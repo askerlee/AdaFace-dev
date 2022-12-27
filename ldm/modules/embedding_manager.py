@@ -265,7 +265,7 @@ class EmbeddingManager(nn.Module):
         euc_loss_type       = 'l2'       # l1, l2
         euc_loss_weight     = 0.8
         cosine_loss_weight  = 1 - euc_loss_weight
-        l2_norm_weight      = 0.000
+        l2_norm_weight      = 0.001
         reg_center_type     = 'init'     # avg, init
 
         for key in self.initial_embeddings:

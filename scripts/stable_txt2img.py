@@ -15,7 +15,7 @@ from contextlib import contextmanager, nullcontext
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
-
+import re
 
 def chunk(it, size):
     it = iter(it)
@@ -277,7 +277,14 @@ def main():
 
                     # to image
                     grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
-                    grid_filepath = os.path.join(outpath, f'{prompt.replace(" ", "-")}-{grid_count:04}.jpg')
+                    # logs/name2022-12-27T23-03-14_name/checkpoints/embeddings_gs-1200.pt
+                    date_mat = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}", opt.embedding_path)
+                    date_sig = date_mat.group(0)
+                    iter_mat = re.search(r"(\d+).pt", opt.embedding_path)
+                    iter_sig = iter_mat.group(1)
+                    embedding_sig = date_sig + "-" + iter_sig
+
+                    grid_filepath = os.path.join(outpath, f'{prompt.replace(" ", "-")}-{embedding_sig}.jpg')
                     Image.fromarray(grid.astype(np.uint8)).save(grid_filepath)
                     grid_count += 1
 
