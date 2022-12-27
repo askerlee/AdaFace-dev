@@ -4,3 +4,4 @@ __pycache__/
 logs/*
 data/*
 outputs/*
+models/stable-diffusion-v-1-4-original
