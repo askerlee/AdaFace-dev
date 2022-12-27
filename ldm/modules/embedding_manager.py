@@ -263,7 +263,7 @@ class EmbeddingManager(nn.Module):
         loss = 0.
         num_embeddings = len(self.initial_embeddings)
         euc_loss_type       = 'l2'       # l1, l2
-        euc_loss_weight     = 0.5
+        euc_loss_weight     = 0.8
         cosine_loss_weight  = 1 - euc_loss_weight
         l2_norm_weight      = 0.000
         reg_center_type     = 'init'     # avg, init
@@ -287,11 +287,11 @@ class EmbeddingManager(nn.Module):
                 # Push the embedding of each layer towards the mean embedding averaged across layers.
                 euc_loss = F.mse_loss(embeddings, reg_center)
 
-            # cosine_mat = F.cosine_similarity(embeddings[:,:,None], embeddings.t()[None,:,:])
-            # homo_loss is opposite to cosine similarity
-            # cosine_loss = 1. - torch.triu(cosine_mat, diagonal=1).sum() * 2 / (embeddings.shape[0] * (embeddings.shape[0] - 1))
-            cosines = F.cosine_similarity(embeddings, reg_center)
-            cosine_loss = 1. - cosines.mean()
+            cosine_mat = F.cosine_similarity(embeddings[:,:,None], embeddings.t()[None,:,:])
+            # There are N*(N-1)/2 elements in torch.triu(cosine_mat, diagonal=1).
+            cosine_loss = 1. - torch.triu(cosine_mat, diagonal=1).sum() * 2 / (embeddings.shape[0] * (embeddings.shape[0] - 1))
+            # cosines = F.cosine_similarity(embeddings, reg_center)
+            # cosine_loss = 1. - cosines.mean()
 
             loss = loss + euc_loss * euc_loss_weight \
                    + cosine_loss * cosine_loss_weight \
