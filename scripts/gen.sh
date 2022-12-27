@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-if [ $# -le 2 ]; then
+if [ $# -le 1 ]; then
     echo "Usage: $0 <embedding_path> <arg2> <arg3>..."
     exit 1
 fi
