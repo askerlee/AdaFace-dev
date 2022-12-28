@@ -72,12 +72,15 @@ class LoraEmbedding(nn.Module):
         else:
             self.bias = 0
             
-    def forward(self):
+    def forward(self, opt_bias=True):
         with torch.autocast(device_type='cuda', enabled=False):
             # torch.matmul: matrix multiplication.
             # torch.matmul(self.lora_up, self.lora_down): 25 * 768.
             # * self.scale: 25 * 768.
-            return torch.matmul(self.lora_up, self.lora_down) * self.scale + self.bias
+            if opt_bias:
+                return torch.matmul(self.lora_up, self.lora_down) * self.scale + self.bias
+            else:
+                return torch.matmul(self.lora_up, self.lora_down) * self.scale + self.bias.detach()
 
 # embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -312,9 +315,11 @@ class EmbeddingManager(nn.Module):
 
         for key in self.initial_embeddings:
             embeddings = self.string_to_param_dict[key]
-            # Generate the actual embeddings on the fly.
+            # Generate the actual embeddings on the fly, but disable the gradient on  
+            # the bias (initial_embeddings[key]) so that it doesn't impact the regularization.
+            # Then the L1/L2 loss becomes |lora_up * lora_down + bias - bias| = |lora_up * lora_down|.
             if isinstance(embeddings, LoraEmbedding):
-                embeddings = embeddings()
+                embeddings = embeddings(opt_bias=False)
 
             if reg_center_type == 'init':
                 # initial_embeddings[key] is already [L, 768]. No need to repeat().
@@ -341,7 +346,7 @@ class EmbeddingManager(nn.Module):
                 # cosine_loss = 1. - cosines.mean()
             else:
                 cosine_loss = 0.
-                
+
             loss = loss + euc_loss * euc_loss_weight \
                    + cosine_loss * cosine_loss_weight \
                    + l2_norm_reg * l2_norm_weight
