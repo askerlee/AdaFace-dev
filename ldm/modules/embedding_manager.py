@@ -62,17 +62,22 @@ class LoraEmbedding(nn.Module):
         self.r = r
 
         if init_vec is not None:
+            self.bias = nn.Parameter(init_vec.clone(), requires_grad=False)
+            '''
             # Each vec in lora_down is init_vec + standard normal noise / 4.
             self.lora_down.data  = self.lora_down.data / 4 + init_vec.unsqueeze(0)
             self.lora_up.data    = self.lora_up.data   / 4 + torch.ones_like(self.lora_up)
             self.lora_up.data   /= r
-
+            '''
+        else:
+            self.bias = 0
+            
     def forward(self):
         with torch.autocast(device_type='cuda', enabled=False):
             # torch.matmul: matrix multiplication.
             # torch.matmul(self.lora_up, self.lora_down): 25 * 768.
             # * self.scale: 25 * 768.
-            return torch.matmul(self.lora_up, self.lora_down) * self.scale
+            return torch.matmul(self.lora_up, self.lora_down) * self.scale + self.bias
 
 # embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -88,7 +93,8 @@ class EmbeddingManager(nn.Module):
             use_layerwise_embedding=False,
             layerwise_reflective=False,
             num_unet_enc_layers=12,
-            layerwise_lora_rank=5,
+            # Compress 12*2+1=25 embeddings to the linear combination of 5 embeddings.
+            layerwise_lora_rank=5,          
             **kwargs
     ):
         super().__init__()
