@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
+import numpy as np
 
 from ldm.data.personalized import per_img_token_list
 from transformers import CLIPTokenizer
@@ -40,6 +41,39 @@ def get_bert_token_for_string(tokenizer, string):
 def get_embedding_for_clip_token(embedder, token):
     return embedder(token.unsqueeze(0))[0, 0]
 
+class LoraEmbedding(nn.Module):
+    def __init__(self, dim1, dim2, r=4, init_vec=None):
+        super().__init__()
+
+        if r > min(dim1, dim2):
+            raise ValueError(
+                f"LoRA rank {r} must be less or equal than {min(dim1, dim2)}"
+            )
+        if init_vec is not None and init_vec.shape != (dim2,):
+            raise ValueError(
+                f"LoRA init vector shape {init_vec.shape} must be ({dim2},)"
+            )
+
+        # lora_up: 25 * r, lora_down: r * 768. lora_up * lora_down: 25 * 768.
+        self.lora_up    = nn.Parameter(torch.randn(dim1, r))
+        # / sqrt(r) to make the std of (lora_down * lora_up) \approx 1.
+        self.lora_down  = nn.Parameter(torch.randn(r, dim2) / np.sqrt(r))
+        self.scale = 1.0
+        self.r = r
+
+        if init_vec is not None:
+            # Each vec in lora_down is init_vec + standard normal noise / 4.
+            self.lora_down.data  = self.lora_down.data / 4 + init_vec.unsqueeze(0)
+            self.lora_up.data    = self.lora_up.data   / 4 + torch.ones_like(self.lora_up)
+            self.lora_up.data   /= r
+
+    def forward(self):
+        with torch.autocast(device_type='cuda', enabled=False):
+            # torch.matmul: matrix multiplication.
+            # torch.matmul(self.lora_up, self.lora_down): 25 * 768.
+            # * self.scale: 25 * 768.
+            return torch.matmul(self.lora_up, self.lora_down) * self.scale
+
 # embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
 class EmbeddingManager(nn.Module):
@@ -54,7 +88,7 @@ class EmbeddingManager(nn.Module):
             use_layerwise_embedding=False,
             layerwise_reflective=False,
             num_unet_enc_layers=12,
-            layerwise_groupsize=1,
+            layerwise_lora_rank=5,
             **kwargs
     ):
         super().__init__()
@@ -69,11 +103,10 @@ class EmbeddingManager(nn.Module):
         self.progressive_counter = 0
 
         self.use_layerwise_embedding = use_layerwise_embedding
-        self.layerwise_reflective = layerwise_reflective
+        self.layerwise_lora_rank    = layerwise_lora_rank if self.use_layerwise_embedding else -1
+        self.layerwise_reflective   = layerwise_reflective
         self.num_unet_enc_layers    = num_unet_enc_layers
         self.num_unet_layers        = num_unet_enc_layers * 2 + 1
-        self.layerwise_groupsize    = layerwise_groupsize
-        self.layerwise_enc_groupnum = num_unet_enc_layers // layerwise_groupsize
         # change max_vectors_per_token to max_vectors_per_layer_per_token
         # When the passed argument num_vectors_per_token > 1, it means multi-token embedding, 
         # instead of layer-wise embedding.
@@ -83,13 +116,13 @@ class EmbeddingManager(nn.Module):
             assert num_vectors_per_token == 1, \
                 "multiple embeddings per token is not supported when using layer-wise embeddings"
             # num_vectors_per_token specifies the total number of embeddings for this token.
-            # There's an embedding for each layer group.
+            # There's an embedding for each layer.
             # if embeddings are symmetric in the encoder & decoder, then
-            # only needs (number of encoder groups) embeddings + 1 embedding (the middle layer).
+            # it only needs (number of encoder layer) embeddings + 1 embedding (the middle layer).
             if self.layerwise_reflective:
-                num_vectors_per_token = num_unet_enc_layers // layerwise_groupsize + 1
+                num_vectors_per_token = num_unet_enc_layers + 1
             else:
-                num_vectors_per_token = num_unet_enc_layers // layerwise_groupsize * 2 + 1
+                num_vectors_per_token = num_unet_enc_layers * 2 + 1
 
         # hasattr(embedder, 'tokenizer') -> True
         if hasattr(embedder, 'tokenizer'): # using Stable Diffusion's CLIP encoder
@@ -116,11 +149,18 @@ class EmbeddingManager(nn.Module):
                 with torch.no_grad():
                     init_word_embedding = get_embedding_for_tkn(init_word_token.cpu())
 
-                token_params = torch.nn.Parameter(init_word_embedding.unsqueeze(0).repeat(num_vectors_per_token, 1), requires_grad=True)
-                # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
+                if self.layerwise_lora_rank > 0:
+                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, self.layerwise_lora_rank, init_word_embedding)
+                else:
+                    # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
+                    token_params = torch.nn.Parameter(init_word_embedding.unsqueeze(0).repeat(num_vectors_per_token, 1), requires_grad=True)
+                # initial_embeddings are for computing the regularization loss.
                 self.initial_embeddings[placeholder_string] = torch.nn.Parameter(init_word_embedding.unsqueeze(0).repeat(num_vectors_per_token, 1), requires_grad=False)
             else:
-                token_params = torch.nn.Parameter(torch.rand(size=(num_vectors_per_token, token_dim), requires_grad=True))
+                if self.layerwise_lora_rank > 0:
+                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, self.layerwise_lora_rank)
+                else:
+                    token_params = torch.nn.Parameter(torch.rand(size=(num_vectors_per_token, token_dim), requires_grad=True))
             
             self.string_to_token_dict[placeholder_string] = token
             # token_params: embedding vector.
@@ -139,6 +179,9 @@ class EmbeddingManager(nn.Module):
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
 
             placeholder_embedding = self.string_to_param_dict[placeholder_string].to(device)
+            # Generate the actual placeholder_embedding on the fly.
+            if isinstance(placeholder_embedding, LoraEmbedding):
+                placeholder_embedding = placeholder_embedding()
 
             # max_vectors_per_layer_per_token == 1: original num_vectors_per_token == 1, but 
             # self.use_layerwise_embedding could still be True.
@@ -154,19 +197,12 @@ class EmbeddingManager(nn.Module):
                     tokenized_text = tokenized_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1).view(b * self.num_unet_layers, n)
                     # mirror-reflect the embedding along the layer dimension, to make it symmetric 
                     # in the encoder & decoder.
-                    # Repeat each element in placeholder_embedding layerwise_groupsize times.
 
                     if self.layerwise_reflective:
-                        placeholder_embedding_enc = placeholder_embedding[:-1].unsqueeze(1).repeat(1, self.layerwise_groupsize, 1).view(-1, D)
+                        placeholder_embedding_enc = placeholder_embedding[:-1]
                         placeholder_embedding = torch.cat([ placeholder_embedding_enc, 
                                                             placeholder_embedding[-1].unsqueeze(0), 
                                                             placeholder_embedding_enc.flip(0) ], dim=0)
-                    else:
-                        placeholder_embedding_enc = placeholder_embedding[:self.layerwise_enc_groupnum].unsqueeze(1).repeat(1, self.layerwise_groupsize, 1).view(-1, D)
-                        placeholder_embedding_dec = placeholder_embedding[self.layerwise_enc_groupnum+1:].unsqueeze(1).repeat(1, self.layerwise_groupsize, 1).view(-1, D)
-                        placeholder_embedding = torch.cat([ placeholder_embedding_enc, 
-                                                            placeholder_embedding[self.layerwise_enc_groupnum].unsqueeze(0), 
-                                                            placeholder_embedding_dec ], dim=0)
 
                 placeholder_idx = torch.where(tokenized_text == placeholder_token.to(device))
                 if placeholder_idx[0].numel() == 0:
@@ -270,6 +306,10 @@ class EmbeddingManager(nn.Module):
 
         for key in self.initial_embeddings:
             embeddings = self.string_to_param_dict[key]
+            # Generate the actual embeddings on the fly.
+            if isinstance(embeddings, LoraEmbedding):
+                embeddings = embeddings()
+
             if reg_center_type == 'init':
                 # initial_embeddings[key] is already [L, 768]. No need to repeat().
                 reg_center = self.initial_embeddings[key].clone().to(embeddings.device)
