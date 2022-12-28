@@ -17,112 +17,56 @@ import os
 import glob
 import hashlib
 from collections import OrderedDict, defaultdict
+import re
+import copy
 
 parser = argparse.ArgumentParser(description='PyTorch Checkpoint Averager')
 parser.add_argument('--input', default='', type=str, metavar='PATH',
                     help='path to base input folder containing checkpoints')
-parser.add_argument('--filter', default='*.pth.tar', type=str, metavar='WILDCARD',
+parser.add_argument('--filter', default='*0.pt', type=str, metavar='WILDCARD',
                     help='checkpoint filter (path wildcard)')
-parser.add_argument('--output', default='./averaged.pth', type=str, metavar='PATH',
+parser.add_argument('--output', default='averaged.pt', type=str, metavar='PATH',
                     help='output filename')
-parser.add_argument('--no-use-ema', dest='no_use_ema', action='store_true',
-                    help='Force not using ema version of weights (if present)')
-parser.add_argument('--no-sort', dest='no_sort', action='store_true',
-                    help='Do not sort and select by checkpoint metric, also makes "n" argument irrelevant')
-parser.add_argument('-n', type=int, default=10, metavar='N',
-                    help='Number of checkpoints to average')
-
-def clean_state_dict(state_dict):
-    # 'clean' checkpoint by removing .module prefix from state dict if it exists from parallel training
-    cleaned_state_dict = OrderedDict()
-    for k, v in state_dict.items():
-        name = k[7:] if k.startswith('module.') else k
-        cleaned_state_dict[name] = v
-    return cleaned_state_dict
-
-
-def load_state_dict(checkpoint_path, use_ema=True):
-    if checkpoint_path and os.path.isfile(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        state_dict_key = ''
-        if isinstance(checkpoint, dict):
-            if use_ema and checkpoint.get('state_dict_ema', None) is not None:
-                state_dict_key = 'state_dict_ema'
-            elif use_ema and checkpoint.get('model_ema', None) is not None:
-                state_dict_key = 'model_ema'
-            elif 'state_dict' in checkpoint:
-                state_dict_key = 'state_dict'
-            elif 'model' in checkpoint:
-                state_dict_key = 'model'
-        state_dict = clean_state_dict(checkpoint[state_dict_key] if state_dict_key else checkpoint)
-        print("Loaded {} from checkpoint '{}'".format(state_dict_key, checkpoint_path))
-        return state_dict
-    else:
-        print("No checkpoint found at '{}'".format(checkpoint_path))
-        raise FileNotFoundError()
-
-def checkpoint_metric(checkpoint_path):
-    if not checkpoint_path or not os.path.isfile(checkpoint_path):
-        return {}
-    print("=> Extracting metric from checkpoint '{}'".format(checkpoint_path))
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    metric = None
-    if 'metric' in checkpoint:
-        metric = checkpoint['metric']
-    return metric
+parser.add_argument('--min', type=int, help='Minimal iteration of checkpoints to average')
 
 
 def main():
     args = parser.parse_args()
-    # by default use the EMA weights (if present)
-    args.use_ema = not args.no_use_ema
-    # by default sort by checkpoint metric (if present) and avg top n checkpoints
-    args.sort = not args.no_sort
-
-    if os.path.exists(args.output):
-        print("Error: Output filename ({}) already exists.".format(args.output))
-        exit(1)
-
     pattern = args.input
     if not args.input.endswith(os.path.sep) and not args.filter.startswith(os.path.sep):
         pattern += os.path.sep
     pattern += args.filter
-    checkpoints = glob.glob(pattern, recursive=True)
+    checkpoint_filenames = glob.glob(pattern, recursive=True)
+    checkpoint_filenames = filter(lambda x: int(re.search(r"(\d+).pt", x).group(1)) >= args.min, checkpoint_filenames)
+    checkpoint_filenames = sorted(checkpoint_filenames, key=lambda x: int(re.search(r"(\d+).pt", x).group(1)))
+    avg_checkpoint_filenames = checkpoint_filenames
+    if len(avg_checkpoint_filenames) == 0:
+        print("Error: No checkpoints matching '{}' and iteration >= {} in '{}'".format(
+                args.filter, args.min, args.input))
+        return
 
-    if args.sort:
-        checkpoint_metrics = []
-        for c in checkpoints:
-            metric = checkpoint_metric(c)
-            if metric is not None:
-                checkpoint_metrics.append((metric, c))
-        checkpoint_metrics = list(sorted(checkpoint_metrics))
-        checkpoint_metrics = checkpoint_metrics[-args.n:]
-        print("Selected checkpoints:")
-        [print(m, c) for m, c in checkpoint_metrics]
-        avg_checkpoints = [c for m, c in checkpoint_metrics]
-    else:
-        avg_checkpoints = checkpoints
-        print("Selected checkpoints:")
-        [print(c) for c in checkpoints]
+    print("Selected checkpoints:")
+    [print(c) for c in checkpoint_filenames]
 
     avg_state_dict = {}
     avg_counts = {}
-    for c in avg_checkpoints:
-        new_state_dict = load_state_dict(c, args.use_ema)
+    for c in avg_checkpoint_filenames:
+        checkpoint = torch.load(c, map_location='cpu')
+        new_state_dict = checkpoint['string_to_param']
         if not new_state_dict:
             print("Error: Checkpoint ({}) doesn't exist".format(args.checkpoint))
             continue
 
         for k, v in new_state_dict.items():
             if k not in avg_state_dict:
-                avg_state_dict[k] = v.clone().to(dtype=torch.float64)
+                avg_state_dict[k] = copy.copy(v)
                 avg_counts[k] = 1
             else:
-                avg_state_dict[k] += v.to(dtype=torch.float64)
+                avg_state_dict[k].data = v
                 avg_counts[k] += 1
 
     for k, v in avg_state_dict.items():
-        v.div_(avg_counts[k])
+        v.data.div_(avg_counts[k])
 
     # float32 overflow seems unlikely based on weights seen to date, but who knows
     float32_info = torch.finfo(torch.float32)
@@ -131,14 +75,16 @@ def main():
         v = v.clamp(float32_info.min, float32_info.max)
         final_state_dict[k] = v.to(dtype=torch.float32)
 
-    try:
-        torch.save(final_state_dict, args.output, _use_new_zipfile_serialization=False)
-    except:
-        torch.save(final_state_dict, args.output)
+    complete_state_dict = { 'string_to_token': checkpoint['string_to_token'],
+                            'string_to_param': torch.nn.ParameterDict(final_state_dict) }
 
-    with open(args.output, 'rb') as f:
-        sha_hash = hashlib.sha256(f.read()).hexdigest()
-    print("=> Saved state_dict to '{}, SHA256: {}'".format(args.output, sha_hash))
+    output_filename = os.path.join(args.input, f"avg_{args.min}.pt")
+    try:
+        torch.save(complete_state_dict, output_filename, _use_new_zipfile_serialization=False)
+    except:
+        torch.save(complete_state_dict, output_filename)
+
+    print("=> Saved state_dict to '{}'".format(output_filename))
 
 
 if __name__ == '__main__':
