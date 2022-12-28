@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from ldm.modules.embedding_manager import LoraEmbedding
 import sys
 import os
 import glob
@@ -14,6 +15,9 @@ emb_ckpt_files = sorted(emb_ckpt_files, key=lambda s:int(re.search(r"(\d+).pt", 
 for emb_ckpt_filename in emb_ckpt_files:
     emb_ckpt = torch.load(emb_ckpt_filename, map_location='cpu')
     embeddings = emb_ckpt['string_to_param']['z']
+    if isinstance(embeddings, LoraEmbedding):
+        embeddings = embeddings()
+        
     emb_mean = embeddings.mean(0, keepdim=True).repeat(embeddings.size(0), 1)
     l1_loss = F.l1_loss(embeddings, emb_mean)
     l2_loss = F.mse_loss(embeddings, emb_mean)

@@ -62,7 +62,7 @@ class LoraEmbedding(nn.Module):
         self.r = r
 
         if init_vec is not None:
-            self.bias = nn.Parameter(init_vec.clone(), requires_grad=False)
+            self.bias = nn.Parameter(init_vec.clone(), requires_grad=True)
             '''
             # Each vec in lora_down is init_vec + standard normal noise / 4.
             self.lora_down.data  = self.lora_down.data / 4 + init_vec.unsqueeze(0)
@@ -305,7 +305,7 @@ class EmbeddingManager(nn.Module):
         loss = 0.
         num_embeddings = len(self.initial_embeddings)
         euc_loss_type       = 'l2'       # l1, l2
-        euc_loss_weight     = 0.6
+        euc_loss_weight     = 1.0
         cosine_loss_weight  = 1 - euc_loss_weight
         l2_norm_weight      = 0.01
         reg_center_type     = 'init'     # avg, init
@@ -333,12 +333,15 @@ class EmbeddingManager(nn.Module):
                 # Push the embedding of each layer towards the mean embedding averaged across layers.
                 euc_loss = F.mse_loss(embeddings, reg_center)
 
-            cosine_mat = F.cosine_similarity(embeddings[:,:,None], embeddings.t()[None,:,:])
-            # There are N*(N-1)/2 elements in torch.triu(cosine_mat, diagonal=1).
-            cosine_loss = 1. - torch.triu(cosine_mat, diagonal=1).sum() * 2 / (embeddings.shape[0] * (embeddings.shape[0] - 1))
-            # cosines = F.cosine_similarity(embeddings, reg_center)
-            # cosine_loss = 1. - cosines.mean()
-
+            if cosine_loss_weight > 0:
+                cosine_mat = F.cosine_similarity(embeddings[:,:,None], embeddings.t()[None,:,:])
+                # There are N*(N-1)/2 elements in torch.triu(cosine_mat, diagonal=1).
+                cosine_loss = 1. - torch.triu(cosine_mat, diagonal=1).sum() * 2 / (embeddings.shape[0] * (embeddings.shape[0] - 1))
+                # cosines = F.cosine_similarity(embeddings, reg_center)
+                # cosine_loss = 1. - cosines.mean()
+            else:
+                cosine_loss = 0.
+                
             loss = loss + euc_loss * euc_loss_weight \
                    + cosine_loss * cosine_loss_weight \
                    + l2_norm_reg * l2_norm_weight
