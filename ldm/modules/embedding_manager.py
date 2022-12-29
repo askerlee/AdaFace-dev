@@ -43,7 +43,7 @@ def get_embedding_for_clip_token(embedder, token):
 
 class LoraEmbedding(nn.Module):
     # dim1: 25, dim2: 768, r: 4.
-    def __init__(self, dim1, dim2, r=4, init_vecs=None, device_type="cuda"):
+    def __init__(self, dim1, dim2, r=4, init_noise_std=0.1, init_vecs=None, device_type="cuda"):
         super().__init__()
 
         if r > min(dim1, dim2):
@@ -69,10 +69,14 @@ class LoraEmbedding(nn.Module):
 
         if init_vecs is not None:
             N = init_vecs.shape[0]
+            # If no init_vecs is passed in, keep the noise std = 1.
+            self.lora_down.data         *= init_noise_std
             #self.bias = nn.Parameter(init_vecs.clone(), requires_grad=True)
-            # Each vec in lora_down is init_vecs + standard normal noise / 4.
-            self.lora_down.data[:N]     = self.lora_down.data[:N]  / 4 + init_vecs
-            self.lora_up.data[:, :N]    = self.lora_up.data[:, :N] / 4 + torch.ones(dim1, N) / N
+            # The first N vectors in lora_down are init_vecs + standard normal noise * init_noise_std.
+            self.lora_down.data[:N]     += init_vecs
+            self.lora_up.data           *= init_noise_std
+            self.lora_up.data[:, :N]    += torch.ones(dim1, N) / N
+
         self.bias = nn.Parameter(torch.zeros(dim1, dim2))
             
     def forward(self):
@@ -310,7 +314,7 @@ class EmbeddingManager(nn.Module):
         euc_loss_type       = 'l2'       # l1, l2
         euc_loss_weight     = 1.0
         cosine_loss_weight  = 1 - euc_loss_weight
-        l2_norm_weight      = 0.01
+        l2_norm_weight      = 0.00
         reg_center_type     = 'init'     # avg, init
 
         for key in self.initial_embeddings:
