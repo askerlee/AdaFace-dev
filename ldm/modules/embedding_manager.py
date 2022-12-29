@@ -43,7 +43,8 @@ def get_embedding_for_clip_token(embedder, token):
 
 class LoraEmbedding(nn.Module):
     # dim1: 25, dim2: 768, r: 4.
-    def __init__(self, dim1, dim2, r=4, init_noise_std=0.1, init_vecs=None, device_type="cuda"):
+    # If using init_vecs, init_noise_std is recommended to be 0.1. Otherwise 1.
+    def __init__(self, dim1, dim2, init_noise_std, r=4, init_vecs=None, device_type="cuda"):
         super().__init__()
 
         if r > min(dim1, dim2):
@@ -66,15 +67,15 @@ class LoraEmbedding(nn.Module):
         self.scale = 1.0
         self.r = r
         self.device_type = device_type
+        # If no init_vecs is passed in, keep the noise std = 1.
+        self.lora_down.data         *= init_noise_std
+        self.lora_up.data           *= init_noise_std
 
         if init_vecs is not None:
             N = init_vecs.shape[0]
-            # If no init_vecs is passed in, keep the noise std = 1.
-            self.lora_down.data         *= init_noise_std
             #self.bias = nn.Parameter(init_vecs.clone(), requires_grad=True)
             # The first N vectors in lora_down are init_vecs + standard normal noise * init_noise_std.
             self.lora_down.data[:N]     += init_vecs
-            self.lora_up.data           *= init_noise_std
             self.lora_up.data[:, :N]    += torch.ones(dim1, N) / N
 
         self.bias = nn.Parameter(torch.zeros(dim1, dim2))
@@ -163,7 +164,7 @@ class EmbeddingManager(nn.Module):
                     init_word_embedding = get_embedding_for_tkn(init_word_token.cpu())
 
                 if self.layerwise_lora_rank > 0:
-                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, self.layerwise_lora_rank, init_word_embedding)
+                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, 0.1, self.layerwise_lora_rank, init_word_embedding)
                 else:
                     # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
                     token_params = torch.nn.Parameter(init_word_embedding.unsqueeze(0).repeat(num_vectors_per_token, 1), requires_grad=True)
@@ -171,7 +172,7 @@ class EmbeddingManager(nn.Module):
                 self.initial_embeddings[placeholder_string] = torch.nn.Parameter(init_word_embedding.unsqueeze(0).repeat(num_vectors_per_token, 1), requires_grad=False)
             else:
                 if self.layerwise_lora_rank > 0:
-                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, self.layerwise_lora_rank)
+                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, 1.0, self.layerwise_lora_rank)
                 else:
                     token_params = torch.nn.Parameter(torch.rand(size=(num_vectors_per_token, token_dim), requires_grad=True))
             
