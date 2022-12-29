@@ -42,16 +42,21 @@ def get_embedding_for_clip_token(embedder, token):
     return embedder(token.unsqueeze(0))[0, 0]
 
 class LoraEmbedding(nn.Module):
-    def __init__(self, dim1, dim2, r=4, init_vec=None):
+    # dim1: 25, dim2: 768, r: 4.
+    def __init__(self, dim1, dim2, r=4, init_vecs=None, device_type="cuda"):
         super().__init__()
 
         if r > min(dim1, dim2):
             raise ValueError(
                 f"LoRA rank {r} must be less or equal than {min(dim1, dim2)}"
             )
-        if init_vec is not None and init_vec.shape != (dim2,):
+
+        # Only one vector is passed in.
+        if init_vecs.ndim == 1:
+            init_vecs = init_vecs.unsqueeze(0)
+        if init_vecs is not None and init_vecs.shape[1] != dim2 or init_vecs.shape[0] > dim1:
             raise ValueError(
-                f"LoRA init vector shape {init_vec.shape} must be ({dim2},)"
+                f"LoRA init vectors shape {init_vecs.shape} must be (<={dim1}, {dim2})"
             )
 
         # lora_up: 25 * r, lora_down: r * 768. lora_up * lora_down: 25 * 768.
@@ -60,27 +65,22 @@ class LoraEmbedding(nn.Module):
         self.lora_down  = nn.Parameter(torch.randn(r, dim2) / np.sqrt(r))
         self.scale = 1.0
         self.r = r
+        self.device_type = device_type
 
-        if init_vec is not None:
-            self.bias = nn.Parameter(init_vec.clone(), requires_grad=True)
-            '''
-            # Each vec in lora_down is init_vec + standard normal noise / 4.
-            self.lora_down.data  = self.lora_down.data / 4 + init_vec.unsqueeze(0)
-            self.lora_up.data    = self.lora_up.data   / 4 + torch.ones_like(self.lora_up)
-            self.lora_up.data   /= r
-            '''
-        else:
-            self.bias = 0
+        if init_vecs is not None:
+            N = init_vecs.shape[0]
+            #self.bias = nn.Parameter(init_vecs.clone(), requires_grad=True)
+            # Each vec in lora_down is init_vecs + standard normal noise / 4.
+            self.lora_down.data[:N]     = self.lora_down.data[:N]  / 4 + init_vecs
+            self.lora_up.data[:, :N]    = self.lora_up.data[:, :N] / 4 + torch.ones(dim1, N) / N
+        self.bias = nn.Parameter(torch.zeros(dim1, dim2))
             
-    def forward(self, opt_bias=True):
-        with torch.autocast(device_type='cuda', enabled=False):
+    def forward(self):
+        with torch.autocast(device_type=self.device_type, enabled=False):
             # torch.matmul: matrix multiplication.
             # torch.matmul(self.lora_up, self.lora_down): 25 * 768.
             # * self.scale: 25 * 768.
-            if opt_bias:
-                return torch.matmul(self.lora_up, self.lora_down) * self.scale + self.bias
-            else:
-                return torch.matmul(self.lora_up, self.lora_down) * self.scale + self.bias.detach()
+            return torch.matmul(self.lora_up, self.lora_down) * self.scale + self.bias
 
 # embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
