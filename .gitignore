@@ -3,5 +3,6 @@ __pycache__/
 *$py.class
 logs/*
 data/*
+data
 outputs/*
 models/stable-diffusion-v-1-4-original

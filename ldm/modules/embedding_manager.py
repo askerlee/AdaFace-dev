@@ -11,8 +11,7 @@ DEFAULT_PLACEHOLDER_TOKEN = ["*"]
 
 PROGRESSIVE_SCALE = 2000
 
-def get_clip_token_for_string(tokenizer, string):
-    assert " " not in string, "Please use a single word for the placeholder string"
+def get_clip_tokens_for_string(tokenizer, string, force_single_token=False):
     '''
     # If string is a new token, add it to the tokenizer.
     if string not in tokenizer.get_vocab():
@@ -26,11 +25,15 @@ def get_clip_token_for_string(tokenizer, string):
     batch_encoding = tokenizer(string, truncation=True, max_length=77, return_length=True,
                                return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
     tokens = batch_encoding["input_ids"]
-    assert torch.count_nonzero(tokens - 49407) == 2, f"String '{string}' maps to more than a single token. Please use another string"
+    # 2: one begin of text, one token.
+    token_count = torch.count_nonzero(tokens - 49407) - 1
+    assert token_count >= 1, f"No token found in string '{string}'"
+    if force_single_token:
+        assert token_count == 1, f"String '{string}' maps to more than a single token. Please use another string"
 
-    return tokens[0, 1]
+    return tokens[0, 1:1+token_count]
 
-def get_bert_token_for_string(tokenizer, string):
+def get_bert_tokens_for_string(tokenizer, string):
     token = tokenizer(string)
     assert torch.count_nonzero(token) == 3, f"String '{string}' maps to more than a single token. Please use another string"
 
@@ -38,13 +41,17 @@ def get_bert_token_for_string(tokenizer, string):
 
     return token
 
-def get_embedding_for_clip_token(embedder, token):
-    return embedder(token.unsqueeze(0))[0, 0]
+def get_embeddings_for_clip_tokens(embedder, tokens):
+    # embedder(tokens): [1, N, 768]. N: number of tokens. 
+    # RETURN: [N, 768]
+    return embedder(tokens)[0]
 
 class LoraEmbedding(nn.Module):
     # dim1: 25, dim2: 768, r: 4.
-    # If using init_vecs, init_noise_std is recommended to be 0.1. Otherwise 1.
-    def __init__(self, dim1, dim2, init_noise_std, r=4, init_vecs=None, device_type="cuda"):
+    # If using init_vecs, init_up_noise_stds are applied to lora_down and lora_up. 
+    # Otherwise, init_up_noise_stds has no effect.
+    # init_up_noise_stds[1] << init_up_noise_stds[0].
+    def __init__(self, dim1, dim2, r=4, init_noise_stds=(0.1, 0.02), init_vecs=None, device_type="cuda"):
         super().__init__()
 
         if r > min(dim1, dim2):
@@ -52,13 +59,15 @@ class LoraEmbedding(nn.Module):
                 f"LoRA rank {r} must be less or equal than {min(dim1, dim2)}"
             )
 
-        # Only one vector is passed in.
-        if init_vecs.ndim == 1:
-            init_vecs = init_vecs.unsqueeze(0)
-        if init_vecs is not None and init_vecs.shape[1] != dim2 or init_vecs.shape[0] > dim1:
-            raise ValueError(
-                f"LoRA init vectors shape {init_vecs.shape} must be (<={dim1}, {dim2})"
-            )
+        if init_vecs is not None:
+            # Only one vector is passed in.
+            if init_vecs.ndim == 1:
+                init_vecs = init_vecs.unsqueeze(0)
+
+            if init_vecs.shape[1] != dim2 or init_vecs.shape[0] > dim1:
+                raise ValueError(
+                    f"LoRA init vectors shape {init_vecs.shape} must be (<={dim1}, {dim2})"
+                )
 
         # lora_up: 25 * r, lora_down: r * 768. lora_up * lora_down: 25 * 768.
         self.lora_up    = nn.Parameter(torch.randn(dim1, r))
@@ -67,16 +76,29 @@ class LoraEmbedding(nn.Module):
         self.scale = 1.0
         self.r = r
         self.device_type = device_type
-        # If no init_vecs is passed in, keep the noise std = 1.
-        self.lora_down.data         *= init_noise_std
-        self.lora_up.data           *= init_noise_std
 
+        # init_up_noise_stds is only applied when init_vecs is passed in.
         if init_vecs is not None:
             N = init_vecs.shape[0]
             #self.bias = nn.Parameter(init_vecs.clone(), requires_grad=True)
-            # The first N vectors in lora_down are init_vecs + standard normal noise * init_noise_std.
-            self.lora_down.data[:N]     += init_vecs
-            self.lora_up.data[:, :N]    += torch.ones(dim1, N) / N
+            # The first N vectors in lora_down are init_vecs (no noise added).
+            self.lora_down.data[:N]      = init_vecs.clone()
+            # The remaining dim1-N vectors are gaussian noise with std init_noise_stds[0].
+            # init_noise_stds[0] scales down the noise level, so that 
+            # the output embeddings \approx init_vecs.mean().
+            self.lora_down.data[N:]     *= init_noise_stds[0]
+            # After scaled down by init_up_noise_stds[0] (default 0.1) and 
+            # init_up_noise_stds[1] (default 0.02), 
+            # lora_up contains small noise + [1, ..., 1, 0, ..., 0,
+            #                                 1, ..., 1, 0, ..., 0,
+            #                                         ...                         
+            #                                 1, ..., 1, 0, ..., 0.] / N.
+            # 1s block are coefficients of init_vecs, so added with smaller noises (init_noise_stds[1]=0.02). 
+            self.lora_up.data[:, :N]    = self.lora_up.data[:, :N] * init_noise_stds[1] \
+                                          + torch.ones(dim1, N) / N
+            # 0s block are coefficients of the extra random vectors, 
+            # So added with larger noises (init_noise_stds[0]=0.1), to let them play a bigger role.
+            self.lora_up.data[:, N:]    *= init_noise_stds[0]
 
         self.bias = nn.Parameter(torch.zeros(dim1, dim2))
             
@@ -141,13 +163,13 @@ class EmbeddingManager(nn.Module):
         # hasattr(embedder, 'tokenizer') -> True
         if hasattr(embedder, 'tokenizer'): # using Stable Diffusion's CLIP encoder
             self.is_clip = True
-            get_token_for_string = partial(get_clip_token_for_string, embedder.tokenizer)
-            get_embedding_for_tkn = partial(get_embedding_for_clip_token, embedder.transformer.text_model.embeddings)
+            get_tokens_for_string = partial(get_clip_tokens_for_string, embedder.tokenizer)
+            get_embeddings_for_tokens = partial(get_embeddings_for_clip_tokens, embedder.transformer.text_model.embeddings)
             token_dim = 768
         else: # using LDM's BERT encoder
             self.is_clip = False
-            get_token_for_string = partial(get_bert_token_for_string, embedder.tknz_fn)
-            get_embedding_for_tkn = embedder.transformer.token_emb
+            get_tokens_for_string = partial(get_bert_tokens_for_string, embedder.tknz_fn)
+            get_embeddings_for_tokens = embedder.transformer.token_emb
             token_dim = 1280
 
         if per_image_tokens:
@@ -155,24 +177,27 @@ class EmbeddingManager(nn.Module):
 
         for idx, placeholder_string in enumerate(placeholder_strings):
             # get_token_for_string = get_clip_token_for_string
-            token = get_token_for_string(placeholder_string)
+            tokens = get_tokens_for_string(placeholder_string, force_single_token=True)
+            token = tokens[0]
 
             if initializer_words and idx < len(initializer_words):
-                init_word_token = get_token_for_string(initializer_words[idx])
+                init_word_tokens = get_tokens_for_string(initializer_words[idx])
+                N = len(init_word_tokens)
 
                 with torch.no_grad():
-                    init_word_embedding = get_embedding_for_tkn(init_word_token.cpu())
+                    init_word_embeddings = get_embeddings_for_tokens(init_word_tokens.cpu())
+                    avg_init_word_embedding = init_word_embeddings.mean(dim=0, keepdim=True)
 
                 if self.layerwise_lora_rank > 0:
-                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, 0.1, self.layerwise_lora_rank, init_word_embedding)
+                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, self.layerwise_lora_rank, (0.1, 0.02), init_word_embeddings)
                 else:
                     # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
-                    token_params = torch.nn.Parameter(init_word_embedding.unsqueeze(0).repeat(num_vectors_per_token, 1), requires_grad=True)
+                    token_params = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
                 # initial_embeddings are for computing the regularization loss.
-                self.initial_embeddings[placeholder_string] = torch.nn.Parameter(init_word_embedding.unsqueeze(0).repeat(num_vectors_per_token, 1), requires_grad=False)
+                self.initial_embeddings[placeholder_string] = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=False)
             else:
                 if self.layerwise_lora_rank > 0:
-                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, 1.0, self.layerwise_lora_rank)
+                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, self.layerwise_lora_rank, (0.1, 0.02))
                 else:
                     token_params = torch.nn.Parameter(torch.rand(size=(num_vectors_per_token, token_dim), requires_grad=True))
             
