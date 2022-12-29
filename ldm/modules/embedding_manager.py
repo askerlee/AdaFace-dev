@@ -51,7 +51,8 @@ class LoraEmbedding(nn.Module):
     # If using init_vecs, init_up_noise_stds are applied to lora_down and lora_up. 
     # Otherwise, init_up_noise_stds has no effect.
     # init_up_noise_stds[1] << init_up_noise_stds[0].
-    def __init__(self, dim1, dim2, r=4, init_noise_stds=(0.1, 0.02), init_vecs=None, device_type="cuda"):
+    def __init__(self, dim1, dim2, r=4, init_noise_stds=(0.1, 0.02), init_vecs=None, 
+                 has_bias=True, device_type="cuda"):
         super().__init__()
 
         if r > min(dim1, dim2):
@@ -73,8 +74,11 @@ class LoraEmbedding(nn.Module):
         self.lora_up    = nn.Parameter(torch.randn(dim1, r))
         # / sqrt(r) to make the std of (lora_down * lora_up) \approx 1.
         self.lora_down  = nn.Parameter(torch.randn(r, dim2) / np.sqrt(r))
+        # lora_basis is the constant bias of the basis vectors. lora_basis won't be updated.
+        self.lora_basis = nn.Parameter(torch.zeros_like(self.lora_down), requires_grad=False)
         self.scale = 1.0
         self.r = r
+        self.has_bias = has_bias
         self.device_type = device_type
 
         # init_up_noise_stds is only applied when init_vecs is passed in.
@@ -82,11 +86,12 @@ class LoraEmbedding(nn.Module):
             N = init_vecs.shape[0]
             #self.bias = nn.Parameter(init_vecs.clone(), requires_grad=True)
             # The first N vectors in lora_down are init_vecs (no noise added).
-            self.lora_down.data[:N]      = init_vecs.clone()
+            # self.lora_down.data[:N]      = init_vecs.clone()
             # The remaining dim1-N vectors are gaussian noise with std init_noise_stds[0].
             # init_noise_stds[0] scales down the noise level, so that 
             # the output embeddings \approx init_vecs.mean().
-            self.lora_down.data[N:]     *= init_noise_stds[0]
+            self.lora_basis.data[:N]     = init_vecs.clone()
+            self.lora_down.data         *= init_noise_stds[0]
             # After scaled down by init_up_noise_stds[0] (default 0.1) and 
             # init_up_noise_stds[1] (default 0.02), 
             # lora_up contains small noise + [1, ..., 1, 0, ..., 0,
@@ -100,14 +105,18 @@ class LoraEmbedding(nn.Module):
             # So added with larger noises (init_noise_stds[0]=0.1), to let them play a bigger role.
             self.lora_up.data[:, N:]    *= init_noise_stds[0]
 
-        self.bias = nn.Parameter(torch.zeros(dim1, dim2))
+        if self.has_bias:
+            # bias: 25 * 768.
+            self.bias = nn.Parameter(torch.zeros(dim1, dim2))
+        else:
+            self.bias = 0
             
     def forward(self):
         with torch.autocast(device_type=self.device_type, enabled=False):
             # torch.matmul: matrix multiplication.
             # torch.matmul(self.lora_up, self.lora_down): 25 * 768.
             # * self.scale: 25 * 768.
-            return torch.matmul(self.lora_up, self.lora_down) * self.scale + self.bias
+            return torch.matmul(self.lora_up, self.lora_down + self.lora_basis) * self.scale + self.bias
 
 # embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -394,9 +403,9 @@ class EmbeddingManager(nn.Module):
             if not isinstance(embeddings, LoraEmbedding):
                 continue
             if euc_loss_type == 'l1':
-                loss = loss + embeddings.lora_down.abs().sum()
+                loss = loss + embeddings.lora_down.abs().mean()  + embeddings.lora_up.abs().mean()
             elif euc_loss_type == 'l2':
-                loss = loss + (embeddings.lora_down ** 2).sum()
+                loss = loss + (embeddings.lora_down ** 2).mean() + (embeddings.lora_up ** 2).mean()
 
         return loss / num_embeddings
 
