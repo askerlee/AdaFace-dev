@@ -322,7 +322,7 @@ class EmbeddingManager(nn.Module):
     def embedding_parameters(self):
         return self.string_to_param_dict.parameters()
 
-    def embedding_to_coarse_loss(self):
+    def embedding_attractor_loss(self):
         loss = 0.
         num_embeddings = len(self.initial_embeddings)
 
@@ -334,9 +334,9 @@ class EmbeddingManager(nn.Module):
 
         return loss
 
-    def embedding_to_layerwise_loss(self):
+    def layerwise_embedding_attractor_loss(self):
         loss = 0.
-        num_embeddings = len(self.initial_embeddings)
+        num_embeddings      = len(self.initial_embeddings)
         euc_loss_type       = 'l2'       # l1, l2
         euc_loss_weight     = 1.0
         cosine_loss_weight  = 1 - euc_loss_weight
@@ -382,9 +382,29 @@ class EmbeddingManager(nn.Module):
                    + l2_norm_reg * l2_norm_weight
 
         return loss / num_embeddings
-    
+
+    def layerwise_lora_norm_loss(self):
+        loss = 0.
+        num_embeddings  = len(self.initial_embeddings)
+        euc_loss_type   = 'l1'       # l1, l2
+
+        for key in self.initial_embeddings:
+            embeddings = self.string_to_param_dict[key]
+            # Skip non-LORA embeddings.
+            if not isinstance(embeddings, LoraEmbedding):
+                continue
+            if euc_loss_type == 'l1':
+                loss = loss + embeddings.lora_down.abs().sum()
+            elif euc_loss_type == 'l2':
+                loss = loss + (embeddings.lora_down ** 2).sum()
+
+        return loss / num_embeddings
+
     def embedding_to_loss(self):
         if self.use_layerwise_embedding:
-            return self.embedding_to_layerwise_loss()
+            if self.layerwise_lora_rank > 0:
+                return self.layerwise_lora_norm_loss()
+            else:
+                return self.layerwise_embedding_attractor_loss()
         else:
-            return self.embedding_to_coarse_loss()
+            return self.embedding_attractor_loss()
