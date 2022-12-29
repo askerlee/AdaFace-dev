@@ -319,7 +319,7 @@ class EmbeddingManager(nn.Module):
             # the bias (initial_embeddings[key]) so that it doesn't impact the regularization.
             # Then the L1/L2 loss becomes |lora_up * lora_down + bias - bias| = |lora_up * lora_down|.
             if isinstance(embeddings, LoraEmbedding):
-                embeddings = embeddings(opt_bias=False)
+                embeddings = embeddings()
 
             if reg_center_type == 'init':
                 # initial_embeddings[key] is already [L, 768]. No need to repeat().
