@@ -52,7 +52,7 @@ class LoraEmbedding(nn.Module):
     # Otherwise, init_up_noise_stds has no effect.
     # init_up_noise_stds[1] << init_up_noise_stds[0].
     def __init__(self, dim1, dim2, r=4, init_noise_stds=(0.1, 0.02), init_vecs=None, 
-                 has_bias=True, device_type="cuda"):
+                 vec_init_weights=None, has_bias=True, device_type="cuda"):
         super().__init__()
 
         if r > min(dim1, dim2):
@@ -84,6 +84,7 @@ class LoraEmbedding(nn.Module):
         # init_up_noise_stds is only applied when init_vecs is passed in.
         if init_vecs is not None:
             N = init_vecs.shape[0]
+            self.N = N
             #self.bias = nn.Parameter(init_vecs.clone(), requires_grad=True)
             # The first N vectors in lora_down are init_vecs (no noise added).
             # self.lora_down.data[:N]      = init_vecs.clone()
@@ -92,18 +93,35 @@ class LoraEmbedding(nn.Module):
             # the output embeddings \approx init_vecs.mean().
             self.lora_basis.data[:N]     = init_vecs.clone()
             self.lora_down.data         *= init_noise_stds[0]
+            if vec_init_weights is not None:
+                assert len(vec_init_weights) == N, f"vec_init_weights must have length {N}"
+                # vec_weights: [1, N]
+                # vec_weights will be initialized as vec_init_weights and tuned through BP.
+                vec_init_weights = torch.tensor(vec_init_weights, dtype=init_vecs.dtype, device=init_vecs.device)
+                self.vec_weights = nn.Parameter(vec_init_weights.clone().unsqueeze(0), requires_grad=True)
+            else:
+                # vec_weights are initialized as equal weights, then tuned through BP.
+                self.vec_weights = nn.Parameter(torch.ones(1, N) / N, requires_grad=True)
             # After scaled down by init_up_noise_stds[0] (default 0.1) and 
-            # init_up_noise_stds[1] (default 0.02), 
-            # lora_up contains small noise + [1, ..., 1, 0, ..., 0,
-            #                                 1, ..., 1, 0, ..., 0,
-            #                                         ...                         
-            #                                 1, ..., 1, 0, ..., 0.] / N.
-            # 1s block are coefficients of init_vecs, so added with smaller noises (init_noise_stds[1]=0.02). 
-            self.lora_up.data[:, :N]    = self.lora_up.data[:, :N] * init_noise_stds[1] \
-                                          + torch.ones(dim1, N) / N
-            # 0s block are coefficients of the extra random vectors, 
-            # So added with larger noises (init_noise_stds[0]=0.1), to let them play a bigger role.
+            # init_up_noise_stds[1] (default 0.02), self.lora_up contains only small noise.
+            # The common weight matrix (broadcasted from self.vec_weights)             
+            #                       [w_0, ..., w_N, 0, ..., 0,
+            #                        w_0, ..., w_N, 0, ..., 0,
+            #                                 ...                         
+            #                        w_0, ..., w_N, 0, ..., 0.]
+            # will be added to self.lora_up in forward().
+            # First N columns are coefficients of init_vecs (or lora_basis), 
+            # these noises will be added to the common weight matrix, 
+            # so make the noises smaller (init_noise_stds[1]=0.02) -- 
+            # rows are given small randomness.
+            self.lora_up.data[:, :N]    *= init_noise_stds[1]
+            # The last dim1-N block are coefficients of the extra learned vectors.
+            # We don't want the result embeddings to be confined 
+            # in the subspace of lora_basis. So we let the extra learned vectors play a bigger role,
+            # by making the noises larger (init_noise_stds[0]=0.1).
             self.lora_up.data[:, N:]    *= init_noise_stds[0]
+        else:
+            self.N = 0
 
         if self.has_bias:
             # bias: 25 * 768.
@@ -116,7 +134,13 @@ class LoraEmbedding(nn.Module):
             # torch.matmul: matrix multiplication.
             # torch.matmul(self.lora_up, self.lora_down): 25 * 768.
             # * self.scale: 25 * 768.
-            return torch.matmul(self.lora_up, self.lora_down + self.lora_basis) * self.scale + self.bias
+            lora_up = self.lora_up.clone()
+            if self.N > 0:
+                # self.vec_weights: [1, N] broadcasted to [768, N].
+                lora_up[:, :self.N] += self.lora_up[:, :self.N] + self.vec_weights
+
+            lora_down = self.lora_down + self.lora_basis
+            return torch.matmul(lora_up, lora_down) * self.scale + self.bias
 
 # embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
