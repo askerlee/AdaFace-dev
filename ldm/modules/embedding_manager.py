@@ -75,6 +75,8 @@ class LoraEmbedding(nn.Module):
         # / sqrt(r) to make the std of (lora_down * lora_up) \approx 1.
         self.lora_down  = nn.Parameter(torch.randn(r, dim2) / np.sqrt(r))
         # lora_basis is the constant bias of the basis vectors. lora_basis won't be updated.
+        # In forward(), the actual basis embeddings lora_down = self.lora_down + lora_basis.
+        # self.lora_down is learned through BP, so the basis embeddings are updated.
         self.lora_basis = nn.Parameter(torch.zeros_like(self.lora_down), requires_grad=False)
         self.scale = 1.0
         self.r = r
