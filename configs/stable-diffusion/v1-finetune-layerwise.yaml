@@ -16,11 +16,11 @@ model:
     monitor: val/loss_simple_ema
     scale_factor: 0.18215
     use_ema: False
-    embedding_reg_weight: 0.001
+    embedding_reg_weight: 0.003
     unfreeze_model: False
     model_lr: 0.0
     use_layerwise_embedding: True
-
+    
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
@@ -30,6 +30,7 @@ model:
         num_vectors_per_token: 1
         progressive_words: False
         use_layerwise_embedding: True
+        layerwise_lora_rank: 3
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
