@@ -20,6 +20,7 @@ from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.util import instantiate_from_config
+import re
 
 def load_model_from_config(config, ckpt, verbose=False):
     print(f"Loading model from {ckpt}")
@@ -166,7 +167,11 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--init_word", 
         type=str, 
-        help="Word to use as source for initial token embedding")
+        help="Words to use as source for initial token embedding")
+
+    parser.add_argument("--init_word_weights", nargs="*", 
+        type=float, 
+        help="Weights of each token in init word")
 
     return parser
 
@@ -600,20 +605,26 @@ if __name__ == "__main__":
 
         # model
 
-        # config.model.params.personalization_config.params.init_word = opt.init_word
+        if len(opt.init_word_weights) > 0:
+            assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_word))
+
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
         if opt.placeholder_string:
             config.model.params.personalization_config.params.placeholder_strings = [opt.placeholder_string]
             config.data.params.train.params.placeholder_token = opt.placeholder_string
             config.data.params.validation.params.placeholder_token = opt.placeholder_string
 
+        # Currently, only supports one group of initial words and weights.
         if opt.init_word:
             config.model.params.personalization_config.params.initializer_words[0] = opt.init_word
+            if len(opt.init_word_weights) > 0:
+                config.model.params.personalization_config.params.initializer_weights[0] = opt.init_word_weights
 
         if opt.actual_resume:
             model = load_model_from_config(config, opt.actual_resume)
         else:
             model = instantiate_from_config(config.model)
+
 
         # trainer and callbacks
         trainer_kwargs = dict()

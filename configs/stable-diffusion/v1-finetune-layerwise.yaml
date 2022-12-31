@@ -16,7 +16,7 @@ model:
     monitor: val/loss_simple_ema
     scale_factor: 0.18215
     use_ema: False
-    embedding_reg_weight: 0.001
+    embedding_reg_weight: 0.005
     unfreeze_model: False
     model_lr: 0.0
     use_layerwise_embedding: True
@@ -26,10 +26,12 @@ model:
       params:
         placeholder_strings: ["*"]
         initializer_words: ["sculpture"]
+        initializer_weights: [ None ]
         per_image_tokens: false
         num_vectors_per_token: 1
         progressive_words: False
         use_layerwise_embedding: True
+        layerwise_lora_rank_token_ratio: 2
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
