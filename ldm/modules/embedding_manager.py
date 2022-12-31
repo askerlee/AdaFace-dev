@@ -385,7 +385,7 @@ class EmbeddingManager(nn.Module):
     def layerwise_embedding_attractor_loss(self):
         loss = 0.
         num_embeddings      = len(self.initial_embeddings)
-        euc_loss_type       = 'l2'       # l1, l2
+        euc_loss_type       = 'l1'       # l1, l2
         euc_loss_weight     = 1.0
         cosine_loss_weight  = 1 - euc_loss_weight
         l2_norm_weight      = 0.00
@@ -434,7 +434,7 @@ class EmbeddingManager(nn.Module):
     def layerwise_lora_norm_loss(self):
         loss = 0.
         num_embeddings  = len(self.initial_embeddings)
-        euc_loss_type   = 'l2'       # l1, l2
+        euc_loss_type   = 'l1'       # l1, l2
 
         for key in self.initial_embeddings:
             embeddings = self.string_to_param_dict[key]
