@@ -170,7 +170,7 @@ class EmbeddingManager(nn.Module):
             # If two tokens, lora rank=4. That means,
             # compress 12*2+1=25 embeddings to the linear combination of 4 embeddings,
             # in which two are initialized as the two token embeddings, and two are learned through BP.
-            layerwise_lora_rank_token_ratio=2,
+            layerwise_lora_rank_token_ratio=2.,
             # If no initializer words are specified, then lora rank=2.
             layerwise_lora_default_rank=2,
             **kwargs
@@ -231,7 +231,7 @@ class EmbeddingManager(nn.Module):
                 init_word_tokens = get_tokens_for_string(initializer_words[idx])
                 init_word_weights = initializer_weights[idx] if (initializer_weights is not None) else None
                 N = len(init_word_tokens)
-                layerwise_lora_rank = layerwise_lora_rank_token_ratio * N if self.use_layerwise_embedding else -1
+                layerwise_lora_rank = round(layerwise_lora_rank_token_ratio * N) if self.use_layerwise_embedding else -1
 
                 with torch.no_grad():
                     init_word_embeddings = get_embeddings_for_tokens(init_word_tokens.cpu())
