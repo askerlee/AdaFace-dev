@@ -52,9 +52,13 @@ class LoraEmbedding(nn.Module):
     # Otherwise, init_up_noise_stds has no effect.
     # init_up_noise_stds[1] << init_up_noise_stds[0].
     # has_bias: if disabled, the performance is much worse.
-    def __init__(self, dim1, dim2, r=4, init_noise_stds=(0.1, 0.04), init_vecs=None, 
+    def __init__(self, dim1, dim2, r=4, init_noise_stds=(0.1, 0.01), init_vecs=None, 
                  vec_init_weights=None, has_bias=True, device_type="cuda"):
         super().__init__()
+
+        self.dim1 = dim1
+        self.dim2 = dim2
+        self.r = r
 
         if r > min(dim1, dim2):
             raise ValueError(
@@ -80,7 +84,6 @@ class LoraEmbedding(nn.Module):
         # self.lora_down is learned through BP, so the basis embeddings are updated.
         self.lora_basis = nn.Parameter(torch.zeros_like(self.lora_down), requires_grad=False)
         self.scale = 1.0
-        self.r = r
         self.has_bias = has_bias
         self.device_type = device_type
 
@@ -91,7 +94,7 @@ class LoraEmbedding(nn.Module):
             #self.bias = nn.Parameter(init_vecs.clone(), requires_grad=True)
             # The first N vectors in lora_down are init_vecs (no noise added).
             # self.lora_down.data[:N]      = init_vecs.clone()
-            # The remaining dim1-N vectors are gaussian noise with std init_noise_stds[0].
+            # The remaining dim1-N vectors are gaussian noise with std init_noise_stds[0] (default: 0.1).
             # init_noise_stds[0] scales down the noise level, so that 
             # the output embeddings \approx init_vecs.mean().
             self.lora_basis.data[:N]     = init_vecs.clone()
@@ -110,7 +113,7 @@ class LoraEmbedding(nn.Module):
                 self.vec_weights = nn.Parameter(torch.ones(1, N) / N)
 
             # After scaled down by init_up_noise_stds[0] (default 0.1) and 
-            # init_up_noise_stds[1] (default 0.04), self.lora_up contains only small noise.
+            # init_up_noise_stds[1] (default 0.01), self.lora_up contains only small noise.
             # The common weight matrix (broadcasted from self.vec_weights)             
             #                       [w_0, ..., w_N, 0, ..., 0,
             #                        w_0, ..., w_N, 0, ..., 0,
@@ -144,7 +147,7 @@ class LoraEmbedding(nn.Module):
             # * self.scale: 25 * 768.
             lora_up = self.lora_up.clone()
             if self.N > 0:
-                # self.vec_weights: [1, N] broadcasted to [768, N].
+                # self.vec_weights: [1, N] broadcasted to [25, N].
                 lora_up[:, :self.N] += self.lora_up[:, :self.N] + self.vec_weights
 
             lora_down = self.lora_down + self.lora_basis
@@ -236,7 +239,7 @@ class EmbeddingManager(nn.Module):
                     avg_init_word_embedding = init_word_embeddings.mean(dim=0, keepdim=True)
 
                 if layerwise_lora_rank > 0:
-                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, layerwise_lora_rank, (0.1, 0.04), 
+                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, layerwise_lora_rank, (0.1, 0.01), 
                                                  init_word_embeddings, init_word_weights)
                 else:
                     # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
@@ -245,7 +248,7 @@ class EmbeddingManager(nn.Module):
                 self.initial_embeddings[placeholder_string] = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=False)
             else:
                 if layerwise_lora_default_rank > 0:
-                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, layerwise_lora_default_rank, (0.1, 0.04))
+                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, layerwise_lora_default_rank, (0.1, 0.01))
                 else:
                     token_params = torch.nn.Parameter(torch.rand(size=(num_vectors_per_token, token_dim), requires_grad=True))
             
@@ -435,17 +438,21 @@ class EmbeddingManager(nn.Module):
         loss = 0.
         num_embeddings  = len(self.initial_embeddings)
         euc_loss_type   = 'l1'       # l1, l2
+        l2_norm_weight  = 0.01
 
         for key in self.initial_embeddings:
-            embeddings = self.string_to_param_dict[key]
+            lora_embedding = self.string_to_param_dict[key]
             # Skip non-LORA embeddings.
-            if not isinstance(embeddings, LoraEmbedding):
+            if not isinstance(lora_embedding, LoraEmbedding):
                 continue
             if euc_loss_type == 'l1':
-                loss = loss + embeddings.lora_down.abs().mean()  + embeddings.lora_up.abs().mean()
+                loss = loss + lora_embedding.lora_down.abs().mean()  + lora_embedding.lora_up.abs().mean()
             elif euc_loss_type == 'l2':
-                loss = loss + (embeddings.lora_down ** 2).mean() + (embeddings.lora_up ** 2).mean()
-
+                loss = loss + (lora_embedding.lora_down ** 2).mean() + (lora_embedding.lora_up ** 2).mean()
+            
+            l2_norm_reg = torch.norm(lora_embedding(), dim=1).mean()
+            loss = loss + l2_norm_reg * l2_norm_weight
+            
         return loss / num_embeddings
 
     def embedding_to_loss(self):

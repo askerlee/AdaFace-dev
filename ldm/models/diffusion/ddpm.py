@@ -1448,8 +1448,12 @@ class LatentDiffusion(DDPM):
                 return {key: log[key] for key in return_keys}
         return log
 
+    # configure_optimizers() is called later in main.py.
     def configure_optimizers(self):
+        # self.learning_rate and self.weight_decay are set in main.py.
+        # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
         lr = self.learning_rate
+        weight_decay = self.weight_decay
 
         if self.embedding_manager is not None: # If using textual inversion
             embedding_params = list(self.embedding_manager.embedding_parameters())
@@ -1458,7 +1462,7 @@ class LatentDiffusion(DDPM):
                 model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
                 opt = torch.optim.AdamW([{"params": embedding_params, "lr": lr}, {"params": model_params}], lr=self.model_lr)
             else: # Otherwise, train only embedding
-                opt = torch.optim.AdamW(embedding_params, lr=lr)
+                opt = torch.optim.AdamW(embedding_params, lr=lr, weight_decay=weight_decay)
         else:
             params = list(self.model.parameters())
             if self.cond_stage_trainable:
@@ -1468,10 +1472,24 @@ class LatentDiffusion(DDPM):
                 print('Diffusion model optimizing logvar')
                 params.append(self.logvar)
 
-                opt = torch.optim.AdamW(params, lr=lr)
+            opt = torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay)
+
+        if self.use_scheduler:
+            assert 'target' in self.scheduler_config
+            scheduler = instantiate_from_config(self.scheduler_config)
+
+            print("Setting up LambdaLR scheduler...")
+            scheduler = [
+                {
+                    'scheduler': LambdaLR(opt, lr_lambda=scheduler.schedule),
+                    'interval': 'step',
+                    'frequency': 1
+                }]
+            return [opt], scheduler
 
         return opt
 
+    # configure_opt_embedding() is never called.
     def configure_opt_embedding(self):
 
         self.cond_stage_model.eval()
@@ -1489,7 +1507,8 @@ class LatentDiffusion(DDPM):
 
         lr = self.learning_rate
         params = list(self.embedding_manager.embedding_parameters())
-        return torch.optim.AdamW(params, lr=lr)
+        opt = torch.optim.AdamW(params, lr=lr)
+        return opt
 
     def configure_opt_model(self):
 

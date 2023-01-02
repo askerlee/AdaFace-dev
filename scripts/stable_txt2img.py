@@ -285,6 +285,8 @@ def main():
                     embedding_sig = date_sig + "-" + iter_sig
 
                     grid_filepath = os.path.join(outpath, f'{prompt.replace(" ", "-")}-{embedding_sig}.jpg')
+                    if os.path.exists(grid_filepath):
+                        grid_filepath = os.path.join(outpath, f'{prompt.replace(" ", "-")}-{embedding_sig}-{grid_count}.jpg')
                     Image.fromarray(grid.astype(np.uint8)).save(grid_filepath)
                     grid_count += 1
 

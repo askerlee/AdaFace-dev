@@ -467,6 +467,7 @@ class CUDACallback(Callback):
         except AttributeError:
             pass
 
+# ModeSwapCallback is never used in the code.
 class ModeSwapCallback(Callback):
 
     def __init__(self, swap_step=2000):
@@ -768,7 +769,8 @@ if __name__ == "__main__":
             print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
 
         # configure learning rate
-        bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
+        bs, base_lr, weight_decay = config.data.params.batch_size, config.model.base_learning_rate, \
+                                    config.model.weight_decay
         if not cpu:
             ngpu = len(lightning_config.trainer.gpus.strip(",").split(','))
         else:
@@ -779,6 +781,7 @@ if __name__ == "__main__":
             accumulate_grad_batches = 1
         print(f"accumulate_grad_batches = {accumulate_grad_batches}")
         lightning_config.trainer.accumulate_grad_batches = accumulate_grad_batches
+        # scale_lr = True by default. So learning_rate is set to 2*base_lr.
         if opt.scale_lr:
             model.learning_rate = accumulate_grad_batches * ngpu * bs * base_lr
             print(
@@ -788,7 +791,8 @@ if __name__ == "__main__":
             model.learning_rate = base_lr
             print("++++ NOT USING LR SCALING ++++")
             print(f"Setting learning rate to {model.learning_rate:.2e}")
-
+        
+        model.weight_decay = weight_decay
 
         # allow checkpointing via USR1
         def melk(*args, **kwargs):

@@ -1,7 +1,10 @@
 model:
-  base_learning_rate: 5.0e-03
+  base_learning_rate: 1e-02
+  weight_decay: 0.0
+
   target: ldm.models.diffusion.ddpm.LatentDiffusion
   params:
+    # linear_start/linear_end: params for linear beta schedule.
     linear_start: 0.00085
     linear_end: 0.0120
     num_timesteps_cond: 1
@@ -16,11 +19,22 @@ model:
     monitor: val/loss_simple_ema
     scale_factor: 0.18215
     use_ema: False
-    embedding_reg_weight: 0.005
+    embedding_reg_weight: 0.1
     unfreeze_model: False
     model_lr: 0.0
     use_layerwise_embedding: True
-    
+
+    scheduler_config:
+      target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
+      params:
+        verbosity_interval: 0
+        warm_up_steps: 100
+        # max_decay_steps > max_steps = 4000, so that the final LR is around 0.26*base_lr.
+        max_decay_steps: 6000
+        lr_start: 0.1
+        lr_max: 1.0
+        lr_min: 0.1
+
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
