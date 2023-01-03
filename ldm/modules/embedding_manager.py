@@ -83,7 +83,6 @@ class LoraEmbedding(nn.Module):
         # In forward(), the actual basis embeddings lora_down = self.lora_down + lora_basis.
         # self.lora_down is learned through BP, so the basis embeddings are updated.
         self.lora_basis = nn.Parameter(torch.zeros_like(self.lora_down), requires_grad=False)
-        self.scale = 1.0
         self.has_bias = has_bias
         self.device_type = device_type
         # vec_weights are initialized as equal weights, then tuned through BP.
@@ -149,8 +148,7 @@ class LoraEmbedding(nn.Module):
             lora_down   = self.lora_down + self.lora_basis
             # torch.matmul: matrix multiplication.
             # torch.matmul(lora_up, lora_down): 25 * 768.
-            # * self.scale: 25 * 768.
-            return torch.matmul(lora_up, lora_down) * self.scale + self.bias
+            return torch.matmul(lora_up, lora_down) + self.bias
 
 # embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -173,6 +171,7 @@ class EmbeddingManager(nn.Module):
             layerwise_lora_rank_token_ratio=2.,
             # If no initializer words are specified, then lora rank=2.
             layerwise_lora_default_rank=2,
+            subj_scale=1.0,
             **kwargs
     ):
         super().__init__()
@@ -184,6 +183,7 @@ class EmbeddingManager(nn.Module):
 
         self.progressive_words = progressive_words
         self.progressive_counter = 0
+        self.subj_scale = subj_scale
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_reflective   = layerwise_reflective
@@ -309,7 +309,7 @@ class EmbeddingManager(nn.Module):
                 # placeholder_embedding: placeholder_embedding: [25, 768] repeat=> [50, 768]
                 # Note that the 25 layers are initialized with the same embedding. 
                 # LINK #init_embed
-                embedded_text[placeholder_idx] = placeholder_embedding.repeat(b, 1)
+                embedded_text[placeholder_idx] = placeholder_embedding.repeat(b, 1) * self.subj_scale
 
             # *multi-vector latent space*: In this space, S* is embedded into multiple 
             # learned embeddings, an approach that is equivalent to describing
@@ -342,7 +342,9 @@ class EmbeddingManager(nn.Module):
                     col = sorted_cols[idx]
 
                     new_token_row = torch.cat([tokenized_text[row][:col], placeholder_token.repeat(num_vectors_for_token).to(device), tokenized_text[row][col + 1:]], axis=0)[:n]
-                    new_embed_row = torch.cat([embedded_text[row][:col],  placeholder_embedding[:num_vectors_for_token], embedded_text[row][col + 1:]], axis=0)[:n]
+                    new_embed_row = torch.cat([embedded_text[row][:col],  
+                                               placeholder_embedding[:num_vectors_for_token] * self.subj_scale, 
+                                               embedded_text[row][col + 1:]], axis=0)[:n]
 
                     # Locate the next placeholder token in the row, and replace the embedding in embedded_text.
                     embedded_text[row]  = new_embed_row
@@ -437,7 +439,7 @@ class EmbeddingManager(nn.Module):
         loss = 0.
         num_embeddings  = len(self.initial_embeddings)
         euc_loss_type   = 'l1'       # l1, l2
-        l2_norm_weight  = 0.01
+        basis_l2_norm_weight  = 0.0005
 
         for key in self.initial_embeddings:
             lora_embedding = self.string_to_param_dict[key]
@@ -449,8 +451,9 @@ class EmbeddingManager(nn.Module):
             elif euc_loss_type == 'l2':
                 loss = loss + (lora_embedding.lora_down ** 2).mean() + (lora_embedding.lora_up ** 2).mean()
             
-            l2_norm_reg = torch.norm(lora_embedding.lora_basis, dim=1).mean()
-            loss = loss + l2_norm_reg * l2_norm_weight
+            basis_l2_norm = torch.norm(lora_embedding.lora_basis, dim=1).mean()
+            scale_norm = torch.abs(lora_embedding.scale)
+            loss = loss + basis_l2_norm * basis_l2_norm_weight
             
         return loss / num_embeddings
 

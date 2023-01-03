@@ -10,6 +10,12 @@ import numpy as np
 np.set_printoptions(precision=3, suppress=True)
 
 emb_ckpt_folder = sys.argv[1]
+if len(sys.argv) > 2:
+    # N: number of placeholder words. 3 is the default.
+    N = int(sys.argv[2])
+else:
+    N = 3
+
 emb_ckpt_files = glob.glob(emb_ckpt_folder + "/embeddings_gs-*.pt")
 emb_ckpt_files = sorted(emb_ckpt_files, key=lambda s:int(re.search(r"(\d+).pt", s).group(1)))
 
@@ -30,7 +36,11 @@ for emb_ckpt_filename in emb_ckpt_files:
     print("%s:" %os.path.basename(emb_ckpt_filename))
     if isinstance(embeddings, LoraEmbedding):
         print(embeddings.vec_weights.detach().cpu().numpy())
-        calc_stats("lora_basis", embeddings.lora_basis)
+        print(embeddings.scale)
+        lora_basis = embeddings.lora_basis.detach().cpu()
+        calc_stats("lora_basis_placeholder", embeddings.lora_basis[:N])
+        calc_stats("lora_basis_learned",     embeddings.lora_basis[N:])
         embeddings = embeddings()
 
     calc_stats("embeddings", embeddings)
+    print()

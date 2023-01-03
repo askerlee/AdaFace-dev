@@ -180,6 +180,12 @@ def main():
         "--embedding_path", 
         type=str, 
         help="Path to a pre-trained embedding manager checkpoint")
+    parser.add_argument(
+        "--subj_scale",
+        type=float,
+        default=1.0,
+        help="Scale of the subject embedding",
+    )
 
     parser.add_argument('--gpu', type=str,  default='1', help='ID of GPU to use')
 
@@ -197,6 +203,7 @@ def main():
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
     model.embedding_manager.load(opt.embedding_path)
+    model.embedding_manager.subj_scale = opt.subj_scale
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = model.to(device)
