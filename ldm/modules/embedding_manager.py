@@ -82,7 +82,8 @@ class LoraEmbedding(nn.Module):
         # lora_basis is the constant bias of the basis vectors. lora_basis won't be updated.
         # In forward(), the actual basis embeddings lora_down = self.lora_down + lora_basis.
         # self.lora_down is learned through BP, so the basis embeddings are updated.
-        self.lora_basis = nn.Parameter(torch.zeros_like(self.lora_down), requires_grad=False)
+        self.lora_basis = nn.Parameter(torch.randn_like(self.lora_down), requires_grad=False)
+        self.lora_basis.data /= self.lora_basis.data.norm(dim=1, keepdim=True)
         self.has_bias = has_bias
         self.device_type = device_type
         # vec_weights are initialized as equal weights, then tuned through BP.
@@ -98,8 +99,15 @@ class LoraEmbedding(nn.Module):
             # The remaining dim1-N vectors are gaussian noise with std init_noise_stds[0] (default: 0.1).
             # init_noise_stds[0] scales down the noise level, so that 
             # the output embeddings \approx init_vecs.mean().
-            self.lora_basis.data[:N]     = init_vecs.clone()
+            init_vecs_norm = init_vecs.norm(dim=1, keepdim=True)
+            # print("init_vecs_norm: ", init_vecs_norm)
+            self.lora_basis.data[:N]     = init_vecs.clone() / init_vecs_norm
             self.lora_down.data         *= init_noise_stds[0]
+            # Normalize init_vecs, and transfer their original norms into the vec_weights.
+            self.vec_weights.data[:, :N] = init_vecs_norm.squeeze(1).unsqueeze(0)
+            # Lower the weights of the remaining r-N random vectors, to encourage the model to 
+            # stay near the subspace spanned with init_vecs.
+            self.vec_weights.data[:, N:] *= init_noise_stds[0]
 
             # vec_weights: [1, N]
             if vec_init_weights is not None:
@@ -108,10 +116,7 @@ class LoraEmbedding(nn.Module):
                 # Normalize the sum of vec_init_weights to 1.
                 vec_init_weights /= vec_init_weights.sum()
                 # The first N vec_weights are initialized as vec_init_weights, and tuned through BP.
-                self.vec_weights.data[:, :N] = vec_init_weights.unsqueeze(0)
-                # Lower the weights of the remaining r-N random vectors, to encourage the model to 
-                # stay near the subspace spanned with init_vecs.
-                self.vec_weights.data[:, N:] *= init_noise_stds[0]
+                self.vec_weights.data[:, :N] *= vec_init_weights.unsqueeze(0)
 
             # After scaled down by init_up_noise_stds[0] (default 0.1) and 
             # init_up_noise_stds[1] (default 0.01), self.lora_up contains only small noise.
@@ -143,9 +148,10 @@ class LoraEmbedding(nn.Module):
 
     def forward(self):
         with torch.autocast(device_type=self.device_type, enabled=False):
+            self.lora_basis.data /= self.lora_basis.data.norm(dim=1, keepdim=True)
             # self.vec_weights: [1, r] broadcasted to [25, r].
             lora_up     = self.lora_up   + self.vec_weights
-            lora_down   = self.lora_down + self.lora_basis
+            lora_down   = self.lora_basis # + self.lora_down
             # torch.matmul: matrix multiplication.
             # torch.matmul(lora_up, lora_down): 25 * 768.
             return torch.matmul(lora_up, lora_down) + self.bias
@@ -439,7 +445,7 @@ class EmbeddingManager(nn.Module):
         loss = 0.
         num_embeddings  = len(self.initial_embeddings)
         euc_loss_type   = 'l1'       # l1, l2
-        basis_l2_norm_weight  = 0.0005
+        basis_l2_norm_weight  = 0.000
 
         for key in self.initial_embeddings:
             lora_embedding = self.string_to_param_dict[key]
@@ -447,12 +453,13 @@ class EmbeddingManager(nn.Module):
             if not isinstance(lora_embedding, LoraEmbedding):
                 continue
             if euc_loss_type == 'l1':
-                loss = loss + lora_embedding.lora_down.abs().mean()  + lora_embedding.lora_up.abs().mean()
+                # loss = loss + lora_embedding.lora_down.abs().mean()  + lora_embedding.lora_up.abs().mean()
+                loss = loss + lora_embedding.lora_up.abs().mean()
             elif euc_loss_type == 'l2':
-                loss = loss + (lora_embedding.lora_down ** 2).mean() + (lora_embedding.lora_up ** 2).mean()
-            
+                # loss = loss + (lora_embedding.lora_down ** 2).mean() + (lora_embedding.lora_up ** 2).mean()
+                loss = loss + (lora_embedding.lora_up ** 2).mean()
+
             basis_l2_norm = torch.norm(lora_embedding.lora_basis, dim=1).mean()
-            scale_norm = torch.abs(lora_embedding.scale)
             loss = loss + basis_l2_norm * basis_l2_norm_weight
             
         return loss / num_embeddings
