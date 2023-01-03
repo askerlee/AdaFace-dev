@@ -36,7 +36,6 @@ for emb_ckpt_filename in emb_ckpt_files:
     print("%s:" %os.path.basename(emb_ckpt_filename))
     if isinstance(embeddings, LoraEmbedding):
         print(embeddings.vec_weights.detach().cpu().numpy())
-        print(embeddings.scale)
         lora_basis = embeddings.lora_basis.detach().cpu()
         calc_stats("lora_basis_placeholder", embeddings.lora_basis[:N])
         calc_stats("lora_basis_learned",     embeddings.lora_basis[N:])

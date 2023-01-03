@@ -445,7 +445,7 @@ class EmbeddingManager(nn.Module):
         loss = 0.
         num_embeddings  = len(self.initial_embeddings)
         euc_loss_type   = 'l1'       # l1, l2
-        basis_l2_norm_weight  = 0.000
+        vec_weights_norm_weight  = 0.0001
 
         for key in self.initial_embeddings:
             lora_embedding = self.string_to_param_dict[key]
@@ -459,8 +459,8 @@ class EmbeddingManager(nn.Module):
                 # loss = loss + (lora_embedding.lora_down ** 2).mean() + (lora_embedding.lora_up ** 2).mean()
                 loss = loss + (lora_embedding.lora_up ** 2).mean()
 
-            basis_l2_norm = torch.norm(lora_embedding.lora_basis, dim=1).mean()
-            loss = loss + basis_l2_norm * basis_l2_norm_weight
+            vec_weights_norm = lora_embedding.vec_weights.abs().mean()
+            loss = loss + vec_weights_norm * vec_weights_norm_weight
             
         return loss / num_embeddings
 
