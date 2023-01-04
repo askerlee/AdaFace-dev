@@ -16,8 +16,12 @@ if len(sys.argv) > 2:
 else:
     N = 3
 
-emb_ckpt_files = glob.glob(emb_ckpt_folder + "/embeddings_gs-*.pt")
-emb_ckpt_files = sorted(emb_ckpt_files, key=lambda s:int(re.search(r"(\d+).pt", s).group(1)))
+# check if emb_ckpt_folder is a single file or a folder
+if os.path.isfile(emb_ckpt_folder):
+    emb_ckpt_files = [emb_ckpt_folder]
+else:
+    emb_ckpt_files = glob.glob(emb_ckpt_folder + "/embeddings_gs-*.pt")
+    emb_ckpt_files = sorted(emb_ckpt_files, key=lambda s:int(re.search(r"(\d+).pt", s).group(1)))
 
 def calc_stats(emb_name, embeddings):
     print("%s:" %emb_name)
@@ -36,10 +40,13 @@ for emb_ckpt_filename in emb_ckpt_files:
     print("%s:" %os.path.basename(emb_ckpt_filename))
     if isinstance(embeddings, LoraEmbedding):
         print(embeddings.vec_weights.detach().cpu().numpy())
+        #print(embeddings.lora_up.detach().cpu().numpy())
         lora_basis = embeddings.lora_basis.detach().cpu()
         calc_stats("lora_basis_placeholder", embeddings.lora_basis[:N])
         calc_stats("lora_basis_learned",     embeddings.lora_basis[N:])
-        embeddings = embeddings()
+        if not isinstance(embeddings.bias, int):
+            calc_stats("bias", embeddings.bias)
+        embeddings = embeddings(False)
 
     calc_stats("embeddings", embeddings)
     print()
