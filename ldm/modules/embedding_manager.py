@@ -50,15 +50,23 @@ class LoraEmbedding(nn.Module):
     # dim1: 25, dim2: 768, r: 4.
     # If using init_vecs, init_noise_stds are applied to lora_up and lora_basis. 
     # Otherwise, init_up_noise_stds has no effect.
+    # init_vec_weights: weights of init_vecs, not "init weights of vecs".
+    # Assume init_vec_weights is already normalized, i.e., init_vec_weights.sum() = 1.
     # init_up_noise_stds[1] << init_up_noise_stds[0].
     # has_bias: if enabled, the output vectors will be dominated by self.bias.
-    def __init__(self, dim1, dim2, r=4, init_noise_stds=(0.1, 0.02), init_vecs=None, 
-                 vec_init_weights=None, has_bias=True, device_type="cuda"):
+    def __init__(self, dim1, dim2, r=4, init_noise_stds=(0.1, 0.04), init_vecs=None, 
+                 init_vec_weights=None, init_neg_vecs=None, has_bias=True, device_type="cuda"):
         super().__init__()
 
         self.dim1 = dim1
         self.dim2 = dim2
         self.r = r
+
+        # If dropout_p > 0, apply dropout on lora_basis.
+        # If dropout_p = 0, self.drop is equivalent to nn.Identity.
+        self.dropout_p = 0.2
+        self.dropout = nn.Dropout(self.dropout_p)
+        self.lora_basis_drop_mask = nn.Parameter(torch.ones(r, 1), requires_grad=False)
 
         if r > min(dim1, dim2):
             raise ValueError(
@@ -79,9 +87,15 @@ class LoraEmbedding(nn.Module):
         self.lora_up    = nn.Parameter(torch.randn(dim1, r))
         # lora_basis consists of r basis vectors. Will be updated through BP.
         self.lora_basis = nn.Parameter(torch.randn(r, dim2), requires_grad=False)
-        self.has_bias = has_bias
+        # The init_vecs norm is usually small (0.5~1).
+        # So we need to normalize lora_basis, to avoid randomly initialized vectors 
+        # dominating the output embeddings.
+        self.lora_basis.data = F.normalize(self.lora_basis, dim=1)
+        self.has_bias    = has_bias
         self.device_type = device_type
         # vec_weights are initialized as equal weights, then tuned through BP.
+        # vec_weights is added with lora_up. lora_up is a random component of the actual weights.
+        # So equal weights here won't cause equal graidents (and non-identifiability of parameters).
         self.vec_weights = nn.Parameter(torch.ones(1, r) / r)
 
         # init_up_noise_stds is only applied when init_vecs is passed in.
@@ -90,29 +104,20 @@ class LoraEmbedding(nn.Module):
             self.N = N
             #self.bias = nn.Parameter(init_vecs.clone(), requires_grad=True)
             # The first N vectors in lora_basis are init_vecs (no noise added).
-            # The remaining dim1-N vectors are gaussian noise with std init_noise_stds[0] (default: 0.1).
-            # init_noise_stds[0] scales down the noise level, so that 
-            # the output embeddings \approx init_vecs.mean().
-            # init_vecs_norm = init_vecs.norm(dim=1, keepdim=True)
-            # print("init_vecs_norm: ", init_vecs_norm)
+            # The remaining dim1-N vectors are gaussian noises on the unit ball.
             self.lora_basis.data[:N]     = init_vecs.clone()
-            # Normalize init_vecs, extract their original norms and absorb into the vec_weights,
-            # so that their multiplication doesn't change.
             # Divided by N: put an equal weight prior on init_vecs            
-            # self.vec_weights.data[:, :N] = init_vecs_norm.squeeze(1).unsqueeze(0) / N
             self.vec_weights.data.fill_(1. / N)
-            # Lower the weights of the remaining r-N random vectors, to encourage the model to 
-            # stay near the subspace spanned with init_vecs.
-            # By default, these weights are 1/6*0.1 = 0.0167.
-            self.vec_weights.data[:, N:] *= init_noise_stds[0]
+            # Lower the weights of the remaining r-N random vectors, to prevent the model  
+            # from going too far away from the subspace spanned with init_vecs.
+            # By default, these weights are 1/6*0.4 = 0.067.
+            self.vec_weights.data[:, N:] *= 0.4
 
             # vec_weights: [1, N]
-            if vec_init_weights is not None:
-                assert len(vec_init_weights) == self.N, f"vec_init_weights must have length {self.N}"
-                vec_init_weights = torch.Tensor(vec_init_weights)
-                # Normalize the sum of vec_init_weights to 1.
-                vec_init_weights /= vec_init_weights.sum()
-                self.vec_weights.data[:, :N] = vec_init_weights.unsqueeze(0)
+            if init_vec_weights is not None:
+                assert len(init_vec_weights) == self.N, f"init_vec_weights must have length {self.N}"
+                # Assume init_vec_weights is already normalized, i.e., init_vec_weights.sum() = 1.
+                self.vec_weights.data[:, :N] = init_vec_weights.unsqueeze(0)
 
             # After scaled down by init_up_noise_stds[0] (default 0.1) and 
             # init_up_noise_stds[1] (default 0.01), self.lora_up contains only small noise.
@@ -136,6 +141,19 @@ class LoraEmbedding(nn.Module):
         else:
             self.N = 0
 
+        if init_neg_vecs is not None:
+            NEG = init_neg_vecs.shape[0]
+            self.NEG = NEG
+            # The no. N~N+NEG vectors in lora_basis are init_neg_vecs (no noise added).
+            # The remaining dim1-(N+NEG) vectors are gaussian noises on the unit ball.
+            self.lora_basis.data[N:N+NEG] = -init_neg_vecs.clone()
+            # self.vec_weights.data[N:N+NEG] = 1. / NEG
+            # Do not tinker with the columns corresponding to negative vectors in lora_up.
+        else:
+            self.NEG = 0
+
+        print(f"LoRA initialized with {self.N} init vectors, {self.NEG} negative vectors")
+
         if self.has_bias:
             # bias: 25 * 768.
             self.bias = nn.Parameter(torch.zeros(dim1, dim2))
@@ -147,12 +165,16 @@ class LoraEmbedding(nn.Module):
             if only_bias:
                 return self.bias
 
+            #if self.NEG > 0:
+            #    self.vec_weights.data[self.N:self.N+self.NEG] = -1. / self.NEG
+
             # self.lora_basis.data /= self.lora_basis.data.norm(dim=1, keepdim=True)
             # self.vec_weights: [1, r] broadcasted to [25, r].
             lora_up     = self.lora_up   + self.vec_weights
             # torch.matmul: matrix multiplication.
             # torch.matmul(lora_up, lora_basis): 25 * 768.
-            out_vecs = torch.matmul(lora_up, self.lora_basis) + self.bias
+            lora_basis_drop = self.lora_basis * self.dropout(self.lora_basis_drop_mask)
+            out_vecs = torch.matmul(lora_up, lora_basis_drop) + self.bias
             return out_vecs
 
 # embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
@@ -164,6 +186,7 @@ class EmbeddingManager(nn.Module):
             placeholder_strings=None,
             initializer_words=None,
             initializer_weights=None,
+            initializer_neg_words=None,
             per_image_tokens=False,
             num_vectors_per_token=1,
             progressive_words=False,
@@ -227,32 +250,58 @@ class EmbeddingManager(nn.Module):
         if per_image_tokens:
             placeholder_strings.extend(per_img_token_list)
 
+        if initializer_neg_words is not None and len(initializer_neg_words) > 0:
+            init_neg_embeddings = []
+            for neg_words in initializer_neg_words:
+                if neg_words is None or len(neg_words) == 0:
+                    continue
+                neg_tokens = get_tokens_for_string(neg_words)
+                with torch.no_grad():
+                    init_neg_embeddings.append(get_embeddings_for_tokens(neg_tokens.cpu()))
+            if len(init_neg_embeddings) > 0:
+                init_neg_embeddings = torch.cat(init_neg_embeddings, dim=0)
+                NEG = init_neg_embeddings.shape[0]
+            else:
+                init_neg_embeddings = None
+                NEG = 0
+        else:
+            init_neg_embeddings = None
+            NEG = 0
+
         for idx, placeholder_string in enumerate(placeholder_strings):
-            # get_token_for_string = get_clip_token_for_string
+            # get_token_for_string <= get_clip_token_for_string.
+            # force_single_token = True, as there should be only one token in placeholder_string.
             tokens = get_tokens_for_string(placeholder_string, force_single_token=True)
             token = tokens[0]
 
-            if initializer_words and idx < len(initializer_words):
+            if initializer_words is not None and idx < len(initializer_words):
                 init_word_tokens = get_tokens_for_string(initializer_words[idx])
-                init_word_weights = initializer_weights[idx] if (initializer_weights is not None) else None
                 N = len(init_word_tokens)
-                layerwise_lora_rank = round(layerwise_lora_rank_token_ratio * N) if self.use_layerwise_embedding else -1
+                if initializer_weights is not None:
+                    init_word_weights = initializer_weights[idx]
+                    init_word_weights = torch.tensor(init_word_weights, dtype=torch.float32)
+                    init_word_weights = init_word_weights / init_word_weights.sum()
+                else:
+                    init_word_weights = torch.ones(N, dtype=torch.float32) / N
+
+                layerwise_lora_rank = round(layerwise_lora_rank_token_ratio * N + NEG) if self.use_layerwise_embedding else -1
 
                 with torch.no_grad():
                     init_word_embeddings = get_embeddings_for_tokens(init_word_tokens.cpu())
-                    avg_init_word_embedding = init_word_embeddings.mean(dim=0, keepdim=True)
+                    avg_init_word_embedding = (init_word_embeddings * init_word_weights.unsqueeze(1)).sum(dim=0, keepdim=True)
 
                 if layerwise_lora_rank > 0:
                     token_params = LoraEmbedding(num_vectors_per_token, token_dim, layerwise_lora_rank, (0.1, 0.02), 
-                                                 init_word_embeddings, init_word_weights)
+                                                 init_word_embeddings, init_word_weights, init_neg_vecs=init_neg_embeddings)
                 else:
                     # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
                     token_params = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
-                # initial_embeddings are for computing the regularization loss.
+                # initial_embeddings are only used to compute the regularization loss.
                 self.initial_embeddings[placeholder_string] = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=False)
             else:
                 if layerwise_lora_default_rank > 0:
-                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, layerwise_lora_default_rank, (0.1, 0.02))
+                    token_params = LoraEmbedding(num_vectors_per_token, token_dim, layerwise_lora_default_rank, (0.1, 0.02),
+                                                 None, None, init_neg_embeddings=init_neg_embeddings)
                 else:
                     token_params = torch.nn.Parameter(torch.rand(size=(num_vectors_per_token, token_dim), requires_grad=True))
             
@@ -438,10 +487,11 @@ class EmbeddingManager(nn.Module):
 
         return loss / num_embeddings
 
+    # Regularization on lora_bias and lora_basis only.
     def layerwise_lora_norm_loss(self):
         loss = 0.
         num_embeddings  = len(self.initial_embeddings)
-        euc_loss_type   = 'l1'       # l1, l2
+        euc_loss_type   = 'l2'       # l1, l2
 
         for key in self.initial_embeddings:
             lora_embedding = self.string_to_param_dict[key]

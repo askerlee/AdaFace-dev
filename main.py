@@ -167,11 +167,20 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--init_word", 
         type=str, 
-        help="Words to use as source for initial token embedding")
+        help="Words used to initialize token embedding")
 
     parser.add_argument("--init_word_weights", nargs="*", 
         type=float, 
-        help="Weights of each token in init word")
+        help="Weights of each token in init_word")
+
+    parser.add_argument("--init_neg_words", 
+        type=str, default=None,
+        help="Negative words (commma separated) used to initialize token embedding")
+
+    # layerwise_lora_rank_token_ratio
+    parser.add_argument("--layerwise_lora_rank_token_ratio", 
+        type=float, default=-1,
+        help="Layerwise lora rank/token ratio")
 
     return parser
 
@@ -620,6 +629,14 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.initializer_words[0] = opt.init_word
             if len(opt.init_word_weights) > 0:
                 config.model.params.personalization_config.params.initializer_weights[0] = opt.init_word_weights
+
+        if opt.init_neg_words is not None:
+            init_neg_words = re.split(r",\s*", opt.init_neg_words)
+            config.model.params.personalization_config.params.initializer_neg_words = init_neg_words
+
+        if opt.layerwise_lora_rank_token_ratio > 0:
+            config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \
+                                    opt.layerwise_lora_rank_token_ratio
 
         if opt.actual_resume:
             model = load_model_from_config(config, opt.actual_resume)
