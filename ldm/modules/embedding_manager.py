@@ -46,9 +46,20 @@ def get_embeddings_for_clip_tokens(embedder, tokens):
     # RETURN: [N, 768]
     return embedder(tokens)[0]
 
+def thres_reg_loss(x, loss_type='l2', thres=None):
+    if thres is not None:
+        # If x <= thres, the gradient flow is cut off.
+        x = x * (x > thres).float()
+    if loss_type == 'l1':
+        return x.abs().mean()
+    elif loss_type == 'l2':
+        return (x * x).mean()
+    else:
+        breakpoint()
+
 class LoraEmbedding(nn.Module):
     # dim1: 25, dim2: 768, r: 4.
-    # If using init_vecs, init_noise_stds are applied to lora_up and lora_basis. 
+    # If using init_vecs, init_noise_stds are applied to basis_rand_weights. 
     # Otherwise, init_up_noise_stds has no effect.
     # init_vec_weights: weights of init_vecs, not "init weights of vecs".
     # Assume init_vec_weights is already normalized, i.e., init_vec_weights.sum() = 1.
@@ -64,7 +75,7 @@ class LoraEmbedding(nn.Module):
 
         # If dropout_p > 0, apply dropout on lora_basis.
         # If dropout_p = 0, self.drop is equivalent to nn.Identity.
-        self.dropout_p = 0.2
+        self.dropout_p = 0.0
         self.dropout = nn.Dropout(self.dropout_p)
         self.lora_basis_drop_mask = nn.Parameter(torch.ones(r, 1), requires_grad=False)
 
@@ -83,8 +94,8 @@ class LoraEmbedding(nn.Module):
                     f"LoRA init vectors shape {init_vecs.shape} must be (<={dim1}, {dim2})"
                 )
 
-        # lora_up: 25 * r, lora_basis: r * 768. lora_up * lora_basis: 25 * 768.
-        self.lora_up    = nn.Parameter(torch.randn(dim1, r))
+        # basis_rand_weights: 25 * r, lora_basis: r * 768. basis_rand_weights * lora_basis: 25 * 768.
+        self.basis_rand_weights    = nn.Parameter(torch.randn(dim1, r))
         # lora_basis consists of r basis vectors. Will be updated through BP.
         self.lora_basis = nn.Parameter(torch.randn(r, dim2), requires_grad=False)
         # The init_vecs norm is usually small (0.5~1).
@@ -93,10 +104,10 @@ class LoraEmbedding(nn.Module):
         self.lora_basis.data = F.normalize(self.lora_basis, dim=1)
         self.has_bias    = has_bias
         self.device_type = device_type
-        # vec_weights are initialized as equal weights, then tuned through BP.
-        # vec_weights is added with lora_up. lora_up is a random component of the actual weights.
+        # basis_comm_weights are initialized as equal weights, then tuned through BP.
+        # basis_comm_weights is added with basis_rand_weights. basis_rand_weights is a random component of the actual weights.
         # So equal weights here won't cause equal graidents (and non-identifiability of parameters).
-        self.vec_weights = nn.Parameter(torch.ones(1, r) / r)
+        self.basis_comm_weights = nn.Parameter(torch.ones(1, r) / r)
 
         # init_up_noise_stds is only applied when init_vecs is passed in.
         if init_vecs is not None:
@@ -107,37 +118,37 @@ class LoraEmbedding(nn.Module):
             # The remaining dim1-N vectors are gaussian noises on the unit ball.
             self.lora_basis.data[:N]     = init_vecs.clone()
             # Divided by N: put an equal weight prior on init_vecs            
-            self.vec_weights.data.fill_(1. / N)
+            self.basis_comm_weights.data.fill_(1. / N)
             # Lower the weights of the remaining r-N random vectors, to prevent the model  
             # from going too far away from the subspace spanned with init_vecs.
             # By default, these weights are 1/6*0.4 = 0.067.
-            self.vec_weights.data[:, N:] *= 0.4
+            self.basis_comm_weights.data[:, N:] *= 0.4
 
-            # vec_weights: [1, N]
+            # basis_comm_weights: [1, r]
             if init_vec_weights is not None:
                 assert len(init_vec_weights) == self.N, f"init_vec_weights must have length {self.N}"
                 # Assume init_vec_weights is already normalized, i.e., init_vec_weights.sum() = 1.
-                self.vec_weights.data[:, :N] = init_vec_weights.unsqueeze(0)
+                self.basis_comm_weights.data[:, :N] = init_vec_weights.unsqueeze(0)
 
             # After scaled down by init_up_noise_stds[0] (default 0.1) and 
-            # init_up_noise_stds[1] (default 0.01), self.lora_up contains only small noise.
-            # The common weight matrix (broadcasted from self.vec_weights)             
+            # init_up_noise_stds[1] (default 0.01), self.basis_rand_weights contains only small noise.
+            # The common weight matrix (broadcasted from self.basis_comm_weights)             
             #                       [w_0, ..., w_N, 0, ..., 0,
             #                        w_0, ..., w_N, 0, ..., 0,
             #                                 ...                         
             #                        w_0, ..., w_N, 0, ..., 0.]
-            # will be added to self.lora_up in forward().
+            # will be added to self.basis_rand_weights in forward().
             # First N columns are coefficients of init_vecs (or lora_basis), 
             # these noises will be added to the common weight matrix, 
             # so make the noises smaller (init_noise_stds[1]=0.04).
             # As a result, the component from lora_basis has less randomness, 
             # and is more constant across rows.
-            self.lora_up.data[:, :N]    *= init_noise_stds[1]
+            self.basis_rand_weights.data[:, :N]    *= init_noise_stds[1]
             # The last dim1-N block are coefficients of the extra learned vectors.
             # We don't want the result embeddings to be confined 
             # in the subspace of lora_basis. So we let the extra learned vectors play a bigger role,
             # by making the noises larger (init_noise_stds[0]=0.1).
-            self.lora_up.data[:, N:]    *= init_noise_stds[0]
+            self.basis_rand_weights.data[:, N:]    *= init_noise_stds[0]
         else:
             self.N = 0
 
@@ -147,8 +158,8 @@ class LoraEmbedding(nn.Module):
             # The no. N~N+NEG vectors in lora_basis are init_neg_vecs (no noise added).
             # The remaining dim1-(N+NEG) vectors are gaussian noises on the unit ball.
             self.lora_basis.data[N:N+NEG] = -init_neg_vecs.clone()
-            # self.vec_weights.data[N:N+NEG] = 1. / NEG
-            # Do not tinker with the columns corresponding to negative vectors in lora_up.
+            # self.basis_comm_weights.data[N:N+NEG] = 1. / NEG
+            # Do not tinker with the columns corresponding to negative vectors in basis_rand_weights.
         else:
             self.NEG = 0
 
@@ -157,24 +168,28 @@ class LoraEmbedding(nn.Module):
         if self.has_bias:
             # bias: 25 * 768.
             self.bias = nn.Parameter(torch.zeros(dim1, dim2))
+            self.bias_scales = nn.Parameter(torch.ones(dim1, 1))
         else:
             self.bias = 0
+            self.bias_scales = 0
 
     def forward(self, only_bias=False):
         with torch.autocast(device_type=self.device_type, enabled=False):
             if only_bias:
                 return self.bias
 
-            #if self.NEG > 0:
-            #    self.vec_weights.data[self.N:self.N+self.NEG] = -1. / self.NEG
-
             # self.lora_basis.data /= self.lora_basis.data.norm(dim=1, keepdim=True)
-            # self.vec_weights: [1, r] broadcasted to [25, r].
-            lora_up     = self.lora_up   + self.vec_weights
+            # self.basis_comm_weights: [1, r] broadcasted to [25, r].
+            basis_weights   = self.basis_rand_weights   + self.basis_comm_weights
             # torch.matmul: matrix multiplication.
             # torch.matmul(lora_up, lora_basis): 25 * 768.
-            lora_basis_drop = self.lora_basis * self.dropout(self.lora_basis_drop_mask)
-            out_vecs = torch.matmul(lora_up, lora_basis_drop) + self.bias
+            lora_basis_drop     = self.lora_basis * self.dropout(self.lora_basis_drop_mask)
+            basis_weights_drop  = basis_weights # self.dropout(lora_up)
+            # The layerwise embeddings are highly correlated. 
+            # So capture the correlation with a common bias component with different scales.
+            layerwise_bias      = self.bias * self.bias_scales
+            out_vecs = torch.matmul(basis_weights_drop, lora_basis_drop) + layerwise_bias
+
             return out_vecs
 
 # embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
@@ -492,18 +507,28 @@ class EmbeddingManager(nn.Module):
         loss = 0.
         num_embeddings  = len(self.initial_embeddings)
         euc_loss_type   = 'l2'       # l1, l2
+        up_reg_weight   = 0.00
+        bias_scale_reg_weight = 0.001
 
         for key in self.initial_embeddings:
-            lora_embedding = self.string_to_param_dict[key]
+            lora_embobj = self.string_to_param_dict[key]
             # Skip non-LORA embeddings.
-            if not isinstance(lora_embedding, LoraEmbedding):
+            if not isinstance(lora_embobj, LoraEmbedding):
                 continue
-            if euc_loss_type == 'l1':
-                # loss = loss + lora_embedding.lora_up.abs().mean()
-                loss = loss + lora_embedding.bias.abs().mean() + lora_embedding.lora_basis.abs().mean()
-            elif euc_loss_type == 'l2':
-                # loss = loss + (lora_embedding.lora_up ** 2).mean()
-                loss = loss + (lora_embedding.bias ** 2).mean() + (lora_embedding.lora_basis ** 2).mean()
+
+            loss_basis_rand_weights = thres_reg_loss(lora_embobj.basis_rand_weights, loss_type=euc_loss_type)
+            if lora_embobj.has_bias:
+                loss_bias   = thres_reg_loss(lora_embobj.bias, loss_type=euc_loss_type)
+            else:
+                loss_bias   = 0.
+            # Only penalize the bias scales that are larger than 1. 
+            # Otherwise they will be driven towards 0.
+            loss_bias_scales = thres_reg_loss(lora_embobj.bias_scales, loss_type=euc_loss_type, thres=1)
+            loss_basis       = thres_reg_loss(lora_embobj.lora_basis, loss_type=euc_loss_type)
+
+            loss = loss + loss_basis_rand_weights * up_reg_weight \
+                    + loss_bias + loss_basis \
+                    + loss_bias_scales * bias_scale_reg_weight
             
         return loss / num_embeddings
 

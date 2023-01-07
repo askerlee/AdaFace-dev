@@ -37,7 +37,10 @@ for emb_ckpt_filename in emb_ckpt_files:
     for key in emb_ckpt['string_to_param']:
         embeddings = emb_ckpt['string_to_param'][key]
         if isinstance(embeddings, LoraEmbedding):
-            print(embeddings.vec_weights.detach().cpu().numpy())
+            print("basis_comm_weights:")
+            print(embeddings.basis_comm_weights.detach().cpu().numpy())
+            print("bias_scales:")
+            print(embeddings.bias_scales.squeeze().detach().cpu().numpy())
             #print(embeddings.lora_up.detach().cpu().numpy())
             lora_basis = embeddings.lora_basis.detach().cpu()
             N = embeddings.N
@@ -52,4 +55,9 @@ for emb_ckpt_filename in emb_ckpt_files:
             embeddings = embeddings(False)
 
         calc_stats("embeddings", embeddings)
+        cosine_mat = F.cosine_similarity(embeddings[:,:,None], embeddings.t()[None,:,:])
+        triu_indices = torch.triu_indices(cosine_mat.size(0), cosine_mat.size(1), offset=1)
+        cosine_mat = cosine_mat[triu_indices[0], triu_indices[1]]
+        print("Cosine: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(cosine_mat.min(), cosine_mat.max(), cosine_mat.mean(), cosine_mat.std()))
+
         print()

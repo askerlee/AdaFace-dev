@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1e-03
+  base_learning_rate: 3e-03
   weight_decay: 0.0
 
   target: ldm.models.diffusion.ddpm.LatentDiffusion
@@ -30,7 +30,7 @@ model:
         verbosity_interval: 0
         warm_up_steps: 100
         # max_decay_steps > max_steps = 4000, so that the final LR is around 0.26*base_lr.
-        max_decay_steps: 8000
+        max_decay_steps: 6000
         lr_start: 0.01
         lr_max: 1.0
         lr_min: 0.01
@@ -47,7 +47,7 @@ model:
         num_vectors_per_token: 1
         progressive_words: False
         use_layerwise_embedding: True
-        layerwise_lora_rank_token_ratio: 4
+        layerwise_lora_rank_token_ratio: 3
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
@@ -127,4 +127,4 @@ lightning:
 
   trainer:
     benchmark: True
-    max_steps: 5000
+    max_steps: 4000
