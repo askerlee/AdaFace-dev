@@ -430,7 +430,8 @@ class DDPM(pl.LightningModule):
         opt = torch.optim.AdamW(params, lr=lr)
         return opt
 
-
+# LatentDiffusion inherits from DDPM. So:
+# LatentDiffusion.model = DiffusionWrapper(unet_config, conditioning_key, use_layerwise_embedding)
 class LatentDiffusion(DDPM):
     """main class"""
     def __init__(self,
@@ -505,6 +506,8 @@ class LatentDiffusion(DDPM):
         for param in self.embedding_manager.embedding_parameters():
             param.requires_grad = True
 
+        self.model.diffusion_model.embedding_manager = self.embedding_manager
+        
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
         ids = torch.round(torch.linspace(0, self.num_timesteps - 1, self.num_timesteps_cond)).long()
@@ -601,7 +604,6 @@ class LatentDiffusion(DDPM):
     # c: template, 'an illustration of a dirty *'
     def get_learned_conditioning(self, c):
         # print(c, id(self.cond_stage_model))
-        
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # c: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
@@ -615,6 +617,13 @@ class LatentDiffusion(DDPM):
         else:
             assert hasattr(self.cond_stage_model, self.cond_stage_forward)
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
+        return c
+
+    def get_dynamic_conditioning(self, c, layer_infeat, layer_idx):
+        self.embedding_manager.layer_idx = layer_idx
+        self.embedding_manager.layer_infeat = layer_infeat
+        self.embedding_manager.do_dynamic_embedding = True
+        c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
         return c
 
     def meshgrid(self, h, w):
@@ -1563,6 +1572,7 @@ class DiffusionWrapper(pl.LightningModule):
             out = self.diffusion_model(xc, t)
         elif self.conditioning_key == 'crossattn':
             cc = torch.cat(c_crossattn, 1)
+            # self.diffusion_model: UNetModel.
             out = self.diffusion_model(x, t, context=cc, use_layerwise_context=self.use_layerwise_embedding)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)

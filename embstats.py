@@ -33,23 +33,24 @@ def calc_stats(emb_name, embeddings):
 # enumerate files in emb_ckpt_folder
 for emb_ckpt_filename in emb_ckpt_files:
     emb_ckpt = torch.load(emb_ckpt_filename, map_location='cpu')
-    print("%s:" %os.path.basename(emb_ckpt_filename))
+    print("%s:" %emb_ckpt_filename)
     for key in emb_ckpt['string_to_param']:
         embeddings = emb_ckpt['string_to_param'][key]
         if isinstance(embeddings, LoraEmbedding):
             print("basis_comm_weights:")
             print(embeddings.basis_comm_weights.detach().cpu().numpy())
+            calc_stats("basis_rand_weights", embeddings.basis_rand_weights)
             print("bias_scales:")
             print(embeddings.bias_scales.squeeze().detach().cpu().numpy())
             #print(embeddings.lora_up.detach().cpu().numpy())
-            lora_basis = embeddings.lora_basis.detach().cpu()
+            basis_vecs = embeddings.basis_vecs.detach().cpu()
             N = embeddings.N
             NEG = embeddings.NEG
-            calc_stats("lora_basis_pos", embeddings.lora_basis[:N])
+            calc_stats("basis_vecs_pos", embeddings.basis_vecs[:N])
             if NEG > 0:
-                calc_stats("lora_basis_neg",     embeddings.lora_basis[N:N+NEG])
+                calc_stats("basis_vecs_neg",     embeddings.basis_vecs[N:N+NEG])
 
-            calc_stats("lora_basis_rand", embeddings.lora_basis[N+NEG:])
+            calc_stats("basis_vecs_rand", embeddings.basis_vecs[N+NEG:])
             if not isinstance(embeddings.bias, int):
                 calc_stats("bias", embeddings.bias)
             embeddings = embeddings(False)
