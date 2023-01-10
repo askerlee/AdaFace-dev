@@ -1514,7 +1514,6 @@ class LatentDiffusion(DDPM):
 
     # configure_opt_embedding() is never called.
     def configure_opt_embedding(self):
-
         self.cond_stage_model.eval()
         self.cond_stage_model.train = disabled_train
         for param in self.cond_stage_model.parameters():
@@ -1533,8 +1532,8 @@ class LatentDiffusion(DDPM):
         opt = torch.optim.AdamW(params, lr=lr)
         return opt
 
+    # configure_opt_model() is never called.
     def configure_opt_model(self):
-
         for param in self.cond_stage_model.parameters():
             param.requires_grad = True
 

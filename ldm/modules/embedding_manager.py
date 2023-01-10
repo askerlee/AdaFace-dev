@@ -103,7 +103,7 @@ class StaticLoraEmbedding(nn.Module):
         # basis_rand_weights: 25 * r, basis_vecs: r * 768. basis_rand_weights * basis_vecs: 25 * 768.
         self.basis_rand_weights    = nn.Parameter(torch.randn(dim1, r))
         # basis_vecs consists of r basis vectors. Will be updated through BP.
-        self.basis_vecs = nn.Parameter(torch.randn(r, dim2), requires_grad=False)
+        self.basis_vecs = nn.Parameter(torch.randn(r, dim2), requires_grad=True)
 
         self.has_bias    = has_bias
         self.device_type = device_type
@@ -234,7 +234,7 @@ class DynamicLoraEmbedding(nn.Module):
         self.device_type = device_type
 
         # basis_vecs: [12, 768], consists of r basis vectors. Will be updated through BP.
-        self.basis_vecs = nn.Parameter(torch.randn(r, dim2), requires_grad=False)
+        self.basis_vecs = nn.Parameter(torch.randn(r, dim2), requires_grad=True)
 
         if init_vecs is not None:
             N = init_vecs.shape[0]
@@ -612,8 +612,11 @@ class EmbeddingManager(nn.Module):
 
         return param_norm_squared
 
+    # Originally returned value is not enclosed in list(), i.e., return a generator.
+    # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def embedding_parameters(self):
-        return self.string_to_param_dict.parameters()
+        return list(self.string_to_param_dict.parameters()) \
+               + list(self.string_to_dyn_embedder_dict.parameters())
 
     def embedding_attractor_loss(self):
         loss = 0.
@@ -679,9 +682,9 @@ class EmbeddingManager(nn.Module):
         num_embeddings  = len(self.initial_embeddings)
         euc_loss_type   = 'l1'       # l1, l2
         if euc_loss_type == 'l1':
-            basis_rand_weights_reg_weight_base   = 0.001
+            basis_rand_weights_reg_weight_base   = 0.000
         else:
-            basis_rand_weights_reg_weight_base   = 0.008
+            basis_rand_weights_reg_weight_base   = 0.000
 
         # each elem in bias_scales is broadcasted to 768 dims. i.e., its effect and gradient is multiplied by 768.
         # So the loss should be divided by 768.
@@ -700,7 +703,7 @@ class EmbeddingManager(nn.Module):
 
             loss_basis_rand_weights = selective_reg_loss(lora_embobj.basis_rand_weights, loss_type=euc_loss_type)
             # basis_rand_weights use 0.2 as the reference norm.
-            norm_to_ref_norm_ratio = torch.norm(lora_embobj.basis_rand_weights, dim=1).mean() / 0.1
+            norm_to_ref_norm_ratio = torch.norm(lora_embobj.basis_rand_weights, dim=1).mean() / 0.2
             basis_rand_weights_reg_weight = basis_rand_weights_reg_weight_base \
                                              * norm_to_ref_norm_ratio ** T
 

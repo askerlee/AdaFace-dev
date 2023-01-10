@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from ldm.modules.embedding_manager import LoraEmbedding
+from ldm.modules.embedding_manager import StaticLoraEmbedding, DynamicLoraEmbedding
 import sys
 import os
 import glob
@@ -10,6 +10,12 @@ import numpy as np
 np.set_printoptions(precision=3, suppress=True)
 
 emb_ckpt_folder = sys.argv[1]
+if len(sys.argv) > 2:
+    output_type = sys.argv[2]
+else:
+    output_type = 'all'
+    
+# output_type: static or all
 
 # check if emb_ckpt_folder is a single file or a folder
 if os.path.isfile(emb_ckpt_folder):
@@ -33,16 +39,15 @@ def calc_stats(emb_name, embeddings):
 # enumerate files in emb_ckpt_folder
 for emb_ckpt_filename in emb_ckpt_files:
     emb_ckpt = torch.load(emb_ckpt_filename, map_location='cpu')
-    print("%s:" %emb_ckpt_filename)
+    print("%s STATIC:" %emb_ckpt_filename)
     for key in emb_ckpt['string_to_param']:
         embeddings = emb_ckpt['string_to_param'][key]
-        if isinstance(embeddings, LoraEmbedding):
+        if isinstance(embeddings, StaticLoraEmbedding):
             print("basis_comm_weights:")
             print(embeddings.basis_comm_weights.detach().cpu().numpy())
             calc_stats("basis_rand_weights", embeddings.basis_rand_weights)
             print("bias_scales:")
             print(embeddings.bias_scales.squeeze().detach().cpu().numpy())
-            #print(embeddings.lora_up.detach().cpu().numpy())
             basis_vecs = embeddings.basis_vecs.detach().cpu()
             N = embeddings.N
             NEG = embeddings.NEG
@@ -62,3 +67,15 @@ for emb_ckpt_filename in emb_ckpt_files:
         print("Cosine: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(cosine_mat.min(), cosine_mat.max(), cosine_mat.mean(), cosine_mat.std()))
 
         print()
+
+    if output_type == 'all':
+        print("%s DYNAMIC:" %emb_ckpt_filename)
+        for key in emb_ckpt['string_to_dyn_embedder']:
+            embeddings = emb_ckpt['string_to_dyn_embedder'][key]
+            if isinstance(embeddings, DynamicLoraEmbedding):
+                basis_vecs = embeddings.basis_vecs.detach().cpu()
+                N = embeddings.N
+                calc_stats("basis_vecs_pos", embeddings.basis_vecs[:N])
+                calc_stats("basis_vecs_rand", embeddings.basis_vecs[N:])
+                for map in embeddings.maps:
+                    calc_stats("map", map.weight)
