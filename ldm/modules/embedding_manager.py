@@ -2,6 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np
+import copy
 
 from ldm.data.personalized import per_img_token_list
 from transformers import CLIPTokenizer
@@ -217,11 +218,12 @@ class StaticLoraEmbedding(nn.Module):
 class DynamicLoraEmbedding(nn.Module):
     # dim1: 25, dim2: 768, r: 12.
     # infeat_dims: a list of 25 integers, each is the dimension of 
-    # the input feature from the respective layer. infeat_dims are reflective around the middle layer.
+    # the input feature from the respective layer. 
+    # infeat_dims are (almost) reflective around the middle layer, except for the first and last layers.
     def __init__(self, dim1=25, dim2=768, r=12, init_vecs=None, 
-                 infeat_dims=[ 320, 320, 320, 320, 640, 640, 640, 1280, 1280, 1280, 1280, 1280,
+                 infeat_dims=[ 4,    320,  320,  320,  320,  640,  640,  640, 1280, 1280, 1280, 1280, 
                                1280,
-                               1280, 1280, 1280, 1280, 1280, 640, 640, 640, 320, 320, 320, 320 ],
+                               1280, 1280, 1280, 1280, 1280, 1280, 1280, 640, 640,  640,  320,  320 ],
                  has_bias=True, device_type="cuda"):
         super().__init__()
 
@@ -269,8 +271,8 @@ class DynamicLoraEmbedding(nn.Module):
 
     # layer_infeat: 4D image feature tensor [B, C, H, W].
     # layer_idx: 0 ~ self.dim1 - 1.
-    def forward(self, layer_infeat, layer_idx):
-        with torch.autocast(device_type=self.device_type, enabled=False):
+    def forward(self, layer_idx, layer_infeat):
+        with torch.autocast(device_type=self.device_type, enabled=True):
             # basis_dyn_weight: [B, r] = [2, 12].
             infeat_pooled    = self.avgpool(layer_infeat).squeeze(-1).squeeze(-1)
             basis_dyn_weight = self.maps[layer_idx](infeat_pooled)
@@ -425,9 +427,7 @@ class EmbeddingManager(nn.Module):
             self.string_to_param_dict[placeholder_string] = token_params
             self.string_to_dyn_embedder_dict[placeholder_string] = token_dyn_embedder
 
-            self.layer_idx = -1
-            self.layer_infeat = None
-            self.do_dynamic_embedding = False
+            self.clear_dyn_layer_info()
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then max_vectors_per_token = num_unet_layers = 25.
@@ -442,9 +442,7 @@ class EmbeddingManager(nn.Module):
             embedded_text = self.get_dyn_embedding(self.layer_infeat, self.layer_idx, 
                                                    tokenized_text, embedded_text)
             # Remove dynamic-embedding specific variables.
-            self.layer_idx = -1
-            self.layer_infeat = None
-            self.do_dynamic_embedding = False
+            self.clear_dyn_layer_info()
             return embedded_text
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
@@ -559,22 +557,38 @@ class EmbeddingManager(nn.Module):
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             placeholder_embedder = self.string_to_dyn_embedder_dict[placeholder_string].to(device)
             assert isinstance(placeholder_embedder, DynamicLoraEmbedding)
-            # Generate the actual placeholder_embedding on the fly.
-            # [B=2, 768]
-            placeholder_embedding = placeholder_embedder(layer_infeat, layer_idx)
 
             # There's only one vector per token, we can do a simple replacement
             # embedded_text: [B, N, 768].
             # tokenized_text: [B, N].
             placeholder_idx = torch.where(tokenized_text == placeholder_token.to(device))
+            # Skip generating the dynamic embedding if there's no placeholder token in the batch.
             if placeholder_idx[0].numel() == 0:
                 continue
 
+            # Generate the actual placeholder_embedding on the fly.
+            # [B=2, 768]
+            placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat)
             # embedded_text[placeholder_idx] indexes the embedding at each instance in the batch.
             # embedded_text[placeholder_idx]: [2, 768].  placeholder_embedding: [2, 768].
-            embedded_text[placeholder_idx] = placeholder_embedding * self.subj_scale
+            # Sometimes (e.g. during inference, some instances contain the placeholder token but
+            # others don't. tokenized_text has a batch size of those containing the placeholder token only.
+            # But layer_infeat is still of the full batch size. So placeholder_embedding has a batch size 
+            # larger than the number of instances containing the placeholder token. We need to index
+            # placeholder_embedding with placeholder_idx[0] to get the matching new placeholder_embedding.
+            embedded_text[placeholder_idx] = placeholder_embedding[placeholder_idx[0]] * self.subj_scale
 
         return embedded_text
+
+    def set_dyn_layer_info(self, layer_idx, layer_infeat):
+        self.do_dynamic_embedding = True
+        self.layer_idx = layer_idx
+        self.layer_infeat = layer_infeat
+    
+    def clear_dyn_layer_info(self):
+        self.do_dynamic_embedding = False
+        self.layer_idx = -1
+        self.layer_infeat = None
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, ckpt_path):

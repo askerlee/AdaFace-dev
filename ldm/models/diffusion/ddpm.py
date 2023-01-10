@@ -26,7 +26,8 @@ from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianD
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
-
+import copy
+from functools import partial
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -77,6 +78,7 @@ class DDPM(pl.LightningModule):
                  learn_logvar=False,
                  logvar_init=0.,
                  use_layerwise_embedding=False,
+                 use_dynamic_embedding=False,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -89,7 +91,10 @@ class DDPM(pl.LightningModule):
         self.image_size = image_size  # try conv?
         self.channels = channels
         self.use_positional_encodings = use_positional_encodings
-        self.model = DiffusionWrapper(unet_config, conditioning_key, use_layerwise_embedding)
+        self.use_layerwise_embedding = use_layerwise_embedding
+        self.use_dynamic_embedding = use_layerwise_embedding and use_dynamic_embedding
+        self.model = DiffusionWrapper(unet_config, conditioning_key, 
+                                      use_layerwise_embedding, use_dynamic_embedding)
         count_params(self.model, verbose=True)
         self.use_ema = use_ema
         if self.use_ema:
@@ -505,8 +510,6 @@ class LatentDiffusion(DDPM):
         # which maps custom tokens to embeddings
         for param in self.embedding_manager.embedding_parameters():
             param.requires_grad = True
-
-        self.model.diffusion_model.embedding_manager = self.embedding_manager
         
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -609,9 +612,13 @@ class LatentDiffusion(DDPM):
                 # c: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
                 # c is encoded as [1, 77, 768].
                 # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
+                c_in = copy.copy(c)
                 c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
+                if self.use_dynamic_embedding:
+                    embedder = self.get_dynamic_conditioning
+                    c = (c, c_in, embedder)
             else:
                 c = self.cond_stage_model(c)
         else:
@@ -619,11 +626,13 @@ class LatentDiffusion(DDPM):
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
         return c
 
-    def get_dynamic_conditioning(self, c, layer_infeat, layer_idx):
-        self.embedding_manager.layer_idx = layer_idx
-        self.embedding_manager.layer_infeat = layer_infeat
-        self.embedding_manager.do_dynamic_embedding = True
-        c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
+    # get_dynamic_conditioning() is called iteratively for each layer in UNet.
+    def get_dynamic_conditioning(self, c_in, layer_idx, layer_infeat):
+        # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
+        # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
+        # when embedding_manager is called within cond_stage_model.encode().
+        self.embedding_manager.set_dyn_layer_info(layer_idx, layer_infeat)
+        c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         return c
 
     def meshgrid(self, h, w):
@@ -941,6 +950,7 @@ class LatentDiffusion(DDPM):
         loss = self(x, c)
         return loss
 
+    # LatentDiffusion.forward() is only called during training.
     def forward(self, x, c, *args, **kwargs):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         if self.model.conditioning_key is not None:
@@ -948,10 +958,13 @@ class LatentDiffusion(DDPM):
             # c: condition, a prompt template. 
             # get_learned_conditioning(): convert c to a [1, 77, 768] tensor.
             if self.cond_stage_trainable:
+                # c: ['an illustration of a dirty z', 'an illustration of the cool z']
                 c = self.get_learned_conditioning(c)
             # shorten_cond_schedule: False
             if self.shorten_cond_schedule:  # TODO: drop this option
                 tc = self.cond_ids[t].to(self.device)
+                # q_sample() is only called during training. 
+                # q_sample() calls apply_model(), which estimates the latent code of the image.
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
 
         return self.p_losses(x, c, t, *args, **kwargs)
@@ -966,6 +979,7 @@ class LatentDiffusion(DDPM):
 
         return [rescale_bbox(b) for b in bboxes]
 
+    # apply_model() is called both during training and inference.
     def apply_model(self, x_noisy, t, cond, return_ids=False):
 
         if isinstance(cond, dict):
@@ -1095,7 +1109,7 @@ class LatentDiffusion(DDPM):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
         model_output = self.apply_model(x_noisy, t, cond)
-        
+
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
 
@@ -1327,8 +1341,8 @@ class LatentDiffusion(DDPM):
         if ddim:
             ddim_sampler = DDIMSampler(self)
             shape = (self.channels, self.image_size, self.image_size)
-            samples, intermediates = ddim_sampler.sample(ddim_steps,batch_size,
-                                                        shape,cond,verbose=False,**kwargs)
+            samples, intermediates = ddim_sampler.sample(ddim_steps, batch_size,
+                                                         shape, cond, verbose=False, **kwargs)
 
         else:
             samples, intermediates = self.sample(cond=cond, batch_size=batch_size,
@@ -1398,7 +1412,7 @@ class LatentDiffusion(DDPM):
                 denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
                 log["denoise_row"] = denoise_grid
             
-            uc = self.get_learned_conditioning(len(c) * [""])
+            uc = self.get_learned_conditioning(N * [""])
             sample_scaled, _ = self.sample_log(cond=c, 
                                                batch_size=N, 
                                                ddim=use_ddim, 
@@ -1556,12 +1570,14 @@ class LatentDiffusion(DDPM):
 
 
 class DiffusionWrapper(pl.LightningModule):
-    def __init__(self, diff_model_config, conditioning_key, use_layerwise_embedding=False):
+    def __init__(self, diff_model_config, conditioning_key, 
+                 use_layerwise_embedding=False, use_dynamic_embedding=False):
         super().__init__()
         self.diffusion_model = instantiate_from_config(diff_model_config)
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm']
         self.use_layerwise_embedding = use_layerwise_embedding
+        self.use_dynamic_embedding   = use_dynamic_embedding
 
     # t: a 1-D batch of timesteps (during training: randomly sample one timestep for each instance).
     def forward(self, x, t, c_concat: list = None, c_crossattn: list = None):
@@ -1571,9 +1587,19 @@ class DiffusionWrapper(pl.LightningModule):
             xc = torch.cat([x] + c_concat, dim=1)
             out = self.diffusion_model(xc, t)
         elif self.conditioning_key == 'crossattn':
-            cc = torch.cat(c_crossattn, 1)
+            # For textual inversion, there's usually only one element tensor in c_crossattn.
+            # So we take c_crossattn[0] directly, instead of torch.cat() on a list of tensors.
+            if isinstance(c_crossattn[0], tuple):
+                cc, c_in, embedder = c_crossattn[0]
+            else:
+                cc       = c_crossattn[0]
+                c_in     = None
+                embedder = None
+            # cc = torch.cat(c_crossattn, 1)
             # self.diffusion_model: UNetModel.
-            out = self.diffusion_model(x, t, context=cc, use_layerwise_context=self.use_layerwise_embedding)
+            out = self.diffusion_model(x, t, context=cc, context_in=c_in, embedder=embedder,
+                                       use_layerwise_context=self.use_layerwise_embedding,
+                                       use_dynamic_context=self.use_dynamic_embedding)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
             cc = torch.cat(c_crossattn, 1)

@@ -708,7 +708,9 @@ class UNetModel(nn.Module):
         self.middle_block.apply(convert_module_to_f32)
         self.output_blocks.apply(convert_module_to_f32)
 
-    def forward(self, x, timesteps=None, context=None, y=None, use_layerwise_context=False, **kwargs):
+    def forward(self, x, timesteps=None, context=None, y=None, 
+                context_in=None, embedder=None, use_layerwise_context=False, 
+                use_dynamic_context=False, **kwargs):
         """
         Apply the model to an input batch.
         :param x: an [N x C x ...] Tensor of inputs.
@@ -734,16 +736,21 @@ class UNetModel(nn.Module):
 
         h = x.type(self.dtype)
 
-        def get_layer_context(context):
-            context_iter = iter(context)
-            while True:
-                if use_layerwise_context:
-                    yield next(context_iter)
-                else:
-                    yield context
+        def get_layer_context(layer_idx, h):
+            # print(h.shape)
+            if not use_layerwise_context:
+                return context
+            
+            static_context = context[layer_idx]
+            # Do not have dynamic context on the first layer features, as the features are mostly random noises.
+            if use_dynamic_context and layer_idx > 0:
+                dynamic_context = embedder(context_in, layer_idx, h)
+                context_mix = (static_context + dynamic_context) / 2
+                return context_mix
+            else:
+                return static_context
 
-        context_gen = get_layer_context(context)
-
+        # input h:   [2, 4, 64, 64]
         # torch.Size([2, 320, 64, 64])
         # torch.Size([2, 320, 64, 64])
         # torch.Size([2, 320, 64, 64])
@@ -756,12 +763,19 @@ class UNetModel(nn.Module):
         # torch.Size([2, 1280, 8, 8])
         # torch.Size([2, 1280, 8, 8])
         # torch.Size([2, 1280, 8, 8])
-        for module in self.input_blocks:
-            h = module(h, emb, next(context_gen))
-            hs.append(h)
+        layer_idx = 0
 
+        for module in self.input_blocks:
+            layer_context = get_layer_context(layer_idx, h)
+            h = module(h, emb, layer_context)
+            hs.append(h)
+            layer_idx += 1
+        
+        layer_context = get_layer_context(layer_idx, h)
         # torch.Size([2, 1280, 8, 8])
-        h = self.middle_block(h, emb, next(context_gen))
+        h = self.middle_block(h, emb, layer_context)
+        layer_idx += 1
+
         # torch.Size([2, 1280, 8, 8])
         # torch.Size([2, 1280, 8, 8])
         # torch.Size([2, 1280, 16, 16])
@@ -773,10 +787,13 @@ class UNetModel(nn.Module):
         # torch.Size([2, 640, 64, 64])
         # torch.Size([2, 320, 64, 64])
         # torch.Size([2, 320, 64, 64])
-        # torch.Size([2, 320, 64, 64])
         for module in self.output_blocks:
+            layer_context = get_layer_context(layer_idx, h)
             h = th.cat([h, hs.pop()], dim=1)
-            h = module(h, emb, next(context_gen))
+            h = module(h, emb, layer_context)
+            layer_idx += 1
+
+        # torch.Size([2, 320, 64, 64])
         h = h.type(x.dtype)
         if self.predict_codebook_ids:
             return self.id_predictor(h)

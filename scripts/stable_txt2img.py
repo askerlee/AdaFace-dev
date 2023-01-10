@@ -178,7 +178,7 @@ def main():
 
     parser.add_argument(
         "--embedding_path", 
-        type=str, 
+        type=str, default=None,
         help="Path to a pre-trained embedding manager checkpoint")
     parser.add_argument(
         "--subj_scale",
@@ -202,7 +202,8 @@ def main():
 
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
-    model.embedding_manager.load(opt.embedding_path)
+    if opt.embedding_path is not None:
+        model.embedding_manager.load(opt.embedding_path)
     model.embedding_manager.subj_scale = opt.subj_scale
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -253,6 +254,12 @@ def main():
                             prompts = list(prompts)
                         c = model.get_learned_conditioning(prompts)
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+                        # When dynamic embedding is used, c is a tuple of (cond, dynamic_embedder).
+                        # When both unconditional and conditional guidance are passed to ddim sampler, 
+                        # dynamic_embedder of the conditional guidance is applied on both 
+                        # unconditional and conditional embeddings within UNetModel.forward(). 
+                        # But since unconditional prompt doesn't contain the placeholder token,
+                        # dynamic_embedder won't change the unconditional embedding uc.
                         samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                                          conditioning=c,
                                                          batch_size=opt.n_samples,
