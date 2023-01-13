@@ -49,7 +49,6 @@ model:
         progressive_words: False
         use_layerwise_embedding: True
         layerwise_lora_rank_token_ratio: 3
-        layerwise_lora_init_vecs_repeat: 1
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

@@ -741,28 +741,30 @@ class UNetModel(nn.Module):
             if not use_layerwise_context:
                 return context
             
+            static_weight   = 0.5
+            dynamic_weight  = 0.5 # 1 - static_weight
+
             static_context = context[layer_idx]
-            # Do not have dynamic context on the first layer features, as the features are mostly random noises.
-            if use_dynamic_context and layer_idx > 0:
+            if use_dynamic_context: # and layer_idx <= 13:
                 dynamic_context = embedder(context_in, layer_idx, h)
-                context_mix = (static_context + dynamic_context) / 2
+                context_mix = static_context * static_weight + dynamic_context * dynamic_weight
                 return context_mix
             else:
                 return static_context
 
-        # input h:   [2, 4, 64, 64]
-        # torch.Size([2, 320, 64, 64])
-        # torch.Size([2, 320, 64, 64])
-        # torch.Size([2, 320, 64, 64])
-        # torch.Size([2, 320, 32, 32])
-        # torch.Size([2, 640, 32, 32])
-        # torch.Size([2, 640, 32, 32])
-        # torch.Size([2, 640, 16, 16])
-        # torch.Size([2, 1280, 16, 16])
-        # torch.Size([2, 1280, 16, 16])
-        # torch.Size([2, 1280, 8, 8])
-        # torch.Size([2, 1280, 8, 8])
-        # torch.Size([2, 1280, 8, 8])
+        # 0  input h:   [2, 4, 64, 64]
+        # 1  torch.Size([2, 320, 64, 64])
+        # 2  torch.Size([2, 320, 64, 64])
+        # 3  torch.Size([2, 320, 64, 64])
+        # 4  torch.Size([2, 320, 32, 32])
+        # 5  torch.Size([2, 640, 32, 32])
+        # 6  torch.Size([2, 640, 32, 32])
+        # 7  torch.Size([2, 640, 16, 16])
+        # 8  torch.Size([2, 1280, 16, 16])
+        # 9  torch.Size([2, 1280, 16, 16])
+        # 10 torch.Size([2, 1280, 8, 8])
+        # 11 torch.Size([2, 1280, 8, 8])
+        # 12 torch.Size([2, 1280, 8, 8])
         layer_idx = 0
 
         for module in self.input_blocks:
@@ -772,21 +774,21 @@ class UNetModel(nn.Module):
             layer_idx += 1
         
         layer_context = get_layer_context(layer_idx, h)
-        # torch.Size([2, 1280, 8, 8])
+        # 13 torch.Size([2, 1280, 8, 8])
         h = self.middle_block(h, emb, layer_context)
         layer_idx += 1
 
-        # torch.Size([2, 1280, 8, 8])
-        # torch.Size([2, 1280, 8, 8])
-        # torch.Size([2, 1280, 16, 16])
-        # torch.Size([2, 1280, 16, 16])
-        # torch.Size([2, 1280, 16, 16])
-        # torch.Size([2, 1280, 32, 32])
-        # torch.Size([2, 640, 32, 32])
-        # torch.Size([2, 640, 32, 32])
-        # torch.Size([2, 640, 64, 64])
-        # torch.Size([2, 320, 64, 64])
-        # torch.Size([2, 320, 64, 64])
+        # 14 torch.Size([2, 1280, 8, 8])
+        # 15 torch.Size([2, 1280, 8, 8])
+        # 16 torch.Size([2, 1280, 16, 16])
+        # 17 torch.Size([2, 1280, 16, 16])
+        # 18 torch.Size([2, 1280, 16, 16])
+        # 19 torch.Size([2, 1280, 32, 32])
+        # 20 torch.Size([2, 640, 32, 32])
+        # 21 torch.Size([2, 640, 32, 32])
+        # 22 torch.Size([2, 640, 64, 64])
+        # 23 torch.Size([2, 320, 64, 64])
+        # 24 torch.Size([2, 320, 64, 64])
         for module in self.output_blocks:
             layer_context = get_layer_context(layer_idx, h)
             h = th.cat([h, hs.pop()], dim=1)

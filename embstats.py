@@ -10,12 +10,12 @@ import numpy as np
 np.set_printoptions(precision=3, suppress=True)
 
 emb_ckpt_folder = sys.argv[1]
+# output_type: static (default) or all
 if len(sys.argv) > 2:
     output_type = sys.argv[2]
 else:
-    output_type = 'all'
-    
-# output_type: static or all
+    output_type = 'static'
+
 
 # check if emb_ckpt_folder is a single file or a folder
 if os.path.isfile(emb_ckpt_folder):
@@ -35,6 +35,9 @@ def calc_stats(emb_name, embeddings):
     print("L1: %.4f, L2: %.4f" %(l1_loss.item(), l2_loss.item()))
     print("Norms: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(norms.min(), norms.max(), norms.mean(), norms.std()))
 
+def simple_stats(emb_name, embeddings):
+    print("%s:" %emb_name)
+    print("min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(embeddings.min(), embeddings.max(), embeddings.abs().mean(), embeddings.std()))
 
 # enumerate files in emb_ckpt_folder
 for emb_ckpt_filename in emb_ckpt_files:
@@ -64,7 +67,7 @@ for emb_ckpt_filename in emb_ckpt_files:
         cosine_mat = F.cosine_similarity(embeddings[:,:,None], embeddings.t()[None,:,:])
         triu_indices = torch.triu_indices(cosine_mat.size(0), cosine_mat.size(1), offset=1)
         cosine_mat = cosine_mat[triu_indices[0], triu_indices[1]]
-        print("Cosine: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(cosine_mat.min(), cosine_mat.max(), cosine_mat.mean(), cosine_mat.std()))
+        simple_stats("cosine", cosine_mat)
 
         print()
 
@@ -77,5 +80,12 @@ for emb_ckpt_filename in emb_ckpt_files:
                 N = embeddings.N
                 calc_stats("basis_vecs_pos", embeddings.basis_vecs[:N])
                 calc_stats("basis_vecs_rand", embeddings.basis_vecs[N:])
-                for map in embeddings.maps:
-                    calc_stats("map", map.weight)
+                for i, map in enumerate(embeddings.maps):
+                    calc_stats(f"map-{i} weight", map.weight)
+                    simple_stats(f"map-{i} bias", map.bias)
+
+                print("bias_scales:")
+                print(embeddings.bias_scales.squeeze().detach().cpu().numpy())
+                if not isinstance(embeddings.bias, int):
+                    calc_stats("bias", embeddings.bias)
+        print()
