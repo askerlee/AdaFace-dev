@@ -1471,21 +1471,35 @@ class LatentDiffusion(DDPM):
                 return {key: log[key] for key in return_keys}
         return log
 
-    # configure_optimizers() is called later in main.py.
+    # configure_optimizers() is called later as a hook function by pytorch_lightning.
+    # call stack: main.py: trainer.fit()
+    # ...
+    # pytorch_lightning/core/optimizer.py:
+    # optim_conf = model.trainer._call_lightning_module_hook("configure_optimizers", pl_module=model)
     def configure_optimizers(self):
         # self.learning_rate and self.weight_decay are set in main.py.
         # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
         lr = self.learning_rate
         weight_decay = self.weight_decay
+        use_lbfgs = True
 
-        if self.embedding_manager is not None: # If using textual inversion
+        # If using textual inversion, then embedding_manager is not None.
+        if self.embedding_manager is not None: 
             embedding_params = list(self.embedding_manager.embedding_parameters())
-
-            if self.unfreeze_model: # Are we allowing the base model to train? If so, set two different parameter groups.
+            # unfreeze_model:
+            # Are we allowing the base model to train? If so, set two different parameter groups.
+            if self.unfreeze_model: 
                 model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
                 opt = torch.optim.AdamW([{"params": embedding_params, "lr": lr}, {"params": model_params}], lr=self.model_lr)
-            else: # Otherwise, train only embedding
-                opt = torch.optim.AdamW(embedding_params, lr=lr, weight_decay=weight_decay)
+            # Otherwise, train only embedding
+            else:
+                if use_lbfgs:
+                    # LBFGS uses a huge learning rate of 1.
+                    opt = torch.optim.LBFGS(embedding_params, lr=0.01, max_iter=20, max_eval=25, history_size=100,
+                                            line_search_fn="strong_wolfe")
+                    self.use_scheduler = False
+                else:
+                    opt = torch.optim.AdamW(embedding_params, lr=lr, weight_decay=weight_decay)
         else:
             params = list(self.model.parameters())
             if self.cond_stage_trainable:

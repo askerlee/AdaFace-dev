@@ -107,7 +107,7 @@ class StaticLoraEmbedding(nn.Module):
             N = self.N = init_vecs.shape[0]
             self.pre_vecs = nn.Parameter(init_vecs.clone(), requires_grad=True)
             # Normalize pre_vecs, to roughly equalize the contributions of different predefined vectors.
-            self.pre_vecs.data = F.normalize(self.pre_vecs.data, dim=1)
+            # self.pre_vecs.data = F.normalize(self.pre_vecs.data, dim=1)
         else:
             self.N = 0
             self.pre_vecs = None
@@ -117,7 +117,7 @@ class StaticLoraEmbedding(nn.Module):
         # basis_vecs consists of r basis vectors. Will be updated through BP.
         self.basis_vecs = nn.Parameter(torch.randn(r - N, dim2), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
-        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1)
+        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1) / 2.
         # Always set the last basis vector to 0.
         self.basis_vecs.data[-1] = 0
 
@@ -250,7 +250,7 @@ class DynamicLoraEmbedding(nn.Module):
             N = self.N = init_vecs.shape[0]
             self.pre_vecs = nn.Parameter(init_vecs.clone(), requires_grad=True)
             # Normalize pre_vecs, to roughly equalize the contributions of different predefined basis vectors.
-            self.pre_vecs.data = F.normalize(self.pre_vecs, dim=1)
+            # self.pre_vecs.data = F.normalize(self.pre_vecs, dim=1)
         else:
             self.N = 0
             self.pre_vecs = None
@@ -258,7 +258,7 @@ class DynamicLoraEmbedding(nn.Module):
         # basis_vecs: [12, 768], consists of r-N basis vectors. Will be updated through BP.
         self.basis_vecs = nn.Parameter(torch.randn(r - N, dim2), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
-        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1)
+        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1) / 2.
         # Always set the last basis vector to 0.
         self.basis_vecs.data[-1] = 0
 
