@@ -1481,7 +1481,6 @@ class LatentDiffusion(DDPM):
         # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
         lr = self.learning_rate
         weight_decay = self.weight_decay
-        use_lbfgs = True
 
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 
@@ -1493,13 +1492,7 @@ class LatentDiffusion(DDPM):
                 opt = torch.optim.AdamW([{"params": embedding_params, "lr": lr}, {"params": model_params}], lr=self.model_lr)
             # Otherwise, train only embedding
             else:
-                if use_lbfgs:
-                    # LBFGS uses a huge learning rate of 1.
-                    opt = torch.optim.LBFGS(embedding_params, lr=0.01, max_iter=20, max_eval=25, history_size=100,
-                                            line_search_fn="strong_wolfe")
-                    self.use_scheduler = False
-                else:
-                    opt = torch.optim.AdamW(embedding_params, lr=lr, weight_decay=weight_decay)
+                opt = torch.optim.AdamW(embedding_params, lr=lr, weight_decay=weight_decay)
         else:
             params = list(self.model.parameters())
             if self.cond_stage_trainable:
