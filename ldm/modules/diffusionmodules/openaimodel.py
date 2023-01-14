@@ -748,13 +748,15 @@ class UNetModel(nn.Module):
 
             skipped_layers = set([0, 3, 6, 9, 10, 11, 13, 14, 15])
             static_context = context[layer_idx]
-            if use_dynamic_context and layer_idx not in skipped_layers:
+            if layer_idx in skipped_layers:
+                return None
+            if use_dynamic_context:
                 dynamic_context = embedder(context_in, layer_idx, h, emb)
-                context_mix = static_context * static_weight + dynamic_context * dynamic_weight
-                return context_mix
+                mix_context = static_context * static_weight + dynamic_context * dynamic_weight
+                return mix_context
             else:
                 # We simply return None, as it's not used anyway.
-                return None
+                return static_context
 
         # 0  input h:   [2, 4,    64, 64]
         # 1             [2, 320,  64, 64]
