@@ -79,8 +79,10 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
 
     def forward(self, x, emb, context=None):
         for layer in self:
+            # TimestepBlock: often ResBlock layers, which take time embedding as an input.
             if isinstance(layer, TimestepBlock):
                 x = layer(x, emb)
+            # SpatialTransformer layers take text embedding as an input.
             elif isinstance(layer, SpatialTransformer):
                 x = layer(x, context)
             else:
@@ -746,7 +748,7 @@ class UNetModel(nn.Module):
 
             static_context = context[layer_idx]
             if use_dynamic_context: # and layer_idx <= 13:
-                dynamic_context = embedder(context_in, layer_idx, h)
+                dynamic_context = embedder(context_in, layer_idx, h, emb)
                 context_mix = static_context * static_weight + dynamic_context * dynamic_weight
                 return context_mix
             else:
@@ -769,6 +771,7 @@ class UNetModel(nn.Module):
 
         for module in self.input_blocks:
             layer_context = get_layer_context(layer_idx, h)
+            # layer_context [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
             hs.append(h)
             layer_idx += 1

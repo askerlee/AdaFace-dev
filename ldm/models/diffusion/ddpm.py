@@ -627,11 +627,11 @@ class LatentDiffusion(DDPM):
         return c
 
     # get_dynamic_conditioning() is called iteratively for each layer in UNet.
-    def get_dynamic_conditioning(self, c_in, layer_idx, layer_infeat):
+    def get_dynamic_conditioning(self, c_in, layer_idx, layer_infeat, time_emb):
         # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
         # when embedding_manager is called within cond_stage_model.encode().
-        self.embedding_manager.set_dyn_layer_info(layer_idx, layer_infeat)
+        self.embedding_manager.set_dyn_layer_info(layer_idx, layer_infeat, time_emb)
         c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         return c
 

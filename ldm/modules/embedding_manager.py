@@ -117,7 +117,7 @@ class StaticLoraEmbedding(nn.Module):
         # basis_vecs consists of r basis vectors. Will be updated through BP.
         self.basis_vecs = nn.Parameter(torch.randn(r - N, dim2), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
-        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1) / 2.
+        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1) / 4.
         # Always set the last basis vector to 0.
         self.basis_vecs.data[-1] = 0
 
@@ -258,7 +258,7 @@ class DynamicLoraEmbedding(nn.Module):
         # basis_vecs: [12, 768], consists of r-N basis vectors. Will be updated through BP.
         self.basis_vecs = nn.Parameter(torch.randn(r - N, dim2), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
-        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1) / 2.
+        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1) / 4.
         # Always set the last basis vector to 0.
         self.basis_vecs.data[-1] = 0
 
@@ -268,7 +268,8 @@ class DynamicLoraEmbedding(nn.Module):
         maps = []
         lns  = []
         for i in range(dim1):
-            maps.append( nn.Linear(infeat_dims[i], r, bias=True) )
+            # infeat_dims[i] * 2 because we also include time embeddings as the input features.
+            maps.append( nn.Linear(infeat_dims[i] * 2, r, bias=True) )
             lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
 
         self.maps = nn.ModuleList(maps)
@@ -284,18 +285,27 @@ class DynamicLoraEmbedding(nn.Module):
             self.bias_scales = 0
 
         print(f"Dynamic LoRA initialized with {self.N} init vectors, {self.r} basis vectors")
-
         self.call_count = 0
-        self.debug = False
 
     # layer_infeat: 4D image feature tensor [B, C, H, W].
     # layer_idx: 0 ~ self.dim1 - 1.
-    def forward(self, layer_idx, layer_infeat):
+    # time_emb: [B, 1280].
+    def forward(self, layer_idx, layer_infeat, time_emb):
         with torch.autocast(device_type=self.device_type, enabled=True):
             # basis_dyn_weight: [B, r] = [2, 12].
             # We do not BP into the UNet. So cut off the gradient flow here.
+            # infeat_pooled: [B, D_layer]
             infeat_pooled    = self.avgpool(layer_infeat).squeeze(-1).squeeze(-1).detach()
-            basis_dyn_weight = self.maps[layer_idx](infeat_pooled)
+            D = self.infeat_dims[layer_idx]
+            # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
+            # Only use the first D dimensions of the time embedding, 
+            # as the time embedding is highly redundant, and the first D dimensions are sufficient
+            # to capture the temporal information.
+            # Note to take the first D dimensions, instead of the last D dimensions,
+            # as the leading dimensions are sensitive to time change, 
+            # and the last dimensions tend to be the same for all time steps.
+            infeat_time      = torch.cat([infeat_pooled, time_emb[:, :D]], dim=1)
+            basis_dyn_weight = self.maps[layer_idx](infeat_time)
             # Separate bias and bias_scales, for easier regularization on their scales.
             # bias: [1, 768] * [1, 1] = [1, 768].
             bias    = self.bias[layer_idx].unsqueeze(0) * self.bias_scales[layer_idx]
@@ -309,12 +319,11 @@ class DynamicLoraEmbedding(nn.Module):
             # [2, 12] x [12, 768] = [2, 768], + [1, 768] = [2, 768].
             out_vec = ln(torch.matmul(basis_dyn_weight, basis_vecs)) / np.sqrt(self.dim2) + bias
 
-            if 'debug' not in self.__dict__:
-                self.debug = True
+            self.debug = False
             if 'call_count' not in self.__dict__:
                 self.call_count = 0
 
-            if self.debug and self.call_count % 100 == 0:
+            if self.debug and self.call_count % 10 == 0:
                 calc_stats(f'{layer_idx} basis_dyn_weight', basis_dyn_weight)
                 calc_stats(f'{layer_idx} out_vec', out_vec)
             
@@ -467,6 +476,7 @@ class EmbeddingManager(nn.Module):
             self.string_to_dyn_embedder_dict[placeholder_string] = token_dyn_embedder
 
             self.clear_dyn_layer_info()
+            self.call_count = 0
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then max_vectors_per_token = num_unet_layers = 25.
@@ -477,8 +487,10 @@ class EmbeddingManager(nn.Module):
     ):
         b, n, device = *tokenized_text.shape, tokenized_text.device
 
+        self.call_count += 1
+
         if self.do_dynamic_embedding:
-            embedded_text = self.get_dyn_embedding(self.layer_infeat, self.layer_idx, 
+            embedded_text = self.get_dyn_embedding(self.layer_idx, self.layer_infeat, self.time_emb,
                                                    tokenized_text, embedded_text)
             # Remove dynamic-embedding specific variables.
             self.clear_dyn_layer_info()
@@ -575,8 +587,9 @@ class EmbeddingManager(nn.Module):
     # If self.use_layerwise_embedding, then max_vectors_per_token = num_unet_layers = 25.
     def get_dyn_embedding(
             self,
-            layer_infeat,           # layer_infeat: intermediate features of the UNet on the noise image.
             layer_idx,              # the index of the current layer in the UNet.
+            layer_infeat,           # layer_infeat: intermediate features of the UNet on the noise image.
+            time_emb,               # time embedding of the current iteration.
             tokenized_text,         # [B, N]. Identical B copies along the batch dimension.
             embedded_text,          # [B, N, 768]. Identical B copies along the batch dimension.
     ):
@@ -607,7 +620,7 @@ class EmbeddingManager(nn.Module):
 
             # Generate the actual placeholder_embedding on the fly.
             # [B=2, 768]
-            placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat)
+            placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat, time_emb)
             # embedded_text[placeholder_idx] indexes the embedding at each instance in the batch.
             # embedded_text[placeholder_idx]: [2, 768].  placeholder_embedding: [2, 768].
             # Sometimes (e.g. during inference, some instances contain the placeholder token but
@@ -619,15 +632,17 @@ class EmbeddingManager(nn.Module):
 
         return embedded_text
 
-    def set_dyn_layer_info(self, layer_idx, layer_infeat):
+    def set_dyn_layer_info(self, layer_idx, layer_infeat, time_emb):
         self.do_dynamic_embedding = True
-        self.layer_idx = layer_idx
-        self.layer_infeat = layer_infeat
-    
+        self.layer_idx      = layer_idx
+        self.layer_infeat   = layer_infeat
+        self.time_emb       = time_emb
+
     def clear_dyn_layer_info(self):
         self.do_dynamic_embedding = False
-        self.layer_idx = -1
-        self.layer_infeat = None
+        self.layer_idx      = -1
+        self.layer_infeat   = None
+        self.time_emb       = None
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, ckpt_path):
@@ -726,9 +741,9 @@ class EmbeddingManager(nn.Module):
         bias_reg_weight_base    = 0.1
         basis_reg_weight_base   = 0.1
         dyn_maps_weight_reg_weight = 1.
-        dyn_maps_bias_reg_weight   = 0.000
-        pre_vecs_reg_weight = 0.1
-        l2_loss_boost = 10
+        dyn_maps_bias_reg_weight   = 0.01
+        pre_vecs_reg_weight     = 0.1
+        l2_loss_boost           = 10
 
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.
@@ -766,12 +781,15 @@ class EmbeddingManager(nn.Module):
                 else:
                     loss_pre_vecs = 0.
 
-                loss_dyn_maps_weight = 0
-                loss_dyn_maps_bias   = 0
+                loss_dyn_maps_weight = 0.
+                loss_dyn_maps_bias   = 0.
                 if isinstance(lora_embobj, DynamicLoraEmbedding):
                     for map in lora_embobj.maps:
                         loss_dyn_maps_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
                         loss_dyn_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
+
+                if type(loss_bias) == int:
+                    breakpoint()
 
                 loss = loss + loss_bias     * bias_reg_weight \
                         + loss_bias_scales  * bias_scales_reg_weight \
@@ -779,6 +797,18 @@ class EmbeddingManager(nn.Module):
                         + loss_pre_vecs     * pre_vecs_reg_weight \
                         + loss_dyn_maps_weight  * dyn_maps_weight_reg_weight \
                         + loss_dyn_maps_bias    * dyn_maps_bias_reg_weight
+
+                debug = True
+                if debug and self.call_count % 100 == 0:
+                    print_str = f'loss_bias={loss_bias.item():.4f}, ' \
+                                f'loss_bias_scales={loss_bias_scales.item():.4f}, ' \
+                                f'loss_basis={loss_basis.item():.4f}, ' \
+                                f'loss_pre_vecs={loss_pre_vecs.item():.4f}, '
+                    if isinstance(lora_embobj, DynamicLoraEmbedding):
+                        print_str += f'loss_dyn_maps_weight={loss_dyn_maps_weight.item():.4f}, ' \
+                                     f'loss_dyn_maps_bias={loss_dyn_maps_bias.item():.4f}'
+
+                    print(print_str)
 
         if euc_loss_type   == 'l2':
             loss = loss * l2_loss_boost 
