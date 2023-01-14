@@ -207,11 +207,9 @@ class StaticLoraEmbedding(nn.Module):
                 basis_vecs = self.basis_vecs
 
             out_vecs = torch.matmul(basis_weights, basis_vecs)
-            if 'lns' in self.__dict__['_modules']:
-                out_vecs_ln = [ self.lns[i](out_vecs[i]) for i in range(self.dim1) ]
-                out_vecs_ln = torch.stack(out_vecs_ln, dim=0) / np.sqrt(self.dim2)
-            else:
-                out_vecs_ln = out_vecs
+            # Apply layer-wise layer normalization.
+            out_vecs_ln = [ self.lns[i](out_vecs[i]) for i in range(self.dim1) ]
+            out_vecs_ln = torch.stack(out_vecs_ln, dim=0) / np.sqrt(self.dim2)
 
             # Different layers have different bias scales.
             # Separate bias and bias_scales, for easier regularization on their scales.
@@ -267,18 +265,24 @@ class DynamicLoraEmbedding(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.layers_skipped = [ True if i in skipped_layers else False for i in range(dim1) ]
 
-        # First TD dimension of the time embeddings will be used.
-        self.TD = 10
+        # First TD_frac of dimensions of the time embeddings will be used.
+        self.TD_frac = 0.5
+
         maps = []
         lns  = []
+        self.TDs = []
+
         for i in range(dim1):
+            TD = int(self.TD_frac * infeat_dims[i])
+            self.TDs.append(TD)
+
             if self.layers_skipped[i]:
                 maps.append(None)
                 lns.append(None)
                 continue
 
             # infeat_dims[i] + 10 because we also include time embeddings (first 10 dims) as the input features.
-            maps.append( nn.Linear(infeat_dims[i] + self.TD, r, bias=True) )
+            maps.append( nn.Linear(infeat_dims[i] + TD, r, bias=True) )
             lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
 
         self.maps = nn.ModuleList(maps)
@@ -314,7 +318,7 @@ class DynamicLoraEmbedding(nn.Module):
             # as the leading dimensions are sensitive to time change, 
             # and the last dimensions tend to be the same for all time steps.
             # Never allow time embeddings dominate image features infeat.
-            TD = min(self.TD, D)
+            TD = self.TDs[layer_idx]
             infeat_time      = torch.cat([infeat_pooled, time_emb[:, :TD]], dim=1)
             basis_dyn_weight = self.maps[layer_idx](infeat_time)
             # Separate bias and bias_scales, for easier regularization on their scales.
