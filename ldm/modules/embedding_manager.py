@@ -313,7 +313,9 @@ class DynamicLoraEmbedding(nn.Module):
             # Note to take the first D dimensions, instead of the last D dimensions,
             # as the leading dimensions are sensitive to time change, 
             # and the last dimensions tend to be the same for all time steps.
-            infeat_time      = torch.cat([infeat_pooled, time_emb[:, :self.TD]], dim=1)
+            # Never allow time embeddings dominate image features infeat.
+            TD = min(self.TD, D)
+            infeat_time      = torch.cat([infeat_pooled, time_emb[:, :TD]], dim=1)
             basis_dyn_weight = self.maps[layer_idx](infeat_time)
             # Separate bias and bias_scales, for easier regularization on their scales.
             # bias: [1, 768] * [1, 1] = [1, 768].
