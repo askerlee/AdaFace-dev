@@ -225,9 +225,10 @@ class DynamicLoraEmbedding(nn.Module):
     # the input feature from the respective layer. 
     # infeat_dims are (almost) reflective around the middle layer, except for the first and last layers.
     def __init__(self, dim1=25, dim2=768, r=12, init_vecs=None, 
-                 infeat_dims=[ 4,    320,  320,  320,  320,  640,  640,  640, 1280, 1280, 1280, 1280, 
-                               1280,
-                               1280, 1280, 1280, 1280, 1280, 1280, 1280, 640, 640,  640,  320,  320 ],
+                 infeat_dims = [ 4,    320,  320,  320,  320,  640,  640,  640, 1280, 1280, 1280, 1280, 
+                                 1280,
+                                 1280, 1280, 1280, 1280, 1280, 1280, 1280, 640, 640,  640,  320,  320 ],
+                 skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15],
                  has_bias=True, device_type="cuda"):
         super().__init__()
 
@@ -264,12 +265,20 @@ class DynamicLoraEmbedding(nn.Module):
 
         self.infeat_dims = list(infeat_dims)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.layers_skipped = [ True if i in skipped_layers else False for i in range(dim1) ]
 
+        # First TD dimension of the time embeddings will be used.
+        self.TD = 10
         maps = []
         lns  = []
         for i in range(dim1):
-            # infeat_dims[i] * 2 because we also include time embeddings as the input features.
-            maps.append( nn.Linear(infeat_dims[i] * 2, r, bias=True) )
+            if self.layers_skipped[i]:
+                maps.append(None)
+                lns.append(None)
+                continue
+
+            # infeat_dims[i] + 10 because we also include time embeddings (first 10 dims) as the input features.
+            maps.append( nn.Linear(infeat_dims[i] + self.TD, r, bias=True) )
             lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
 
         self.maps = nn.ModuleList(maps)
@@ -304,7 +313,7 @@ class DynamicLoraEmbedding(nn.Module):
             # Note to take the first D dimensions, instead of the last D dimensions,
             # as the leading dimensions are sensitive to time change, 
             # and the last dimensions tend to be the same for all time steps.
-            infeat_time      = torch.cat([infeat_pooled, time_emb[:, :D]], dim=1)
+            infeat_time      = torch.cat([infeat_pooled, time_emb[:, :self.TD]], dim=1)
             basis_dyn_weight = self.maps[layer_idx](infeat_time)
             # Separate bias and bias_scales, for easier regularization on their scales.
             # bias: [1, 768] * [1, 1] = [1, 768].
@@ -317,7 +326,8 @@ class DynamicLoraEmbedding(nn.Module):
 
             ln = self.lns[layer_idx]
             # [2, 12] x [12, 768] = [2, 768], + [1, 768] = [2, 768].
-            out_vec = ln(torch.matmul(basis_dyn_weight, basis_vecs)) / np.sqrt(self.dim2) + bias
+            out_vec0 = ln(torch.matmul(basis_dyn_weight, basis_vecs)) / np.sqrt(self.dim2)
+            out_vec  = out_vec0 + bias
 
             self.debug = False
             if 'call_count' not in self.__dict__:
@@ -325,7 +335,8 @@ class DynamicLoraEmbedding(nn.Module):
 
             if self.debug and self.call_count % 10 == 0:
                 calc_stats(f'{layer_idx} basis_dyn_weight', basis_dyn_weight)
-                calc_stats(f'{layer_idx} out_vec', out_vec)
+                calc_stats(f'{layer_idx} out_vec0', out_vec0)
+                calc_stats(f'{layer_idx} bias', bias)
             
             if layer_idx == 24:
                 self.call_count += 1
@@ -784,7 +795,9 @@ class EmbeddingManager(nn.Module):
                 loss_dyn_maps_weight = 0.
                 loss_dyn_maps_bias   = 0.
                 if isinstance(lora_embobj, DynamicLoraEmbedding):
-                    for map in lora_embobj.maps:
+                    for i, map in enumerate(lora_embobj.maps):
+                        if lora_embobj.layers_skipped[i]:
+                            continue
                         loss_dyn_maps_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
                         loss_dyn_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
 

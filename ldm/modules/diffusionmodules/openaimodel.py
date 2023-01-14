@@ -756,51 +756,52 @@ class UNetModel(nn.Module):
                 # We simply return None, as it's not used anyway.
                 return None
 
-        # 0  input h:   [2, 4, 64, 64]
-        # 1  torch.Size([2, 320, 64, 64])
-        # 2  torch.Size([2, 320, 64, 64])
-        # 3  torch.Size([2, 320, 64, 64])
-        # 4  torch.Size([2, 320, 32, 32])
-        # 5  torch.Size([2, 640, 32, 32])
-        # 6  torch.Size([2, 640, 32, 32])
-        # 7  torch.Size([2, 640, 16, 16])
-        # 8  torch.Size([2, 1280, 16, 16])
-        # 9  torch.Size([2, 1280, 16, 16])
-        # 10 torch.Size([2, 1280, 8, 8])
-        # 11 torch.Size([2, 1280, 8, 8])
-        # 12 torch.Size([2, 1280, 8, 8])
+        # 0  input h:   [2, 4,    64, 64]
+        # 1             [2, 320,  64, 64]
+        # 2             [2, 320,  64, 64]
+        # 3             [2, 320,  64, 64]
+        # 4             [2, 320,  32, 32]
+        # 5             [2, 640,  32, 32]
+        # 6             [2, 640,  32, 32]
+        # 7             [2, 640,  16, 16]
+        # 8             [2, 1280, 16, 16]
+        # 9             [2, 1280, 16, 16]
+        # 10            [2, 1280, 8,  8]
+        # 11            [2, 1280, 8,  8]
+        # 12            [2, 1280, 8,  8]
         layer_idx = 0
 
         for module in self.input_blocks:
             layer_context = get_layer_context(layer_idx, h)
-            # layer_context [2, 77, 768], emb: [2, 1280].
+            # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
             hs.append(h)
             layer_idx += 1
         
         layer_context = get_layer_context(layer_idx, h)
-        # 13 torch.Size([2, 1280, 8, 8])
+        # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, layer_context)
         layer_idx += 1
 
-        # 14 torch.Size([2, 1280, 8, 8])
-        # 15 torch.Size([2, 1280, 8, 8])
-        # 16 torch.Size([2, 1280, 16, 16])
-        # 17 torch.Size([2, 1280, 16, 16])
-        # 18 torch.Size([2, 1280, 16, 16])
-        # 19 torch.Size([2, 1280, 32, 32])
-        # 20 torch.Size([2, 640, 32, 32])
-        # 21 torch.Size([2, 640, 32, 32])
-        # 22 torch.Size([2, 640, 64, 64])
-        # 23 torch.Size([2, 320, 64, 64])
-        # 24 torch.Size([2, 320, 64, 64])
+        # 14 [2, 1280, 8,  8]
+        # 15 [2, 1280, 8,  8]
+        # 16 [2, 1280, 16, 16]
+        # 17 [2, 1280, 16, 16]
+        # 18 [2, 1280, 16, 16]
+        # 19 [2, 1280, 32, 32]
+        # 20 [2, 640,  32, 32]
+        # 21 [2, 640,  32, 32]
+        # 22 [2, 640,  64, 64]
+        # 23 [2, 320,  64, 64]
+        # 24 [2, 320,  64, 64]
         for module in self.output_blocks:
             layer_context = get_layer_context(layer_idx, h)
             h = th.cat([h, hs.pop()], dim=1)
+            # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
             layer_idx += 1
 
-        # torch.Size([2, 320, 64, 64])
+        # [2, 320, 64, 64]
         h = h.type(x.dtype)
         if self.predict_codebook_ids:
             return self.id_predictor(h)

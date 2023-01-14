@@ -72,6 +72,9 @@ for emb_ckpt_filename in emb_ckpt_files:
         print()
 
     if output_type == 'all':
+        skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15]
+        layers_skipped = [ True if i in skipped_layers else False for i in range(25) ]
+
         print("%s DYNAMIC:" %emb_ckpt_filename)
         for key in emb_ckpt['string_to_dyn_embedder']:
             embeddings = emb_ckpt['string_to_dyn_embedder'][key]
@@ -81,6 +84,8 @@ for emb_ckpt_filename in emb_ckpt_files:
                 calc_stats("basis_vecs_pos", embeddings.basis_vecs[:N])
                 calc_stats("basis_vecs_rand", embeddings.basis_vecs[N:])
                 for i, map in enumerate(embeddings.maps):
+                    if layers_skipped[i]:
+                        continue
                     calc_stats(f"map-{i} weight", map.weight)
                     simple_stats(f"map-{i} bias", map.bias)
 
