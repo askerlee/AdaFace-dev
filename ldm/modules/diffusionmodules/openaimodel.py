@@ -746,13 +746,15 @@ class UNetModel(nn.Module):
             static_weight   = 0.5
             dynamic_weight  = 0.5 # 1 - static_weight
 
+            skipped_layers = set([0, 3, 6, 9, 10, 11, 13, 14, 15])
             static_context = context[layer_idx]
-            if use_dynamic_context: # and layer_idx <= 13:
+            if use_dynamic_context and layer_idx not in skipped_layers:
                 dynamic_context = embedder(context_in, layer_idx, h, emb)
                 context_mix = static_context * static_weight + dynamic_context * dynamic_weight
                 return context_mix
             else:
-                return static_context
+                # We simply return None, as it's not used anyway.
+                return None
 
         # 0  input h:   [2, 4, 64, 64]
         # 1  torch.Size([2, 320, 64, 64])
