@@ -363,7 +363,6 @@ class EmbeddingManager(nn.Module):
             num_vectors_per_token=1,
             progressive_words=False,
             use_layerwise_embedding=False,
-            layerwise_reflective=False,
             num_unet_enc_layers=12,
             # If two tokens, lora rank=4. That means,
             # compress 12*2+1=25 embeddings to the linear combination of 4 embeddings,
@@ -386,7 +385,6 @@ class EmbeddingManager(nn.Module):
         self.subj_scale = subj_scale
 
         self.use_layerwise_embedding = use_layerwise_embedding
-        self.layerwise_reflective   = layerwise_reflective
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
         self.num_unet_enc_layers    = num_unet_enc_layers
         self.num_unet_layers        = num_unet_enc_layers * 2 + 1
@@ -400,12 +398,7 @@ class EmbeddingManager(nn.Module):
                 "multiple embeddings per token is not supported when using layer-wise embeddings"
             # num_vectors_per_token specifies the total number of embeddings for this token.
             # There's an embedding for each layer.
-            # if embeddings are symmetric in the encoder & decoder, then
-            # it only needs (number of encoder layer) embeddings + 1 embedding (the middle layer).
-            if self.layerwise_reflective:
-                num_vectors_per_token = num_unet_enc_layers + 1
-            else:
-                num_vectors_per_token = num_unet_enc_layers * 2 + 1
+            num_vectors_per_token = num_unet_enc_layers * 2 + 1
 
         # hasattr(embedder, 'tokenizer') -> True
         if hasattr(embedder, 'tokenizer'): # using Stable Diffusion's CLIP encoder
@@ -513,8 +506,19 @@ class EmbeddingManager(nn.Module):
             self.clear_dyn_layer_info()
             return embedded_text
 
-        for placeholder_string, placeholder_token in self.string_to_token_dict.items():
+        if self.use_layerwise_embedding:
+            # embedded_text: [B, 25, N, 768] => [25*B, N, 768].
+            # "Tuck" the layer dimension into the batch dimension, 
+            # to keep embedded_text in 3D, same as the input.
+            embedded_text = embedded_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1, 1).view(b * self.num_unet_layers, n, -1)
+            # tokenized_text: [B, 25, N] => [25*B, N]
+            # tokenized_text has to be repeated along the layer dimension as well, so that 
+            # placeholder_idx can index the embedding at each layer in the batch.
+            tokenized_text = tokenized_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1).view(b * self.num_unet_layers, n)
+            # mirror-reflect the embedding along the layer dimension, to make it symmetric 
+            # in the encoder & decoder.
 
+        for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             placeholder_embedding = self.string_to_param_dict[placeholder_string].to(device)
             # Generate the actual placeholder_embedding on the fly.
             if isinstance(placeholder_embedding, StaticLoraEmbedding):
@@ -523,24 +527,6 @@ class EmbeddingManager(nn.Module):
             # max_vectors_per_layer_per_token == 1: original num_vectors_per_token == 1, but 
             # self.use_layerwise_embedding could still be True.
             if self.max_vectors_per_layer_per_token == 1: # If there's only one vector per token, we can do a simple replacement
-                if self.use_layerwise_embedding:
-                    # embedded_text: [B, 25, N, 768] => [25*B, N, 768].
-                    # "Tuck" the layer dimension into the batch dimension, 
-                    # to keep embedded_text in 3D, same as the input.
-                    embedded_text = embedded_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1, 1).view(b * self.num_unet_layers, n, -1)
-                    # tokenized_text: [B, 25, N] => [25*B, N]
-                    # tokenized_text has to be repeated along the layer dimension as well, so that 
-                    # placeholder_idx can index the embedding at each layer in the batch.
-                    tokenized_text = tokenized_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1).view(b * self.num_unet_layers, n)
-                    # mirror-reflect the embedding along the layer dimension, to make it symmetric 
-                    # in the encoder & decoder.
-
-                    if self.layerwise_reflective:
-                        placeholder_embedding_enc = placeholder_embedding[:-1]
-                        placeholder_embedding = torch.cat([ placeholder_embedding_enc, 
-                                                            placeholder_embedding[-1].unsqueeze(0), 
-                                                            placeholder_embedding_enc.flip(0) ], dim=0)
-
                 placeholder_idx = torch.where(tokenized_text == placeholder_token.to(device))
                 if placeholder_idx[0].numel() == 0:
                     continue
@@ -601,7 +587,8 @@ class EmbeddingManager(nn.Module):
         return embedded_text
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
-    # If self.use_layerwise_embedding, then max_vectors_per_token = num_unet_layers = 25.
+    # As the output embedding is only generated for a particular layer, 
+    # no need to repeat num_unet_layers times as replacing with the static embedding in forward().
     def get_dyn_embedding(
             self,
             layer_idx,              # the index of the current layer in the UNet.
@@ -669,13 +656,38 @@ class EmbeddingManager(nn.Module):
                     ckpt_path)
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
-    def load(self, ckpt_path):
-        ckpt = torch.load(ckpt_path, map_location='cpu')
+    def load(self, ckpt_paths):
+        # The default placeholder specified in the config file will be loaded to these dicts.
+        # So before loading, remove it from these dicts first.
+        self.string_to_token_dict           = {}
+        self.string_to_param_dict           = nn.ParameterDict()
+        self.string_to_dyn_embedder_dict    = nn.ModuleDict()
 
-        self.string_to_token_dict        = ckpt["string_to_token"]
-        self.string_to_param_dict        = ckpt["string_to_param"]
-        self.string_to_dyn_embedder_dict = ckpt["string_to_dyn_embedder"]
+        for i, ckpt_path in enumerate(ckpt_paths):
+            ckpt_path_parts = ckpt_path.split(":")
+            ckpt_path = ckpt_path_parts[0]
+            if len(ckpt_path_parts) == 2:
+                placeholder_mapper = {}
+                for placeholder_mapping in ckpt_path_parts[1].split(","):
+                    from_, to_ = placeholder_mapping.split("-")
+                    placeholder_mapper[from_] = to_
+            else:
+                placeholder_mapper = None
+                
+            ckpt = torch.load(ckpt_path, map_location='cpu')
+            for k in ckpt["string_to_token"]:
+                if (placeholder_mapper is not None) and (k in placeholder_mapper):
+                    k2 = placeholder_mapper[k]
+                else:
+                    k2 = k
 
+                if k2 in self.string_to_token_dict:
+                    raise ValueError(f"Duplicate key {k}->{k2} in {ckpt_path}")
+
+                self.string_to_token_dict[k2]        = ckpt["string_to_token"][k]
+                self.string_to_param_dict[k2]        = ckpt["string_to_param"][k]
+                self.string_to_dyn_embedder_dict[k2] = ckpt["string_to_dyn_embedder"][k]
+                
     # get_embedding_norms_squared() is never used.
     def get_embedding_norms_squared(self):
         all_params = torch.cat(list(self.string_to_param_dict.values()), axis=0) # num_placeholders x embedding_dim

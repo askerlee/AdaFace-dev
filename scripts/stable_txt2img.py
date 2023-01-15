@@ -177,9 +177,10 @@ def main():
 
 
     parser.add_argument(
-        "--embedding_path", 
+        "--embedding_paths", 
+        nargs="*", 
         type=str, default=None,
-        help="Path to a pre-trained embedding manager checkpoint")
+        help="Paths to a pre-trained embedding manager checkpoint")
     parser.add_argument(
         "--subj_scale",
         type=float,
@@ -202,8 +203,8 @@ def main():
 
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
-    if opt.embedding_path is not None:
-        model.embedding_manager.load(opt.embedding_path)
+    if opt.embedding_paths is not None:
+        model.embedding_manager.load(opt.embedding_paths)
     model.embedding_manager.subj_scale = opt.subj_scale
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -292,9 +293,9 @@ def main():
                     # to image
                     grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
                     # logs/name2022-12-27T23-03-14_name/checkpoints/embeddings_gs-1200.pt
-                    date_mat = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}", opt.embedding_path)
+                    date_mat = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}", opt.embedding_paths[0])
                     date_sig = date_mat.group(0)
-                    iter_mat = re.search(r"(\d+).pt", opt.embedding_path)
+                    iter_mat = re.search(r"(\d+).pt", opt.embedding_paths[0])
                     iter_sig = iter_mat.group(1)
                     embedding_sig = date_sig + "-" + iter_sig
 
