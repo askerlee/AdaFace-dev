@@ -85,8 +85,12 @@ class PLMSSampler(object):
                 if cbs != batch_size:
                     print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
             else:
-                if conditioning.shape[0] != batch_size:
-                    print(f"Warning: Got {conditioning.shape[0]} conditionings but batch-size is {batch_size}")
+                if isinstance(conditioning, tuple):
+                    conditioning_ = conditioning[0]
+                else:
+                    conditioning_ = conditioning
+                if conditioning_.shape[0] != batch_size:
+                    print(f"Warning: Got {conditioning_.shape[0]} conditionings but batch-size is {batch_size}")
 
         self.make_schedule(ddim_num_steps=S, ddim_eta=eta, verbose=verbose)
         # sampling
@@ -181,8 +185,21 @@ class PLMSSampler(object):
             else:
                 x_in = torch.cat([x] * 2)
                 t_in = torch.cat([t] * 2)
-                c_in = torch.cat([unconditional_conditioning, c])
-                e_t_uncond, e_t = self.model.apply_model(x_in, t_in, c_in).chunk(2)
+
+                if isinstance(c, tuple):
+                    c_c, c_in_c, embedder = c
+                    c_u, c_in_u, embedder = unconditional_conditioning
+                    # Concatenated conditining embedding in the order of (unconditional, conditional)
+                    uc_c = torch.cat([c_u, c_c])
+                    # Concatenated input context (prompts) in the order of (unconditional, conditional)
+                    uc_c_in = sum([c_in_u, c_in_c], [])
+                    # Combined context tuple.
+                    c2 = (uc_c, uc_c_in, embedder)
+                else:
+                    c2 = torch.cat([unconditional_conditioning, c])
+
+                # c_in = torch.cat([unconditional_conditioning, c])
+                e_t_uncond, e_t = self.model.apply_model(x_in, t_in, c2).chunk(2)
                 e_t = e_t_uncond + unconditional_guidance_scale * (e_t - e_t_uncond)
 
             if score_corrector is not None:

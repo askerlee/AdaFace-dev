@@ -412,6 +412,7 @@ class EmbeddingManager(nn.Module):
             get_embeddings_for_tokens = embedder.transformer.token_emb
             self.token_dim = 1280
 
+        # Save this function to be used in load() when doing placeholder substitution.
         self.get_tokens_for_string = get_tokens_for_string
 
         if per_image_tokens:
