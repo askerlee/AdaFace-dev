@@ -412,6 +412,8 @@ class EmbeddingManager(nn.Module):
             get_embeddings_for_tokens = embedder.transformer.token_emb
             self.token_dim = 1280
 
+        self.get_tokens_for_string = get_tokens_for_string
+
         if per_image_tokens:
             placeholder_strings.extend(per_img_token_list)
 
@@ -663,7 +665,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_param_dict           = nn.ParameterDict()
         self.string_to_dyn_embedder_dict    = nn.ModuleDict()
 
-        for i, ckpt_path in enumerate(ckpt_paths):
+        for ckpt_path in ckpt_paths:
             ckpt_path_parts = ckpt_path.split(":")
             ckpt_path = ckpt_path_parts[0]
             if len(ckpt_path_parts) == 2:
@@ -678,16 +680,21 @@ class EmbeddingManager(nn.Module):
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
                     k2 = placeholder_mapper[k]
+                    k2_token = self.get_tokens_for_string(k2)[0]
                 else:
                     k2 = k
+                    k2_token = ckpt["string_to_token"][k]
 
                 if k2 in self.string_to_token_dict:
                     raise ValueError(f"Duplicate key {k}->{k2} in {ckpt_path}")
 
-                self.string_to_token_dict[k2]        = ckpt["string_to_token"][k]
+                # The mapping in string_to_token_dict is determined by the tokenizer. 
+                # Shouldn't do the k->k2 mapping on string_to_token_dict.
+                self.string_to_token_dict[k2]        = k2_token
                 self.string_to_param_dict[k2]        = ckpt["string_to_param"][k]
                 self.string_to_dyn_embedder_dict[k2] = ckpt["string_to_dyn_embedder"][k]
-                
+                print(f"Loaded {k}->{k2} from {ckpt_path}")
+
     # get_embedding_norms_squared() is never used.
     def get_embedding_norms_squared(self):
         all_params = torch.cat(list(self.string_to_param_dict.values()), axis=0) # num_placeholders x embedding_dim
