@@ -41,6 +41,18 @@ def load_model_from_config(config, ckpt, verbose=False):
     model.eval()
     return model
 
+# copied from img2img.py
+def load_img(path, h, w):
+    image = Image.open(path).convert("RGB")
+    w0, h0 = image.size
+    print(f"loaded input image of size ({w0}, {h0}) from {path}")
+    w, h = map(lambda x: x - x % 32, (w, h))  # resize to integer multiple of 32
+    image = image.resize((w, h), resample=Image.LANCZOS)
+    image = np.array(image).astype(np.float32) / 255.0
+    image = image[None].transpose(0, 3, 1, 2)
+    image = torch.from_numpy(image)
+    return 2.*image - 1.
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -187,6 +199,19 @@ def main():
         default=1.0,
         help="Scale of the subject embedding",
     )
+    parser.add_argument(
+        "--init_img",
+        type=str,
+        default=None,
+        help="path to the initial image",
+    )  
+    # Anything between 0 and 1 will cause blended images.
+    parser.add_argument(
+        "--mask_weight",
+        type=float,
+        default=0.0,
+        help="Weight of the initial image",
+    )
 
     parser.add_argument('--gpu', type=str,  default='1', help='ID of GPU to use')
 
@@ -236,6 +261,17 @@ def main():
     base_count = len(os.listdir(sample_path))
     grid_count = len(os.listdir(outpath)) - 1
 
+    if opt.init_img is not None:
+        assert opt.fixed_code is False
+        init_img = load_img(opt.init_img, opt.H, opt.W)
+        init_img = init_img.repeat([opt.n_samples, 1, 1, 1]).to(device)
+        # move init_img to latent space
+        x0      = model.get_first_stage_encoding(model.encode_first_stage(init_img))  
+        mask    = torch.ones_like(x0) * opt.mask_weight
+    else:
+        x0      = None
+        mask    = None
+
     start_code = None
     if opt.fixed_code:
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
@@ -269,6 +305,8 @@ def main():
                                                          unconditional_guidance_scale=opt.scale,
                                                          unconditional_conditioning=uc,
                                                          eta=opt.ddim_eta,
+                                                         x0=x0,
+                                                         mask=mask,
                                                          x_T=start_code)
 
                         x_samples_ddim = model.decode_first_stage(samples_ddim)

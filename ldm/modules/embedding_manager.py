@@ -546,7 +546,10 @@ class EmbeddingManager(nn.Module):
                 # placeholder_embedding: placeholder_embedding: [25, 768] repeat=> [50, 768]
                 # Note that the 25 layers are initialized with the same embedding. 
                 # LINK #init_embed
-                embedded_text[placeholder_idx] = placeholder_embedding.repeat(b, 1) * self.subj_scale
+                # Possible BUG: if the placeholder appears in > 1 times in one prompt, then the 
+                # filling order may be wrong. Check in the future.
+                OCCUR = placeholder_idx[0].numel() // self.num_unet_layers
+                embedded_text[placeholder_idx] = placeholder_embedding.repeat(OCCUR, 1) * self.subj_scale
 
             # *multi-vector latent space*: In this space, S* is embedded into multiple 
             # learned embeddings, an approach that is equivalent to describing
