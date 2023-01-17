@@ -16,16 +16,21 @@ model:
     monitor: val/loss_simple_ema
     scale_factor: 0.18215
     use_ema: False
+    use_layerwise_embedding: False
+    use_dynamic_embedding: False
 
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
         placeholder_strings: ["*"]
+        # The number of initializer words is probably different from that used in fine-tuning.
+        # But it doesn't matter, as EmbeddingManager.load() will completely replace self.string_to_param_dict,
+        # including the wrongly initialized LoraEmbedding object(s).
         initializer_words: ["sculpture"]
         per_image_tokens: false
         num_vectors_per_token: 1
         progressive_words: False
-        
+        use_layerwise_embedding: False        
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:

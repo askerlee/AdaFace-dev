@@ -1,7 +1,10 @@
 model:
   base_learning_rate: 5.0e-03
+  weight_decay: 0.0
+
   target: ldm.models.diffusion.ddpm.LatentDiffusion
   params:
+    # linear_start/linear_end: params for linear beta schedule.
     linear_start: 0.00085
     linear_end: 0.0120
     num_timesteps_cond: 1
@@ -20,12 +23,25 @@ model:
     unfreeze_model: False
     model_lr: 0.0
     use_layerwise_embedding: False
+    use_dynamic_embedding: False
+    
+    scheduler_config:
+      target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
+      params:
+        verbosity_interval: 0
+        warm_up_steps: 1000
+        # max_decay_steps = max_steps = 4000, so that the final LR is 0.01*base_lr.
+        max_decay_steps: 4000
+        lr_start: 0.01
+        lr_max: 1.0
+        lr_min: 0.2
 
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
         placeholder_strings: ["*"]
         initializer_words: ["sculpture"]
+        initializer_weights: [ None ]
         per_image_tokens: false
         num_vectors_per_token: 1
         progressive_words: False
@@ -103,10 +119,10 @@ lightning:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 500
+        batch_frequency: 1201
         max_images: 8
         increase_log_steps: False
 
   trainer:
     benchmark: True
-    max_steps: 6100
+    max_steps: 4000

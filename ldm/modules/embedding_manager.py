@@ -548,7 +548,10 @@ class EmbeddingManager(nn.Module):
                 # LINK #init_embed
                 # Possible BUG: if the placeholder appears in > 1 times in one prompt, then the 
                 # filling order may be wrong. Check in the future.
-                OCCUR = placeholder_idx[0].numel() // self.num_unet_layers
+                if self.use_layerwise_embedding:
+                    OCCUR = placeholder_idx[0].numel() // self.num_unet_layers
+                else:
+                    OCCUR = placeholder_idx[0].numel()
                 embedded_text[placeholder_idx] = placeholder_embedding.repeat(OCCUR, 1) * self.subj_scale
 
             # *multi-vector latent space*: In this space, S* is embedded into multiple 
