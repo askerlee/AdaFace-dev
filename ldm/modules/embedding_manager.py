@@ -523,8 +523,10 @@ class EmbeddingManager(nn.Module):
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             placeholder_embedding = self.string_to_param_dict[placeholder_string].to(device)
-            # Generate the actual placeholder_embedding on the fly.
             if isinstance(placeholder_embedding, StaticLoraEmbedding):
+                # Generate the actual placeholder_embedding on the fly.
+                # The 25 Static LoRA embeddings are formed by linearly combining the basis vectors.
+                # The matrix operations are done on the fly.
                 placeholder_embedding = placeholder_embedding()
 
             # max_vectors_per_layer_per_token == 1: original num_vectors_per_token == 1, but 

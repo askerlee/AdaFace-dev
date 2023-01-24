@@ -4,5 +4,7 @@ __pycache__/
 logs/*
 data/*
 data
+unused_data/*
+unused_data
 outputs/*
 models/stable-diffusion-v-1-4-original

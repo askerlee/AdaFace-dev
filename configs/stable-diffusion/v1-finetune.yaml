@@ -19,7 +19,9 @@ model:
     monitor: val/loss_simple_ema
     scale_factor: 0.18215
     use_ema: False
-    embedding_reg_weight: 0.0
+    # To control the norm of the result embeddings, set the reg weight to something <= 0.0001.
+    # Otherwise it won't learn anything interesting.
+    embedding_reg_weight: 0.0000    
     unfreeze_model: False
     model_lr: 0.0
     use_layerwise_embedding: False

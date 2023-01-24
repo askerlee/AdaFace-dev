@@ -64,10 +64,11 @@ for emb_ckpt_filename in emb_ckpt_files:
             embeddings = embeddings(False)
 
         calc_stats("embeddings", embeddings)
-        cosine_mat = F.cosine_similarity(embeddings[:,:,None], embeddings.t()[None,:,:])
-        triu_indices = torch.triu_indices(cosine_mat.size(0), cosine_mat.size(1), offset=1)
-        cosine_mat = cosine_mat[triu_indices[0], triu_indices[1]]
-        simple_stats("cosine", cosine_mat)
+        if embeddings.size(0) > 1:
+            cosine_mat = F.cosine_similarity(embeddings[:,:,None], embeddings.t()[None,:,:])
+            triu_indices = torch.triu_indices(cosine_mat.size(0), cosine_mat.size(1), offset=1)
+            cosine_mat = cosine_mat[triu_indices[0], triu_indices[1]]
+            simple_stats("cosine", cosine_mat)
 
         print()
 

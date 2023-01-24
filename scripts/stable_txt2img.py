@@ -331,15 +331,17 @@ def main():
                     # to image
                     grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
                     # logs/name2022-12-27T23-03-14_name/checkpoints/embeddings_gs-1200.pt
-                    date_mat = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}", opt.embedding_paths[0])
-                    date_sig = date_mat.group(0)
+                    date_mat = re.search(r"(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.embedding_paths[0])
+                    date_sig = date_mat.group(1)
+                    ckpt_postfix = date_mat.group(2)
                     iter_mat = re.search(r"(\d+).pt", opt.embedding_paths[0])
                     iter_sig = iter_mat.group(1)
-                    embedding_sig = date_sig + "-" + iter_sig
 
-                    grid_filepath = os.path.join(outpath, f'{prompt.replace(" ", "-")}-{embedding_sig}.jpg')
+                    embedding_sig = "-".join([date_sig, iter_sig, f"scale{opt.scale:.1f}"])
+
+                    grid_filepath = os.path.join(outpath, f'{ckpt_postfix}-{prompt.replace(" ", "-")}-{embedding_sig}.jpg')
                     if os.path.exists(grid_filepath):
-                        grid_filepath = os.path.join(outpath, f'{prompt.replace(" ", "-")}-{embedding_sig}-{grid_count}.jpg')
+                        grid_filepath = os.path.join(outpath, f'{ckpt_postfix}-{prompt.replace(" ", "-")}-{embedding_sig}-{grid_count}.jpg')
                     Image.fromarray(grid.astype(np.uint8)).save(grid_filepath)
                     grid_count += 1
 
