@@ -59,11 +59,14 @@ def selective_reg_loss(x, loss_type='l2', selector=None):
 
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
-def calc_delta_loss(delta, ref_delta):
+def calc_delta_loss(delta, ref_delta, exponent=3):
     # dela: [2464, 768], ref_delta: [2464, 768]
     delta = delta.view(delta.numel() // delta.shape[-1], -1)
     ref_delta = ref_delta.view(ref_delta.numel() // ref_delta.shape[-1], -1)
-    loss = F.cosine_embedding_loss(delta, ref_delta.detach(), torch.ones_like(delta[:, 0]))
+    # delta_pow = delta * delta.abs().pow(exponent - 1)
+    ref_delta_pow = ref_delta * ref_delta.abs().pow(exponent - 1)
+    loss = F.cosine_embedding_loss(delta, ref_delta_pow.detach(), 
+                                   torch.ones_like(delta[:, 0]))
     return loss
 
 def calc_stats(emb_name, embeddings):
