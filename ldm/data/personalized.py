@@ -4,7 +4,7 @@ import PIL
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
-
+from .compositions import sample_compositions
 import random
 
 imagenet_templates_smallest = [
@@ -129,6 +129,10 @@ per_img_token_list = [
     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק', 'ר', 'ש', 'ת',
 ]
 
+# 4 common English names. Keep these names short and simple, so that tokenizers convert them to single tokens.
+common_names = [ "tom", "john", "mary", "lisa" ]
+
+# Should never use per_image_tokens.
 class PersonalizedBase(Dataset):
     def __init__(self,
                  data_root,
@@ -187,12 +191,22 @@ class PersonalizedBase(Dataset):
         if self.coarse_class_text:
             placeholder_string = f"{self.coarse_class_text} {placeholder_string}"
 
+        # Should never use per_image_tokens. So we don't modify the corresponding branch.
         if self.per_image_tokens and np.random.uniform() < self.mixing_prob:
-            text = random.choice(imagenet_dual_templates_small).format(placeholder_string, per_img_token_list[i % self.num_images])
+            subj_prompt_single = random.choice(imagenet_dual_templates_small).format(placeholder_string, per_img_token_list[i % self.num_images])
         else:
-            text = random.choice(imagenet_templates_small).format(placeholder_string)
-            
-        example["caption"] = text
+            template = random.choice(imagenet_templates_small)
+            subj_prompt_single = template.format(placeholder_string)
+            person = random.choice(common_names)
+            common_prompt_single = template.format(person)
+            composition = sample_compositions(1)[0]
+            subj_prompt_comp = subj_prompt_single + " " + composition
+            common_prompt_comp = common_prompt_single + " " + composition
+
+        example["caption"]              = subj_prompt_single
+        example["subj_prompt_comp"]     = subj_prompt_comp
+        example["common_prompt_comp"]   = common_prompt_comp
+        example["common_prompt_single"] = common_prompt_single
 
         # default to score-sde preprocessing
         img = np.array(image).astype(np.uint8)

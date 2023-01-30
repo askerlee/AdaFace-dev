@@ -291,12 +291,12 @@ def main():
                             prompts = list(prompts)
                         c = model.get_learned_conditioning(prompts)
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                        # When dynamic embedding is used, c is a tuple of (cond, dynamic_embedder).
+                        # When lasr embedding is used, c is a tuple of (cond, lasr_embedder).
                         # When both unconditional and conditional guidance are passed to ddim sampler, 
-                        # dynamic_embedder of the conditional guidance is applied on both 
+                        # lasr_embedder of the conditional guidance is applied on both 
                         # unconditional and conditional embeddings within UNetModel.forward(). 
                         # But since unconditional prompt doesn't contain the placeholder token,
-                        # dynamic_embedder won't change the unconditional embedding uc.
+                        # lasr_embedder won't change the unconditional embedding uc.
                         samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                                          conditioning=c,
                                                          batch_size=opt.n_samples,

@@ -78,7 +78,9 @@ class DDPM(pl.LightningModule):
                  learn_logvar=False,
                  logvar_init=0.,
                  use_layerwise_embedding=False,
-                 use_dynamic_embedding=False,
+                 use_lasr_embedding=False,
+                 composition_delta_reg_iter_gap=-1,
+                 composition_delta_reg_weight=0.,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -91,10 +93,15 @@ class DDPM(pl.LightningModule):
         self.image_size = image_size  # try conv?
         self.channels = channels
         self.use_positional_encodings = use_positional_encodings
+
         self.use_layerwise_embedding = use_layerwise_embedding
-        self.use_dynamic_embedding = use_layerwise_embedding and use_dynamic_embedding
+        self.use_lasr_embedding = use_layerwise_embedding and use_lasr_embedding
+        self.composition_delta_reg_iter_gap = composition_delta_reg_iter_gap
+        self.composition_delta_reg_weight   = composition_delta_reg_weight
+        self.do_composition_delta_reg       = False
+
         self.model = DiffusionWrapper(unet_config, conditioning_key, 
-                                      use_layerwise_embedding, use_dynamic_embedding)
+                                      use_layerwise_embedding, use_lasr_embedding)
         count_params(self.model, verbose=True)
         self.use_ema = use_ema
         if self.use_ema:
@@ -349,12 +356,17 @@ class DDPM(pl.LightningModule):
         x = x.to(memory_format=torch.contiguous_format).float()
         return x
 
+    # ignore do_composition_delta_reg. It's handled in LatentDiffusion::shared_step().
     def shared_step(self, batch):
         x = self.get_input(batch, self.first_stage_key)
         loss, loss_dict = self(x)
         return loss, loss_dict
 
     def training_step(self, batch, batch_idx):
+        self.do_composition_delta_reg = self.composition_delta_reg_iter_gap > 0 \
+                                            and self.global_step % self.composition_delta_reg_iter_gap == 0 \
+                                            and self.composition_delta_reg_weight > 0
+        
         loss, loss_dict = self.shared_step(batch)
 
         self.log_dict(loss_dict, prog_bar=True,
@@ -604,7 +616,7 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
         return self.scale_factor * z
 
-    # c: template, 'an illustration of a dirty *'
+    # c: a batch of templates, ['an illustration of a dirty z', ...]
     def get_learned_conditioning(self, c):
         # print(c, id(self.cond_stage_model))
         if self.cond_stage_forward is None:
@@ -616,8 +628,9 @@ class LatentDiffusion(DDPM):
                 c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
-                if self.use_dynamic_embedding:
-                    embedder = self.get_dynamic_conditioning
+                if self.use_lasr_embedding:
+                    embedder = self.get_lasr_conditioning
+                    self.embedding_manager.init_lasr_embedding_cache()
                     c = (c, c_in, embedder)
             else:
                 c = self.cond_stage_model(c)
@@ -626,12 +639,12 @@ class LatentDiffusion(DDPM):
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
         return c
 
-    # get_dynamic_conditioning() is called iteratively for each layer in UNet.
-    def get_dynamic_conditioning(self, c_in, layer_idx, layer_infeat, time_emb):
+    # get_lasr_conditioning() is a callback function called iteratively by each layer in UNet.
+    def get_lasr_conditioning(self, c_in, layer_idx, layer_infeat, time_emb):
         # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
         # when embedding_manager is called within cond_stage_model.encode().
-        self.embedding_manager.set_dyn_layer_info(layer_idx, layer_infeat, time_emb)
+        self.embedding_manager.set_lasr_layer_info(layer_idx, layer_infeat, time_emb)
         c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         return c
 
@@ -945,13 +958,29 @@ class LatentDiffusion(DDPM):
         else:
             return self.first_stage_model.encode(x)
 
+    # LatentDiffusion.shared_step() overloads DDPM.shared_step().
+    # shared_step() is called in training_step() and (no_grad) validation_step().
+    # batch: { 'caption':               ['an illustration of a dirty z',                    
+    #                                    'a depiction of a z'], 
+    #          'subj_prompt_comp':      ['an illustration of a dirty z dancing with a boy', 
+    #                                    'a depiction of a z kicking a punching bag'],
+    #          'common_prompt_single':  ['an illustration of a dirty christopher',          
+    #                                    'a depiction of a john'],
+    #          'common_prompt_comp'  :  ['an illustration of a dirty christopher dancing with a boy', 
+    #                                    'a depiction of a john kicking a punching bag']
+    #          'image':   [2, 512, 512, 3] }
     def shared_step(self, batch, **kwargs):
         x, c = self.get_input(batch, self.first_stage_key)
-        loss = self(x, c)
+        if self.do_composition_delta_reg:
+            composition_delta_prompts = (batch['subj_prompt_comp'], batch['common_prompt_single'], batch['common_prompt_comp'])
+        else:
+            composition_delta_prompts = None
+
+        loss = self(x, c, composition_delta_prompts)
         return loss
 
     # LatentDiffusion.forward() is only called during training.
-    def forward(self, x, c, *args, **kwargs):
+    def forward(self, x, c, composition_delta_prompts=None, *args, **kwargs):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         if self.model.conditioning_key is not None:
             assert c is not None
@@ -959,7 +988,32 @@ class LatentDiffusion(DDPM):
             # get_learned_conditioning(): convert c to a [1, 77, 768] tensor.
             if self.cond_stage_trainable:
                 # c: ['an illustration of a dirty z', 'an illustration of the cool z']
-                c = self.get_learned_conditioning(c)
+                if composition_delta_prompts is not None:
+                    subj_prompt_comp, common_prompt_single, common_prompt_comp = composition_delta_prompts
+                    N_LAYERS = 16 if self.use_layerwise_embedding else 1
+                    N_INST   = len(c)
+                    N_EMBEDS = len(c) * N_LAYERS
+                    c_delta = c + subj_prompt_comp + common_prompt_single + common_prompt_comp
+                    # c_delta_static is a tuple: (c, c_in, embedder).
+                    c_delta_static = self.get_learned_conditioning(c_delta)
+                    if self.use_lasr_embedding:
+                        # c_real: [128, 77, 768]. 128 = 8 * 16. 
+                        # 8 is the total number of prompts in c_delta. Each prompt is converted to 16 embeddings.
+                        c_real, c_in, embedder = c_delta_static
+                        # Only keep the embeddings corresponding to subj_prompt_single (the original c) 
+                        # and subj_prompt_comp, as the corresponding LASR embeddings are dynamically generated.
+                        # common_prompt_single and common_prompt_comp are static, so no need to 
+                        # be fed to UNet.
+                        c = (c_real[:N_EMBEDS*2], c_in[:N_INST*2], embedder)
+                        self.c_delta_static = c_real
+                    else:
+                        c = c_delta_static[:N_EMBEDS]
+                        self.c_delta_static = c_delta_static
+
+                else:
+                    c = self.get_learned_conditioning(c)
+                    self.c_delta_static = None
+
             # shorten_cond_schedule: False
             if self.shorten_cond_schedule:  # TODO: drop this option
                 tc = self.cond_ids[t].to(self.device)
@@ -967,6 +1021,7 @@ class LatentDiffusion(DDPM):
                 # q_sample() calls apply_model(), which estimates the latent code of the image.
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
 
+        # self.model (UNetModel) is called in p_losses().
         return self.p_losses(x, c, t, *args, **kwargs)
 
     def _rescale_annotations(self, bboxes, crop_coordinates):  # TODO: move to dataset
@@ -1108,7 +1163,17 @@ class LatentDiffusion(DDPM):
     def p_losses(self, x_start, cond, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        if self.use_lasr_embedding and self.do_composition_delta_reg:
+            x_noisy = x_noisy.repeat(2, 1, 1, 1)
+            t       = t.repeat(2)
+
         model_output = self.apply_model(x_noisy, t, cond)
+        if self.use_lasr_embedding and self.do_composition_delta_reg:
+            # Restore model_output and t.
+            # Do not use the second half of the model output, as they are used 
+            # to compute the LASR embeddings only, which are the input of the delta regularization.
+            model_output = model_output[:model_output.shape[0] // 2]
+            t = t[:t.shape[0] // 2]
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
@@ -1140,10 +1205,16 @@ class LatentDiffusion(DDPM):
 
         if self.embedding_reg_weight > 0:
             loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
-
             loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg})
-
             loss += (self.embedding_reg_weight * loss_embedding_reg)
+
+            if self.c_delta_static is not None:
+                loss_comp_delta_reg = self.embedding_manager.composition_delta_loss( 
+                                        self.use_lasr_embedding, self.c_delta_static
+                                      ).mean()
+                loss_dict.update({f'{prefix}/loss_comp_delta_reg': loss_comp_delta_reg})
+                loss += (self.composition_delta_reg_weight * loss_comp_delta_reg)
+
             loss_dict.update({f'{prefix}/loss': loss})
 
         return loss, loss_dict
@@ -1577,13 +1648,14 @@ class LatentDiffusion(DDPM):
 
 class DiffusionWrapper(pl.LightningModule):
     def __init__(self, diff_model_config, conditioning_key, 
-                 use_layerwise_embedding=False, use_dynamic_embedding=False):
+                 use_layerwise_embedding=False, use_lasr_embedding=False):
         super().__init__()
+        # diffusion_model: UNetModel
         self.diffusion_model = instantiate_from_config(diff_model_config)
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm']
         self.use_layerwise_embedding = use_layerwise_embedding
-        self.use_dynamic_embedding   = use_dynamic_embedding
+        self.use_lasr_embedding   = use_lasr_embedding
 
     # t: a 1-D batch of timesteps (during training: randomly sample one timestep for each instance).
     def forward(self, x, t, c_concat: list = None, c_crossattn: list = None):
@@ -1605,7 +1677,7 @@ class DiffusionWrapper(pl.LightningModule):
             # self.diffusion_model: UNetModel.
             out = self.diffusion_model(x, t, context=cc, context_in=c_in, embedder=embedder,
                                        use_layerwise_context=self.use_layerwise_embedding,
-                                       use_dynamic_context=self.use_dynamic_embedding)
+                                       use_lasr_context=self.use_lasr_embedding)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
             cc = torch.cat(c_crossattn, 1)

@@ -84,7 +84,7 @@ class DDIMSampler(object):
                 if cbs != batch_size:
                     print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
             else:
-                # When doing dynamic embedding, conditioning is changed to (conditioning, embedder).
+                # When doing lasr embedding, conditioning is changed to (conditioning, embedder).
                 if isinstance(conditioning, tuple):
                     conditioning_ = conditioning[0]
                 else:

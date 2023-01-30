@@ -220,7 +220,9 @@ def worker_init_fn(_):
     else:
         return np.random.seed(np.random.get_state()[1][0] + worker_id)
 
-
+# LightningDataModule: https://pytorch-lightning.readthedocs.io/en/stable/notebooks/lightning_examples/datamodules.html
+# train: ldm.data.personalized.PersonalizedBase
+# validation path is the same as train.
 class DataModuleFromConfig(pl.LightningDataModule):
     def __init__(self, batch_size, train=None, validation=None, test=None, predict=None,
                  wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
@@ -229,7 +231,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
         self.batch_size = batch_size
         self.dataset_configs = dict()
         self.num_workers = num_workers if num_workers is not None else batch_size * 2
-        self.use_worker_init_fn = use_worker_init_fn
+        self.use_worker_init_fn = use_worker_init_fn        # False
         if train is not None:
             self.dataset_configs["train"] = train
             self.train_dataloader = self._train_dataloader
@@ -642,7 +644,7 @@ if __name__ == "__main__":
             model = load_model_from_config(config, opt.actual_resume)
         else:
             model = instantiate_from_config(config.model)
-
+        # model: ldm.models.diffusion.ddpm.LatentDiffusion, inherits from LightningModule.
 
         # trainer and callbacks
         trainer_kwargs = dict()
@@ -770,11 +772,17 @@ if __name__ == "__main__":
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         trainer.logdir = logdir  ###
 
-        # data
+        # config.data:
+        # {'target': 'main.DataModuleFromConfig', 'params': {'batch_size': 2, 'num_workers': 2, 
+        #  'wrap': False, 'train': {'target': 'ldm.data.personalized.PersonalizedBase', 
+        #  'params': {'size': 512, 'set': 'train', 'per_image_tokens': False, 'repeats': 100, 
+        #  'placeholder_token': 'z', 'data_root': 'data/spikelee/'}}, 
+        #  'validation': {'target': 'ldm.data.personalized.PersonalizedBase', 
+        #  'params': {'size': 512, 'set': 'val', 'per_image_tokens': False, 'repeats': 10, 
+        #  'placeholder_token': 'z', 'data_root': 'data/spikelee/'}}}}
         config.data.params.train.params.data_root = opt.data_root
         config.data.params.validation.params.data_root = opt.data_root
-        data = instantiate_from_config(config.data)
-
+        # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
         # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
         # calling these ourselves should not be necessary but it is.
@@ -834,6 +842,7 @@ if __name__ == "__main__":
         # run
         if opt.train:
             try:
+                # trainer: pytorch_lightning.trainer.trainer.Trainer
                 trainer.fit(model, data)
             except Exception:
                 melk()

@@ -22,7 +22,6 @@ def get_clip_tokens_for_string(tokenizer, string, force_single_token=False):
         new_token_id = tokenizer(string)["input_ids"][1]
         print("Added new token to tokenizer: {} -> {}".format(string, new_token_id))
     '''
-
     batch_encoding = tokenizer(string, truncation=True, max_length=77, return_length=True,
                                return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
     tokens = batch_encoding["input_ids"]
@@ -58,6 +57,15 @@ def selective_reg_loss(x, loss_type='l2', selector=None):
     else:
         breakpoint()
 
+# Eq.(2) in the StyleGAN-NADA paper.
+# delta, ref_delta: [2, 16, 77, 768].
+def calc_delta_loss(delta, ref_delta):
+    # dela: [2464, 768], ref_delta: [2464, 768]
+    delta = delta.view(delta.numel() // delta.shape[-1], -1)
+    ref_delta = ref_delta.view(ref_delta.numel() // ref_delta.shape[-1], -1)
+    loss = F.cosine_embedding_loss(delta, ref_delta.detach(), torch.ones_like(delta[:, 0]))
+    return loss
+
 def calc_stats(emb_name, embeddings):
     print("%s:" %emb_name)
     emb_mean = embeddings.mean(0, keepdim=True).repeat(embeddings.size(0), 1)
@@ -69,8 +77,8 @@ def calc_stats(emb_name, embeddings):
     print("L1: %.4f, L2: %.4f" %(l1_loss.item(), l2_loss.item()))
     print("Norms: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(norms.min(), norms.max(), norms.mean(), norms.std()))
 
-class StaticLoraEmbedding(nn.Module):
-    # dim1: 25, dim2: 768, r: 12.
+class StaticLayerwiseEmbedding(nn.Module):
+    # dim1: 16 (9 layers out of 25 of UNet are skipped), dim2: 768, r: 12.
     # If using init_vecs, init_noise_stds are applied to basis_rand_weights. 
     # Otherwise, init_up_noise_stds has no effect.
     # init_vec_weights: weights of init_vecs, not "init weights of vecs".
@@ -81,7 +89,7 @@ class StaticLoraEmbedding(nn.Module):
     # Extra copies of init_vecs are added with random noises to avoid the non-identifiability issue.
     # init_up_noise_stds[1] << init_up_noise_stds[0].
     # has_bias: if enabled, the output vectors will be dominated by self.bias.
-    def __init__(self, dim1=25, dim2=768, r=12, init_noise_stds=(0.1, 0.04), init_vecs=None, 
+    def __init__(self, dim1=16, dim2=768, r=12, init_noise_stds=(0.1, 0.04), init_vecs=None, 
                  init_vec_weights=None, init_neg_vecs=None, has_bias=True, device_type="cuda"):
         super().__init__()
 
@@ -91,7 +99,7 @@ class StaticLoraEmbedding(nn.Module):
 
         if r > min(dim1, dim2):
             raise ValueError(
-                f"LoRA rank {r} must be less or equal than {min(dim1, dim2)}"
+                f"StaticLayerwiseEmbedding LoRA rank {r} must be less or equal than {min(dim1, dim2)}"
             )
 
         if init_vecs is not None:
@@ -101,7 +109,7 @@ class StaticLoraEmbedding(nn.Module):
 
             if init_vecs.shape[1] != dim2 or init_vecs.shape[0] > dim1:
                 raise ValueError(
-                    f"LoRA init vectors shape {init_vecs.shape} must be (<={dim1}, {dim2})"
+                    f"StaticLayerwiseEmbedding init vectors shape {init_vecs.shape} must be (<={dim1}, {dim2})"
                 )
 
             N = self.N = init_vecs.shape[0]
@@ -112,7 +120,7 @@ class StaticLoraEmbedding(nn.Module):
             self.N = 0
             self.pre_vecs = None
 
-        # basis_rand_weights: 25 * r, basis_vecs: r * 768. basis_rand_weights * basis_vecs: 25 * 768.
+        # basis_rand_weights: 16 * r, basis_vecs: r * 768. basis_rand_weights * basis_vecs: 16 * 768.
         self.basis_rand_weights    = nn.Parameter(torch.randn(dim1, r))
         # basis_vecs consists of r basis vectors. Will be updated through BP.
         self.basis_vecs = nn.Parameter(torch.randn(r - N, dim2), requires_grad=True)
@@ -165,6 +173,7 @@ class StaticLoraEmbedding(nn.Module):
             self.N = 0
 
         if init_neg_vecs is not None:
+            # NEG: number of negative initial vectors.
             NEG = init_neg_vecs.shape[0]
             self.NEG = NEG
             # The no. N~N+NEG vectors in basis_vecs are init_neg_vecs (no noise added).
@@ -176,7 +185,7 @@ class StaticLoraEmbedding(nn.Module):
             self.NEG = 0
 
         if self.has_bias:
-            # bias: 25 * 768.
+            # bias: 16 * 768.
             self.bias        = nn.Parameter(torch.zeros(dim1, dim2))
             self.bias_scales = nn.Parameter(torch.ones(dim1, 1))
         else:
@@ -189,17 +198,17 @@ class StaticLoraEmbedding(nn.Module):
 
         self.lns  = nn.ModuleList(lns)
 
-        print(f"Static LoRA initialized with {self.N} init vectors, {self.NEG} negative vectors, {self.r} basis vectors")
+        print(f"StaticLayerwiseEmbedding initialized with {self.N} init vectors, {self.NEG} negative vectors, {self.r} basis vectors")
 
     def forward(self, only_bias=False):
         with torch.autocast(device_type=self.device_type, enabled=False):
             if only_bias:
                 return self.bias
 
-            # self.basis_comm_weights: [1, r] broadcasted to [25, r].
+            # self.basis_comm_weights: [1, r] broadcasted to [16, r].
             basis_weights   = self.basis_rand_weights   + self.basis_comm_weights
             # torch.matmul: matrix multiplication.
-            # torch.matmul(lora_up, basis_vecs): 25 * 768.
+            # torch.matmul(lora_up, basis_vecs): 16 * 768.
 
             if self.N > 0:
                 basis_vecs = torch.cat([self.pre_vecs, self.basis_vecs], dim=0)
@@ -217,24 +226,30 @@ class StaticLoraEmbedding(nn.Module):
             out_vecs_ln = out_vecs_ln + layerwise_bias
             return out_vecs_ln
 
-class DynamicLoraEmbedding(nn.Module):
-    # dim1: 25, dim2: 768, r: 12.
+class LASREmbedding(nn.Module):
+    # dim1: 16 (9 layers out of 25 of UNet are skipped).
+    # dim2: 768, r: 12.
     # infeat_dims: a list of 25 integers, each is the dimension of 
-    # the input feature from the respective layer. 
+    # the input feature from the respective layer. 9 of them are skipped.
     # infeat_dims are (almost) reflective around the middle layer, except for the first and last layers.
-    def __init__(self, dim1=25, dim2=768, r=12, init_vecs=None, 
+    # Layer indices absent in layer_idx2emb_idx are skipped layers.
+    def __init__(self, dim1=16, dim2=768, r=12, init_vecs=None, 
                  infeat_dims = [ 4,    320,  320,  320,  320,  640,  640,  640, 1280, 1280, 1280, 1280, 
                                  1280,
                                  1280, 1280, 1280, 1280, 1280, 1280, 1280, 640, 640,  640,  320,  320 ],
-                 skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15],
+                 # skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15],
+                 layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
+                                       17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },
                  has_bias=True, device_type="cuda"):
         super().__init__()
 
-        assert dim1 == len(infeat_dims), f"dim1={dim1} != len(infeat_dims)={len(infeat_dims)}"
+        assert dim1 == len(layer_idx2emb_idx), f"dim1={dim1} != len(layer_idx2emb_idx)={len(layer_idx2emb_idx)}"
         self.dim1 = dim1
         self.dim2 = dim2
         self.r = r
         self.device_type = device_type
+        self.layer_idx2emb_idx = layer_idx2emb_idx
+        self.emb_idx2layer_idx = { v: k for k, v in layer_idx2emb_idx.items() }
 
         if init_vecs is not None:
             # Only one vector is passed in.
@@ -263,7 +278,6 @@ class DynamicLoraEmbedding(nn.Module):
 
         self.infeat_dims = list(infeat_dims)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.layers_skipped = [ True if i in skipped_layers else False for i in range(dim1) ]
 
         # First TD_frac of dimensions of the time embeddings will be used.
         self.TD_frac = 0.5
@@ -273,16 +287,12 @@ class DynamicLoraEmbedding(nn.Module):
         self.TDs = []
 
         for i in range(dim1):
-            TD = int(self.TD_frac * infeat_dims[i])
+            i2 = self.emb_idx2layer_idx[i]
+            TD = int(self.TD_frac * infeat_dims[i2])
             self.TDs.append(TD)
 
-            if self.layers_skipped[i]:
-                maps.append(None)
-                lns.append(None)
-                continue
-
-            # infeat_dims[i] + 10 because we also include time embeddings (first 10 dims) as the input features.
-            maps.append( nn.Linear(infeat_dims[i] + TD, r, bias=True) )
+            # infeat_dims[i2] + TD because we also include time embeddings (first TD dims) as the input features.
+            maps.append( nn.Linear(infeat_dims[i2] + TD, r, bias=True) )
             lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
 
         self.maps = nn.ModuleList(maps)
@@ -297,19 +307,20 @@ class DynamicLoraEmbedding(nn.Module):
             self.bias = 0
             self.bias_scales = 0
 
-        print(f"Dynamic LoRA initialized with {self.N} init vectors, {self.r} basis vectors")
+        print(f"LASREmbedding initialized with {self.N} init vectors, {self.r} basis vectors")
         self.call_count = 0
 
     # layer_infeat: 4D image feature tensor [B, C, H, W].
-    # layer_idx: 0 ~ self.dim1 - 1.
+    # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
     # time_emb: [B, 1280].
     def forward(self, layer_idx, layer_infeat, time_emb):
+        emb_idx = self.layer_idx2emb_idx[layer_idx]
+
         with torch.autocast(device_type=self.device_type, enabled=True):
             # basis_dyn_weight: [B, r] = [2, 12].
             # We do not BP into the UNet. So cut off the gradient flow here.
             # infeat_pooled: [B, D_layer]
             infeat_pooled    = self.avgpool(layer_infeat).squeeze(-1).squeeze(-1).detach()
-            D = self.infeat_dims[layer_idx]
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first D dimensions of the time embedding, 
             # as the time embedding is highly redundant, and the first D dimensions are sufficient
@@ -318,19 +329,19 @@ class DynamicLoraEmbedding(nn.Module):
             # as the leading dimensions are sensitive to time change, 
             # and the last dimensions tend to be the same for all time steps.
             # Never allow time embeddings dominate image features infeat.
-            TD = self.TDs[layer_idx]
+            TD = self.TDs[emb_idx]
             infeat_time      = torch.cat([infeat_pooled, time_emb[:, :TD]], dim=1)
-            basis_dyn_weight = self.maps[layer_idx](infeat_time)
+            basis_dyn_weight = self.maps[emb_idx](infeat_time)
             # Separate bias and bias_scales, for easier regularization on their scales.
             # bias: [1, 768] * [1, 1] = [1, 768].
-            bias    = self.bias[layer_idx].unsqueeze(0) * self.bias_scales[layer_idx]
+            bias = self.bias[emb_idx].unsqueeze(0) * self.bias_scales[emb_idx]
 
             if self.N > 0:
                 basis_vecs = torch.cat([self.pre_vecs, self.basis_vecs], dim=0)
             else:
                 basis_vecs = self.basis_vecs
 
-            ln = self.lns[layer_idx]
+            ln = self.lns[emb_idx]
             # [2, 12] x [12, 768] = [2, 768], + [1, 768] = [2, 768].
             out_vec0 = ln(torch.matmul(basis_dyn_weight, basis_vecs)) / np.sqrt(self.dim2)
             out_vec  = out_vec0 + bias
@@ -340,11 +351,11 @@ class DynamicLoraEmbedding(nn.Module):
                 self.call_count = 0
 
             if self.debug and self.call_count % 10 == 0:
-                calc_stats(f'{layer_idx} basis_dyn_weight', basis_dyn_weight)
-                calc_stats(f'{layer_idx} out_vec0', out_vec0)
-                calc_stats(f'{layer_idx} bias', bias)
+                calc_stats(f'{emb_idx} basis_dyn_weight', basis_dyn_weight)
+                calc_stats(f'{emb_idx} out_vec0', out_vec0)
+                calc_stats(f'{emb_idx} bias', bias)
             
-            if layer_idx == 24:
+            if emb_idx == 24:
                 self.call_count += 1
 
         return out_vec
@@ -363,13 +374,15 @@ class EmbeddingManager(nn.Module):
             num_vectors_per_token=1,
             progressive_words=False,
             use_layerwise_embedding=False,
-            num_unet_enc_layers=12,
+            num_unet_layers=16,
             # If two tokens, lora rank=4. That means,
-            # compress 12*2+1=25 embeddings to the linear combination of 4 embeddings,
+            # compress 16 embeddings to the linear combination of 4 embeddings,
             # in which two are initialized as the two token embeddings, and two are learned through BP.
             layerwise_lora_rank_token_ratio=3,
             # If no initializer words are specified, then lora rank=2.
             layerwise_lora_default_rank=2,
+            layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
+                                  17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },            
             subj_scale=1.0,
             **kwargs
     ):
@@ -377,7 +390,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_token_dict = {}
         
         self.string_to_param_dict = nn.ParameterDict()
-        self.string_to_dyn_embedder_dict = nn.ModuleDict()
+        self.string_to_lasr_embedder_dict = nn.ModuleDict()
         self.initial_embeddings = nn.ParameterDict() # These should not be optimized
 
         self.progressive_words = progressive_words
@@ -386,8 +399,7 @@ class EmbeddingManager(nn.Module):
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
-        self.num_unet_enc_layers    = num_unet_enc_layers
-        self.num_unet_layers        = num_unet_enc_layers * 2 + 1
+        self.num_unet_layers    = num_unet_layers
         # change max_vectors_per_token to max_vectors_per_layer_per_token
         # When the passed argument num_vectors_per_token > 1, it means multi-token embedding, 
         # instead of layer-wise embedding.
@@ -398,7 +410,7 @@ class EmbeddingManager(nn.Module):
                 "multiple embeddings per token is not supported when using layer-wise embeddings"
             # num_vectors_per_token specifies the total number of embeddings for this token.
             # There's an embedding for each layer.
-            num_vectors_per_token = num_unet_enc_layers * 2 + 1
+            num_vectors_per_token = num_unet_layers
 
         # hasattr(embedder, 'tokenizer') -> True
         if hasattr(embedder, 'tokenizer'): # using Stable Diffusion's CLIP encoder
@@ -459,40 +471,43 @@ class EmbeddingManager(nn.Module):
                     avg_init_word_embedding = (init_word_embeddings * init_word_weights.unsqueeze(1)).sum(dim=0, keepdim=True)
 
                 if layerwise_lora_rank > 0:
-                    token_params        = StaticLoraEmbedding(num_vectors_per_token, self.token_dim, layerwise_lora_rank, (0.1, 0.02), 
-                                                              init_word_embeddings, init_word_weights, 
-                                                              init_neg_vecs=init_neg_embeddings)
+                    token_params        = StaticLayerwiseEmbedding(num_vectors_per_token, self.token_dim, layerwise_lora_rank, (0.1, 0.02), 
+                                                                   init_word_embeddings, init_word_weights, 
+                                                                   init_neg_vecs=init_neg_embeddings)
 
-                    token_dyn_embedder  = DynamicLoraEmbedding(num_vectors_per_token, self.token_dim, 
-                                                               layerwise_lora_rank, init_word_embeddings)                                                        
+                    token_lasr_embedder  = LASREmbedding(num_vectors_per_token, self.token_dim, 
+                                                         layerwise_lora_rank, init_word_embeddings)                                                        
                 else:
                     # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
                     token_params = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
-                    token_dyn_embedder = None
+                    token_lasr_embedder = None
                 # initial_embeddings are only used to compute the regularization loss.
                 self.initial_embeddings[placeholder_string] = torch.nn.Parameter(init_word_embeddings, requires_grad=False)
             else:
                 if self.use_layerwise_embedding and layerwise_lora_default_rank > 0:
-                    token_params        = StaticLoraEmbedding(num_vectors_per_token, self.token_dim, layerwise_lora_default_rank, (0.1, 0.02),
+                    token_params        = StaticLayerwiseEmbedding(num_vectors_per_token, self.token_dim, layerwise_lora_default_rank, (0.1, 0.02),
                                                               None, None, init_neg_embeddings=init_neg_embeddings)
                                                   
-                    token_dyn_embedder  = DynamicLoraEmbedding(num_vectors_per_token, self.token_dim, 
-                                                               layerwise_lora_default_rank, init_word_embeddings)   
+                    token_lasr_embedder  = LASREmbedding(num_vectors_per_token, self.token_dim, 
+                                                        layerwise_lora_default_rank, init_word_embeddings)   
                 else:
                     token_params = torch.nn.Parameter(torch.rand(size=(num_vectors_per_token, self.token_dim), requires_grad=True))
-                    token_dyn_embedder = None
+                    token_lasr_embedder = None
 
             self.string_to_token_dict[placeholder_string] = token
-            # token_params: an embedding vector or a StaticLoraEmbedding object (when use_layerwise_embedding).
+            # token_params: an embedding vector or a StaticLayerwiseEmbedding object (when use_layerwise_embedding).
             # Pytorch >= 1.12.0 allows to put an nn.Module object into an nn.ParameterDict.
             self.string_to_param_dict[placeholder_string] = token_params
-            self.string_to_dyn_embedder_dict[placeholder_string] = token_dyn_embedder
+            self.string_to_lasr_embedder_dict[placeholder_string] = token_lasr_embedder
 
-            self.clear_dyn_layer_info()
-            self.call_count = 0
+            self.clear_lasr_layer_info()
+            self.layer_idx2emb_idx = layer_idx2emb_idx
+            self.loss_call_count = 0
+            # Store the embedder to compute the delta loss.
+            self.embedder = embedder
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
-    # If self.use_layerwise_embedding, then max_vectors_per_token = num_unet_layers = 25.
+    # If self.use_layerwise_embedding, then max_vectors_per_token = num_unet_layers = 16.
     def forward(
             self,
             tokenized_text,         # [B, N]. Identical B copies along the batch dimension.
@@ -500,21 +515,24 @@ class EmbeddingManager(nn.Module):
     ):
         b, n, device = *tokenized_text.shape, tokenized_text.device
 
-        self.call_count += 1
-
-        if self.do_dynamic_embedding:
-            embedded_text = self.get_dyn_embedding(self.layer_idx, self.layer_infeat, self.time_emb,
-                                                   tokenized_text, embedded_text)
-            # Remove dynamic-embedding specific variables.
-            self.clear_dyn_layer_info()
+        if self.do_lasr_embedding:
+            # self.layer_idx, self.layer_infeat, self.time_emb were cached by 
+            # a previous call of set_lasr_layer_info() from UNet.
+            embedded_text = self.get_lasr_embedding(self.layer_idx, self.layer_infeat, self.time_emb,
+                                                    tokenized_text, embedded_text)
+            emb_idx = self.layer_idx2emb_idx[self.layer_idx]
+            # Cache the computed lasr embedding of the current layer.
+            self.lasr_embeddings[emb_idx] = embedded_text
+            # Remove lasr-specific intermediate variables.
+            self.clear_lasr_layer_info()
             return embedded_text
 
         if self.use_layerwise_embedding:
-            # embedded_text: [B, 25, N, 768] => [25*B, N, 768].
+            # embedded_text: [B, 16, N, 768] => [16*B, N, 768].
             # "Tuck" the layer dimension into the batch dimension, 
             # to keep embedded_text in 3D, same as the input.
             embedded_text = embedded_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1, 1).view(b * self.num_unet_layers, n, -1)
-            # tokenized_text: [B, 25, N] => [25*B, N]
+            # tokenized_text: [B, 16, N] => [16*B, N]
             # tokenized_text has to be repeated along the layer dimension as well, so that 
             # placeholder_idx can index the embedding at each layer in the batch.
             tokenized_text = tokenized_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1).view(b * self.num_unet_layers, n)
@@ -523,9 +541,9 @@ class EmbeddingManager(nn.Module):
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             placeholder_embedding = self.string_to_param_dict[placeholder_string].to(device)
-            if isinstance(placeholder_embedding, StaticLoraEmbedding):
+            if isinstance(placeholder_embedding, StaticLayerwiseEmbedding):
                 # Generate the actual placeholder_embedding on the fly.
-                # The 25 Static LoRA embeddings are formed by linearly combining the basis vectors.
+                # The 16 Static LoRA embeddings are formed by linearly combining the basis vectors.
                 # The matrix operations are done on the fly.
                 placeholder_embedding = placeholder_embedding()
 
@@ -541,12 +559,12 @@ class EmbeddingManager(nn.Module):
                 # layerwise: placeholder_idx =  
                 # (tensor([ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]), 
                 #  tensor([ 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]))
-                # embedded_text[placeholder_idx]: [50, 768]. placeholder_embedding: [25, 768].
-                # The first 25 elements (0-8) in embedded_text[placeholder_idx] correspond to the 25 layers of the 
+                # embedded_text[placeholder_idx]: [32, 768]. placeholder_embedding: [16, 768].
+                # The first 16 elements (0-8) in embedded_text[placeholder_idx] correspond to the 16 layers of the 
                 # first instance in the batch.
-                # 25 layers of placeholder_embedding are repeated b times.
-                # placeholder_embedding: placeholder_embedding: [25, 768] repeat=> [50, 768]
-                # Note that the 25 layers are initialized with the same embedding. 
+                # 16 layers of placeholder_embedding are repeated b times.
+                # placeholder_embedding: placeholder_embedding: [16, 768] repeat=> [32, 768]
+                # Note that the 16 layers are initialized with the same embedding. 
                 # LINK #init_embed
                 # Possible BUG: if the placeholder appears in > 1 times in one prompt, then the 
                 # filling order may be wrong. Check in the future.
@@ -600,7 +618,7 @@ class EmbeddingManager(nn.Module):
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # As the output embedding is only generated for a particular layer, 
     # no need to repeat num_unet_layers times as replacing with the static embedding in forward().
-    def get_dyn_embedding(
+    def get_lasr_embedding(
             self,
             layer_idx,              # the index of the current layer in the UNet.
             layer_infeat,           # layer_infeat: intermediate features of the UNet on the noise image.
@@ -619,17 +637,17 @@ class EmbeddingManager(nn.Module):
             raise NotImplementedError("multi-vector latent space not implemented yet.")
 
         if not self.use_layerwise_embedding:
-            raise NotImplementedError("non-layerwise embedding not supported in get_dyn_embedding().")
+            raise NotImplementedError("non-layerwise embedding not supported in get_lasr_embedding().")
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
-            placeholder_embedder = self.string_to_dyn_embedder_dict[placeholder_string].to(device)
-            assert isinstance(placeholder_embedder, DynamicLoraEmbedding)
+            placeholder_embedder = self.string_to_lasr_embedder_dict[placeholder_string].to(device)
+            assert isinstance(placeholder_embedder, LASREmbedding)
 
             # There's only one vector per token, we can do a simple replacement
             # embedded_text: [B, N, 768].
             # tokenized_text: [B, N].
             placeholder_idx = torch.where(tokenized_text == placeholder_token.to(device))
-            # Skip generating the dynamic embedding if there's no placeholder token in the batch.
+            # Skip generating the lasr embedding if there's no placeholder token in the batch.
             if placeholder_idx[0].numel() == 0:
                 continue
 
@@ -647,23 +665,32 @@ class EmbeddingManager(nn.Module):
 
         return embedded_text
 
-    def set_dyn_layer_info(self, layer_idx, layer_infeat, time_emb):
-        self.do_dynamic_embedding = True
+    def set_lasr_layer_info(self, layer_idx, layer_infeat, time_emb):
+        self.do_lasr_embedding = True
         self.layer_idx      = layer_idx
         self.layer_infeat   = layer_infeat
         self.time_emb       = time_emb
+        # Initialize the lasr_embeddings cache list.
 
-    def clear_dyn_layer_info(self):
-        self.do_dynamic_embedding = False
+    # lasr_embeddings is used to cache the embeddings of all layers, 
+    # for computing the composition delta loss.
+    def init_lasr_embedding_cache(self):
+        self.lasr_embeddings = [ None for i in range(self.num_unet_layers) ]
+
+    def clear_lasr_layer_info(self):
+        self.do_lasr_embedding = False
         self.layer_idx      = -1
         self.layer_infeat   = None
         self.time_emb       = None
+        
+    def clear_lasr_embedding_cache(self):
+        self.lasr_embeddings = None
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, ckpt_path):
         torch.save({ "string_to_token":         self.string_to_token_dict,
                      "string_to_param":         self.string_to_param_dict,
-                     "string_to_dyn_embedder":  self.string_to_dyn_embedder_dict }, 
+                     "string_to_lasr_embedder": self.string_to_lasr_embedder_dict }, 
                     ckpt_path)
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
@@ -672,7 +699,7 @@ class EmbeddingManager(nn.Module):
         # So before loading, remove it from these dicts first.
         self.string_to_token_dict           = {}
         self.string_to_param_dict           = nn.ParameterDict()
-        self.string_to_dyn_embedder_dict    = nn.ModuleDict()
+        self.string_to_lasr_embedder_dict    = nn.ModuleDict()
 
         for ckpt_path in ckpt_paths:
             ckpt_path_parts = ckpt_path.split(":")
@@ -701,7 +728,7 @@ class EmbeddingManager(nn.Module):
                 # Shouldn't do the k->k2 mapping on string_to_token_dict.
                 self.string_to_token_dict[k2]        = k2_token
                 self.string_to_param_dict[k2]        = ckpt["string_to_param"][k]
-                self.string_to_dyn_embedder_dict[k2] = ckpt["string_to_dyn_embedder"][k]
+                self.string_to_lasr_embedder_dict[k2] = ckpt["string_to_lasr_embedder"][k]
                 print(f"Loaded {k}->{k2} from {ckpt_path}")
 
     # get_embedding_norms_squared() is never used.
@@ -715,7 +742,7 @@ class EmbeddingManager(nn.Module):
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def embedding_parameters(self):
         return list(self.string_to_param_dict.parameters()) \
-               + list(self.string_to_dyn_embedder_dict.parameters())
+               + list(self.string_to_lasr_embedder_dict.parameters())
 
     def embedding_attractor_loss(self):
         loss = 0.
@@ -728,6 +755,7 @@ class EmbeddingManager(nn.Module):
 
         return loss
 
+    # Do not use. Performs poorly. 
     def layerwise_embedding_attractor_loss(self):
         loss = 0.
         num_placeholders    = len(self.initial_embeddings)
@@ -740,7 +768,7 @@ class EmbeddingManager(nn.Module):
         for key in self.initial_embeddings:
             embeddings = self.string_to_param_dict[key]
             # Generate the actual embeddings on the fly.
-            if isinstance(embeddings, StaticLoraEmbedding):
+            if isinstance(embeddings, StaticLayerwiseEmbedding):
                 embeddings = embeddings()
 
             if reg_center_type == 'init':
@@ -775,7 +803,7 @@ class EmbeddingManager(nn.Module):
 
         return loss / num_placeholders
 
-    def layerwise_lora_norm_loss(self):
+    def layerwise_embedding_norm_loss(self):
         loss = 0.
         num_placeholders  = len(self.initial_embeddings)
         euc_loss_type   = 'l2'       # l1, l2
@@ -785,8 +813,8 @@ class EmbeddingManager(nn.Module):
         bias_scales_reg_weight  = 1. / self.token_dim
         bias_reg_weight_base    = 0.1
         basis_reg_weight_base   = 0.1
-        dyn_maps_weight_reg_weight = 1.
-        dyn_maps_bias_reg_weight   = 0.01
+        lasr_maps_weight_reg_weight = 1.
+        lasr_maps_bias_reg_weight   = 0.01
         pre_vecs_reg_weight     = 0.1
         l2_loss_boost           = 10
 
@@ -795,45 +823,43 @@ class EmbeddingManager(nn.Module):
         T = 1.5
 
         for key in self.initial_embeddings:
-            for lora_embobj in (self.string_to_param_dict[key], self.string_to_dyn_embedder_dict[key]):
+            for embobj in (self.string_to_param_dict[key], self.string_to_lasr_embedder_dict[key]):
                 # Skip non-LORA embeddings.
-                if not isinstance(lora_embobj, StaticLoraEmbedding) \
-                  and not isinstance(lora_embobj, DynamicLoraEmbedding):
+                if not isinstance(embobj, StaticLayerwiseEmbedding) \
+                  and not isinstance(embobj, LASREmbedding):
                     continue
 
                 init_vecs = self.initial_embeddings[key].clone()
                 # bias, pre_vecs, basis_vecs are common structures for 
-                # both StaticLoraEmbedding and DynamicLoraEmbedding.
-                if lora_embobj.has_bias:
+                # both StaticLayerwiseEmbedding and LASREmbedding.
+                if embobj.has_bias:
                     # Penalize the bias scales that are larger than 1 with weight 1, 
                     # and those smaller than 1 with weight 0.0001.
                     # If penalizing those < 1 weights too much, they will be slowly driven towards 0.
-                    loss_bias_scales_above1 = selective_reg_loss(lora_embobj.bias_scales, loss_type=euc_loss_type, selector=lambda x: x > 1)
-                    loss_bias_scales_below1 = selective_reg_loss(lora_embobj.bias_scales, loss_type=euc_loss_type, selector=lambda x: x <= 1)
+                    loss_bias_scales_above1 = selective_reg_loss(embobj.bias_scales, loss_type=euc_loss_type, selector=lambda x: x > 1)
+                    loss_bias_scales_below1 = selective_reg_loss(embobj.bias_scales, loss_type=euc_loss_type, selector=lambda x: x <= 1)
                     # Penalize those scales bigger than 1 more than those smaller than 1.
                     loss_bias_scales = loss_bias_scales_above1 + loss_bias_scales_below1 * 0.0001
-                    loss_bias        = selective_reg_loss(lora_embobj.bias, loss_type=euc_loss_type)
-                    bias_reg_weight  = bias_reg_weight_base  * torch.norm(lora_embobj.bias, dim=1).mean().item() ** T
+                    loss_bias        = selective_reg_loss(embobj.bias, loss_type=euc_loss_type)
+                    bias_reg_weight  = bias_reg_weight_base  * torch.norm(embobj.bias, dim=1).mean().item() ** T
                 else:
                     loss_bias_scales = 0.
                     loss_bias        = 0.
                     bias_reg_weight  = 0.
 
-                loss_basis       = selective_reg_loss(lora_embobj.basis_vecs, loss_type=euc_loss_type)
-                basis_reg_weight = basis_reg_weight_base * torch.norm(lora_embobj.basis_vecs, dim=1).mean().item() ** T
-                if lora_embobj.N > 0:
-                    loss_pre_vecs = selective_reg_loss(lora_embobj.pre_vecs - init_vecs, loss_type=euc_loss_type)
+                loss_basis       = selective_reg_loss(embobj.basis_vecs, loss_type=euc_loss_type)
+                basis_reg_weight = basis_reg_weight_base * torch.norm(embobj.basis_vecs, dim=1).mean().item() ** T
+                if embobj.N > 0:
+                    loss_pre_vecs = selective_reg_loss(embobj.pre_vecs - init_vecs, loss_type=euc_loss_type)
                 else:
                     loss_pre_vecs = 0.
 
-                loss_dyn_maps_weight = 0.
-                loss_dyn_maps_bias   = 0.
-                if isinstance(lora_embobj, DynamicLoraEmbedding):
-                    for i, map in enumerate(lora_embobj.maps):
-                        if lora_embobj.layers_skipped[i]:
-                            continue
-                        loss_dyn_maps_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
-                        loss_dyn_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
+                loss_lasr_maps_weight = 0.
+                loss_lasr_maps_bias   = 0.
+                if isinstance(embobj, LASREmbedding):
+                    for i, map in enumerate(embobj.maps):
+                        loss_lasr_maps_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
+                        loss_lasr_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
 
                 if type(loss_bias) == int:
                     breakpoint()
@@ -842,18 +868,18 @@ class EmbeddingManager(nn.Module):
                         + loss_bias_scales  * bias_scales_reg_weight \
                         + loss_basis        * basis_reg_weight \
                         + loss_pre_vecs     * pre_vecs_reg_weight \
-                        + loss_dyn_maps_weight  * dyn_maps_weight_reg_weight \
-                        + loss_dyn_maps_bias    * dyn_maps_bias_reg_weight
+                        + loss_lasr_maps_weight  * lasr_maps_weight_reg_weight \
+                        + loss_lasr_maps_bias    * lasr_maps_bias_reg_weight
 
                 debug = True
-                if debug and self.call_count % 100 == 0:
+                if debug and self.loss_call_count % 100 == 0:
                     print_str = f'loss_bias={loss_bias.item():.4f}, ' \
                                 f'loss_bias_scales={loss_bias_scales.item():.4f}, ' \
                                 f'loss_basis={loss_basis.item():.4f}, ' \
                                 f'loss_pre_vecs={loss_pre_vecs.item():.4f}, '
-                    if isinstance(lora_embobj, DynamicLoraEmbedding):
-                        print_str += f'loss_dyn_maps_weight={loss_dyn_maps_weight.item():.4f}, ' \
-                                     f'loss_dyn_maps_bias={loss_dyn_maps_bias.item():.4f}'
+                    if isinstance(embobj, LASREmbedding):
+                        print_str += f'loss_lasr_maps_weight={loss_lasr_maps_weight.item():.4f}, ' \
+                                     f'loss_lasr_maps_bias={loss_lasr_maps_bias.item():.4f}'
 
                     print(print_str)
 
@@ -863,10 +889,48 @@ class EmbeddingManager(nn.Module):
         return loss / num_placeholders
 
     def embedding_to_loss(self):
+        self.loss_call_count += 1
         if self.use_layerwise_embedding:
             if self.layerwise_lora_rank_token_ratio > 0:
-                return self.layerwise_lora_norm_loss()
+                return self.layerwise_embedding_norm_loss()
             else:
+            # Do not use. Performs poorly. 
                 return self.layerwise_embedding_attractor_loss()
         else:
             return self.embedding_attractor_loss()
+
+    # TODO: support for textual inversion, where static_embeddings is only one embedding.
+    # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
+    # embeddings of subj_prompt_single, subj_prompt_comp, common_prompt_single, common_prompt_comp. 
+    def composition_delta_loss(self, use_lasr_embedding, static_embeddings):
+        BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
+        # static_embeddings: [8, 16, 77, 768]
+        static_embeddings = static_embeddings.view(BS * 4, self.num_unet_layers, -1, static_embeddings.shape[-1])
+        # Each is [2, 16, 77, 768]
+        subj_prompt_single, subj_prompt_comp, common_prompt_single, common_prompt_comp = \
+                    static_embeddings.split(BS, dim=0)
+
+        # common_delta: [2, 16, 77, 768]. Should be a repeat of a tensor [2, 1, 77, 768] 
+        # by 16 times along dim=1, as common_prompt_* doesn't contain placeholder_token.
+        common_delta = common_prompt_comp - common_prompt_single
+        # static_delta: [2, 16, 77, 768]. Different values for each layer along dim=1.
+        static_delta = subj_prompt_comp - subj_prompt_single
+        static_delta_loss   = calc_delta_loss(static_delta, common_delta)
+
+        if use_lasr_embedding:
+            # Each emb is of [4, 77, 768]. 4 = 2 * batch_size.
+            for i, emb in enumerate(self.lasr_embeddings):
+                if emb is None:
+                    breakpoint()
+            # lasr_embeddings: [4, 16, 77, 768]
+            lasr_embeddings = torch.stack(self.lasr_embeddings, dim=1)
+            lasr_subj_emb_single, lasr_subj_emb_comp = lasr_embeddings.split(BS, dim=0)
+            lasr_delta = lasr_subj_emb_comp - lasr_subj_emb_single
+            lasr_delta_loss = calc_delta_loss(lasr_delta, common_delta)
+        else:
+            lasr_delta_loss = 0
+            self.clear_lasr_embedding_cache()
+            
+        delta_loss = static_delta_loss + lasr_delta_loss
+        return delta_loss
+    

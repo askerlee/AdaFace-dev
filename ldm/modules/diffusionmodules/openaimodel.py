@@ -692,7 +692,6 @@ class UNetModel(nn.Module):
             conv_nd(dims, model_channels, n_embed, 1),
             #nn.LogSoftmax(dim=1)  # change to cross_entropy and produce non-normalized logits
         )
-        self.num_unet_layers = len(self.input_blocks) + len(self.output_blocks) + 1
 
     def convert_to_fp16(self):
         """
@@ -712,7 +711,7 @@ class UNetModel(nn.Module):
 
     def forward(self, x, timesteps=None, context=None, y=None, 
                 context_in=None, embedder=None, use_layerwise_context=False, 
-                use_dynamic_context=False, **kwargs):
+                use_lasr_context=False, **kwargs):
         """
         Apply the model to an input batch.
         :param x: an [N x C x ...] Tensor of inputs.
@@ -730,7 +729,7 @@ class UNetModel(nn.Module):
 
         # context: [9*B, N, 768] reshape => [B, 9, N, 768] permute => [9, B, N, 768]
         if use_layerwise_context:
-            context = context.reshape(x.shape[0], self.num_unet_layers, -1, context.shape[-1]).permute(1, 0, 2, 3)
+            context = context.reshape(x.shape[0], 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
 
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
@@ -744,15 +743,18 @@ class UNetModel(nn.Module):
                 return context
             
             static_weight   = 0.5
-            dynamic_weight  = 0.5 # 1 - static_weight
+            lasr_weight     = 0.5 # 1 - static_weight
 
-            skipped_layers = set([0, 3, 6, 9, 10, 11, 13, 14, 15])
-            static_context = context[layer_idx]
-            if layer_idx in skipped_layers:
+            # skipped_layers = set([0, 3, 6, 9, 10, 11, 13, 14, 15])
+            layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
+                                  17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
+            if layer_idx not in layer_idx2emb_idx:
                 return None
-            if use_dynamic_context:
-                dynamic_context = embedder(context_in, layer_idx, h, emb)
-                mix_context = static_context * static_weight + dynamic_context * dynamic_weight
+            emb_idx = layer_idx2emb_idx[layer_idx]
+            static_context = context[emb_idx]
+            if use_lasr_context:
+                lasr_context = embedder(context_in, layer_idx, h, emb)
+                mix_context  = static_context * static_weight + lasr_context * lasr_weight
                 return mix_context
             else:
                 # We simply return None, as it's not used anyway.

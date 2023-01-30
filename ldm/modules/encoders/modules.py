@@ -345,6 +345,8 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         for param in self.parameters():
             param.requires_grad = False
 
+    # text: ['an illustration of a dirty z', 'an illustration of the cool z']
+    # kwargs: embedding_manager
     def forward(self, text, **kwargs):
         # tokenizer: CLIPTokenizer.
         batch_encoding = self.tokenizer(text, truncation=True, max_length=self.max_length, return_length=True,
