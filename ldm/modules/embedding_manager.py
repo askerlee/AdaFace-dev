@@ -522,6 +522,7 @@ class EmbeddingManager(nn.Module):
                                                     tokenized_text, embedded_text)
             emb_idx = self.layer_idx2emb_idx[self.layer_idx]
             # Cache the computed lasr embedding of the current layer.
+            # Before this call, init_lasr_embedding_cache() should have been called somewhere.
             self.lasr_embeddings[emb_idx] = embedded_text
             # Remove lasr-specific intermediate variables.
             self.clear_lasr_layer_info()
@@ -927,9 +928,10 @@ class EmbeddingManager(nn.Module):
             lasr_subj_emb_single, lasr_subj_emb_comp = lasr_embeddings.split(BS, dim=0)
             lasr_delta = lasr_subj_emb_comp - lasr_subj_emb_single
             lasr_delta_loss = calc_delta_loss(lasr_delta, common_delta)
+            # The cached LASR embeddings are obsolete now, release them.
+            self.clear_lasr_embedding_cache()
         else:
             lasr_delta_loss = 0
-            self.clear_lasr_embedding_cache()
             
         delta_loss = static_delta_loss + lasr_delta_loss
         return delta_loss

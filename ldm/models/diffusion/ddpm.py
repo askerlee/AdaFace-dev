@@ -630,6 +630,9 @@ class LatentDiffusion(DDPM):
                     c = c.mode()
                 if self.use_lasr_embedding:
                     embedder = self.get_lasr_conditioning
+                    # Initialize the lasr embedding cache, so that the subsequent calls to 
+                    # EmbeddingManager.get_lasr_embedding() will store the lasr embedding 
+                    # for each layer into the cache.
                     self.embedding_manager.init_lasr_embedding_cache()
                     c = (c, c_in, embedder)
             else:
@@ -639,7 +642,8 @@ class LatentDiffusion(DDPM):
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
         return c
 
-    # get_lasr_conditioning() is a callback function called iteratively by each layer in UNet.
+    # get_lasr_conditioning() is a callback function called iteratively by each layer in UNet
+    # It returns the lasr embedding for the current layer to UNet.
     def get_lasr_conditioning(self, c_in, layer_idx, layer_infeat, time_emb):
         # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
@@ -992,7 +996,7 @@ class LatentDiffusion(DDPM):
                     subj_prompt_comp, common_prompt_single, common_prompt_comp = composition_delta_prompts
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     N_INST   = len(c)
-                    N_EMBEDS = len(c) * N_LAYERS
+                    N_EMBEDS = N_INST * N_LAYERS
                     c_delta = c + subj_prompt_comp + common_prompt_single + common_prompt_comp
                     # c_delta_static is a tuple: (c, c_in, embedder).
                     c_delta_static = self.get_learned_conditioning(c_delta)
