@@ -385,7 +385,8 @@ class EmbeddingManager(nn.Module):
             # If no initializer words are specified, then lora rank=2.
             layerwise_lora_default_rank=2,
             layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
-                                  17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },            
+                                  17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
+            lasr_emb_weight=0.5,        
             subj_scale=1.0,
             **kwargs
     ):
@@ -399,6 +400,7 @@ class EmbeddingManager(nn.Module):
         self.progressive_words = progressive_words
         self.progressive_counter = 0
         self.subj_scale = subj_scale
+        self.lasr_emb_weight = lasr_emb_weight
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
@@ -669,6 +671,9 @@ class EmbeddingManager(nn.Module):
 
         return embedded_text
 
+    def get_lasr_emb_weight(self):
+        return self.lasr_emb_weight
+    
     def set_lasr_layer_info(self, layer_idx, layer_infeat, time_emb):
         self.do_lasr_embedding = True
         self.layer_idx      = layer_idx
@@ -820,7 +825,8 @@ class EmbeddingManager(nn.Module):
         lasr_maps_weight_reg_weight = 1.
         lasr_maps_bias_reg_weight   = 0.01
         pre_vecs_reg_weight     = 0.1
-        l2_loss_boost           = 10
+        static_l2_loss_boost    = 5
+        lasr_l2_loss_boost      = 10
 
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.
@@ -868,12 +874,12 @@ class EmbeddingManager(nn.Module):
                 if type(loss_bias) == int:
                     breakpoint()
 
-                loss = loss + loss_bias     * bias_reg_weight \
-                        + loss_bias_scales  * bias_scales_reg_weight \
-                        + loss_basis        * basis_reg_weight \
-                        + loss_pre_vecs     * pre_vecs_reg_weight \
-                        + loss_lasr_maps_weight  * lasr_maps_weight_reg_weight \
-                        + loss_lasr_maps_bias    * lasr_maps_bias_reg_weight
+                curr_loss = loss_bias     * bias_reg_weight \
+                            + loss_bias_scales  * bias_scales_reg_weight \
+                            + loss_basis        * basis_reg_weight \
+                            + loss_pre_vecs     * pre_vecs_reg_weight \
+                            + loss_lasr_maps_weight  * lasr_maps_weight_reg_weight \
+                            + loss_lasr_maps_bias    * lasr_maps_bias_reg_weight
 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
@@ -887,8 +893,14 @@ class EmbeddingManager(nn.Module):
 
                     print(print_str)
 
-        if euc_loss_type   == 'l2':
-            loss = loss * l2_loss_boost 
+                if euc_loss_type   == 'l2':
+                    if isinstance(embobj, LASREmbedding):
+                        loss_boost = lasr_l2_loss_boost
+                    else:
+                        loss_boost = static_l2_loss_boost
+                else:
+                    loss_boost = 1.
+                loss = loss + curr_loss * loss_boost
 
         return loss / num_placeholders
 

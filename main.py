@@ -182,6 +182,15 @@ def get_parser(**parser_kwargs):
         type=float, default=-1,
         help="Layerwise lora rank/token ratio")
 
+    # embedding_reg_weight
+    parser.add_argument("--embedding_reg_weight",
+        type=float, default=-1,
+        help="Embedding regularization weight")
+    
+    parser.add_argument("--lasr_emb_weight",
+        type=float, default=-1,
+        help="Weight of lasr embeddings (in contrast to static embeddings)")
+
     return parser
 
 
@@ -640,6 +649,11 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \
                                     opt.layerwise_lora_rank_token_ratio
 
+        if opt.embedding_reg_weight > 0:
+            config.model.params.embedding_reg_weight = opt.embedding_reg_weight
+        if opt.lasr_emb_weight > 0:
+            config.model.params.personalization_config.params.lasr_emb_weight = opt.lasr_emb_weight
+            
         if opt.actual_resume:
             model = load_model_from_config(config, opt.actual_resume)
         else:

@@ -51,7 +51,8 @@ model:
         progressive_words: False
         use_layerwise_embedding: True
         layerwise_lora_rank_token_ratio: 2
-        
+        lasr_emb_weight: 0.5
+
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:

@@ -650,7 +650,7 @@ class LatentDiffusion(DDPM):
         # when embedding_manager is called within cond_stage_model.encode().
         self.embedding_manager.set_lasr_layer_info(layer_idx, layer_infeat, time_emb)
         c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
-        return c
+        return (c, self.embedding_manager.get_lasr_emb_weight())
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)

@@ -741,9 +741,6 @@ class UNetModel(nn.Module):
             # print(h.shape)
             if not use_layerwise_context:
                 return context
-            
-            static_weight   = 0.5
-            lasr_weight     = 0.5 # 1 - static_weight
 
             # skipped_layers = set([0, 3, 6, 9, 10, 11, 13, 14, 15])
             layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
@@ -753,8 +750,9 @@ class UNetModel(nn.Module):
             emb_idx = layer_idx2emb_idx[layer_idx]
             static_context = context[emb_idx]
             if use_lasr_context:
-                lasr_context = embedder(context_in, layer_idx, h, emb)
-                mix_context  = static_context * static_weight + lasr_context * lasr_weight
+                lasr_context, lasr_emb_weight = embedder(context_in, layer_idx, h, emb)
+                static_emb_weight = 1 - lasr_emb_weight
+                mix_context  = static_context * static_emb_weight + lasr_context * lasr_emb_weight
                 return mix_context
             else:
                 # We simply return None, as it's not used anyway.
