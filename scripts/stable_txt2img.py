@@ -199,6 +199,11 @@ def main():
         default=1.0,
         help="Scale of the subject embedding",
     )
+
+    parser.add_argument("--lasr_emb_weight",
+        type=float, default=-1,
+        help="Weight of lasr embeddings (in contrast to static embeddings)")
+
     parser.add_argument(
         "--init_img",
         type=str,
@@ -212,6 +217,7 @@ def main():
         default=0.0,
         help="Weight of the initial image",
     )
+
 
     parser.add_argument('--gpu', type=str,  default='1', help='ID of GPU to use')
 
@@ -227,13 +233,14 @@ def main():
     seed_everything(opt.seed)
 
     config = OmegaConf.load(f"{opt.config}")
-    model = load_model_from_config(config, f"{opt.ckpt}")
+    model  = load_model_from_config(config, f"{opt.ckpt}")
     if opt.embedding_paths is not None:
         model.embedding_manager.load(opt.embedding_paths)
-    model.embedding_manager.subj_scale = opt.subj_scale
+    model.embedding_manager.subj_scale      = opt.subj_scale
+    model.embedding_manager.lasr_emb_weight = opt.lasr_emb_weight
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model = model.to(device)
+    model  = model.to(device)
 
     if opt.plms:
         sampler = PLMSSampler(model)
