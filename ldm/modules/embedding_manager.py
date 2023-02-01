@@ -965,7 +965,7 @@ class EmbeddingManager(nn.Module):
             lasr_subj_emb_single, lasr_subj_emb_comp = lasr_embeddings.split(BS, dim=0)
             lasr_delta = lasr_subj_emb_comp - lasr_subj_emb_single
             lasr_delta_loss = calc_delta_loss(lasr_delta, common_delta)
-            # The cached LASR embeddings are obsolete now, release them.
+            # The cached LASR embeddings are useless now, release them.
             self.clear_lasr_embedding_cache()
         else:
             lasr_delta_loss = 0
