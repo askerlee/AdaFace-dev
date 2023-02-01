@@ -98,7 +98,8 @@ class DDPM(pl.LightningModule):
         self.use_lasr_embedding = use_layerwise_embedding and use_lasr_embedding
         self.composition_delta_reg_iter_gap = composition_delta_reg_iter_gap
         self.composition_delta_reg_weight   = composition_delta_reg_weight
-        self.do_composition_delta_reg       = False
+        self.do_static_comp_delta_reg       = False
+        self.do_lasr_comp_delta_reg         = False
 
         self.model = DiffusionWrapper(unet_config, conditioning_key, 
                                       use_layerwise_embedding, use_lasr_embedding)
@@ -363,9 +364,11 @@ class DDPM(pl.LightningModule):
         return loss, loss_dict
 
     def training_step(self, batch, batch_idx):
-        self.do_composition_delta_reg = self.composition_delta_reg_iter_gap > 0 \
-                                            and self.global_step % self.composition_delta_reg_iter_gap == 0 \
+        self.do_static_comp_delta_reg = self.composition_delta_reg_iter_gap > 0 \
                                             and self.composition_delta_reg_weight > 0
+        self.do_lasr_comp_delta_reg   = self.do_static_comp_delta_reg \
+                                            and self.use_lasr_embedding \
+                                            and self.global_step % self.composition_delta_reg_iter_gap == 0
         
         loss, loss_dict = self.shared_step(batch)
 
@@ -975,7 +978,7 @@ class LatentDiffusion(DDPM):
     #          'image':   [2, 512, 512, 3] }
     def shared_step(self, batch, **kwargs):
         x, c = self.get_input(batch, self.first_stage_key)
-        if self.do_composition_delta_reg:
+        if self.do_static_comp_delta_reg:
             composition_delta_prompts = (batch['subj_prompt_comp'], batch['common_prompt_single'], batch['common_prompt_comp'])
         else:
             composition_delta_prompts = None
@@ -992,23 +995,31 @@ class LatentDiffusion(DDPM):
             # get_learned_conditioning(): convert c to a [1, 77, 768] tensor.
             if self.cond_stage_trainable:
                 # c: ['an illustration of a dirty z', 'an illustration of the cool z']
-                if composition_delta_prompts is not None:
+                if self.do_static_comp_delta_reg:
                     subj_prompt_comp, common_prompt_single, common_prompt_comp = composition_delta_prompts
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     N_INST   = len(c)
                     N_EMBEDS = N_INST * N_LAYERS
+                    # c == subj_prompt_single.
                     c_delta = c + subj_prompt_comp + common_prompt_single + common_prompt_comp
                     # c_delta_static is a tuple: (c, c_in, embedder).
+                    # *_static means static embeddings.
                     c_delta_static = self.get_learned_conditioning(c_delta)
                     if self.use_lasr_embedding:
                         # c_real: [128, 77, 768]. 128 = 8 * 16. 
                         # 8 is the total number of prompts in c_delta. Each prompt is converted to 16 embeddings.
                         c_real, c_in, embedder = c_delta_static
-                        # Only keep the embeddings corresponding to subj_prompt_single (the original c) 
-                        # and subj_prompt_comp, as the corresponding LASR embeddings are dynamically generated.
-                        # common_prompt_single and common_prompt_comp are static, so no need to 
-                        # be fed to UNet.
-                        c = (c_real[:N_EMBEDS*2], c_in[:N_INST*2], embedder)
+                        if self.do_lasr_comp_delta_reg:
+                            # Do lasr composition delta loss in this iteration. 
+                            # Only keep the embeddings corresponding to subj_prompt_single (the original c) 
+                            # and subj_prompt_comp, as the corresponding LASR embeddings are dynamically generated.
+                            # common_prompt_single and common_prompt_comp are static, so no need to 
+                            # be fed to UNet.
+                            c = (c_real[:N_EMBEDS*2], c_in[:N_INST*2], embedder)
+                        else:
+                            # Don't do lasr composition delta loss in this iteration. 
+                            # So restore the original c.
+                            c = (c_real[:N_EMBEDS], c_in[:N_INST], embedder)
                         self.c_delta_static = c_real
                     else:
                         c = c_delta_static[:N_EMBEDS]
@@ -1167,12 +1178,12 @@ class LatentDiffusion(DDPM):
     def p_losses(self, x_start, cond, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        if self.use_lasr_embedding and self.do_composition_delta_reg:
+        if self.use_lasr_embedding and self.do_lasr_comp_delta_reg:
             x_noisy = x_noisy.repeat(2, 1, 1, 1)
             t       = t.repeat(2)
 
         model_output = self.apply_model(x_noisy, t, cond)
-        if self.use_lasr_embedding and self.do_composition_delta_reg:
+        if self.use_lasr_embedding and self.do_lasr_comp_delta_reg:
             # Restore model_output and t.
             # Do not use the second half of the model output, as they are used 
             # to compute the LASR embeddings only, which are the input of the delta regularization.
@@ -1212,9 +1223,9 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg})
             loss += (self.embedding_reg_weight * loss_embedding_reg)
 
-            if self.c_delta_static is not None:
+            if self.do_static_comp_delta_reg:
                 loss_comp_delta_reg = self.embedding_manager.composition_delta_loss( 
-                                        self.use_lasr_embedding, self.c_delta_static
+                                        self.do_lasr_comp_delta_reg, self.c_delta_static
                                       ).mean()
                 loss_dict.update({f'{prefix}/loss_comp_delta_reg': loss_comp_delta_reg})
                 loss += (self.composition_delta_reg_weight * loss_comp_delta_reg)

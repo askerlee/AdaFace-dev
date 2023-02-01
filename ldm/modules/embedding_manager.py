@@ -389,7 +389,8 @@ class EmbeddingManager(nn.Module):
             layerwise_lora_default_rank=2,
             layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                   17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
-            lasr_emb_weight=0.5,        
+            lasr_emb_weight=0.5, 
+            composition_delta_reg_iter_gap=-1,       
             subj_scale=1.0,
             **kwargs
     ):
@@ -404,6 +405,7 @@ class EmbeddingManager(nn.Module):
         self.progressive_counter = 0
         self.subj_scale = subj_scale
         self.lasr_emb_weight = lasr_emb_weight
+        self.composition_delta_reg_iter_gap = composition_delta_reg_iter_gap
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
@@ -932,8 +934,11 @@ class EmbeddingManager(nn.Module):
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of subj_prompt_single, subj_prompt_comp, common_prompt_single, common_prompt_comp. 
     # common_prompt_*: embeddings generated from prompts containing a common English name.
-    def composition_delta_loss(self, use_lasr_embedding, static_embeddings):
-        lasr_static_loss_boost_ratio = 1
+    def composition_delta_loss(self, do_lasr_comp_delta_reg, static_embeddings):
+        # The composition delta loss for LASR embeddings is only applied 
+        # every composition_delta_reg_iter_gap iterations. So boost the loss 
+        # by composition_delta_reg_iter_gap times.
+        lasr_comp_loss_boost_ratio = self.composition_delta_reg_iter_gap
         BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
         # static_embeddings: [8, 16, 77, 768]
         static_embeddings = static_embeddings.view(BS * 4, self.num_unet_layers, -1, static_embeddings.shape[-1])
@@ -948,7 +953,7 @@ class EmbeddingManager(nn.Module):
         static_delta = subj_prompt_comp - subj_prompt_single
         static_delta_loss   = calc_delta_loss(static_delta, common_delta)
 
-        if use_lasr_embedding:
+        if do_lasr_comp_delta_reg:
             # Each emb is of [4, 77, 768]. 4 = 2 * batch_size.
             for i, emb in enumerate(self.lasr_embeddings):
                 # LASR embeddings of all layers should have been stored in self.lasr_embeddings
@@ -965,6 +970,6 @@ class EmbeddingManager(nn.Module):
         else:
             lasr_delta_loss = 0
             
-        delta_loss = static_delta_loss + lasr_delta_loss * lasr_static_loss_boost_ratio
+        delta_loss = static_delta_loss + lasr_delta_loss * lasr_comp_loss_boost_ratio
         return delta_loss
     
