@@ -130,7 +130,7 @@ per_img_token_list = [
 ]
 
 # 4 common English names. Keep these names short and simple, so that tokenizers convert them to single tokens.
-common_names = [ "tom", "john", "mary", "lisa" ]
+# common_names = [ "tom", "john", "mary", "lisa" ]
 
 # Should never use per_image_tokens.
 class PersonalizedBase(Dataset):
@@ -197,7 +197,8 @@ class PersonalizedBase(Dataset):
         else:
             template = random.choice(imagenet_templates_small)
             subj_prompt_single = template.format(placeholder_string)
-            person = random.choice(common_names)
+            # person = random.choice(common_names)
+            person = "person"
             common_prompt_single = template.format(person)
             composition = sample_compositions(1)[0]
             subj_prompt_comp = subj_prompt_single + " " + composition

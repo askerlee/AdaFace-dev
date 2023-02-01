@@ -933,7 +933,7 @@ class EmbeddingManager(nn.Module):
     # embeddings of subj_prompt_single, subj_prompt_comp, common_prompt_single, common_prompt_comp. 
     # common_prompt_*: embeddings generated from prompts containing a common English name.
     def composition_delta_loss(self, use_lasr_embedding, static_embeddings):
-        lasr_static_loss_boost_ratio = 2
+        lasr_static_loss_boost_ratio = 1
         BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
         # static_embeddings: [8, 16, 77, 768]
         static_embeddings = static_embeddings.view(BS * 4, self.num_unet_layers, -1, static_embeddings.shape[-1])
