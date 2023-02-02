@@ -25,7 +25,7 @@ model:
     use_layerwise_embedding: True
     use_lasr_embedding: True
     composition_delta_reg_iter_gap: 5
-    composition_delta_reg_weight: 0.001
+    composition_delta_reg_weight: 0.005
 
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler

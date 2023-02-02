@@ -24,7 +24,9 @@ model:
     model_lr: 0.0
     use_layerwise_embedding: True
     use_lasr_embedding: False
-    
+    composition_delta_reg_iter_gap: 5
+    composition_delta_reg_weight: 0.005
+
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:
@@ -49,7 +51,8 @@ model:
         progressive_words: False
         use_layerwise_embedding: True
         layerwise_lora_rank_token_ratio: 3
-
+        composition_delta_reg_iter_gap: 5
+        
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:

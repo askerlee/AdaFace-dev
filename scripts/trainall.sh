@@ -1,7 +1,7 @@
 GPU="0"
 python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n alexachung-lasr --gpus $GPU, --data_root data/alexachung/  --placeholder_string "z" --no-test  --init_word "young girl woman" --init_word_weights 1 2 2
 
-python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n corgi-lasr --gpus $GPU, --data_root unused_data/corgi/ --placeholder_string "z" --no-test  --init_word "corgi dog" --init_word_weights 2 1
+python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n corgi-lasr --gpus $GPU, --data_root unused_data/corgi/ --placeholder_string "y" --no-test  --init_word "corgi dog" --init_word_weights 2 1
 
 python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n donnieyen-lasr --gpus $GPU, --data_root data/donnieyen/  --placeholder_string "z" --no-test  --init_word "asian man" --init_word_weights 1 2
 

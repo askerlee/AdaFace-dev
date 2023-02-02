@@ -969,7 +969,8 @@ class EmbeddingManager(nn.Module):
             self.clear_lasr_embedding_cache()
         else:
             lasr_delta_loss = 0
-            
-        delta_loss = static_delta_loss + lasr_delta_loss * lasr_comp_loss_boost_ratio
+        
+        # delta_loss is the sum of the delta loss of all layers. Change it to the average.
+        delta_loss = (static_delta_loss + lasr_delta_loss * lasr_comp_loss_boost_ratio) / self.num_unet_layers
         return delta_loss
     
