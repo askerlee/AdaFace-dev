@@ -236,8 +236,9 @@ def main():
     model  = load_model_from_config(config, f"{opt.ckpt}")
     if opt.embedding_paths is not None:
         model.embedding_manager.load(opt.embedding_paths)
-    model.embedding_manager.subj_scale      = opt.subj_scale
-    model.embedding_manager.lasr_emb_weight = opt.lasr_emb_weight
+    model.embedding_manager.subj_scale  = opt.subj_scale
+    if opt.lasr_emb_weight >= 0:
+        model.embedding_manager.lasr_emb_weight = opt.lasr_emb_weight
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model  = model.to(device)
