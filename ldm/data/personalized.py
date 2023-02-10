@@ -129,9 +129,6 @@ per_img_token_list = [
     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק', 'ר', 'ש', 'ת',
 ]
 
-# 4 common English names. Keep these names short and simple, so that tokenizers convert them to single tokens.
-# common_names = [ "tom", "john", "mary", "lisa" ]
-
 # Should never use per_image_tokens.
 class PersonalizedBase(Dataset):
     def __init__(self,
@@ -142,6 +139,7 @@ class PersonalizedBase(Dataset):
                  flip_p=0.5,
                  set="train",
                  placeholder_token="*",
+                 cls_token="person",
                  per_image_tokens=False,
                  center_crop=False,
                  mixing_prob=0.25,
@@ -156,6 +154,7 @@ class PersonalizedBase(Dataset):
         self.num_images = len(self.image_paths)
         self._length = self.num_images 
         self.placeholder_token = placeholder_token
+        self.cls_token = cls_token
 
         self.per_image_tokens = per_image_tokens
         self.center_crop = center_crop
@@ -196,18 +195,16 @@ class PersonalizedBase(Dataset):
             subj_prompt_single = random.choice(imagenet_dual_templates_small).format(placeholder_string, per_img_token_list[i % self.num_images])
         else:
             template = random.choice(imagenet_templates_small)
-            subj_prompt_single = template.format(placeholder_string)
-            # person = random.choice(common_names)
-            person = "person"
-            common_prompt_single = template.format(person)
-            composition = sample_compositions(1)[0]
-            subj_prompt_comp = subj_prompt_single + " " + composition
-            common_prompt_comp = common_prompt_single + " " + composition
+            subj_prompt_single  = template.format(placeholder_string)
+            cls_prompt_single   = template.format(self.cls_token)
+            composition_partial = sample_compositions(1)[0]
+            subj_prompt_comp    = subj_prompt_single + " " + composition_partial
+            cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
 
         example["caption"]              = subj_prompt_single
         example["subj_prompt_comp"]     = subj_prompt_comp
-        example["common_prompt_comp"]   = common_prompt_comp
-        example["common_prompt_single"] = common_prompt_single
+        example["cls_prompt_comp"]      = cls_prompt_comp
+        example["cls_prompt_single"]    = cls_prompt_single
 
         # default to score-sde preprocessing
         img = np.array(image).astype(np.uint8)

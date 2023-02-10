@@ -932,8 +932,8 @@ class EmbeddingManager(nn.Module):
 
     # TODO: support for textual inversion, where static_embeddings is only one embedding.
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
-    # embeddings of subj_prompt_single, subj_prompt_comp, common_prompt_single, common_prompt_comp. 
-    # common_prompt_*: embeddings generated from prompts containing a common English name.
+    # embeddings of subj_prompt_single, subj_prompt_comp, cls_prompt_single, cls_prompt_comp. 
+    # cls_prompt_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
     def composition_delta_loss(self, do_lasr_comp_delta_reg, static_embeddings):
         # The composition delta loss for LASR embeddings is only applied 
         # every composition_delta_reg_iter_gap iterations. So boost the loss 
@@ -943,15 +943,15 @@ class EmbeddingManager(nn.Module):
         # static_embeddings: [8, 16, 77, 768]
         static_embeddings = static_embeddings.view(BS * 4, self.num_unet_layers, -1, static_embeddings.shape[-1])
         # Each is [2, 16, 77, 768]
-        subj_prompt_single, subj_prompt_comp, common_prompt_single, common_prompt_comp = \
+        subj_prompt_single, subj_prompt_comp, cls_prompt_single, cls_prompt_comp = \
                     static_embeddings.split(BS, dim=0)
 
-        # common_delta: [2, 16, 77, 768]. Should be a repeat of a tensor [2, 1, 77, 768] 
-        # by 16 times along dim=1, as common_prompt_* doesn't contain placeholder_token.
-        common_delta = common_prompt_comp - common_prompt_single
+        # cls_delta: [2, 16, 77, 768]. Should be a repeat of a tensor [2, 1, 77, 768] 
+        # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
+        cls_delta = cls_prompt_comp - cls_prompt_single
         # static_delta: [2, 16, 77, 768]. Different values for each layer along dim=1.
         static_delta = subj_prompt_comp - subj_prompt_single
-        static_delta_loss   = calc_delta_loss(static_delta, common_delta)
+        static_delta_loss   = calc_delta_loss(static_delta, cls_delta)
 
         if do_lasr_comp_delta_reg:
             # Each emb is of [4, 77, 768]. 4 = 2 * batch_size.
@@ -964,7 +964,7 @@ class EmbeddingManager(nn.Module):
             lasr_embeddings = torch.stack(self.lasr_embeddings, dim=1)
             lasr_subj_emb_single, lasr_subj_emb_comp = lasr_embeddings.split(BS, dim=0)
             lasr_delta = lasr_subj_emb_comp - lasr_subj_emb_single
-            lasr_delta_loss = calc_delta_loss(lasr_delta, common_delta)
+            lasr_delta_loss = calc_delta_loss(lasr_delta, cls_delta)
             # The cached LASR embeddings are useless now, release them.
             self.clear_lasr_embedding_cache()
         else:

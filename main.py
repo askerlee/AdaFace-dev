@@ -129,6 +129,13 @@ def get_parser(**parser_kwargs):
         default="logs",
         help="directory for logging dat shit",
     )
+    # learning rate
+    parser.add_argument(
+        "--lr",
+        type=float, 
+        default=-1,
+        help="learning rate",
+    )
     parser.add_argument(
         "--scale_lr",
         type=str2bool,
@@ -177,6 +184,11 @@ def get_parser(**parser_kwargs):
         type=str, default=None,
         help="Negative words (commma separated) used to initialize token embedding")
 
+    # cls_token
+    parser.add_argument("--cls_token",
+        type=str, default=None,
+        help="A single word to use in class-level prompts")
+    
     # layerwise_lora_rank_token_ratio
     parser.add_argument("--layerwise_lora_rank_token_ratio", 
         type=float, default=-1,
@@ -636,8 +648,8 @@ if __name__ == "__main__":
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
         if opt.placeholder_string:
             config.model.params.personalization_config.params.placeholder_strings = [opt.placeholder_string]
-            config.data.params.train.params.placeholder_token = opt.placeholder_string
-            config.data.params.validation.params.placeholder_token = opt.placeholder_string
+            config.data.params.train.params.placeholder_token       = opt.placeholder_string
+            config.data.params.validation.params.placeholder_token  = opt.placeholder_string
 
         # Currently, only supports one group of initial words and weights.
         if opt.init_word:
@@ -649,6 +661,10 @@ if __name__ == "__main__":
             init_neg_words = re.split(r",\s*", opt.init_neg_words)
             config.model.params.personalization_config.params.initializer_neg_words = init_neg_words
 
+        if opt.cls_token is not None:
+            config.data.params.train.params.cls_token      = opt.cls_token
+            config.data.params.validation.params.cls_token = opt.cls_token
+
         if opt.layerwise_lora_rank_token_ratio > 0:
             config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \
                                     opt.layerwise_lora_rank_token_ratio
@@ -657,7 +673,8 @@ if __name__ == "__main__":
             config.model.params.embedding_reg_weight = opt.embedding_reg_weight
         if opt.lasr_emb_weight > 0:
             config.model.params.personalization_config.params.lasr_emb_weight = opt.lasr_emb_weight
-        if opt.composition_delta_reg_weight > 0:
+        # Setting composition_delta_reg_weight to 0 will disable composition delta regularization.
+        if opt.composition_delta_reg_weight >= 0:
             config.model.params.composition_delta_reg_weight = opt.composition_delta_reg_weight
             
         if opt.actual_resume:
@@ -813,9 +830,14 @@ if __name__ == "__main__":
         for k in data.datasets:
             print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
 
+        if opt.lr > 0:
+            config.model.base_learning_rate = opt.lr
+
         # configure learning rate
         bs, base_lr, weight_decay = config.data.params.batch_size, config.model.base_learning_rate, \
                                     config.model.weight_decay
+
+
         if not cpu:
             ngpu = len(lightning_config.trainer.gpus.strip(",").split(','))
         else:

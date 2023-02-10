@@ -971,15 +971,15 @@ class LatentDiffusion(DDPM):
     #                                    'a depiction of a z'], 
     #          'subj_prompt_comp':      ['an illustration of a dirty z dancing with a boy', 
     #                                    'a depiction of a z kicking a punching bag'],
-    #          'common_prompt_single':  ['an illustration of a dirty christopher',          
+    #          'cls_prompt_single':     ['an illustration of a dirty christopher',          
     #                                    'a depiction of a john'],
-    #          'common_prompt_comp'  :  ['an illustration of a dirty christopher dancing with a boy', 
+    #          'cls_prompt_comp'  :     ['an illustration of a dirty christopher dancing with a boy', 
     #                                    'a depiction of a john kicking a punching bag']
     #          'image':   [2, 512, 512, 3] }
     def shared_step(self, batch, **kwargs):
         x, c = self.get_input(batch, self.first_stage_key)
         if self.do_static_comp_delta_reg:
-            composition_delta_prompts = (batch['subj_prompt_comp'], batch['common_prompt_single'], batch['common_prompt_comp'])
+            composition_delta_prompts = (batch['subj_prompt_comp'], batch['cls_prompt_single'], batch['cls_prompt_comp'])
         else:
             composition_delta_prompts = None
 
@@ -996,12 +996,12 @@ class LatentDiffusion(DDPM):
             if self.cond_stage_trainable:
                 # c: ['an illustration of a dirty z', 'an illustration of the cool z']
                 if self.do_static_comp_delta_reg:
-                    subj_prompt_comp, common_prompt_single, common_prompt_comp = composition_delta_prompts
+                    subj_prompt_comp, cls_prompt_single, cls_prompt_comp = composition_delta_prompts
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     N_INST   = len(c)
                     N_EMBEDS = N_INST * N_LAYERS
                     # c == subj_prompt_single.
-                    c_delta = c + subj_prompt_comp + common_prompt_single + common_prompt_comp
+                    c_delta = c + subj_prompt_comp + cls_prompt_single + cls_prompt_comp
                     # c_delta_static is a tuple: (c, c_in, embedder).
                     # *_static means static embeddings.
                     c_delta_static = self.get_learned_conditioning(c_delta)
@@ -1013,7 +1013,7 @@ class LatentDiffusion(DDPM):
                             # Do lasr composition delta loss in this iteration. 
                             # Only keep the embeddings corresponding to subj_prompt_single (the original c) 
                             # and subj_prompt_comp, as the corresponding LASR embeddings are dynamically generated.
-                            # common_prompt_single and common_prompt_comp are static, so no need to 
+                            # cls_prompt_single and cls_prompt_comp are static, so no need to 
                             # be fed to UNet.
                             c = (c_real[:N_EMBEDS*2], c_in[:N_INST*2], embedder)
                         else:
