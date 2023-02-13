@@ -81,6 +81,18 @@ def calc_stats(emb_name, embeddings):
     print("L1: %.4f, L2: %.4f" %(l1_loss.item(), l2_loss.item()))
     print("Norms: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(norms.min(), norms.max(), norms.mean(), norms.std()))
 
+class LNCat2(nn.Module):
+    def __init__(self, chan1, chan2, dim=1):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(chan1, elementwise_affine=True)
+        self.ln2 = nn.LayerNorm(chan2, elementwise_affine=True)
+        self.dim = dim
+
+    def forward(self, x1, x2):
+        x1 = self.ln1(x1)
+        x2 = self.ln2(x2)
+        return torch.cat([x1, x2], dim=self.dim)
+    
 class StaticLayerwiseEmbedding(nn.Module):
     # dim1: 16 (9 layers out of 25 of UNet are skipped), dim2: 768, r: 12.
     # If using init_vecs, init_noise_stds are applied to basis_rand_weights. 
@@ -198,11 +210,11 @@ class StaticLayerwiseEmbedding(nn.Module):
             self.bias = 0
             self.bias_scales = 0
 
-        lns  = []
+        layer_lns  = []
         for i in range(dim1):
-            lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
+            layer_lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
 
-        self.lns  = nn.ModuleList(lns)
+        self.layer_lns  = nn.ModuleList(layer_lns)
 
         print(f"StaticLayerwiseEmbedding initialized with {self.N} init vectors, {self.NEG} negative vectors, {self.r} basis vectors")
 
@@ -223,7 +235,7 @@ class StaticLayerwiseEmbedding(nn.Module):
 
             out_vecs = torch.matmul(basis_weights, basis_vecs)
             # Apply layer-wise layer normalization.
-            out_vecs_ln = [ self.lns[i](out_vecs[i]) for i in range(self.dim1) ]
+            out_vecs_ln = [ self.layer_lns[i](out_vecs[i]) for i in range(self.dim1) ]
             out_vecs_ln = torch.stack(out_vecs_ln, dim=0) / np.sqrt(self.dim2)
 
             # Different layers have different bias scales.
@@ -288,8 +300,9 @@ class LASREmbedding(nn.Module):
         # First TD_frac of dimensions of the time embeddings will be used.
         self.TD_frac = 0.5
 
-        maps = []
-        lns  = []
+        layer_maps = []
+        layer_lns  = []
+        layer_lncat2s = []
         self.TDs = []
 
         for i in range(dim1):
@@ -298,11 +311,13 @@ class LASREmbedding(nn.Module):
             self.TDs.append(TD)
 
             # infeat_dims[i2] + TD because we also include time embeddings (first TD dims) as the input features.
-            maps.append( nn.Linear(infeat_dims[i2] + TD, r, bias=True) )
-            lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
+            layer_maps.append( nn.Linear(infeat_dims[i2] + TD, r, bias=True) )
+            layer_lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
+            layer_lncat2s.append(LNCat2(infeat_dims[i2], TD))
 
-        self.maps = nn.ModuleList(maps)
-        self.lns  = nn.ModuleList(lns)
+        self.layer_maps = nn.ModuleList(layer_maps)
+        self.layer_lns  = nn.ModuleList(layer_lns)
+        self.layer_lncat2s = nn.ModuleList(layer_lncat2s)
 
         self.has_bias = has_bias
         if has_bias:
@@ -336,8 +351,9 @@ class LASREmbedding(nn.Module):
             # and the last dimensions tend to be the same for all time steps.
             # Never allow time embeddings dominate image features infeat.
             TD = self.TDs[emb_idx]
-            infeat_time      = torch.cat([infeat_pooled, time_emb[:, :TD]], dim=1)
-            basis_dyn_weight = self.maps[emb_idx](infeat_time)
+            infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled, time_emb[:, :TD])
+            # infeat_time      = torch.cat([infeat_pooled, time_emb[:, :TD]], dim=1)
+            basis_dyn_weight = self.layer_maps[emb_idx](infeat_time)
             # Separate bias and bias_scales, for easier regularization on their scales.
             # bias: [1, 768] * [1, 1] = [1, 768].
             bias = self.bias[emb_idx].unsqueeze(0) * self.bias_scales[emb_idx]
@@ -347,7 +363,7 @@ class LASREmbedding(nn.Module):
             else:
                 basis_vecs = self.basis_vecs
 
-            ln = self.lns[emb_idx]
+            ln = self.layer_lns[emb_idx]
             # [2, 12] x [12, 768] = [2, 768], + [1, 768] = [2, 768].
             out_vec0 = ln(torch.matmul(basis_dyn_weight, basis_vecs)) / np.sqrt(self.dim2)
             out_vec  = out_vec0 + bias
@@ -357,10 +373,12 @@ class LASREmbedding(nn.Module):
                 self.call_count = 0
 
             if self.debug and self.call_count % 10 == 0:
+                calc_stats(f'{emb_idx} time_emb', time_emb[:, :TD])
+                calc_stats(f'{emb_idx} infeat_pooled', infeat_pooled)
                 calc_stats(f'{emb_idx} basis_dyn_weight', basis_dyn_weight)
                 calc_stats(f'{emb_idx} out_vec0', out_vec0)
                 calc_stats(f'{emb_idx} bias', bias)
-            
+
             if emb_idx == 24:
                 self.call_count += 1
 
@@ -882,7 +900,7 @@ class EmbeddingManager(nn.Module):
                 loss_lasr_maps_weight = 0.
                 loss_lasr_maps_bias   = 0.
                 if isinstance(embobj, LASREmbedding):
-                    for i, map in enumerate(embobj.maps):
+                    for i, map in enumerate(embobj.layer_maps):
                         loss_lasr_maps_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
                         loss_lasr_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
 

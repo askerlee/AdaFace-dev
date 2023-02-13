@@ -217,7 +217,12 @@ def main():
         default=0.0,
         help="Weight of the initial image",
     )
-
+    # No preview
+    parser.add_argument(
+        "--no_preview",
+        action='store_true',
+        help="do not preview the image",
+    )
 
     parser.add_argument('--gpu', type=str,  default='1', help='ID of GPU to use')
 
@@ -355,7 +360,7 @@ def main():
 
                 toc = time.time()
 
-    if not opt.skip_grid:
+    if not opt.skip_grid or not opt.no_preview:
         print(f"Your samples are ready and waiting for you here: \n{grid_filepath}")
         os.spawnvp(os.P_NOWAIT, "gpicview", [ "gpicview", os.path.abspath(grid_filepath) ])
     else:
