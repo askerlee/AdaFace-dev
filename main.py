@@ -189,7 +189,8 @@ def get_parser(**parser_kwargs):
         type=str, default=None,
         help="A single word to use in class-level prompts")
     
-    # layerwise_lora_rank_token_ratio
+    # layerwise_lora_rank_token_ratio. When there are two tokens, 
+    # it seems that increasing the rank to 3 doesn't help.
     parser.add_argument("--layerwise_lora_rank_token_ratio", 
         type=float, default=-1,
         help="Layerwise lora rank/token ratio")
