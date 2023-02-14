@@ -751,12 +751,8 @@ class UNetModel(nn.Module):
             static_context = context[emb_idx]
             if use_lasr_context:
                 lasr_context, lasr_emb_weight = embedder(context_in, layer_idx, h, emb)
-                if self.training:
-                    rand_lasr_emb_weight = lasr_emb_weight * np.random.uniform(0.8, 1.4)
-                else:
-                    rand_lasr_emb_weight = lasr_emb_weight
-                static_emb_weight = 1 - rand_lasr_emb_weight
-                mix_context  = static_context * static_emb_weight + lasr_context * rand_lasr_emb_weight
+                static_emb_weight = 1 - lasr_emb_weight
+                mix_context  = static_context * static_emb_weight + lasr_context * lasr_emb_weight
                 return mix_context
             else:
                 # We simply return None, as it's not used anyway.

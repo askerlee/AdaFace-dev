@@ -4,8 +4,8 @@ __pycache__/
 /logs/*
 /data/*
 /data
-/unused_data/*
-/unused_data
+/data_unused/*
+/data_unused
 /outputs/*
 /models/stable-diffusion-v-1-4-original
 *.txt

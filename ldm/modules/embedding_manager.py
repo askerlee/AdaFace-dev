@@ -696,7 +696,12 @@ class EmbeddingManager(nn.Module):
         return embedded_text
 
     def get_lasr_emb_weight(self):
-        return self.lasr_emb_weight
+        if self.training:
+            # 0.5 -> uniform in [0.4, 0.7]
+            rand_lasr_emb_weight = self.lasr_emb_weight * np.random.uniform(0.8, 1.4)
+        else:
+            rand_lasr_emb_weight = self.lasr_emb_weight        
+        return rand_lasr_emb_weight
     
     def set_lasr_layer_info(self, layer_idx, layer_infeat, time_emb):
         self.gen_lasr_embedding = True
