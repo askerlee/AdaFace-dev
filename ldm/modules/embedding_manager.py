@@ -276,7 +276,7 @@ class LASREmbedding(nn.Module):
 
             if init_vecs.shape[1] != dim2 or init_vecs.shape[0] > dim1:
                 raise ValueError(
-                    f"LoRA init vectors shape {init_vecs.shape} must be (<={dim1}, {dim2})"
+                    f"LASREmbedding LoRA init vectors shape {init_vecs.shape} must be (<={dim1}, {dim2})"
                 )
 
             N = self.N = init_vecs.shape[0]
@@ -869,7 +869,7 @@ class EmbeddingManager(nn.Module):
 
         for key in self.initial_embeddings:
             for embobj in (self.string_to_param_dict[key], self.string_to_lasr_embedder_dict[key]):
-                # Skip non-LORA embeddings.
+                # Skip non-layerwise embeddings.
                 if not isinstance(embobj, StaticLayerwiseEmbedding) \
                   and not isinstance(embobj, LASREmbedding):
                     continue

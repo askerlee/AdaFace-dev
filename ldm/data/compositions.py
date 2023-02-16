@@ -3,13 +3,14 @@ import numpy as np
 
 composition_regexs = \
 [ "lifting a (rock|box|barbell|cat|dog)",
+  "doing (makeup|housekeeping|gardening|exercise)",
   "carrying a (bag|backpack|luggage|laptop|book|briefcase|purse|suitcase|bouquet|baby|cat|dog|teddy bear)",
   "holding a (mobile phone|book|cup of water|piece of paper|flower|bouquet|pen|sign|cat|dog|teddy bear|baby)",
   "sitting (on a table|on a chair|on a bench|on a tank|in a wheelchair|on the ground)",
   "leaning (against a wall|against a tree|against a table|on a chair|on a car)",
   "jumping on a (table|stair|board|chair|bed|box|trampoline)",
   "punching a (tree|wall|table|punching bag)",
-  "swimming (in a pool|underwater|in the ocean|in a lake|in a river)",
+  "swimming (in a pool|underwater|in the ocean|in a lake|in a river)( among tropical fishes)?",
   "pushing a (door|table|car|wheelchair|stroller|shopping cart|bicycle|motorcycle|scooter)",
   "running (in a forest|at the beach|over forest leaves|on a trail|under the moon|on a treadmill)",
   "walking (in a forest|at the beach|over forest leaves|on a trail|under the moon|on a treadmill)",
@@ -33,8 +34,8 @@ composition_regexs = \
   "in (a car|a meeting|a class|a dress|a suit|a tshirt|a stormtrooper costume|a superman costume|a wedding|an elevator|a dinner|a concert|a gym|a library|a park|a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
   "at (a beach|a table|a park|a concert|a gym|a library|a mall|a movie theater|a hotel room|a theme park)",
   "besides (a friend|a tree|a car|a river|a lake|a mountain|an ocean|a playground|a statue)",
-  "in (cartoon|comic book|steampunk|oil on canvas|sci-fi movie) style",
-  ", (concept art|trending in artstation|hyper realistic|vivid colors|realistic painting|character design)",
+  "in (cartoon|animation|anime|comic book|steampunk|oil on canvas|sci-fi movie) style",
+  ", (concept art|trending in artstation|hyper realistic|vivid colors|realistic painting|character design|anime sketch)",
 ]
 
 def sample_compositions(N):

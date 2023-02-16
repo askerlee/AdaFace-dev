@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from .compositions import sample_compositions
 import random
+import torch
 
 imagenet_templates_smallest = [
     'a photo of a {}',
@@ -137,6 +138,9 @@ class PersonalizedBase(Dataset):
                  repeats=100,
                  interpolation="bicubic",
                  flip_p=0.5,
+                 # min_rand_scaling: -1 (disabled) or a float 
+                 # that specifies the minimum scaling factor.
+                 min_rand_scaling=-1,
                  set="train",
                  placeholder_token="*",
                  cls_token="person",
@@ -175,6 +179,16 @@ class PersonalizedBase(Dataset):
                               "lanczos": PIL.Image.LANCZOS,
                               }[interpolation]
         self.flip = transforms.RandomHorizontalFlip(p=flip_p)
+
+        if min_rand_scaling > 0:
+            # RandomResizedCrop only enlarges (a crop of) the image, so we use RandomAffine instead.
+            self.random_scaler = transforms.Compose([
+                                    transforms.RandomAffine(degrees=0, shear=0, scale=(min_rand_scaling, 1)),
+                                    transforms.Resize(size),
+                                ])
+            print(f"{set} images will be randomly scaled with range ({min_rand_scaling}, 1)")
+        else:
+            self.random_scaler = None
 
     def __len__(self):
         return self._length
@@ -220,6 +234,17 @@ class PersonalizedBase(Dataset):
             image = image.resize((self.size, self.size), resample=self.interpolation)
 
         image = self.flip(image)
+        if self.random_scaler:
+            image_tensor = torch.tensor(np.array(image).astype(np.uint8)).permute(2, 0, 1)
+            mask = torch.ones_like(image_tensor[0:1])
+            image_ext = torch.cat([image_tensor, mask], dim=0)
+            image_ext = self.random_scaler(image_ext)
+            image_tensor = image_ext[:3].permute(1, 2, 0).numpy().astype(np.uint8)
+            mask = image_ext[3].numpy().astype(np.uint8)
+            # mask[mask > 0] = 1. No need to do thresholding, as mask is uint8.
+            example["mask"]  = mask
+
         image = np.array(image).astype(np.uint8)
         example["image"] = (image / 127.5 - 1.0).astype(np.float32)
         return example
+    

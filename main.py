@@ -208,8 +208,13 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--composition_delta_reg_weight",
         type=float, default=-1,
         help="Composition delta regularization weight")
-    return parser
 
+    # min_rand_scaling
+    parser.add_argument("--min_rand_scaling",
+                        type=float, default=-1, 
+                        help="Minimum random scaling factor of training images (default: -1, disabled)")
+
+    return parser
 
 def nondefault_trainer_args(opt):
     parser = argparse.ArgumentParser()
@@ -665,6 +670,9 @@ if __name__ == "__main__":
         if opt.cls_token is not None:
             config.data.params.train.params.cls_token      = opt.cls_token
             config.data.params.validation.params.cls_token = opt.cls_token
+
+        if opt.min_rand_scaling is not None:
+            config.data.params.train.params.min_rand_scaling = opt.min_rand_scaling
 
         if opt.layerwise_lora_rank_token_ratio > 0:
             config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \

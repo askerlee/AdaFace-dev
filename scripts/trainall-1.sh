@@ -1,5 +1,8 @@
 GPU="1"
-EXTRA_ARGS=""
+EXTRA_ARGS="--random_scaling 0.7"
+
+python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n michelleyeoh-lasr --gpus $GPU, --data_root data/michelleyeoh/  --placeholder_string "z" --no-test  --init_word "asian woman" --init_word_weights 1 2 $EXTRA_ARGS
+
 python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n monstertruck-lasr --gpus $GPU, --data_root data/princessmonstertruck/  --placeholder_string "y" --no-test  --init_word "black persian cat" --init_word_weights 1 1 3 $EXTRA_ARGS
 
 python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n sandraoh-lasr --gpus $GPU, --data_root data_unused/sandraoh/  --placeholder_string "z" --no-test  --init_word "asian woman" --init_word_weights 1 2 $EXTRA_ARGS

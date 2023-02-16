@@ -7,8 +7,9 @@ https://github.com/CompVis/taming-transformers
 """
 
 import torch
-
 import torch.nn as nn
+import torch.nn.functional as F
+
 import os
 import numpy as np
 import pytorch_lightning as pl
@@ -983,7 +984,14 @@ class LatentDiffusion(DDPM):
         else:
             composition_delta_prompts = None
 
-        loss = self(x, c, composition_delta_prompts)
+        if 'mask' in batch:
+            mask = batch['mask']
+            mask = mask.unsqueeze(1).to(x.device)
+            mask = F.interpolate(mask, size=x.shape[-2:], mode='nearest')
+        else:
+            mask = None
+
+        loss = self(x, c, composition_delta_prompts, mask=mask, **kwargs)
         return loss
 
     # LatentDiffusion.forward() is only called during training.
@@ -1175,7 +1183,7 @@ class LatentDiffusion(DDPM):
         kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
         return mean_flat(kl_prior) / np.log(2.0)
 
-    def p_losses(self, x_start, cond, t, noise=None):
+    def p_losses(self, x_start, cond, t, noise=None, mask=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
         if self.use_lasr_embedding and self.do_lasr_comp_delta_reg:
@@ -1199,6 +1207,11 @@ class LatentDiffusion(DDPM):
             target = noise
         else:
             raise NotImplementedError()
+
+        # Only compute the loss on the masked region.
+        if mask is not None:
+            target = target * mask
+            model_output = model_output * mask
 
         loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
         loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
