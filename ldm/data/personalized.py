@@ -241,9 +241,10 @@ class PersonalizedBase(Dataset):
             # image_ext: [4, 512, 512]
             image_ext = self.random_scaler(image_ext)
             # After random scaling, the valid area is only a sub-region at the center of the image.
-            # 50% chance to randomly roll towards right and bottom (), 
-            # and 50% chance to keep the valid area at the center.
-            if random.random() < 0.5:
+            # NOTE: disable random shifting, as it seems to hurt.
+            # ??% chance to randomly roll towards right and bottom (), 
+            # and ??% chance to keep the valid area at the center.
+            if random.random() < 0: #0.5:
                 # count number of empty lines at the left, right, top, bottom edges of image_ext.
                 # mask = image_ext[3] is uint8, so all pixels >= 0. 
                 # sum(dim=1).cumsum() == 0 means this is an empty row at the top of the image.
