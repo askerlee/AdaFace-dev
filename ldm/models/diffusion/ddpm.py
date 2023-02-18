@@ -639,7 +639,7 @@ class LatentDiffusion(DDPM):
                     # for each layer into the cache. 
                     # The cache will be used in composition_delta_loss().
                     self.embedding_manager.init_lasr_embedding_cache()
-                    if self.do_lasr_comp_delta_reg:
+                    if self.do_lasr_comp_delta_reg and img_mask is not None:
                         # The image batch is repeated twice, so img_mask is also repeated twice.
                         img_mask = img_mask.repeat(2, 1, 1, 1)
                     self.embedding_manager.set_img_mask(img_mask)

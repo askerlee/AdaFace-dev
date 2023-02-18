@@ -101,7 +101,7 @@ class MaskedAvgPool2d(nn.Module):
     # x: [N, C, H, W], mask: [N, 1, H0, W0]. 
     # H, W: feature map size, H0, W0: original image size.
     # Return: [N, C]
-    def forward(self, x, mask):
+    def forward(self, x, mask=None):
         if mask is None:
             return self.avgpool(x).view(x.shape[0], -1)
         
@@ -353,7 +353,8 @@ class LASREmbedding(nn.Module):
     # time_emb: [B, 1280].
     def forward(self, layer_idx, layer_infeat, time_emb, img_mask=None):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
-
+        self.avgpool = MaskedAvgPool2d()
+        
         with torch.autocast(device_type=self.device_type, enabled=True):
             # basis_dyn_weight: [B, r] = [2, 12].
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
