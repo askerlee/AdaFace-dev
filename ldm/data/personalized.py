@@ -234,20 +234,22 @@ class PersonalizedBase(Dataset):
             image = image.resize((self.size, self.size), resample=self.interpolation)
 
         image = self.flip(image)
+        scale_p = 0.5
         # Do random scaling with 50% chance. Not to do it all the time, 
         # as it seems to hurt (maybe introduced domain gap between training and inference?)
         if self.random_scaler:
-            if random.random() < 0.5:
+            if random.random() < scale_p:
                 image_tensor = torch.tensor(np.array(image).astype(np.uint8)).permute(2, 0, 1)
                 mask = torch.ones_like(image_tensor[0:1])
                 image_ext = torch.cat([image_tensor, mask], dim=0)
                 # image_ext: [4, 512, 512]
                 image_ext = self.random_scaler(image_ext)
                 # After random scaling, the valid area is only a sub-region at the center of the image.
-                # NOTE: disable random shifting, as it seems to hurt.
+                # NOTE: random shifting DISABLED, as it seems to hurt.
                 # ??% chance to randomly roll towards right and bottom (), 
                 # and ??% chance to keep the valid area at the center.
-                if random.random() < 0: #0.5:
+                shift_p = 0     #0.5
+                if random.random() < shift_p:
                     # count number of empty lines at the left, right, top, bottom edges of image_ext.
                     # mask = image_ext[3] is uint8, so all pixels >= 0. 
                     # sum(dim=1).cumsum() == 0 means this is an empty row at the top of the image.

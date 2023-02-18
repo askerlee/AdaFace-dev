@@ -621,7 +621,7 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     # c: a batch of templates, ['an illustration of a dirty z', ...]
-    def get_learned_conditioning(self, c):
+    def get_learned_conditioning(self, c, img_mask=None):
         # print(c, id(self.cond_stage_model))
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
@@ -636,8 +636,13 @@ class LatentDiffusion(DDPM):
                     embedder = self.get_lasr_conditioning
                     # Initialize the lasr embedding cache, so that the subsequent calls to 
                     # EmbeddingManager.get_lasr_embedding() will store the lasr embedding 
-                    # for each layer into the cache.
+                    # for each layer into the cache. 
+                    # The cache will be used in composition_delta_loss().
                     self.embedding_manager.init_lasr_embedding_cache()
+                    if self.do_lasr_comp_delta_reg:
+                        # The image batch is repeated twice, so img_mask is also repeated twice.
+                        img_mask = img_mask.repeat(2, 1, 1, 1)
+                    self.embedding_manager.set_img_mask(img_mask)
                     c = (c, c_in, embedder)
             else:
                 c = self.cond_stage_model(c)
@@ -647,7 +652,8 @@ class LatentDiffusion(DDPM):
         return c
 
     # get_lasr_conditioning() is a callback function called iteratively by each layer in UNet
-    # It returns the lasr embedding for the current layer to UNet.
+    # It returns the conditioning embedding (lasr embedding & other token embeddings -> clip encoder) 
+    # for the current layer to UNet.
     def get_lasr_conditioning(self, c_in, layer_idx, layer_infeat, time_emb):
         # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
@@ -985,17 +991,17 @@ class LatentDiffusion(DDPM):
             composition_delta_prompts = None
 
         if 'mask' in batch:
-            mask = batch['mask']
-            mask = mask.unsqueeze(1).to(x.device)
-            mask = F.interpolate(mask, size=x.shape[-2:], mode='nearest')
+            img_mask = batch['mask']
+            img_mask = img_mask.unsqueeze(1).to(x.device)
+            img_mask = F.interpolate(img_mask, size=x.shape[-2:], mode='nearest')
         else:
-            mask = None
+            img_mask = None
 
-        loss = self(x, c, composition_delta_prompts, mask=mask, **kwargs)
+        loss = self(x, c, composition_delta_prompts, img_mask=img_mask, **kwargs)
         return loss
 
     # LatentDiffusion.forward() is only called during training.
-    def forward(self, x, c, composition_delta_prompts=None, *args, **kwargs):
+    def forward(self, x, c, composition_delta_prompts=None, img_mask=None, *args, **kwargs):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         if self.model.conditioning_key is not None:
             assert c is not None
@@ -1012,7 +1018,7 @@ class LatentDiffusion(DDPM):
                     c_delta = c + subj_prompt_comp + cls_prompt_single + cls_prompt_comp
                     # c_delta_static is a tuple: (c, c_in, embedder).
                     # *_static means static embeddings.
-                    c_delta_static = self.get_learned_conditioning(c_delta)
+                    c_delta_static = self.get_learned_conditioning(c_delta, img_mask=img_mask)
                     if self.use_lasr_embedding:
                         # c_real: [128, 77, 768]. 128 = 8 * 16. 
                         # 8 is the total number of prompts in c_delta. Each prompt is converted to 16 embeddings.
@@ -1045,7 +1051,7 @@ class LatentDiffusion(DDPM):
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
 
         # self.model (UNetModel) is called in p_losses().
-        return self.p_losses(x, c, t, *args, **kwargs)
+        return self.p_losses(x, c, t, img_mask=img_mask, *args, **kwargs)
 
     def _rescale_annotations(self, bboxes, crop_coordinates):  # TODO: move to dataset
         def rescale_bbox(bbox):
@@ -1183,7 +1189,7 @@ class LatentDiffusion(DDPM):
         kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
         return mean_flat(kl_prior) / np.log(2.0)
 
-    def p_losses(self, x_start, cond, t, noise=None, mask=None):
+    def p_losses(self, x_start, cond, t, noise=None, img_mask=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
         if self.use_lasr_embedding and self.do_lasr_comp_delta_reg:
@@ -1209,9 +1215,9 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError()
 
         # Only compute the loss on the masked region.
-        if mask is not None:
-            target = target * mask
-            model_output = model_output * mask
+        if img_mask is not None:
+            target       = target       * img_mask
+            model_output = model_output * img_mask
 
         loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
         loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})

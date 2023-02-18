@@ -92,7 +92,24 @@ class LNCat2(nn.Module):
         x1 = self.ln1(x1)
         x2 = self.ln2(x2)
         return torch.cat([x1, x2], dim=self.dim)
-    
+
+class MaskedAvgPool2d(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+
+    # x: [N, C, H, W], mask: [N, 1, H0, W0]. 
+    # H, W: feature map size, H0, W0: original image size.
+    # Return: [N, C]
+    def forward(self, x, mask):
+        if mask is None:
+            return self.avgpool(x).view(x.shape[0], -1)
+        
+        mask = F.interpolate(mask, size=x.shape[2:], mode='nearest')
+        x = x * mask
+        x = x.sum(dim=(2,3)) / mask.sum(dim=(2,3))
+        return x
+        
 class StaticLayerwiseEmbedding(nn.Module):
     # dim1: 16 (9 layers out of 25 of UNet are skipped), dim2: 768, r: 12.
     # If using init_vecs, init_noise_stds are applied to basis_rand_weights. 
@@ -295,7 +312,7 @@ class LASREmbedding(nn.Module):
         self.basis_vecs.data[-1] = 0
 
         self.infeat_dims = list(infeat_dims)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.avgpool = MaskedAvgPool2d() # nn.AdaptiveAvgPool2d((1, 1))
 
         # First TD_frac of dimensions of the time embeddings will be used.
         self.TD_frac = 0.5
@@ -334,25 +351,25 @@ class LASREmbedding(nn.Module):
     # layer_infeat: 4D image feature tensor [B, C, H, W].
     # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
     # time_emb: [B, 1280].
-    def forward(self, layer_idx, layer_infeat, time_emb):
+    def forward(self, layer_idx, layer_infeat, time_emb, img_mask=None):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
 
         with torch.autocast(device_type=self.device_type, enabled=True):
             # basis_dyn_weight: [B, r] = [2, 12].
-            # We do not BP into the UNet. So cut off the gradient flow here.
-            # infeat_pooled: [B, D_layer]
-            infeat_pooled    = self.avgpool(layer_infeat).squeeze(-1).squeeze(-1).detach()
+            # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
+            # infeat_pooled: [B, C_layer]
+            infeat_pooled    = self.avgpool(layer_infeat, img_mask).detach()
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
-            # Only use the first D dimensions of the time embedding, 
-            # as the time embedding is highly redundant, and the first D dimensions are sufficient
+            # Only use the first TD dimensions of the time embedding, 
+            # as the time embedding is highly redundant, and the first TD dimensions are sufficient
             # to capture the temporal information.
-            # Note to take the first D dimensions, instead of the last D dimensions,
-            # as the leading dimensions are sensitive to time change, 
+            # Note to take the first TD dimensions, instead of the last TD dimensions,
+            # as the leading dimensions are most sensitive to time change, 
             # and the last dimensions tend to be the same for all time steps.
-            # Never allow time embeddings dominate image features infeat.
+            # TD is C_layer/2, so that the time embeddings won't dominate the image features infeat_pooled.
             TD = self.TDs[emb_idx]
+            # cat(ln(infeat_pooled), ln(time_emb)) as the input features.
             infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled, time_emb[:, :TD])
-            # infeat_time      = torch.cat([infeat_pooled, time_emb[:, :TD]], dim=1)
             basis_dyn_weight = self.layer_maps[emb_idx](infeat_time)
             # Separate bias and bias_scales, for easier regularization on their scales.
             # bias: [1, 768] * [1, 1] = [1, 768].
@@ -529,6 +546,7 @@ class EmbeddingManager(nn.Module):
             self.string_to_lasr_embedder_dict[placeholder_string] = token_lasr_embedder
 
             self.clear_lasr_layer_info()
+            self.img_mask = None
             self.layer_idx2emb_idx = layer_idx2emb_idx
             self.loss_call_count = 0
             # Store the embedder to compute the delta loss.
@@ -683,7 +701,7 @@ class EmbeddingManager(nn.Module):
 
             # Generate the actual placeholder_embedding on the fly.
             # [B=2, 768]
-            placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat, time_emb)
+            placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat, time_emb, self.img_mask)
             # embedded_text[placeholder_idx] indexes the embedding at each instance in the batch.
             # embedded_text[placeholder_idx]: [2, 768].  placeholder_embedding: [2, 768].
             # Sometimes (e.g. during inference, some instances contain the placeholder token but
@@ -723,6 +741,9 @@ class EmbeddingManager(nn.Module):
         
     def clear_lasr_embedding_cache(self):
         self.lasr_embeddings = None
+
+    def set_img_mask(self, img_mask):
+        self.img_mask = img_mask
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, ckpt_path):
