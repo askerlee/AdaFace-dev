@@ -1005,9 +1005,12 @@ class LatentDiffusion(DDPM):
             else:
                 subj_prompt_comps2 = []
                 cls_prompt_comp2 = []
-                # Interlace the list of composition prompt lists into one list.
-                # Do not simply concatenate. Interlacing makes it easy to choose the first 
-                # B prompts (just as for a normal batch).
+                # Suppose R = num_composition_samples_per_batch.
+                # subj_prompt_comps, cls_prompt_comps are like [ (p1_1,..., p1_R), ..., (pB_1,..., pB_R) ].
+                # Interlace the list of composition prompt lists into one list:
+                # [ p1_1, p2_1, ..., pB_1, p1_2, p2_2, ..., pB_2, ..., p1_R, p2_R, ..., pB_R ].
+                # Interlacing makes it easy to choose the first B prompts (just as for a normal batch). 
+                # Do not simply concatenate along B.
                 for prompts in zip(*subj_prompt_comps):
                     subj_prompt_comps2 += prompts
                 for prompts in zip(*cls_prompt_comps):
@@ -1059,14 +1062,29 @@ class LatentDiffusion(DDPM):
                             # and subj_prompt_comp, as the corresponding LASR embeddings are dynamically generated.
                             # cls_prompt_single and cls_prompt_comp are static, so no need to 
                             # be fed to UNet.
+                            # num_composition_samples_per_batch = 1.
+                            # subj_prompt_comps, cls_prompt_comps are: [ p1_1, p2_1, ..., pB_1 ].
+                            # c_in is the concatenation of
+                            # (real c_in, subj_prompt_comps, cls_prompt_single, cls_prompt_comps).
+                            # Each prompt is converted to 16 layerwise static embeddings in c_real.
+                            # So c_real[:N_EMBEDS*2] is the 2*B*16 embeddings of (real c_in, subj_prompt_comps), 
+                            # and c_in[:N_INST*2] is (real c_in, subj_prompt_comps).
                             c = (c_real[:N_EMBEDS*2], c_in[:N_INST*2], embedder)
                         else:
                             # Don't do lasr composition delta loss in this iteration. 
                             # So restore the original c.
+                            # Suppose R = num_composition_samples_per_batch.
+                            # subj_prompt_comps, cls_prompt_comps are:
+                            # [ p1_1, p2_1, ..., pB_1, p1_2, p2_2, ..., pB_2, ..., p1_R, p2_R, ..., pB_R ].
+                            # c_in is the concatenation of 
+                            # (real c_in * R, subj_prompt_comps, cls_prompt_single, cls_prompt_comps).
+                            # Each prompt is converted to 16 layerwise static embeddings in c_real.
+                            # So c_real[:N_EMBEDS] is the B*16 embeddings of real c_in,
+                            # and c_in[:N_INST] is the real c_in.
                             c = (c_real[:N_EMBEDS], c_in[:N_INST], embedder)
+
                         self.c_delta_static = c_real
                     else:
-                        breakpoint()
                         c = c_delta_static[:N_EMBEDS]
                         self.c_delta_static = c_delta_static
 

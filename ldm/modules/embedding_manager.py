@@ -984,6 +984,8 @@ class EmbeddingManager(nn.Module):
         # every composition_delta_reg_iter_gap iterations. So boost the loss 
         # by composition_delta_reg_iter_gap times.
         lasr_comp_loss_boost_ratio = self.composition_delta_reg_iter_gap
+        # If do_lasr_comp_delta_reg,     BS = 2.
+        # If not do_lasr_comp_delta_reg, BS = 2 * num_composition_samples_per_batch = 4.
         BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
         # static_embeddings: [8, 16, 77, 768]
         static_embeddings = static_embeddings.view(BS * 4, self.num_unet_layers, -1, static_embeddings.shape[-1])
