@@ -984,9 +984,39 @@ class LatentDiffusion(DDPM):
     #                                    'a depiction of a john kicking a punching bag']
     #          'image':   [2, 512, 512, 3] }
     def shared_step(self, batch, **kwargs):
+        # c = batch["caption"]
         x, c = self.get_input(batch, self.first_stage_key)
         if self.do_static_comp_delta_reg:
-            composition_delta_prompts = (batch['subj_prompt_comp'], batch['cls_prompt_single'], batch['cls_prompt_comp'])
+            subj_prompt_comps = []
+            for prompt_comps in batch['subj_prompt_comp']:
+                subj_prompt_comps.append(prompt_comps.split("|"))
+            cls_prompt_comps = []
+            for prompt_comps in batch['cls_prompt_comp']:
+                cls_prompt_comps.append(prompt_comps.split("|"))
+            cls_prompt_single = batch['cls_prompt_single']
+            REPEATS = len(subj_prompt_comps[0])
+            if REPEATS == 1 or self.do_lasr_comp_delta_reg:
+                # This iter computes lasr composition delta loss. 
+                # So only use the first of the composition prompts 
+                # (otherwise it consumes more than twice of the RAM).
+                subj_prompt_comp = [ prompts[0] for prompts in subj_prompt_comps ]
+                cls_prompt_comp  = [ prompts[0] for prompts in cls_prompt_comps ]
+                composition_delta_prompts = (subj_prompt_comp, cls_prompt_single, cls_prompt_comp)
+            else:
+                subj_prompt_comps2 = []
+                cls_prompt_comp2 = []
+                # Interlace the list of composition prompt lists into one list.
+                # Do not simply concatenate. Interlacing makes it easy to choose the first 
+                # B prompts (just as for a normal batch).
+                for prompts in zip(*subj_prompt_comps):
+                    subj_prompt_comps2 += prompts
+                for prompts in zip(*cls_prompt_comps):
+                    cls_prompt_comp2 += prompts
+                subj_prompt_comps = subj_prompt_comps2
+                cls_prompt_comps  = cls_prompt_comp2
+                c = c * REPEATS
+                cls_prompt_single = cls_prompt_single * REPEATS
+                composition_delta_prompts = (subj_prompt_comps, cls_prompt_single, cls_prompt_comps)
         else:
             composition_delta_prompts = None
 
@@ -1010,12 +1040,12 @@ class LatentDiffusion(DDPM):
             if self.cond_stage_trainable:
                 # c: ['an illustration of a dirty z', 'an illustration of the cool z']
                 if self.do_static_comp_delta_reg:
-                    subj_prompt_comp, cls_prompt_single, cls_prompt_comp = composition_delta_prompts
+                    subj_prompt_comps, cls_prompt_single, cls_prompt_comps = composition_delta_prompts
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
-                    N_INST   = len(c)
+                    N_INST   = len(x)
                     N_EMBEDS = N_INST * N_LAYERS
                     # c == subj_prompt_single.
-                    c_delta = c + subj_prompt_comp + cls_prompt_single + cls_prompt_comp
+                    c_delta = c + subj_prompt_comps + cls_prompt_single + cls_prompt_comps
                     # c_delta_static is a tuple: (c, c_in, embedder).
                     # *_static means static embeddings.
                     c_delta_static = self.get_learned_conditioning(c_delta, img_mask=img_mask)
@@ -1036,6 +1066,7 @@ class LatentDiffusion(DDPM):
                             c = (c_real[:N_EMBEDS], c_in[:N_INST], embedder)
                         self.c_delta_static = c_real
                     else:
+                        breakpoint()
                         c = c_delta_static[:N_EMBEDS]
                         self.c_delta_static = c_delta_static
 

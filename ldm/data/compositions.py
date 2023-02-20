@@ -34,8 +34,8 @@ composition_regexs = \
   "in (a car|a meeting|a class|a dress|a suit|a tshirt|a stormtrooper costume|a superman costume|a wedding|an elevator|a dinner|a concert|a gym|a library|a park|a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
   "at (a beach|a table|a park|a concert|a gym|a library|a mall|a movie theater|a hotel room|a theme park)",
   "besides (a friend|a tree|a car|a river|a lake|a mountain|an ocean|a playground|a statue)",
-  "in (cartoon|animation|anime|comic book|steampunk|oil on canvas|sci-fi movie) style",
-  ", (concept art|trending in artstation|hyper realistic|vivid colors|realistic painting|character design|anime sketch)",
+  "in (cartoon|animation|anime|comic book|steampunk|oil on canvas|sci-fi movie|scuplture|bronze sculpture) style",
+  ", (concept art|realistic painting|character design|anime sketch|trending in artstation|hyper realistic|vivid colors)",
 ]
 
 def sample_compositions(N):

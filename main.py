@@ -213,7 +213,10 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--min_rand_scaling",
                         type=float, default=-1, 
                         help="Minimum random scaling factor of training images (default: -1, disabled)")
-
+    # num_composition_samples_per_batch
+    parser.add_argument("--num_composition_samples_per_batch",
+                        type=int, default=-1,
+                        help="Number of composition samples in each batch (default: 1)")
     return parser
 
 def nondefault_trainer_args(opt):
@@ -671,6 +674,7 @@ if __name__ == "__main__":
             config.data.params.train.params.cls_token      = opt.cls_token
             config.data.params.validation.params.cls_token = opt.cls_token
 
+        config.data.params.train.params.num_composition_samples_per_batch = opt.num_composition_samples_per_batch
         if opt.min_rand_scaling is not None:
             config.data.params.train.params.min_rand_scaling = opt.min_rand_scaling
 

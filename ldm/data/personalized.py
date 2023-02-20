@@ -148,6 +148,7 @@ class PersonalizedBase(Dataset):
                  center_crop=False,
                  mixing_prob=0.25,
                  coarse_class_text=None,
+                 num_composition_samples_per_batch=1,
                  ):
 
         self.data_root = data_root
@@ -190,6 +191,8 @@ class PersonalizedBase(Dataset):
         else:
             self.random_scaler = None
 
+        self.num_composition_samples_per_batch = num_composition_samples_per_batch
+
     def __len__(self):
         return self._length
 
@@ -211,19 +214,29 @@ class PersonalizedBase(Dataset):
             template = random.choice(imagenet_templates_small)
             subj_prompt_single  = template.format(placeholder_string)
             cls_prompt_single   = template.format(self.cls_token)
-            composition_partial = sample_compositions(1)[0]
-            subj_prompt_comp    = subj_prompt_single + " " + composition_partial
-            cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
+
+            subj_prompt_comps = []
+            cls_prompt_comps  = []
+            for i in range(self.num_composition_samples_per_batch):
+                composition_partial = sample_compositions(1)[0]
+                subj_prompt_comp    = subj_prompt_single + " " + composition_partial
+                cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
+                subj_prompt_comps.append(subj_prompt_comp)
+                cls_prompt_comps.append(cls_prompt_comp)
+            
+            # Will split by "|" in the ddpm trainer.
+            subj_prompt_comp = "|".join(subj_prompt_comps)
+            cls_prompt_comp  = "|".join(cls_prompt_comps)
+            example["cls_prompt_single"]    = cls_prompt_single
+            example["subj_prompt_comp"]     = subj_prompt_comp
+            example["cls_prompt_comp"]      = cls_prompt_comp
 
         example["caption"]              = subj_prompt_single
-        example["subj_prompt_comp"]     = subj_prompt_comp
-        example["cls_prompt_comp"]      = cls_prompt_comp
-        example["cls_prompt_single"]    = cls_prompt_single
 
         # default to score-sde preprocessing
         img = np.array(image).astype(np.uint8)
         
-        if self.center_crop:
+        if self.center_crop:        # default: False
             crop = min(img.shape[0], img.shape[1])
             h, w, = img.shape[0], img.shape[1]
             img = img[(h - crop) // 2:(h + crop) // 2,
