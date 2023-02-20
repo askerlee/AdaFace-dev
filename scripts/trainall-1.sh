@@ -1,5 +1,5 @@
 GPU="1"
-EXTRA_ARGS="--min_rand_scaling 0.7"
+EXTRA_ARGS="--num_composition_samples_per_batch 2"
 
 python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n michelleyeoh-lasr --gpus $GPU, --data_root data/michelleyeoh/  --placeholder_string "z" --no-test  --init_word "asian woman" --init_word_weights 1 2 $EXTRA_ARGS
 
