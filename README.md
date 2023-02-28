@@ -3,9 +3,8 @@
 > Layerwise Adaptive Subject Representations for Diffusion Models
 >
 > Shaohua Li, Xiuchao Sui, Daquan Zhou, Menghan Zhou, Hong Yang, Weide Liu, Xinxing Xu, Yong Liu, Rick Goh
-> 
-
-> Abstract: A subject is a particular person, animal or object. This paper is about subject representation learning for diffusion models, to control diffusion models for subject-driven generation, i.e., rendering a specific subject or in a custom style in *novel contexts*. We propose three criteria for an ideal subject-driven generation method: 1) capture sufficient details of the subject with authenticity to retain its identity, 2) avoid forgetting existing concepts, and 3) be amenable to prompt compositions, such as modifying subject attributes or incorporating extra objects. The existing methods have yet to meet the three objectives satisfactorily. Here we propose Layerwise Adaptive Subject Representations (LASR), which for different layers of the diffusion model, generates a subject embedding specific to the dynamic layer features, with a layer-specific neural network. LASR is able to control the model precisely for generating more authentic images. Operating in the input embedding space, LASR naturally avoids forgetting of other concepts. The prompt composition ability is well maintained through a composition delta loss. Experiments on a set of few-shot subject images show that LASR is advantageous on all the three criteria than the representative subject-driven methods, Textual Inversion and DreamBooth.
+>
+> Abstract: A subject is a particular person, animal or object. This paper is about subject representation learning for diffusion models, to control diffusion models for subject-driven generation, i.e., rendering a specific subject or in a custom style in *novel contexts*. We propose three criteria for an ideal subject-driven generation method: 1) capture sufficient details of the subject with authenticity to retain its identity, 2) avoid forgetting existing concepts, and 3) be amenable to prompt compositions, such as modifying subject attributes or incorporating extra objects. The existing methods have yet to meet the three objectives satisfactorily. Here we propose Layerwise Adaptive Subject Representations (LASR), which for different layers of the diffusion model, generates a subject embedding specific to the dynamic layer features, with a layer-specific neural network. LASR is able to control the model precisely for generating more authentic images. Operating in the input embedding space, LASR naturally avoids forgetting of other concepts. In addition, we propose a composition delta loss to well maintain the prompt composition ability under subject guidance. Experiments on a set of few-shot subject images validate that LASR is advantageous on all the three criteria than the representative subject-driven methods, Textual Inversion and DreamBooth.
 > 
 
 ## Description
@@ -14,21 +13,20 @@ This repo contains the official code, data and sample generations for our LASR p
 
 ## Setup
 
-Our code builds on, and shares requirements with [Latent Diffusion Models (LDM)](https://github.com/CompVis/latent-diffusion). To set up their environment, please run:
+Our code builds on, and shares requirements with [Latent Diffusion Models (LDM)](https://github.com/CompVis/latent-diffusion). To set up the environment using conda, please run:
 
 ```bash
 conda env create -f environment.yaml
 conda activate ldm
 ```
 
-You will also need the official LDM text-to-image checkpoint, available through the [LDM project page](https://github.com/CompVis/latent-diffusion).
-
-Currently, the model can be downloaded by running:
+To set up the the environment using pip, please run
 
 ```bash
-mkdir -p models/ldm/text2img-large/
-wget -O models/ldm/text2img-large/model.ckpt https://ommer-lab.com/files/latent-diffusion/nitro/txt2img-f8-large/model.ckpt
+pip install -r requirements.txt
 ```
+
+You will also need the official Stable Diffusion downloadable at [https://huggingface.co/CompVis/stable-diffusion-v1-4](https://huggingface.co/CompVis/stable-diffusion-v1-4).
 
 ## Usage
 
@@ -42,18 +40,17 @@ python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml
          -n <run_name> --gpus 0, --no-test
          --data_root data/subject_images/
          --placeholder_string <placeholder_string>
-         --init_word "word1 word2..." 
-         --init_word_weights w1 w2...
+         --init_word "word1 word2..." --init_word_weights w1 w2...
 ```
 
 Example:
 
-```bash
+```jsx
 python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml 
-         -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt 
-         -n alexachung-lasr --gpus 0, --no-test  
+         -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt          
+         -n alexachung-lasr --gpus 0, --no-test 
          --data_root data/alexachung/  
-         --placeholder_string "z" 
+         --placeholder_string "z"  
          --init_word "young girl woman" 
          --init_word_weights 1 2 2
 ```
@@ -78,10 +75,10 @@ To generate new images of the learned concept, run:
 
 ```bash
 python scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-lasr.yaml --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --ddim_eta 0.0
---n_samples 8 --ddim_steps 100 --gpu 0 
---embedding_paths logs/<run_name1>/checkpoints/embeddings_gs-4000.pt 
-                 logs/<run_name2>/checkpoints/embeddings_gs-4000.pt
---prompt "text containing the subject placeholder(s)" --scale 5 --n_iter 2
+  --n_samples 8 --ddim_steps 100 --gpu 0 
+  --embedding_paths logs/<run_name1>/checkpoints/embeddings_gs-4000.pt 
+                    logs/<run_name2>/checkpoints/embeddings_gs-4000.pt
+  --prompt "text containing the subject placeholder(s)" --scale 5 --n_iter 2
 ```
 
 where multiple embedding paths can be specified for multi-subject composition. The prompt contains one or more placeholder tokens corresponding to the embedding checkpoints.
@@ -92,8 +89,8 @@ Example:
 python3 scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-lasr.yaml --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt 
 --ddim_eta 0.0 --n_samples 8 --ddim_teps 100 --gpu 0
 --embedding_paths 
-logs/donnieyen2023-02-20T23-52-39_donnieyen-lasr/checkpoints/embeddings_gs-4000.pt 
-logs/lilbub2023-02-21T08-18-18_lilbub-lasr/checkpoints/embeddings_gs-4000.pt 
+   logs/donnieyen2023-02-20T23-52-39_donnieyen-lasr/checkpoints/embeddings_gs-4000.pt 
+   logs/lilbub2023-02-21T08-18-18_lilbub-lasr/checkpoints/embeddings_gs-4000.pt 
 --prompt "a z hugging a y" --scale 5 --n_iter 2
 ```
 

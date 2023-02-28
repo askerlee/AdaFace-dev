@@ -7,3 +7,4 @@ __pycache__/
 /outputs/*
 /models/stable-diffusion-v-1-4-original
 *.txt
+!requirements.txt
