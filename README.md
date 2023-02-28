@@ -71,7 +71,7 @@ Embeddings and output images will be saved in the log/<run_name> directory.
 
 ### Generation
 
-To generate new images of the learned concept, run:
+To generate new images of the learned subject(s), run:
 
 ```bash
 python scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-lasr.yaml --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --ddim_eta 0.0
