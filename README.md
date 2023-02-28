@@ -1,51 +1,30 @@
-# An Image is Worth One Word: Personalizing Text-to-Image Generation using Textual Inversion
+# Layerwise Adaptive Subject Representations for Diffusion Models
 
-[![arXiv](https://img.shields.io/badge/arXiv-2208.01618-b31b1b.svg)](https://arxiv.org/abs/2208.01618)
+> Layerwise Adaptive Subject Representations for Diffusion Models
+Shaohua Li, Xiuchao Sui, Daquan Zhou, Menghan Zhou, Hong Yang, Weide Liu, Xinxing Xu, Yong Liu, Rick Goh
+> 
 
-[[Project Website](https://textual-inversion.github.io/)]
-
-> **An Image is Worth One Word: Personalizing Text-to-Image Generation using Textual Inversion**<br>
-> Rinon Gal<sup>1,2</sup>, Yuval Alaluf<sup>1</sup>, Yuval Atzmon<sup>2</sup>, Or Patashnik<sup>1</sup>, Amit H. Bermano<sup>1</sup>, Gal Chechik<sup>2</sup>, Daniel Cohen-Or<sup>1</sup> <br>
-> <sup>1</sup>Tel Aviv University, <sup>2</sup>NVIDIA
-
->**Abstract**: <br>
-> Text-to-image models offer unprecedented freedom to guide creation through natural language.
-  Yet, it is unclear how such freedom can be exercised to generate images of specific unique concepts, modify their appearance, or compose them in new roles and novel scenes.
-  In other words, we ask: how can we use language-guided models to turn <i>our</i> cat into a painting, or imagine a new product based on <i>our</i> favorite toy?
-  Here we present a simple approach that allows such creative freedom.
-  Using only 3-5 images of a user-provided concept, like an object or a style, we learn to represent it through new "words" in the embedding space of a frozen text-to-image model.
-  These "words" can be composed into natural language sentences, guiding <i>personalized</i> creation in an intuitive way.
-  Notably, we find evidence that a <i>single</i> word embedding is sufficient for capturing unique and varied concepts.
-  We compare our approach to a wide range of baselines, and demonstrate that it can more faithfully portray the concepts across a range of applications and tasks.
+> Abstract: A subject is a particular person, animal or object. This paper is about subject representation learning for diffusion models, to control diffusion models for subject-driven generation, i.e., rendering a specific subject or in a custom style in *novel contexts*. We propose three criteria for an ideal subject-driven generation method: 1) capture sufficient details of the subject with authenticity to retain its identity, 2) avoid forgetting existing concepts, and 3) be amenable to prompt compositions, such as modifying subject attributes or incorporating extra objects. The existing methods have yet to meet the three objectives satisfactorily. Here we propose Layerwise Adaptive Subject Representations (LASR), which for different layers of the diffusion model, generates a subject embedding specific to the dynamic layer features, with a layer-specific neural network. LASR is able to control the model precisely for generating more authentic images. Operating in the input embedding space, LASR naturally avoids forgetting of other concepts. The prompt composition ability is well maintained through a composition delta loss. Experiments on a set of few-shot subject images show that LASR is advantageous on all the three criteria than the representative subject-driven methods, Textual Inversion and DreamBooth.
+> 
 
 ## Description
-This repo contains the official code, data and sample inversions for our Textual Inversion paper. 
 
-## Updates
-**29/08/2022** Merge embeddings now supports SD embeddings. Added SD pivotal tuning code (WIP), fixed training duration, checkpoint save iterations.
-**21/08/2022** Code released!
-
-## TODO:
-- [x] Release code!
-- [x] Optimize gradient storing / checkpointing. Memory requirements, training times reduced by ~55%
-- [x] Release data sets
-- [ ] Release pre-trained embeddings
-- [ ] Add Stable Diffusion support
+This repo contains the official code, data and sample generations for our LASR paper.
 
 ## Setup
 
 Our code builds on, and shares requirements with [Latent Diffusion Models (LDM)](https://github.com/CompVis/latent-diffusion). To set up their environment, please run:
 
-```
+```bash
 conda env create -f environment.yaml
 conda activate ldm
 ```
 
-You will also need the official LDM text-to-image checkpoint, available through the [LDM project page](https://github.com/CompVis/latent-diffusion). 
+You will also need the official LDM text-to-image checkpoint, available through the [LDM project page](https://github.com/CompVis/latent-diffusion).
 
 Currently, the model can be downloaded by running:
 
-```
+```bash
 mkdir -p models/ldm/text2img-large/
 wget -O models/ldm/text2img-large/model.ckpt https://ommer-lab.com/files/latent-diffusion/nitro/txt2img-f8-large/model.ckpt
 ```
@@ -56,74 +35,59 @@ wget -O models/ldm/text2img-large/model.ckpt https://ommer-lab.com/files/latent-
 
 To invert an image set, run:
 
+```bash
+python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml
+         -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt
+         -n <run_name> --gpus 0, --no-test
+         --data_root data/subject_images/
+         --placeholder_string <placeholder_string>
+         --init_word "word1 word2..." --init_word_weights w1 w2...
 ```
-python main.py --base configs/latent-diffusion/txt2img-1p4B-finetune.yaml 
-               -t 
-               --actual_resume /path/to/pretrained/model.ckpt 
-               -n <run_name> 
-               --gpus 0, 
-               --data_root /path/to/directory/with/images
-               --init_word <initialization_word>
+
+Example:
+
+```jsx
+python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n alexachung-lasr --gpus 0, --data_root data/alexachung/  --placeholder_string "z" --no-test  --init_word "young girl woman" --init_word_weights 1 2 2
 ```
 
-where the initialization word should be a single-token rough description of the object (e.g., 'toy', 'painting', 'sculpture'). If the input is comprised of more than a single token, you will be prompted to replace it.
+where `placeholder_string` is a chosen uncommonly used single-token, such as ‘z’, ‘y’.
 
-Please note that `init_word` is *not* the placeholder string that will later represent the concept. It is only used as a beggining point for the optimization scheme.
+`init_word` is a few words that roughly describe the subject (e.g., 'man', ‘girl’, ‘dog’). It is used to initialize the low-rank semantic space of the subject embeddings.
 
-In the paper, we use 5k training iterations. However, some concepts (particularly styles) can converge much faster.
+`init_word_weights` are the weights of each words in `init_word`. The number of weights are expected to be equal to the number of words. Intuitively, category words (”girl”, “man”, etc.) are given higher weights than modifier words (”young”, “chinese”, etc.).
 
-To run on multiple GPUs, provide a comma-delimited list of GPU indices to the --gpus argument (e.g., ``--gpus 0,3,7,8``)
+The number of training iterations is specified in `configs/stable-diffusion/v1-finetune-lasr.yaml`. We chose 4k training iterations.
 
-Embeddings and output images will be saved in the log directory.
+To run on multiple GPUs, provide a comma-delimited list of GPU indices to the –gpus argument (e.g., `--gpus 0,1`)
 
-See `configs/latent-diffusion/txt2img-1p4B-finetune.yaml` for more options, such as: changing the placeholder string which denotes the concept (defaults to "*"), changing the maximal number of training iterations, changing how often checkpoints are saved and more.
+Embeddings and output images will be saved in the log/<run_name> directory.
 
-**Important** All training set images should be upright. If you are using phone captured images, check the inputs_gs*.jpg files in the output image directory and make sure they are oriented correctly. Many phones capture images with a 90 degree rotation and denote this in the image metadata. Windows parses these correctly, but PIL does not. Hence you will need to correct them manually (e.g. by pasting them into paint and re-saving) or wait until we add metadata parsing.
+**Note**  All training set images should be upright, in square shapes, and clear (without obvious artifacts). Otherwise, the generated images will contain similar artifacts.
 
 ### Generation
 
 To generate new images of the learned concept, run:
-```
-python scripts/txt2img.py --ddim_eta 0.0 
-                          --n_samples 8 
-                          --n_iter 2 
-                          --scale 10.0 
-                          --ddim_steps 50 
-                          --embedding_path /path/to/logs/trained_model/checkpoints/embeddings_gs-5049.pt 
-                          --ckpt_path /path/to/pretrained/model.ckpt 
-                          --prompt "a photo of *"
+
+```bash
+python scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-lasr.yaml --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --ddim_eta 0.0
+--n_samples 8 --ddim_steps 100 --gpu 0 
+--embedding_paths logs/<run_name1>/checkpoints/embeddings_gs-4000.pt 
+                 logs/<run_name2>/checkpoints/embeddings_gs-4000.pt
+--prompt "text containing the subject placeholder(s)" --scale 5 --n_iter 2
 ```
 
-where * is the placeholder string used during inversion.
+where multiple embedding paths can be specified for multi-subject composition. The prompt contains one or more placeholder tokens corresponding to the embedding checkpoints.
 
-### Merging Checkpoints
+Example:
 
-LDM embedding checkpoints can be merged into a single file by running:
-
+```bash
+python3 scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-lasr.yaml --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt 
+--ddim_eta 0.0 --n_samples 8 --ddim_teps 100 --gpu 0
+--embedding_paths 
+logs/donnieyen2023-02-20T23-52-39_donnieyen-lasr/checkpoints/embeddings_gs-4000.pt 
+logs/lilbub2023-02-21T08-18-18_lilbub-lasr/checkpoints/embeddings_gs-4000.pt 
+--prompt "a z hugging a y" --scale 5 --n_iter 2
 ```
-python merge_embeddings.py 
---manager_ckpts /path/to/first/embedding.pt /path/to/second/embedding.pt [...]
---output_path /path/to/output/embedding.pt
-```
-
-For SD embeddings, simply add the flag: `-sd` or `--stable_diffusion`.
-
-If the checkpoints contain conflicting placeholder strings, you will be prompted to select new placeholders. The merged checkpoint can later be used to prompt multiple concepts at once ("A photo of * in the style of @").
-
-### Pretrained Models / Data
-
-Datasets which appear in the paper are being uploaded [here](https://drive.google.com/drive/folders/1d2UXkX0GWM-4qUwThjNhFIPP7S6WUbQJ). Some sets are unavailable due to image ownership. We will upload more as we recieve permissions to do so.
-
-Pretained models coming soon.
-
-## Stable Diffusion
-
-Stable Diffusion support is a work in progress and will be completed soon™.
-
-## Tips and Tricks
-- Adding "a photo of" to the prompt usually results in better target consistency.
-- Results can be seed sensititve. If you're unsatisfied with the model, try re-inverting with a new seed (by adding `--seed <#>` to the prompt).
-
 
 ## Citation
 
@@ -131,21 +95,21 @@ If you make use of our work, please cite our paper:
 
 ```
 @misc{gal2022textual,
-      doi = {10.48550/ARXIV.2208.01618},
-      url = {https://arxiv.org/abs/2208.01618},
-      author = {Gal, Rinon and Alaluf, Yuval and Atzmon, Yuval and Patashnik, Or and Bermano, Amit H. and Chechik, Gal and Cohen-Or, Daniel},
-      title = {An Image is Worth One Word: Personalizing Text-to-Image Generation using Textual Inversion},
+      url = {https://arxiv.org/abs/xxxx.xxxx},
+      author = {Li, Shaohua and Sui, Xiuchao and Zhou, Daquan and Zhou, Menghan and Yang, Hong and Liu, Weide and Xu, Xinxing and Liu, Yong and Goh, Rick},
+      title = {Layerwise Adaptive Subject Representations for Diffusion Models},
       publisher = {arXiv},
-      year = {2022},
+      year = {2023},
       primaryClass={cs.CV}
 }
 ```
 
 ## Results
-Here are some sample results. Please visit our [project page](https://textual-inversion.github.io/) or read our paper for more!
 
-![](img/teaser.jpg)
+Here are some sample results.
 
-![](img/samples.jpg)
+![https://www.notion.soimg/teaser.jpg](https://www.notion.soimg/teaser.jpg)
 
-![](img/style.jpg)
+![https://www.notion.soimg/samples.jpg](https://www.notion.soimg/samples.jpg)
+
+![https://www.notion.soimg/style.jpg](https://www.notion.soimg/style.jpg)
