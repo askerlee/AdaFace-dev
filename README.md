@@ -1,7 +1,8 @@
 # Layerwise Adaptive Subject Representations for Diffusion Models
 
 > Layerwise Adaptive Subject Representations for Diffusion Models
-Shaohua Li, Xiuchao Sui, Daquan Zhou, Menghan Zhou, Hong Yang, Weide Liu, Xinxing Xu, Yong Liu, Rick Goh
+>
+> Shaohua Li, Xiuchao Sui, Daquan Zhou, Menghan Zhou, Hong Yang, Weide Liu, Xinxing Xu, Yong Liu, Rick Goh
 > 
 
 > Abstract: A subject is a particular person, animal or object. This paper is about subject representation learning for diffusion models, to control diffusion models for subject-driven generation, i.e., rendering a specific subject or in a custom style in *novel contexts*. We propose three criteria for an ideal subject-driven generation method: 1) capture sufficient details of the subject with authenticity to retain its identity, 2) avoid forgetting existing concepts, and 3) be amenable to prompt compositions, such as modifying subject attributes or incorporating extra objects. The existing methods have yet to meet the three objectives satisfactorily. Here we propose Layerwise Adaptive Subject Representations (LASR), which for different layers of the diffusion model, generates a subject embedding specific to the dynamic layer features, with a layer-specific neural network. LASR is able to control the model precisely for generating more authentic images. Operating in the input embedding space, LASR naturally avoids forgetting of other concepts. The prompt composition ability is well maintained through a composition delta loss. Experiments on a set of few-shot subject images show that LASR is advantageous on all the three criteria than the representative subject-driven methods, Textual Inversion and DreamBooth.
@@ -41,13 +42,20 @@ python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml
          -n <run_name> --gpus 0, --no-test
          --data_root data/subject_images/
          --placeholder_string <placeholder_string>
-         --init_word "word1 word2..." --init_word_weights w1 w2...
+         --init_word "word1 word2..." 
+         --init_word_weights w1 w2...
 ```
 
 Example:
 
-```jsx
-python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n alexachung-lasr --gpus 0, --data_root data/alexachung/  --placeholder_string "z" --no-test  --init_word "young girl woman" --init_word_weights 1 2 2
+```bash
+python3 main.py --base configs/stable-diffusion/v1-finetune-lasr.yaml 
+         -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt 
+         -n alexachung-lasr --gpus 0, --no-test  
+         --data_root data/alexachung/  
+         --placeholder_string "z" 
+         --init_word "young girl woman" 
+         --init_word_weights 1 2 2
 ```
 
 where `placeholder_string` is a chosen uncommonly used single-token, such as ‘z’, ‘y’.
