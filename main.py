@@ -213,10 +213,10 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--min_rand_scaling",
                         type=float, default=0.7, 
                         help="Minimum random scaling factor of training images (set to -1 to disable)")
-    # num_composition_samples_per_batch
+    # num_composition_samples_per_batch: a value > 1 leads to better performance on prompt compositions
     parser.add_argument("--num_composition_samples_per_batch",
-                        type=int, default=1,
-                        help="Number of composition samples in each batch (default: 1)")
+                        type=int, default=2,
+                        help="Number of composition samples in each batch (default: 2)")
     return parser
 
 def nondefault_trainer_args(opt):

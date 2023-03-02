@@ -996,9 +996,9 @@ class LatentDiffusion(DDPM):
             cls_prompt_single = batch['cls_prompt_single']
             REPEATS = len(subj_prompt_comps[0])
             if REPEATS == 1 or self.do_lasr_comp_delta_reg:
-                # This iter computes lasr composition delta loss. 
-                # So only use the first of the composition prompts 
-                # (otherwise it consumes more than twice of the RAM).
+                # When this iter computes lasr composition delta loss, 
+                # only use the first of the composition prompts (in effect num_composition_samples_per_batch=1),
+                # otherwise it will use more than 40G RAM.
                 subj_prompt_comp = [ prompts[0] for prompts in subj_prompt_comps ]
                 cls_prompt_comp  = [ prompts[0] for prompts in cls_prompt_comps ]
                 composition_delta_prompts = (subj_prompt_comp, cls_prompt_single, cls_prompt_comp)

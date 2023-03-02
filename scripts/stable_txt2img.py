@@ -351,10 +351,10 @@ def main():
                     iter_sig = iter_mat.group(1)
 
                     embedding_sig = "-".join([date_sig, iter_sig, f"scale{opt.scale:.1f}"])
-
-                    grid_filepath = os.path.join(outpath, f'{ckpt_postfix}-{prompt.replace(" ", "-")}-{embedding_sig}.jpg')
+                    prompt_sig = prompt.replace(" ", "-")[:40]  # Cut too long prompt
+                    grid_filepath = os.path.join(outpath, f'{ckpt_postfix}-{prompt_sig}-{embedding_sig}.jpg')
                     if os.path.exists(grid_filepath):
-                        grid_filepath = os.path.join(outpath, f'{ckpt_postfix}-{prompt.replace(" ", "-")}-{embedding_sig}-{grid_count}.jpg')
+                        grid_filepath = os.path.join(outpath, f'{ckpt_postfix}-{prompt_sig}-{embedding_sig}-{grid_count}.jpg')
                     Image.fromarray(grid.astype(np.uint8)).save(grid_filepath)
                     grid_count += 1
 
