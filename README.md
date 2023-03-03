@@ -101,8 +101,8 @@ If you make use of our work, please cite our paper:
 ```
 @misc{gal2022textual,
       url = {https://arxiv.org/abs/xxxx.xxxx},
-      author = {Li, Shaohua and Sui, Xiuchao and Zhou, Daquan and Zhou, Menghan and Yang, Hong and Liu, Weide and Xu, Xinxing and Liu, Yong and Goh, Rick},
-      title = {Layerwise Adaptive Subject Representations for Diffusion Models},
+      author = {Li, Shaohua and Sui, Xiuchao and Liu, Weide and Zhou, Daquan and Yang, Hong and Zhou, Menghan and Xu, Xinxing and Liu, Yong and Goh, Rick},
+      title = {Teach Diffusion Models New Concepts via Adaptive Prompts},
       publisher = {arXiv},
       year = {2023},
       primaryClass={cs.CV}
