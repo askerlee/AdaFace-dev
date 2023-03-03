@@ -1,6 +1,6 @@
-# Layerwise Adaptive Subject Representations for Diffusion Models
+# Teach Diffusion Models New Concepts via Adaptive Prompts
 
-> Layerwise Adaptive Subject Representations for Diffusion Models
+> Teach Diffusion Models New Concepts via Adaptive Prompts
 >
 > Shaohua Li, Xiuchao Sui, Weide Liu, Daquan Zhou, Hong Yang, Menghan Zhou, Xinxing Xu, Yong Liu, Rick Goh
 >
