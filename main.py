@@ -200,9 +200,9 @@ def get_parser(**parser_kwargs):
         type=float, default=-1,
         help="Embedding regularization weight")
     
-    parser.add_argument("--lasr_emb_weight",
+    parser.add_argument("--ada_emb_weight",
         type=float, default=-1,
-        help="Weight of lasr embeddings (in contrast to static embeddings)")
+        help="Weight of ada embeddings (in contrast to static embeddings)")
 
     # composition_delta_reg_weight
     parser.add_argument("--composition_delta_reg_weight",
@@ -684,8 +684,8 @@ if __name__ == "__main__":
 
         if opt.embedding_reg_weight > 0:
             config.model.params.embedding_reg_weight = opt.embedding_reg_weight
-        if opt.lasr_emb_weight > 0:
-            config.model.params.personalization_config.params.lasr_emb_weight = opt.lasr_emb_weight
+        if opt.ada_emb_weight > 0:
+            config.model.params.personalization_config.params.ada_emb_weight = opt.ada_emb_weight
         # Setting composition_delta_reg_weight to 0 will disable composition delta regularization.
         if opt.composition_delta_reg_weight >= 0:
             config.model.params.composition_delta_reg_weight = opt.composition_delta_reg_weight

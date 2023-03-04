@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from ldm.modules.embedding_manager import StaticLayerwiseEmbedding, LASREmbedding
+from ldm.modules.embedding_manager import StaticLayerwiseEmbedding, AdaEmbedding
 import sys
 import os
 import glob
@@ -73,10 +73,14 @@ for emb_ckpt_filename in emb_ckpt_files:
         print()
 
     if output_type == 'all':
-        print("%s LASR:" %emb_ckpt_filename)
-        for key in emb_ckpt['string_to_lasr_embedder']:
-            embeddings = emb_ckpt['string_to_lasr_embedder'][key]
-            if isinstance(embeddings, LASREmbedding):
+        print("%s ada:" %emb_ckpt_filename)
+        # Make it compatible to older checkpoints.
+        if 'string_to_lasr_embedder' not in emb_ckpt:
+            emb_ckpt['string_to_ada_embedder'] = emb_ckpt['string_to_lasr_embedder']
+                                                          
+        for key in emb_ckpt['string_to_ada_embedder']:
+            embeddings = emb_ckpt['string_to_ada_embedder'][key]
+            if isinstance(embeddings, AdaEmbedding):
                 basis_vecs = embeddings.basis_vecs.detach().cpu()
                 N = embeddings.N
                 calc_stats("basis_vecs_pos", embeddings.basis_vecs[:N])

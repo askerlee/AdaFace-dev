@@ -79,7 +79,7 @@ class DDPM(pl.LightningModule):
                  learn_logvar=False,
                  logvar_init=0.,
                  use_layerwise_embedding=False,
-                 use_lasr_embedding=False,
+                 use_ada_embedding=False,
                  composition_delta_reg_iter_gap=-1,
                  composition_delta_reg_weight=0.,
                  ):
@@ -96,14 +96,14 @@ class DDPM(pl.LightningModule):
         self.use_positional_encodings = use_positional_encodings
 
         self.use_layerwise_embedding = use_layerwise_embedding
-        self.use_lasr_embedding = use_layerwise_embedding and use_lasr_embedding
+        self.use_ada_embedding = use_layerwise_embedding and use_ada_embedding
         self.composition_delta_reg_iter_gap = composition_delta_reg_iter_gap
         self.composition_delta_reg_weight   = composition_delta_reg_weight
         self.do_static_comp_delta_reg       = False
-        self.do_lasr_comp_delta_reg         = False
+        self.do_ada_comp_delta_reg          = False
 
         self.model = DiffusionWrapper(unet_config, conditioning_key, 
-                                      use_layerwise_embedding, use_lasr_embedding)
+                                      use_layerwise_embedding, use_ada_embedding)
         count_params(self.model, verbose=True)
         self.use_ema = use_ema
         if self.use_ema:
@@ -367,8 +367,8 @@ class DDPM(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         self.do_static_comp_delta_reg = self.composition_delta_reg_iter_gap > 0 \
                                             and self.composition_delta_reg_weight > 0
-        self.do_lasr_comp_delta_reg   = self.do_static_comp_delta_reg \
-                                            and self.use_lasr_embedding \
+        self.do_ada_comp_delta_reg    = self.do_static_comp_delta_reg \
+                                            and self.use_ada_embedding \
                                             and self.global_step % self.composition_delta_reg_iter_gap == 0
         
         loss, loss_dict = self.shared_step(batch)
@@ -632,14 +632,14 @@ class LatentDiffusion(DDPM):
                 c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
-                if self.use_lasr_embedding:
-                    embedder = self.get_lasr_conditioning
-                    # Initialize the lasr embedding cache, so that the subsequent calls to 
-                    # EmbeddingManager.get_lasr_embedding() will store the lasr embedding 
+                if self.use_ada_embedding:
+                    embedder = self.get_ada_conditioning
+                    # Initialize the ada embedding cache, so that the subsequent calls to 
+                    # EmbeddingManager.get_ada_embedding() will store the ada embedding 
                     # for each layer into the cache. 
                     # The cache will be used in composition_delta_loss().
-                    self.embedding_manager.init_lasr_embedding_cache()
-                    if self.do_lasr_comp_delta_reg and img_mask is not None:
+                    self.embedding_manager.init_ada_embedding_cache()
+                    if self.do_ada_comp_delta_reg and img_mask is not None:
                         # The image batch is repeated twice, so img_mask is also repeated twice.
                         img_mask = img_mask.repeat(2, 1, 1, 1)
                     self.embedding_manager.set_img_mask(img_mask)
@@ -651,16 +651,16 @@ class LatentDiffusion(DDPM):
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
         return c
 
-    # get_lasr_conditioning() is a callback function called iteratively by each layer in UNet
-    # It returns the conditioning embedding (lasr embedding & other token embeddings -> clip encoder) 
+    # get_ada_conditioning() is a callback function called iteratively by each layer in UNet
+    # It returns the conditioning embedding (ada embedding & other token embeddings -> clip encoder) 
     # for the current layer to UNet.
-    def get_lasr_conditioning(self, c_in, layer_idx, layer_infeat, time_emb):
+    def get_ada_conditioning(self, c_in, layer_idx, layer_infeat, time_emb):
         # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
         # when embedding_manager is called within cond_stage_model.encode().
-        self.embedding_manager.set_lasr_layer_info(layer_idx, layer_infeat, time_emb)
+        self.embedding_manager.set_ada_layer_info(layer_idx, layer_infeat, time_emb)
         c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
-        return (c, self.embedding_manager.get_lasr_emb_weight())
+        return (c, self.embedding_manager.get_ada_emb_weight())
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)
@@ -995,8 +995,8 @@ class LatentDiffusion(DDPM):
                 cls_prompt_comps.append(prompt_comps.split("|"))
             cls_prompt_single = batch['cls_prompt_single']
             REPEATS = len(subj_prompt_comps[0])
-            if REPEATS == 1 or self.do_lasr_comp_delta_reg:
-                # When this iter computes lasr composition delta loss, 
+            if REPEATS == 1 or self.do_ada_comp_delta_reg:
+                # When this iter computes ada composition delta loss, 
                 # only use the first of the composition prompts (in effect num_composition_samples_per_batch=1),
                 # otherwise it will use more than 40G RAM.
                 subj_prompt_comp = [ prompts[0] for prompts in subj_prompt_comps ]
@@ -1052,14 +1052,14 @@ class LatentDiffusion(DDPM):
                     # c_delta_static is a tuple: (c, c_in, embedder).
                     # *_static means static embeddings.
                     c_delta_static = self.get_learned_conditioning(c_delta, img_mask=img_mask)
-                    if self.use_lasr_embedding:
+                    if self.use_ada_embedding:
                         # c_real: [128, 77, 768]. 128 = 8 * 16. 
                         # 8 is the total number of prompts in c_delta. Each prompt is converted to 16 embeddings.
                         c_real, c_in, embedder = c_delta_static
-                        if self.do_lasr_comp_delta_reg:
-                            # Do lasr composition delta loss in this iteration. 
+                        if self.do_ada_comp_delta_reg:
+                            # Do ada composition delta loss in this iteration. 
                             # Only keep the embeddings corresponding to subj_prompt_single (the original c) 
-                            # and subj_prompt_comp, as the corresponding LASR embeddings are dynamically generated.
+                            # and subj_prompt_comp, as the corresponding ada embeddings are dynamically generated.
                             # cls_prompt_single and cls_prompt_comp are static, so no need to 
                             # be fed to UNet.
                             # num_composition_samples_per_batch = 1.
@@ -1071,7 +1071,7 @@ class LatentDiffusion(DDPM):
                             # and c_in[:N_INST*2] is (real c_in, subj_prompt_comps).
                             c = (c_real[:N_EMBEDS*2], c_in[:N_INST*2], embedder)
                         else:
-                            # Don't do lasr composition delta loss in this iteration. 
+                            # Don't do ada composition delta loss in this iteration. 
                             # So restore the original c.
                             # Suppose R = num_composition_samples_per_batch.
                             # subj_prompt_comps, cls_prompt_comps are:
@@ -1241,15 +1241,15 @@ class LatentDiffusion(DDPM):
     def p_losses(self, x_start, cond, t, noise=None, img_mask=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        if self.use_lasr_embedding and self.do_lasr_comp_delta_reg:
+        if self.use_ada_embedding and self.do_ada_comp_delta_reg:
             x_noisy = x_noisy.repeat(2, 1, 1, 1)
             t       = t.repeat(2)
 
         model_output = self.apply_model(x_noisy, t, cond)
-        if self.use_lasr_embedding and self.do_lasr_comp_delta_reg:
+        if self.use_ada_embedding and self.do_ada_comp_delta_reg:
             # Restore model_output and t.
             # Do not use the second half of the model output, as they are used 
-            # to compute the LASR embeddings only, which are the input of the delta regularization.
+            # to compute the ada embeddings only, which are the input of the delta regularization.
             model_output = model_output[:model_output.shape[0] // 2]
             t = t[:t.shape[0] // 2]
 
@@ -1293,7 +1293,7 @@ class LatentDiffusion(DDPM):
 
             if self.do_static_comp_delta_reg:
                 loss_comp_delta_reg = self.embedding_manager.composition_delta_loss( 
-                                        self.do_lasr_comp_delta_reg, self.c_delta_static
+                                        self.do_ada_comp_delta_reg, self.c_delta_static
                                       ).mean()
                 loss_dict.update({f'{prefix}/loss_comp_delta_reg': loss_comp_delta_reg})
                 loss += (self.composition_delta_reg_weight * loss_comp_delta_reg)
@@ -1731,14 +1731,14 @@ class LatentDiffusion(DDPM):
 
 class DiffusionWrapper(pl.LightningModule):
     def __init__(self, diff_model_config, conditioning_key, 
-                 use_layerwise_embedding=False, use_lasr_embedding=False):
+                 use_layerwise_embedding=False, use_ada_embedding=False):
         super().__init__()
         # diffusion_model: UNetModel
         self.diffusion_model = instantiate_from_config(diff_model_config)
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm']
         self.use_layerwise_embedding = use_layerwise_embedding
-        self.use_lasr_embedding   = use_lasr_embedding
+        self.use_ada_embedding       = use_ada_embedding
 
     # t: a 1-D batch of timesteps (during training: randomly sample one timestep for each instance).
     def forward(self, x, t, c_concat: list = None, c_crossattn: list = None):
@@ -1760,7 +1760,7 @@ class DiffusionWrapper(pl.LightningModule):
             # self.diffusion_model: UNetModel.
             out = self.diffusion_model(x, t, context=cc, context_in=c_in, embedder=embedder,
                                        use_layerwise_context=self.use_layerwise_embedding,
-                                       use_lasr_context=self.use_lasr_embedding)
+                                       use_ada_context=self.use_ada_embedding)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
             cc = torch.cat(c_crossattn, 1)

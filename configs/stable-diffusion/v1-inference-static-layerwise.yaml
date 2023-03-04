@@ -17,7 +17,7 @@ model:
     scale_factor: 0.18215
     use_ema: False
     use_layerwise_embedding: True
-    use_lasr_embedding: False
+    use_ada_embedding: False
     
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager

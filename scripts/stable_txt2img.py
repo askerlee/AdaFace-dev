@@ -200,9 +200,9 @@ def main():
         help="Scale of the subject embedding",
     )
 
-    parser.add_argument("--lasr_emb_weight",
+    parser.add_argument("--ada_emb_weight",
         type=float, default=-1,
-        help="Weight of lasr embeddings (in contrast to static embeddings)")
+        help="Weight of adaptive embeddings (in contrast to static embeddings)")
 
     parser.add_argument(
         "--init_img",
@@ -242,8 +242,8 @@ def main():
     if opt.embedding_paths is not None:
         model.embedding_manager.load(opt.embedding_paths)
     model.embedding_manager.subj_scale  = opt.subj_scale
-    if opt.lasr_emb_weight >= 0:
-        model.embedding_manager.lasr_emb_weight = opt.lasr_emb_weight
+    if opt.ada_emb_weight >= 0:
+        model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model  = model.to(device)
@@ -303,12 +303,12 @@ def main():
                             prompts = list(prompts)
                         c = model.get_learned_conditioning(prompts)
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                        # When lasr embedding is used, c is a tuple of (cond, lasr_embedder).
+                        # When ada embedding is used, c is a tuple of (cond, ada_embedder).
                         # When both unconditional and conditional guidance are passed to ddim sampler, 
-                        # lasr_embedder of the conditional guidance is applied on both 
+                        # ada_embedder of the conditional guidance is applied on both 
                         # unconditional and conditional embeddings within UNetModel.forward(). 
                         # But since unconditional prompt doesn't contain the placeholder token,
-                        # lasr_embedder won't change the unconditional embedding uc.
+                        # ada_embedder won't change the unconditional embedding uc.
                         samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                                          conditioning=c,
                                                          batch_size=opt.n_samples,

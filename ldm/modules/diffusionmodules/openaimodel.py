@@ -711,7 +711,7 @@ class UNetModel(nn.Module):
 
     def forward(self, x, timesteps=None, context=None, y=None, 
                 context_in=None, embedder=None, use_layerwise_context=False, 
-                use_lasr_context=False, **kwargs):
+                use_ada_context=False, **kwargs):
         """
         Apply the model to an input batch.
         :param x: an [N x C x ...] Tensor of inputs.
@@ -749,10 +749,10 @@ class UNetModel(nn.Module):
                 return None
             emb_idx = layer_idx2emb_idx[layer_idx]
             static_context = context[emb_idx]
-            if use_lasr_context:
-                lasr_context, lasr_emb_weight = embedder(context_in, layer_idx, h, emb)
-                static_emb_weight = 1 - lasr_emb_weight
-                mix_context  = static_context * static_emb_weight + lasr_context * lasr_emb_weight
+            if use_ada_context:
+                ada_context, ada_emb_weight = embedder(context_in, layer_idx, h, emb)
+                static_emb_weight = 1 - ada_emb_weight
+                mix_context  = static_context * static_emb_weight + ada_context * ada_emb_weight
                 return mix_context
             else:
                 # We simply return None, as it's not used anyway.

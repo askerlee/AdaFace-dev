@@ -35,7 +35,7 @@ You will also need the official Stable Diffusion downloadable at [https://huggin
 To invert an image set, run:
 
 ```bash
-python3 main.py --base configs/stable-diffusion/v1-finetune-adaprompt.yaml
+python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml
          -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt
          -n <run_name> --gpus 0, --no-test
          --data_root data/subject_images/
@@ -46,9 +46,9 @@ python3 main.py --base configs/stable-diffusion/v1-finetune-adaprompt.yaml
 Example:
 
 ```jsx
-python3 main.py --base configs/stable-diffusion/v1-finetune-adaprompt.yaml 
+python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml 
          -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt          
-         -n alexachung-adaprompt --gpus 0, --no-test 
+         -n alexachung-ada --gpus 0, --no-test 
          --data_root data/alexachung/  
          --placeholder_string "z"  
          --init_word "young girl woman" 
@@ -61,7 +61,7 @@ where `placeholder_string` is a chosen uncommonly used single-token, such as ‘
 
 `init_word_weights` are the weights of each words in `init_word`. The number of weights are expected to be equal to the number of words. Intuitively, category words (”girl”, “man”, etc.) are given higher weights than modifier words (”young”, “chinese”, etc.).
 
-The number of training iterations is specified in `configs/stable-diffusion/v1-finetune-adaprompt.yaml`. We chose 4k training iterations.
+The number of training iterations is specified in `configs/stable-diffusion/v1-finetune-ada.yaml`. We chose 4k training iterations.
 
 To run on multiple GPUs, provide a comma-delimited list of GPU indices to the –gpus argument (e.g., `--gpus 0,1`)
 
@@ -74,7 +74,7 @@ Embeddings and output images will be saved in the log/<run_name> directory.
 To generate new images of the learned subject(s), run:
 
 ```bash
-python scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-adaprompt.yaml --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --ddim_eta 0.0
+python scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-ada.yaml --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --ddim_eta 0.0
   --n_samples 8 --ddim_steps 100 --gpu 0 
   --embedding_paths logs/<run_name1>/checkpoints/embeddings_gs-4000.pt 
                     logs/<run_name2>/checkpoints/embeddings_gs-4000.pt
@@ -86,11 +86,11 @@ where multiple embedding paths can be specified for multi-subject composition. T
 Example:
 
 ```bash
-python3 scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-adaprompt.yaml --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt 
+python3 scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-ada.yaml --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt 
 --ddim_eta 0.0 --n_samples 8 --ddim_teps 100 --gpu 0
 --embedding_paths 
-   logs/donnieyen2023-02-20T23-52-39_donnieyen-adaprompt/checkpoints/embeddings_gs-4000.pt 
-   logs/lilbub2023-02-21T08-18-18_lilbub-adaprompt/checkpoints/embeddings_gs-4000.pt 
+   logs/donnieyen2023-02-20T23-52-39_donnieyen-ada/checkpoints/embeddings_gs-4000.pt 
+   logs/lilbub2023-02-21T08-18-18_lilbub-ada/checkpoints/embeddings_gs-4000.pt 
 --prompt "a z hugging a y" --scale 5 --n_iter 2
 ```
 

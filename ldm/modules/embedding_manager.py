@@ -261,7 +261,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             out_vecs_ln = out_vecs_ln + layerwise_bias
             return out_vecs_ln
 
-class LASREmbedding(nn.Module):
+class AdaEmbedding(nn.Module):
     # dim1: 16 (9 layers out of 25 of UNet are skipped).
     # dim2: 768, r: 12.
     # infeat_dims: a list of 25 integers, each is the dimension of 
@@ -293,7 +293,7 @@ class LASREmbedding(nn.Module):
 
             if init_vecs.shape[1] != dim2 or init_vecs.shape[0] > dim1:
                 raise ValueError(
-                    f"LASREmbedding LoRA init vectors shape {init_vecs.shape} must be (<={dim1}, {dim2})"
+                    f"AdaEmbedding LoRA init vectors shape {init_vecs.shape} must be (<={dim1}, {dim2})"
                 )
 
             N = self.N = init_vecs.shape[0]
@@ -345,7 +345,7 @@ class LASREmbedding(nn.Module):
             self.bias = 0
             self.bias_scales = 0
 
-        print(f"LASREmbedding initialized with {self.N} init vectors, {self.r} basis vectors")
+        print(f"AdaEmbedding initialized with {self.N} init vectors, {self.r} basis vectors")
         self.call_count = 0
 
     # layer_infeat: 4D image feature tensor [B, C, H, W].
@@ -402,6 +402,9 @@ class LASREmbedding(nn.Module):
 
         return out_vec
 
+# Make it compatible with older checkpoints.
+LASREmbedding = AdaEmbedding
+
 # embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
 class EmbeddingManager(nn.Module):
@@ -425,7 +428,7 @@ class EmbeddingManager(nn.Module):
             layerwise_lora_default_rank=2,
             layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                   17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
-            lasr_emb_weight=0.5, 
+            ada_emb_weight=0.5, 
             composition_delta_reg_iter_gap=-1,       
             subj_scale=1.0,
             **kwargs
@@ -434,13 +437,13 @@ class EmbeddingManager(nn.Module):
         self.string_to_token_dict = {}
         
         self.string_to_param_dict = nn.ParameterDict()
-        self.string_to_lasr_embedder_dict = nn.ModuleDict()
+        self.string_to_ada_embedder_dict = nn.ModuleDict()
         self.initial_embeddings = nn.ParameterDict() # These should not be optimized
 
         self.progressive_words = progressive_words
         self.progressive_counter = 0
         self.subj_scale = subj_scale
-        self.lasr_emb_weight = lasr_emb_weight
+        self.ada_emb_weight = ada_emb_weight
         self.composition_delta_reg_iter_gap = composition_delta_reg_iter_gap
 
         self.use_layerwise_embedding = use_layerwise_embedding
@@ -521,12 +524,12 @@ class EmbeddingManager(nn.Module):
                                                                    init_word_embeddings, init_word_weights, 
                                                                    init_neg_vecs=init_neg_embeddings)
 
-                    token_lasr_embedder  = LASREmbedding(num_vectors_per_token, self.token_dim, 
+                    token_ada_embedder  = AdaEmbedding(num_vectors_per_token, self.token_dim, 
                                                          layerwise_lora_rank, init_word_embeddings)                                                        
                 else:
                     # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
                     token_params = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
-                    token_lasr_embedder = None
+                    token_ada_embedder = None
                 # initial_embeddings are only used to compute the regularization loss.
                 self.initial_embeddings[placeholder_string] = torch.nn.Parameter(init_word_embeddings, requires_grad=False)
             else:
@@ -534,19 +537,19 @@ class EmbeddingManager(nn.Module):
                     token_params        = StaticLayerwiseEmbedding(num_vectors_per_token, self.token_dim, layerwise_lora_default_rank, (0.1, 0.02),
                                                               None, None, init_neg_embeddings=init_neg_embeddings)
                                                   
-                    token_lasr_embedder  = LASREmbedding(num_vectors_per_token, self.token_dim, 
+                    token_ada_embedder  = AdaEmbedding(num_vectors_per_token, self.token_dim, 
                                                         layerwise_lora_default_rank, init_word_embeddings)   
                 else:
                     token_params = torch.nn.Parameter(torch.rand(size=(num_vectors_per_token, self.token_dim), requires_grad=True))
-                    token_lasr_embedder = None
+                    token_ada_embedder = None
 
             self.string_to_token_dict[placeholder_string] = token
             # token_params: an embedding vector or a StaticLayerwiseEmbedding object (when use_layerwise_embedding).
             # Pytorch >= 1.12.0 allows to put an nn.Module object into an nn.ParameterDict.
             self.string_to_param_dict[placeholder_string] = token_params
-            self.string_to_lasr_embedder_dict[placeholder_string] = token_lasr_embedder
+            self.string_to_ada_embedder_dict[placeholder_string] = token_ada_embedder
 
-            self.clear_lasr_layer_info()
+            self.clear_ada_layer_info()
             self.img_mask = None
             self.layer_idx2emb_idx = layer_idx2emb_idx
             self.loss_call_count = 0
@@ -562,18 +565,18 @@ class EmbeddingManager(nn.Module):
     ):
         b, n, device = *tokenized_text.shape, tokenized_text.device
 
-        # gen_lasr_embedding is dynamically switched on/off by set_lasr_layer_info()/clear_lasr_layer_info().
-        if self.gen_lasr_embedding:
+        # gen_ada_embedding is dynamically switched on/off by  set_ada_layer_info()/clear_ada_layer_info().
+        if self.gen_ada_embedding:
             # self.layer_idx, self.layer_infeat, self.time_emb were cached by 
-            # a previous call of set_lasr_layer_info() from UNet.
-            embedded_text = self.get_lasr_embedding(self.layer_idx, self.layer_infeat, self.time_emb,
+            # a previous call of  set_ada_layer_info() from UNet.
+            embedded_text = self.get_ada_embedding(self.layer_idx, self.layer_infeat, self.time_emb,
                                                     tokenized_text, embedded_text)
             emb_idx = self.layer_idx2emb_idx[self.layer_idx]
-            # Cache the computed lasr embedding of the current layer.
-            # Before this call, init_lasr_embedding_cache() should have been called somewhere.
-            self.lasr_embeddings[emb_idx] = embedded_text
-            # Remove lasr-specific intermediate variables.
-            self.clear_lasr_layer_info()
+            # Cache the computed ada embedding of the current layer.
+            # Before this call, init_ada_embedding_cache() should have been called somewhere.
+            self.ada_embeddings[emb_idx] = embedded_text
+            # Remove ada-specific intermediate variables.
+            self.clear_ada_layer_info()
             return embedded_text
 
         if self.use_layerwise_embedding:
@@ -667,7 +670,7 @@ class EmbeddingManager(nn.Module):
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # As the output embedding is only generated for a particular layer, 
     # no need to repeat num_unet_layers times as replacing with the static embedding in forward().
-    def get_lasr_embedding(
+    def get_ada_embedding(
             self,
             layer_idx,              # the index of the current layer in the UNet.
             layer_infeat,           # layer_infeat: intermediate features of the UNet on the noise image.
@@ -686,17 +689,17 @@ class EmbeddingManager(nn.Module):
             raise NotImplementedError("multi-vector latent space not implemented yet.")
 
         if not self.use_layerwise_embedding:
-            raise NotImplementedError("non-layerwise embedding not supported in get_lasr_embedding().")
+            raise NotImplementedError("non-layerwise embedding not supported in get_ada_embedding().")
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
-            placeholder_embedder = self.string_to_lasr_embedder_dict[placeholder_string].to(device)
-            assert isinstance(placeholder_embedder, LASREmbedding)
+            placeholder_embedder = self.string_to_ada_embedder_dict[placeholder_string].to(device)
+            assert isinstance(placeholder_embedder, AdaEmbedding)
 
             # There's only one vector per token, we can do a simple replacement
             # embedded_text: [B, N, 768].
             # tokenized_text: [B, N].
             placeholder_idx = torch.where(tokenized_text == placeholder_token.to(device))
-            # Skip generating the lasr embedding if there's no placeholder token in the batch.
+            # Skip generating the ada embedding if there's no placeholder token in the batch.
             if placeholder_idx[0].numel() == 0:
                 continue
 
@@ -714,34 +717,34 @@ class EmbeddingManager(nn.Module):
 
         return embedded_text
 
-    def get_lasr_emb_weight(self):
+    def get_ada_emb_weight(self):
         if self.training:
             # 0.5 -> uniform in [0.4, 0.7]
-            rand_lasr_emb_weight = self.lasr_emb_weight * np.random.uniform(0.8, 1.4)
+            rand_ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)
         else:
-            rand_lasr_emb_weight = self.lasr_emb_weight        
-        return rand_lasr_emb_weight
+            rand_ada_emb_weight = self.ada_emb_weight        
+        return rand_ada_emb_weight
     
-    def set_lasr_layer_info(self, layer_idx, layer_infeat, time_emb):
-        self.gen_lasr_embedding = True
+    def set_ada_layer_info(self, layer_idx, layer_infeat, time_emb):
+        self.gen_ada_embedding = True
         self.layer_idx      = layer_idx
         self.layer_infeat   = layer_infeat
         self.time_emb       = time_emb
-        # Initialize the lasr_embeddings cache list.
+        # Initialize the ada_embeddings cache list.
 
-    # lasr_embeddings is used to cache the embeddings of all layers, 
+    # ada_embeddings is used to cache the embeddings of all layers, 
     # for computing the composition delta loss.
-    def init_lasr_embedding_cache(self):
-        self.lasr_embeddings = [ None for i in range(self.num_unet_layers) ]
+    def init_ada_embedding_cache(self):
+        self.ada_embeddings = [ None for i in range(self.num_unet_layers) ]
 
-    def clear_lasr_layer_info(self):
-        self.gen_lasr_embedding = False
+    def clear_ada_layer_info(self):
+        self.gen_ada_embedding = False
         self.layer_idx      = -1
         self.layer_infeat   = None
         self.time_emb       = None
         
-    def clear_lasr_embedding_cache(self):
-        self.lasr_embeddings = None
+    def clear_ada_embedding_cache(self):
+        self.ada_embeddings = None
 
     def set_img_mask(self, img_mask):
         self.img_mask = img_mask
@@ -750,8 +753,8 @@ class EmbeddingManager(nn.Module):
     def save(self, ckpt_path):
         torch.save({ "string_to_token":         self.string_to_token_dict,
                      "string_to_param":         self.string_to_param_dict,
-                     "string_to_lasr_embedder": self.string_to_lasr_embedder_dict,
-                     "lasr_emb_weight":         self.lasr_emb_weight, }, 
+                     "string_to_ada_embedder":  self.string_to_ada_embedder_dict,
+                     "ada_emb_weight":          self.ada_emb_weight, }, 
                     ckpt_path)
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
@@ -760,7 +763,7 @@ class EmbeddingManager(nn.Module):
         # So before loading, remove it from these dicts first.
         self.string_to_token_dict           = {}
         self.string_to_param_dict           = nn.ParameterDict()
-        self.string_to_lasr_embedder_dict   = nn.ModuleDict()
+        self.string_to_ada_embedder_dict   = nn.ModuleDict()
 
         for ckpt_path in ckpt_paths:
             ckpt_path_parts = ckpt_path.split(":")
@@ -789,12 +792,15 @@ class EmbeddingManager(nn.Module):
                 # Shouldn't do the k->k2 mapping on string_to_token_dict.
                 self.string_to_token_dict[k2]        = k2_token
                 self.string_to_param_dict[k2]        = ckpt["string_to_param"][k]
-                self.string_to_lasr_embedder_dict[k2] = ckpt["string_to_lasr_embedder"][k]
+                # Make it compatible with older checkpoints.
+                if 'string_to_lasr_embedder' in ckpt:
+                    ckpt["string_to_ada_embedder"] = ckpt["string_to_lasr_embedder"]
+                self.string_to_ada_embedder_dict[k2] = ckpt["string_to_ada_embedder"][k]
                 print(f"Loaded {k}->{k2} from {ckpt_path}")
 
-            # If multiple checkpoints have different lasr_emb_weight, the last one will be used.
-            if "lasr_emb_weight" in ckpt:
-                self.lasr_emb_weight = ckpt["lasr_emb_weight"]
+            # If multiple checkpoints have different ada_emb_weight, the last one will be used.
+            if "ada_emb_weight" in ckpt:
+                self.ada_emb_weight = ckpt["ada_emb_weight"]
 
     # get_embedding_norms_squared() is never used.
     def get_embedding_norms_squared(self):
@@ -807,7 +813,7 @@ class EmbeddingManager(nn.Module):
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def embedding_parameters(self):
         return list(self.string_to_param_dict.parameters()) \
-               + list(self.string_to_lasr_embedder_dict.parameters())
+               + list(self.string_to_ada_embedder_dict.parameters())
 
     def embedding_attractor_loss(self):
         loss = 0.
@@ -878,27 +884,27 @@ class EmbeddingManager(nn.Module):
         bias_scales_reg_weight      = 1. / self.token_dim
         bias_reg_weight_base        = 0.1
         basis_reg_weight_base       = 0.1
-        lasr_maps_weight_reg_weight = 1.
-        lasr_maps_bias_reg_weight   = 0.01
+        ada_maps_weight_reg_weight = 1.
+        ada_maps_bias_reg_weight   = 0.01
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
-        lasr_static_loss_boost_ratio = 2
-        lasr_l2_loss_boost          = static_l2_loss_boost * lasr_static_loss_boost_ratio
+        ada_static_loss_boost_ratio = 2
+        ada_l2_loss_boost          = static_l2_loss_boost * ada_static_loss_boost_ratio
 
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.
         T = 1.5
 
         for key in self.initial_embeddings:
-            for embobj in (self.string_to_param_dict[key], self.string_to_lasr_embedder_dict[key]):
+            for embobj in (self.string_to_param_dict[key], self.string_to_ada_embedder_dict[key]):
                 # Skip non-layerwise embeddings.
                 if not isinstance(embobj, StaticLayerwiseEmbedding) \
-                  and not isinstance(embobj, LASREmbedding):
+                  and not isinstance(embobj, AdaEmbedding):
                     continue
 
                 init_vecs = self.initial_embeddings[key].clone()
                 # bias, pre_vecs, basis_vecs are structures existing in 
-                # both StaticLayerwiseEmbedding and LASREmbedding.
+                # both StaticLayerwiseEmbedding and AdaEmbedding.
                 # pre_vecs: basis vectors that are initialized by prespecified init_vecs. 
                 # pre_vecs are updated through BP. Therefore, loss_pre_vecs prevents pre_vecs 
                 # from drifting too far from init_vecs.
@@ -924,12 +930,12 @@ class EmbeddingManager(nn.Module):
                 else:
                     loss_pre_vecs = 0.
 
-                loss_lasr_maps_weight = 0.
-                loss_lasr_maps_bias   = 0.
-                if isinstance(embobj, LASREmbedding):
+                loss_ada_maps_weight = 0.
+                loss_ada_maps_bias   = 0.
+                if isinstance(embobj, AdaEmbedding):
                     for i, map in enumerate(embobj.layer_maps):
-                        loss_lasr_maps_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
-                        loss_lasr_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
+                        loss_ada_maps_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
+                        loss_ada_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
 
                 if type(loss_bias) == int:
                     breakpoint()
@@ -938,8 +944,8 @@ class EmbeddingManager(nn.Module):
                             + loss_bias_scales      * bias_scales_reg_weight \
                             + loss_basis            * basis_reg_weight \
                             + loss_pre_vecs         * pre_vecs_reg_weight \
-                            + loss_lasr_maps_weight * lasr_maps_weight_reg_weight \
-                            + loss_lasr_maps_bias   * lasr_maps_bias_reg_weight
+                            + loss_ada_maps_weight * ada_maps_weight_reg_weight \
+                            + loss_ada_maps_bias   * ada_maps_bias_reg_weight
 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
@@ -947,15 +953,15 @@ class EmbeddingManager(nn.Module):
                                 f'loss_bias_scales={loss_bias_scales.item():.4f}, ' \
                                 f'loss_basis={loss_basis.item():.4f}, ' \
                                 f'loss_pre_vecs={loss_pre_vecs.item():.4f}, '
-                    if isinstance(embobj, LASREmbedding):
-                        print_str += f'loss_lasr_maps_weight={loss_lasr_maps_weight.item():.4f}, ' \
-                                     f'loss_lasr_maps_bias={loss_lasr_maps_bias.item():.4f}'
+                    if isinstance(embobj, AdaEmbedding):
+                        print_str += f'loss_ada_maps_weight={loss_ada_maps_weight.item():.4f}, ' \
+                                     f'loss_ada_maps_bias={loss_ada_maps_bias.item():.4f}'
 
                     print(print_str)
 
                 if euc_loss_type   == 'l2':
-                    if isinstance(embobj, LASREmbedding):
-                        loss_boost = lasr_l2_loss_boost
+                    if isinstance(embobj, AdaEmbedding):
+                        loss_boost = ada_l2_loss_boost
                     else:
                         loss_boost = static_l2_loss_boost
                 else:
@@ -979,13 +985,13 @@ class EmbeddingManager(nn.Module):
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of subj_prompt_single, subj_prompt_comp, cls_prompt_single, cls_prompt_comp. 
     # cls_prompt_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
-    def composition_delta_loss(self, do_lasr_comp_delta_reg, static_embeddings):
-        # The composition delta loss for LASR embeddings is only applied 
+    def composition_delta_loss(self, do_ada_comp_delta_reg, static_embeddings):
+        # The composition delta loss for ada embeddings is only applied 
         # every composition_delta_reg_iter_gap iterations. So boost the loss 
         # by composition_delta_reg_iter_gap times.
-        lasr_comp_loss_boost_ratio = self.composition_delta_reg_iter_gap
-        # If do_lasr_comp_delta_reg,     BS = 2.
-        # If not do_lasr_comp_delta_reg, BS = 2 * num_composition_samples_per_batch = 4.
+        ada_comp_loss_boost_ratio = self.composition_delta_reg_iter_gap
+        # If do_ada_comp_delta_reg,     BS = 2.
+        # If not do_ada_comp_delta_reg, BS = 2 * num_composition_samples_per_batch = 4.
         BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
         # static_embeddings: [8, 16, 77, 768]
         static_embeddings = static_embeddings.view(BS * 4, self.num_unet_layers, -1, static_embeddings.shape[-1])
@@ -1000,24 +1006,24 @@ class EmbeddingManager(nn.Module):
         static_delta = subj_prompt_comp - subj_prompt_single
         static_delta_loss   = calc_delta_loss(static_delta, cls_delta)
 
-        if do_lasr_comp_delta_reg:
+        if do_ada_comp_delta_reg:
             # Each emb is of [4, 77, 768]. 4 = 2 * batch_size.
-            for i, emb in enumerate(self.lasr_embeddings):
-                # LASR embeddings of all layers should have been stored in self.lasr_embeddings
+            for i, emb in enumerate(self.ada_embeddings):
+                # ada embeddings of all layers should have been stored in self.ada_embeddings
                 # before calling composition_delta_loss().
                 if emb is None:
                     breakpoint()
-            # lasr_embeddings: [4, 16, 77, 768]
-            lasr_embeddings = torch.stack(self.lasr_embeddings, dim=1)
-            lasr_subj_emb_single, lasr_subj_emb_comp = lasr_embeddings.split(BS, dim=0)
-            lasr_delta = lasr_subj_emb_comp - lasr_subj_emb_single
-            lasr_delta_loss = calc_delta_loss(lasr_delta, cls_delta)
-            # The cached LASR embeddings are useless now, release them.
-            self.clear_lasr_embedding_cache()
+            # ada_embeddings: [4, 16, 77, 768]
+            ada_embeddings = torch.stack(self.ada_embeddings, dim=1)
+            ada_subj_emb_single, ada_subj_emb_comp = ada_embeddings.split(BS, dim=0)
+            ada_delta = ada_subj_emb_comp - ada_subj_emb_single
+            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta)
+            # The cached ada embeddings are useless now, release them.
+            self.clear_ada_embedding_cache()
         else:
-            lasr_delta_loss = 0
+            ada_delta_loss = 0
         
         # delta_loss is the sum of the delta loss of all layers. Change it to the average.
-        delta_loss = (static_delta_loss + lasr_delta_loss * lasr_comp_loss_boost_ratio) / self.num_unet_layers
+        delta_loss = (static_delta_loss + ada_delta_loss * ada_comp_loss_boost_ratio) / self.num_unet_layers
         return delta_loss
     

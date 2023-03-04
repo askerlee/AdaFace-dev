@@ -23,7 +23,7 @@ model:
     unfreeze_model: False
     model_lr: 0.0
     use_layerwise_embedding: True
-    use_lasr_embedding: True
+    use_ada_embedding: True
     composition_delta_reg_iter_gap: 5
     composition_delta_reg_weight: 0.005
 
@@ -51,7 +51,7 @@ model:
         progressive_words: False
         use_layerwise_embedding: True
         layerwise_lora_rank_token_ratio: 2
-        lasr_emb_weight: 0.5
+        ada_emb_weight: 0.5
         composition_delta_reg_iter_gap: 5
 
     unet_config:
