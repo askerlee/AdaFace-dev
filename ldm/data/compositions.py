@@ -27,15 +27,16 @@ composition_regexs = \
   "pointing at (the sky|the sun|the beach|the mountains|the forest)",
   "looking at (a book|a mobile phone|the screen|the sky|the sun|the beach|a UFO|a map|a painting|a photo|a clock|a mirror|a telescope|a microscope)",
   "flying (in the sky|under the sunset|in the outer space|over water|over a building)",
-  "wearing a (tshirt|stormtrooper costume|superman costume|ski outfit|astronaut outfit|medal|suit|tie|baseball cap)",
+  "wearing a (tshirt|stormtrooper costume|superman costume|ironman armor|ski outfit|astronaut outfit|medal|suit|tie|baseball cap)",
   "drinking (a bottle of water|a cup of wine|a can of beer|a glass of juice|a cup of tea|a bottle of milk)",
   "eating (a sandwich|an ice cream|barbecue|a pizza|a burger|a bowl of pasta|a piece of cake|a sushi roll|a bowl of soup|a plate of tacos)",
   "on (an airplane|a bus|a busy street|a grass|a roof|an escalator|a train|a boat|a bike|a roller coaster|a ski lift|a hot air balloon|a scooter)",
   "in (a car|a meeting|a class|a dress|a suit|a tshirt|a stormtrooper costume|a superman costume|a wedding|an elevator|a dinner|a concert|a gym|a library|a park|a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
   "at (a beach|a table|a park|a concert|a gym|a library|a mall|a movie theater|a hotel room|a theme park)",
-  "besides (a friend|a tree|a car|a river|a lake|a mountain|an ocean|a playground|a statue)",
+  "next to (a friend|a tree|a car|a river|a lake|a mountain|an ocean|a playground|a statue|a panda)",
   "in (cartoon|animation|anime|comic book|steampunk|oil on canvas|sci-fi movie|scuplture|bronze sculpture) style",
-  ", (concept art|realistic painting|character design|anime sketch|trending in artstation|hyper realistic|vivid colors)",
+  ", (concept art|realistic painting|character design|anime sketch|trending in artstation|hyper realistic|vivid colors|clear face|detailed face)",
+  "made of metal",
 ]
 
 def sample_compositions(N):

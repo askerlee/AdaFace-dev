@@ -626,9 +626,10 @@ class LatentDiffusion(DDPM):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # c: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
-                # c is encoded as [1, 77, 768].
+                # each prompt in c is encoded as [1, 77, 768].
                 # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
                 c_in = copy.copy(c)
+                # c: [128, 77, 768]
                 c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
