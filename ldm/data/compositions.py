@@ -34,19 +34,56 @@ composition_regexs = \
   "in (a car|a meeting|a class|a dress|a suit|a tshirt|a stormtrooper costume|a superman costume|a wedding|an elevator|a dinner|a concert|a gym|a library|a park|a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
   "at (a beach|a table|a park|a concert|a gym|a library|a mall|a movie theater|a hotel room|a theme park)",
   "next to (a friend|a tree|a car|a river|a lake|a mountain|an ocean|a playground|a statue|a panda)",
-  "in (cartoon|animation|anime|comic book|steampunk|oil on canvas|sci-fi movie|scuplture|bronze sculpture) style",
-  ", (concept art|realistic painting|character design|anime sketch|trending in artstation|hyper realistic|vivid colors|clear face|detailed face)",
-  "made of metal",
+  "made of (metal|stainless steel|fractal flame|marble|rubber|bronze|ice)",
 ]
+
+all_styles = [ "cartoon", "animation", "anime", "comic book", "steampunk", "oil on canvas", "oil painting",
+               "sci-fi movie", "scuplture", "bronze sculpture", "abyss art", "blade runner", "cyberpunk",
+               "synthwave", 
+             ]
+# concept art|realistic painting|character design|anime sketch|trending in artstation|hyper realistic|vivid colors|clear face|detailed face
+all_modifiers = [ "concept art", "realistic painting", "character design", "anime sketch", 
+                 "trending in artstation", "hyper realistic", "vivid colors", "clear face", 
+                 "detailed face", "semirealism", "hyperrealistic", "highly detailed", "octane render",
+                 "unreal 5", "photorealistic", "sharp focus", "digital painting", "illustration"  
+                ]
+
+all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve" ]
 
 def sample_compositions(N):
     compositions = []
     K = len(composition_regexs)
-    for i in range(100):
+    for i in range(N):
         idx = np.random.choice(K)
         composition = exrex.getone(composition_regexs[idx])
-        compositions.append(composition)
+
+        has_styles = np.random.choice([0, 1])
+        if has_styles:
+            num_styles = np.random.choice([1, 2, 3])
+            styles = [ np.random.choice(all_styles) for i in range(num_styles) ]
+            style = ", in " + " and ".join(styles) + " style"
+        else:
+            style = ""
+
+        has_modifiers = np.random.choice([0, 1])
+        if has_modifiers:
+            num_modifiers = np.random.choice([1, 2, 3])
+            modifiers = [ np.random.choice(all_modifiers) for i in range(num_modifiers) ]
+            modifier = ", " + ", ".join(modifiers)
+        else:
+            modifier = ""
+
+        has_art_by = np.random.choice([0, 1])
+        if has_art_by:
+            num_art_by = np.random.choice([1, 2])
+            art_bys = [ np.random.choice(all_art_by) for i in range(num_art_by) ]
+            art_by = ", art by " + " and ".join(art_bys)
+        else:
+            art_by = ""
+
+        compositions.append(f"{composition}{style}{modifier}{art_by}")
+
     return compositions
 
 if __name__ == '__main__':
-    print(sample_compositions(100))
+    print('\n'.join(sample_compositions(100)))
