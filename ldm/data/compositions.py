@@ -43,9 +43,9 @@ all_styles = [ "cartoon", "animation", "anime", "comic book", "steampunk", "oil 
              ]
 # concept art|realistic painting|character design|anime sketch|trending in artstation|hyper realistic|vivid colors|clear face|detailed face
 all_modifiers = [ "concept art", "realistic painting", "character design", "anime sketch", 
-                 "trending in artstation", "hyper realistic", "vivid colors", "clear face", 
-                 "detailed face", "semirealism", "hyperrealistic", "highly detailed", "octane render",
-                 "unreal 5", "photorealistic", "sharp focus", "digital painting", "illustration"  
+                  "trending in artstation", "hyper realistic", "vivid colors", "clear face", 
+                  "detailed face", "semirealism", "hyperrealistic", "highly detailed", "octane render",
+                  "unreal 5", "photorealistic", "sharp focus", "digital painting", "illustration"  
                 ]
 
 all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve" ]
