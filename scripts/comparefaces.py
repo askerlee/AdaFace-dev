@@ -62,7 +62,7 @@ if __name__ == "__main__":
     path2 = sys.argv[2]
     if len(sys.argv) == 3:
         if path1 == '--self':
-            subdirs = os.listdir(path1)
+            subdirs = os.listdir(path2)
             for subdir in subdirs:
                 subdir_path = os.path.join(path2, subdir)
                 print("Self comparing %s:" %(subdir_path))
