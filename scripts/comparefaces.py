@@ -2,6 +2,7 @@ from deepface import DeepFace
 import sys
 import os
 import glob
+import argparse
 
 def compare_paths(path1, path2, verbose=False):
     if os.path.isfile(path1):
@@ -56,13 +57,28 @@ if __name__ == "__main__":
         print("Usage: python comparefaces.py path1 path2")
         exit(1)
 
+    skip_subjs = [ 'lilbub', 'jiffpom', 'princessmonstertruck' ]
     path1 = sys.argv[1]
     path2 = sys.argv[2]
-    if path2 == '--self':
-        subdirs = os.listdir(path1)
-        for subdir in subdirs:
-            subdir_path = os.path.join(path1, subdir)
-            print("Self comparing %s:" %(subdir_path))
-            compare_paths(subdir_path, subdir_path)
-    else:            
-        compare_paths(path1, path2, verbose=False)
+    if len(sys.argv) == 3:
+        if path1 == '--self':
+            subdirs = os.listdir(path1)
+            for subdir in subdirs:
+                subdir_path = os.path.join(path2, subdir)
+                print("Self comparing %s:" %(subdir_path))
+                compare_paths(subdir_path, subdir_path)
+        else:            
+            compare_paths(path1, path2, verbose=False)
+    elif len(sys.argv) == 4 and path1 == '--pair':
+            path3 = sys.argv[3]
+            subdirs = os.listdir(path2)
+            for subdir in subdirs:
+                if subdir in skip_subjs:
+                    continue
+                subdir_path1 = os.path.join(path2, subdir)
+                subdir_path2 = os.path.join(path3, subdir)
+                print("Pair comparing %s vs %s:" %(subdir_path1, subdir_path2))
+                compare_paths(subdir_path1, subdir_path2)        
+    else:
+        breakpoint()
+        

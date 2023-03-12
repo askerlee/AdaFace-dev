@@ -360,9 +360,10 @@ def main():
 
                 toc = time.time()
 
-    if not opt.skip_grid or not opt.no_preview:
+    if not opt.skip_grid:
         print(f"Your samples are ready and waiting for you here: \n{grid_filepath}")
-        os.spawnvp(os.P_NOWAIT, "gpicview", [ "gpicview", os.path.abspath(grid_filepath) ])
+        if not opt.no_preview:
+            os.spawnvp(os.P_NOWAIT, "gpicview", [ "gpicview", os.path.abspath(grid_filepath) ])
     else:
         print(f"Your samples are ready and waiting for you here: \n{outpath}")
 
