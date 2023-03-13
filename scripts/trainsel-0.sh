@@ -1,6 +1,7 @@
+#!/usr/bin/fish
 set fish_trace 1
-GPU="0"
-EXTRA_ARGS=""
+set -x GPU "0"
+set -x EXTRA_ARGS ""
 
 set -l subjects alexachung         caradelevingne corgi        donnieyen   ianarmitage gabrielleunion jaychou     jenniferlawrence jiffpom    keanureeves      lilbub       lisa                masatosakai michelleyeoh  princessmonstertruck ryangosling sandraoh      selenagomez    smritimandhana spikelee    stephenchow   taylorswift  timotheechalamet  tomholland            zendaya
 set -l prompts  "young girl woman"  "young girl"  "corgi dog"  "asian man" "young boy" "black woman"  "asian man" "young woman"    "pom dog"  "keanu cool man" "tabby cat"  "asian young girl"  "asian man" "asian woman" "black persian cat"  "white man" "asian woman" "young girl"   "indian girl"  "black man" "asian man"   "cute girl"  "french young man" "young handsome man" "young girl zendaya"
