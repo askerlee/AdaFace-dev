@@ -1,3 +1,4 @@
+set fish_trace 1
 GPU="0"
 EXTRA_ARGS=""
 
