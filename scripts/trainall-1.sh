@@ -1,6 +1,6 @@
 #!/usr/bin/fish
 set fish_trace 1
-set -x GPU "0"
+set -x GPU "1"
 set -x EXTRA_ARGS
 
 set -l subjects alexachung         caradelevingne corgi        donnieyen   ianarmitage gabrielleunion jaychou     jenniferlawrence jiffpom    keanureeves      lilbub       lisa                masatosakai michelleyeoh  princessmonstertruck ryangosling sandraoh      selenagomez    smritimandhana spikelee    stephenchow   taylorswift  timotheechalamet  tomholland            zendaya

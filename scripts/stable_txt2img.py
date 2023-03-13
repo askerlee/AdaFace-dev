@@ -72,6 +72,12 @@ def main():
         default="outputs/txt2img-samples"
     )
     parser.add_argument(
+        "--indiv_subdir",
+        type=str,
+        help="subdir to write individual images to",
+        default="samples"
+    )      
+    parser.add_argument(
         "--skip_grid",
         action='store_true',
         help="do not save a grid, only individual samples. Helpful when evaluating lots of samples",
@@ -269,7 +275,7 @@ def main():
             data = f.read().splitlines()
             data = list(chunk(data, batch_size))
 
-    sample_path = os.path.join(outpath, "samples")
+    sample_path = os.path.join(outpath, opt.indiv_subdir)
     os.makedirs(sample_path, exist_ok=True)
     grid_count = len(os.listdir(outpath)) - 1
 
