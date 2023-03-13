@@ -1,26 +1,13 @@
 GPU="1"
 EXTRA_ARGS=""
 
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n michelleyeoh-ada --gpus $GPU, --data_root data/michelleyeoh/  --placeholder_string "z" --no-test  --init_word "asian woman" --init_word_weights 1 2 $EXTRA_ARGS
+set -l subjects alexachung         caradelevingne corgi        donnieyen   ianarmitage gabrielleunion jaychou     jenniferlawrence jiffpom    keanureeves      lilbub       lisa                masatosakai michelleyeoh  princessmonstertruck ryangosling sandraoh      selenagomez    smritimandhana spikelee    stephenchow   taylorswift  timotheechalamet  tomholland            zendaya
+set -l prompts  "young girl woman"  "young girl"  "corgi dog"  "asian man" "young boy" "black woman"  "asian man" "young woman"    "pom dog"  "keanu cool man" "tabby cat"  "asian young girl"  "asian man" "asian woman" "black persian cat"  "white man" "asian woman" "young girl"   "indian girl"  "black man" "asian man"   "cute girl"  "french young man" "young handsome man" "young girl zendaya"
+set -l weights  "1 2 2"             "1 2"         "2 1"        "1 2"       "1 2"       "1 2"          "1 2"       "1 2"            "1 1"      "2 1 2"          "1 2"        "1 1 2"             "1 2"        "1 2"        "1 1 3"              "1 2"        "1 2"        "1 2"          "1 2"          "1 2"        "1 2"        "1 2"        "1 1 2"            "1 1 2"              "1 2 2"
 
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n monstertruck-ada --gpus $GPU, --data_root data/princessmonstertruck/  --placeholder_string "y" --no-test  --init_word "black persian cat" --init_word_weights 1 1 3 $EXTRA_ARGS
-
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n sandraoh-ada --gpus $GPU, --data_root data/sandraoh/  --placeholder_string "z" --no-test  --init_word "asian woman" --init_word_weights 1 2 $EXTRA_ARGS
-
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n selenagomez-ada --gpus $GPU, --data_root data/selenagomez/  --placeholder_string "z" --no-test  --init_word "young girl" --init_word_weights 1 2 $EXTRA_ARGS
-
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n smritimandhana-ada --gpus $GPU, --data_root data/smritimandhana/  --placeholder_string "z" --no-test  --init_word "indian girl" --init_word_weights 1 2 $EXTRA_ARGS
-
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n spikelee-ada --gpus $GPU, --data_root data/spikelee/  --placeholder_string "z" --no-test  --init_word "black man" --init_word_weights 1 2 $EXTRA_ARGS
-
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n stephenchow-ada --gpus $GPU, --data_root data/stephenchow/  --placeholder_string "z" --no-test  --init_word "asian man" --init_word_weights 1 2 $EXTRA_ARGS
-
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n stevejobs-ada --gpus $GPU, --data_root data/stevejobs/  --placeholder_string "z" --no-test  --init_word "white man" --init_word_weights 1 2 $EXTRA_ARGS
-
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n taylorswift-ada --gpus $GPU, --data_root data/taylorswift/  --placeholder_string "z" --no-test  --init_word "cute girl" --init_word_weights 1 2 $EXTRA_ARGS
-
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n timotheechalamet-ada --gpus $GPU, --data_root data/timotheechalamet/  --placeholder_string "z" --no-test  --init_word "french young man" --init_word_weights 1 1 2 $EXTRA_ARGS
-
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n tomholland-ada --gpus $GPU, --data_root data/tomholland/  --placeholder_string "z" --no-test  --init_word "young handsome man" --init_word_weights 1 1 2 $EXTRA_ARGS
-
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n zendaya-ada --gpus $GPU, --data_root data/zendaya/  --placeholder_string "z" --no-test  --init_word "young girl zendaya" --init_word_weights 1 2 2 $EXTRA_ARGS
+for i in (seq 14 25)
+    set -x subject $subjects[$i]
+    set -x prompt  $prompts[$i]
+    set -x weight  (string split " " $weights[$i])
+    python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt -n $subject-ada --gpus $GPU, --data_root data/$subject/  --placeholder_string "z" --no-test  --init_word "$prompt" --init_word_weights $weight $EXTRA_ARGS
+end
