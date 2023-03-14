@@ -1,13 +1,13 @@
 #!/usr/bin/fish
 set fish_trace 1
-set -x GPU "0"
+set GPU "0"
 set -l subjects alexachung         caradelevingne corgi        donnieyen   iainarmitage gabrielleunion jaychou     jenniferlawrence jiffpom    keanureeves      lilbub       lisa                masatosakai michelleyeoh  princessmonstertruck ryangosling sandraoh      selenagomez    smritimandhana spikelee    stephenchow   taylorswift  timotheechalamet  tomholland            zendaya
-set -x niter 1
+set niter 1
 
 for i in (seq 25)
-    set -x subject $subjects[$i]
-    set -x prompt  "a z"
-    set -x ckptname  (ls -1 -rt logs|grep $subject|tail -1)
+    set subject $subjects[$i]
+    set prompt  "a z"
+    set ckptname  (ls -1 -rt logs|grep $subject|tail -1)
     if test -z "$ckptname"
     	echo Unable to find the checkpoint of $subject
     	continue

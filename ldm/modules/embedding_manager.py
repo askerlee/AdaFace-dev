@@ -981,7 +981,7 @@ class EmbeddingManager(nn.Module):
         else:
             return self.embedding_attractor_loss()
 
-    # TODO: support for textual inversion, where static_embeddings is only one embedding.
+    # Textual inversion is supported, where static_embeddings is only one embedding.
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of subj_prompt_single, subj_prompt_comp, cls_prompt_single, cls_prompt_comp. 
     # cls_prompt_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
@@ -993,8 +993,9 @@ class EmbeddingManager(nn.Module):
         # If do_ada_comp_delta_reg,     BS = 2.
         # If not do_ada_comp_delta_reg, BS = 2 * num_composition_samples_per_batch = 4.
         BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
+        max_token_num = static_embeddings.shape[1]
         # static_embeddings: [8, 16, 77, 768]
-        static_embeddings = static_embeddings.view(BS * 4, self.num_unet_layers, -1, static_embeddings.shape[-1])
+        static_embeddings = static_embeddings.view(BS * 4, -1, max_token_num, static_embeddings.shape[-1])
         # Each is [2, 16, 77, 768]
         subj_prompt_single, subj_prompt_comp, cls_prompt_single, cls_prompt_comp = \
                     static_embeddings.split(BS, dim=0)
