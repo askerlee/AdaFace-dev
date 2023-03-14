@@ -276,6 +276,7 @@ def main():
             data = list(chunk(data, batch_size))
 
     sample_path = os.path.join(outpath, opt.indiv_subdir)
+    print("Images will be saved to ", sample_path)
     os.makedirs(sample_path, exist_ok=True)
     grid_count = len(os.listdir(outpath)) - 1
 

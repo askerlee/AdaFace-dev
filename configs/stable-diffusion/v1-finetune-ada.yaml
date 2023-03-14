@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1e-03
+  base_learning_rate: 8e-04
   weight_decay: 0.0
 
   target: ldm.models.diffusion.ddpm.LatentDiffusion

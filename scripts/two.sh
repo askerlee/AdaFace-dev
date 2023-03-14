@@ -6,13 +6,19 @@ then
  exit
 fi
 
-feh  --scale-down -g 1600x200+5+30 "outputs/txt2img-samples/$1" &
-feh  --scale-down -g 1600x200+0+250 "outputs/txt2img-samples/$2" &
+if [[ $1 =~ "/" ]]; then
+   folder=""
+else
+   folder="outputs/txt2img-samples"
+fi
+
+feh  --scale-down -g 1600x200+5+30  "$folder$1" &
+feh  --scale-down -g 1600x200+0+250 "$folder$2" &
 if [ ! -z "$3" ]
 then
- feh  --scale-down -g 1600x200+0+470 "outputs/txt2img-samples/$3" &
+ feh  --scale-down -g 1600x200+0+470 "$folder$3" &
 fi
 if [ ! -z "$4" ]
 then
- feh  --scale-down -g 1600x200+0+690 "outputs/txt2img-samples/$4" &
+ feh  --scale-down -g 1600x200+0+690 "$folder$4" &
 fi

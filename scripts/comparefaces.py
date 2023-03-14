@@ -3,6 +3,7 @@ import sys
 import os
 import glob
 import argparse
+import time
 
 def compare_paths(path1, path2, verbose=False):
     if os.path.isfile(path1):
@@ -32,7 +33,7 @@ def compare_paths(path1, path2, verbose=False):
                 print("%d/%d: %s vs %s" %(curr_pair_count, total_pair_count, img1_name, img2_name))
             try:
                 result = DeepFace.verify(img1_path = img1_path, img2_path = img2_path, 
-                                        model_name="ArcFace", detector_backend = "retinaface")
+                                         model_name="ArcFace", detector_backend = "retinaface")
             except:
                 except_pair_count += 1
                 continue
@@ -60,6 +61,9 @@ if __name__ == "__main__":
     skip_subjs = [ 'lilbub', 'jiffpom', 'princessmonstertruck' ]
     path1 = sys.argv[1]
     path2 = sys.argv[2]
+
+    begin = time.time()
+
     if len(sys.argv) == 3:
         if path1 == '--self':
             subdirs = os.listdir(path2)
@@ -82,3 +86,5 @@ if __name__ == "__main__":
     else:
         breakpoint()
         
+    end = time.time()
+    print("Time elapsed: %.2f seconds" %(end - begin))
