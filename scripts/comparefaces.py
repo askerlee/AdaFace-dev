@@ -58,7 +58,7 @@ if __name__ == "__main__":
         print("Usage: python comparefaces.py path1 path2")
         exit(1)
 
-    skip_subjs = [ 'lilbub', 'jiffpom', 'princessmonstertruck' ]
+    skip_subjs = [ 'corgi', 'lilbub', 'jiffpom', 'princessmonstertruck' ]
     path1 = sys.argv[1]
     path2 = sys.argv[2]
 
@@ -69,6 +69,9 @@ if __name__ == "__main__":
             subdirs = os.listdir(path2)
             for subdir in subdirs:
                 subdir_path = os.path.join(path2, subdir)
+                if os.path.isdir(subdir_path) == False:
+                    continue
+
                 print("Self comparing %s:" %(subdir_path))
                 compare_paths(subdir_path, subdir_path)
         else:            
@@ -81,6 +84,8 @@ if __name__ == "__main__":
                     continue
                 subdir_path1 = os.path.join(path2, subdir)
                 subdir_path2 = os.path.join(path3, subdir)
+                if os.path.isdir(subdir_path1) == False or os.path.isdir(subdir_path2) == False:
+                    continue
                 print("Pair comparing %s vs %s:" %(subdir_path1, subdir_path2))
                 compare_paths(subdir_path1, subdir_path2)        
     else:
