@@ -6,8 +6,7 @@ __pycache__/
 /data_unused
 /outputs/*
 /generations/*
-/samples/*
-/samples-old/*
+/samples*/*
 /models/stable-diffusion-v-1-4-original
 *.txt
 !requirements.txt
