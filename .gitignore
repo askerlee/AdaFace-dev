@@ -3,8 +3,8 @@ __pycache__/
 *$py.class
 /logs/*
 /commercial/*
-/data_unused/*
-/data_unused
+/data_extra/*
+/data_extra
 /data-256/*
 /outputs/*
 /generations/*
