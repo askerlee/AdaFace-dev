@@ -1,10 +1,10 @@
 #!/usr/bin/fish
 #set fish_trace 1
 set GPU 0
-set niter 1
-set outdir samples-dreambooth
-set scale 10
+set n_iter 1
 set config v1-inference.yaml
+set scale 10
+set outdir samples-dreambooth
 fish scripts/composition-cases.sh
 
 for case in $cases
@@ -30,5 +30,5 @@ for case in $cases
     	continue
     end
 
-    python3 scripts/stable_txt2img.py --config configs/stable-diffusion/$config --ddim_eta 0.0 --n_samples 8 --n_iter 1 --scale 5.0 --ddim_steps 100 --ckpt logs/$ckptname/checkpoints/last.ckpt --prompt "$prompt2" --gpu $GPU --scale $scale --n_iter $niter --outdir $outdir --indiv_subdir $folder
+    python3 scripts/stable_txt2img.py --config configs/stable-diffusion/$config --ddim_eta 0.0 --n_samples 8 --ddim_steps 100 --ckpt logs/$ckptname/checkpoints/last.ckpt --prompt "$prompt2" --gpu $GPU --scale $scale --n_iter $n_iter --outdir $outdir --indiv_subdir $folder
 end
