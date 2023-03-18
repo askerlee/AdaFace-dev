@@ -2,10 +2,13 @@ __pycache__/
 *.py[cod]
 *$py.class
 /logs/*
+/commercial/*
 /data_unused/*
 /data_unused
+/data-256/*
 /outputs/*
 /generations/*
+/samples*
 /samples*/*
 /models/stable-diffusion-v-1-4-original
 *.txt

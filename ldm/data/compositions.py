@@ -6,7 +6,7 @@ composition_regexs = \
   "doing (makeup|housekeeping|gardening|exercise)",
   "carrying a (bag|backpack|luggage|laptop|book|briefcase|purse|suitcase|bouquet|baby|cat|dog|teddy bear)",
   "holding a (mobile phone|book|cup of water|piece of paper|flower|bouquet|pen|sign|cat|dog|teddy bear|baby)",
-  "sitting (on a table|on a chair|on a bench|on a tank|in a wheelchair|on the ground)",
+  "(sitting|sleeping) (on a table|on a chair|on a bench|on a tank|in a wheelchair|on the ground|on flying cloud)",
   "leaning (against a wall|against a tree|against a table|on a chair|on a car)",
   "jumping on a (table|stair|board|chair|bed|box|trampoline)",
   "punching a (tree|wall|table|punching bag)",
@@ -19,7 +19,7 @@ composition_regexs = \
   "kicking a (ball|bottle|tree|rock|punching bag|telephone booth)",
   "playing (a card game|a video game|a piano|a violin|basketball|tennis)",
   "riding a (bike|motorcycle|scooter|horse|car|bus|train|boat)",
-  "kissing a (boy|girl|baby|lady|man|cat)",
+  "(kissing|hugging|holding) a (boy|girl|baby|lady|man|cat)",
   "dancing with a (boy|girl|lady|man|villager)",
   "standing (besides a friend|besides a tree|besides a car|in a river|on a table|on a stair|on a board|on a box)",
   "picking up a (rock|leaf|mushroom|stick|flower|shell|pebble|twig|fruit)",
@@ -35,17 +35,26 @@ composition_regexs = \
   "at (a beach|a table|a park|a concert|a gym|a library|a mall|a movie theater|a hotel room|a theme park)",
   "next to (a friend|a tree|a car|a river|a lake|a mountain|an ocean|a playground|a statue|a panda)",
   "made of (metal|stainless steel|fractal flame|marble|rubber|bronze|ice)",
+  # Prompts below are from DreamBooth evaluation dataset
+  #LINK - https://github.com/google/dreambooth/blob/main/dataset/prompts_and_classes.txt
+  "(in the jungle|in the snow|on a cobblestone street|floating on top of water|floating in an ocean of milk)",
+  "with a (city|mountain|blue house|wheat field|a tree and autumn leaves|Eiffel Tower) in the background",
+  "on top of (pink fabric|a wooden floor|green grass with sunflowers around it|a mirror|the sidewalk in a crowded street|a dirt road|a white rug|a purple rug in a forest)",
+  "in red|in purple|in shiny fabric|of cube shape|who is wet",
+  "in a (chef|firefighter|police|a purple wizard) outfit",
+  "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt)",
 ]
 
 all_styles = [ "cartoon", "animation", "anime", "comic book", "steampunk", "oil on canvas", "oil painting",
                "sci-fi movie", "scuplture", "bronze sculpture", "abyss art", "blade runner", "cyberpunk",
-               "synthwave", "pencil sketch", 
+               "synthwave", "pencil sketch", "pastel colors", "illustration for childrens book", 
              ]
 # concept art|realistic painting|character design|anime sketch|trending in artstation|hyper realistic|vivid colors|clear face|detailed face
 all_modifiers = [ "concept art", "realistic painting", "character design", "anime sketch", 
                   "trending in artstation", "hyper realistic", "vivid colors", "clear face", 
                   "detailed face", "semirealism", "hyperrealistic", "highly detailed", "octane render",
-                  "unreal 5", "photorealistic", "sharp focus", "digital painting", "illustration"  
+                  "unreal 5", "photorealistic", "sharp focus", "digital painting", "illustration",
+                  "volumetric lighting", "dreamy", 
                 ]
 
 all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve" ]
@@ -85,5 +94,5 @@ def sample_compositions(N):
 
     return compositions
 
-if __name__ == '__main__':
-    print('\n'.join(sample_compositions(100)))
+if __name__ == "__main__":
+    print("\n".join(sample_compositions(100)))
