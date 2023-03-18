@@ -10,7 +10,7 @@ def parse_args():
     parser.add_argument("--gen_comp", dest="gen_single", action="store_false", 
                         help="Generate composition images (default: False, generating single images)")
     parser.add_argument("--guidance_scale", type=float, default=-1, help="guidance scale")
-    parser.add_argument("--model_suffix", dest="model_suffix", type=str, default="", 
+    parser.add_argument("--model", dest="model_suffix", type=str, default="", 
                         help="model suffix")
     parser.add_argument("--num_samples", type=int, default=8, help="number of samples")
     # composition case file path
@@ -57,10 +57,10 @@ if args.guidance_scale == -1:
 
 if args.gen_single:
     subjects = [ "alexachung", "caradelevingne", "corgi", "donnieyen", "gabrielleunion", 
-                "iainarmitage", "jaychou", "jenniferlawrence", "jiffpom", "keanureeves", 
-                "lilbub", "lisa", "masatosakai", "michelleyeoh", "princessmonstertruck", 
-                "ryangosling", "sandraoh", "selenagomez", "smritimandhana", "spikelee", 
-                "stephenchow", "taylorswift", "timotheechalamet", "tomholland", "zendaya" ]
+                 "iainarmitage", "jaychou", "jenniferlawrence", "jiffpom", "keanureeves", 
+                 "lilbub", "lisa", "masatosakai", "michelleyeoh", "princessmonstertruck", 
+                 "ryangosling", "sandraoh", "selenagomez", "smritimandhana", "spikelee", 
+                 "stephenchow", "taylorswift", "timotheechalamet", "tomholland", "zendaya" ]
 
     # For plain subject generation.
     prompts = [ "" for i in range(len(subjects))]
@@ -77,7 +77,7 @@ else:
         prompts.append(case[1])
         subj_folders.append(case[2])
 
-for subject, prompt, subj_folder in list(zip(subjects, prompts, subj_folders))[:5]:
+for subject, prompt, subj_folder in list(zip(subjects, prompts, subj_folders)):
     print("Subject {}:".format(subject))
     ckpt_path = f"{args.ckpt_folder}/{subject}/final_lora.safetensors"
     if os.path.exists(ckpt_path):

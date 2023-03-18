@@ -1,5 +1,18 @@
 #!/usr/bin/fish
-set fish_trace 1
+set self (status basename)
+
+if test (count $argv) -lt 3
+    echo "Usage: $self GPU-ID L H"
+    exit 1
+end
+
+# set fish_trace 1
+
+set GPU $argv[1]
+set L $argv[2]
+set H $argv[3]
+echo $self $GPU $L $H
+
 set -l subjects alexachung         caradelevingne corgi        donnieyen   gabrielleunion iainarmitage jaychou     jenniferlawrence jiffpom    keanureeves      lilbub       lisa                masatosakai michelleyeoh  princessmonstertruck ryangosling sandraoh      selenagomez    smritimandhana spikelee    stephenchow   taylorswift  timotheechalamet  tomholland            zendaya
 set MODEL_NAME "runwayml/stable-diffusion-v1-5"
 set BS 2
@@ -8,11 +21,13 @@ set LR 1e-4
 set LR_TEXT 1e-5
 set LR_TI 5e-4
 
-# alexachung .. masatosakai
-for i in (seq 1 13)
+# $0 0 1 13: alexachung .. masatosakai, on GPU0
+# $0 1 14 25: michelleyeoh .. zendaya,  on GPU1
+for i in (seq $L $H)
     set subject $subjects[$i]
     set INSTANCE_DIR "data/$subject"
     set OUTPUT_DIR   "exps$BS-$ACCUMU_STEPS/$subject"
+    echo $subject
 
     lora_pti \
     --pretrained_model_name_or_path=$MODEL_NAME  \
@@ -26,7 +41,6 @@ for i in (seq 1 13)
     --learning_rate_unet=$LR \
     --learning_rate_text=$LR_TEXT \
     --learning_rate_ti=$LR_TI \
-    --color_jitter \
     --lr_scheduler="linear" \
     --lr_warmup_steps=0 \
     --placeholder_tokens="<s1>" \
@@ -40,7 +54,8 @@ for i in (seq 1 13)
     --weight_decay_lora=0.001\
     --continue_inversion \
     --continue_inversion_lr=1e-4 \
-    --device="cuda:0" \
+    --device="cuda:$GPU" \
     --lora_rank=1
+    # --color_jitter \
 
 end

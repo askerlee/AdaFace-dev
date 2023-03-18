@@ -1,6 +1,9 @@
 #!/usr/bin/fish
-set fish_trace 1
-set GPU "0"
+if test -z "$GPU"
+    set GPU 0
+end
+
+# set fish_trace 1
 set suffix ", instagram"
 set -l subjects alexachung caradelevingne corgi donnieyen   gabrielleunion ianarmitage  jaychou     jenniferlawrence jiffpom    keanureeves lilbub lisa         masatosakai michelleyeoh  princessmonstertruck ryangosling sandraoh      selenagomez smritimandhana spikelee    stephenchow  taylorswift timotheechalamet  tomholland        zendaya
 set -l prompts  girl       girl           corgi "asian man" "black woman"  "young boy"  "asian man" girl             "pom dog"  "white man" cat    "asian girl" "asian man" "asian woman" "black persian cat"  "white man" "asian woman" girl        "indian girl"  "black man" "asian man"  girl        "white young man" "white young man" girl
@@ -17,5 +20,7 @@ for i in (seq 25)
     	echo Unable to find the checkpoint of $subject
     	continue
     end
+
+    echo $subject: $ckptname $prompt
     python3 scripts/stable_txt2img.py --ddim_eta 0.0 --n_samples 8 --ddim_steps 100 --ckpt logs/$ckptname/checkpoints/last.ckpt --prompt $prompt --gpu $GPU --scale $scale --n_iter $n_iter --outdir $outdir --indiv_subdir $subject
 end

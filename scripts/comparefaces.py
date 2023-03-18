@@ -66,7 +66,7 @@ if __name__ == "__main__":
 
     if len(sys.argv) == 3:
         if path1 == '--self':
-            subdirs = os.listdir(path2)
+            subdirs = sorted(os.listdir(path2))
             for subdir in subdirs:
                 subdir_path = os.path.join(path2, subdir)
                 if os.path.isdir(subdir_path) == False:
@@ -78,7 +78,7 @@ if __name__ == "__main__":
             compare_paths(path1, path2, verbose=False)
     elif len(sys.argv) == 4 and path1 == '--pair':
             path3 = sys.argv[3]
-            subdirs = os.listdir(path2)
+            subdirs = sorted(os.listdir(path2))
             for subdir in subdirs:
                 if subdir in skip_subjs:
                     continue
