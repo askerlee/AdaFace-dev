@@ -2,7 +2,7 @@
 
 > Teaching Diffusion Models New Concepts via Adaptive Prompts
 >
-> Shaohua Li, Xiuchao Sui, Weide Liu, Hong Yang, Menghan Zhou, Xinxing Xu, Yong Liu, Rick Goh
+> Shaohua Li, Xiuchao Sui, Hong Yang, Weide Liu, Menghan Zhou, Xinxing Xu, Yong Liu, Rick Goh
 >
 > Abstract: Large-scale diffusion models have the ability to vividly generate a wide range of items with text guidance. However, generating a concept that is new to the model, such as oneself or one's pet, is a highly challenging task that has yet to be explored extensively. This task, known as **Subject-Driven Generation**, is challenging due to the limited training images for the subject and the potential to compromise the existing capabilities of the model while capturing the subject's unique characteristics. This paper proposes Adaptive Prompts (AdaPrompt) that can guide the diffusion model to generate images of a **new concept** in various contexts. AdaPrompt effectively captures the subject's characteristics and closely guides the model to generate authentic images of the subject. Additionally, it preserves existing concepts by operating solely in the textual input space without modifying the pre-trained model weights. Moreover, AdaPrompt is regularized with a novel **Compositional Delta Loss** to preserve its compositionality for building complex prompts. The advantages of AdaPrompt over existing methods, DreamBooth and Textual Inversion, have been validated through experiments on a set of few-shot subject images.
 > 
@@ -25,6 +25,8 @@ To set up the the environment using pip, please run
 ```bash
 pip install -r requirements.txt
 ```
+
+Please also install fish with `apt install fish`, which is required for running batch training/test scripts.
 
 You will also need the official Stable Diffusion downloadable at [https://huggingface.co/CompVis/stable-diffusion-v1-4](https://huggingface.co/CompVis/stable-diffusion-v1-4).
 

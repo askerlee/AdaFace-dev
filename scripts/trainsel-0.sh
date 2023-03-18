@@ -7,7 +7,7 @@ set -l subjects alexachung         caradelevingne corgi        donnieyen   gabri
 set -l prompts  "young girl woman"  "young girl"  "corgi dog"  "asian man" "black woman"  "young boy"  "asian man" "young woman"    "pom dog"  "keanu cool man" "tabby cat"  "asian young girl"  "asian man" "asian woman" "black persian cat"  "white man" "asian woman" "young girl"   "indian girl"  "black man" "asian man"   "cute girl"  "french young man" "young handsome man" "young girl zendaya"
 set -l weights  "1 2 2"             "1 2"         "2 1"        "1 2"       "1 2"          "1 2"        "1 2"       "1 2"            "1 1"      "2 1 2"          "1 2"        "1 1 2"             "1 2"        "1 2"        "1 1 3"              "1 2"        "1 2"        "1 2"          "1 2"          "1 2"        "1 2"        "1 2"        "1 1 2"            "1 1 2"              "1 2 2"
 
-for i in 4 8 9 11 12
+for i in 4 8 9 11 12 14 18 19 22 25
     set subject $subjects[$i]
     set prompt  $prompts[$i]
     set weight  (string split " " $weights[$i])
