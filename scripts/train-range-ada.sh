@@ -1,19 +1,21 @@
 #!/usr/bin/fish
 set self (status basename)
+echo $self $argv
 
-if test (count $argv) -lt 3
-    echo "Usage: $self GPU-ID L H"
+argparse --min-args 2 --max-args 2 'gpu=' 'extra=' -- $argv
+or begin
+    echo "Usage: $self [--gpu GPU-ID] low high [--extra EXTRA_ARGS]"
     exit 1
 end
 
 # set fish_trace 1
 
-set GPU $argv[1]
-set L $argv[2]
-set H $argv[3]
-echo $self $GPU $L $H
+set -q _flag_gpu; and set GPU $_flag_gpu; or set GPU 0
+set L $argv[1]
+set H $argv[2]
+set EXTRA_ARGS $_flag_extra
 
-set EXTRA_ARGS
+#                1                    2            3             4            5               6           7             8            9               10          11            12                    13             14          15                  16          17             18              19          20             21            22              23          24                   25    
 set -l subjects alexachung         caradelevingne corgi        donnieyen   gabrielleunion iainarmitage jaychou     jenniferlawrence jiffpom    keanureeves      lilbub       lisa                masatosakai michelleyeoh  princessmonstertruck ryangosling sandraoh      selenagomez    smritimandhana spikelee    stephenchow   taylorswift  timotheechalamet  tomholland            zendaya
 set -l prompts  "young girl woman"  "young girl"  "corgi dog"  "asian man" "black woman"  "young boy"  "asian man" "young woman"    "pom dog"  "keanu cool man" "tabby cat"  "asian young girl"  "asian man" "asian woman" "black persian cat"  "white man" "asian woman" "young girl"   "indian girl"  "black man" "asian man"   "cute girl"  "french young man" "young handsome man" "young girl zendaya"
 set -l weights  "1 2 2"             "1 2"         "2 1"        "1 2"       "1 2"          "1 2"        "1 2"       "1 2"            "1 1"      "2 1 2"          "1 2"        "1 1 2"             "1 2"        "1 2"        "1 1 3"              "1 2"        "1 2"        "1 2"          "1 2"          "1 2"        "1 2"        "1 2"        "1 1 2"            "1 1 2"              "1 2 2"

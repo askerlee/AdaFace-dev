@@ -17,8 +17,14 @@ set -a cases "selenagomez | as jedi woman with lightsaber, star wars, by artgerm
 set -a cases "taylorswift | as jedi woman with lightsaber, star wars, by artgerm and moebius, beautiful, hyperrealism, highly detailed, 8k, intricate, closeup, dynamic dramatic dark moody lighting, shadows, artstation, concept art, octane render, 8k | taylorswift-starwars | girl, instagram"
 set -a cases "michelleyeoh | a portrait of a {}, clear face, posing with a tabby cat, by justin gerard and greg rutkowski, digital art, realistic painting, dnd, character design, trending on artstation | michelleyeoh-cat | asian woman, instagram"
 set -a cases "zendaya | a portrait of a cute brunette {}, clear face, posing with a tabby cat, by justin gerard and greg rutkowski, digital art, realistic painting, dnd, character design, trending on artstation | zendaya-cat | girl, instagram"
+set -a cases "taylorswift | neutral face, wearing blue silk dress with diamond studded lily iris flowers, fashion model style, high resolution, realistic anatomy photography | taylorswift-bluedress | girl, instagram"
+set -a cases "tomholland | wearing creative jewel suit with high collar and purple blue gemstone wings and glass crown, fashion model style, high resolution, realistic anatomy photography | tomholland-jewelsuit | white young man, instagram"
 # Temporary clear the previous cases, so as to only generate the following cases. 
 # Undo clearing by commenting out the following line.
-# set cases
-set -a cases "jiffpom | cute furry {} sitting on flying cloud, 3D render, cute, kawaii, isolated on white background, digital art, ethereal, volumetric lighting, dreamy, pastel colors, illustration for childrens book, hyperrealistic | jiffpom-cloud | pom dog, instagram"
+set -a cases "jiffpom | cute furry {} sitting on flying cloud, 3D render, digital art, ethereal, volumetric lighting, dreamy, pastel colors, illustration for childrens book, hyperrealistic | jiffpom-cloud | pom dog, instagram"
+set -a cases "keanureeves | dressed as mario, digital art, hyperdetailed, illustration, trending on artstation, matte painting, CGSociety, pinterest | keanureeves-supermario | white man, instagram"
+set -a cases "timotheechalamet | dressed as mario, digital art, hyperdetailed, illustration, trending on artstation, matte painting, CGSociety, pinterest | tomholland-supermario | white young man, instagram"
+set -a cases "lilbub | a cute little {} in the shape of a ball, pixar style, 4k, portrait, forest background, cinematic lighting, award winning creature portrait photography | lilbub-ball | tabby cat, instagram"
+set cases
+set -a cases "jenniferlawrence | beautiful Gold Knightess redhead hysterically laughing out loud and dancing, visible eye laughter lines, visible smile lines, funny weird facial expression, tightly closed eyes, open gaping mouth, close up face, long flowing hair, photorealistic, wearing intricately designed high chroma tank top, perfect clean defined underarms, chiaroscuro solid colors, divine elegance, perfect teeth, beautiful intricate halo | jenniferlawrence-laugh | girl, instagram"
 set -Ux cases $cases

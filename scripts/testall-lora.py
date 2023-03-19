@@ -16,7 +16,9 @@ def parse_args():
     # composition case file path
     parser.add_argument("--case_file", type=str, default="scripts/compositon-cases.sh", 
                         help="case script file")
-
+    # range of subjects to generate
+    parser.add_argument("--range", type=str, default=None, 
+                        help="Range of subjects to generate (Index starts from 1 and is inclusive, e.g., 1-25)")
     args = parser.parse_args()
     return args
 
@@ -30,7 +32,7 @@ def parse_case_file(case_file_path):
         lines = [line.strip() for line in lines]
         lines = [line for line in lines if len(line) > 0 and line[0] != "#" and re.search(r"^set [-la\s]*cases", line) is not None ]
         for line in lines:
-            # Clear all previous cases.
+            # Clear all previous cases. This is to simulate the behavior of a shell script.
             if re.match(r"^set cases", line) is not None:
                 cases = []
                 continue
@@ -56,11 +58,23 @@ if args.guidance_scale == -1:
     args.guidance_scale = 5 if args.gen_single else 10
 
 if args.gen_single:
+    #                  1              2             3          4             5
     subjects = [ "alexachung", "caradelevingne", "corgi", "donnieyen", "gabrielleunion", 
+    #                  6              7             8          9             10
                  "iainarmitage", "jaychou", "jenniferlawrence", "jiffpom", "keanureeves", 
+    #                  11             12            13         14            15
                  "lilbub", "lisa", "masatosakai", "michelleyeoh", "princessmonstertruck", 
+    #                  16             17            18         19            20
                  "ryangosling", "sandraoh", "selenagomez", "smritimandhana", "spikelee", 
+    #                  21             22            23         24            25
                  "stephenchow", "taylorswift", "timotheechalamet", "tomholland", "zendaya" ]
+
+    if args.range is not None:
+        range_strs = args.range.split("-")
+        # low is 1-indexed, converted to 0-indexed by -1.
+        # high is inclusive, converted to exclusive without adding offset.
+        low, high = int(range_strs[0]) - 1, int(range_strs[1])
+        subjects = subjects[low:high]
 
     # For plain subject generation.
     prompts = [ "" for i in range(len(subjects))]
@@ -104,13 +118,15 @@ for subject, prompt, subj_folder in list(zip(subjects, prompts, subj_folders)):
     # create folder f"samples-lora/{subject}" if it doesn't exist
     os.makedirs(f"{args.out_folder}/{subj_folder}", exist_ok=True)
 
+    if "{}" in prompt:
+        prompt2 = prompt.format("<s1>")
+    else:
+        prompt2 = "<s1> " + prompt
+        prompt2 = prompt2.strip()
+    print("Prompt:", prompt2)
+
     for i in range(8):
         torch.manual_seed(i)
-        if "{}" in prompt:
-            prompt2 = prompt.format("<s1>")
-        else:
-            prompt2 = "<s1> " + prompt
-
         image = pipe(prompt2, num_inference_steps=50, guidance_scale=args.guidance_scale).images[0]
         imgs.append(image)
         image.save(f"{args.out_folder}/{subj_folder}/{i:05d}.jpg")
