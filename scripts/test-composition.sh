@@ -25,7 +25,7 @@ set -q _flag_ckptiter; and set ckpt_iter $_flag_ckptiter; or set ckpt_iter 4000
 set outdir samples-$method
 set config v1-inference-$method.yaml
 
-set -q _flag_casefile; and set casefile $_flag_casefile; or set casefile scripts/composition-cases.txt
+set -q _flag_casefile; and set casefile $_flag_casefile; or set casefile scripts/info-compositions.txt
 fish $casefile
 
 for case in $cases
