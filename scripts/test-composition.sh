@@ -2,16 +2,16 @@
 set self (status basename)
 echo $self $argv
 
-argparse --min-args 1 --max-args 1 'gpu=' 'steps=' 'scale=' 'niter=' -- $argv
+argparse --min-args 1 --max-args 1 'gpu=' 'steps=' 'scale=' 'niter=' 'ckptiter=' 'casefile=' -- $argv
 or begin
-    echo "Usage: $self [--gpu GPU-ID] [--steps DDIM_STEPS] [--scale scale] [--niter n_iter] (ada|ti)"
+    echo "Usage: $self [--gpu ID] [--steps T] [--scale S] [--niter N] [--ckptiter N2] [--casefile F] (ada|ti)"
     exit 1
 end
 
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu GPU-ID] [--steps DDIM_STEPS] [--scale scale] [--niter n_iter] (ada|ti)"
+    echo "Usage: $self [--gpu ID] [--steps T] [--scale S] [--niter N] [--casefile F] (ada|ti)"
     exit 1
 end
 
@@ -20,10 +20,13 @@ set -q _flag_gpu; and set GPU $_flag_gpu; or set GPU 0
 set -q _flag_steps; and set ddim_steps $_flag_steps; or set ddim_steps 100
 set -q _flag_scale; and set scale $_flag_scale; or set scale 10
 set -q _flag_niter; and set n_iter $_flag_niter; or set n_iter 1
+set -q _flag_ckptiter; and set ckpt_iter $_flag_ckptiter; or set ckpt_iter 4000
 
 set outdir samples-$method
 set config v1-inference-$method.yaml
-fish scripts/composition-cases.sh
+
+set -q _flag_casefile; and set casefile $_flag_casefile; or set casefile scripts/composition-cases.txt
+fish $casefile
 
 for case in $cases
     echo \"$case\"
@@ -46,5 +49,5 @@ for case in $cases
 
     echo $subject: $ckptname 
     echo Prompt: $prompt
-    python3 scripts/stable_txt2img.py --config configs/stable-diffusion/$config --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --ddim_eta 0.0 --n_samples 8 --ddim_steps $ddim_steps --embedding_paths logs/$ckptname/checkpoints/embeddings_gs-4000.pt --gpu $GPU --prompt $prompt --scale $scale --n_iter $n_iter --outdir $outdir --indiv_subdir $folder
+    python3 scripts/stable_txt2img.py --config configs/stable-diffusion/$config --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --ddim_eta 0.0 --n_samples 8 --ddim_steps $ddim_steps --embedding_paths logs/$ckptname/checkpoints/embeddings_gs-$ckpt_iter.pt --gpu $GPU --prompt $prompt --scale $scale --n_iter $n_iter --outdir $outdir --indiv_subdir $folder
 end
