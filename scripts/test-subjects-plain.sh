@@ -15,7 +15,6 @@ else
     exit 1
 end
 
-# set fish_trace 1
 set -q _flag_gpu; and set GPU $_flag_gpu; or set GPU 0
 set -q _flag_steps; and set ddim_steps $_flag_steps; or set ddim_steps 100
 set -q _flag_scale; and set scale $_flag_scale; or set scale 5
@@ -56,9 +55,13 @@ for i in (seq $L $H)
     echo $subject: $ckptname 
     echo prompt=\"$prompt\", scale=$scale
 
+    set fish_trace 1
+
     if [ "$argv[1]" = 'db' ]
         python3 scripts/stable_txt2img.py --config configs/stable-diffusion/$config --ckpt logs/$ckptname/checkpoints/last.ckpt --ddim_eta 0.0 --n_samples 8 --ddim_steps $ddim_steps --gpu $GPU --prompt $prompt --scale $scale --n_iter $n_iter --outdir $outdir --indiv_subdir $folder
     else
         python3 scripts/stable_txt2img.py --config configs/stable-diffusion/$config --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --ddim_eta 0.0 --n_samples 8 --ddim_steps $ddim_steps --embedding_paths logs/$ckptname/checkpoints/embeddings_gs-$ckpt_iter.pt --gpu $GPU --prompt $prompt --scale $scale --n_iter $n_iter --outdir $outdir --indiv_subdir $folder
     end
+
+    set fish_trace 0
 end

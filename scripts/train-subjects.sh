@@ -44,6 +44,8 @@ for i in indices
     set db_prompt0 "$db_prompts[$i]"
     set db_prompt  "$db_prompt0$db_suffix"
 
+    set fish_trace 1
+
     if [ $method = 'ti' ]
         echo $subject: $ti_initword
         python3 main.py --base configs/stable-diffusion/v1-finetune-ti.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root data/$subject/ -n $subject-ti --no-test --max_training_steps $max_iters --placeholder_string "z" --init_word $ti_initword --init_word_weights 1 $EXTRA_ARGS
@@ -55,4 +57,6 @@ for i in indices
         echo $subject: $ada_prompt $ada_weight
         python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root data/$subject/ -n $subject-ada --no-test --max_training_steps $max_iters --placeholder_string "z" --init_word $ada_prompt --init_word_weights $ada_weight $EXTRA_ARGS
     end
+
+    set fish_trace 0
 end
