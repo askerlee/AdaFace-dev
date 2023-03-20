@@ -4,9 +4,11 @@ set -l subjects     backpack        backpack_dog    bear_plushie    berry_bowl  
 set -l db_prompts   backpack        backpack        stuffed animal  bowl            can     candle  cat     cat     clock   sneaker           dog      dog     dog     dog     dog     dog     dog     toy             boot            stuffed animal          toy             glasses         toy             toy     cartoon         toy             sneaker         teapot  vase    stuffed animal
 set -l ada_prompts  backpack        backpack        stuffed animal  bowl            can     candle  cat     cat     clock   sneaker           dog      dog     dog     dog     dog     dog     dog     toy             boot            stuffed animal          toy             glasses         toy             toy     cartoon         toy             sneaker         teapot  vase    stuffed animal
 set -l ada_weights  1               1               "1 2"           1               1       1       1       1       1       1                 1        1       1       1       1       1       1       1               1               "1 2"                   1               1               1               1       1               1               1               1       1       "1 2"
-set -Ux subjects    $subjects
-set -Ux db_prompts  $db_prompts
-set -Ux ada_prompts $ada_prompts
-set -Ux ada_weights $ada_weights
+
+set -Ux subjects        $subjects
+set -Ux db_prompts      $db_prompts
+set -Ux ada_prompts     $ada_prompts
+set -Ux ada_weights     $ada_weights
 # No suffix for the DreamBooth eval set, as they are objects/animals, as opposed to faces.
-set -Ux db_suffix   ""
+set -Ux db_suffix       ""
+set -Ux data_folder     db-eval-dataset

@@ -24,13 +24,13 @@ set -q _flag_accu; and set ACCUMU_STEPS $_flag_accu; or set ACCUMU_STEPS 2
 set LR 1e-4
 set LR_TEXT 1e-5
 set LR_TI 5e-4
-echo "subj_file=$subj_file, GPU=$GPU, BS=$BS, ACCUMU_STEPS=$ACCUMU_STEPS"
+echo "subj_file=$subj_file, data_folder=$data_folder, GPU=$GPU, BS=$BS, ACCUMU_STEPS=$ACCUMU_STEPS"
 
 # $0 0 1 13: alexachung .. masatosakai, on GPU0
 # $0 1 14 25: michelleyeoh .. zendaya,  on GPU1
 for i in (seq $L $H)
     set subject $subjects[$i]
-    set INSTANCE_DIR "data/$subject"
+    set INSTANCE_DIR "$data_folder/$subject"
     set OUTPUT_DIR   "exps$BS-$ACCUMU_STEPS/$subject"
     echo $subject
 

@@ -35,7 +35,7 @@ end
 set -q _flag_selset; and set -l indices 4 8 9 11 12 14 18 19 22 25; or set -l indices (seq $L $H)
 # $0 0 1 13: alexachung .. masatosakai, on GPU0
 # $0 1 14 25: michelleyeoh .. zendaya,  on GPU1
-for i in indices
+for i in $indices
     set subject     $subjects[$i]
     set ada_prompt  $ada_prompts[$i]
     set ada_weight  (string split " " $ada_weights[$i])
@@ -48,14 +48,14 @@ for i in indices
 
     if [ $method = 'ti' ]
         echo $subject: $ti_initword
-        python3 main.py --base configs/stable-diffusion/v1-finetune-ti.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root data/$subject/ -n $subject-ti --no-test --max_training_steps $max_iters --placeholder_string "z" --init_word $ti_initword --init_word_weights 1 $EXTRA_ARGS
+        python3 main.py --base configs/stable-diffusion/v1-finetune-ti.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-ti --no-test --max_training_steps $max_iters --placeholder_string "z" --init_word $ti_initword --init_word_weights 1 $EXTRA_ARGS
     else if [ $method = 'db' ]
         echo $subject: $db_prompt
         # $EXTRA_ARGS is not for DreamBooth. It is for AdaPrompt/TI only.
-        python3 main.py --base configs/stable-diffusion/v1-finetune_unfrozen.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root data/$subject -n $subject-dreambooth --no-test --max_training_steps $max_iters --token "z" --class_word $db_prompt
+        python3 main.py --base configs/stable-diffusion/v1-finetune_unfrozen.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-dreambooth --no-test --max_training_steps $max_iters --token "z" --class_word $db_prompt
     else
         echo $subject: $ada_prompt $ada_weight
-        python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root data/$subject/ -n $subject-ada --no-test --max_training_steps $max_iters --placeholder_string "z" --init_word $ada_prompt --init_word_weights $ada_weight $EXTRA_ARGS
+        python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-ada --no-test --max_training_steps $max_iters --placeholder_string "z" --init_word $ada_prompt --init_word_weights $ada_weight $EXTRA_ARGS
     end
 
     set fish_trace 0
