@@ -25,7 +25,6 @@ set -q _flag_ckptiter; and set ckpt_iter $_flag_ckptiter; or set ckpt_iter 4000
 set -q argv[2]; and set L $argv[2]; or set L 1
 set -q argv[3]; and set H $argv[3]; or set H 25
 
-set db_suffix ", instagram"
 set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file scripts/info-subjects.txt
 # Read the subject list by fish shell.
 fish $subj_file
@@ -43,7 +42,7 @@ for i in (seq $L $H)
     set folder  $subject
     set db_prompt0 $db_prompts[$i]
     if [ "$argv[1]" = 'db' ]
-        set prompt "a z $prompt0$suffix"
+        set prompt "a z $prompt0$db_suffix"
     else
         set prompt "a z"
     end

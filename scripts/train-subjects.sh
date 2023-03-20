@@ -17,7 +17,6 @@ else
 end
 
 # set fish_trace 1
-set db_suffix ", instagram"
 set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file scripts/info-subjects.txt
 fish $subj_file
 
@@ -43,7 +42,7 @@ for i in indices
     # initword is for TI only. It is the last word of the init words of ada
     set ti_initword (string split " " $ada_prompt)[-1]
     set db_prompt0 "$db_prompts[$i]"
-    set db_prompt  "$db_prompt0$suffix"
+    set db_prompt  "$db_prompt0$db_suffix"
 
     if [ $method = 'ti' ]
         echo $subject: $ti_initword

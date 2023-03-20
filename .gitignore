@@ -11,5 +11,5 @@ __pycache__/
 /samples*
 /samples*/*
 /models/stable-diffusion-v-1-4-original
-*.txt
+/*.txt
 !requirements.txt

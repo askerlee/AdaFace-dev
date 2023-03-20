@@ -9,3 +9,4 @@ set -Ux subjects    $subjects
 set -Ux db_prompts  $db_prompts
 set -Ux ada_prompts $ada_prompts
 set -Ux ada_weights $ada_weights
+set -Ux db_suffix ", instagram"
