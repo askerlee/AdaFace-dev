@@ -61,9 +61,14 @@ for case in $cases
 
     echo $subject: $ckptname 
     echo Prompt: $prompt
+
+    set fish_trace 1
+    
     if [ "$argv[1]" = 'db' ]
         python3 scripts/stable_txt2img.py --config configs/stable-diffusion/$config --ckpt logs/$ckptname/checkpoints/last.ckpt --ddim_eta 0.0 --n_samples 8 --ddim_steps $ddim_steps --gpu $GPU --prompt "$prompt" --scale $scale --n_iter $n_iter --outdir $outdir --indiv_subdir $folder
     else
         python3 scripts/stable_txt2img.py --config configs/stable-diffusion/$config --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --ddim_eta 0.0 --n_samples 8 --ddim_steps $ddim_steps --embedding_paths logs/$ckptname/checkpoints/embeddings_gs-$ckpt_iter.pt --gpu $GPU --prompt $prompt --scale $scale --n_iter $n_iter --outdir $outdir --indiv_subdir $folder
     end
+
+    set fish_trace 0
 end
