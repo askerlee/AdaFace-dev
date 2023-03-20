@@ -27,4 +27,6 @@ set -a cases "lilbub | a cute little {} in the shape of a ball, pixar style, 4k,
 # Undo clearing by commenting out the following line.
 set cases
 set -a cases "jenniferlawrence | beautiful Gold Knightess redhead hysterically laughing out loud and dancing, visible eye laughter lines, visible smile lines, funny weird facial expression, tightly closed eyes, open gaping mouth, close up face, long flowing hair, photorealistic, wearing intricately designed high chroma tank top, perfect clean defined underarms, chiaroscuro solid colors, divine elegance, perfect teeth, beautiful intricate halo | jenniferlawrence-laugh | girl, instagram"
+set -a cases "alita | as a Disney Princess | alita-disney | girl, instagram"
+set -a cases "alita | leading an army on a holy war on Mars, clear face | alita-mars | girl, instagram"
 set -Ux cases $cases

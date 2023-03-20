@@ -3,16 +3,16 @@
 set self (status basename)
 echo $self $argv
 
-argparse --min-args 1 --max-args 3 'gpu=' 'extra=' 'maxiter=' 'subjfile=' -- $argv
+argparse --min-args 1 --max-args 3 'gpu=' 'extra=' 'maxiter=' 'subjfile=' 'selset' -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--subjfile SUBJ] (ada|ti|db) [low high] [--extra EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--subjfile SUBJ] (ada|ti|db) [--selset|low high] [--extra EXTRA_ARGS]"
     exit 1
 end
 
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] (ada|ti|db) [low high] [--extra EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--subjfile SUBJ] (ada|ti|db) [--selset|low high] [--extra EXTRA_ARGS]"
     exit 1
 end
 
@@ -32,9 +32,11 @@ else
     set -q _flag_maxiter; and set max_iters $_flag_maxiter; or set max_iters 800
 end
 
+# If --selset is specified, then only train the selected subjects, i.e., 4, 8, ..., 25.
+set -q _flag_selset; and set -l indices 4 8 9 11 12 14 18 19 22 25; or set -l indices (seq $L $H)
 # $0 0 1 13: alexachung .. masatosakai, on GPU0
 # $0 1 14 25: michelleyeoh .. zendaya,  on GPU1
-for i in (seq $L $H)
+for i in indices
     set subject     $subjects[$i]
     set ada_prompt  $ada_prompts[$i]
     set ada_weight  (string split " " $ada_weights[$i])
