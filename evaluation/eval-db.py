@@ -12,7 +12,9 @@ def parse_args():
                         help="method to use for generating samples")
     parser.add_argument("--placeholder", type=str, default="z", 
                         help="placeholder token for the subject")
-    parser.add_argument("--scale", type=float, default=10, 
+    parser.add_argument("--append_class", action="store_true",
+                        help="append class token to the subject placeholder")
+    parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
     parser.add_argument("--n_samples", type=int, default=4, 
                         help="number of samples to generate in each batch")
@@ -42,7 +44,7 @@ def split_string(input_string):
     return substrings
 
 def parse_subject_file(subject_file_path):
-    subjects, db_prompts = None, None
+    subjects, class_tokens = None, None
 
     with open(subject_file_path, "r") as f:
         lines = f.readlines()
@@ -57,14 +59,14 @@ def parse_subject_file(subject_file_path):
                     if var_name == "subjects":
                         subjects = substrings
                     elif var_name == "db_prompts":
-                        db_prompts = substrings
+                        class_tokens = substrings
                 else:
                     breakpoint()
 
-    if subjects is None or db_prompts is None:
+    if subjects is None or class_tokens is None:
         raise ValueError("subjects or db_prompts is None")
     
-    return subjects, db_prompts
+    return subjects, class_tokens
 
 def get_promt_list(subject_name, unique_token, class_token):
     object_prompt_list = [
@@ -140,7 +142,9 @@ def find_first_match(lst, search_term):
     return None  # If no match is found
 
 args = parse_args()
-subjects, db_prompts = parse_subject_file(args.subject_file)
+subjects, class_tokens = parse_subject_file(args.subject_file)
+if args.method == 'db':
+    args.append_class = True
 
 if args.range is not None:
     range_strs = args.range.split("-")
@@ -148,12 +152,12 @@ if args.range is not None:
     # high is inclusive, converted to exclusive without adding offset.
     low, high  = int(range_strs[0]) - 1, int(range_strs[1])
     subjects   = subjects[low:high]
-    db_prompts = db_prompts[low:high]
+    class_tokens = class_tokens[low:high]
 
 all_ckpts = os.listdir(args.ckpt_dir)
 all_ckpts.sort(key=lambda x: os.path.getmtime(os.path.join(args.ckpt_dir, x)), reverse=True)
 
-for subject_name, db_prompt in zip(subjects, db_prompts):
+for subject_name, class_token in zip(subjects, class_tokens):
     ckpt_sig   = subject_name + "-" + args.method
     ckpt_name  = find_first_match(all_ckpts, ckpt_sig)
     if ckpt_name is None:
@@ -161,13 +165,20 @@ for subject_name, db_prompt in zip(subjects, db_prompts):
         continue
         # breakpoint()
 
-    if args.method == 'db':
+    if args.append_class:
+        # For DreamBooth, append_class is the default.
+        # For Ada/TI, if we append class token to "z" -> "z dog", 
+        # the chance of occasional under-expression of the subject may be reduced.
+        # (This trick is not needed for human faces)
         # Prepend a space to class_token to avoid "a zcat" -> "a z cat"
-        class_token = " " + db_prompt
+        class_token = " " + class_token
+    else:
+        class_token = ""
+
+    if args.method == 'db':
         config_file = "v1-inference.yaml"
         ckpt_path   = f"logs/{ckpt_name}/checkpoints/last.ckpt"
     else:
-        class_token = ""
         config_file = "v1-inference-" + args.method + ".yaml"
         ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
         emb_path    = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{args.ckpt_iter}.pt"
