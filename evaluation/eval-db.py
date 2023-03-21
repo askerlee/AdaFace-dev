@@ -165,11 +165,12 @@ for subject_name, db_prompt in zip(subjects, db_prompts):
         # Prepend a space to class_token to avoid "a zcat" -> "a z cat"
         class_token = " " + db_prompt
         config_file = "v1-inference.yaml"
-        ckpt_file   = f"logs/{ckpt_name}/checkpoints/last.ckpt"
+        ckpt_path   = f"logs/{ckpt_name}/checkpoints/last.ckpt"
     else:
         class_token = ""
         config_file = "v1-inference-" + args.method + ".yaml"
-        ckpt_file   = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{args.ckpt_iter}.pt"
+        ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
+        emb_path    = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{args.ckpt_iter}.pt"
 
     outdir = args.out_pardir + "-" + args.method
     prompt_list = get_promt_list(subject_name, args.placeholder, class_token)
@@ -177,6 +178,9 @@ for subject_name, db_prompt in zip(subjects, db_prompts):
     for prompt in prompt_list:
         print(f'{subject_name}: "{prompt}"')
         folder = subject_name + "-" + prompt.replace(" ", "-")
-        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_file} --ddim_eta 0.0 --n_samples {args.n_samples} --ddim_steps {args.steps} --gpu {args.gpu} --prompt \"{prompt}\" --scale {args.scale} --n_iter {args.n_iter} --outdir {outdir} --indiv_subdir {folder}"
+        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --n_samples {args.n_samples} --ddim_steps {args.steps} --gpu {args.gpu} --prompt \"{prompt}\" --scale {args.scale} --n_iter {args.n_iter} --outdir {outdir} --indiv_subdir {folder}"
+        if args.method != 'db':
+            command_line += f" --embedding_paths {emb_path}"
+
         print(command_line)
         os.system(command_line)
