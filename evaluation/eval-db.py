@@ -185,13 +185,19 @@ for subject_name, class_token in zip(subjects, class_tokens):
 
     outdir = args.out_pardir + "-" + args.method
     prompt_list = get_promt_list(subject_name, args.placeholder, class_token)
+    prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
+    PROMPTS = open(prompt_filepath, "w")
+    print(subject_name, ":")
 
     for prompt in prompt_list:
-        print(f'{subject_name}: "{prompt}"')
-        folder = subject_name + "-" + prompt.replace(" ", "-")
-        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --n_samples {args.n_samples} --ddim_steps {args.steps} --gpu {args.gpu} --prompt \"{prompt}\" --scale {args.scale} --n_iter {args.n_iter} --outdir {outdir} --indiv_subdir {folder}"
-        if args.method != 'db':
-            command_line += f" --embedding_paths {emb_path}"
+        print("\t", prompt)
+        indiv_subdir = subject_name + "-" + prompt.replace(" ", "-")
+        PROMPTS.write( "\t".join([indiv_subdir, prompt]) + "\n" )
 
-        print(command_line)
-        os.system(command_line)
+    PROMPTS.close()
+    command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --n_samples {args.n_samples} --ddim_steps {args.steps} --gpu {args.gpu} --from_file {prompt_filepath} --scale {args.scale} --n_iter {args.n_iter} --outdir {outdir}"
+    if args.method != 'db':
+        command_line += f" --embedding_paths {emb_path}"
+
+    print(command_line)
+    os.system(command_line)

@@ -17,44 +17,7 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 import re
 
-def chunk(it, size):
-    it = iter(it)
-    return iter(lambda: tuple(islice(it, size)), ())
-
-
-def load_model_from_config(config, ckpt, verbose=False):
-    print(f"Loading model from {ckpt}")
-    pl_sd = torch.load(ckpt, map_location="cpu")
-    if "global_step" in pl_sd:
-        print(f"Global Step: {pl_sd['global_step']}")
-    sd = pl_sd["state_dict"]
-    model = instantiate_from_config(config.model)
-    m, u = model.load_state_dict(sd, strict=False)
-    if len(m) > 0 and verbose:
-        print("missing keys:")
-        print(m)
-    if len(u) > 0 and verbose:
-        print("unexpected keys:")
-        print(u)
-
-    model.cuda()
-    model.eval()
-    return model
-
-# copied from img2img.py
-def load_img(path, h, w):
-    image = Image.open(path).convert("RGB")
-    w0, h0 = image.size
-    print(f"loaded input image of size ({w0}, {h0}) from {path}")
-    w, h = map(lambda x: x - x % 32, (w, h))  # resize to integer multiple of 32
-    image = image.resize((w, h), resample=Image.LANCZOS)
-    image = np.array(image).astype(np.float32) / 255.0
-    image = image[None].transpose(0, 3, 1, 2)
-    image = torch.from_numpy(image)
-    return 2.*image - 1.
-
-
-def main():
+def parse_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -193,7 +156,6 @@ def main():
         default="autocast"
     )
 
-
     parser.add_argument(
         "--embedding_paths", 
         nargs="*", 
@@ -232,7 +194,47 @@ def main():
 
     parser.add_argument('--gpu', type=str,  default='1', help='ID of GPU to use')
 
-    opt = parser.parse_args()
+    args = parser.parse_args()
+    return args
+
+def chunk(it, size):
+    it = iter(it)
+    return iter(lambda: tuple(islice(it, size)), ())
+
+
+def load_model_from_config(config, ckpt, verbose=False):
+    print(f"Loading model from {ckpt}")
+    pl_sd = torch.load(ckpt, map_location="cpu")
+    if "global_step" in pl_sd:
+        print(f"Global Step: {pl_sd['global_step']}")
+    sd = pl_sd["state_dict"]
+    model = instantiate_from_config(config.model)
+    m, u = model.load_state_dict(sd, strict=False)
+    if len(m) > 0 and verbose:
+        print("missing keys:")
+        print(m)
+    if len(u) > 0 and verbose:
+        print("unexpected keys:")
+        print(u)
+
+    model.cuda()
+    model.eval()
+    return model
+
+# copied from img2img.py
+def load_img(path, h, w):
+    image = Image.open(path).convert("RGB")
+    w0, h0 = image.size
+    print(f"loaded input image of size ({w0}, {h0}) from {path}")
+    w, h = map(lambda x: x - x % 32, (w, h))  # resize to integer multiple of 32
+    image = image.resize((w, h), resample=Image.LANCZOS)
+    image = np.array(image).astype(np.float32) / 255.0
+    image = image[None].transpose(0, 3, 1, 2)
+    image = torch.from_numpy(image)
+    return 2.*image - 1.
+
+
+def main(opt):
     os.environ['CUDA_VISIBLE_DEVICES'] = opt.gpu
 
     if opt.laion400m:
@@ -260,25 +262,21 @@ def main():
         sampler = DDIMSampler(model)
 
     os.makedirs(opt.outdir, exist_ok=True)
-    outpath = opt.outdir
 
     batch_size = opt.n_samples
     n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
     if not opt.from_file:
         prompt = opt.prompt
         assert prompt is not None
-        data = [batch_size * [prompt]]
-
+        prompts = [batch_size * [prompt]]
     else:
         print(f"reading prompts from {opt.from_file}")
         with open(opt.from_file, "r") as f:
+            # splitlines() will remove the trailing newline. So no need to strip().
             data = f.read().splitlines()
-            data = list(chunk(data, batch_size))
-
-    sample_path = os.path.join(outpath, opt.indiv_subdir)
-    print("Images will be saved to ", sample_path)
-    os.makedirs(sample_path, exist_ok=True)
-    grid_count = len(os.listdir(outpath)) - 1
+            indiv_subdirs_prompts = [ line.split("\t") for line in data ]
+            indiv_subdirs, prompts = zip(*indiv_subdirs_prompts)
+            prompts = list(chunk(prompts, batch_size))
 
     if opt.init_img is not None:
         assert opt.fixed_code is False
@@ -301,8 +299,10 @@ def main():
             with model.ema_scope():
                 tic = time.time()
                 all_samples = list()
+                sample_count = 0
+
                 for n in trange(opt.n_iter, desc="Sampling"):
-                    for prompts in tqdm(data, desc="data"):
+                    for prompts in tqdm(prompts, desc="prompts"):
                         uc = None
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
@@ -332,16 +332,27 @@ def main():
                         x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
 
                         if not opt.skip_save:
-                            base_count = len(os.listdir(sample_path))
-                            for x_sample in x_samples_ddim:
+                            for i, x_sample in enumerate(x_samples_ddim):
+                                if opt.from_file:
+                                    # Specify individual subdirectory for each sample in opt.from_file.
+                                    indiv_subdir = indiv_subdirs[sample_count + i]
+                                else:
+                                    # Use a common subdirectory opt.indiv_subdir for all samples.
+                                    indiv_subdir = opt.indiv_subdir
+                                sample_path = os.path.join(opt.outdir, indiv_subdir)
+                                os.makedirs(sample_path, exist_ok=True)                            
+                                base_count = len(os.listdir(sample_path))
+
                                 x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                                 Image.fromarray(x_sample.astype(np.uint8)).save(
                                     os.path.join(sample_path, f"{base_count:05}.jpg"))
-                                base_count += 1
 
                         if not opt.skip_grid:
                             all_samples.append(x_samples_ddim)
 
+                        sample_count += batch_size
+
+                # After n_iter iterations, save all sample images as an image grid
                 if not opt.skip_grid:
                     # additionally, save as grid
                     grid = torch.stack(all_samples, 0)
@@ -358,21 +369,30 @@ def main():
                     iter_sig = iter_mat.group(1)
 
                     embedding_sig = "-".join([date_sig, iter_sig, f"scale{opt.scale:.1f}"])
+                    # Use the first prompt of the current chunk from opt.from_file as the saved file name.
+                    if opt.from_file:
+                        prompt = prompts[0]
+                    # Otherwise, use the prompt passed by the command line.
                     prompt_sig = prompt.replace(" ", "-")[:40]  # Cut too long prompt
-                    grid_filepath = os.path.join(outpath, f'{ckpt_postfix}-{prompt_sig}-{embedding_sig}.jpg')
+                    grid_filepath = os.path.join(opt.outdir, f'{ckpt_postfix}-{prompt_sig}-{embedding_sig}.jpg')
                     if os.path.exists(grid_filepath):
-                        grid_filepath = os.path.join(outpath, f'{ckpt_postfix}-{prompt_sig}-{embedding_sig}-{grid_count}.jpg')
+                        grid_count = 2
+                        grid_filepath = os.path.join(opt.outdir, f'{ckpt_postfix}-{prompt_sig}-{embedding_sig}-{grid_count}.jpg')
+                        while os.path.exists(grid_filepath):
+                            grid_count += 1
+                            grid_filepath = os.path.join(opt.outdir, f'{ckpt_postfix}-{prompt_sig}-{embedding_sig}-{grid_count}.jpg')
+
                     Image.fromarray(grid.astype(np.uint8)).save(grid_filepath)
-                    grid_count += 1
 
                 toc = time.time()
 
     if not opt.skip_grid:
-        print(f"Your samples are ready and waiting for you here: \n{grid_filepath}")
-        if not opt.no_preview:
+        print(f"Your samples are at: \n{grid_filepath}")
+        if not (opt.no_preview or opt.from_file):
             os.spawnvp(os.P_NOWAIT, "gpicview", [ "gpicview", os.path.abspath(grid_filepath) ])
     else:
-        print(f"Your samples are ready and waiting for you here: \n{outpath}")
+        print(f"Your samples are at: \n{opt.outdir}")
 
 if __name__ == "__main__":
-    main()
+    opt = parse_args()
+    main(opt)
