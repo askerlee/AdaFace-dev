@@ -45,6 +45,19 @@ composition_regexs = \
   "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt)",
 ]
 
+all_locations = [ "at the left", "at the right", "at the top", "at the bottom", 
+                  "in the center", "in the middle", "at the upper left", "at the upper right",
+                  "at the lower left", "at the lower right", "in the background", "in the foreground" ]
+
+coexist_objects = [ "person", "man",  "woman",   "girl",    "boy",   "baby",       "crowd", "villager", 
+                     "cat",   "dog",  "bird",    "panda",  "monkey", "chimpanzee", "gorilla", "bear",  
+                     "horse", "sheep", "elephant", "lion",
+                     # No need to include non-animals below. They tend not to mix features with subjects.
+                     # "stone", "tree",  "flower", "rock", "mountain", "grass",     "cloud", "sun",
+                     # "moon",  "stars", "fire",   "lake", "ocean",    "river",     "beach", "village",
+                     # "house", "car",   "bus",    "train", "boat",    "bike",      "building", "tower" 
+                  ] 
+
 all_styles = [ "cartoon", "animation", "anime", "comic book", "steampunk", "oil on canvas", "oil painting",
                "sci-fi movie", "scuplture", "bronze sculpture", "abyss art", "blade runner", "cyberpunk",
                "synthwave", "pencil sketch", "pastel colors", "illustration for childrens book", "pixar movie",
@@ -65,6 +78,15 @@ def sample_compositions(N):
     for i in range(N):
         idx = np.random.choice(K)
         composition = exrex.getone(composition_regexs[idx])
+        has_location = np.random.choice([0, 1])
+        if has_location:
+            loc1, loc2 = np.random.choice(all_locations, 2, replace=False)
+            location1 = loc1 + " "
+            object2   = np.random.choice(coexist_objects)
+            obj_loc2  = ", a " + object2 + " " + loc2
+        else:
+            location1 = ""
+            obj_loc2  = ""
 
         has_styles = np.random.choice([0, 1])
         if has_styles:
@@ -90,7 +112,7 @@ def sample_compositions(N):
         else:
             art_by = ""
 
-        compositions.append(f"{composition}{style}{modifier}{art_by}")
+        compositions.append(f"{location1}{composition}{style}{modifier}{art_by}{obj_loc2}")
 
     return compositions
 

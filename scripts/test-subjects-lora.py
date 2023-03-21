@@ -14,7 +14,7 @@ def parse_args():
                         help="model suffix")
     parser.add_argument("--num_samples", type=int, default=8, help="number of samples")
     # composition case file path
-    parser.add_argument("--case_file", type=str, default="scripts/compositon-cases.sh", 
+    parser.add_argument("--case_file", type=str, default="scripts/info-compositons.sh", 
                         help="case script file")
     # range of subjects to generate
     parser.add_argument("--range", type=str, default=None, 
