@@ -6,6 +6,7 @@ __pycache__/
 /data-extra/*
 /data-extra
 /data-256/*
+/data-256
 /outputs/*
 /generations/*
 /samples*

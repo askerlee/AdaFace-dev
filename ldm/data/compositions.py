@@ -61,6 +61,7 @@ coexist_objects = [ "person", "man",  "woman",   "girl",    "boy",   "baby",    
 all_styles = [ "cartoon", "animation", "anime", "comic book", "steampunk", "oil on canvas", "oil painting",
                "sci-fi movie", "scuplture", "bronze sculpture", "abyss art", "blade runner", "cyberpunk",
                "synthwave", "pencil sketch", "pastel colors", "illustration for childrens book", "pixar movie",
+               "as a crochet figure", "as a 3d model",
              ]
 # concept art|realistic painting|character design|anime sketch|trending in artstation|hyper realistic|vivid colors|clear face|detailed face
 all_modifiers = [ "concept art", "realistic painting", "character design", "anime sketch", 
