@@ -78,10 +78,10 @@ def parse_args():
         help="ddim eta (eta=0.0 corresponds to deterministic sampling",
     )
     parser.add_argument(
-        "--n_iter",
+        "--n_repeat",
         type=int,
-        default=2,
-        help="sample this often",
+        default=1,
+        help="Go through all prompts this times",
     )
     parser.add_argument(
         "--H",
@@ -110,19 +110,22 @@ def parse_args():
     parser.add_argument(
         "--n_samples",
         type=int,
-        default=3,
-        help="how many samples to produce for each given prompt. A.k.a. batch size",
+        default=4,
+        help="How many samples to produce for each given prompt. " 
+             "Required if prompts are not loaded from a file (--from-file not specified)",
     )
+    parser.add_argument("--bs", type=int, default=-1, 
+                        help="batch size. If -1, use n_samples") 
     parser.add_argument(
         "--n_rows",
         type=int,
         default=0,
-        help="rows in the grid (default: n_samples)",
+        help="rows in the grid (default: batch_size)",
     )
     parser.add_argument(
         "--scale",
         type=float,
-        default=7.5,
+        default=5,
         help="unconditional guidance scale: eps = eps(x, empty) + scale * (eps(x, cond) - eps(x, empty))",
     )
     parser.add_argument(
@@ -160,7 +163,7 @@ def parse_args():
         "--embedding_paths", 
         nargs="*", 
         type=str, default=None,
-        help="Paths to a pre-trained embedding manager checkpoint")
+        help="One or more paths to pre-trained embedding manager checkpoints")
     parser.add_argument(
         "--subj_scale",
         type=float,
@@ -263,25 +266,29 @@ def main(opt):
 
     os.makedirs(opt.outdir, exist_ok=True)
 
-    batch_size = opt.n_samples
+    batch_size = opt.n_samples if opt.bs == -1 else opt.bs
     n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
     if not opt.from_file:
         prompt = opt.prompt
         assert prompt is not None
-        prompts = [batch_size * [prompt]]
+        all_prompts = opt.n_samples * [prompt]
+        # By default, batch_size = n_samples. After chunk, all_prompts becomes a list of length 1,
+        # and the sole elment is a list of prompt repeated n_samples times,
+        # e.g. [ ['z', 'z', 'z', 'z'] ]. Then tqdm() will finish it in one iteration.
+        all_prompts = list(chunk(all_prompts, batch_size))
     else:
         print(f"reading prompts from {opt.from_file}")
         with open(opt.from_file, "r") as f:
             # splitlines() will remove the trailing newline. So no need to strip().
             data = f.read().splitlines()
             indiv_subdirs_prompts = [ line.split("\t") for line in data ]
-            indiv_subdirs, prompts = zip(*indiv_subdirs_prompts)
-            prompts = list(chunk(prompts, batch_size))
+            indiv_subdirs, all_prompts = zip(*indiv_subdirs_prompts)
+            all_prompts = list(chunk(all_prompts, batch_size))
 
     if opt.init_img is not None:
         assert opt.fixed_code is False
         init_img = load_img(opt.init_img, opt.H, opt.W)
-        init_img = init_img.repeat([opt.n_samples, 1, 1, 1]).to(device)
+        init_img = init_img.repeat([batch_size, 1, 1, 1]).to(device)
         # move init_img to latent space
         x0      = model.get_first_stage_encoding(model.encode_first_stage(init_img))  
         mask    = torch.ones_like(x0) * opt.mask_weight
@@ -291,7 +298,7 @@ def main(opt):
 
     start_code = None
     if opt.fixed_code:
-        start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
+        start_code = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     with torch.no_grad():
@@ -301,8 +308,8 @@ def main(opt):
                 all_samples = list()
                 sample_count = 0
 
-                for n in trange(opt.n_iter, desc="Sampling"):
-                    for prompts in tqdm(prompts, desc="prompts"):
+                for n in trange(opt.n_repeat, desc="Sampling"):
+                    for prompts in tqdm(all_prompts, desc="prompts"):
                         uc = None
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
@@ -318,7 +325,7 @@ def main(opt):
                         # ada_embedder won't change the unconditional embedding uc.
                         samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                                          conditioning=c,
-                                                         batch_size=opt.n_samples,
+                                                         batch_size=batch_size,
                                                          shape=shape,
                                                          verbose=False,
                                                          unconditional_guidance_scale=opt.scale,
@@ -352,7 +359,7 @@ def main(opt):
 
                         sample_count += batch_size
 
-                # After n_iter iterations, save all sample images as an image grid
+                # After n_repeat passes of all_prompts, save all sample images as an image grid
                 if not opt.skip_grid:
                     # additionally, save as grid
                     grid = torch.stack(all_samples, 0)
