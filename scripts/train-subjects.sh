@@ -67,10 +67,10 @@ for i in $indices
         # If --use_cls_token, and cls_tokens is provided in the subjfile, then use cls_token. 
         # Otherwise use the default cls_token "person".
         set -q _flag_use_cls_token; and set EXTRA_ARGS1 $EXTRA_ARGS1 --cls_delta_token $cls_token
-        # z_suffix: append $ada_prompt as a suffix to "z" in the prompt. The prompt will be "z <ada_prompt> <prompt>".
-        # E.g., ada_prompt="stuffed animal", prompt="in a chair", then full prompt="z stuffed animal in a chair".
-        # If not specified, then no suffix is appended. The prompt will be "z <prompt>". E.g. "z in a chair".
-        set -q _flag_use_z_suffix;  and set z_suffix $ada_prompt; or set -e z_suffix
+        # z_suffix: append $cls_token as a suffix to "z" in the prompt. The prompt will be "a z <cls_token> <prompt>".
+        # E.g., cls_token="toy", prompt="in a chair", then full prompt="a z toy in a chair".
+        # If not specified, then no suffix is appended. The prompt will be "a z <prompt>". E.g. "a z in a chair".
+        set -q _flag_use_z_suffix;  and set z_suffix $cls_token; or set -e z_suffix
         set -q z_suffix; and set EXTRA_ARGS1 $EXTRA_ARGS1 --placeholder_suffix $z_suffix
         echo $subject: --init_word $initword $EXTRA_ARGS1
         set fish_trace 1
