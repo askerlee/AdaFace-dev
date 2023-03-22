@@ -282,7 +282,7 @@ def main(opt):
             # splitlines() will remove the trailing newline. So no need to strip().
             data = f.read().splitlines()
             indiv_subdirs_prompts = [ line.split("\t") for line in data ]
-            indiv_subdirs, all_prompts = zip(*indiv_subdirs_prompts)
+            indiv_subdirs, all_prompts, _ = zip(*indiv_subdirs_prompts)
             all_prompts = list(chunk(all_prompts, batch_size))
 
     if opt.init_img is not None:
