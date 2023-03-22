@@ -164,7 +164,7 @@ for subject_name, class_token in zip(subjects, class_tokens):
     ckpt_name  = find_first_match(all_ckpts, ckpt_sig)
     if ckpt_name is None:
         print("ERROR: No checkpoint found for subject: " + subject_name)
-        #continue
+        continue
         # breakpoint()
 
     if args.append_class:
