@@ -11,8 +11,8 @@ def parse_args():
                         help="method to use for generating samples")
     parser.add_argument("--placeholder", type=str, default="z", 
                         help="placeholder token for the subject")
-    parser.add_argument("--no_append_class", dest='append_class', action="store_false",
-                        help="Do not append class token to the subject placeholder (default: append)")
+    parser.add_argument("--no_z_suffix", dest='use_z_suffix', action="store_false",
+                        help="Do not append placeholder suffix to the subject placeholder (default: append)")
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
     parser.add_argument("--n_samples", type=int, default=4, 
@@ -44,22 +44,24 @@ def split_string(input_string):
     substrings = [ s.strip('"') for s in substrings ]
     return substrings
 
-def parse_subject_file(subject_file_path):
+def parse_subject_file(subject_file_path, method):
     subjects, class_tokens = None, None
 
     with open(subject_file_path, "r") as f:
         lines = f.readlines()
         lines = [line.strip() for line in lines]
         for line in lines:
-            if re.search(r"^set -[la] (subjects|db_prompts|ada_prompts)", line):
+            if re.search(r"^set -[la] (subjects|db_prompts|cls_tokens)", line):
                 # set -l subjects  alexachung    alita...
-                mat = re.search(r"^set -[la] (subjects|db_prompts|ada_prompts)\s+(\S.+\S)", line)
+                mat = re.search(r"^set -[la] (subjects|db_prompts|cls_tokens)\s+(\S.+\S)", line)
                 if mat is not None:
                     var_name = mat.group(1)
                     substrings = split_string(mat.group(2))
                     if var_name == "subjects":
                         subjects = substrings
-                    elif var_name == "db_prompts":
+                    elif var_name == "db_prompts" and method == "db":
+                        class_tokens = substrings
+                    elif var_name == "cls_tokens" and method != "db":
                         class_tokens = substrings
                 else:
                     breakpoint()
@@ -146,7 +148,8 @@ def find_first_match(lst, search_term):
 args = parse_args()
 subjects, class_tokens = parse_subject_file(args.subject_file)
 if args.method == 'db':
-    args.append_class = True
+    # For DreamBooth, use_z_suffix is the default.
+    args.use_z_suffix = True
 
 if args.range is not None:
     range_strs = args.range.split("-")
@@ -167,8 +170,8 @@ for subject_name, class_token in zip(subjects, class_tokens):
         continue
         # breakpoint()
 
-    if args.append_class:
-        # For DreamBooth, append_class is the default.
+    if args.use_z_suffix:
+        # For DreamBooth, use_z_suffix is the default.
         # For Ada/TI, if we append class token to "z" -> "z dog", 
         # the chance of occasional under-expression of the subject may be reduced.
         # (This trick is not needed for human faces)
