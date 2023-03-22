@@ -208,4 +208,4 @@ for subject_name, class_token in zip(subjects, class_tokens):
         command_line += f" --embedding_paths {emb_path}"
 
     print(command_line)
-    #os.system(command_line)
+    os.system(command_line)
