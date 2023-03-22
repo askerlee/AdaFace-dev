@@ -310,6 +310,7 @@ def main(opt):
 
                 for n in trange(opt.n_repeat, desc="Sampling"):
                     for prompts in tqdm(all_prompts, desc="prompts"):
+                        print(prompts[0], "...", prompts[-1])
                         uc = None
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
