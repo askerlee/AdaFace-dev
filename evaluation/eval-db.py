@@ -146,7 +146,7 @@ def find_first_match(lst, search_term):
     return None  # If no match is found
 
 args = parse_args()
-subjects, class_tokens = parse_subject_file(args.subject_file)
+subjects, class_tokens = parse_subject_file(args.subject_file, args.method)
 if args.method == 'db':
     # For DreamBooth, use_z_suffix is the default.
     args.use_z_suffix = True
