@@ -184,10 +184,13 @@ def get_parser(**parser_kwargs):
         type=str, default=None,
         help="Negative words (commma separated) used to initialize token embedding")
 
-    # cls_token
-    parser.add_argument("--cls_token",
+    parser.add_argument("--cls_delta_token",
         type=str, default=None,
         help="A single word to use in class-level prompts")
+    
+    parser.add_argument("--placeholder_suffix", 
+        type=str, default=None,
+        help="Suffix to append to the placeholder string")
     
     # layerwise_lora_rank_token_ratio. When there are two tokens, 
     # it seems that increasing the rank to 3 doesn't help.
@@ -670,9 +673,12 @@ if __name__ == "__main__":
             init_neg_words = re.split(r",\s*", opt.init_neg_words)
             config.model.params.personalization_config.params.initializer_neg_words = init_neg_words
 
-        if opt.cls_token is not None:
-            config.data.params.train.params.cls_token      = opt.cls_token
-            config.data.params.validation.params.cls_token = opt.cls_token
+        if opt.cls_delta_token is not None:
+            config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
+            config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
+        if opt.placeholder_suffix is not None:
+            config.data.params.train.params.placeholder_suffix      = opt.placeholder_suffix
+            config.data.params.validation.params.placeholder_suffix = opt.placeholder_suffix
 
         config.data.params.train.params.num_composition_samples_per_batch = opt.num_composition_samples_per_batch
         if opt.min_rand_scaling is not None:

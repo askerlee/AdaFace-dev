@@ -142,12 +142,18 @@ class PersonalizedBase(Dataset):
                  # that specifies the minimum scaling factor.
                  min_rand_scaling=-1,
                  set="train",
-                 placeholder_token="*",
-                 cls_token="person",
+                 placeholder_token="z",
+                 # cls token used to compute the delta loss.
+                 cls_delta_token="person",  
+                 # suffix to append to the placeholder token, e.g., "toy". 
+                 # Used mainly for objects/animals.
+                 # cls_delta_token can only contain one token, but placeholder_suffix could be multiple. 
+                 # If both are specified, in most of the times, placeholder_suffix = cls_delta_token,
+                 # but sometimes different, such as "stuffed animal" vs. "toy".
+                 placeholder_suffix="",     
                  per_image_tokens=False,
                  center_crop=False,
                  mixing_prob=0.25,
-                 coarse_class_text=None,
                  num_composition_samples_per_batch=1,
                  ):
 
@@ -158,14 +164,13 @@ class PersonalizedBase(Dataset):
         # self._length = len(self.image_paths)
         self.num_images = len(self.image_paths)
         self._length = self.num_images 
-        self.placeholder_token = placeholder_token
-        self.cls_token = cls_token
+        self.placeholder_token  = placeholder_token
+        self.cls_delta_token    = cls_delta_token
+        self.placeholder_suffix = placeholder_suffix
 
         self.per_image_tokens = per_image_tokens
         self.center_crop = center_crop
         self.mixing_prob = mixing_prob
-
-        self.coarse_class_text = coarse_class_text
 
         if per_image_tokens:
             assert self.num_images < len(per_img_token_list), f"Can't use per-image tokens when the training set contains more than {len(per_img_token_list)} tokens. To enable larger sets, add more tokens to 'per_img_token_list'."
@@ -204,8 +209,12 @@ class PersonalizedBase(Dataset):
             image = image.convert("RGB")
 
         placeholder_string = self.placeholder_token
-        if self.coarse_class_text:
-            placeholder_string = f"{self.coarse_class_text} {placeholder_string}"
+        cls_delta_token    = self.cls_delta_token
+        if self.placeholder_suffix is not None:
+            placeholder_string = f"{placeholder_string} {self.placeholder_suffix}"
+            # Append the suffix to cls_delta_token as well, 
+            # so that cls_prompt_comp is token-wise aligned with subj_prompt_comp.
+            cls_delta_token    = f"{cls_delta_token} {self.placeholder_suffix}"
 
         # Should never use per_image_tokens. So we don't modify the corresponding branch.
         if self.per_image_tokens and np.random.uniform() < self.mixing_prob:
@@ -213,7 +222,7 @@ class PersonalizedBase(Dataset):
         else:
             template = random.choice(imagenet_templates_small)
             subj_prompt_single  = template.format(placeholder_string)
-            cls_prompt_single   = template.format(self.cls_token)
+            cls_prompt_single   = template.format(cls_delta_token)
 
             subj_prompt_comps = []
             cls_prompt_comps  = []
@@ -230,6 +239,8 @@ class PersonalizedBase(Dataset):
             example["cls_prompt_single"]    = cls_prompt_single
             example["subj_prompt_comp"]     = subj_prompt_comp
             example["cls_prompt_comp"]      = cls_prompt_comp
+            #print(f"subj_prompt_comp: {subj_prompt_comp}")
+            #print(f"cls_prompt_comp: {cls_prompt_comp}")
 
         example["caption"]              = subj_prompt_single
 

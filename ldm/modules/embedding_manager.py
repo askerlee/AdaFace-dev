@@ -25,7 +25,8 @@ def get_clip_tokens_for_string(tokenizer, string, force_single_token=False):
     batch_encoding = tokenizer(string, truncation=True, max_length=77, return_length=True,
                                return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
     tokens = batch_encoding["input_ids"]
-    # 2: one begin of text, one token.
+    # [49406, 11781,  4668, 49407, 49407...]. 49406: start of text, 49407: end of text
+    # 11781,  4668: tokens of "stuffed animal".
     token_count = torch.count_nonzero(tokens - 49407) - 1
     assert token_count >= 1, f"No token found in string '{string}'"
     if force_single_token:
