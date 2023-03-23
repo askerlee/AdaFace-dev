@@ -659,7 +659,7 @@ class LatentDiffusion(DDPM):
         # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
         # when embedding_manager is called within cond_stage_model.encode().
-        self.embedding_manager.set_ada_layer_info(layer_idx, layer_infeat, time_emb)
+        self.embedding_manager.set_ada_layer_temp_info(layer_idx, layer_infeat, time_emb)
         c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         return (c, self.embedding_manager.get_ada_emb_weight())
 
@@ -989,16 +989,19 @@ class LatentDiffusion(DDPM):
         x, c = self.get_input(batch, self.first_stage_key)
         if self.do_static_comp_delta_reg:
             subj_prompt_comps = []
+            # Each prompt_comps consists of multiple prompts separated by "|".
+            # Split them into a list of subj_prompt_comp/cls_prompt_comp.
             for prompt_comps in batch['subj_prompt_comp']:
                 subj_prompt_comps.append(prompt_comps.split("|"))
             cls_prompt_comps = []
             for prompt_comps in batch['cls_prompt_comp']:
                 cls_prompt_comps.append(prompt_comps.split("|"))
             cls_prompt_single = batch['cls_prompt_single']
+            # REPEATS: how many prompts correspond to each image.
             REPEATS = len(subj_prompt_comps[0])
             if REPEATS == 1 or self.do_ada_comp_delta_reg:
                 # When this iter computes ada composition delta loss, 
-                # only use the first of the composition prompts (in effect num_composition_samples_per_batch=1),
+                # only use the first of the composition prompts (in effect num_compositions_per_image=1),
                 # otherwise it will use more than 40G RAM.
                 subj_prompt_comp = [ prompts[0] for prompts in subj_prompt_comps ]
                 cls_prompt_comp  = [ prompts[0] for prompts in cls_prompt_comps ]
@@ -1006,7 +1009,7 @@ class LatentDiffusion(DDPM):
             else:
                 subj_prompt_comps2 = []
                 cls_prompt_comp2 = []
-                # Suppose R = num_composition_samples_per_batch.
+                # Suppose R = num_compositions_per_image, and B the batch size.
                 # subj_prompt_comps, cls_prompt_comps are like [ (p1_1,..., p1_R), ..., (pB_1,..., pB_R) ].
                 # Interlace the list of composition prompt lists into one list:
                 # [ p1_1, p2_1, ..., pB_1, p1_2, p2_2, ..., pB_2, ..., p1_R, p2_R, ..., pB_R ].
@@ -1063,7 +1066,8 @@ class LatentDiffusion(DDPM):
                             # and subj_prompt_comp, as the corresponding ada embeddings are dynamically generated.
                             # cls_prompt_single and cls_prompt_comp are static, so no need to 
                             # be fed to UNet.
-                            # num_composition_samples_per_batch = 1.
+                            # In shared_step(), we have chosen subset of images, 
+                            # so that in effect num_compositions_per_image = 1.
                             # subj_prompt_comps, cls_prompt_comps are: [ p1_1, p2_1, ..., pB_1 ].
                             # c_in is the concatenation of
                             # (real c_in, subj_prompt_comps, cls_prompt_single, cls_prompt_comps).
@@ -1074,7 +1078,7 @@ class LatentDiffusion(DDPM):
                         else:
                             # Don't do ada composition delta loss in this iteration. 
                             # So restore the original c.
-                            # Suppose R = num_composition_samples_per_batch.
+                            # Suppose R = num_compositions_per_image.
                             # subj_prompt_comps, cls_prompt_comps are:
                             # [ p1_1, p2_1, ..., pB_1, p1_2, p2_2, ..., pB_2, ..., p1_R, p2_R, ..., pB_R ].
                             # c_in is the concatenation of 
@@ -1243,6 +1247,8 @@ class LatentDiffusion(DDPM):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
         if self.use_ada_embedding and self.do_ada_comp_delta_reg:
+            # To compute the delta loss, we need two copies of the input noise, to go through 
+            # U-Net under different conditioning embeddings. 
             x_noisy = x_noisy.repeat(2, 1, 1, 1)
             t       = t.repeat(2)
 

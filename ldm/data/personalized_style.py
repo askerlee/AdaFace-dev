@@ -62,7 +62,6 @@ class PersonalizedBase(Dataset):
                  flip_p=0.5,
                  set="train",
                  placeholder_token="*",
-                 per_image_tokens=False,
                  center_crop=False,
                  ):
 
@@ -76,11 +75,7 @@ class PersonalizedBase(Dataset):
 
         self.placeholder_token = placeholder_token
 
-        self.per_image_tokens = per_image_tokens
         self.center_crop = center_crop
-
-        if per_image_tokens:
-            assert self.num_images < len(per_img_token_list), f"Can't use per-image tokens when the training set contains more than {len(per_img_token_list)} tokens. To enable larger sets, add more tokens to 'per_img_token_list'."
 
         if set == "train":
             self._length = self.num_images * repeats
@@ -103,10 +98,7 @@ class PersonalizedBase(Dataset):
         if not image.mode == "RGB":
             image = image.convert("RGB")
 
-        if self.per_image_tokens and np.random.uniform() < 0.25:
-            text = random.choice(imagenet_dual_templates_small).format(self.placeholder_token, per_img_token_list[i % self.num_images])
-        else:
-            text = random.choice(imagenet_templates_small).format(self.placeholder_token)
+        text = random.choice(imagenet_templates_small).format(self.placeholder_token)
             
         example["caption"] = text
 

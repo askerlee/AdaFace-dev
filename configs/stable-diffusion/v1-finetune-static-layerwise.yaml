@@ -46,7 +46,6 @@ model:
         initializer_weights: [ None ]
         # Negative prompts lead to worse images.
         initializer_neg_words: [ ]        # "poor bad ugly"
-        per_image_tokens: false
         num_vectors_per_token: 1
         progressive_words: False
         use_layerwise_embedding: True
@@ -107,14 +106,12 @@ data:
       params:
         size: 512
         set: train
-        per_image_tokens: false
         repeats: 100
     validation:
       target: ldm.data.personalized.PersonalizedBase
       params:
         size: 512
         set: val
-        per_image_tokens: false
         repeats: 10
 
 lightning:

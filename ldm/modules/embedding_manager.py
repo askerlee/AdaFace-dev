@@ -60,9 +60,15 @@ def selective_reg_loss(x, loss_type='l2', selector=None):
 
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
-def calc_delta_loss(delta, ref_delta, exponent=3):
+# emb_mask: [2, 77, 1]
+def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3):
     # Flatten delta and ref_delta.
     # dela: [2464, 768], ref_delta: [2464, 768]
+    # Mask out the placeholder suffix token(s).
+    try:
+        delta = delta * emb_mask if emb_mask is not None else delta
+    except:
+        breakpoint()
     delta = delta.view(delta.numel() // delta.shape[-1], -1)
     ref_delta = ref_delta.view(ref_delta.numel() // ref_delta.shape[-1], -1)
     # delta_pow = delta * delta.abs().pow(exponent - 1)
@@ -416,7 +422,8 @@ class EmbeddingManager(nn.Module):
             initializer_words=None,
             initializer_weights=None,
             initializer_neg_words=None,
-            per_image_tokens=False,
+            placeholder_suffix=None,
+            cls_delta_token="person",
             num_vectors_per_token=1,
             progressive_words=False,
             use_layerwise_embedding=False,
@@ -477,17 +484,14 @@ class EmbeddingManager(nn.Module):
         # Save this function to be used in load() when doing placeholder substitution.
         self.get_tokens_for_string = get_tokens_for_string
 
-        if per_image_tokens:
-            placeholder_strings.extend(per_img_token_list)
-
         if initializer_neg_words is not None and len(initializer_neg_words) > 0:
             init_neg_embeddings = []
             for neg_words in initializer_neg_words:
                 if neg_words is None or len(neg_words) == 0:
                     continue
-                neg_tokens = get_tokens_for_string(neg_words)
+                neg_token_ids = get_tokens_for_string(neg_words)
                 with torch.no_grad():
-                    init_neg_embeddings.append(get_embeddings_for_tokens(neg_tokens.cpu()))
+                    init_neg_embeddings.append(get_embeddings_for_tokens(neg_token_ids.cpu()))
             if len(init_neg_embeddings) > 0:
                 init_neg_embeddings = torch.cat(init_neg_embeddings, dim=0)
                 NEG = init_neg_embeddings.shape[0]
@@ -550,7 +554,25 @@ class EmbeddingManager(nn.Module):
             self.string_to_param_dict[placeholder_string] = token_params
             self.string_to_ada_embedder_dict[placeholder_string] = token_ada_embedder
 
-            self.clear_ada_layer_info()
+            self.cls_delta_token    = cls_delta_token
+            if self.cls_delta_token is not None:
+                cls_delta_token_ids = get_tokens_for_string(self.cls_delta_token)
+                if len(cls_delta_token_ids) > 1:
+                    raise ValueError(f"ERROR: cls_delta_token '{cls_delta_token}' must be a single token.")
+                
+            self.placeholder_suffix = placeholder_suffix
+            if self.placeholder_suffix is not None:
+                # Usually the placeholder word is "z", 
+                # so placeholder_suffix variables are named z_suffix_*.
+                z_suffix_ids = get_tokens_for_string(self.placeholder_suffix)
+                self.z_suffix_ids      = z_suffix_ids
+                self.z_suffix_id_count = len(z_suffix_ids)
+            else:
+                self.z_suffix_ids      = None
+                self.z_suffix_id_count = 0
+
+            self.clear_ada_layer_temp_info()
+            self.clear_delta_loss_emb_mask()
             self.img_mask = None
             self.layer_idx2emb_idx = layer_idx2emb_idx
             self.loss_call_count = 0
@@ -561,23 +583,32 @@ class EmbeddingManager(nn.Module):
     # If self.use_layerwise_embedding, then max_vectors_per_token = num_unet_layers = 16.
     def forward(
             self,
-            tokenized_text,         # [B, N]. Identical B copies along the batch dimension.
-            embedded_text,          # [B, N, 768]. Identical B copies along the batch dimension.
+            tokenized_text,         # [B, N]. 
+            embedded_text,          # [B, N, 768]. 
     ):
+        # When delta loss is used, b is not batch_size, but batch_size * 4 * num_compositions_per_image.
+        # If bs=2, num_compositions_per_image=2, then b=16.
+        # In the iterations when ada delta loss is enabled, in effect num_compositions_per_image is 1, 
+        # even if it's specified as 2, so b=8.
         b, n, device = *tokenized_text.shape, tokenized_text.device
 
-        # gen_ada_embedding is dynamically switched on/off by  set_ada_layer_info()/clear_ada_layer_info().
+        # gen_ada_embedding is dynamically switched on/off by  set_ada_layer_temp_info()/clear_ada_layer_temp_info().
+        # No need to calculate delta_loss_emb_mask here, as the mask for ada embeddings is 
+        # the same as for the static embeddings. 
+        # AdaPrompt combines static and ada embeddings. So the static embedding replacement 
+        # code below is always called, and delta_loss_emb_mask is always calculated.
         if self.gen_ada_embedding:
             # self.layer_idx, self.layer_infeat, self.time_emb were cached by 
-            # a previous call of  set_ada_layer_info() from UNet.
-            embedded_text = self.get_ada_embedding(self.layer_idx, self.layer_infeat, self.time_emb,
-                                                    tokenized_text, embedded_text)
+            # a previous call of  set_ada_layer_temp_info() from UNet.
+            embedded_text = \
+                self.get_ada_embedding(self.layer_idx, self.layer_infeat, self.time_emb,
+                                       tokenized_text, embedded_text)
             emb_idx = self.layer_idx2emb_idx[self.layer_idx]
             # Cache the computed ada embedding of the current layer.
             # Before this call, init_ada_embedding_cache() should have been called somewhere.
             self.ada_embeddings[emb_idx] = embedded_text
             # Remove ada-specific intermediate variables.
-            self.clear_ada_layer_info()
+            self.clear_ada_layer_temp_info()
             return embedded_text
 
         if self.use_layerwise_embedding:
@@ -604,6 +635,7 @@ class EmbeddingManager(nn.Module):
             # self.use_layerwise_embedding could still be True.
             if self.max_vectors_per_layer_per_token == 1: # If there's only one vector per token, we can do a simple replacement
                 placeholder_idx = torch.where(tokenized_text == placeholder_token.to(device))
+                # No placeholder token is found in the current batch.
                 if placeholder_idx[0].numel() == 0:
                     continue
 
@@ -622,14 +654,30 @@ class EmbeddingManager(nn.Module):
                 # Possible BUG: if the placeholder appears in > 1 times in one prompt, then the 
                 # filling order may be wrong. Check in the future.
                 if self.use_layerwise_embedding:
+                    # OCCUR: the actual number of occurrences of the placeholder in the current batch,
+                    # not repetitively counting the occurrences in the embedded_text repeated for M layers.
                     OCCUR = placeholder_idx[0].numel() // self.num_unet_layers
                 else:
                     OCCUR = placeholder_idx[0].numel()
                 embedded_text[placeholder_idx] = placeholder_embedding.repeat(OCCUR, 1) * self.subj_scale
 
+                delta_loss_emb_mask = torch.ones(b, 1, n, 1, device=device)
+                # OCCUR is the real number of occurrences of placeholder. OCCUR <= b.
+                # The batch size b is usually small, so this loop is not a bottleneck.
+                for i in range(OCCUR):
+                    elem_idx  = placeholder_idx[0][i]
+                    start_idx = placeholder_idx[1][i] + 1
+                    end_idx   = placeholder_idx[1][i] + 1 + self.z_suffix_id_count
+                    # Mask the placeholder suffix following the placeholder token.
+                    delta_loss_emb_mask[elem_idx][0][start_idx:end_idx] = 0
+
+                self.set_delta_loss_emb_mask(delta_loss_emb_mask)
             # *multi-vector latent space*: In this space, S* is embedded into multiple 
             # learned embeddings, an approach that is equivalent to describing
-            # the concept through multiple learned pseudo-words.
+            # the concept through multiple learned pseudo-words. 
+            # This setting is experimented in the TI paper, 
+            # but AdaPrompt or Static Layerwise Embedding doesn't use it. 
+            # So we don't consider this option, and just leave the original code as is.
             else: 
                 # otherwise, need to insert and keep track of changing indices
                 # *progressive_words*: Begin training with a single embedding vector, introduce a second vector 
@@ -726,7 +774,7 @@ class EmbeddingManager(nn.Module):
             rand_ada_emb_weight = self.ada_emb_weight        
         return rand_ada_emb_weight
     
-    def set_ada_layer_info(self, layer_idx, layer_infeat, time_emb):
+    def set_ada_layer_temp_info(self, layer_idx, layer_infeat, time_emb):
         self.gen_ada_embedding = True
         self.layer_idx      = layer_idx
         self.layer_infeat   = layer_infeat
@@ -738,7 +786,9 @@ class EmbeddingManager(nn.Module):
     def init_ada_embedding_cache(self):
         self.ada_embeddings = [ None for i in range(self.num_unet_layers) ]
 
-    def clear_ada_layer_info(self):
+    # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
+    # which will be enabled again through set_ada_layer_temp_info() in ddpm.py.
+    def clear_ada_layer_temp_info(self):
         self.gen_ada_embedding = False
         self.layer_idx      = -1
         self.layer_infeat   = None
@@ -747,6 +797,22 @@ class EmbeddingManager(nn.Module):
     def clear_ada_embedding_cache(self):
         self.ada_embeddings = None
 
+    # delta_loss_emb_mask: [1, N, 768], where N is the padded prompt length.
+    def set_delta_loss_emb_mask(self, delta_loss_emb_mask):
+        if self.z_suffix_id_count > 0 and self.delta_loss_emb_mask is None:
+            self.delta_loss_emb_mask = delta_loss_emb_mask
+        # Otherwise, either delta_loss_emb_mask is already set (probably when processing 
+        # for a previous layer), so we don't need to set it again.
+        # or z_suffix_id_count == 0, so we don't need to use it to mask a region 
+        # when computing the compositional delta loss.
+
+    def clear_delta_loss_emb_mask(self):
+        self.delta_loss_emb_mask = None
+
+    # There are image margins after the original image is scaled down.
+    # When doing average pooling of image features, the margin area contains no signal, so we use 
+    # img_mask to mask it out. 
+    # Each image has its own img_mask, so img_mask has a shape of [B, 1, H, W].
     def set_img_mask(self, img_mask):
         self.img_mask = img_mask
 
@@ -992,7 +1058,7 @@ class EmbeddingManager(nn.Module):
         # by composition_delta_reg_iter_gap times.
         ada_comp_loss_boost_ratio = self.composition_delta_reg_iter_gap
         # If do_ada_comp_delta_reg,     BS = 2.
-        # If not do_ada_comp_delta_reg, BS = 2 * num_composition_samples_per_batch = 4.
+        # If not do_ada_comp_delta_reg, BS = 2 * num_compositions_per_image = 4.
         BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
         max_token_num = static_embeddings.shape[1]
         # static_embeddings: [8, 16, 77, 768]
@@ -1006,7 +1072,7 @@ class EmbeddingManager(nn.Module):
         cls_delta = cls_prompt_comp - cls_prompt_single
         # static_delta: [2, 16, 77, 768]. Different values for each layer along dim=1.
         static_delta = subj_prompt_comp - subj_prompt_single
-        static_delta_loss   = calc_delta_loss(static_delta, cls_delta)
+        static_delta_loss   = calc_delta_loss(static_delta, cls_delta, self.delta_loss_emb_mask[:BS])
 
         if do_ada_comp_delta_reg:
             # Each emb is of [4, 77, 768]. 4 = 2 * batch_size.
@@ -1019,12 +1085,13 @@ class EmbeddingManager(nn.Module):
             ada_embeddings = torch.stack(self.ada_embeddings, dim=1)
             ada_subj_emb_single, ada_subj_emb_comp = ada_embeddings.split(BS, dim=0)
             ada_delta = ada_subj_emb_comp - ada_subj_emb_single
-            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta)
+            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, self.delta_loss_emb_mask[:BS])
             # The cached ada embeddings are useless now, release them.
             self.clear_ada_embedding_cache()
         else:
             ada_delta_loss = 0
         
+        self.clear_delta_loss_emb_mask()
         # delta_loss is the sum of the delta loss of all layers. Change it to the average.
         delta_loss = (static_delta_loss + ada_delta_loss * ada_comp_loss_boost_ratio) / self.num_unet_layers
         return delta_loss

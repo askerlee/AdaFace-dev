@@ -310,7 +310,7 @@ def main(opt):
                 prompt_block_count = len(all_prompts)
                 for n in trange(opt.n_repeat, desc="Sampling"):
                     for p_i, prompts in enumerate(tqdm(all_prompts, desc="prompts")):
-                        print(f"{p_i}/{prompt_block_count}", prompts[0], "...", prompts[-1])
+                        print(f"\n{p_i}/{prompt_block_count}", prompts[0], "...", prompts[-1])
                         uc = None
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])

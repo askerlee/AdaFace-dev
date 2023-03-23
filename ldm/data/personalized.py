@@ -130,7 +130,6 @@ per_img_token_list = [
     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק', 'ר', 'ש', 'ת',
 ]
 
-# Should never use per_image_tokens.
 class PersonalizedBase(Dataset):
     def __init__(self,
                  data_root,
@@ -151,10 +150,9 @@ class PersonalizedBase(Dataset):
                  # If both are specified, in most of the times, placeholder_suffix = cls_delta_token,
                  # but sometimes different, such as "stuffed animal" vs. "toy".
                  placeholder_suffix="",     
-                 per_image_tokens=False,
                  center_crop=False,
                  mixing_prob=0.25,
-                 num_composition_samples_per_batch=1,
+                 num_compositions_per_image=1,
                  ):
 
         self.data_root = data_root
@@ -168,21 +166,17 @@ class PersonalizedBase(Dataset):
         self.cls_delta_token    = cls_delta_token
         self.placeholder_suffix = placeholder_suffix
 
-        self.per_image_tokens = per_image_tokens
         self.center_crop = center_crop
         self.mixing_prob = mixing_prob
-
-        if per_image_tokens:
-            assert self.num_images < len(per_img_token_list), f"Can't use per-image tokens when the training set contains more than {len(per_img_token_list)} tokens. To enable larger sets, add more tokens to 'per_img_token_list'."
 
         if set == "train":
             self._length = self.num_images * repeats
 
         self.size = size
-        self.interpolation = {"linear": PIL.Image.LINEAR,
+        self.interpolation = {"linear":   PIL.Image.LINEAR,
                               "bilinear": PIL.Image.BILINEAR,
-                              "bicubic": PIL.Image.BICUBIC,
-                              "lanczos": PIL.Image.LANCZOS,
+                              "bicubic":  PIL.Image.BICUBIC,
+                              "lanczos":  PIL.Image.LANCZOS,
                               }[interpolation]
         self.flip = transforms.RandomHorizontalFlip(p=flip_p)
 
@@ -196,7 +190,7 @@ class PersonalizedBase(Dataset):
         else:
             self.random_scaler = None
 
-        self.num_composition_samples_per_batch = num_composition_samples_per_batch
+        self.num_compositions_per_image = num_compositions_per_image
 
     def __len__(self):
         return self._length
@@ -216,31 +210,27 @@ class PersonalizedBase(Dataset):
             # so that cls_prompt_comp is token-wise aligned with subj_prompt_comp.
             cls_delta_token    = f"{cls_delta_token} {self.placeholder_suffix}"
 
-        # Should never use per_image_tokens. So we don't modify the corresponding branch.
-        if self.per_image_tokens and np.random.uniform() < self.mixing_prob:
-            subj_prompt_single = random.choice(imagenet_dual_templates_small).format(placeholder_string, per_img_token_list[i % self.num_images])
-        else:
-            template = random.choice(imagenet_templates_small)
-            subj_prompt_single  = template.format(placeholder_string)
-            cls_prompt_single   = template.format(cls_delta_token)
+        template = random.choice(imagenet_templates_small)
+        subj_prompt_single  = template.format(placeholder_string)
+        cls_prompt_single   = template.format(cls_delta_token)
 
-            subj_prompt_comps = []
-            cls_prompt_comps  = []
-            for i in range(self.num_composition_samples_per_batch):
-                composition_partial = sample_compositions(1)[0]
-                subj_prompt_comp    = subj_prompt_single + " " + composition_partial
-                cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
-                subj_prompt_comps.append(subj_prompt_comp)
-                cls_prompt_comps.append(cls_prompt_comp)
-            
-            # Will split by "|" in the ddpm trainer.
-            subj_prompt_comp = "|".join(subj_prompt_comps)
-            cls_prompt_comp  = "|".join(cls_prompt_comps)
-            example["cls_prompt_single"]    = cls_prompt_single
-            example["subj_prompt_comp"]     = subj_prompt_comp
-            example["cls_prompt_comp"]      = cls_prompt_comp
-            #print(f"subj_prompt_comp: {subj_prompt_comp}")
-            #print(f"cls_prompt_comp: {cls_prompt_comp}")
+        subj_prompt_comps = []
+        cls_prompt_comps  = []
+        for i in range(self.num_compositions_per_image):
+            composition_partial = sample_compositions(1)[0]
+            subj_prompt_comp    = subj_prompt_single + " " + composition_partial
+            cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
+            subj_prompt_comps.append(subj_prompt_comp)
+            cls_prompt_comps.append(cls_prompt_comp)
+        
+        # Will split by "|" in the ddpm trainer.
+        subj_prompt_comp = "|".join(subj_prompt_comps)
+        cls_prompt_comp  = "|".join(cls_prompt_comps)
+        example["cls_prompt_single"]    = cls_prompt_single
+        example["subj_prompt_comp"]     = subj_prompt_comp
+        example["cls_prompt_comp"]      = cls_prompt_comp
+        #print(f"subj_prompt_comp: {subj_prompt_comp}")
+        #print(f"cls_prompt_comp: {cls_prompt_comp}")
 
         example["caption"]              = subj_prompt_single
 

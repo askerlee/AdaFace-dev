@@ -172,6 +172,10 @@ def get_parser(**parser_kwargs):
         type=str, 
         help="Placeholder string which will be used to denote the concept in future prompts. Overwrites the config options.")
 
+    parser.add_argument("--placeholder_suffix", 
+        type=str, default=None,
+        help="Suffix to append to the placeholder string")
+    
     parser.add_argument("--init_word", 
         type=str, 
         help="Words used to initialize token embedding")
@@ -187,10 +191,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--cls_delta_token",
         type=str, default=None,
         help="A single word to use in class-level prompts")
-    
-    parser.add_argument("--placeholder_suffix", 
-        type=str, default=None,
-        help="Suffix to append to the placeholder string")
     
     # layerwise_lora_rank_token_ratio. When there are two tokens, 
     # it seems that increasing the rank to 3 doesn't help.
@@ -216,10 +216,10 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--min_rand_scaling",
                         type=float, default=0.7, 
                         help="Minimum random scaling factor of training images (set to -1 to disable)")
-    # num_composition_samples_per_batch: a value > 1 leads to better performance on prompt compositions
-    parser.add_argument("--num_composition_samples_per_batch",
+    # num_compositions_per_image: a value > 1 leads to better performance on prompt compositions
+    parser.add_argument("--num_compositions_per_image",
                         type=int, default=2,
-                        help="Number of composition samples in each batch (default: 2)")
+                        help="Number of composition samples for each image in a batch (default: 2)")
     return parser
 
 def nondefault_trainer_args(opt):
@@ -676,11 +676,13 @@ if __name__ == "__main__":
         if opt.cls_delta_token is not None:
             config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
             config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
+            config.model.params.personalization_config.params.cls_delta_token   = opt.cls_delta_token
         if opt.placeholder_suffix is not None:
-            config.data.params.train.params.placeholder_suffix      = opt.placeholder_suffix
-            config.data.params.validation.params.placeholder_suffix = opt.placeholder_suffix
-
-        config.data.params.train.params.num_composition_samples_per_batch = opt.num_composition_samples_per_batch
+            config.data.params.train.params.placeholder_suffix              = opt.placeholder_suffix
+            config.data.params.validation.params.placeholder_suffix         = opt.placeholder_suffix
+            config.model.params.personalization_config.params.placeholder_suffix = opt.placeholder_suffix
+            
+        config.data.params.train.params.num_compositions_per_image = opt.num_compositions_per_image
         if opt.min_rand_scaling is not None:
             config.data.params.train.params.min_rand_scaling = opt.min_rand_scaling
 
@@ -831,10 +833,10 @@ if __name__ == "__main__":
         # config.data:
         # {'target': 'main.DataModuleFromConfig', 'params': {'batch_size': 2, 'num_workers': 2, 
         #  'wrap': False, 'train': {'target': 'ldm.data.personalized.PersonalizedBase', 
-        #  'params': {'size': 512, 'set': 'train', 'per_image_tokens': False, 'repeats': 100, 
+        #  'params': {'size': 512, 'set': 'train', 'repeats': 100, 
         #  'placeholder_token': 'z', 'data_root': 'data/spikelee/'}}, 
         #  'validation': {'target': 'ldm.data.personalized.PersonalizedBase', 
-        #  'params': {'size': 512, 'set': 'val', 'per_image_tokens': False, 'repeats': 10, 
+        #  'params': {'size': 512, 'set': 'val', 'repeats': 10, 
         #  'placeholder_token': 'z', 'data_root': 'data/spikelee/'}}}}
         config.data.params.train.params.data_root = opt.data_root
         config.data.params.validation.params.data_root = opt.data_root
