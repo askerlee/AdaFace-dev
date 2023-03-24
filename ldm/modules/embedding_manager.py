@@ -1079,7 +1079,9 @@ class EmbeddingManager(nn.Module):
         cls_delta = cls_prompt_comp - cls_prompt_single
         # static_delta: [2, 16, 77, 768]. Different values for each layer along dim=1.
         static_delta = subj_prompt_comp - subj_prompt_single
-        static_delta_loss   = calc_delta_loss(static_delta, cls_delta, self.delta_loss_emb_mask[:BS])
+        # delta_loss_emb_mask is often obtained from an extended batch. So only uses the first BS elements.
+        delta_loss_emb_mask = self.delta_loss_emb_mask[:BS] if self.delta_loss_emb_mask is not None else None
+        static_delta_loss   = calc_delta_loss(static_delta, cls_delta, delta_loss_emb_mask)
 
         if do_ada_comp_delta_reg:
             # Each emb is of [4, 77, 768]. 4 = 2 * batch_size.
@@ -1092,7 +1094,7 @@ class EmbeddingManager(nn.Module):
             ada_embeddings = torch.stack(self.ada_embeddings, dim=1)
             ada_subj_emb_single, ada_subj_emb_comp = ada_embeddings.split(BS, dim=0)
             ada_delta = ada_subj_emb_comp - ada_subj_emb_single
-            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, self.delta_loss_emb_mask[:BS])
+            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, delta_loss_emb_mask)
             # The cached ada embeddings are useless now, release them.
             self.clear_ada_embedding_cache()
         else:
