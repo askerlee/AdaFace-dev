@@ -358,7 +358,8 @@ class DDPM(pl.LightningModule):
         x = x.to(memory_format=torch.contiguous_format).float()
         return x
 
-    # ignore do_composition_delta_reg. It's handled in LatentDiffusion::shared_step().
+    # This shared_step() is overridden by LatentDiffusion::shared_step() and never called. 
+    #LINK #shared_step
     def shared_step(self, batch):
         x = self.get_input(batch, self.first_stage_key)
         loss, loss_dict = self(x)
@@ -975,15 +976,17 @@ class LatentDiffusion(DDPM):
 
     # LatentDiffusion.shared_step() overloads DDPM.shared_step().
     # shared_step() is called in training_step() and (no_grad) validation_step().
+    # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
     # batch: { 'caption':               ['an illustration of a dirty z',                    
     #                                    'a depiction of a z'], 
     #          'subj_prompt_comp':      ['an illustration of a dirty z dancing with a boy', 
     #                                    'a depiction of a z kicking a punching bag'],
     #          'cls_prompt_single':     ['an illustration of a dirty christopher',          
     #                                    'a depiction of a john'],
-    #          'cls_prompt_comp'  :     ['an illustration of a dirty christopher dancing with a boy', 
     #                                    'a depiction of a john kicking a punching bag']
+    #          'cls_prompt_comp'  :     ['an illustration of a dirty christopher dancing with a boy', 
     #          'image':   [2, 512, 512, 3] }
+    # ANCHOR[id=shared_step]
     def shared_step(self, batch, **kwargs):
         # c = batch["caption"]
         x, c = self.get_input(batch, self.first_stage_key)
@@ -1037,13 +1040,14 @@ class LatentDiffusion(DDPM):
         loss = self(x, c, composition_delta_prompts, img_mask=img_mask, **kwargs)
         return loss
 
-    # LatentDiffusion.forward() is only called during training.
+    # LatentDiffusion.forward() is only called during training, by shared_step().
+    #LINK #shared_step
     def forward(self, x, c, composition_delta_prompts=None, img_mask=None, *args, **kwargs):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         if self.model.conditioning_key is not None:
             assert c is not None
             # c: condition, a prompt template. 
-            # get_learned_conditioning(): convert c to a [1, 77, 768] tensor.
+            # get_learned_conditioning(): convert c to a [B, 77, 768] tensor.
             if self.cond_stage_trainable:
                 # c: ['an illustration of a dirty z', 'an illustration of the cool z']
                 if self.do_static_comp_delta_reg:
@@ -1097,7 +1101,7 @@ class LatentDiffusion(DDPM):
                     c = self.get_learned_conditioning(c)
                     self.c_delta_static = None
 
-            # shorten_cond_schedule: False
+            # shorten_cond_schedule: False. Skipped.
             if self.shorten_cond_schedule:  # TODO: drop this option
                 tc = self.cond_ids[t].to(self.device)
                 # q_sample() is only called during training. 
@@ -1105,6 +1109,7 @@ class LatentDiffusion(DDPM):
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
 
         # self.model (UNetModel) is called in p_losses().
+        #LINK #p_losses
         return self.p_losses(x, c, t, img_mask=img_mask, *args, **kwargs)
 
     def _rescale_annotations(self, bboxes, crop_coordinates):  # TODO: move to dataset
@@ -1243,6 +1248,10 @@ class LatentDiffusion(DDPM):
         kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
         return mean_flat(kl_prior) / np.log(2.0)
 
+    # t: steps.
+    # cond: (cc, c_in, embedder). c_in is the textual prompts. 
+    # embedder: a function to convert c_in to subject embeddings.
+    # ANCHOR[id=p_losses]
     def p_losses(self, x_start, cond, t, noise=None, img_mask=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
@@ -1256,7 +1265,8 @@ class LatentDiffusion(DDPM):
         if self.use_ada_embedding and self.do_ada_comp_delta_reg:
             # Restore model_output and t.
             # Do not use the second half of the model output, as they are used 
-            # to compute the ada embeddings only, which are the input of the delta regularization.
+            # to obtain the ada embeddings only, which are then used as the input of 
+            # the delta regularization. The final images are useless.
             model_output = model_output[:model_output.shape[0] // 2]
             t = t[:t.shape[0] // 2]
 

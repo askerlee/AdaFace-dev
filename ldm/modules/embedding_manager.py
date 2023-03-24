@@ -797,9 +797,16 @@ class EmbeddingManager(nn.Module):
     def clear_ada_embedding_cache(self):
         self.ada_embeddings = None
 
-    # delta_loss_emb_mask: [1, N, 768], where N is the padded prompt length.
+    # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
+    # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
+    # -> .get_learned_conditioning() -> .cond_stage_model.encode()
+    # -> EmbeddingManager.forward() -> here.
+    # Occasionally, image_logger is called, which calls LatentDiffusion.log_images ->
+    # .get_learned_conditioning() -> ... -> here.
+    # Such delta_loss_emb_mask won't be used in composition_delta_loss() and won't be cleared.
+    # delta_loss_emb_mask: [B, N, 768], where N is the padded prompt length.
     def set_delta_loss_emb_mask(self, delta_loss_emb_mask):
-        if self.z_suffix_id_count > 0 and self.delta_loss_emb_mask is None:
+        if self.z_suffix_id_count > 0 and delta_loss_emb_mask is not None:
             self.delta_loss_emb_mask = delta_loss_emb_mask
         # Otherwise, either delta_loss_emb_mask is already set (probably when processing 
         # for a previous layer), so we don't need to set it again.
@@ -951,12 +958,12 @@ class EmbeddingManager(nn.Module):
         bias_scales_reg_weight      = 1. / self.token_dim
         bias_reg_weight_base        = 0.1
         basis_reg_weight_base       = 0.1
-        ada_maps_weight_reg_weight = 1.
-        ada_maps_bias_reg_weight   = 0.01
+        ada_maps_weight_reg_weight  = 1.
+        ada_maps_bias_reg_weight    = 0.01
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
-        ada_l2_loss_boost          = static_l2_loss_boost * ada_static_loss_boost_ratio
+        ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
 
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.
@@ -1011,8 +1018,8 @@ class EmbeddingManager(nn.Module):
                             + loss_bias_scales      * bias_scales_reg_weight \
                             + loss_basis            * basis_reg_weight \
                             + loss_pre_vecs         * pre_vecs_reg_weight \
-                            + loss_ada_maps_weight * ada_maps_weight_reg_weight \
-                            + loss_ada_maps_bias   * ada_maps_bias_reg_weight
+                            + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
+                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight
 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
