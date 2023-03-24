@@ -347,13 +347,17 @@ def main(opt):
                                 else:
                                     # Use a common subdirectory opt.indiv_subdir for all samples.
                                     indiv_subdir = opt.indiv_subdir
-                                sample_path = os.path.join(opt.outdir, indiv_subdir)
-                                os.makedirs(sample_path, exist_ok=True)                            
-                                base_count = len(os.listdir(sample_path))
+                                sample_dir = os.path.join(opt.outdir, indiv_subdir)
+                                os.makedirs(sample_dir, exist_ok=True)                            
+                                base_count = len(os.listdir(sample_dir))
+                                sample_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
+
+                                while os.path.exists(sample_path):
+                                    base_count += 1
+                                    sample_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
 
                                 x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                                Image.fromarray(x_sample.astype(np.uint8)).save(
-                                    os.path.join(sample_path, f"{base_count:05}.jpg"))
+                                Image.fromarray(x_sample.astype(np.uint8)).save(sample_path)
 
                         if not opt.skip_grid:
                             all_samples.append(x_samples_ddim)
