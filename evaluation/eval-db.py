@@ -26,6 +26,9 @@ def parse_args():
                         help="parent directory containing checkpoints of all subjects")
     parser.add_argument("--ckpt_iter", type=int, default=4000,
                         help="checkpoint iteration to use")
+    parser.add_argument("--ckpt_extra_sig", type=str, default="",
+                        help="extra signature that is part of the checkpoint directory name")
+    
     parser.add_argument("--out_dir_tmpl", type=str, default="samples-dbeval",
                         help="Template of parent directory to save generated samples")
 
@@ -139,9 +142,9 @@ def get_promt_list(subject_name, unique_token, class_token):
     prompt_list = [ prompt.format(unique_token, class_token) for prompt in orig_prompt_list ]
     return prompt_list, orig_prompt_list
 
-def find_first_match(lst, search_term):
+def find_first_match(lst, search_term, extra_sig=""):
     for item in lst:
-        if search_term in item:
+        if search_term in item and extra_sig in item:
             return item
     return None  # If no match is found
 
@@ -160,11 +163,14 @@ if args.range is not None:
     class_tokens = class_tokens[low:high]
 
 all_ckpts = os.listdir(args.ckpt_dir)
+# Sort all_ckpts by modification time, most recent first.
 all_ckpts.sort(key=lambda x: os.path.getmtime(os.path.join(args.ckpt_dir, x)), reverse=True)
 
 for subject_name, class_token in zip(subjects, class_tokens):
     ckpt_sig   = subject_name + "-" + args.method
-    ckpt_name  = find_first_match(all_ckpts, ckpt_sig)
+    # Find the newest checkpoint that matches the subject name.
+    ckpt_name  = find_first_match(all_ckpts, ckpt_sig, args.ckpt_extra_sig)
+
     if ckpt_name is None:
         print("ERROR: No checkpoint found for subject: " + subject_name)
         continue
