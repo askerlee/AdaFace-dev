@@ -153,6 +153,7 @@ class PersonalizedBase(Dataset):
                  center_crop=False,
                  mixing_prob=0.25,
                  num_compositions_per_image=1,
+                 is_animal=True,
                  ):
 
         self.data_root = data_root
@@ -191,6 +192,7 @@ class PersonalizedBase(Dataset):
             self.random_scaler = None
 
         self.num_compositions_per_image = num_compositions_per_image
+        self.is_animal = is_animal
 
     def __len__(self):
         return self._length
@@ -217,7 +219,7 @@ class PersonalizedBase(Dataset):
         subj_prompt_comps = []
         cls_prompt_comps  = []
         for i in range(self.num_compositions_per_image):
-            composition_partial = sample_compositions(1)[0]
+            composition_partial = sample_compositions(1, self.is_animal)[0]
             subj_prompt_comp    = subj_prompt_single + " " + composition_partial
             cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
             subj_prompt_comps.append(subj_prompt_comp)

@@ -65,18 +65,24 @@ for i in $indices
 
         # Reset EXTRA_ARGS1 to EXTRA_ARGS0 each time. 
         set EXTRA_ARGS1 $EXTRA_ARGS0
+
         # cls_token: the class token used in delta loss computation.
         # If --use_cls_token, and cls_tokens is provided in the subjfile, then use cls_token. 
         # Otherwise use the default cls_token "person".
         set -q _flag_use_cls_token; and set EXTRA_ARGS1 $EXTRA_ARGS1 --cls_delta_token $cls_token
+
         # z_suffix: append $cls_token as a suffix to "z" in the prompt. The prompt will be "a z <cls_token> <prompt>".
         # E.g., cls_token="toy", prompt="in a chair", then full prompt="a z toy in a chair".
         # If not specified, then no suffix is appended. The prompt will be "a z <prompt>". E.g. "a z in a chair".
         set -q _flag_use_z_suffix;  and set z_suffix $cls_token; or set -e z_suffix
         set -q z_suffix; and set EXTRA_ARGS1 $EXTRA_ARGS1 --placeholder_suffix $z_suffix
+
+        # If $are_animals are specified in subjfile, then use it. Otherwise, use the default value 1.
+        set -q are_animals; and set is_animal $are_animals[$i]; or set is_animal 1
+
         echo $subject: --init_word $initword $EXTRA_ARGS1
         set fish_trace 1
-        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --lr $lr --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights $EXTRA_ARGS1
+        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --lr $lr --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --is_animal $is_animal $EXTRA_ARGS1
     else
         echo $subject: $db_prompt
         set fish_trace 1

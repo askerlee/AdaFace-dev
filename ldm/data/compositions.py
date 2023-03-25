@@ -1,7 +1,7 @@
 import exrex
 import numpy as np
 
-composition_regexs = \
+dynamic_composition_regexs = \
 [ "lifting a (rock|box|barbell|cat|dog)",
   "doing (makeup|housekeeping|gardening|exercise)",
   "carrying a (bag|backpack|luggage|laptop|book|briefcase|purse|suitcase|bouquet|baby|cat|dog|teddy bear)",
@@ -30,7 +30,12 @@ composition_regexs = \
   "wearing a (tshirt|stormtrooper costume|superman costume|ironman armor|ski outfit|astronaut outfit|medal|suit|tie|baseball cap)",
   "drinking (a bottle of water|a cup of wine|a can of beer|a glass of juice|a cup of tea|a bottle of milk)",
   "eating (a sandwich|an ice cream|barbecue|a pizza|a burger|a bowl of pasta|a piece of cake|a sushi roll|a bowl of soup|a plate of tacos)",
-  "on (an airplane|a bus|a busy street|a grass|a roof|an escalator|a train|a boat|a bike|a roller coaster|a ski lift|a hot air balloon|a scooter)",
+  "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt)",
+  "in a (chef|firefighter|police|a purple wizard) outfit",
+]
+
+static_composition_regexs = \
+[ "on (an airplane|a bus|a busy street|a grass|a roof|an escalator|a train|a boat|a bike|a roller coaster|a ski lift|a hot air balloon|a scooter)",
   "in (a car|a meeting|a class|a dress|a suit|a tshirt|a stormtrooper costume|a superman costume|a wedding|an elevator|a dinner|a concert|a gym|a library|a park|a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
   "at (a beach|a table|a park|a concert|a gym|a library|a mall|a movie theater|a hotel room|a theme park)",
   "next to (a friend|a tree|a car|a river|a lake|a mountain|an ocean|a playground|a statue|a panda)",
@@ -40,10 +45,10 @@ composition_regexs = \
   "(in the jungle|in the snow|on a cobblestone street|floating on top of water|floating in an ocean of milk)",
   "with a (city|mountain|blue house|wheat field|a tree and autumn leaves|Eiffel Tower) in the background",
   "on top of (pink fabric|a wooden floor|green grass with sunflowers around it|a mirror|the sidewalk in a crowded street|a dirt road|a white rug|a purple rug in a forest)",
-  "in red|in purple|in shiny fabric|of cube shape|who is wet",
-  "in a (chef|firefighter|police|a purple wizard) outfit",
-  "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt)",
+  "in red|in purple|in shiny fabric|of cube shape|which is wet",
 ]
+
+all_composition_regexs = static_composition_regexs + dynamic_composition_regexs
 
 all_locations = [ "at the left", "at the right", "at the top", "at the bottom", 
                   "in the center", "in the middle", "at the upper left", "at the upper right",
@@ -73,8 +78,13 @@ all_modifiers = [ "concept art", "realistic painting", "character design", "anim
 
 all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve" ]
 
-def sample_compositions(N):
+def sample_compositions(N, is_animal):
     compositions = []
+    if is_animal:
+        composition_regexs = all_composition_regexs
+    else:
+        composition_regexs = static_composition_regexs
+        
     K = len(composition_regexs)
     for i in range(N):
         idx = np.random.choice(K)

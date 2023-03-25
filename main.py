@@ -228,6 +228,9 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--num_compositions_per_image",
                         type=int, default=2,
                         help="Number of composition samples for each image in a batch (default: 2)")
+    parser.add_argument("--is_animal", type=str2bool, 
+                        help="Whether the subject is a human/animal or an object (default: 1, human/animal)")
+    
     return parser
 
 def nondefault_trainer_args(opt):
@@ -393,7 +396,6 @@ class SetupCallback(Callback):
                     os.rename(self.logdir, dst)
                 except FileNotFoundError:
                     pass
-
 
 class ImageLogger(Callback):
     def __init__(self, batch_frequency, max_images, clamp=True, increase_log_steps=True,
@@ -680,6 +682,9 @@ if __name__ == "__main__":
         if opt.init_neg_words is not None:
             init_neg_words = re.split(r",\s*", opt.init_neg_words)
             config.model.params.personalization_config.params.initializer_neg_words = init_neg_words
+
+        config.data.params.train.params.is_animal       = opt.is_animal
+        config.data.params.validation.params.is_animal  = opt.is_animal
 
         if opt.cls_delta_token is not None:
             config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
