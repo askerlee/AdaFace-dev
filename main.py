@@ -144,7 +144,15 @@ def get_parser(**parser_kwargs):
         default=True,
         help="scale base-lr by ngpu * batch_size * n_accumulate",
     )
-
+    # max_steps is inherent in Trainer class. No need to specify it here.
+    '''
+    parser.add_argument(
+        "--max_steps",
+        type=int,
+        default=-1,
+        help="max steps",
+    )
+    '''
     parser.add_argument(
         "--datadir_in_name", 
         type=str2bool, 
@@ -697,7 +705,14 @@ if __name__ == "__main__":
         # Setting composition_delta_reg_weight to 0 will disable composition delta regularization.
         if opt.composition_delta_reg_weight >= 0:
             config.model.params.composition_delta_reg_weight = opt.composition_delta_reg_weight
-            
+
+        if opt.lr > 0:
+            config.model.base_learning_rate = opt.lr
+
+        if opt.max_steps > 0:
+            trainer_opt.max_steps = opt.max_steps
+            config.model.params.scheduler_config.params.max_decay_steps = opt.max_steps
+
         if opt.actual_resume:
             model = load_model_from_config(config, opt.actual_resume)
         else:
@@ -850,9 +865,6 @@ if __name__ == "__main__":
         print("#### Data #####")
         for k in data.datasets:
             print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
-
-        if opt.lr > 0:
-            config.model.base_learning_rate = opt.lr
 
         # configure learning rate
         bs, base_lr, weight_decay = config.data.params.batch_size, config.model.base_learning_rate, \

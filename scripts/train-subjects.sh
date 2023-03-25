@@ -3,9 +3,9 @@
 set self (status basename)
 echo $self $argv
 
-argparse --min-args 1 --max-args 3 'gpu=' 'extra=' 'maxiter=' 'subjfile=' 'selset' 'use_cls_token' 'use_z_suffix' -- $argv
+argparse --min-args 1 --max-args 3 'gpu=' 'extra=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'use_cls_token' 'use_z_suffix' -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [--extra EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [--extra EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-db-eval-subjects.sh --use_cls_token ada 1 25"
     exit 1
 end
@@ -31,6 +31,8 @@ if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ];
 else
     set -q _flag_maxiter; and set max_iters $_flag_maxiter; or set max_iters 800
 end
+
+set -q _flag_lr; and set lr $_flag_lr; or set lr -1
 
 #set fish_trace 1
 
@@ -74,12 +76,12 @@ for i in $indices
         set -q z_suffix; and set EXTRA_ARGS1 $EXTRA_ARGS1 --placeholder_suffix $z_suffix
         echo $subject: --init_word $initword $EXTRA_ARGS1
         set fish_trace 1
-        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_training_steps $max_iters --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights $EXTRA_ARGS1
+        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --lr $lr --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights $EXTRA_ARGS1
     else
         echo $subject: $db_prompt
         set fish_trace 1
         # $EXTRA_ARGS is not for DreamBooth. It is for AdaPrompt/TI only.
-        python3 main.py --base configs/stable-diffusion/v1-finetune_unfrozen.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-dreambooth --no-test --max_training_steps $max_iters --token "z" --class_word $db_prompt
+        python3 main.py --base configs/stable-diffusion/v1-finetune_unfrozen.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-dreambooth --no-test --max_steps $max_iters --lr $lr --token "z" --class_word $db_prompt
     end
 
     set -e fish_trace
