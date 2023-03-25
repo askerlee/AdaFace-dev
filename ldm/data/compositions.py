@@ -1,6 +1,7 @@
 import exrex
 import numpy as np
 
+# dynamic compositions are used by humans/animals only
 dynamic_composition_regexs = \
 [ "lifting a (rock|box|barbell|cat|dog)",
   "doing (makeup|housekeeping|gardening|exercise)",
@@ -31,9 +32,11 @@ dynamic_composition_regexs = \
   "drinking (a bottle of water|a cup of wine|a can of beer|a glass of juice|a cup of tea|a bottle of milk)",
   "eating (a sandwich|an ice cream|barbecue|a pizza|a burger|a bowl of pasta|a piece of cake|a sushi roll|a bowl of soup|a plate of tacos)",
   "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt)",
+  # This is kind of static but only for humans/animals. So we put it here.
   "in a (chef|firefighter|police|a purple wizard) outfit",
 ]
 
+# static compositions are used by both humans/animals and objects
 static_composition_regexs = \
 [ "on (an airplane|a bus|a busy street|a grass|a roof|an escalator|a train|a boat|a bike|a roller coaster|a ski lift|a hot air balloon|a scooter)",
   "in (a car|a meeting|a class|a dress|a suit|a tshirt|a stormtrooper costume|a superman costume|a wedding|an elevator|a dinner|a concert|a gym|a library|a park|a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
@@ -128,4 +131,4 @@ def sample_compositions(N, is_animal):
     return compositions
 
 if __name__ == "__main__":
-    print("\n".join(sample_compositions(100)))
+    print("\n".join(sample_compositions(100, True)))
