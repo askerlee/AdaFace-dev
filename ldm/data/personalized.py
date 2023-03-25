@@ -143,7 +143,7 @@ class PersonalizedBase(Dataset):
                  set="train",
                  placeholder_token="z",
                  # cls token used to compute the delta loss.
-                 cls_delta_token="person",  
+                 cls_delta_token=None,  
                  # suffix to append to the placeholder token, e.g., "toy". 
                  # Used mainly for objects/animals.
                  # cls_delta_token can only contain one token, but placeholder_suffix could be multiple. 
@@ -164,7 +164,14 @@ class PersonalizedBase(Dataset):
         self.num_images = len(self.image_paths)
         self._length = self.num_images 
         self.placeholder_token  = placeholder_token
-        self.cls_delta_token    = cls_delta_token
+        if cls_delta_token is None:
+            # "bike" is a commonly seen object that can appear in various contexts. 
+            # So it's a good template object for computing the delta loss.
+            # "person" is also used for animals, as their dynamic compositions are highly similar.
+            self.cls_delta_token = "person" if is_animal else "bike"
+        else:
+            self.cls_delta_token    = cls_delta_token
+
         self.placeholder_suffix = placeholder_suffix
 
         self.center_crop = center_crop
