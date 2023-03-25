@@ -167,7 +167,8 @@ if args.range is not None:
     low, high  = int(range_strs[0]) - 1, int(range_strs[1])
     subjects   = subjects[low:high]
     class_tokens = class_tokens[low:high]
-
+    are_animals  = are_animals[low:high]
+    
 all_ckpts = os.listdir(args.ckpt_dir)
 # Sort all_ckpts by modification time, most recent first.
 all_ckpts.sort(key=lambda x: os.path.getmtime(os.path.join(args.ckpt_dir, x)), reverse=True)
