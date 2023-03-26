@@ -162,9 +162,13 @@ if args.method == 'db':
 
 if args.range is not None:
     range_strs = args.range.split("-")
-    # low is 1-indexed, converted to 0-indexed by -1.
-    # high is inclusive, converted to exclusive without adding offset.
-    low, high  = int(range_strs[0]) - 1, int(range_strs[1])
+    # Only generate a particular subject.
+    if len(range_strs) == 1:
+        low, high = int(range_strs[0]) - 1, int(range_strs[0])
+    else:
+        # low is 1-indexed, converted to 0-indexed by -1.
+        # high is inclusive, converted to exclusive without adding offset.
+        low, high  = int(range_strs[0]) - 1, int(range_strs[1])
     subjects   = subjects[low:high]
     class_tokens = class_tokens[low:high]
     are_animals  = are_animals[low:high]

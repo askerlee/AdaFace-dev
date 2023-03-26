@@ -689,6 +689,9 @@ if __name__ == "__main__":
         if opt.cls_delta_token is not None:
             config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
             config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
+            # cls_delta_token is passed to the embedding manager, to check if the token consists of only
+            # one token in the CLIP vocabulary. (if it's a rare word, it may be split to multiple tokens,
+            # which will cause misalignment when calculating the delta loss)
             config.model.params.personalization_config.params.cls_delta_token   = opt.cls_delta_token
         if opt.placeholder_suffix is not None:
             config.data.params.train.params.placeholder_suffix              = opt.placeholder_suffix
