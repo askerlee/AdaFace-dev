@@ -77,7 +77,8 @@ if __name__ == "__main__":
         subject_prompts_filepath = os.path.join(opt.samples_dir, subject + "-prompts.txt")
         print(f"Reading prompts from {subject_prompts_filepath}")
         subj_sims_img, subj_sims_text = [], []
-        
+        processed_prompts = {}
+
         with open(subject_prompts_filepath, "r") as f:
             # splitlines() will remove the trailing newline. So no need to strip().
             lines = f.read().splitlines()
@@ -85,14 +86,18 @@ if __name__ == "__main__":
             for indiv_subdir, prompt0, prompt_template in indiv_subdirs_prompts:
                 # Remove subject placeholder from prompt
                 prompt = prompt0.replace(" z ", " ")
+                if prompt in processed_prompts:
+                    continue
                 print(f"Prompt: {prompt}")
                 subjprompt_samples_dir = os.path.join(opt.samples_dir, indiv_subdir)
                 subjprompt_sim_img, subjprompt_sim_text = \
                     compare_folders(evaluator, subject_gt_dir, subjprompt_samples_dir, prompt, opt.num_samples)
                 
-                subj_sims_img.append(subjprompt_sim_img)
-                subj_sims_text.append(subjprompt_sim_text)
+                subj_sims_img.append(subjprompt_sim_img.detach().cpu().numpy())
+                subj_sims_text.append(subjprompt_sim_text.detach().cpu().numpy())
 
+                processed_prompts[prompt] = True
+                
         subj_sims_img_avg = np.mean(subj_sims_img)
         subj_sims_text_avg = np.mean(subj_sims_text)
         print(f"Mean image/text similarities: {subj_sims_img_avg:.3f} {subj_sims_text_avg:.3f}")
