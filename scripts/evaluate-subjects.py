@@ -6,7 +6,7 @@ from tqdm import tqdm, trange
 
 from ldm.data.personalized import PersonalizedBase
 from evaluation.clip_eval import ImageDirEvaluator
-from scripts.syn_subjects_for_eval import parse_subject_file, parse_range_str
+from scripts.gen_subjects_for_eval import parse_subject_file, parse_range_str
 
 # num_samples: only evaluate the last (latest) num_samples images. 
 # If -1, then evaluate all images
@@ -30,6 +30,9 @@ def compare_folders(evaluator, gt_dir, samples_dir, prompt, num_samples=-1):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
+    parser.add_argument("--method", default='ada', choices=["ada", "ti", "db"], type=str, 
+                        help="method to use for generating samples")
+    
     parser.add_argument(
         "--gt_dir",
         type=str,
@@ -63,7 +66,7 @@ if __name__ == "__main__":
     opt = parser.parse_args()
     evaluator = ImageDirEvaluator('cuda')
 
-    subjects, class_tokens, broad_classes = parse_subject_file(opt.subject_file)
+    subjects, class_tokens, broad_classes = parse_subject_file(opt.subject_file, opt.method)
     low, high = parse_range_str(opt.range)
     subjects  = subjects[low:high]
     allsubj_sims_img, allsubj_sims_text = [], []
