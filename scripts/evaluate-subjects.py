@@ -92,7 +92,7 @@ if __name__ == "__main__":
     subject_count = len(subjects)
 
     for i, subject in enumerate(subjects):
-        print(f"{i+1}/{subject_count} Subject: {subject}")
+        print(f"{i+1}/{subject_count}  {subject}")
         class_token = class_tokens[i]
 
         subject_gt_dir = os.path.join(opt.gt_dir, subject)
@@ -147,4 +147,6 @@ if __name__ == "__main__":
         print()
 
     for i, subject in enumerate(subjects):
-        print(f"{i+1} Subject: {subject}: {allsubj_sims_img[i]:.3f} {allsubj_sims_text[i]:.3f} {allsubj_sims_dino[i]:.3f}")
+        print(f"{i+1} {subject}: {allsubj_sims_img[i]:.3f} {allsubj_sims_text[i]:.3f} {allsubj_sims_dino[i]:.3f}")
+
+    print(f"All subjects: {allsubj_sims_img_avg:.3f} {allsubj_sims_text_avg:.3f} {allsubj_sims_dino_avg:.3f}")
