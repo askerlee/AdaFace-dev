@@ -65,6 +65,10 @@ if __name__ == "__main__":
         "--num_samples", type=int, default=4,
         help="Number of samples to generate for each subject under each prompt"
     )
+    parser.add_argument(
+        "--class_name_format", type=str, default="long", choices=["short", "long"],
+        help="Format of class name to use for prompt"
+    )
 
     opt = parser.parse_args()
     evaluator = ImageDirEvaluator('cuda')
@@ -93,9 +97,14 @@ if __name__ == "__main__":
             lines = f.read().splitlines()
             indiv_subdirs_prompts = [ line.split("\t") for line in lines ]
             for indiv_subdir, prompt0, prompt_template in indiv_subdirs_prompts:
-                # Prompt is different from prompt0 (used for ada generation). 
-                # It doesn't contain 'z', but contains the full class name (as opposed to the short one)
-                prompt = prompt_template.format("", class_token)
+                if opt.class_name_format == 'long':
+                    # Prompt is different from prompt0 (prompt0 is used for ada generation). 
+                    # It doesn't contain 'z', but contains the full class name (as opposed to the short one)
+                    prompt = prompt_template.format("", class_token)
+                else:
+                    # Simply remove the subject placeholder from prompt0.
+                    prompt = prompt0.replace(" z ", "")
+
                 if prompt in processed_prompts:
                     continue
                 print(f"Prompt: {prompt}")
@@ -119,3 +128,7 @@ if __name__ == "__main__":
         print(f"Mean image/text similarities of all subjects: {allsubj_sims_img_avg:.3f} {allsubj_sims_text_avg:.3f}")
 
         print()
+
+    for i, subject in enumerate(subjects):
+        print(f"{i+1} Subject: {subject}")
+        print(f"Mean image/text similarities: {allsubj_sims_img[i]:.3f} {allsubj_sims_text[i]:.3f}")
