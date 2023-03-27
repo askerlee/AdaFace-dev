@@ -26,7 +26,7 @@ def compare_folders(evaluator, gt_dir, samples_dir, prompt, num_samples=-1):
 
     sim_img, sim_text = evaluator.evaluate(sample_images, gt_images, prompt)
 
-    print(gt_dir, "vs", samples_dir)
+    print(os.path.basename(gt_dir), "vs", os.path.basename(samples_dir))
     print(f"Image/text similarities: {sim_img:.3f} {sim_text:.3f}")
     return sim_img, sim_text
 
@@ -69,7 +69,10 @@ if __name__ == "__main__":
     opt = parser.parse_args()
     evaluator = ImageDirEvaluator('cuda')
 
-    subjects, class_tokens, broad_classes = parse_subject_file(opt.subject_file, opt.method)
+    # Always pass "db", no matter what the actual method is. 
+    # So that class_tokens are the long class name, instead of the one-token short class name.
+    # This helps better match the prompt with the image.
+    subjects, class_tokens, broad_classes = parse_subject_file(opt.subject_file, "db")
     low, high = parse_range_str(opt.range)
     subjects  = subjects[low:high]
     allsubj_sims_img, allsubj_sims_text = [], []
@@ -77,6 +80,8 @@ if __name__ == "__main__":
 
     for i, subject in enumerate(subjects):
         print(f"{i+1}/{subject_count} Subject: {subject}")
+        class_token = class_tokens[i]
+
         subject_gt_dir = os.path.join(opt.gt_dir, subject)
         subject_prompts_filepath = os.path.join(opt.samples_dir, subject + "-prompts.txt")
         print(f"Reading prompts from {subject_prompts_filepath}")
@@ -88,8 +93,9 @@ if __name__ == "__main__":
             lines = f.read().splitlines()
             indiv_subdirs_prompts = [ line.split("\t") for line in lines ]
             for indiv_subdir, prompt0, prompt_template in indiv_subdirs_prompts:
-                # Remove subject placeholder from prompt
-                prompt = prompt0.replace(" z ", " ")
+                # Prompt is different from prompt0 (used for ada generation). 
+                # It doesn't contain 'z', but contains the full class name (as opposed to the short one)
+                prompt = prompt_template.format("", class_token)
                 if prompt in processed_prompts:
                     continue
                 print(f"Prompt: {prompt}")
