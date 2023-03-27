@@ -11,25 +11,20 @@ class ViTEvaluator(object):
         self.vit_model = vit_model
         self.model = ViTModel.from_pretrained(self.vit_model)
         self.preprocess = ViTFeatureExtractor.from_pretrained(self.vit_model)
+        self.model.to(self.device)
+        self.model.eval()
 
     @torch.no_grad()
-    def encode_images(self, images: ImageInput, cls_only: bool = True) -> torch.Tensor:
-        # If not cls_only, spatial location of the subject will impact matching similarity, 
-        # which seems unreasonable? So by default, we only use the first token (CLS) as the image features.
+    def encode_images(self, images: ImageInput) -> torch.Tensor:
         inputs  = self.preprocess(images=images, return_tensors="pt")
+        inputs  = inputs.to(self.device)
         outputs = self.model(**inputs)
         # last_hidden_states: [B, 197, 384]
         last_hidden_states = outputs.last_hidden_state
 
-        if cls_only:
-            # [B, 384]
-            return last_hidden_states[:, 0]
-        else:
-            # img_to_img_similarity() requires [B, D]-shaped features. 
-            # TODO: flatten the image features to 1D. But this seems unreasonable. 
-            # So just leave the buggy code here.
-            # [B, 197, 384]
-            return last_hidden_states[:]
+        # We only use CLS token's features, so that the spatial location of the subject will not impact matching. 
+        # [B, 384]
+        return last_hidden_states[:, 0]
 
     def get_image_features(self, img: ImageInput, norm: bool = True) -> torch.Tensor:
         image_features = self.encode_images(img)
@@ -45,4 +40,5 @@ class ViTEvaluator(object):
         # [B2, 384]
         gen_img_features = self.get_image_features(generated_images)
         # ([B1, B2]).mean()
-        return (src_img_features @ gen_img_features.T).mean()
+        pairwise_sims = src_img_features @ gen_img_features.T
+        return pairwise_sims.mean()
