@@ -280,8 +280,8 @@ def main(opt):
         print(f"reading prompts from {opt.from_file}")
         with open(opt.from_file, "r") as f:
             # splitlines() will remove the trailing newline. So no need to strip().
-            data = f.read().splitlines()
-            indiv_subdirs_prompts = [ line.split("\t") for line in data ]
+            lines = f.read().splitlines()
+            indiv_subdirs_prompts = [ line.split("\t") for line in lines ]
             indiv_subdirs, all_prompts, _ = zip(*indiv_subdirs_prompts)
             all_prompts = list(chunk(all_prompts, batch_size))
 

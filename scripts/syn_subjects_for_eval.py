@@ -156,79 +156,88 @@ def find_first_match(lst, search_term, extra_sig=""):
             return item
     return None  # If no match is found
 
-args = parse_args()
-subjects, class_tokens, broad_classes = parse_subject_file(args.subject_file, args.method)
-if args.method == 'db':
-    # For DreamBooth, use_z_suffix is the default.
-    args.use_z_suffix = True
-
-if args.range is not None:
-    range_strs = args.range.split("-")
-    # Only generate a particular subject.
-    if len(range_strs) == 1:
-        low, high = int(range_strs[0]) - 1, int(range_strs[0])
+def parse_range_str(range_str):
+    if range_str is not None:
+        range_strs = range_str.split("-")
+        # Only generate a particular subject.
+        if len(range_strs) == 1:
+            low, high = int(range_strs[0]) - 1, int(range_strs[0])
+        else:
+            # low is 1-indexed, converted to 0-indexed by -1.
+            # high is inclusive, converted to exclusive without adding offset.
+            low, high  = int(range_strs[0]) - 1, int(range_strs[1])
     else:
-        # low is 1-indexed, converted to 0-indexed by -1.
-        # high is inclusive, converted to exclusive without adding offset.
-        low, high  = int(range_strs[0]) - 1, int(range_strs[1])
+        low, high = 0, None
+
+    return low, high
+
+if __name__ == "__main__":
+    
+    args = parse_args()
+    subjects, class_tokens, broad_classes = parse_subject_file(args.subject_file, args.method)
+    if args.method == 'db':
+        # For DreamBooth, use_z_suffix is the default.
+        args.use_z_suffix = True
+
+    low, high     = parse_range_str(args.range)
     subjects      = subjects[low:high]
     class_tokens  = class_tokens[low:high]
     broad_classes = broad_classes[low:high]
-    
-all_ckpts = os.listdir(args.ckpt_dir)
-# Sort all_ckpts by modification time, most recent first.
-all_ckpts.sort(key=lambda x: os.path.getmtime(os.path.join(args.ckpt_dir, x)), reverse=True)
+        
+    all_ckpts = os.listdir(args.ckpt_dir)
+    # Sort all_ckpts by modification time, most recent first.
+    all_ckpts.sort(key=lambda x: os.path.getmtime(os.path.join(args.ckpt_dir, x)), reverse=True)
 
-for subject_name, class_token, broad_class in zip(subjects, class_tokens, broad_classes):
-    ckpt_sig   = subject_name + "-" + args.method
-    # Find the newest checkpoint that matches the subject name.
-    ckpt_name  = find_first_match(all_ckpts, ckpt_sig, args.ckpt_extra_sig)
+    for subject_name, class_token, broad_class in zip(subjects, class_tokens, broad_classes):
+        ckpt_sig   = subject_name + "-" + args.method
+        # Find the newest checkpoint that matches the subject name.
+        ckpt_name  = find_first_match(all_ckpts, ckpt_sig, args.ckpt_extra_sig)
 
-    if ckpt_name is None:
-        print("ERROR: No checkpoint found for subject: " + subject_name)
-        continue
-        # breakpoint()
+        if ckpt_name is None:
+            print("ERROR: No checkpoint found for subject: " + subject_name)
+            continue
+            # breakpoint()
 
-    if args.use_z_suffix:
-        # For DreamBooth, use_z_suffix is the default.
-        # For Ada/TI, if we append class token to "z" -> "z dog", 
-        # the chance of occasional under-expression of the subject may be reduced.
-        # (This trick is not needed for human faces)
-        # Prepend a space to class_token to avoid "a zcat" -> "a z cat"
-        class_token = " " + class_token
-    else:
-        class_token = ""
+        if args.use_z_suffix:
+            # For DreamBooth, use_z_suffix is the default.
+            # For Ada/TI, if we append class token to "z" -> "z dog", 
+            # the chance of occasional under-expression of the subject may be reduced.
+            # (This trick is not needed for human faces)
+            # Prepend a space to class_token to avoid "a zcat" -> "a z cat"
+            class_token = " " + class_token
+        else:
+            class_token = ""
 
-    if args.method == 'db':
-        config_file = "v1-inference.yaml"
-        ckpt_path   = f"logs/{ckpt_name}/checkpoints/last.ckpt"
-    else:
-        config_file = "v1-inference-" + args.method + ".yaml"
-        ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
-        emb_path    = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{args.ckpt_iter}.pt"
+        if args.method == 'db':
+            config_file = "v1-inference.yaml"
+            ckpt_path   = f"logs/{ckpt_name}/checkpoints/last.ckpt"
+        else:
+            config_file = "v1-inference-" + args.method + ".yaml"
+            ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
+            emb_path    = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{args.ckpt_iter}.pt"
 
-    outdir = args.out_dir_tmpl + "-" + args.method
-    # E.g., get_promt_list(subject_name="cat2", placeholder="z", class_token="cat", broad_class=1)
-    prompt_list, orig_prompt_list = get_promt_list(subject_name, args.placeholder, class_token, broad_class)
-    prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
-    os.makedirs(outdir, exist_ok=True)
-    PROMPTS = open(prompt_filepath, "w")
-    print(subject_name, ":")
+        outdir = args.out_dir_tmpl + "-" + args.method
+        # E.g., get_promt_list(subject_name="cat2", placeholder="z", class_token="cat", broad_class=1)
+        prompt_list, orig_prompt_list = get_promt_list(subject_name, args.placeholder, class_token, broad_class)
+        prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
+        os.makedirs(outdir, exist_ok=True)
+        PROMPTS = open(prompt_filepath, "w")
+        print(subject_name, ":")
 
-    for prompt, orig_prompt in zip(prompt_list, orig_prompt_list):
-        print("  ", prompt)
-        indiv_subdir = subject_name + "-" + prompt.replace(" ", "-")
-        # Repeat each prompt for n_samples times in the prompt file. 
-        # So that stable_txt2img.py generates n_samples images for each prompt.
-        for i in range(args.n_samples):
-            # orig_prompt is saved in the prompt file as well, for evaluation later.
-            PROMPTS.write( "\t".join([indiv_subdir, prompt, orig_prompt]) + "\n" )
+        for prompt, orig_prompt in zip(prompt_list, orig_prompt_list):
+            print("  ", prompt)
+            indiv_subdir = subject_name + "-" + prompt.replace(" ", "-")
+            # Repeat each prompt for n_samples times in the prompt file. 
+            # So that stable_txt2img.py generates n_samples images for each prompt.
+            for i in range(args.n_samples):
+                # orig_prompt is saved in the prompt file as well, for evaluation later.
+                PROMPTS.write( "\t".join([indiv_subdir, prompt, orig_prompt]) + "\n" )
 
-    PROMPTS.close()
-    # Since we use a prompt file, we don't need to specify --n_samples.
-    command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --from-file {prompt_filepath} --scale {args.scale} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
-    if args.method != 'db':
-        command_line += f" --embedding_paths {emb_path}"
+        PROMPTS.close()
+        # Since we use a prompt file, we don't need to specify --n_samples.
+        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --from-file {prompt_filepath} --scale {args.scale} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
+        if args.method != 'db':
+            command_line += f" --embedding_paths {emb_path}"
 
-    print(command_line)
-    os.system(command_line)
+        print(command_line)
+        os.system(command_line)

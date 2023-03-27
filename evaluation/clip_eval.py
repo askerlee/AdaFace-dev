@@ -111,3 +111,4 @@ class ImageDirEvaluator(CLIPEvaluator):
         sim_samples_to_text = self.txt_to_img_similarity(target_text.replace("*", ""), gen_samples)
 
         return sim_samples_to_img, sim_samples_to_text
+    
