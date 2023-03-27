@@ -187,9 +187,9 @@ class PersonalizedBase(Dataset):
                               "bicubic":  PIL.Image.BICUBIC,
                               "lanczos":  PIL.Image.LANCZOS,
                               }[interpolation]
-        self.flip = transforms.RandomHorizontalFlip(p=flip_p)
-
-        if min_rand_scaling > 0:
+        
+        if set == "train" and min_rand_scaling > 0:
+            self.flip = transforms.RandomHorizontalFlip(p=flip_p)
             # RandomResizedCrop only enlarges (a crop of) the image, so we use RandomAffine instead.
             self.random_scaler = transforms.Compose([
                                     transforms.RandomAffine(degrees=0, shear=0, scale=(min_rand_scaling, 1)),
@@ -198,8 +198,10 @@ class PersonalizedBase(Dataset):
             print(f"{set} images will be randomly scaled with range ({min_rand_scaling}, 1)")
         else:
             self.random_scaler = None
+            self.flip = None
 
         self.num_compositions_per_image = num_compositions_per_image
+        # cartoon characters are usually depicted as human-like, so is_animal is True.
         self.is_animal = (broad_class == 1 or broad_class == 2)
 
     def __len__(self):
@@ -257,7 +259,9 @@ class PersonalizedBase(Dataset):
         if self.size is not None:
             image = image.resize((self.size, self.size), resample=self.interpolation)
 
-        image = self.flip(image)
+        if self.flip:
+            image = self.flip(image)
+            
         scale_p = 0.5
         # Do random scaling with 50% chance. Not to do it all the time, 
         # as it seems to hurt (maybe introduced domain gap between training and inference?)

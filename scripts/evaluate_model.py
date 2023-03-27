@@ -81,7 +81,7 @@ if __name__ == "__main__":
     images = [torch.from_numpy(data_loader[i]["image"]).permute(2, 0, 1) for i in range(data_loader.num_images)]
     images = torch.stack(images, axis=0)
 
-    sim_img, sim_text = evaluator.evaluate(model, images, opt.prompt)
+    sim_img, sim_text = evaluator.gen_and_evaluate(model, images, opt.prompt)
 
     output_dir = os.path.join(opt.out_dir, prompt.replace(" ", "-"))
 

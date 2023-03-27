@@ -63,7 +63,7 @@ class LDMCLIPEvaluator(CLIPEvaluator):
     def __init__(self, device, clip_model='ViT-B/32') -> None:
         super().__init__(device, clip_model)
 
-    def evaluate(self, ldm_model, src_images, target_text, n_samples=64, n_steps=50):
+    def gen_and_evaluate(self, ldm_model, src_images, target_text, n_samples=64, n_steps=50):
         
         sampler = DDIMSampler(ldm_model)
 
