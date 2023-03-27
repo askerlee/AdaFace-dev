@@ -321,6 +321,8 @@ class PersonalizedBase(Dataset):
             # mask[mask > 0] = 1. No need to do thresholding, as mask is uint8.
             example["mask"]  = mask
 
+        # Also return the PIL Image object.
+        example["pil_image"] = image
         image = np.array(image).astype(np.uint8)
         example["image"] = (image / 127.5 - 1.0).astype(np.float32)
         return example
