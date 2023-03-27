@@ -228,8 +228,8 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--num_compositions_per_image",
                         type=int, default=2,
                         help="Number of composition samples for each image in a batch (default: 2)")
-    parser.add_argument("--is_animal", type=str2bool, 
-                        help="Whether the subject is a human/animal or an object (default: 1, human/animal)")
+    parser.add_argument("--broad_class", type=int, default=1,
+                        help="Whether the subject is a human/animal, object or cartoon (0: object, 1: human/animal, 2: cartoon)")
     
     return parser
 
@@ -683,16 +683,21 @@ if __name__ == "__main__":
             init_neg_words = re.split(r",\s*", opt.init_neg_words)
             config.model.params.personalization_config.params.initializer_neg_words = init_neg_words
 
-        config.data.params.train.params.is_animal       = opt.is_animal
-        config.data.params.validation.params.is_animal  = opt.is_animal
+        config.data.params.train.params.broad_class       = opt.broad_class
+        config.data.params.validation.params.broad_class  = opt.broad_class
 
-        if opt.cls_delta_token is not None:
-            config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
-            config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
-            # cls_delta_token is passed to the embedding manager, to check if the token consists of only
-            # one token in the CLIP vocabulary. (if it's a rare word, it may be split to multiple tokens,
-            # which will cause misalignment when calculating the delta loss)
-            config.model.params.personalization_config.params.cls_delta_token   = opt.cls_delta_token
+        if opt.cls_delta_token is None:
+            #                             object   human    cartoon character
+            default_cls_delta_tokens = [ "bike", "person", "mickey" ]
+            opt.cls_delta_token = default_cls_delta_tokens[opt.broad_class]
+
+        config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
+        config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
+        # cls_delta_token is passed to the embedding manager, to check if the token consists of only
+        # one token in the CLIP vocabulary. (if it's a rare word, it may be split to multiple tokens,
+        # which will cause misalignment when calculating the delta loss)
+        config.model.params.personalization_config.params.cls_delta_token   = opt.cls_delta_token
+            
         if opt.placeholder_suffix is not None:
             config.data.params.train.params.placeholder_suffix              = opt.placeholder_suffix
             config.data.params.validation.params.placeholder_suffix         = opt.placeholder_suffix

@@ -153,7 +153,7 @@ class PersonalizedBase(Dataset):
                  center_crop=False,
                  mixing_prob=0.25,
                  num_compositions_per_image=1,
-                 is_animal=True,
+                 broad_class=1,
                  ):
 
         self.data_root = data_root
@@ -165,12 +165,13 @@ class PersonalizedBase(Dataset):
         self._length = self.num_images 
         self.placeholder_token  = placeholder_token
         if cls_delta_token is None:
+            default_cls_delta_tokens = [ "bike", "person", "mickey" ]
             # "bike" is a commonly seen object that can appear in various contexts. 
             # So it's a good template object for computing the delta loss.
             # "person" is also used for animals, as their dynamic compositions are highly similar.
-            self.cls_delta_token = "person" if is_animal else "bike"
+            self.cls_delta_token = default_cls_delta_tokens[broad_class]
         else:
-            self.cls_delta_token    = cls_delta_token
+            self.cls_delta_token = cls_delta_token
 
         self.placeholder_suffix = placeholder_suffix
 
@@ -199,7 +200,7 @@ class PersonalizedBase(Dataset):
             self.random_scaler = None
 
         self.num_compositions_per_image = num_compositions_per_image
-        self.is_animal = is_animal
+        self.is_animal = (broad_class == 1 or broad_class == 2)
 
     def __len__(self):
         return self._length

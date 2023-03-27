@@ -50,6 +50,7 @@ for i in $indices
     # So we need an individual cls_tokens for non-human subjects. 
     # For "stuffed animal", the corresponding cls_token is "toy".
     # For humans, this is optional. If not specified, then cls_token = last word of ada_prompt.
+    # Only use cls_token when --use_cls_token is specified.
     set -q cls_tokens; and set cls_token $cls_tokens[$i]; or set cls_token (string split " " $ada_prompt)[-1]
     set db_prompt0 "$db_prompts[$i]"
     set db_prompt  "$db_prompt0$db_suffix"
@@ -77,12 +78,12 @@ for i in $indices
         set -q _flag_use_z_suffix;  and set z_suffix $cls_token; or set -e z_suffix
         set -q z_suffix; and set EXTRA_ARGS1 $EXTRA_ARGS1 --placeholder_suffix $z_suffix
 
-        # If $are_animals are specified in subjfile, then use it. Otherwise, use the default value 1.
-        set -q are_animals; and set is_animal $are_animals[$i]; or set is_animal 1
+        # If $broad_classes are specified in subjfile, then use it. Otherwise, use the default value 1.
+        set -q broad_classes; and set broad_class $broad_classes[$i]; or set broad_class 1
 
         echo $subject: --init_word $initword $EXTRA_ARGS1
         set fish_trace 1
-        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --lr $lr --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --is_animal $is_animal $EXTRA_ARGS1
+        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --lr $lr --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_ARGS1
     else
         echo $subject: $db_prompt
         set fish_trace 1
