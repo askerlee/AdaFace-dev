@@ -207,9 +207,10 @@ class PersonalizedBase(Dataset):
     def __len__(self):
         return self._length
 
-    def __getitem__(self, i):
+    def __getitem__(self, index):
         example = {}
-        image = Image.open(self.image_paths[i % self.num_images])
+        image_path = self.image_paths[index % self.num_images]
+        image = Image.open(image_path)
 
         if not image.mode == "RGB":
             image = image.convert("RGB")
@@ -228,7 +229,7 @@ class PersonalizedBase(Dataset):
 
         subj_prompt_comps = []
         cls_prompt_comps  = []
-        for i in range(self.num_compositions_per_image):
+        for _ in range(self.num_compositions_per_image):
             composition_partial = sample_compositions(1, self.is_animal)[0]
             subj_prompt_comp    = subj_prompt_single + " " + composition_partial
             cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
@@ -323,4 +324,3 @@ class PersonalizedBase(Dataset):
         image = np.array(image).astype(np.uint8)
         example["image"] = (image / 127.5 - 1.0).astype(np.float32)
         return example
-    

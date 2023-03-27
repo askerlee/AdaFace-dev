@@ -11,17 +11,20 @@ from scripts.gen_subjects_for_eval import parse_subject_file, parse_range_str
 # num_samples: only evaluate the last (latest) num_samples images. 
 # If -1, then evaluate all images
 def compare_folders(evaluator, gt_dir, samples_dir, prompt, num_samples=-1):
-    gt_data_loader  = PersonalizedBase(gt_dir,      set='evaluation', size=256, flip_p=0.0)
+    gt_data_loader     = PersonalizedBase(gt_dir,      set='evaluation', size=256, flip_p=0.0)
     sample_data_loader = PersonalizedBase(samples_dir, set='evaluation', size=256, flip_p=0.0)
 
     sample_start_idx = 0 if num_samples == -1 else sample_data_loader.num_images - num_samples
     sample_range     = range(sample_start_idx, sample_data_loader.num_images)
+    # sample_filenames = [sample_data_loader.image_paths[i] for i in sample_range]
+    # print("Sample filenames:", sample_filenames)
+
     gt_images = [torch.from_numpy(gt_data_loader[i]["image"]).permute(2, 0, 1) for i in range(gt_data_loader.num_images)]
     gt_images = torch.stack(gt_images, axis=0)
     sample_images = [torch.from_numpy(sample_data_loader[i]["image"]).permute(2, 0, 1) for i in sample_range]
     sample_images = torch.stack(sample_images, axis=0)
 
-    sim_img, sim_text = evaluator.evaluate(gt_images, sample_images, prompt)
+    sim_img, sim_text = evaluator.evaluate(sample_images, gt_images, prompt)
 
     print(gt_dir, "vs", samples_dir)
     print(f"Image/text similarities: {sim_img:.3f} {sim_text:.3f}")
@@ -70,9 +73,10 @@ if __name__ == "__main__":
     low, high = parse_range_str(opt.range)
     subjects  = subjects[low:high]
     allsubj_sims_img, allsubj_sims_text = [], []
+    subject_count = len(subjects)
 
-    for subject in subjects:
-        print("Subject: ", subject)
+    for i, subject in enumerate(subjects):
+        print(f"{i+1}/{subject_count} Subject: {subject}")
         subject_gt_dir = os.path.join(opt.gt_dir, subject)
         subject_prompts_filepath = os.path.join(opt.samples_dir, subject + "-prompts.txt")
         print(f"Reading prompts from {subject_prompts_filepath}")
@@ -97,14 +101,15 @@ if __name__ == "__main__":
                 subj_sims_text.append(subjprompt_sim_text.detach().cpu().numpy())
 
                 processed_prompts[prompt] = True
-                
+
         subj_sims_img_avg = np.mean(subj_sims_img)
         subj_sims_text_avg = np.mean(subj_sims_text)
         print(f"Mean image/text similarities: {subj_sims_img_avg:.3f} {subj_sims_text_avg:.3f}")
         allsubj_sims_img.append(subj_sims_img_avg)
         allsubj_sims_text.append(subj_sims_text_avg)
     
-    allsubj_sims_img_avg = np.mean(allsubj_sims_img)
-    allsubj_sims_text_avg = np.mean(allsubj_sims_text)
-    print(f"Mean image/text similarities of all subjects: {allsubj_sims_img_avg:.3f} {allsubj_sims_text_avg:.3f}")
+        allsubj_sims_img_avg = np.mean(allsubj_sims_img)
+        allsubj_sims_text_avg = np.mean(allsubj_sims_text)
+        print(f"Mean image/text similarities of all subjects: {allsubj_sims_img_avg:.3f} {allsubj_sims_text_avg:.3f}")
 
+        print()
