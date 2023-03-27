@@ -5,6 +5,7 @@ set -l db_prompts   girl                girl                  girl             "
 set -l ada_prompts  "young girl woman"  "cyborg young girl"   "young girl"     "asian man" "black woman"  "young boy"  "asian man"  "young woman"    "pom dog"  "keanu cool man" "tabby cat"  "asian young girl"  "asian man" "asian woman" "black persian cat"  "white man" "asian woman" "young girl"  "indian girl"  "black man" "asian man"   "cute girl"  "french young man" "young handsome man"  "young girl zendaya"
 set -l cls_tokens   girl                girl                  girl             man         woman          boy          man          girl             dog        man              cat          girl                man         woman         cat                  man         woman         girl          girl           man         man           girl         man                man                   girl
 set -l ada_weights  "1 2 2"             "1 1 2"               "1 2"            "1 2"       "1 2"          "1 2"        "1 2"        "1 2"            "1 1"      "2 1 2"          "1 2"        "1 1 2"             "1 2"       "1 2"         "1 1 3"              "1 2"       "1 2"         "1 2"         "1 2"          "1 2"        "1 2"        "1 2"        "1 1 2"            "1 1 2"               "1 2 2"
+set -l sel_set      4 8 9 11 12 14 18 19 22 25
 
 set -Ux subjects        $subjects
 set -Ux db_prompts      $db_prompts
@@ -13,4 +14,5 @@ set -Ux ada_weights     $ada_weights
 set -Ux cls_tokens      $cls_tokens
 # "instagram" for the main dataset, to focus on faces.
 set -Ux db_suffix       ", instagram"
+set -Ux sel_set         $sel_set
 set -Ux data_folder     data

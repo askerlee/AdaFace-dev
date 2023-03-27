@@ -713,8 +713,14 @@ if __name__ == "__main__":
 
         if opt.embedding_reg_weight > 0:
             config.model.params.embedding_reg_weight = opt.embedding_reg_weight
-        if opt.ada_emb_weight > 0:
-            config.model.params.personalization_config.params.ada_emb_weight = opt.ada_emb_weight
+
+        if opt.ada_emb_weight == -1:
+            # Smaller ada embedding weight for objects and cartoon characters, larger for humans.
+            default_ada_emb_weights = [ 0.2, 0.5, 0.2 ]
+            opt.ada_emb_weight = default_ada_emb_weights[opt.broad_class]
+            
+        config.model.params.personalization_config.params.ada_emb_weight = opt.ada_emb_weight
+
         # Setting composition_delta_reg_weight to 0 will disable composition delta regularization.
         if opt.composition_delta_reg_weight >= 0:
             config.model.params.composition_delta_reg_weight = opt.composition_delta_reg_weight

@@ -36,8 +36,10 @@ set -q _flag_lr; and set lr $_flag_lr; or set lr -1
 
 #set fish_trace 1
 
-# If --selset is specified, then only train the selected subjects, i.e., 4, 8, ..., 25.
-set -q _flag_selset; and set -l indices 4 8 9 11 12 14 18 19 22 25; or set -l indices (seq $L $H)
+# If --selset is given, then only train on the selected subjects, specified in $subj_file.
+set -q _flag_selset; and set -l indices $sel_set; or set -l indices (seq $L $H)
+echo Training on subjects $indices
+
 # $0 0 1 13: alexachung .. masatosakai, on GPU0
 # $0 1 14 25: michelleyeoh .. zendaya,  on GPU1
 for i in $indices

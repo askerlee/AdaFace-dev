@@ -322,7 +322,7 @@ class PersonalizedBase(Dataset):
             example["mask"]  = mask
 
         # Also return the PIL Image object.
-        example["pil_image"] = image
         image = np.array(image).astype(np.uint8)
+        example["image_unnorm"] = image
         example["image"] = (image / 127.5 - 1.0).astype(np.float32)
         return example

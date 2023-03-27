@@ -28,8 +28,8 @@ def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_s
     sim_img, sim_text = clip_evator.evaluate(sample_images, gt_images, prompt)
 
     # huggingface's ViT pipeline requires a list of PIL images as input.
-    gt_pil_images     = [ gt_data_loader[i]["pil_image"] for i in range(gt_data_loader.num_images) ]
-    sample_pil_images = [ sample_data_loader[i]["pil_image"] for i in sample_range ]
+    gt_pil_images     = [ gt_data_loader[i]["image_unnorm"] for i in range(gt_data_loader.num_images) ]
+    sample_pil_images = [ sample_data_loader[i]["image_unnorm"] for i in sample_range ]
 
     sim_dino = dino_evator.img_to_img_similarity(gt_pil_images, sample_pil_images)
 

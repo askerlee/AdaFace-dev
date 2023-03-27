@@ -6,6 +6,7 @@ set -l cls_tokens     backpack        backpack        toy               bowl    
 set -l ada_prompts    backpack        backpack        "stuffed animal"  bowl            can     candle  cat     cat     clock   sneaker           dog      dog     dog     dog     dog     dog     dog     toy             boot            "stuffed animal"        toy             glasses         toy             toy     "cartoon monster"  toy             sneaker         teapot  vase    "stuffed animal"
 set -l ada_weights    1               1               "1 2"             1               1       1       1       1       1       1                 1        1       1       1       1       1       1       1               1               "1 2"                   1               1               1               1       "2 1"              1               1               1       1       "1 2"
 set -l broad_classes  0               0               0                 0               0       0       1       1       0       0                 1        1       1       1       1       1       1       0               0               0                       0               0               0               0       2                  0               0               0       0       0
+set -l sel_set        1 2 6 9 13 21 28
 
 set -Ux subjects        $subjects
 set -Ux db_prompts      $db_prompts
@@ -13,6 +14,7 @@ set -Ux ada_prompts     $ada_prompts
 set -Ux ada_weights     $ada_weights
 set -Ux cls_tokens      $cls_tokens
 set -Ux broad_classes   $broad_classes
+set -Ux sel_set         $sel_set
 # No suffix for the DreamBooth eval set, as they are objects/animals, as opposed to faces.
 set -Ux db_suffix       ""
 set -Ux data_folder     db-eval-dataset
