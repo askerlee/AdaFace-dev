@@ -79,6 +79,7 @@ if __name__ == "__main__":
     subjects, class_tokens, broad_classes = parse_subject_file(opt.subject_file, "db")
     low, high = parse_range_str(opt.range)
     subjects  = subjects[low:high]
+    class_tokens = class_tokens[low:high]
     allsubj_sims_img, allsubj_sims_text = [], []
     subject_count = len(subjects)
 
@@ -100,10 +101,14 @@ if __name__ == "__main__":
                 if opt.class_name_format == 'long':
                     # Prompt is different from prompt0 (prompt0 is used for ada generation). 
                     # It doesn't contain 'z', but contains the full class name (as opposed to the short one)
+                    # Patch the class token of  "red cartoon". "a cartoon in the forest ..." doesn't make sense.
+                    if class_token == 'cartoon':
+                        class_token = "cartoon monster"
+
                     prompt = prompt_template.format("", class_token)
                 else:
                     # Simply remove the subject placeholder from prompt0.
-                    prompt = prompt0.replace(" z ", "")
+                    prompt = prompt0.replace(" z ", " ")
 
                 if prompt in processed_prompts:
                     continue
