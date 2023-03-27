@@ -22,9 +22,12 @@ class ViTEvaluator(object):
         last_hidden_states = outputs.last_hidden_state
 
         if cls_only:
-            # [B, 1, 384]
-            return last_hidden_states[:, [0]]
+            # [B, 384]
+            return last_hidden_states[:, 0]
         else:
+            # img_to_img_similarity() requires [B, D]-shaped features. 
+            # TODO: flatten the image features to 1D. But this seems unreasonable. 
+            # So just leave the buggy code here.
             # [B, 197, 384]
             return last_hidden_states[:]
 
@@ -37,9 +40,9 @@ class ViTEvaluator(object):
         return image_features
 
     def img_to_img_similarity(self, src_images, generated_images):
-        # [B1, 1, 384]
+        # [B1, 384]
         src_img_features = self.get_image_features(src_images)
-        # [B2, 1, 384]
+        # [B2, 384]
         gen_img_features = self.get_image_features(generated_images)
         # ([B1, B2]).mean()
         return (src_img_features @ gen_img_features.T).mean()

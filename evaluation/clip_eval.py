@@ -47,7 +47,9 @@ class CLIPEvaluator(object):
         return image_features
 
     def img_to_img_similarity(self, src_images, generated_images):
+        # [B1, 512]
         src_img_features = self.get_image_features(src_images)
+        # [B2, 512]
         gen_img_features = self.get_image_features(generated_images)
 
         return (src_img_features @ gen_img_features.T).mean()
