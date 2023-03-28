@@ -74,7 +74,7 @@ def parse_subject_file(subject_file_path, method):
                     elif var_name == "broad_classes":
                         broad_classes = [ int(s) for s in substrings ]
                     elif var_name == 'sel_set':
-                        sel_set = [ int(s) for s in substrings ]
+                        sel_set = [ int(s) - 1 for s in substrings ]
                 else:
                     breakpoint()
 
