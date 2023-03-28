@@ -67,6 +67,10 @@ if __name__ == "__main__":
         help="Range of subjects to generate "
              "(Index starts from 1 and is inclusive, e.g., 1-30)"
     )
+    parser.add_argument(
+        "--selset", action="store_true",
+        help="Whether to evaluate only the selected subset of subjects"
+    )
     # num_samples = 4
     parser.add_argument(
         "--num_samples", type=int, default=4,
@@ -84,10 +88,14 @@ if __name__ == "__main__":
     # Always pass "db", no matter what the actual method is. 
     # So that class_tokens are the long class name, instead of the one-token short class name.
     # This helps better match the prompt with the image.
-    subjects, class_tokens, broad_classes = parse_subject_file(opt.subject_file, "db")
+    subjects, class_tokens, broad_classes, sel_set = parse_subject_file(opt.subject_file, "db")
     low, high = parse_range_str(opt.range)
     subjects  = subjects[low:high]
     class_tokens = class_tokens[low:high]
+    if opt.selset:
+        subjects = [ subjects[i] for i in sel_set ]
+        class_tokens = [ class_tokens[i] for i in sel_set ]
+        
     allsubj_sims_img, allsubj_sims_text, allsubj_sims_dino = [], [], []
     subject_count = len(subjects)
 

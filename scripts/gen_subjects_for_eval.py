@@ -38,6 +38,11 @@ def parse_args():
     # range of subjects to generate
     parser.add_argument("--range", type=str, default=None, 
                         help="Range of subjects to generate (Index starts from 1 and is inclusive, e.g., 1-30)")
+    parser.add_argument(
+        "--selset", action="store_true",
+        help="Whether to evaluate only the selected subset of subjects"
+    )
+
     args = parser.parse_args()
     return args
 
@@ -48,15 +53,15 @@ def split_string(input_string):
     return substrings
 
 def parse_subject_file(subject_file_path, method):
-    subjects, class_tokens, broad_classes = None, None, None
+    subjects, class_tokens, broad_classes, sel_set = None, None, None, None
 
     with open(subject_file_path, "r") as f:
         lines = f.readlines()
         lines = [line.strip() for line in lines]
         for line in lines:
-            if re.search(r"^set -[la] (subjects|db_prompts|cls_tokens|broad_classes)", line):
+            if re.search(r"^set -[la] [a-zA-Z_]+ ", line):
                 # set -l subjects  alexachung    alita...
-                mat = re.search(r"^set -[la] (subjects|db_prompts|cls_tokens|broad_classes)\s+(\S.+\S)", line)
+                mat = re.search(r"^set -[la] ([a-zA-Z_]+)\s+(\S.+\S)", line)
                 if mat is not None:
                     var_name = mat.group(1)
                     substrings = split_string(mat.group(2))
@@ -68,6 +73,8 @@ def parse_subject_file(subject_file_path, method):
                         class_tokens = substrings
                     elif var_name == "broad_classes":
                         broad_classes = [ int(s) for s in substrings ]
+                    elif var_name == 'sel_set':
+                        sel_set = [ int(s) for s in substrings ]
                 else:
                     breakpoint()
 
@@ -75,10 +82,13 @@ def parse_subject_file(subject_file_path, method):
         # By default, all subjects are humans/animals, unless specified in the subject file.
         broad_classes = [ 1 for _ in subjects ]
 
+    if sel_set is None:
+        sel_set = list(range(len(subjects)))
+
     if subjects is None or class_tokens is None:
         raise ValueError("subjects or db_prompts is None")
     
-    return subjects, class_tokens, broad_classes
+    return subjects, class_tokens, broad_classes, sel_set
 
 def get_promt_list(subject_name, unique_token, class_token, broad_class):
     object_prompt_list = [
@@ -174,7 +184,7 @@ def parse_range_str(range_str):
 if __name__ == "__main__":
     
     args = parse_args()
-    subjects, class_tokens, broad_classes = parse_subject_file(args.subject_file, args.method)
+    subjects, class_tokens, broad_classes, sel_set = parse_subject_file(args.subject_file, args.method)
     if args.method == 'db':
         # For DreamBooth, use_z_suffix is the default.
         args.use_z_suffix = True
@@ -183,7 +193,11 @@ if __name__ == "__main__":
     subjects      = subjects[low:high]
     class_tokens  = class_tokens[low:high]
     broad_classes = broad_classes[low:high]
-        
+    if args.selset:
+        subjects      = [ subjects[i]       for i in sel_set ]
+        class_tokens  = [ class_tokens[i]   for i in sel_set ]
+        broad_classes = [ broad_classes[i]  for i in sel_set ]
+
     all_ckpts = os.listdir(args.ckpt_dir)
     # Sort all_ckpts by modification time, most recent first.
     all_ckpts.sort(key=lambda x: os.path.getmtime(os.path.join(args.ckpt_dir, x)), reverse=True)
