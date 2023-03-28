@@ -19,6 +19,9 @@ def parse_args():
                         help="number of samples to generate for each test case")
     parser.add_argument("--bs", type=int, default=4, 
                         help="batch size")
+    # prompt_suffix
+    parser.add_argument("--prompt_suffix", type=str, default="",
+                        help="suffix to append to each prompt")
     
     parser.add_argument("--steps", type=int, default=50, 
                         help="number of DDIM steps to generate samples")
@@ -239,6 +242,9 @@ if __name__ == "__main__":
         print(subject_name, ":")
 
         for prompt, orig_prompt in zip(prompt_list, orig_prompt_list):
+            if len(args.prompt_suffix) > 0:
+                prompt = prompt + ", " + args.prompt_suffix
+
             print("  ", prompt)
             indiv_subdir = subject_name + "-" + prompt.replace(" ", "-")
             # Repeat each prompt for n_samples times in the prompt file. 
