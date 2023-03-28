@@ -530,7 +530,7 @@ class EmbeddingManager(nn.Module):
                                                                    init_neg_vecs=init_neg_embeddings)
 
                     token_ada_embedder  = AdaEmbedding(num_vectors_per_token, self.token_dim, 
-                                                         layerwise_lora_rank, init_word_embeddings)                                                        
+                                                       layerwise_lora_rank, init_word_embeddings)                                                        
                 else:
                     # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
                     token_params = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
@@ -578,7 +578,9 @@ class EmbeddingManager(nn.Module):
             self.loss_call_count = 0
             # Store the embedder to compute the delta loss.
             self.embedder = embedder
-
+            print("EmbeddingManager initialized with layerwise_lora_rank={}, ada_emb_weight={}".format(
+                   layerwise_lora_rank, ada_emb_weight))
+            
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then max_vectors_per_token = num_unet_layers = 16.
     def forward(
