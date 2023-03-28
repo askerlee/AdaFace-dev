@@ -15,6 +15,10 @@ def parse_args():
                         help="Do not append placeholder suffix to the subject placeholder (default: append)")
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
+    # subj_scale
+    parser.add_argument("--subj_scale", type=float, default=1,
+                        help="the subject embedding scale")
+    
     parser.add_argument("--n_samples", type=int, default=4, 
                         help="number of samples to generate for each test case")
     parser.add_argument("--bs", type=int, default=4, 
@@ -257,7 +261,7 @@ if __name__ == "__main__":
 
         PROMPTS.close()
         # Since we use a prompt file, we don't need to specify --n_samples.
-        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --from-file {prompt_filepath} --scale {args.scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
+        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --from-file {prompt_filepath} --scale {args.scale} --subj_scale {args.subj_scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
