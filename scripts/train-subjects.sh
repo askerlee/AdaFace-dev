@@ -3,9 +3,9 @@
 set self (status basename)
 echo $self $argv
 
-argparse --min-args 1 --max-args 3 'gpu=' 'extra=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'use_cls_token' 'use_z_suffix' -- $argv
+argparse --min-args 1 --max-args 3 'gpu=' 'extra=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'min_rand_scaling=' 'use_cls_token' 'use_z_suffix' -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [--extra EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--min_rand_scaling S] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [--extra EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-db-eval-subjects.sh --use_cls_token ada 1 25"
     exit 1
 end
@@ -13,7 +13,7 @@ end
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [--extra EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--min_rand_scaling S] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [--extra EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-db-eval-subjects.txt --use_cls_token ada 1 25"
     exit 1
 end
@@ -32,13 +32,15 @@ else
     set -q _flag_maxiter; and set max_iters $_flag_maxiter; or set max_iters 800
 end
 
-set -q _flag_lr; and set lr $_flag_lr; or set lr -1
-
+set -q _flag_lr; and set lr $_flag_lr; or set -e lr
+set -q _flag_min_rand_scaling; and set min_rand_scaling $_flag_min_rand_scaling; or set -e min_rand_scaling
 #set fish_trace 1
 
 # If --selset is given, then only train on the selected subjects, specified in $subj_file.
-set -q _flag_selset; and set -l indices $sel_set; or set -l indices (seq $L $H)
-echo Training on subjects $indices
+set -q _flag_selset; and set -l indices0 $sel_set; or set -l indices0 (seq 1 (count $subjects))
+set -l indices $indices0[(seq $L $H)]
+
+echo Training on $subjects[$indices]
 
 # $0 0 1 13: alexachung .. masatosakai, on GPU0
 # $0 1 14 25: michelleyeoh .. zendaya,  on GPU1
@@ -82,9 +84,12 @@ for i in $indices
 
         # If $broad_classes are specified in subjfile, then use it. Otherwise, use the default value 1.
         set -q broad_classes; and set broad_class $broad_classes[$i]; or set broad_class 1
-        set -q lrs; and set lr $lrs[$broad_class]; or set -e lr
+        if not set -q lr
+            set -q lrs; and set lr $lrs[(math $broad_class+1)]
+        end
         set -q lr; and set EXTRA_ARGS1 $EXTRA_ARGS1 --lr $lr
-        
+        set -q min_rand_scaling; and set EXTRA_ARGS1 $EXTRA_ARGS1 --min_rand_scaling $min_rand_scaling
+
         echo $subject: --init_word $initword $EXTRA_ARGS1
         set fish_trace 1
         python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --lr $lr --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_ARGS1
