@@ -30,7 +30,8 @@ def parse_args():
     parser.add_argument("--ckpt_iter", type=int, default=4000,
                         help="checkpoint iteration to use")
     parser.add_argument("--ckpt_extra_sig", type=str, default="",
-                        help="extra signature that is part of the checkpoint directory name")
+                        help="Extra signature that is part of the checkpoint directory name."
+                             " Could be a regular expression.")
     
     parser.add_argument("--out_dir_tmpl", type=str, default="samples-dbeval",
                         help="Template of parent directory to save generated samples")
@@ -163,9 +164,10 @@ def get_promt_list(subject_name, unique_token, class_token, broad_class):
     prompt_list = [ prompt.format(unique_token, class_token) for prompt in orig_prompt_list ]
     return prompt_list, orig_prompt_list
 
+# extra_sig could be a regular expression
 def find_first_match(lst, search_term, extra_sig=""):
     for item in lst:
-        if search_term in item and extra_sig in item:
+        if search_term in item and re.search(extra_sig, item):
             return item
     return None  # If no match is found
 
