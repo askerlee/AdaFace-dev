@@ -777,10 +777,11 @@ class EmbeddingManager(nn.Module):
         return rand_ada_emb_weight
     
     def set_ada_emb_weight(self, ada_emb_weight, init=False):
-        if not init and self.ada_emb_weight != ada_emb_weight:
-            print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
-        else:
+        if init:
             print(f"Setting ada_emb_weight = {ada_emb_weight}")
+        else:
+            if self.ada_emb_weight != ada_emb_weight:
+                print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
 
     def set_ada_layer_temp_info(self, layer_idx, layer_infeat, time_emb):

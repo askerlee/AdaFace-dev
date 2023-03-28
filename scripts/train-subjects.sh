@@ -82,7 +82,9 @@ for i in $indices
 
         # If $broad_classes are specified in subjfile, then use it. Otherwise, use the default value 1.
         set -q broad_classes; and set broad_class $broad_classes[$i]; or set broad_class 1
-
+        set -q lrs; and set lr $lrs[$broad_class]; or set -e lr
+        set -q lr; and set EXTRA_ARGS1 $EXTRA_ARGS1 --lr $lr
+        
         echo $subject: --init_word $initword $EXTRA_ARGS1
         set fish_trace 1
         python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --lr $lr --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_ARGS1

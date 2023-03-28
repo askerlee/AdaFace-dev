@@ -13,6 +13,10 @@ def parse_args():
                         help="placeholder token for the subject")
     parser.add_argument("--no_z_suffix", dest='use_z_suffix', action="store_false",
                         help="Do not append placeholder suffix to the subject placeholder (default: append)")
+    # extra_z_suffix
+    parser.add_argument("--extra_z_suffix", type=str, default="",
+                        help="Extra suffix to append to the z suffix")
+    
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
     # subj_scale
@@ -25,7 +29,7 @@ def parse_args():
                         help="batch size")
     # prompt_suffix
     parser.add_argument("--prompt_suffix", type=str, default="",
-                        help="suffix to append to each prompt")
+                        help="suffix to append to the end of each prompt")
     
     parser.add_argument("--steps", type=int, default=50, 
                         help="number of DDIM steps to generate samples")
@@ -231,6 +235,9 @@ if __name__ == "__main__":
         else:
             class_token = ""
 
+        if len(args.extra_z_suffix) > 0:
+            class_token += " " + args.extra_z_suffix + ", "
+            
         if args.method == 'db':
             config_file = "v1-inference.yaml"
             ckpt_path   = f"logs/{ckpt_name}/checkpoints/last.ckpt"

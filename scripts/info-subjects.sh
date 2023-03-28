@@ -16,4 +16,5 @@ set -Ux cls_tokens      $cls_tokens
 # "instagram" for the main dataset, to focus on faces.
 set -Ux db_suffix       ", instagram"
 set -Ux sel_set         $sel_set
+set -Ux lrs             $lrs
 set -Ux data_folder     data

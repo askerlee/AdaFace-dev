@@ -56,7 +56,7 @@ all_composition_regexs = static_composition_regexs + dynamic_composition_regexs
 all_locations = [ "at the left", "at the right", "at the top", "at the bottom", 
                   "in the center", "in the middle", "at the upper left", "at the upper right",
                   "at the lower left", "at the lower right", "in the background", "in the foreground",
-                  "closeup shot" ]
+                  "closeup shot", "close view" ]
 
 coexist_objects = [ "person", "man",  "woman",   "girl",    "boy",   "baby",       "crowd", "villager", 
                      "cat",   "dog",  "bird",    "panda",  "monkey", "chimpanzee", "gorilla", "bear",  
