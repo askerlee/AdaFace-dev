@@ -451,7 +451,7 @@ class EmbeddingManager(nn.Module):
         self.progressive_words = progressive_words
         self.progressive_counter = 0
         self.subj_scale = subj_scale
-        self.set_ada_emb_weight(ada_emb_weight)
+        self.set_ada_emb_weight(ada_emb_weight, init=True)
         self.composition_delta_reg_iter_gap = composition_delta_reg_iter_gap
 
         self.use_layerwise_embedding = use_layerwise_embedding
@@ -776,9 +776,12 @@ class EmbeddingManager(nn.Module):
             rand_ada_emb_weight = self.ada_emb_weight        
         return rand_ada_emb_weight
     
-    def set_ada_emb_weight(self, ada_emb_weight):
+    def set_ada_emb_weight(self, ada_emb_weight, init=False):
+        if not init and self.ada_emb_weight != ada_emb_weight:
+            print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
+        else:
+            print(f"Setting ada_emb_weight = {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
-        print(f"Setting ada_emb_weight to {self.ada_emb_weight}")
 
     def set_ada_layer_temp_info(self, layer_idx, layer_infeat, time_emb):
         self.gen_ada_embedding = True

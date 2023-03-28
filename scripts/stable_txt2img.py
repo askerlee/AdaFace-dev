@@ -257,12 +257,14 @@ def main(opt):
         model.embedding_manager.load(opt.embedding_paths)
     model.embedding_manager.subj_scale  = opt.subj_scale
 
-    if opt.ada_emb_weight == -1:
+    use_diff_ada_emb_weight = False
+    if use_diff_ada_emb_weight and opt.ada_emb_weight == -1:
         # Smaller ada embedding weight for objects and cartoon characters, larger for humans.
         default_ada_emb_weights = [ 0.2, 0.5, 0.2 ]
         opt.ada_emb_weight = default_ada_emb_weights[opt.broad_class]
-                
-    model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
+
+    if opt.ada_emb_weight != -1:
+        model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model  = model.to(device)
