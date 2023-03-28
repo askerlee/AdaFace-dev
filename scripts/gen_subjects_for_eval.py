@@ -236,7 +236,7 @@ if __name__ == "__main__":
             class_token = ""
 
         if len(args.extra_z_suffix) > 0:
-            class_token += " " + args.extra_z_suffix + ", "
+            class_token += " " + args.extra_z_suffix + ","
             
         if args.method == 'db':
             config_file = "v1-inference.yaml"
