@@ -13,13 +13,13 @@ def parse_args():
                         help="placeholder token for the subject")
     parser.add_argument("--no_z_suffix", dest='use_z_suffix', action="store_false",
                         help="Do not append placeholder suffix to the subject placeholder (default: append)")
-    # extra_z_suffix
+    # extra_z_suffix: usually reduces the similarity of generated images to the real images.
     parser.add_argument("--extra_z_suffix", type=str, default="",
                         help="Extra suffix to append to the z suffix")
     
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
-    # subj_scale
+    # subj_scale: sometimes it improves the similarity, somtimes it reduces it.
     parser.add_argument("--subj_scale", type=float, default=1,
                         help="the subject embedding scale")
     
@@ -27,7 +27,7 @@ def parse_args():
                         help="number of samples to generate for each test case")
     parser.add_argument("--bs", type=int, default=4, 
                         help="batch size")
-    # prompt_suffix
+    # prompt_suffix: usually reduces the similarity.
     parser.add_argument("--prompt_suffix", type=str, default="",
                         help="suffix to append to the end of each prompt")
     
@@ -202,14 +202,15 @@ if __name__ == "__main__":
         # For DreamBooth, use_z_suffix is the default.
         args.use_z_suffix = True
 
-    low, high     = parse_range_str(args.range)
-    subjects      = subjects[low:high]
-    class_tokens  = class_tokens[low:high]
-    broad_classes = broad_classes[low:high]
     if args.selset:
         subjects      = [ subjects[i]       for i in sel_set ]
         class_tokens  = [ class_tokens[i]   for i in sel_set ]
         broad_classes = [ broad_classes[i]  for i in sel_set ]
+
+    low, high     = parse_range_str(args.range)
+    subjects      = subjects[low:high]
+    class_tokens  = class_tokens[low:high]
+    broad_classes = broad_classes[low:high]
 
     all_ckpts = os.listdir(args.ckpt_dir)
     # Sort all_ckpts by modification time, most recent first.

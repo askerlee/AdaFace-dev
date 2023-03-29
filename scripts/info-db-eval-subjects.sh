@@ -8,8 +8,9 @@ set -l ada_weights    1               1               "1 2"             1       
 set -l broad_classes  0               0               0                 0               0       0       1       1       0       0                 1        1       1       1       1       1       1       0               0               0                       0               0               0               0       2                  0               0               0       0       0
 # backpack backpack_dog candle clock dog3 monster_toy teapot
 set -l sel_set        1 2 6 9 13 21 28 
-# Individual LR for each class in the broad classes.
-set -l lrs            1e-4  2e-4 1e-4
+# Individual LR for each class in the broad classes, according to their difficulties.
+#                     objects    animals    cartoon characters
+set -l lrs            3e-4       5e-4       3e-4
 
 set -Ux subjects        $subjects
 set -Ux db_prompts      $db_prompts

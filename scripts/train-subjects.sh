@@ -3,9 +3,9 @@
 set self (status basename)
 echo $self $argv
 
-argparse --min-args 1 --max-args 3 'gpu=' 'extra=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'min_rand_scaling=' 'use_cls_token' 'use_z_suffix' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 10 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'use_cls_token' 'use_z_suffix' -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--min_rand_scaling S] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [--extra EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-db-eval-subjects.sh --use_cls_token ada 1 25"
     exit 1
 end
@@ -13,7 +13,7 @@ end
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--min_rand_scaling S] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [--extra EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-db-eval-subjects.txt --use_cls_token ada 1 25"
     exit 1
 end
@@ -22,9 +22,10 @@ set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file scrip
 fish $subj_file; or exit 1
 
 set -q _flag_gpu; and set GPU $_flag_gpu; or set GPU 0
+# BUGGY: if L, H are not specified, then $argv[2], $argv[3] may contain unrecognized arguments.
 set -q argv[2]; and set L $argv[2]; or set L 1
 set -q argv[3]; and set H $argv[3]; or set H (count $subjects)
-set EXTRA_ARGS0 $_flag_extra
+set EXTRA_ARGS0 $argv[4..-1]
 
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ];
     set -q _flag_maxiter; and set max_iters $_flag_maxiter; or set max_iters 4000
