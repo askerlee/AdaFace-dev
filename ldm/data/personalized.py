@@ -241,7 +241,7 @@ class PersonalizedBase(Dataset):
                 # There will be misalignment between cls_delta_token and placeholder_string,
                 # but we will mask suffix_num_tokens tokens after "z" when computing delta loss, 
                 # so it should be fine.
-                stuffing_suffix = stuffing_suffices[suffix_num_tokens]
+                stuffing_suffix = stuffing_suffices[suffix_num_tokens - 1]
                 cls_delta_token = f"{self.cls_delta_token} {stuffing_suffix}"
             else:
                 # Append the suffix to cls_delta_token as well, 
