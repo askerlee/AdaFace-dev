@@ -71,7 +71,6 @@ if __name__ == "__main__":
         "--selset", action="store_true",
         help="Whether to evaluate only the selected subset of subjects"
     )
-    # num_samples = 4
     parser.add_argument(
         "--num_samples", type=int, default=4,
         help="Number of samples to generate for each subject under each prompt"
@@ -81,9 +80,13 @@ if __name__ == "__main__":
         help="Format of class name to use for prompt"
     )
 
+    parser.add_argument(
+        "--gpu",  type=int, default=0,
+        help="GPU to use for evaluation"
+    )
     opt = parser.parse_args()
-    clip_evator = ImageDirEvaluator('cuda')
-    dino_evator = ViTEvaluator('cuda')
+    clip_evator = ImageDirEvaluator(f'cuda:{opt.gpu}')
+    dino_evator = ViTEvaluator(f'cuda:{opt.gpu}')
 
     # Always pass "db", no matter what the actual method is. 
     # So that class_tokens are the long class name, instead of the one-token short class name.

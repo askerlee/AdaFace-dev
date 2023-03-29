@@ -150,7 +150,7 @@ class PersonalizedBase(Dataset):
                  # cls_delta_token can only contain one token, but placeholder_suffix could be multiple. 
                  # If both are specified, in most of the times, placeholder_suffix = cls_delta_token,
                  # but sometimes different, such as "stuffed animal" vs. "toy".
-                 placeholder_suffix="",     
+                 placeholder_suffix=None,     
                  center_crop=False,
                  mixing_prob=0.25,
                  num_compositions_per_image=1,
@@ -182,7 +182,10 @@ class PersonalizedBase(Dataset):
         self.mixing_prob = mixing_prob
 
         if set == "train":
+            self.is_training = True
             self._length = self.num_images * repeats
+        else:
+            self.is_training = False
 
         self.size = size
         self.interpolation = {"linear":   PIL.Image.LINEAR,
