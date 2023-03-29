@@ -691,11 +691,13 @@ if __name__ == "__main__":
         config.data.params.train.params.broad_class       = opt.broad_class
         config.data.params.validation.params.broad_class  = opt.broad_class
 
+        '''
         if opt.cls_delta_token is None:
             #                             object   human    cartoon character
             default_cls_delta_tokens = [ "bike", "person", "mickey" ]
             opt.cls_delta_token = default_cls_delta_tokens[opt.broad_class]
-
+        '''
+        
         config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
         config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
         # cls_delta_token is passed to the embedding manager, to check if the token consists of only
