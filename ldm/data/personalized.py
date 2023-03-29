@@ -194,15 +194,16 @@ class PersonalizedBase(Dataset):
                               "lanczos":  PIL.Image.LANCZOS,
                               }[interpolation]
         
-        if set == "train":
+        if self.is_training:
             self.flip = transforms.RandomHorizontalFlip(p=flip_p)
             if rand_scaling_range is not None:
-                # RandomResizedCrop only enlarges (a crop of) the image, so we use RandomAffine instead.
+                # If the scale factor > 1, RandomAffine will crop the scaled image to the original size.
+                # If the scale factor < 1, RandomAffine will pad the scaled image to the original size.
                 self.random_scaler = transforms.Compose([
                                         transforms.RandomAffine(degrees=0, shear=0, scale=rand_scaling_range),
                                         transforms.Resize(size),
                                     ])
-                print(f"{set} images will be randomly scaled with range {rand_scaling_range}")
+                print(f"{set} images will be randomly scaled in range {rand_scaling_range}")
         else:
             self.random_scaler = None
             self.flip = None

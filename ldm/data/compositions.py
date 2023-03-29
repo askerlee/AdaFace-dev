@@ -8,7 +8,6 @@ dynamic_composition_regexs = \
   "carrying a (bag|backpack|luggage|laptop|book|briefcase|purse|suitcase|bouquet|baby|cat|dog|teddy bear)",
   "holding a (mobile phone|book|cup of water|piece of paper|flower|bouquet|pen|sign|cat|dog|teddy bear|baby)",
   "(sitting|sleeping) (on a table|on a chair|on a bench|on a tank|in a wheelchair|on the ground|on flying cloud)",
-  "leaning (against a wall|against a tree|against a table|on a chair|on a car)",
   "jumping on a (table|stair|board|chair|bed|box|trampoline)",
   "punching a (tree|wall|table|punching bag)",
   "swimming (in a pool|underwater|in the ocean|in a lake|in a river)( among tropical fishes)?",
@@ -27,19 +26,21 @@ dynamic_composition_regexs = \
   "opening a (door|window|book|bottle|jar|box|envelope|bag|pouch|wallet|suitcase)",
   "pointing at (the sky|the sun|the beach|the mountains|the forest)",
   "looking at (a book|a mobile phone|the screen|the sky|the sun|the beach|a UFO|a map|a painting|a photo|a clock|a mirror|a telescope|a microscope)",
-  "flying (in the sky|under the sunset|in the outer space|over water|over a building)",
   "wearing a (tshirt|stormtrooper costume|superman costume|ironman armor|ski outfit|astronaut outfit|medal|suit|tie|baseball cap)",
   "drinking (a bottle of water|a cup of wine|a can of beer|a glass of juice|a cup of tea|a bottle of milk)",
   "eating (a sandwich|an ice cream|barbecue|a pizza|a burger|a bowl of pasta|a piece of cake|a sushi roll|a bowl of soup|a plate of tacos)",
   "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt)",
   # This is kind of static but only for humans/animals. So we put it here.
-  "in a (chef|firefighter|police|a purple wizard) outfit",
+  "in a (chef outfit|firefighter outfit|police outfit|a purple wizard outfit|dress|suit|tshirt|stormtrooper costume|superman costume)",
 ]
 
 # static compositions are used by both humans/animals and objects
 static_composition_regexs = \
-[ "on (an airplane|a bus|a busy street|a grass|a roof|an escalator|a train|a boat|a bike|a roller coaster|a ski lift|a hot air balloon|a scooter)",
-  "in (a car|a meeting|a class|a dress|a suit|a tshirt|a stormtrooper costume|a superman costume|a wedding|an elevator|a dinner|a concert|a gym|a library|a park|a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
+[ 
+  "leaning (against a wall|against a tree|against a table|on a chair|on top of a car)",
+  "flying (in the sky|under the sunset|in the outer space|over water|over a building)",
+  "on (an airplane|a bus|a busy street|a grass|a roof|an escalator|a train|a boat|a bike|a roller coaster|a ski lift|a hot air balloon|a scooter)",
+  "in (a car|a meeting|a class|a wedding|an elevator|a dinner|a concert|a gym|a library|a park|a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
   "at (a beach|a table|a park|a concert|a gym|a library|a mall|a movie theater|a hotel room|a theme park)",
   "next to (a friend|a tree|a car|a river|a lake|a mountain|an ocean|a playground|a statue|a panda)",
   "made of (metal|stainless steel|fractal flame|marble|rubber|bronze|ice)",
@@ -48,7 +49,8 @@ static_composition_regexs = \
   "(in the jungle|in the snow|on a cobblestone street|floating on top of water|floating in an ocean of milk)",
   "with a (city|mountain|blue house|wheat field|a tree and autumn leaves|Eiffel Tower) in the background",
   "on top of (pink fabric|a wooden floor|green grass with sunflowers around it|a mirror|the sidewalk in a crowded street|a dirt road|a white rug|a purple rug in a forest)",
-  "in red|in purple|in shiny fabric|of cube shape|which is wet",
+  # To avoid misalignment issues, we don't use "a red/purple z" as prompts.
+  "that is (red|purple|shiny|cube|wet)",
 ]
 
 all_composition_regexs = static_composition_regexs + dynamic_composition_regexs
@@ -56,7 +58,7 @@ all_composition_regexs = static_composition_regexs + dynamic_composition_regexs
 all_locations = [ "at the left", "at the right", "at the top", "at the bottom", 
                   "in the center", "in the middle", "at the upper left", "at the upper right",
                   "at the lower left", "at the lower right", "in the background", "in the foreground",
-                  "closeup shot", "close view" ]
+                  ]
 
 coexist_objects = [ "person", "man",  "woman",   "girl",    "boy",   "baby",       "crowd", "villager", 
                      "cat",   "dog",  "bird",    "panda",  "monkey", "chimpanzee", "gorilla", "bear",  
@@ -70,7 +72,7 @@ coexist_objects = [ "person", "man",  "woman",   "girl",    "boy",   "baby",    
 all_styles = [ "cartoon", "animation", "anime", "comic book", "steampunk", "oil on canvas", "oil painting",
                "sci-fi movie", "scuplture", "bronze sculpture", "abyss art", "blade runner", "cyberpunk",
                "synthwave", "pencil sketch", "pastel colors", "illustration for childrens book", "pixar movie",
-               "as a crochet figure", "as a 3d model",
+               "as a crochet figure", "as a 3d model", "closeup shot", "close view" 
              ]
 # concept art|realistic painting|character design|anime sketch|trending in artstation|hyper realistic|vivid colors|clear face|detailed face
 all_modifiers = [ "concept art", "realistic painting", "character design", "anime sketch", 
