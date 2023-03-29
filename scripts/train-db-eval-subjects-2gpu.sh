@@ -14,9 +14,9 @@ end
 
 if set -q _flag_selset
     set L1 1
-    set H1 4
-    set L2 5
-    set H2 7
+    set H1 3
+    set L2 4
+    set H2 6
     # Pass the --selset flag to train-subjects.sh.
     set flag_selset "--selset"
 else
