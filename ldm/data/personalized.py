@@ -7,6 +7,7 @@ from torchvision import transforms
 from .compositions import sample_compositions
 import random
 import torch
+import re
 
 imagenet_templates_smallest = [
     'a photo of a {}',
@@ -137,9 +138,9 @@ class PersonalizedBase(Dataset):
                  repeats=100,
                  interpolation="bicubic",
                  flip_p=0.5,
-                 # min_rand_scaling: -1 (disabled) or a float 
-                 # that specifies the minimum scaling factor.
-                 min_rand_scaling=-1,
+                 # rand_scaling_range: None (disabled) or a tuple of floats
+                 # that specifies the (minimum, maximum) scaling factors.
+                 rand_scaling_range=None,
                  set="train",
                  placeholder_token="z",
                  # cls token used to compute the delta loss.
@@ -170,8 +171,10 @@ class PersonalizedBase(Dataset):
             # So it's a good template object for computing the delta loss.
             # "person" is also used for animals, as their dynamic compositions are highly similar.
             self.cls_delta_token = default_cls_delta_tokens[broad_class]
+            self.use_default_cls_delta_token = True
         else:
             self.cls_delta_token = cls_delta_token
+            self.use_default_cls_delta_token = False
 
         self.placeholder_suffix = placeholder_suffix
 
@@ -188,14 +191,15 @@ class PersonalizedBase(Dataset):
                               "lanczos":  PIL.Image.LANCZOS,
                               }[interpolation]
         
-        if set == "train" and min_rand_scaling > 0:
+        if set == "train":
             self.flip = transforms.RandomHorizontalFlip(p=flip_p)
-            # RandomResizedCrop only enlarges (a crop of) the image, so we use RandomAffine instead.
-            self.random_scaler = transforms.Compose([
-                                    transforms.RandomAffine(degrees=0, shear=0, scale=(min_rand_scaling, 1)),
-                                    transforms.Resize(size),
-                                ])
-            print(f"{set} images will be randomly scaled with range ({min_rand_scaling}, 1)")
+            if rand_scaling_range is not None:
+                # RandomResizedCrop only enlarges (a crop of) the image, so we use RandomAffine instead.
+                self.random_scaler = transforms.Compose([
+                                        transforms.RandomAffine(degrees=0, shear=0, scale=rand_scaling_range),
+                                        transforms.Resize(size),
+                                    ])
+                print(f"{set} images will be randomly scaled with range {rand_scaling_range}")
         else:
             self.random_scaler = None
             self.flip = None
@@ -217,11 +221,29 @@ class PersonalizedBase(Dataset):
 
         placeholder_string = self.placeholder_token
         cls_delta_token    = self.cls_delta_token
+
         if self.placeholder_suffix is not None:
             placeholder_string = f"{placeholder_string} {self.placeholder_suffix}"
-            # Append the suffix to cls_delta_token as well, 
-            # so that cls_prompt_comp is token-wise aligned with subj_prompt_comp.
-            cls_delta_token    = f"{cls_delta_token} {self.placeholder_suffix}"
+            if self.use_default_cls_delta_token:
+                # It may be inappropriate to append the suffix to cls_delta_token,
+                # e.g., "bike" -> "bike sneaker". 
+                suffix_num_tokens = len(re.findall(r'\w+', self.placeholder_suffix))
+                assert suffix_num_tokens >= 1 and suffix_num_tokens <= 2
+                # Just append some meaningless words to cls_delta_token, 
+                # without altering the meaning of the whole prompt.
+                stuffing_suffices = [ "just", "that is" ]
+                # if suffix contains one token,  cls_delta_token = "bike just (in/on ...)"
+                # if suffix contains two tokens, cls_delta_token = "bike that is (in/on ...)"
+                # placeholder_string = "z sneaker (in/on ...)" or "z stuffed animal (in/on ...)"
+                # There will be misalignment between cls_delta_token and placeholder_string,
+                # but we will mask suffix_num_tokens tokens after "z" when computing delta loss, 
+                # so it should be fine.
+                stuffing_suffix = stuffing_suffices[suffix_num_tokens]
+                cls_delta_token = f"{self.cls_delta_token} {stuffing_suffix}"
+            else:
+                # Append the suffix to cls_delta_token as well, 
+                # so that cls_prompt_comp is token-wise aligned with subj_prompt_comp.
+                cls_delta_token    = f"{self.cls_delta_token} {self.placeholder_suffix}"
 
         template = random.choice(imagenet_templates_small)
         subj_prompt_single  = template.format(placeholder_string)

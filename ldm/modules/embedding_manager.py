@@ -557,8 +557,7 @@ class EmbeddingManager(nn.Module):
             self.cls_delta_token    = cls_delta_token
             if self.cls_delta_token is not None:
                 cls_delta_token_ids = get_tokens_for_string(self.cls_delta_token)
-                if len(cls_delta_token_ids) > 1:
-                    raise ValueError(f"ERROR: cls_delta_token '{cls_delta_token}' must be a single token.")
+                assert len(cls_delta_token_ids) == 1, f"ERROR: cls_delta_token '{cls_delta_token}' must be a single token."
                 
             self.placeholder_suffix = placeholder_suffix
             if self.placeholder_suffix is not None:

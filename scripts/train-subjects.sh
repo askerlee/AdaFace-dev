@@ -85,7 +85,7 @@ for i in $indices
 
         # If $broad_classes are specified in subjfile, then use it. Otherwise, use the default value 1.
         set -q broad_classes; and set broad_class $broad_classes[$i]; or set broad_class 1
-        if not set -q lr
+        if not set -q _flag_lr
             set -q lrs; and set lr $lrs[(math $broad_class+1)]
         end
         set -q lr; and set EXTRA_ARGS1 $EXTRA_ARGS1 --lr $lr

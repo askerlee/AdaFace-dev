@@ -6,8 +6,11 @@ set -l cls_tokens     backpack        backpack        toy               bowl    
 set -l ada_prompts    backpack        backpack        "stuffed animal"  bowl            can     candle  cat     cat     clock   sneaker           dog      dog     dog     dog     dog     dog     dog     toy             boot            "stuffed animal"        toy             glasses         toy             toy     "cartoon monster"  toy             sneaker         teapot  vase    "stuffed animal"
 set -l ada_weights    1               1               "1 2"             1               1       1       1       1       1       1                 1        1       1       1       1       1       1       1               1               "1 2"                   1               1               1               1       "2 1"              1               1               1       1       "1 2"
 set -l broad_classes  0               0               0                 0               0       0       1       1       0       0                 1        1       1       1       1       1       1       0               0               0                       0               0               0               0       2                  0               0               0       0       0
-# backpack backpack_dog candle clock dog3 monster_toy teapot
-set -l sel_set        1 2 6 9 13 21 28 
+
+#                     1        2            3       4    5    6           7
+#                     backpack backpack_dog candle clock dog3 monster_toy teapot
+set -l sel_set        1        2            6       9    13   21          28 
+
 # Individual LR for each class in the broad classes, according to their difficulties.
 #                     objects    animals    cartoon characters
 set -l lrs            3e-4       5e-4       3e-4

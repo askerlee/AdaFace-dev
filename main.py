@@ -224,6 +224,11 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--min_rand_scaling",
                         type=float, default=0.7, 
                         help="Minimum random scaling factor of training images (set to -1 to disable)")
+    # max_rand_scaling
+    parser.add_argument("--max_rand_scaling",
+                        type=float, default=1,
+                        help="Maximum random scaling factor of training images (default: 1)")
+    
     # num_compositions_per_image: a value > 1 leads to better performance on prompt compositions
     parser.add_argument("--num_compositions_per_image",
                         type=int, default=2,
@@ -704,8 +709,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.placeholder_suffix = opt.placeholder_suffix
             
         config.data.params.train.params.num_compositions_per_image = opt.num_compositions_per_image
-        if opt.min_rand_scaling is not None:
-            config.data.params.train.params.min_rand_scaling = opt.min_rand_scaling
+        config.data.params.train.params.rand_scaling_range = (opt.min_rand_scaling, opt.max_rand_scaling)
 
         if opt.layerwise_lora_rank_token_ratio > 0:
             config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \

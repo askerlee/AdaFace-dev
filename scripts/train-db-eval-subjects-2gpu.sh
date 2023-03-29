@@ -27,12 +27,18 @@ else
     set flag_selset ""
 end
 
+set EXTRA_ARGS $argv[2..-1]
+
 if [ $method = 'ada' ]; or [ $method = 'ti' ]; or [ $method = 'db' ]
-    # Set min_rand_scaling = 0.9, so that the generated images tend to be larger, 
+    # In db eval training images, the subjects are usually small.
+    # So set rand_scaling_range = (0.9, 1.1), so that the generated images tend to be larger, 
     # and have higher DINO/CLIP scores.
-    screen -dm -L -Logfile train-$method-0-(date +%m%d%H%M).txt fish scripts/train-subjects.sh $flag_selset $method $L1 $H1 --gpu 0 --subjfile scripts/info-db-eval-subjects.sh --min_rand_scaling 0.9 $argv[2..-1]
-    screen -dm -L -Logfile train-$method-1-(date +%m%d%H%M).txt fish scripts/train-subjects.sh $flag_selset $method $L2 $H2 --gpu 1 --subjfile scripts/info-db-eval-subjects.sh --min_rand_scaling 0.9 $argv[2..-1]
+    if [ $method = 'ada' ]; or [ $method = 'ti' ]
+        set EXTRA_ARGS --min_rand_scaling 0.9 --max_rand_scaling 1.1 --composition_delta_reg_weight 0.01 $EXTRA_ARGS
+    end
+    screen -dm -L -Logfile train-$method-0-(date +%m%d%H%M).txt fish scripts/train-subjects.sh $flag_selset $method $L1 $H1 --gpu 0 --subjfile scripts/info-db-eval-subjects.sh $EXTRA_ARGS 
+    screen -dm -L -Logfile train-$method-1-(date +%m%d%H%M).txt fish scripts/train-subjects.sh $flag_selset $method $L2 $H2 --gpu 1 --subjfile scripts/info-db-eval-subjects.sh $EXTRA_ARGS
 else
-    screen -dm -L -Logfile train-$method-0-(date +%m%d%H%M).txt fish scripts/train-subjects-lora.sh $flag_selset $L1 $H1 --gpu 0 --subjfile scripts/info-db-eval-subjects.sh $argv[2..-1]
-    screen -dm -L -Logfile train-$method-1-(date +%m%d%H%M).txt fish scripts/train-subjects-lora.sh $flag_selset $L2 $H2 --gpu 1 --subjfile scripts/info-db-eval-subjects.sh $argv[2..-1]
+    screen -dm -L -Logfile train-$method-0-(date +%m%d%H%M).txt fish scripts/train-subjects-lora.sh $flag_selset $L1 $H1 --gpu 0 --subjfile scripts/info-db-eval-subjects.sh $EXTRA_ARGS
+    screen -dm -L -Logfile train-$method-1-(date +%m%d%H%M).txt fish scripts/train-subjects-lora.sh $flag_selset $L2 $H2 --gpu 1 --subjfile scripts/info-db-eval-subjects.sh $EXTRA_ARGS
 end
