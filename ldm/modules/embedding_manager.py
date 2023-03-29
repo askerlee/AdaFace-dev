@@ -578,8 +578,8 @@ class EmbeddingManager(nn.Module):
             self.loss_call_count = 0
             # Store the embedder to compute the delta loss.
             self.embedder = embedder
-            print("EmbeddingManager initialized with layerwise_lora_rank={}, ada_emb_weight={}".format(
-                   layerwise_lora_rank, ada_emb_weight))
+            print("EmbeddingManager initialized with layerwise_lora_rank={}, ada_emb_weight={}, placeholder_suffix={}".format(
+                   layerwise_lora_rank, ada_emb_weight, placeholder_suffix))
             
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then max_vectors_per_token = num_unet_layers = 16.
@@ -670,7 +670,8 @@ class EmbeddingManager(nn.Module):
                     elem_idx  = placeholder_idx[0][i]
                     start_idx = placeholder_idx[1][i] + 1
                     end_idx   = placeholder_idx[1][i] + 1 + self.z_suffix_id_count
-                    # Mask the placeholder suffix following the placeholder token.
+                    # Simply mask z_suffix_id_count tokens after the placeholder token.
+                    # In effect, this masks the placeholder suffix following the placeholder token.
                     delta_loss_emb_mask[elem_idx][0][start_idx:end_idx] = 0
 
                 self.set_delta_loss_emb_mask(delta_loss_emb_mask)
@@ -818,9 +819,7 @@ class EmbeddingManager(nn.Module):
     def set_delta_loss_emb_mask(self, delta_loss_emb_mask):
         if self.z_suffix_id_count > 0 and delta_loss_emb_mask is not None:
             self.delta_loss_emb_mask = delta_loss_emb_mask
-        # Otherwise, either delta_loss_emb_mask is already set (probably when processing 
-        # for a previous layer), so we don't need to set it again.
-        # or z_suffix_id_count == 0, so we don't need to use it to mask a region 
+        # Otherwise, z_suffix_id_count == 0, so we don't need to use it to mask a region 
         # when computing the compositional delta loss.
 
     def clear_delta_loss_emb_mask(self):
