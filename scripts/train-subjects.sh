@@ -3,7 +3,7 @@
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'use_cls_token' 'use_z_suffix' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'use_cls_token' 'use_z_suffix' -- $argv
 or begin
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-db-eval-subjects.sh --use_cls_token ada 1 25"
@@ -46,6 +46,11 @@ echo Training on $subjects[$indices]
 # $0 0 1 13: alexachung .. masatosakai, on GPU0
 # $0 1 14 25: michelleyeoh .. zendaya,  on GPU1
 for i in $indices
+    if set -q _flag_skipselset; and contains $i $sel_set
+        echo "Skipping $i: $subjects[$i]"
+        continue
+    end
+
     set subject     $subjects[$i]
     set ada_prompt  $ada_prompts[$i]
     set ada_weight  (string split " " $ada_weights[$i])

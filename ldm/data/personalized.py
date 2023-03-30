@@ -131,6 +131,14 @@ per_img_token_list = [
     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק', 'ר', 'ש', 'ת',
 ]
 
+# "bike", "person", "ball" are a commonly seen "object" that can appear in various contexts. 
+# So it's a good template object for computing the delta loss.
+# "person" is also used for animals, as their dynamic compositions are highly similar.
+# "mickey", "snoopy", "pikachu" are common cartoon characters.
+default_cls_delta_tokens = [ [ "bike", "person", "ball" ], 
+                             [ "person", "dog" ]
+                             [ "mickey", "snoopy", "pikachu" ] ]
+
 class PersonalizedBase(Dataset):
     def __init__(self,
                  data_root,
@@ -166,11 +174,7 @@ class PersonalizedBase(Dataset):
         self._length = self.num_images 
         self.placeholder_token  = placeholder_token
         if cls_delta_token is None:
-            default_cls_delta_tokens = [ "bike", "person", "mickey" ]
-            # "bike" is a commonly seen object that can appear in various contexts. 
-            # So it's a good template object for computing the delta loss.
-            # "person" is also used for animals, as their dynamic compositions are highly similar.
-            self.cls_delta_token = default_cls_delta_tokens[broad_class]
+            self.cls_delta_token = None
             self.use_default_cls_delta_token = True
         else:
             self.cls_delta_token = cls_delta_token
@@ -209,6 +213,7 @@ class PersonalizedBase(Dataset):
             self.flip = None
 
         self.num_compositions_per_image = num_compositions_per_image
+        self.broad_class = broad_class
         # cartoon characters are usually depicted as human-like, so is_animal is True.
         self.is_animal = (broad_class == 1 or broad_class == 2)
 
@@ -224,7 +229,10 @@ class PersonalizedBase(Dataset):
             image = image.convert("RGB")
 
         placeholder_string = self.placeholder_token
-        cls_delta_token    = self.cls_delta_token
+        if self.use_default_cls_delta_token:
+            cls_delta_token = random.choice(default_cls_delta_tokens[self.broad_class])
+        else:
+            cls_delta_token = self.cls_delta_token
 
         if self.placeholder_suffix is not None:
             placeholder_string = f"{placeholder_string} {self.placeholder_suffix}"
@@ -243,11 +251,11 @@ class PersonalizedBase(Dataset):
                 # but we will mask suffix_num_tokens tokens after "z" when computing delta loss, 
                 # so it should be fine.
                 stuffing_suffix = stuffing_suffices[suffix_num_tokens - 1]
-                cls_delta_token = f"{self.cls_delta_token} {stuffing_suffix}"
+                cls_delta_token = f"{cls_delta_token} {stuffing_suffix}"
             else:
                 # Append the suffix to cls_delta_token as well, 
                 # so that cls_prompt_comp is token-wise aligned with subj_prompt_comp.
-                cls_delta_token    = f"{self.cls_delta_token} {self.placeholder_suffix}"
+                cls_delta_token    = f"{cls_delta_token} {self.placeholder_suffix}"
 
         template = random.choice(imagenet_templates_small)
         subj_prompt_single  = template.format(placeholder_string)
