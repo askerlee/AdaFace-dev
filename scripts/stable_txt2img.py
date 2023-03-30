@@ -319,8 +319,10 @@ def main(opt):
             # Append None to the end of batched_subdirs, for indiv_subdir change detection.
             batched_subdirs.append(None)
 
-    if opt.compare_with:
+    if opt.from_file and opt.compare_with:
         clip_evator, dino_evator = init_evaluators(opt.gpu)
+        all_sims_img, all_sims_text, all_sims_dino = [], [], []
+
     else:
         clip_evator, dino_evator = None, None
 
@@ -411,10 +413,14 @@ def main(opt):
                                 # So we evaluate the current chunk.
                                 if next_indiv_subdir != indiv_subdir:
                                     print()
-                                    compare_folders(clip_evator, dino_evator, 
-                                                    # prompts are just repetitions of the same prompt.
-                                                    opt.compare_with, sample_dir, 
-                                                    prompts[0], len(prompts))
+                                    sim_img, sim_text, sim_dino = \
+                                        compare_folders(clip_evator, dino_evator, 
+                                                        # prompts are just repetitions of the same prompt.
+                                                        opt.compare_with, sample_dir, 
+                                                        prompts[0], len(prompts))
+                                    all_sims_img.append(sim_img)
+                                    all_sims_text.append(sim_text)
+                                    all_sims_dino.append(sim_dino)
 
                         if not opt.skip_grid:
                             all_samples.append(x_samples_ddim)
@@ -461,6 +467,10 @@ def main(opt):
             os.spawnvp(os.P_NOWAIT, "gpicview", [ "gpicview", os.path.abspath(grid_filepath) ])
     else:
         print(f"Your samples are at: \n{opt.outdir}")
+
+    if opt.from_file and opt.compare_with:
+        sims_img_avg, sims_text_avg, sims_dino_avg = np.mean(all_sims_img), np.mean(all_sims_text), np.mean(all_sims_dino)
+        print(f"All samples mean image/text/dino sim: {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
 
 if __name__ == "__main__":
     opt = parse_args()
