@@ -1,4 +1,4 @@
-import argparse, os, sys, glob
+import argparse, os
 import torch
 import numpy as np
 from omegaconf import OmegaConf
@@ -8,14 +8,16 @@ from itertools import islice
 from einops import rearrange
 from torchvision.utils import make_grid
 import time
+import re
+
 from pytorch_lightning import seed_everything
 from torch import autocast
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
-import re
+from scripts.eval_utils import compare_folders, init_evaluators
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -112,7 +114,7 @@ def parse_args():
         type=int,
         default=4,
         help="How many samples to produce for each given prompt. " 
-             "Required if prompts are not loaded from a file (--from-file not specified)",
+             "Usually used if prompts are not loaded from a file (--from_file not specified)",
     )
     parser.add_argument("--bs", type=int, default=-1, 
                         help="batch size. If -1, use n_samples") 
@@ -129,7 +131,7 @@ def parse_args():
         help="unconditional guidance scale: eps = eps(x, empty) + scale * (eps(x, cond) - eps(x, empty))",
     )
     parser.add_argument(
-        "--from-file",
+        "--from_file",
         type=str,
         help="if specified, load prompts from this file",
     )
@@ -198,8 +200,11 @@ def parse_args():
                         help="Whether the subject is a human/animal, object or cartoon"
                              " (0: object, 1: human/animal, 2: cartoon)")
     
-    parser.add_argument('--gpu', type=str,  default='1', help='ID of GPU to use')
-
+    parser.add_argument('--gpu', type=str,  default='0', help='ID of GPU to use')
+    parser.add_argument("--compare_with", type=str, default=None,
+                        help="Evaluate the similarity of generated samples with reference images in this folder"
+                             " (requires --from_file to be specified)")
+                            
     args = parser.parse_args()
     return args
 
@@ -292,8 +297,30 @@ def main(opt):
             # splitlines() will remove the trailing newline. So no need to strip().
             lines = f.read().splitlines()
             indiv_subdirs_prompts = [ line.split("\t") for line in lines ]
-            indiv_subdirs, all_prompts, _ = zip(*indiv_subdirs_prompts)
-            all_prompts = list(chunk(all_prompts, batch_size))
+            n_repeats, indiv_subdirs, all_prompts, _ = zip(*indiv_subdirs_prompts)
+            # Repeat each prompt n_repeats times, and split into batches of size batch_size.
+            # If there's remainder after chunks, the last chunk will be shorter than batch_size.
+
+            batched_prompts = []
+            batched_subdirs = []
+            # Repeat each prompt n_repeats times.
+            for i, prompt in enumerate(all_prompts):
+                n_repeat = int(n_repeats[i])
+                indiv_subdir = indiv_subdirs[i]
+                prompts_repeated = [prompt] * n_repeat
+                n_batches = n_repeat // batch_size
+                if n_repeat % batch_size != 0:
+                    n_batches += 1
+                for bi in range(n_batches):
+                    start_idx = batch_size * bi
+                    end_idx   = batch_size * (bi + 1)
+                    batched_prompts.append(prompts_repeated[start_idx:end_idx])
+                    batched_subdirs.append(indiv_subdir)
+
+    if opt.compare_with:
+        clip_evator, dino_evator = init_evaluators(opt.gpu)
+    else:
+        clip_evator, dino_evator = None, None
 
     if opt.init_img is not None:
         assert opt.fixed_code is False
@@ -317,9 +344,26 @@ def main(opt):
                 tic = time.time()
                 all_samples = list()
                 sample_count = 0
-                prompt_block_count = len(all_prompts)
+                prompt_block_count = len(batched_prompts)
                 for n in trange(opt.n_repeat, desc="Sampling"):
-                    for p_i, prompts in enumerate(tqdm(all_prompts, desc="prompts")):
+                    prev_subdir = None
+
+                    for p_i, prompts in enumerate(tqdm(batched_prompts, desc="prompts")):
+                        if opt.from_file:
+                            # Specify individual subdirectory for each sample in opt.from_file.
+                            indiv_subdir = batched_subdirs[p_i]
+                            # subdir changed. Evaluate prev_subdir.
+                            if indiv_subdir != prev_subdir:
+                                if opt.compare_with:
+                                    compare_folders(clip_evator, dino_evator, 
+                                                    # prompts are just repetitions of the same prompt.
+                                                    opt.compare_with, prev_subdir, 
+                                                    prompts[0], len(prompts))
+                                prev_subdir = indiv_subdir
+                        else:
+                            # Use a common subdirectory opt.indiv_subdir for all samples.
+                            indiv_subdir = opt.indiv_subdir
+                                
                         print(f"\n{p_i+1}/{prompt_block_count}", prompts[0], "...", prompts[-1])
                         uc = None
                         if opt.scale != 1.0:
@@ -351,12 +395,6 @@ def main(opt):
 
                         if not opt.skip_save:
                             for i, x_sample in enumerate(x_samples_ddim):
-                                if opt.from_file:
-                                    # Specify individual subdirectory for each sample in opt.from_file.
-                                    indiv_subdir = indiv_subdirs[sample_count + i]
-                                else:
-                                    # Use a common subdirectory opt.indiv_subdir for all samples.
-                                    indiv_subdir = opt.indiv_subdir
                                 sample_dir = os.path.join(opt.outdir, indiv_subdir)
                                 os.makedirs(sample_dir, exist_ok=True)                            
                                 base_count = len(os.listdir(sample_dir))
@@ -374,7 +412,7 @@ def main(opt):
 
                         sample_count += batch_size
 
-                # After n_repeat passes of all_prompts, save all sample images as an image grid
+                # After opt.n_repeat passes of batched_prompts, save all sample images as an image grid
                 if not opt.skip_grid:
                     # additionally, save as grid
                     grid = torch.stack(all_samples, 0)

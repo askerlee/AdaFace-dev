@@ -235,7 +235,7 @@ def get_parser(**parser_kwargs):
                         help="Number of composition samples for each image in a batch (default: 2)")
     parser.add_argument("--broad_class", type=int, default=1,
                         help="Whether the subject is a human/animal, object or cartoon (0: object, 1: human/animal, 2: cartoon)")
-    
+
     return parser
 
 def nondefault_trainer_args(opt):
@@ -717,7 +717,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \
                                     opt.layerwise_lora_rank_token_ratio
 
-        if opt.embedding_reg_weight > 0:
+        if opt.embedding_reg_weight >= 0:
             config.model.params.embedding_reg_weight = opt.embedding_reg_weight
 
         use_diff_ada_emb_weight = False

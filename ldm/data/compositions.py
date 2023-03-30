@@ -55,6 +55,8 @@ static_composition_regexs = \
 
 all_composition_regexs = static_composition_regexs + dynamic_composition_regexs
 
+# Prompt with locations will be combined with a common animal/human.
+# E.g. "a z at the left, a dog in the center"
 all_locations = [ "at the left", "at the right", "at the top", "at the bottom", 
                   "in the center", "in the middle", "at the upper left", "at the upper right",
                   "at the lower left", "at the lower right", "in the background", "in the foreground",
