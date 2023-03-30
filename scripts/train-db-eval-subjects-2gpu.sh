@@ -34,7 +34,7 @@ if [ $method = 'ada' ]; or [ $method = 'ti' ]; or [ $method = 'db' ]
     # So set rand_scaling_range = (0.9, 1.1), so that the generated images tend to be larger, 
     # and have higher DINO/CLIP scores.
     if [ $method = 'ada' ]; or [ $method = 'ti' ]
-        set EXTRA_ARGS --min_rand_scaling 0.9 --max_rand_scaling 1.1 --composition_delta_reg_weight 0.005 --embedding_reg_weight 0.005 $EXTRA_ARGS
+        set EXTRA_ARGS --min_rand_scaling 0.9 --max_rand_scaling 1.1 --composition_delta_reg_weight 0.005 --embedding_reg_weight 0.01 $EXTRA_ARGS
     end
     screen -dm -L -Logfile train-$method-0-(date +%m%d%H%M).txt fish scripts/train-subjects.sh $method $L1 $H1 --gpu 0 --subjfile scripts/info-db-eval-subjects.sh $EXTRA_ARGS 
     screen -dm -L -Logfile train-$method-1-(date +%m%d%H%M).txt fish scripts/train-subjects.sh $method $L2 $H2 --gpu 1 --subjfile scripts/info-db-eval-subjects.sh $EXTRA_ARGS
