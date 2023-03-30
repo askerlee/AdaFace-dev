@@ -292,7 +292,7 @@ def main(opt):
         # e.g. [ ['z', 'z', 'z', 'z'] ]. Then tqdm() will finish it in one iteration.
         all_prompts = list(chunk(all_prompts, batch_size))
     else:
-        print(f"reading prompts from {opt.from_file}")
+        print(f"Reading prompts from {opt.from_file}")
         with open(opt.from_file, "r") as f:
             # splitlines() will remove the trailing newline. So no need to strip().
             lines = f.read().splitlines()
@@ -316,6 +316,8 @@ def main(opt):
                     end_idx   = batch_size * (bi + 1)
                     batched_prompts.append(prompts_repeated[start_idx:end_idx])
                     batched_subdirs.append(indiv_subdir)
+            # Append None to the end of batched_subdirs, for indiv_subdir change detection.
+            batched_subdirs.append(None)
 
     if opt.compare_with:
         clip_evator, dino_evator = init_evaluators(opt.gpu)
@@ -346,24 +348,9 @@ def main(opt):
                 sample_count = 0
                 prompt_block_count = len(batched_prompts)
                 for n in trange(opt.n_repeat, desc="Sampling"):
-                    prev_subdir = None
+                    indiv_subdir = None
 
                     for p_i, prompts in enumerate(tqdm(batched_prompts, desc="prompts")):
-                        if opt.from_file:
-                            # Specify individual subdirectory for each sample in opt.from_file.
-                            indiv_subdir = batched_subdirs[p_i]
-                            # subdir changed. Evaluate prev_subdir.
-                            if indiv_subdir != prev_subdir:
-                                if opt.compare_with:
-                                    compare_folders(clip_evator, dino_evator, 
-                                                    # prompts are just repetitions of the same prompt.
-                                                    opt.compare_with, prev_subdir, 
-                                                    prompts[0], len(prompts))
-                                prev_subdir = indiv_subdir
-                        else:
-                            # Use a common subdirectory opt.indiv_subdir for all samples.
-                            indiv_subdir = opt.indiv_subdir
-                                
                         print(f"\n{p_i+1}/{prompt_block_count}", prompts[0], "...", prompts[-1])
                         uc = None
                         if opt.scale != 1.0:
@@ -394,9 +381,17 @@ def main(opt):
                         x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
 
                         if not opt.skip_save:
+                            if opt.from_file:
+                                # Specify individual subdirectory for each sample in opt.from_file.
+                                indiv_subdir = batched_subdirs[p_i]
+                            else:
+                                # Use a common subdirectory opt.indiv_subdir for all samples.
+                                indiv_subdir = opt.indiv_subdir      
+
+                            sample_dir = os.path.join(opt.outdir, indiv_subdir)
+                            os.makedirs(sample_dir, exist_ok=True)                            
+
                             for i, x_sample in enumerate(x_samples_ddim):
-                                sample_dir = os.path.join(opt.outdir, indiv_subdir)
-                                os.makedirs(sample_dir, exist_ok=True)                            
                                 base_count = len(os.listdir(sample_dir))
                                 sample_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
 
@@ -406,6 +401,20 @@ def main(opt):
 
                                 x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                                 Image.fromarray(x_sample.astype(np.uint8)).save(sample_path)
+
+                            if opt.from_file and opt.compare_with:
+                                # There's an extra "None" after the last indiv_subdir in batched_subdirs 
+                                # as boundary detection. So no need to worry (p_i + 1) may go out of bound.
+                                next_indiv_subdir = batched_subdirs[p_i + 1]
+                                # indiv_subdir will change in the next batch, or this is the end of the loop. 
+                                # This means the current chunk (generated with the same prompt) is finished.
+                                # So we evaluate the current chunk.
+                                if next_indiv_subdir != indiv_subdir:
+                                    print()
+                                    compare_folders(clip_evator, dino_evator, 
+                                                    # prompts are just repetitions of the same prompt.
+                                                    opt.compare_with, sample_dir, 
+                                                    prompts[0], len(prompts))
 
                         if not opt.skip_grid:
                             all_samples.append(x_samples_ddim)
