@@ -132,7 +132,7 @@ if __name__ == "__main__":
         command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --from_file {prompt_filepath} --scale {args.scale} --subj_scale {args.subj_scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
         if args.compare_with_pardir:
             subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)
-            command_line += " --compare_with {args.subject_gt_dir}"
+            command_line += f" --compare_with {subject_gt_dir}"
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
