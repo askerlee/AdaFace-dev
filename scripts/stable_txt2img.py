@@ -246,7 +246,6 @@ def load_img(path, h, w):
 
 
 def main(opt):
-    os.environ['CUDA_VISIBLE_DEVICES'] = opt.gpu
 
     if opt.laion400m:
         print("Falling back to LAION 400M model...")
@@ -271,7 +270,7 @@ def main(opt):
     if opt.ada_emb_weight != -1:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
 
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
     model  = model.to(device)
 
     if opt.plms:
