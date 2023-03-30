@@ -270,7 +270,8 @@ def main(opt):
     if opt.ada_emb_weight != -1:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
 
-    device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
+    torch.cuda.set_device(int(opt.gpu))
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model  = model.to(device)
 
     if opt.plms:
