@@ -98,7 +98,7 @@ for i in $indices
 
         echo $subject: --init_word $initword $EXTRA_ARGS1
         set fish_trace 1
-        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --lr $lr --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_ARGS1
+        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_ARGS1
     else
         echo $subject: $db_prompt
         set fish_trace 1
