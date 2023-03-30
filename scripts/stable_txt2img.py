@@ -418,9 +418,9 @@ def main(opt):
                                                         # prompts are just repetitions of the same prompt.
                                                         opt.compare_with, sample_dir, 
                                                         prompts[0], len(prompts))
-                                    all_sims_img.append(sim_img)
-                                    all_sims_text.append(sim_text)
-                                    all_sims_dino.append(sim_dino)
+                                    all_sims_img.append(sim_img.detach().cpu().numpy())
+                                    all_sims_text.append(sim_text.detach().cpu().numpy())
+                                    all_sims_dino.append(sim_dino.detach().cpu().numpy())
 
                         if not opt.skip_grid:
                             all_samples.append(x_samples_ddim)
