@@ -125,7 +125,7 @@ if __name__ == "__main__":
             print("  ", prompt)
             indiv_subdir = subject_name + "-" + prompt.replace(" ", "-")
             # orig_prompt is saved in the prompt file as well, for evaluation later.
-            PROMPTS.write( "\t".join([args.n_samples, indiv_subdir, prompt, orig_prompt]) + "\n" )
+            PROMPTS.write( "\t".join([str(args.n_samples), indiv_subdir, prompt, orig_prompt]) + "\n" )
 
         PROMPTS.close()
         # Since we use a prompt file, we don't need to specify --n_samples.
