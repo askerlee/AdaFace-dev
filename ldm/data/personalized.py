@@ -136,7 +136,7 @@ per_img_token_list = [
 # "person" is also used for animals, as their dynamic compositions are highly similar.
 # "mickey", "snoopy", "pikachu" are common cartoon characters.
 default_cls_delta_tokens = [ [ "bike", "person", "ball" ], 
-                             [ "person", "dog" ]
+                             [ "person", "dog" ],
                              [ "mickey", "snoopy", "pikachu" ] ]
 
 class PersonalizedBase(Dataset):
