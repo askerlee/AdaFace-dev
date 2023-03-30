@@ -51,8 +51,8 @@ def parse_args():
                         help="Range of subjects to generate (Index starts from 1 and is inclusive, e.g., 1-30)")
     parser.add_argument("--selset", action="store_true",
                         help="Whether to evaluate only the selected subset of subjects")
-    parser.add_argument("--compare_with", type=str, default=None,
-                        help="Evaluate the similarity of generated samples with reference images in this folder")
+    parser.add_argument("--compare_with_pardir", type=str, default=None,
+                        help="Parent folder of subject images used for computing similarity with generated samples")
     
     args = parser.parse_args()
     return args
@@ -130,8 +130,9 @@ if __name__ == "__main__":
         PROMPTS.close()
         # Since we use a prompt file, we don't need to specify --n_samples.
         command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --from_file {prompt_filepath} --scale {args.scale} --subj_scale {args.subj_scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
-        if args.compare_with:
-            command_line += " --compare_with {args.compare_with}"
+        if args.compare_with_pardir:
+            subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)
+            command_line += " --compare_with {args.subject_gt_dir}"
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
