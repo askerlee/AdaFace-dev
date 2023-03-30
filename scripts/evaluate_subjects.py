@@ -89,7 +89,11 @@ if __name__ == "__main__":
             # splitlines() will remove the trailing newline. So no need to strip().
             lines = f.read().splitlines()
             indiv_subdirs_prompts = [ line.split("\t") for line in lines ]
-            for indiv_subdir, prompt0, prompt_template in indiv_subdirs_prompts:
+            prompts_total_num = len(indiv_subdirs_prompts)
+            prompt_idx = 0
+
+            for _, indiv_subdir, prompt0, prompt_template in indiv_subdirs_prompts:
+                prompt_idx += 1
                 if opt.class_name_format == 'long':
                     # Prompt is different from prompt0 (prompt0 is used for ada generation). 
                     # It doesn't contain 'z', but contains the full class name (as opposed to the short one)
@@ -104,7 +108,7 @@ if __name__ == "__main__":
 
                 if prompt in processed_prompts:
                     continue
-                print(f"Prompt: {prompt}")
+                print(f"{prompt_idx}/{prompts_total_num} Prompt: {prompt}")
                 subjprompt_samples_dir = os.path.join(opt.samples_dir, indiv_subdir)
                 subjprompt_sim_img, subjprompt_sim_text, subjprompt_sim_dino = \
                     compare_folders(clip_evator, dino_evator, subject_gt_dir, subjprompt_samples_dir, prompt, opt.num_samples)

@@ -290,7 +290,7 @@ def main(opt):
         # By default, batch_size = n_samples. After chunk, all_prompts becomes a list of length 1,
         # and the sole elment is a list of prompt repeated n_samples times,
         # e.g. [ ['z', 'z', 'z', 'z'] ]. Then tqdm() will finish it in one iteration.
-        all_prompts = list(chunk(all_prompts, batch_size))
+        batched_prompts = list(chunk(all_prompts, batch_size))
     else:
         print(f"Reading prompts from {opt.from_file}")
         with open(opt.from_file, "r") as f:

@@ -15,6 +15,8 @@ def parse_args():
     # extra_z_suffix: usually reduces the similarity of generated images to the real images.
     parser.add_argument("--extra_z_suffix", type=str, default="",
                         help="Extra suffix to append to the z suffix")
+    parser.add_argument("--z_prefix", type=str, default="",
+                        help="Prefix to prepend to z")
     
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
@@ -101,7 +103,12 @@ if __name__ == "__main__":
 
         if len(args.extra_z_suffix) > 0:
             class_token += " " + args.extra_z_suffix + ","
-            
+        
+        if len(args.z_prefix) > 0:
+            placeholder = args.z_prefix + " " + args.placeholder
+        else:
+            placeholder = args.placeholder
+
         if args.method == 'db':
             config_file = "v1-inference.yaml"
             ckpt_path   = f"logs/{ckpt_name}/checkpoints/last.ckpt"
@@ -112,7 +119,7 @@ if __name__ == "__main__":
 
         outdir = args.out_dir_tmpl + "-" + args.method
         # E.g., get_promt_list(subject_name="cat2", placeholder="z", class_token="cat", broad_class=1)
-        prompt_list, orig_prompt_list = get_promt_list(subject_name, args.placeholder, class_token, broad_class)
+        prompt_list, orig_prompt_list = get_promt_list(subject_name, placeholder, class_token, broad_class)
         prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
         os.makedirs(outdir, exist_ok=True)
         PROMPTS = open(prompt_filepath, "w")
