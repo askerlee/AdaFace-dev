@@ -59,6 +59,9 @@ def parse_args():
     parser.add_argument("--compare_with_pardir", type=str, default=None,
                         help="Parent folder of subject images used for computing similarity with generated samples")
     
+    parser.add_argument("--v15", action="store_true",
+                        help="Whether to use v1.5 model")
+    
     args = parser.parse_args()
     return args
 
@@ -120,7 +123,10 @@ if __name__ == "__main__":
             ckpt_path   = f"logs/{ckpt_name}/checkpoints/last.ckpt"
         else:
             config_file = "v1-inference-" + args.method + ".yaml"
-            ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
+            if args.v15:
+                ckpt_path   = "models/stable-diffusion-v-1-5/sd-v1-5-pruned.ckpt"
+            else:
+                ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
             emb_path    = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{args.ckpt_iter}.pt"
 
         outdir = args.out_dir_tmpl + "-" + args.method
