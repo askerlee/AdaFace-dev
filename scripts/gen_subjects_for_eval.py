@@ -124,7 +124,7 @@ if __name__ == "__main__":
         else:
             config_file = "v1-inference-" + args.method + ".yaml"
             if args.v15:
-                ckpt_path   = "models/stable-diffusion-v-1-5/sd-v1-5-pruned.ckpt"
+                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned.ckpt"
             else:
                 ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
             emb_path    = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{args.ckpt_iter}.pt"
