@@ -3,7 +3,7 @@
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'use_cls_token' 'use_z_suffix' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'use_cls_token' 'use_z_suffix' 'v15' -- $argv
 or begin
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-db-eval-subjects.sh --use_cls_token ada 1 25"
@@ -37,6 +37,7 @@ set -q _flag_lr; and set lr $_flag_lr; or set -e lr
 set -q _flag_min_rand_scaling; and set min_rand_scaling $_flag_min_rand_scaling; or set -e min_rand_scaling
 #set fish_trace 1
 
+set -q _flag_v15; and set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt; or set sd_ckpt models/stable-diffusion-v-1-4-original/sd-v1-4.ckpt
 # If --selset is given, then only train on the selected subjects, specified in $subj_file.
 set -q _flag_selset; and set -l indices0 $sel_set; or set -l indices0 (seq 1 (count $subjects))
 set -l indices $indices0[(seq $L $H)]
@@ -98,12 +99,12 @@ for i in $indices
 
         echo $subject: --init_word $initword $EXTRA_ARGS1
         set fish_trace 1
-        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_ARGS1
+        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_ARGS1
     else
         echo $subject: $db_prompt
         set fish_trace 1
         # $EXTRA_ARGS is not for DreamBooth. It is for AdaPrompt/TI only.
-        python3 main.py --base configs/stable-diffusion/v1-finetune_unfrozen.yaml -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-dreambooth --no-test --max_steps $max_iters --lr $lr --token "z" --class_word $db_prompt
+        python3 main.py --base configs/stable-diffusion/v1-finetune_unfrozen.yaml -t --actual_resume $sd_ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-dreambooth --no-test --max_steps $max_iters --lr $lr --token "z" --class_word $db_prompt
     end
 
     set -e fish_trace

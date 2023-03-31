@@ -182,7 +182,9 @@ class PersonalizedBase(Dataset):
 
         self.placeholder_suffix = placeholder_suffix
         if self.placeholder_suffix is not None:
-            self.p_add_suffix = 0.5
+            # Appending the suffix to the placeholder token randomly (sometimes append, sometimes not) 
+            # only leads to worse performance. So set p_add_suffix to 1 to always append the suffix.
+            self.p_add_suffix = 1
         else:
             self.p_add_suffix = 0
 
@@ -238,6 +240,8 @@ class PersonalizedBase(Dataset):
         else:
             cls_delta_token = self.cls_delta_token
 
+        # Appending the suffix to the placeholder token randomly (sometimes append, sometimes not) 
+        # only leads to worse performance. So set p_add_suffix to 1 to always append the suffix.
         if (self.placeholder_suffix is not None) and random.random() < self.p_add_suffix:
             placeholder_string = f"{placeholder_string} {self.placeholder_suffix}"
             if self.use_default_cls_delta_token:
