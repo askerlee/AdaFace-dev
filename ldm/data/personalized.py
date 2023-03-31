@@ -181,6 +181,10 @@ class PersonalizedBase(Dataset):
             self.use_default_cls_delta_token = False
 
         self.placeholder_suffix = placeholder_suffix
+        if self.placeholder_suffix is not None:
+            self.p_add_suffix = 0.5
+        else:
+            self.p_add_suffix = 0
 
         self.center_crop = center_crop
         self.mixing_prob = mixing_prob
@@ -234,7 +238,7 @@ class PersonalizedBase(Dataset):
         else:
             cls_delta_token = self.cls_delta_token
 
-        if self.placeholder_suffix is not None:
+        if (self.placeholder_suffix is not None) and random.random() < self.p_add_suffix:
             placeholder_string = f"{placeholder_string} {self.placeholder_suffix}"
             if self.use_default_cls_delta_token:
                 # It may be inappropriate to append the suffix to cls_delta_token,

@@ -668,10 +668,18 @@ class EmbeddingManager(nn.Module):
                 for i in range(OCCUR):
                     elem_idx  = placeholder_idx[0][i]
                     start_idx = placeholder_idx[1][i] + 1
-                    end_idx   = placeholder_idx[1][i] + 1 + self.z_suffix_id_count
-                    # Simply mask z_suffix_id_count tokens after the placeholder token.
-                    # In effect, this masks the placeholder suffix following the placeholder token.
-                    delta_loss_emb_mask[elem_idx][0][start_idx:end_idx] = 0
+                    assert tokenized_text[elem_idx][start_idx-1] == placeholder_token
+                    has_suffix = True
+                    for j in range(self.z_suffix_id_count):
+                        if tokenized_text[elem_idx][start_idx+j] != self.z_suffix_ids[j]:
+                            has_suffix = False
+                            break
+
+                    if has_suffix:
+                        end_idx   = placeholder_idx[1][i] + 1 + self.z_suffix_id_count
+                        # Simply mask z_suffix_id_count tokens after the placeholder token.
+                        # In effect, this masks the placeholder suffix following the placeholder token.
+                        delta_loss_emb_mask[elem_idx][0][start_idx:end_idx] = 0
 
                 self.set_delta_loss_emb_mask(delta_loss_emb_mask)
             # *multi-vector latent space*: In this space, S* is embedded into multiple 

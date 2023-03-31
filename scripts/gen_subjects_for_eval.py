@@ -52,7 +52,10 @@ def parse_args():
     parser.add_argument("--range", type=str, default=None, 
                         help="Range of subjects to generate (Index starts from 1 and is inclusive, e.g., 1-30)")
     parser.add_argument("--selset", action="store_true",
-                        help="Whether to evaluate only the selected subset of subjects")
+                        help="Whether to generate only the selected subset of subjects")
+    parser.add_argument("--skipselset", action="store_true",
+                        help="Whether to generate all subjects except the selected subset")
+    
     parser.add_argument("--compare_with_pardir", type=str, default=None,
                         help="Parent folder of subject images used for computing similarity with generated samples")
     
@@ -67,21 +70,24 @@ if __name__ == "__main__":
         # For DreamBooth, use_z_suffix is the default.
         args.use_z_suffix = True
 
+    subject_indices = list(range(len(subjects)))
     if args.selset:
-        subjects      = [ subjects[i]       for i in sel_set ]
-        class_tokens  = [ class_tokens[i]   for i in sel_set ]
-        broad_classes = [ broad_classes[i]  for i in sel_set ]
+        subject_indices = sel_set
 
-    low, high     = parse_range_str(args.range)
-    subjects      = subjects[low:high]
-    class_tokens  = class_tokens[low:high]
-    broad_classes = broad_classes[low:high]
+    low, high       = parse_range_str(args.range)
+    subject_indices = subject_indices[low:high]
 
     all_ckpts = os.listdir(args.ckpt_dir)
     # Sort all_ckpts by modification time, most recent first.
     all_ckpts.sort(key=lambda x: os.path.getmtime(os.path.join(args.ckpt_dir, x)), reverse=True)
 
-    for subject_name, class_token, broad_class in zip(subjects, class_tokens, broad_classes):
+    for subject_idx in subject_indices:
+        if args.skipselset and subject_idx in sel_set:
+            continue
+        subject_name = subjects[subject_idx]
+        class_token  = class_tokens[subject_idx]
+        broad_class  = broad_classes[subject_idx]
+
         ckpt_sig   = subject_name + "-" + args.method
         # Find the newest checkpoint that matches the subject name.
         ckpt_name  = find_first_match(all_ckpts, ckpt_sig, args.ckpt_extra_sig)
