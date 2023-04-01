@@ -3,17 +3,18 @@
 set -l subjects       backpack        backpack_dog      bear_plushie      berry_bowl      can     candle          cat     cat2    clock            colorful_sneaker  dog      dog2    dog3    dog5    dog6    dog7    dog8    duck_toy        fancy_boot      grey_sloth_plushie      monster_toy     pink_sunglasses poop_emoji      rc_car     red_cartoon        robot_toy       shiny_sneaker   teapot            vase            wolf_plushie
 set -l db_prompts     backpack        backpack          "stuffed animal"  bowl            can     candle          cat     cat     clock            sneaker           dog      dog     dog     dog     dog     dog     dog     toy             boot            "stuffed animal"        toy             glasses         toy             toy        cartoon            toy             sneaker         teapot            vase            "stuffed animal"
 set -l cls_tokens     backpack        backpack          toy               bowl            can     candle          cat     cat     clock            sneaker           dog      dog     dog     dog     dog     dog     dog     toy             boot            toy                     toy             glasses         toy             toy        cartoon            toy             sneaker         teapot            vase            toy             
-set -l ada_prompts    "red backpack"  "cute backpack"   "stuffed animal"  bowl            can     "glass candle"  cat     cat     "yellow clock"   sneaker           dog      dog     dog     dog     dog     dog     dog     toy             boot            "stuffed animal"        "monster toy"   glasses         toy             "toy car"  "cartoon monster"  toy             sneaker         "chinese teapot"  "stylish vase"  "stuffed animal"
-set -l ada_weights    "1 2"           "1 2"             "1 2"             1               1       "1 2"           1       1       "1 2"            1                 1        1       1       1       1       1       1       1               1               "1 2"                   "1 2"           1               1               "2 1"      "2 1"              1               1               "1 2"             "1 2"           "1 2"
+set -l ada_prompts    "red backpack"  "cute backpack"   "stuffed toy"     "berry bowl"    can     "glass candle"  cat     cat     "yellow clock"   sneaker           dog      dog     dog     dog     dog     dog     dog     toy             boot            "stuffed toy"           "monster toy"   glasses         toy             "toy car"  "cartoon monster"  toy             sneaker         "chinese teapot"  "stylish vase"  "stuffed toy"
+set -l ada_weights    "1 2"           "1 2"             "1 2"             "1 2"           1       "1 2"           1       1       "1 2"            1                 1        1       1       1       1       1       1       1               1               "1 2"                   "1 2"           1               1               "2 1"      "2 1"              1               1               "1 2"             "1 2"           "1 2"
 set -l broad_classes  0               0                 0                 0               0       0               1       1       0                0                 1        1       1       1       1       1       1       0               0               0                       0               0               0               0          2                  0               0               0                 0               0
 
 #                     1        2            3       4    5           6
 #                     backpack backpack_dog candle clock monster_toy teapot
-set -l sel_set        1        2            6       9    21          28 
-
+# set -l sel_set        1        2            6       9    21          28 
+#                     backpack_dog  berry_bowl  rc_car wolf_plushie
+set -l sel_set        2             4           24     30
 # Individual LR for each class in the broad classes, according to their difficulties.
 #                     objects    animals    cartoon characters
-set -l lrs            3e-4       6e-4       3e-4
+set -l lrs            2e-4       5e-4       2e-4
 
 set -Ux subjects        $subjects
 set -Ux db_prompts      $db_prompts

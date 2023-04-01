@@ -975,7 +975,7 @@ class EmbeddingManager(nn.Module):
         bias_reg_weight_base        = 0.1
         basis_reg_weight_base       = 0.1
         ada_maps_weight_reg_weight  = 1.
-        ada_maps_bias_reg_weight    = 0.01
+        ada_maps_bias_reg_weight    = 0.1
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
@@ -1035,7 +1035,7 @@ class EmbeddingManager(nn.Module):
                             + loss_basis            * basis_reg_weight \
                             + loss_pre_vecs         * pre_vecs_reg_weight \
                             + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
-                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight
+                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight 
 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:

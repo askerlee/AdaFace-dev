@@ -14,20 +14,26 @@ end
 
 set EXTRA_ARGS $argv[2..-1]
 
+set info_file scripts/info-db-eval-subjects.sh
+
 if set -q _flag_selset
-    set L1 1
-    set H1 3
-    set L2 4
-    set H2 6
+    fish $info_file
+    if not set -q _flag_selset
+        echo "Error: 'sel_set' is not specified in $info_file."
+        exit 1
+    end
+
+    set LEN (count $sel_set)
     # Pass the --selset flag to train-subjects.sh.
     set EXTRA_ARGS "--selset" $EXTRA_ARGS
 else
-    set L1 1
-    set H1 15
-    set L2 16
-    set H2 30
+    set LEN (count $subjects)
 end
 
+set L1 1
+set H1 (math ceil $LEN / 2)
+set L2 (math ceil $LEN / 2 + 1)
+set H2 $LEN
 
 if [ $method = 'ada' ]; or [ $method = 'ti' ]; or [ $method = 'db' ]
     # In db eval training images, the subjects are usually small.
@@ -36,9 +42,9 @@ if [ $method = 'ada' ]; or [ $method = 'ti' ]; or [ $method = 'db' ]
     if [ $method = 'ada' ]; or [ $method = 'ti' ]
         set EXTRA_ARGS --min_rand_scaling 0.9 --max_rand_scaling 1.1 --composition_delta_reg_weight 0.01 --embedding_reg_weight 0.01 $EXTRA_ARGS
     end
-    screen -dm -L -Logfile train-$method-0-(date +%m%d%H%M).txt fish scripts/train-subjects.sh $method $L1 $H1 --gpu 0 --subjfile scripts/info-db-eval-subjects.sh $EXTRA_ARGS 
-    screen -dm -L -Logfile train-$method-1-(date +%m%d%H%M).txt fish scripts/train-subjects.sh $method $L2 $H2 --gpu 1 --subjfile scripts/info-db-eval-subjects.sh $EXTRA_ARGS
+    screen -dm -L -Logfile train-$method-0-(date +%m%d%H%M).txt fish scripts/train-subjects.sh $method $L1 $H1 --gpu 0 --subjfile $info_file $EXTRA_ARGS 
+    screen -dm -L -Logfile train-$method-1-(date +%m%d%H%M).txt fish scripts/train-subjects.sh $method $L2 $H2 --gpu 1 --subjfile $info_file $EXTRA_ARGS
 else
-    screen -dm -L -Logfile train-$method-0-(date +%m%d%H%M).txt fish scripts/train-subjects-lora.sh $flag_selset $L1 $H1 --gpu 0 --subjfile scripts/info-db-eval-subjects.sh $EXTRA_ARGS
-    screen -dm -L -Logfile train-$method-1-(date +%m%d%H%M).txt fish scripts/train-subjects-lora.sh $flag_selset $L2 $H2 --gpu 1 --subjfile scripts/info-db-eval-subjects.sh $EXTRA_ARGS
+    screen -dm -L -Logfile train-$method-0-(date +%m%d%H%M).txt fish scripts/train-subjects-lora.sh $flag_selset $L1 $H1 --gpu 0 --subjfile $info_file $EXTRA_ARGS
+    screen -dm -L -Logfile train-$method-1-(date +%m%d%H%M).txt fish scripts/train-subjects-lora.sh $flag_selset $L2 $H2 --gpu 1 --subjfile $info_file $EXTRA_ARGS
 end
