@@ -37,6 +37,8 @@ def parse_args():
         "--selset", action="store_true",
         help="Whether to evaluate only the selected subset of subjects"
     )
+    parser.add_argument("--skipselset", action="store_true",
+                        help="Whether to generate all subjects except the selected subset")    
     parser.add_argument(
         "--num_samples", type=int, default=4,
         help="Number of samples to generate for each subject under each prompt"
@@ -51,36 +53,41 @@ def parse_args():
         help="GPU to use for evaluation"
     )
 
-    opt = parser.parse_args()
-    return opt
+    args = parser.parse_args()
+    return args
 
 if __name__ == "__main__":
 
-    opt = parse_args()
-    clip_evator, dino_evator = init_evaluators(opt.gpu)
+    args = parse_args()
+    clip_evator, dino_evator = init_evaluators(args.gpu)
 
     # Always pass "db", no matter what the actual method is. 
     # So that class_tokens are the long class name, instead of the one-token short class name.
     # This helps better match the prompt with the image.
-    subjects, class_tokens, broad_classes, sel_set = parse_subject_file(opt.subject_file, "db")
+    subjects, class_tokens, broad_classes, sel_set = parse_subject_file(args.subject_file, "db")
 
-    if opt.selset:
-        subjects = [ subjects[i] for i in sel_set ]
-        class_tokens = [ class_tokens[i] for i in sel_set ]
+    subject_indices = list(range(len(subjects)))
+    if args.selset:
+        subject_indices = sel_set
 
-    low, high = parse_range_str(opt.range)
-    subjects  = subjects[low:high]
-    class_tokens = class_tokens[low:high]
+    range_indices   = parse_range_str(args.range)
+    subject_indices = [ subject_indices[i] for i in range_indices ]
         
     allsubj_sims_img, allsubj_sims_text, allsubj_sims_dino = [], [], []
-    subject_count = len(subjects)
+    subject_count = len(subject_indices)
 
-    for i, subject in enumerate(subjects):
+    for i, subject_idx in enumerate(subject_indices):
+        if args.skipselset and subject_idx in sel_set:
+            continue
+        subject      = subjects[subject_idx]
+        class_token  = class_tokens[subject_idx]
+        broad_class  = broad_classes[subject_idx]
+
         print(f"{i+1}/{subject_count}  {subject}")
         class_token = class_tokens[i]
 
-        subject_gt_dir = os.path.join(opt.gt_dir, subject)
-        subject_prompts_filepath = os.path.join(opt.samples_dir, subject + "-prompts.txt")
+        subject_gt_dir = os.path.join(args.gt_dir, subject)
+        subject_prompts_filepath = os.path.join(args.samples_dir, subject + "-prompts.txt")
         print(f"Reading prompts from {subject_prompts_filepath}")
         subj_sims_img, subj_sims_text, subj_sims_dino = [], [], []
         processed_prompts = {}
@@ -94,7 +101,7 @@ if __name__ == "__main__":
 
             for _, indiv_subdir, prompt0, prompt_template in indiv_subdirs_prompts:
                 prompt_idx += 1
-                if opt.class_name_format == 'long':
+                if args.class_name_format == 'long':
                     # Prompt is different from prompt0 (prompt0 is used for ada generation). 
                     # It doesn't contain 'z', but contains the full class name (as opposed to the short one)
                     # Patch the class token of  "red cartoon". "a cartoon in the forest ..." doesn't make sense.
@@ -109,9 +116,9 @@ if __name__ == "__main__":
                 if prompt in processed_prompts:
                     continue
                 print(f"{prompt_idx}/{prompts_total_num} Prompt: {prompt}")
-                subjprompt_samples_dir = os.path.join(opt.samples_dir, indiv_subdir)
+                subjprompt_samples_dir = os.path.join(args.samples_dir, indiv_subdir)
                 subjprompt_sim_img, subjprompt_sim_text, subjprompt_sim_dino = \
-                    compare_folders(clip_evator, dino_evator, subject_gt_dir, subjprompt_samples_dir, prompt, opt.num_samples)
+                    compare_folders(clip_evator, dino_evator, subject_gt_dir, subjprompt_samples_dir, prompt, args.num_samples)
                 
                 subj_sims_img.append(subjprompt_sim_img.detach().cpu().numpy())
                 subj_sims_text.append(subjprompt_sim_text.detach().cpu().numpy())

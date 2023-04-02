@@ -90,20 +90,22 @@ def find_first_match(lst, search_term, extra_sig=""):
             return item
     return None  # If no match is found
 
-def parse_range_str(range_str):
-    if range_str is not None:
-        range_strs = range_str.split("-")
-        # Only generate a particular subject.
-        if len(range_strs) == 1:
-            low, high = int(range_strs[0]) - 1, int(range_strs[0])
-        else:
-            # low is 1-indexed, converted to 0-indexed by -1.
-            # high is inclusive, converted to exclusive without adding offset.
-            low, high  = int(range_strs[0]) - 1, int(range_strs[1])
-    else:
-        low, high = 0, None
+# if fix_1_offset: range_str "3-7,8,10" => [2, 3, 4, 5, 6, 7, 9]
+# else:            range_str "3-7,8,10" => [3, 4, 5, 6, 7, 8, 10]
+# "a-b" is always inclusive, i.e., "a-b" = [a, a+1, ..., b]
+def parse_range_str(range_str, fix_1_offset=True):
+    result = []
+    offset = 1 if fix_1_offset else 0
 
-    return low, high
+    for part in range_str.split(','):
+        if '-' in part:
+            a, b = part.split('-')
+            a, b = int(a) - offset, int(b) - offset
+            result.extend(list(range(a, b + 1)))
+        else:
+            a = int(part) - offset
+            result.append(a)
+    return result
 
 def get_promt_list(subject_name, unique_token, class_token, broad_class):
     object_prompt_list = [
