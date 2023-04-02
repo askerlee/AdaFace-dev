@@ -203,9 +203,10 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             inputs_embeds,
             attention_mask = None,
             causal_attention_mask = None,
-            output_attentions = None,
-            output_hidden_states = None,
+            output_attentions = None,       # default: None
+            output_hidden_states = None,    # default: None
             return_dict = None,
+            skip_last_layer = False,
         ):
             output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
             output_hidden_states = (
@@ -228,14 +229,23 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                     output_attentions=output_attentions,
                 )
 
+                # Only keep the last layer's hidden states
                 hidden_states = layer_outputs[0]
 
+                # output_attentions: None
                 if output_attentions:
                     all_attentions = all_attentions + (layer_outputs[1],)
 
+                # NovalAI modification: skip the last layer to make the 
+                # text embeddings more accurate, at the cost of slight performance reduction.
+                if skip_last_layer and idx == len(self.layers) - 2:
+                    break
+
+            # output_hidden_states: None
             if output_hidden_states:
                 encoder_states = encoder_states + (hidden_states,)
 
+            # Only return the last layer's hidden states
             return hidden_states
 
 
@@ -259,6 +269,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             output_hidden_states = None,
             return_dict = None,
             embedding_manager = None,
+            skip_last_layer = False,
         ):
             output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
             output_hidden_states = (
@@ -294,6 +305,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
+                skip_last_layer=skip_last_layer,
             )
 
             # Note that the original implementation in huggingface transformers
@@ -319,6 +331,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             output_hidden_states = None,
             return_dict = None,
             embedding_manager = None,
+            skip_last_layer = False
         ):
             # In the original implementation in huggingface, transformer.forward()
             # simply calls text_model.forward(). Here it's the same, except that 
@@ -330,7 +343,8 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
-                embedding_manager = embedding_manager
+                embedding_manager = embedding_manager,
+                skip_last_layer = skip_last_layer
             )
 
         # transformer: CLIPTextModel

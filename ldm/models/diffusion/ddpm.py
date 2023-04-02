@@ -631,7 +631,8 @@ class LatentDiffusion(DDPM):
                 # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
                 c_in = copy.copy(c)
                 # c: [128, 77, 768]
-                c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
+                c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager,
+                                                 skip_last_layer=False)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
                 if self.use_ada_embedding:
