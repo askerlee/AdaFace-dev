@@ -61,7 +61,11 @@ def parse_args():
     
     parser.add_argument("--v15", action="store_true",
                         help="Whether to use v1.5 model")
-    
+
+    parser.add_argument("--clip_skip_last_layer",
+                        action="store_true", default=False,
+                        help="Whether to skip the last layer of the CLIP text embedder")
+                                    
     args = parser.parse_args()
     return args
 
@@ -154,6 +158,9 @@ if __name__ == "__main__":
             command_line += f" --compare_with {subject_gt_dir}"
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
+
+        if args.clip_skip_last_layer:
+            command_line += " --clip_skip_last_layer"
 
         print(command_line)
         os.system(command_line)
