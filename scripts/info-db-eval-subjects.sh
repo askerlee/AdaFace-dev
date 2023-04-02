@@ -14,7 +14,7 @@ set -l broad_classes  0               0                 0                 0     
 set -l sel_set        2             4           24     30
 # Individual LR for each class in the broad classes, according to their difficulties.
 #                     objects    animals    cartoon characters
-set -l lrs            2e-4       5e-4       2e-4
+set -l lrs            3e-4       6e-4       3e-4
 
 set -Ux subjects        $subjects
 set -Ux db_prompts      $db_prompts
