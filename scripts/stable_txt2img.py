@@ -204,7 +204,11 @@ def parse_args():
     parser.add_argument("--compare_with", type=str, default=None,
                         help="Evaluate the similarity of generated samples with reference images in this folder"
                              " (requires --from_file to be specified)")
-                            
+
+    parser.add_argument("--clip_skip_last_layer",
+                        action="store_true", default=False,
+                        help="Whether to skip the last layer of the CLIP text embedder")
+                                
     args = parser.parse_args()
     return args
 
@@ -260,7 +264,8 @@ def main(opt):
     if opt.embedding_paths is not None:
         model.embedding_manager.load(opt.embedding_paths)
     model.embedding_manager.subj_scale  = opt.subj_scale
-
+    model.clip_skip_last_layer = opt.clip_skip_last_layer
+    
     use_diff_ada_emb_weight = False
     if use_diff_ada_emb_weight and opt.ada_emb_weight == -1:
         # Smaller ada embedding weight for objects and cartoon characters, larger for humans.

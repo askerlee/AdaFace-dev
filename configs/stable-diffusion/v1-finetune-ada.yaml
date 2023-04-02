@@ -26,6 +26,7 @@ model:
     use_ada_embedding: True
     composition_delta_reg_iter_gap: 5
     composition_delta_reg_weight: 0.005
+    clip_skip_last_layer: false
 
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler

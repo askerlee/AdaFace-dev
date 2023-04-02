@@ -80,6 +80,7 @@ class DDPM(pl.LightningModule):
                  logvar_init=0.,
                  use_layerwise_embedding=False,
                  use_ada_embedding=False,
+                 clip_skip_last_layer=False,
                  composition_delta_reg_iter_gap=-1,
                  composition_delta_reg_weight=0.,
                  ):
@@ -97,6 +98,7 @@ class DDPM(pl.LightningModule):
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.use_ada_embedding = use_layerwise_embedding and use_ada_embedding
+        self.clip_skip_last_layer = clip_skip_last_layer
         self.composition_delta_reg_iter_gap = composition_delta_reg_iter_gap
         self.composition_delta_reg_weight   = composition_delta_reg_weight
         self.do_static_comp_delta_reg       = False
@@ -632,7 +634,7 @@ class LatentDiffusion(DDPM):
                 c_in = copy.copy(c)
                 # c: [128, 77, 768]
                 c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager,
-                                                 skip_last_layer=False)
+                                                 skip_last_layer=self.clip_skip_last_layer)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
                 if self.use_ada_embedding:

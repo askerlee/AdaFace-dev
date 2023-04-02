@@ -18,6 +18,7 @@ model:
     use_ema: False
     use_layerwise_embedding: True
     use_ada_embedding: True
+    clip_skip_last_layer: false
     
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
