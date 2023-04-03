@@ -159,7 +159,7 @@ if __name__ == "__main__":
             command_line += f" --embedding_paths {emb_path}"
 
         if args.clip_last_layer_skip_weight > 0:
-            command_line += " --clip_last_layer_skip_weight"
+            command_line += f" --clip_last_layer_skip_weight {args.clip_last_layer_skip_weight}"
 
         print(command_line)
         os.system(command_line)
