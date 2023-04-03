@@ -317,14 +317,14 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             # returns a tuple of (last_hidden_state, encoder_states, all_attentions).
             # However, the overloading text_encoder_forward() above only returns
             # hidden_states. So it's passed to the final_layer_norm() directly.
-            last_hidden_states = self.final_layer_norm(last_hidden_states)
             if last_layer_skip_weight > 0:
                 # According to NovelAI's practice, the penultimate_hidden_states is layernormed
                 # with the same parameters as the last_hidden_states.
-                penultimate_hidden_states = self.final_layer_norm(penultimate_hidden_states)
+                # penultimate_hidden_states = self.final_layer_norm(penultimate_hidden_states)
                 last_hidden_states = last_layer_skip_weight * penultimate_hidden_states + \
                                     (1 - last_layer_skip_weight) * last_hidden_states
-                
+
+            last_hidden_states = self.final_layer_norm(last_hidden_states)
             return last_hidden_states
 
         # text_model: CLIPTextTransformer
