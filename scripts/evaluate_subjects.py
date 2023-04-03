@@ -52,6 +52,13 @@ def parse_args():
         "--gpu",  type=int, default=0,
         help="GPU to use for evaluation"
     )
+    # gt_self_compare
+    #   If True,  compare the subject's gt images with themselves.
+    #   If False, compare each subject's generated images with the subject's gt images.
+    parser.add_argument(
+        "--gt_self_compare", action="store_true",
+        help="Whether to compare all images in the subject gt image folder"
+    )
 
     args = parser.parse_args()
     return args
