@@ -206,7 +206,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             output_attentions = None,       # default: None
             output_hidden_states = None,    # default: None
             return_dict = None,
-            skip_last_layer = False,
+            last_layer_skip_weight = 0,
         ):
             output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
             output_hidden_states = (
@@ -218,6 +218,8 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             all_attentions = () if output_attentions else None
 
             hidden_states = inputs_embeds
+            penultimate_hidden_states = None
+
             for idx, encoder_layer in enumerate(self.layers):
                 if output_hidden_states:
                     encoder_states = encoder_states + (hidden_states,)
@@ -238,15 +240,15 @@ class FrozenCLIPEmbedder(AbstractEncoder):
 
                 # NovalAI modification: skip the last layer to make the 
                 # text embeddings more accurate, at the cost of slight performance reduction.
-                if skip_last_layer and idx == len(self.layers) - 2:
-                    break
+                if last_layer_skip_weight > 0 and idx == len(self.layers) - 2:
+                    penultimate_hidden_states = hidden_states
 
             # output_hidden_states: None
             if output_hidden_states:
                 encoder_states = encoder_states + (hidden_states,)
 
-            # Only return the last layer's hidden states
-            return hidden_states
+            # Only return the last layer's and the second last layer's hidden states
+            return (penultimate_hidden_states, hidden_states)
 
 
         # encoder: CLIPEncoder
@@ -269,7 +271,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             output_hidden_states = None,
             return_dict = None,
             embedding_manager = None,
-            skip_last_layer = False,
+            last_layer_skip_weight = 0.0,
         ):
             output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
             output_hidden_states = (
@@ -298,23 +300,32 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
                 attention_mask = _expand_mask(attention_mask, hidden_states.dtype)
 
-            last_hidden_state = self.encoder(
+            last_hidden_states = self.encoder(
                 inputs_embeds=hidden_states,
                 attention_mask=attention_mask,
                 causal_attention_mask=causal_attention_mask,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
-                skip_last_layer=skip_last_layer,
+                last_layer_skip_weight=last_layer_skip_weight,
             )
 
+            # encoder() returns a tuple of (penultimate_hidden_states, last_hidden_states).
+            # If last_layer_skip_weight is 0, then penultimate_hidden_states = None.
+            penultimate_hidden_states, last_hidden_states = last_hidden_states
             # Note that the original implementation in huggingface transformers
             # returns a tuple of (last_hidden_state, encoder_states, all_attentions).
             # However, the overloading text_encoder_forward() above only returns
             # hidden_states. So it's passed to the final_layer_norm() directly.
-            last_hidden_state = self.final_layer_norm(last_hidden_state)
-
-            return last_hidden_state
+            last_hidden_states = self.final_layer_norm(last_hidden_states)
+            if last_layer_skip_weight > 0:
+                # According to NovelAI's practice, the penultimate_hidden_states is layernormed
+                # with the same parameters as the last_hidden_states.
+                penultimate_hidden_states = self.final_layer_norm(penultimate_hidden_states)
+                last_hidden_states = last_layer_skip_weight * penultimate_hidden_states + \
+                                    (1 - last_layer_skip_weight) * last_hidden_states
+                
+            return last_hidden_states
 
         # text_model: CLIPTextTransformer
         # text_model.forward = text_encoder_forward.__get__(obj)
@@ -331,7 +342,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             output_hidden_states = None,
             return_dict = None,
             embedding_manager = None,
-            skip_last_layer = False
+            last_layer_skip_weight = 0.0
         ):
             # In the original implementation in huggingface, transformer.forward()
             # simply calls text_model.forward(). Here it's the same, except that 
@@ -344,7 +355,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
                 embedding_manager = embedding_manager,
-                skip_last_layer = skip_last_layer
+                last_layer_skip_weight = last_layer_skip_weight
             )
 
         # transformer: CLIPTextModel

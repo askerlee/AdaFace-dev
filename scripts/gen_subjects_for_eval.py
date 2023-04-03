@@ -62,9 +62,8 @@ def parse_args():
     parser.add_argument("--v15", action="store_true",
                         help="Whether to use v1.5 model")
 
-    parser.add_argument("--clip_skip_last_layer",
-                        action="store_true", default=False,
-                        help="Whether to skip the last layer of the CLIP text embedder")
+    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.0,
+                        help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
                                     
     args = parser.parse_args()
     return args
@@ -159,8 +158,8 @@ if __name__ == "__main__":
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
-        if args.clip_skip_last_layer:
-            command_line += " --clip_skip_last_layer"
+        if args.clip_last_layer_skip_weight > 0:
+            command_line += " --clip_last_layer_skip_weight"
 
         print(command_line)
         os.system(command_line)

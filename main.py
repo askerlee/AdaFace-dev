@@ -236,9 +236,8 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--broad_class", type=int, default=1,
                         help="Whether the subject is a human/animal, object or cartoon (0: object, 1: human/animal, 2: cartoon)")
 
-    parser.add_argument("--clip_skip_last_layer",
-                        action="store_true", default=False,
-                        help="Whether to skip the last layer of the CLIP text embedder")
+    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0,
+                        help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     return parser
 
 def nondefault_trainer_args(opt):
@@ -694,7 +693,7 @@ if __name__ == "__main__":
         config.data.params.train.params.broad_class       = opt.broad_class
         config.data.params.validation.params.broad_class  = opt.broad_class
 
-        config.model.params.clip_skip_last_layer = opt.clip_skip_last_layer
+        config.model.params.clip_last_layer_skip_weight   = opt.clip_last_layer_skip_weight
 
         '''
         if opt.cls_delta_token is None:

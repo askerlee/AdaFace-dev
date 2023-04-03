@@ -205,9 +205,8 @@ def parse_args():
                         help="Evaluate the similarity of generated samples with reference images in this folder"
                              " (requires --from_file to be specified)")
 
-    parser.add_argument("--clip_skip_last_layer",
-                        action="store_true", default=False,
-                        help="Whether to skip the last layer of the CLIP text embedder")
+    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.0,
+                        help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
                                 
     args = parser.parse_args()
     return args
@@ -264,7 +263,7 @@ def main(opt):
     if opt.embedding_paths is not None:
         model.embedding_manager.load(opt.embedding_paths)
     model.embedding_manager.subj_scale  = opt.subj_scale
-    model.clip_skip_last_layer = opt.clip_skip_last_layer
+    model.clip_last_layer_skip_weight = opt.clip_last_layer_skip_weight
     
     use_diff_ada_emb_weight = False
     if use_diff_ada_emb_weight and opt.ada_emb_weight == -1:
