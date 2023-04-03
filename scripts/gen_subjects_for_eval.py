@@ -81,7 +81,8 @@ if __name__ == "__main__":
         subject_indices = sel_set
 
     range_indices   = parse_range_str(args.range)
-    subject_indices = [ subject_indices[i] for i in range_indices ]
+    if range_indices is not None:
+        subject_indices = [ subject_indices[i] for i in range_indices ]
 
     all_ckpts = os.listdir(args.ckpt_dir)
     # Sort all_ckpts by modification time, most recent first.

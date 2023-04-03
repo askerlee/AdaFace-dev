@@ -52,7 +52,6 @@ def parse_args():
         "--gpu",  type=int, default=0,
         help="GPU to use for evaluation"
     )
-    # gt_self_compare
     #   If True,  compare the subject's gt images with themselves.
     #   If False, compare each subject's generated images with the subject's gt images.
     parser.add_argument(
@@ -78,8 +77,9 @@ if __name__ == "__main__":
         subject_indices = sel_set
 
     range_indices   = parse_range_str(args.range)
-    subject_indices = [ subject_indices[i] for i in range_indices ]
-        
+    if range_indices is not None:
+        subject_indices = [ subject_indices[i] for i in range_indices ]
+    
     allsubj_sims_img, allsubj_sims_text, allsubj_sims_dino = [], [], []
     subject_count = len(subject_indices)
 
@@ -125,7 +125,8 @@ if __name__ == "__main__":
                 print(f"{prompt_idx}/{prompts_total_num} Prompt: {prompt}")
                 subjprompt_samples_dir = os.path.join(args.samples_dir, indiv_subdir)
                 subjprompt_sim_img, subjprompt_sim_text, subjprompt_sim_dino = \
-                    compare_folders(clip_evator, dino_evator, subject_gt_dir, subjprompt_samples_dir, prompt, args.num_samples)
+                    compare_folders(clip_evator, dino_evator, subject_gt_dir, subjprompt_samples_dir, 
+                                    prompt, args.num_samples, args.gt_self_compare)
                 
                 subj_sims_img.append(subjprompt_sim_img.detach().cpu().numpy())
                 subj_sims_text.append(subjprompt_sim_text.detach().cpu().numpy())
