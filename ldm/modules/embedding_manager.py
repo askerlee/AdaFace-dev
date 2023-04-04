@@ -605,9 +605,6 @@ class EmbeddingManager(nn.Module):
                 self.get_ada_embedding(self.layer_idx, self.layer_infeat, self.time_emb,
                                        tokenized_text, embedded_text)
             emb_idx = self.layer_idx2emb_idx[self.layer_idx]
-            # Cache the computed ada embedding of the current layer.
-            # Before this call, init_ada_embedding_cache() should have been called somewhere.
-            self.ada_embeddings[emb_idx] = embedded_text
             # Remove ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
             return embedded_text
@@ -803,6 +800,10 @@ class EmbeddingManager(nn.Module):
     # for computing the composition delta loss.
     def init_ada_embedding_cache(self):
         self.ada_embeddings = [ None for i in range(self.num_unet_layers) ]
+
+    def cache_ada_embedding(self, i, embedding):
+        emb_idx = self.layer_idx2emb_idx[i]
+        self.ada_embeddings[emb_idx] = embedding
 
     # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
     # which will be enabled again through set_ada_layer_temp_info() in ddpm.py.
@@ -1106,6 +1107,7 @@ class EmbeddingManager(nn.Module):
                 # before calling composition_delta_loss().
                 if emb is None:
                     breakpoint()
+
             # ada_embeddings: [4, 16, 77, 768]
             ada_embeddings = torch.stack(self.ada_embeddings, dim=1)
             ada_subj_emb_single, ada_subj_emb_comp = ada_embeddings.split(BS, dim=0)
