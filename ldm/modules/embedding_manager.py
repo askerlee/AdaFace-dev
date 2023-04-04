@@ -1087,7 +1087,7 @@ class EmbeddingManager(nn.Module):
         # should be boosted proportionally to composition_delta_reg_iter_gap. 
         # Divide it by 2 to reduce the proportion of ada emb loss relative to 
         # static emb loss in the total loss.
-        ada_comp_loss_boost_ratio = self.composition_delta_reg_iter_gap / 2
+        ada_comp_loss_boost_ratio = self.composition_delta_reg_iter_gap / 5
         # If do_ada_comp_delta_reg,     BS = 2.
         # If not do_ada_comp_delta_reg, BS = 2 * num_compositions_per_image = 4.
         BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
