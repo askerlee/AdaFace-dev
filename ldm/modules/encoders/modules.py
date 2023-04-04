@@ -165,10 +165,6 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         self.max_length = max_length
         self.set_last_layer_skip(last_layer_skip_weight, last_layer_skip_scheme)
 
-        def set_last_layer_skip(self, weight, scheme):
-            self.transformer.text_model.last_layer_skip_weight = weight
-            self.transformer.text_model.last_layer_skip_scheme = scheme
-            
         def embedding_forward(
                 self,
                 input_ids = None,
@@ -375,7 +371,10 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         # Therefore, the method is intercepted without modifying the implicit object "transformer".
         self.transformer.forward = transformer_forward.__get__(self.transformer)
 
-
+    def set_last_layer_skip(self, weight, scheme):
+        self.transformer.text_model.last_layer_skip_weight = weight
+        self.transformer.text_model.last_layer_skip_scheme = scheme
+            
     def freeze(self):
         self.transformer = self.transformer.eval()
         for param in self.parameters():
