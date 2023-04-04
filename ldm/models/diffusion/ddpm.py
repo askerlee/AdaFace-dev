@@ -80,7 +80,6 @@ class DDPM(pl.LightningModule):
                  logvar_init=0.,
                  use_layerwise_embedding=False,
                  use_ada_embedding=False,
-                 clip_last_layer_skip_weight=0.,
                  composition_delta_reg_iter_gap=-1,
                  composition_delta_reg_weight=0.,
                  ):
@@ -98,7 +97,6 @@ class DDPM(pl.LightningModule):
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.use_ada_embedding = use_layerwise_embedding and use_ada_embedding
-        self.clip_last_layer_skip_weight = clip_last_layer_skip_weight
         self.composition_delta_reg_iter_gap = composition_delta_reg_iter_gap
         self.composition_delta_reg_weight   = composition_delta_reg_weight
         self.do_static_comp_delta_reg       = False
@@ -633,8 +631,7 @@ class LatentDiffusion(DDPM):
                 # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
                 c_in = copy.copy(c)
                 # c: [128, 77, 768]
-                c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager,
-                                                 last_layer_skip_weight=self.clip_last_layer_skip_weight)
+                c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
                 if self.use_ada_embedding:
@@ -664,8 +661,7 @@ class LatentDiffusion(DDPM):
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
         # when embedding_manager is called within cond_stage_model.encode().
         self.embedding_manager.set_ada_layer_temp_info(layer_idx, layer_infeat, time_emb)
-        c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager,
-                                         last_layer_skip_weight=self.clip_last_layer_skip_weight)
+        c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         return (c, self.embedding_manager.get_ada_emb_weight())
 
     def meshgrid(self, h, w):

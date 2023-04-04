@@ -26,7 +26,6 @@ model:
     use_ada_embedding: True
     composition_delta_reg_iter_gap: 5
     composition_delta_reg_weight: 0.005
-    clip_last_layer_skip_weight: 0.5
 
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
@@ -96,6 +95,9 @@ model:
 
     cond_stage_config:
       target: ldm.modules.encoders.modules.FrozenCLIPEmbedder
+      params:
+        last_layer_skip_weight: 0.5
+        last_layer_skip_scheme: 'add'
 
 data:
   target: main.DataModuleFromConfig
