@@ -374,7 +374,8 @@ class FrozenCLIPEmbedder(AbstractEncoder):
     def set_last_layer_skip(self, weight, scheme):
         self.transformer.text_model.last_layer_skip_weight = weight
         self.transformer.text_model.last_layer_skip_scheme = scheme
-            
+        print(f"CLIP last_layer_skip_weight = {weight}, last_layer_skip_scheme = {scheme}")
+              
     def freeze(self):
         self.transformer = self.transformer.eval()
         for param in self.parameters():
