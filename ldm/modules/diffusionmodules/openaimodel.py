@@ -730,7 +730,7 @@ class UNetModel(nn.Module):
         # context: [9*B, N, 768] reshape => [B, 9, N, 768] permute => [9, B, N, 768]
         if use_layerwise_context:
             context = context.reshape(x.shape[0], 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
-
+            
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)
@@ -749,6 +749,7 @@ class UNetModel(nn.Module):
                 return None
             emb_idx = layer_idx2emb_idx[layer_idx]
             static_context = context[emb_idx]
+
             if use_ada_context:
                 ada_context, ada_emb_weight = embedder(context_in, layer_idx, h, emb)
                 static_emb_weight = 1 - ada_emb_weight

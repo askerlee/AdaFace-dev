@@ -664,7 +664,8 @@ class LatentDiffusion(DDPM):
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
         # when embedding_manager is called within cond_stage_model.encode().
         self.embedding_manager.set_ada_layer_temp_info(layer_idx, layer_infeat, time_emb)
-        c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
+        c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager,
+                                         last_layer_skip_weight=self.clip_last_layer_skip_weight)
         return (c, self.embedding_manager.get_ada_emb_weight())
 
     def meshgrid(self, h, w):

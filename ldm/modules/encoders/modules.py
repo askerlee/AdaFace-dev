@@ -321,8 +321,18 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 # According to NovelAI's practice, the penultimate_hidden_states is layernormed
                 # with the same parameters as the last_hidden_states.
                 # penultimate_hidden_states = self.final_layer_norm(penultimate_hidden_states)
-                last_hidden_states = last_layer_skip_weight * penultimate_hidden_states + \
-                                    (1 - last_layer_skip_weight) * last_hidden_states
+                do_adding = True
+                if do_adding:
+                    # penultimate_hidden_states: [32, 77, 768], last_hidden_states: [32, 77, 768]
+                    last_hidden_states = last_layer_skip_weight * penultimate_hidden_states + \
+                                        (1 - last_layer_skip_weight) * last_hidden_states
+                else:
+                    # Concatenate the two layers' embeddings after scaling them 
+                    # according to last_layer_skip_weight.
+                    # penultimate_hidden_states: [32, 77, 768], last_hidden_states: [32, 77, 768]
+                    last_hidden_states = torch.cat([last_hidden_states * (1 - last_layer_skip_weight),
+                                                    penultimate_hidden_states * last_layer_skip_weight
+                                                   ], dim=1)
 
             last_hidden_states = self.final_layer_norm(last_hidden_states)
             return last_hidden_states
