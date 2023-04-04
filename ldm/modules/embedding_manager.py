@@ -67,9 +67,9 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3):
     # Mask out the placeholder suffix token(s).
     # If CLIP skip scheme is "concat", then the text embedding channel number is doubled.
     # In this case, we also duplicate the mask along the channel dimension.
-    if emb_mask.shape[1] == delta.shape[1] // 2:
+    if (emb_mask is not None) and emb_mask.shape[1] == delta.shape[1] // 2:
         emb_mask = emb_mask.repeat(1, 2, 1)
-        
+
     try:
         delta = delta * emb_mask if emb_mask is not None else delta
     except:
