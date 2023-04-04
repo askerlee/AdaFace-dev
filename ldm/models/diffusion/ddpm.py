@@ -662,6 +662,9 @@ class LatentDiffusion(DDPM):
         # when embedding_manager is called within cond_stage_model.encode().
         self.embedding_manager.set_ada_layer_temp_info(layer_idx, layer_infeat, time_emb)
         c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
+        # Cache the computed ada embedding of the current layer for delta loss computation.
+        # Before this call, init_ada_embedding_cache() should have been called somewhere.
+        self.embedding_manager.cache_ada_embedding(layer_idx, c)
         return (c, self.embedding_manager.get_ada_emb_weight())
 
     def meshgrid(self, h, w):
