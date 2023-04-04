@@ -236,7 +236,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--broad_class", type=int, default=1,
                         help="Whether the subject is a human/animal, object or cartoon (0: object, 1: human/animal, 2: cartoon)")
 
-    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0,
+    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     parser.add_argument("--clip_last_layer_skip_scheme", type=str, choices=["add", "concat"], 
                         default="add", 

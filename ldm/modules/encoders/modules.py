@@ -163,9 +163,12 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         self.transformer = CLIPTextModel.from_pretrained(version)
         self.device = device
         self.max_length = max_length
-        self.last_layer_skip_weight = last_layer_skip_weight
-        self.last_layer_skip_scheme = last_layer_skip_scheme
+        self.set_last_layer_skip(last_layer_skip_weight, last_layer_skip_scheme)
 
+        def set_last_layer_skip(self, weight, scheme):
+            self.transformer.text_model.last_layer_skip_weight = weight
+            self.transformer.text_model.last_layer_skip_scheme = scheme
+            
         def embedding_forward(
                 self,
                 input_ids = None,
@@ -189,7 +192,6 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 if embedding_manager is not None:
                     inputs_embeds = embedding_manager(input_ids, inputs_embeds)
 
-
                 position_embeddings = self.position_embedding(position_ids)
                 embeddings = inputs_embeds + position_embeddings
                 
@@ -209,6 +211,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             output_attentions = None,       # default: None
             output_hidden_states = None,    # default: None
             return_dict = None,
+            last_layer_skip_weight = 0.0,
         ):
             output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
             output_hidden_states = (
@@ -242,7 +245,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
 
                 # NovalAI modification: skip the last layer to make the 
                 # text embeddings more accurate, at the cost of slight performance reduction.
-                if self.last_layer_skip_weight > 0 and idx == len(self.layers) - 2:
+                if last_layer_skip_weight > 0 and idx == len(self.layers) - 2:
                     penultimate_hidden_states = hidden_states
 
             # output_hidden_states: None
@@ -308,6 +311,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
+                last_layer_skip_weight=self.last_layer_skip_weight,
             )
 
             # encoder() returns a tuple of (penultimate_hidden_states, last_hidden_states).
