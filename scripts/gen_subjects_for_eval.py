@@ -64,7 +64,10 @@ def parse_args():
 
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.0,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
-                                    
+    parser.add_argument("--clip_last_layer_skip_scheme", type=str, choices=["add", "concat"], 
+                        default="add", 
+                        help="Scheme for the skip connection between the last layer and second last layer of CLIP text embedder")
+                                                                    
     args = parser.parse_args()
     return args
 
@@ -161,6 +164,7 @@ if __name__ == "__main__":
 
         if args.clip_last_layer_skip_weight > 0:
             command_line += f" --clip_last_layer_skip_weight {args.clip_last_layer_skip_weight}"
-
+            command_line += f" --clip_last_layer_skip_scheme {args.clip_last_layer_skip_scheme}"
+            
         print(command_line)
         os.system(command_line)
