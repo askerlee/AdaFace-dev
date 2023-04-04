@@ -1083,9 +1083,11 @@ class EmbeddingManager(nn.Module):
     # cls_prompt_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
     def composition_delta_loss(self, do_ada_comp_delta_reg, static_embeddings):
         # The composition delta loss for ada embeddings is only applied 
-        # every composition_delta_reg_iter_gap iterations. So boost the loss 
-        # by composition_delta_reg_iter_gap times.
-        ada_comp_loss_boost_ratio = self.composition_delta_reg_iter_gap
+        # every composition_delta_reg_iter_gap iterations. So the ada loss 
+        # should be boosted proportionally to composition_delta_reg_iter_gap. 
+        # Divide it by 2 to reduce the proportion of ada emb loss relative to 
+        # static emb loss in the total loss.
+        ada_comp_loss_boost_ratio = self.composition_delta_reg_iter_gap / 2
         # If do_ada_comp_delta_reg,     BS = 2.
         # If not do_ada_comp_delta_reg, BS = 2 * num_compositions_per_image = 4.
         BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
@@ -1124,7 +1126,6 @@ class EmbeddingManager(nn.Module):
             ada_delta_loss = 0
         
         self.clear_delta_loss_emb_mask()
-        # delta_loss is the sum of the delta loss of all layers. Change it to the average.
-        delta_loss = (static_delta_loss + ada_delta_loss * ada_comp_loss_boost_ratio) / self.num_unet_layers
+        delta_loss = static_delta_loss + ada_delta_loss * ada_comp_loss_boost_ratio
         return delta_loss
     

@@ -1060,27 +1060,29 @@ class LatentDiffusion(DDPM):
                     N_EMBEDS = N_INST * N_LAYERS
                     # c == subj_prompt_single.
                     c_delta = c + subj_prompt_comps + cls_prompt_single + cls_prompt_comps
-                    # c_delta_static is a tuple: (c, c_in, embedder).
+                    # c_delta_static is a tuple: (c, c_in, embedder).  c_in = c_delta above.
                     # *_static means static embeddings.
                     c_delta_static = self.get_learned_conditioning(c_delta, img_mask=img_mask)
                     if self.use_ada_embedding:
-                        # c_real: [128, 77, 768]. 128 = 8 * 16. 
+                        # c_real: static embeddings, [128, 77, 768]. 128 = 8 * 16. 
                         # 8 is the total number of prompts in c_delta. Each prompt is converted to 16 embeddings.
                         c_real, c_in, embedder = c_delta_static
                         if self.do_ada_comp_delta_reg:
                             # Do ada composition delta loss in this iteration. 
-                            # Only keep the embeddings corresponding to subj_prompt_single (the original c) 
-                            # and subj_prompt_comp, as the corresponding ada embeddings are dynamically generated.
-                            # cls_prompt_single and cls_prompt_comp are static, so no need to 
-                            # be fed to UNet.
-                            # In shared_step(), we have chosen subset of images, 
-                            # so that in effect num_compositions_per_image = 1.
-                            # subj_prompt_comps, cls_prompt_comps are: [ p1_1, p2_1, ..., pB_1 ].
+                            # Only keep the embeddings corresponding to subj_prompt_single (the real c_in) 
+                            # and subj_prompt_comp in c, as their corresponding ada embeddings 
+                            # are dynamical. On the other hand, cls_prompt_single and cls_prompt_comp 
+                            # are static, so no need to be fed to UNet.
+                            # In shared_step(), we have chosen a subset of the images, 
+                            # to make sure that the effective num_compositions_per_image = 1.
+                            # subj_prompt_comps, cls_prompt_comps are like: [ p1_1, p2_1, ..., pB_1 ].
                             # c_in is the concatenation of
                             # (real c_in, subj_prompt_comps, cls_prompt_single, cls_prompt_comps).
                             # Each prompt is converted to 16 layerwise static embeddings in c_real.
-                            # So c_real[:N_EMBEDS*2] is the 2*B*16 embeddings of (real c_in, subj_prompt_comps), 
+                            # So c_real[:N_EMBEDS*2] is the 2*B*16 static embeddings of (real c_in, subj_prompt_comps), 
                             # and c_in[:N_INST*2] is (real c_in, subj_prompt_comps).
+                            # c_in is converted to 2*B*16 ada embeddings of (real c_in, subj_prompt_comps).
+                            # We need both sets of ada embeddings to compute the composition delta loss.
                             c = (c_real[:N_EMBEDS*2], c_in[:N_INST*2], embedder)
                         else:
                             # Don't do ada composition delta loss in this iteration. 
