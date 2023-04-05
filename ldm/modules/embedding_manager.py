@@ -968,11 +968,16 @@ class EmbeddingManager(nn.Module):
         num_placeholders  = len(self.initial_embeddings)
         euc_loss_type     = 'l2'       # l1, l2. l2 is recommended.
 
-        # Update: reduce bias reg weights, as the common practice is no regularization on biases.
-        bias_reg_weight_base        = 0.01    #  0.1 -> 0.01
+        # Update: revert the reduction of the reg weight of the global bias, although 
+        # the common practice is no regularization on biases.
+        # If bias_reg_weight_base = 0.01, bias (= static part in ada embeddings) 
+        # becomes too large (1~2), and may overpower the dynamic part.
+        bias_reg_weight_base        = 0.1
         basis_reg_weight_base       = 0.1
         ada_maps_weight_reg_weight  = 1.
         # If ada_maps_bias_reg_weight = 0.02, map biases are usually very small (< 0.001)
+        # If ada_maps_bias_reg_weight = 0.001, map biases are still very small. 
+        # So this weight doesn't matter much.
         ada_maps_bias_reg_weight    = 0.001   # 0.02 -> 0.001
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
