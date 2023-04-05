@@ -62,8 +62,6 @@ def selective_reg_loss(x, loss_type='l2', selector=None):
 # delta, ref_delta: [2, 16, 77, 768].
 # emb_mask: [2, 77, 1]
 def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3):
-    # Flatten delta and ref_delta.
-    # dela: [2464, 768], ref_delta: [2464, 768]
     # Mask out the placeholder suffix token(s).
     # If CLIP skip scheme is "concat", then the text embedding channel number is doubled.
     # In this case, we also duplicate the mask along the channel dimension.
@@ -74,9 +72,12 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3):
         delta = delta * emb_mask if emb_mask is not None else delta
     except:
         breakpoint()
+
+    # Flatten delta and ref_delta, by tucking the layer and token dimensions into the batch dimension.
+    # dela: [2464, 768], ref_delta: [2464, 768]
     delta = delta.view(delta.numel() // delta.shape[-1], -1)
     ref_delta = ref_delta.view(ref_delta.numel() // ref_delta.shape[-1], -1)
-    # delta_pow = delta * delta.abs().pow(exponent - 1)
+    # x * x.abs.pow(exponent - 1) will keep the sign of x after pow(exponent).
     ref_delta_pow = ref_delta * ref_delta.abs().pow(exponent - 1)
     loss = F.cosine_embedding_loss(delta, ref_delta_pow.detach(), 
                                    torch.ones_like(delta[:, 0]))
@@ -234,10 +235,8 @@ class StaticLayerwiseEmbedding(nn.Module):
         if self.has_bias:
             # bias: 16 * 768.
             self.bias        = nn.Parameter(torch.zeros(dim1, dim2))
-            self.bias_scales = nn.Parameter(torch.ones(dim1, 1))
         else:
             self.bias = 0
-            self.bias_scales = 0
 
         layer_lns  = []
         for i in range(dim1):
@@ -267,10 +266,8 @@ class StaticLayerwiseEmbedding(nn.Module):
             out_vecs_ln = [ self.layer_lns[i](out_vecs[i]) for i in range(self.dim1) ]
             out_vecs_ln = torch.stack(out_vecs_ln, dim=0) / np.sqrt(self.dim2)
 
-            # Different layers have different bias scales.
-            # Separate bias and bias_scales, for easier regularization on their scales.
-            layerwise_bias  = self.bias * self.bias_scales
-            out_vecs_ln = out_vecs_ln + layerwise_bias
+            # Different layers have different biases.
+            out_vecs_ln = out_vecs_ln + self.bias
             return out_vecs_ln
 
 class AdaEmbedding(nn.Module):
@@ -344,18 +341,16 @@ class AdaEmbedding(nn.Module):
             layer_lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
             layer_lncat2s.append(LNCat2(infeat_dims[i2], TD))
 
-        self.layer_maps = nn.ModuleList(layer_maps)
-        self.layer_lns  = nn.ModuleList(layer_lns)
+        self.layer_maps    = nn.ModuleList(layer_maps)
+        self.layer_lns     = nn.ModuleList(layer_lns)
         self.layer_lncat2s = nn.ModuleList(layer_lncat2s)
 
         self.has_bias = has_bias
         if has_bias:
             # bias: 25 * 768.
             self.bias        = nn.Parameter(torch.zeros(dim1, dim2))
-            self.bias_scales = nn.Parameter(torch.ones(dim1, 1))
         else:
-            self.bias = 0
-            self.bias_scales = 0
+            self.bias        = 0
 
         print(f"AdaEmbedding initialized with {self.N} init vectors, {self.r} basis vectors")
         self.call_count = 0
@@ -384,9 +379,8 @@ class AdaEmbedding(nn.Module):
             # cat(ln(infeat_pooled), ln(time_emb)) as the input features.
             infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled, time_emb[:, :TD])
             basis_dyn_weight = self.layer_maps[emb_idx](infeat_time)
-            # Separate bias and bias_scales, for easier regularization on their scales.
-            # bias: [1, 768] * [1, 1] = [1, 768].
-            bias = self.bias[emb_idx].unsqueeze(0) * self.bias_scales[emb_idx]
+            # bias: [1, 768]
+            bias = self.bias[emb_idx].unsqueeze(0)
 
             if self.N > 0:
                 basis_vecs = torch.cat([self.pre_vecs, self.basis_vecs], dim=0)
@@ -395,6 +389,7 @@ class AdaEmbedding(nn.Module):
 
             ln = self.layer_lns[emb_idx]
             # [2, 12] x [12, 768] = [2, 768], + [1, 768] = [2, 768].
+            # dim2: 768.
             out_vec0 = ln(torch.matmul(basis_dyn_weight, basis_vecs)) / np.sqrt(self.dim2)
             out_vec  = out_vec0 + bias
 
@@ -662,6 +657,7 @@ class EmbeddingManager(nn.Module):
                     OCCUR = placeholder_idx[0].numel() // self.num_unet_layers
                 else:
                     OCCUR = placeholder_idx[0].numel()
+                
                 embedded_text[placeholder_idx] = placeholder_embedding.repeat(OCCUR, 1) * self.subj_scale
 
                 delta_loss_emb_mask = torch.ones(b, 1, n, 1, device=device)
@@ -888,9 +884,6 @@ class EmbeddingManager(nn.Module):
                 # Shouldn't do the k->k2 mapping on string_to_token_dict.
                 self.string_to_token_dict[k2]        = k2_token
                 self.string_to_param_dict[k2]        = ckpt["string_to_param"][k]
-                # Make it compatible with older checkpoints.
-                if 'string_to_lasr_embedder' in ckpt:
-                    ckpt["string_to_ada_embedder"] = ckpt["string_to_lasr_embedder"]
                 self.string_to_ada_embedder_dict[k2] = ckpt["string_to_ada_embedder"][k]
                 print(f"Loaded {k}->{k2} from {ckpt_path}")
 
@@ -975,13 +968,11 @@ class EmbeddingManager(nn.Module):
         num_placeholders  = len(self.initial_embeddings)
         euc_loss_type     = 'l2'       # l1, l2. l2 is recommended.
 
-        # each elem in bias_scales is broadcasted to 768 dims. i.e., its effect and gradient is multiplied by 768.
-        # So the loss should be divided by 768.
-        bias_scales_reg_weight      = 1. / self.token_dim
         bias_reg_weight_base        = 0.1
         basis_reg_weight_base       = 0.1
         ada_maps_weight_reg_weight  = 1.
-        ada_maps_bias_reg_weight    = 0.02
+        # If ada_maps_bias_reg_weight = 0.02, map biases are usually very small (< 0.001)
+        ada_maps_bias_reg_weight    = 0.005
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
@@ -1005,17 +996,9 @@ class EmbeddingManager(nn.Module):
                 # pre_vecs are updated through BP. Therefore, loss_pre_vecs prevents pre_vecs 
                 # from drifting too far from init_vecs.
                 if embobj.has_bias:
-                    # Penalize the bias scales that are larger than 1 with weight 1, 
-                    # and those smaller than 1 with weight 0.0001.
-                    # If penalizing those < 1 weights too much, they will be slowly driven towards 0.
-                    loss_bias_scales_above1 = selective_reg_loss(embobj.bias_scales, loss_type=euc_loss_type, selector=lambda x: x > 1)
-                    loss_bias_scales_below1 = selective_reg_loss(embobj.bias_scales, loss_type=euc_loss_type, selector=lambda x: x <= 1)
-                    # Penalize those scales bigger than 1 more than those smaller than 1.
-                    loss_bias_scales = loss_bias_scales_above1 + loss_bias_scales_below1 * 0.0001
                     loss_bias        = selective_reg_loss(embobj.bias, loss_type=euc_loss_type)
                     bias_reg_weight  = bias_reg_weight_base  * torch.norm(embobj.bias, dim=1).mean().item() ** T
                 else:
-                    loss_bias_scales = 0.
                     loss_bias        = 0.
                     bias_reg_weight  = 0.
 
@@ -1037,7 +1020,6 @@ class EmbeddingManager(nn.Module):
                     breakpoint()
 
                 curr_loss = loss_bias               * bias_reg_weight \
-                            + loss_bias_scales      * bias_scales_reg_weight \
                             + loss_basis            * basis_reg_weight \
                             + loss_pre_vecs         * pre_vecs_reg_weight \
                             + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
@@ -1046,7 +1028,6 @@ class EmbeddingManager(nn.Module):
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
                     print_str = f'loss_bias={loss_bias.item():.4f}, ' \
-                                f'loss_bias_scales={loss_bias_scales.item():.4f}, ' \
                                 f'loss_basis={loss_basis.item():.4f}, ' \
                                 f'loss_pre_vecs={loss_pre_vecs.item():.4f}, '
                     if isinstance(embobj, AdaEmbedding):

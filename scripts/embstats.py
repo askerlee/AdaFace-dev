@@ -49,8 +49,6 @@ for emb_ckpt_filename in emb_ckpt_files:
             print("basis_comm_weights:")
             print(embeddings.basis_comm_weights.detach().cpu().numpy())
             calc_stats("basis_rand_weights", embeddings.basis_rand_weights)
-            print("bias_scales:")
-            print(embeddings.bias_scales.squeeze().detach().cpu().numpy())
             basis_vecs = embeddings.basis_vecs.detach().cpu()
             N = embeddings.N
             NEG = embeddings.NEG
@@ -74,10 +72,7 @@ for emb_ckpt_filename in emb_ckpt_files:
 
     if output_type == 'all':
         print("%s ada:" %emb_ckpt_filename)
-        # Make it compatible to older checkpoints.
-        if 'string_to_lasr_embedder' not in emb_ckpt:
-            emb_ckpt['string_to_ada_embedder'] = emb_ckpt['string_to_lasr_embedder']
-                                                          
+                                            
         for key in emb_ckpt['string_to_ada_embedder']:
             embeddings = emb_ckpt['string_to_ada_embedder'][key]
             if isinstance(embeddings, AdaEmbedding):
@@ -85,12 +80,10 @@ for emb_ckpt_filename in emb_ckpt_files:
                 N = embeddings.N
                 calc_stats("basis_vecs_pos", embeddings.basis_vecs[:N])
                 calc_stats("basis_vecs_rand", embeddings.basis_vecs[N:])
-                for i, map in enumerate(embeddings.maps):
-                    calc_stats(f"map-{i} weight", map.weight)
-                    simple_stats(f"map-{i} bias", map.bias)
+                for i, layer_map in enumerate(embeddings.layer_maps):
+                    calc_stats(f"map-{i} weight", layer_map.weight)
+                    simple_stats(f"map-{i} bias", layer_map.bias)
 
-                print("bias_scales:")
-                print(embeddings.bias_scales.squeeze().detach().cpu().numpy())
                 if not isinstance(embeddings.bias, int):
-                    calc_stats("bias", embeddings.bias)
+                    calc_stats("biases", embeddings.bias)
         print()
