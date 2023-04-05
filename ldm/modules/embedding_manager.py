@@ -58,10 +58,13 @@ def selective_reg_loss(x, loss_type='l2', selector=None):
     else:
         breakpoint()
 
+def demean(x):
+    return x - x.mean(dim=-1, keepdim=True)
+
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
 # emb_mask: [2, 77, 1]
-def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3):
+def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, do_demean=True):
     # Mask out the placeholder suffix token(s).
     # If CLIP skip scheme is "concat", then the text embedding channel number is doubled.
     # In this case, we also duplicate the mask along the channel dimension.
@@ -77,6 +80,11 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3):
     # dela: [2464, 768], ref_delta: [2464, 768]
     delta = delta.view(delta.numel() // delta.shape[-1], -1)
     ref_delta = ref_delta.view(ref_delta.numel() // ref_delta.shape[-1], -1)
+
+    if do_demean:
+        delta = demean(delta)
+        ref_delta = demean(ref_delta)
+
     # x * x.abs.pow(exponent - 1) will keep the sign of x after pow(exponent).
     ref_delta_pow = ref_delta * ref_delta.abs().pow(exponent - 1)
     loss = F.cosine_embedding_loss(delta, ref_delta_pow.detach(), 
