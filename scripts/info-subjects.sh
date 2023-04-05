@@ -18,8 +18,9 @@ set -Ux db_prompts      $db_prompts
 set -Ux ada_prompts     $ada_prompts
 set -Ux ada_weights     $ada_weights
 set -Ux cls_tokens      $cls_tokens
-# "instagram" for the main dataset, to focus on faces.
-set -Ux db_suffix       ", instagram"
+set -Ux broad_classes   $broad_classes
 set -Ux sel_set         $sel_set
 set -Ux lrs             $lrs
+# "instagram" for the main dataset, to focus on faces.
+set -Ux db_suffix       ", instagram"
 set -Ux data_folder     data
