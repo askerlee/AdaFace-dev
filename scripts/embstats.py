@@ -16,7 +16,6 @@ if len(sys.argv) > 2:
 else:
     output_type = 'static'
 
-
 # check if emb_ckpt_folder is a single file or a folder
 if os.path.isfile(emb_ckpt_folder):
     emb_ckpt_files = [emb_ckpt_folder]
