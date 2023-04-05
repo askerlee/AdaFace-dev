@@ -3,7 +3,7 @@
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'use_cls_token' 'use_z_suffix' 'v15' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'use_cls_token' 'use_z_suffix' 'v14' -- $argv
 or begin
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-db-eval-subjects.sh --use_cls_token ada 1 25"
@@ -37,7 +37,7 @@ set -q _flag_lr; and set lr $_flag_lr; or set -e lr
 set -q _flag_min_rand_scaling; and set min_rand_scaling $_flag_min_rand_scaling; or set -e min_rand_scaling
 #set fish_trace 1
 
-set -q _flag_v15; and set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt; or set sd_ckpt models/stable-diffusion-v-1-4-original/sd-v1-4.ckpt
+set -q _flag_v14; and set sd_ckpt models/stable-diffusion-v-1-4-original/sd-v1-4.ckpt; or set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt
 # If --selset is given, then only train on the selected subjects, specified in $subj_file.
 set -q _flag_selset; and set -l indices0 $sel_set; or set -l indices0 (seq 1 (count $subjects))
 set -l indices $indices0[(seq $L $H)]
