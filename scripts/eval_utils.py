@@ -56,7 +56,7 @@ def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_s
     print(f"Image/text/dino sim: {sim_img:.3f} {sim_text:.3f} {sim_dino:.3f}")
     return sim_img, sim_text, sim_dino
 
-def compare_face_folders(path1, path2, verbose=False):
+def compare_face_folders(path1, path2, num_samples=-1, verbose=False):
     if os.path.isfile(path1):
         img1_paths = [ path1 ]
     else:
@@ -73,6 +73,12 @@ def compare_face_folders(path1, path2, verbose=False):
         for ext in img_extensions:
             img2_paths += glob.glob(path2 + "/*" + ext)
 
+    img1_paths = sorted(img1_paths)
+    img2_paths = sorted(img2_paths)
+    if num_samples > 0:
+        img1_paths = img1_paths[-num_samples:]
+        img2_paths = img2_paths[-num_samples:]
+        
     normal_pair_count = 0
     except_pair_count = 0
     total_distance = 0

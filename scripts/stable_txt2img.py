@@ -447,13 +447,14 @@ def main(opt):
                                                         opt.compare_with, sample_dir, 
                                                         orig_prompt, len(prompts))
 
-                                    all_sims_img.append(sim_img.detach().cpu().numpy())
-                                    all_sims_text.append(sim_text.detach().cpu().numpy())
-                                    all_sims_dino.append(sim_dino.detach().cpu().numpy())
+                                    all_sims_img.append(sim_img.item())
+                                    all_sims_text.append(sim_text.item())
+                                    all_sims_dino.append(sim_dino.item())
 
                                     if opt.is_face:
                                         sim_face = compare_face_folders(opt.compare_with, sample_dir)
-                                        all_sims_face.append(sim_face.detach().cpu().numpy())
+                                        # sim_face is a float, so no need to detach().cpu().numpy().
+                                        all_sims_face.append(sim_face)
                                         
                         if not opt.skip_grid:
                             all_samples.append(x_samples_ddim)
