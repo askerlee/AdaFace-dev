@@ -164,11 +164,16 @@ if __name__ == "__main__":
                 # orig_prompt is saved in the prompt file as well, for evaluation later.
                 PROMPTS.write( "\t".join([str(args.n_samples), indiv_subdir, prompt, orig_prompt]) + "\n" )
 
+        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --scale {args.scale} --subj_scale {args.subj_scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
+
         if not args.plain:
             PROMPTS.close()
-            
-        # Since we use a prompt file, we don't need to specify --n_samples.
-        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --from_file {prompt_filepath} --scale {args.scale} --subj_scale {args.subj_scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
+            # Since we use a prompt file, we don't need to specify --n_samples.
+            command_line += f" --from_file {prompt_filepath}"
+        else:
+            # Do not use a prompt file, but specify --n_samples.
+            command_line += f" --n_samples {args.n_samples}"
+
         if args.compare_with_pardir:
             subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)
             command_line += f" --compare_with {subject_gt_dir}"
