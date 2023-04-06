@@ -452,7 +452,7 @@ def main(opt):
                                     all_sims_dino.append(sim_dino.item())
 
                                     if opt.is_face:
-                                        sim_face = compare_face_folders(opt.compare_with, sample_dir)
+                                        sim_face = compare_face_folders(opt.compare_with, sample_dir, len(prompts))
                                         # sim_face is a float, so no need to detach().cpu().numpy().
                                         all_sims_face.append(sim_face)
                                         
