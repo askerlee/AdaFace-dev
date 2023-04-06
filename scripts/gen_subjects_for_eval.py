@@ -17,6 +17,9 @@ def parse_args():
                         help="Extra suffix to append to the z suffix")
     parser.add_argument("--z_prefix", type=str, default="",
                         help="Prefix to prepend to z")
+    # plain
+    parser.add_argument("--plain", action="store_true",
+                        help="Whether to generate plain samples without compositional prompts")
     
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
@@ -137,11 +140,18 @@ if __name__ == "__main__":
             emb_path    = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{args.ckpt_iter}.pt"
 
         outdir = args.out_dir_tmpl + "-" + args.method
-        # E.g., get_promt_list(subject_name="cat2", placeholder="z", class_token="cat", broad_class=1)
-        prompt_list, orig_prompt_list = get_promt_list(subject_name, placeholder, class_token, broad_class)
-        prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
         os.makedirs(outdir, exist_ok=True)
-        PROMPTS = open(prompt_filepath, "w")
+
+        if not args.plain:
+            # E.g., get_promt_list(subject_name="cat2", placeholder="z", class_token="cat", broad_class=1)
+            prompt_list, orig_prompt_list = get_promt_list(subject_name, placeholder, class_token, broad_class)
+            prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
+            PROMPTS = open(prompt_filepath, "w")
+        else:
+            args.n_samples = 8
+            prompt_list = [ "a z" ]
+            orig_prompt_list = [ "a z" ]
+
         print(subject_name, ":")
 
         for prompt, orig_prompt in zip(prompt_list, orig_prompt_list):
@@ -150,10 +160,13 @@ if __name__ == "__main__":
 
             print("  ", prompt)
             indiv_subdir = subject_name + "-" + prompt.replace(" ", "-")
-            # orig_prompt is saved in the prompt file as well, for evaluation later.
-            PROMPTS.write( "\t".join([str(args.n_samples), indiv_subdir, prompt, orig_prompt]) + "\n" )
+            if not args.plain:
+                # orig_prompt is saved in the prompt file as well, for evaluation later.
+                PROMPTS.write( "\t".join([str(args.n_samples), indiv_subdir, prompt, orig_prompt]) + "\n" )
 
-        PROMPTS.close()
+        if not args.plain:
+            PROMPTS.close()
+            
         # Since we use a prompt file, we don't need to specify --n_samples.
         command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --from_file {prompt_filepath} --scale {args.scale} --subj_scale {args.subj_scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
         if args.compare_with_pardir:

@@ -81,10 +81,13 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, do_LN_first=Tru
     delta = delta.view(delta.numel() // delta.shape[-1], -1)
     ref_delta = ref_delta.view(ref_delta.numel() // ref_delta.shape[-1], -1)
 
-    # Do layer normalization before cosine loss, to remove the effect of bias and scale.
-    # Different ada layers have significantly different scales. 
     # A bias vector to a set of conditioning embeddings doesn't change the attention matrix 
-    # (though changes the V tensor). So the bias is better removed as well.
+    # (though changes the V tensor). So the bias is better removed.
+    # Therefore, do layer normalization before cosine loss, 
+    # to remove the effect of bias.
+    # IN addition, different ada layers have significantly different scales. 
+    # Since cosine is scale invariant, the de-scale is not necessary.
+    # LN = demean & de-scale. So LN is equivalent to demean() here.
     if do_LN_first:
         #delta = demean(delta)
         #ref_delta = demean(ref_delta)
