@@ -495,7 +495,7 @@ def main(opt):
 
     if not opt.skip_grid:
         print(f"Your samples are at: \n{grid_filepath}")
-        if not (opt.no_preview or opt.from_file):
+        if not (opt.no_preview or opt.from_file or opt.compare_with):
             os.spawnvp(os.P_NOWAIT, "gpicview", [ "gpicview", os.path.abspath(grid_filepath) ])
     else:
         print(f"Your samples are at: \n{opt.outdir}")
@@ -506,7 +506,7 @@ def main(opt):
         if opt.is_face:
             sims_face_avg = np.mean(all_sims_face)
             print(f"All samples mean face sim: {sims_face_avg:.3f}")
-            
+
 if __name__ == "__main__":
     opt = parse_args()
     main(opt)

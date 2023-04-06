@@ -161,7 +161,7 @@ if __name__ == "__main__":
             args.n_samples = 8
             args.bs = 8
             prompt_list = [ "a z" ]
-            orig_prompt_list = [ "a z" ]
+            orig_prompt_list = [ "a " + class_token_long ]
 
         print(subject_name, ":")
 
@@ -170,10 +170,12 @@ if __name__ == "__main__":
                 prompt = prompt + ", " + args.prompt_suffix
 
             print("  ", prompt)
-            indiv_subdir = subject_name + "-" + prompt.replace(" ", "-")
             if not args.plain:
+                indiv_subdir = subject_name + "-" + prompt.replace(" ", "-")
                 # orig_prompt is saved in the prompt file as well, for evaluation later.
                 PROMPTS.write( "\t".join([str(args.n_samples), indiv_subdir, prompt, orig_prompt]) + "\n" )
+            else:
+                indiv_subdir = subject_name
 
         command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --scale {args.scale} --subj_scale {args.subj_scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
 
@@ -184,8 +186,8 @@ if __name__ == "__main__":
         else:
             # Do not use a prompt file, but specify --n_samples, --prompt, and --indiv_subdir.
             command_line += f" --n_samples {args.n_samples} --indiv_subdir {indiv_subdir}"
-            command_line += f" --prompt {prompt} --orig_prompt {orig_prompt}"
-            
+            command_line += f" --prompt '{prompt}' --orig_prompt '{orig_prompt}'"
+
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
