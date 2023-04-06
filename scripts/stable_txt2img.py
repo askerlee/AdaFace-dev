@@ -17,7 +17,7 @@ from contextlib import nullcontext
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
-from scripts.eval_utils import compare_folders, compare_face_folders, init_evaluators
+from scripts.eval_utils import compare_folders, compare_face_folders, init_evaluators, set_tf_gpu
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -202,7 +202,7 @@ def parse_args():
     parser.add_argument("--is_face", action="store_true",
                         help="Whether the generated samples are human faces")
         
-    parser.add_argument('--gpu', type=str,  default='0', help='ID of GPU to use')
+    parser.add_argument('--gpu', type=int,  default=0, help='ID of GPU to use')
     parser.add_argument("--compare_with", type=str, default=None,
                         help="Evaluate the similarity of generated samples with reference images in this folder")
     parser.add_argument("--orig_prompt", type=str, default=None,
@@ -284,7 +284,7 @@ def main(opt):
     if opt.ada_emb_weight != -1:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
 
-    torch.cuda.set_device(int(opt.gpu))
+    torch.cuda.set_device(opt.gpu)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model  = model.to(device)
 
@@ -355,6 +355,7 @@ def main(opt):
         all_sims_img, all_sims_text, all_sims_dino = [], [], []
         if opt.is_face:
             all_sims_face = []
+            set_tf_gpu(opt.gpu)
     else:
         clip_evator, dino_evator = None, None
 
