@@ -64,7 +64,7 @@ def demean(x):
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
 # emb_mask: [2, 77, 1]
-def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, do_demean=True):
+def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, do_LN_first=True):
     # Mask out the placeholder suffix token(s).
     # If CLIP skip scheme is "concat", then the text embedding channel number is doubled.
     # In this case, we also duplicate the mask along the channel dimension.
@@ -81,9 +81,15 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, do_demean=True)
     delta = delta.view(delta.numel() // delta.shape[-1], -1)
     ref_delta = ref_delta.view(ref_delta.numel() // ref_delta.shape[-1], -1)
 
-    if do_demean:
-        delta = demean(delta)
-        ref_delta = demean(ref_delta)
+    # Do layer normalization before cosine loss, to remove the effect of bias and scale.
+    # Different ada layers have significantly different scales. 
+    # A bias vector to a set of conditioning embeddings doesn't change the attention matrix 
+    # (though changes the V tensor). So the bias is better removed as well.
+    if do_LN_first:
+        #delta = demean(delta)
+        #ref_delta = demean(ref_delta)
+        delta     = F.layer_norm(delta, delta.shape[1:])
+        ref_delta = F.layer_norm(ref_delta, ref_delta.shape[1:])
 
     # x * x.abs.pow(exponent - 1) will keep the sign of x after pow(exponent).
     ref_delta_pow = ref_delta * ref_delta.abs().pow(exponent - 1)
