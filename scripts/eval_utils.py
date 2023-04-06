@@ -1,10 +1,12 @@
 import os
 import torch
 import re
+import glob
 
 from ldm.data.personalized import PersonalizedBase
 from evaluation.clip_eval import ImageDirEvaluator
 from evaluation.vit_eval import ViTEvaluator
+from deepface import DeepFace
 
 def init_evaluators(gpu_id):
     clip_evator = ImageDirEvaluator(f'cuda:{gpu_id}')
@@ -44,14 +46,73 @@ def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_s
     print(f"Image/text/dino sim: {sim_img:.3f} {sim_text:.3f} {sim_dino:.3f}")
     return sim_img, sim_text, sim_dino
 
+def compare_face_folders(path1, path2, verbose=False):
+    if os.path.isfile(path1):
+        img1_paths = [ path1 ]
+    else:
+        img_extensions = [ "jpg", "jpeg", "png", "bmp" ]
+        img1_paths = []
+        for ext in img_extensions:
+            img1_paths += glob.glob(path1 + "/*" + ext)
+
+    if os.path.isfile(path2):
+        img2_paths = [ path2 ]
+    else:
+        img_extensions = [ "jpg", "jpeg", "png", "bmp" ]
+        img2_paths = []
+        for ext in img_extensions:
+            img2_paths += glob.glob(path2 + "/*" + ext)
+
+    normal_pair_count = 0
+    except_pair_count = 0
+    total_distance = 0
+    total_pair_count = len(img1_paths) * len(img2_paths)
+    curr_pair_count = 0
+
+    for img1_path in img1_paths:
+        for img2_path in img2_paths:
+            curr_pair_count += 1
+            if img1_path == img2_path:
+                continue
+            img1_name = os.path.basename(img1_path)
+            img2_name = os.path.basename(img2_path)
+            if verbose:
+                print("%d/%d: %s vs %s" %(curr_pair_count, total_pair_count, img1_name, img2_name))
+            try:
+                result = DeepFace.verify(img1_path = img1_path, img2_path = img2_path, 
+                                         model_name="ArcFace", detector_backend = "retinaface")
+            except:
+                except_pair_count += 1
+                continue
+
+            distance = result['distance']
+            total_distance += distance
+            normal_pair_count += 1
+            curr_avg_distance = total_distance / normal_pair_count
+            if verbose:
+                print("%.3f / %.3f" %(distance, curr_avg_distance))
+
+    if normal_pair_count > 0:
+        avg_distance = total_distance / normal_pair_count
+    else:
+        avg_distance = 0
+
+    avg_similarity = 1 - avg_distance
+    print("Normal pairs: %d, exception pairs: %d" %(normal_pair_count, except_pair_count))
+    path1_base = os.path.basename(path1)
+    path2_base = os.path.basename(path2)
+    print("'%s' vs '%s' avg similarity: %.3f" %(path1_base, path2_base, avg_similarity))
+    return avg_similarity
+
 def split_string(input_string):
     pattern = r'"[^"]*"|\S+'
     substrings = re.findall(pattern, input_string)
     substrings = [ s.strip('"') for s in substrings ]
     return substrings
 
+# The most important variables: "subjects", "class_tokens", "broad_classes", "sel_set"
 def parse_subject_file(subject_file_path, method):
-    subjects, class_tokens, broad_classes, sel_set = None, None, None, None
+    vars = {}
 
     with open(subject_file_path, "r") as f:
         lines = f.readlines()
@@ -63,30 +124,31 @@ def parse_subject_file(subject_file_path, method):
                 if mat is not None:
                     var_name = mat.group(1)
                     substrings = split_string(mat.group(2))
-                    if var_name == "subjects":
-                        subjects = substrings
-                    elif var_name == "db_prompts" and method == "db":
-                        class_tokens = substrings
-                    elif var_name == "cls_tokens" and method != "db":
-                        class_tokens = substrings
-                    elif var_name == "broad_classes":
-                        broad_classes = [ int(s) for s in substrings ]
+                    if var_name == "broad_classes":
+                        values = [ int(s) for s in substrings ]
                     elif var_name == 'sel_set':
-                        sel_set = [ int(s) - 1 for s in substrings ]
+                        values = [ int(s) - 1 for s in substrings ]
+                    else:
+                        values = substrings
+
+                    vars[var_name] = values
+                    if var_name == "db_prompts" and method == "db":
+                        vars['class_tokens'] = substrings
+                    elif var_name == "cls_tokens" and method != "db":
+                        vars['class_tokens'] = substrings
                 else:
                     breakpoint()
 
-    if broad_classes is None:
+    assert "subjects" in vars and "class_tokens" in vars
+    if 'broad_classes' not in vars:
         # By default, all subjects are humans/animals, unless specified in the subject file.
-        broad_classes = [ 1 for _ in subjects ]
+        vars['broad_classes'] = [ 1 for _ in vars['subjects'] ]
 
-    if sel_set is None:
-        sel_set = list(range(len(subjects)))
+    if 'sel_set' not in vars:
+        vars['sel_set'] = list(range(len(vars['subjects'])))
 
-    if subjects is None or class_tokens is None:
-        raise ValueError("subjects or db_prompts is None")
-    
-    return subjects, class_tokens, broad_classes, sel_set
+    # The most important variables: "subjects", "class_tokens", "broad_classes", "sel_set"
+    return vars
 
 # extra_sig could be a regular expression
 def find_first_match(lst, search_term, extra_sig=""):
@@ -115,7 +177,7 @@ def parse_range_str(range_str, fix_1_offset=True):
             result.append(a)
     return result
 
-def get_promt_list(subject_name, unique_token, class_token, broad_class):
+def get_promt_list(placeholder, class_token, class_token_long, broad_class):
     object_prompt_list = [
     # The space between "{0} {1}" is removed, so that prompts for ada/ti could be generated by
     # providing an empty class_token. To generate prompts for DreamBooth, 
@@ -182,5 +244,6 @@ def get_promt_list(subject_name, unique_token, class_token, broad_class):
         # object.
         orig_prompt_list = object_prompt_list
     
-    prompt_list = [ prompt.format(unique_token, class_token) for prompt in orig_prompt_list ]
+    prompt_list = [ prompt.format(placeholder, class_token) for prompt in orig_prompt_list ]
+    orig_prompt_list = [ prompt.format("", class_token_long) for prompt in orig_prompt_list ]
     return prompt_list, orig_prompt_list

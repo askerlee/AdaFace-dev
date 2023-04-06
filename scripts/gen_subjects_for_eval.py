@@ -65,11 +65,13 @@ def parse_args():
     parser.add_argument("--v14", dest='v15', action="store_false",
                         help="Whether to use v1.4 model (default: v1.5)")
 
-    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
+    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=-1,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     parser.add_argument("--clip_last_layer_skip_scheme", type=str, choices=["add", "concat"], 
                         default="add", 
                         help="Scheme for the skip connection between the last layer and second last layer of CLIP text embedder")
+    parser.add_argument("--is_face", action="store_true",
+                        help="Whether the generated samples are human faces")
                                                                     
     args = parser.parse_args()
     return args
@@ -77,7 +79,13 @@ def parse_args():
 if __name__ == "__main__":
     
     args = parse_args()
-    subjects, class_tokens, broad_classes, sel_set = parse_subject_file(args.subject_file, args.method)
+    vars = parse_subject_file(args.subject_file, args.method)
+    subjects, class_tokens, broad_classes, sel_set = vars['subjects'], vars['class_tokens'], \
+                                                     vars['broad_classes'], vars['sel_set']
+    # db_prompts are phrases, and ada_prompts are multiple individual words.
+    # So db_prompts better suit the CLIP text/image matching.
+    class_tokens_long = vars['db_prompts']
+
     if args.method == 'db':
         # For DreamBooth, use_z_suffix is the default.
         args.use_z_suffix = True
@@ -100,6 +108,8 @@ if __name__ == "__main__":
         subject_name = subjects[subject_idx]
         class_token  = class_tokens[subject_idx]
         broad_class  = broad_classes[subject_idx]
+        class_token_long = class_tokens_long[subject_idx]
+        print("Generating samples for subject: " + subject_name)
 
         ckpt_sig   = subject_name + "-" + args.method
         # Find the newest checkpoint that matches the subject name.
@@ -144,7 +154,7 @@ if __name__ == "__main__":
 
         if not args.plain:
             # E.g., get_promt_list(subject_name="cat2", placeholder="z", class_token="cat", broad_class=1)
-            prompt_list, orig_prompt_list = get_promt_list(subject_name, placeholder, class_token, broad_class)
+            prompt_list, orig_prompt_list = get_promt_list(placeholder, class_token, class_token_long, broad_class)
             prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
@@ -172,18 +182,25 @@ if __name__ == "__main__":
             # Since we use a prompt file, we don't need to specify --n_samples.
             command_line += f" --from_file {prompt_filepath}"
         else:
-            # Do not use a prompt file, but specify --n_samples.
-            command_line += f" --n_samples {args.n_samples} --prompt '{prompt}'"
-
-        if args.compare_with_pardir:
-            subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)
-            command_line += f" --compare_with {subject_gt_dir}"
+            # Do not use a prompt file, but specify --n_samples, --prompt, and --indiv_subdir.
+            command_line += f" --n_samples {args.n_samples} --indiv_subdir {indiv_subdir}"
+            command_line += f" --prompt {prompt} --orig_prompt {orig_prompt}"
+            
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
         if args.clip_last_layer_skip_weight > 0:
             command_line += f" --clip_last_layer_skip_weight {args.clip_last_layer_skip_weight}"
             command_line += f" --clip_last_layer_skip_scheme {args.clip_last_layer_skip_scheme}"
+
+        if args.compare_with_pardir:
+            # Do evaluation on authenticity/composition.
+            subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)
+            command_line += f" --compare_with {subject_gt_dir}"
+
+            if args.is_face:
+                # Tell stable_txt2img.py to do face-specific evaluation.
+                command_line += f" --is_face"
 
         print(command_line)
         os.system(command_line)

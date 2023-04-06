@@ -17,7 +17,7 @@ from contextlib import nullcontext
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
-from scripts.eval_utils import compare_folders, init_evaluators
+from scripts.eval_utils import compare_folders, compare_face_folders, init_evaluators
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -26,7 +26,7 @@ def parse_args():
         "--prompt",
         type=str,
         nargs="?",
-        default="a painting of a virus monster playing guitar",
+        default=None,
         help="the prompt to render"
     )
     parser.add_argument(
@@ -199,11 +199,15 @@ def parse_args():
     parser.add_argument("--broad_class", type=int, default=1,
                         help="Whether the subject is a human/animal, object or cartoon"
                              " (0: object, 1: human/animal, 2: cartoon)")
-    
+    parser.add_argument("--is_face", action="store_true",
+                        help="Whether the generated samples are human faces")
+        
     parser.add_argument('--gpu', type=str,  default='0', help='ID of GPU to use')
     parser.add_argument("--compare_with", type=str, default=None,
-                        help="Evaluate the similarity of generated samples with reference images in this folder"
-                             " (requires --from_file to be specified)")
+                        help="Evaluate the similarity of generated samples with reference images in this folder")
+    parser.add_argument("--orig_prompt", type=str, default=None,
+                        help="the original prompt used for text/image matching evaluation "
+                             "(requires --compare_with to be specified)")
 
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
@@ -294,29 +298,43 @@ def main(opt):
     batch_size = opt.n_samples if opt.bs == -1 else opt.bs
     n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
     if not opt.from_file:
+        assert opt.prompt is not None
         prompt = opt.prompt
-        assert prompt is not None
-        all_prompts = opt.n_samples * [prompt]
-        # By default, batch_size = n_samples. After chunk, all_prompts becomes a list of length 1,
-        # and the sole elment is a list of prompt repeated n_samples times,
+        all_prompts = [prompt] * opt.n_samples
+        # By default, batch_size = n_samples. In this case, chunking turns all_prompts into a list of length 1,
+        # and the sole elment is a list containing "prompt" repeated n_samples times,
         # e.g. [ ['z', 'z', 'z', 'z'] ]. Then tqdm() will finish it in one iteration.
         batched_prompts = list(chunk(all_prompts, batch_size))
+        batched_subdirs = [ opt.indiv_subdir ] * len(batched_prompts)
+        # Append None to the end of batched_subdirs, for indiv_subdir change detection.
+        batched_subdirs.append(None)
+        batched_orig_prompts = [ opt.orig_prompt ] * len(batched_prompts)
+
     else:
         print(f"Reading prompts from {opt.from_file}")
         with open(opt.from_file, "r") as f:
             # splitlines() will remove the trailing newline. So no need to strip().
             lines = f.read().splitlines()
             indiv_subdirs_prompts = [ line.split("\t") for line in lines ]
-            n_repeats, indiv_subdirs, all_prompts, _ = zip(*indiv_subdirs_prompts)
+            n_repeats, indiv_subdirs, all_prompts, orig_prompts = zip(*indiv_subdirs_prompts)
             # Repeat each prompt n_repeats times, and split into batches of size batch_size.
             # If there's remainder after chunks, the last chunk will be shorter than batch_size.
 
             batched_prompts = []
             batched_subdirs = []
+            batched_orig_prompts = []
+
             # Repeat each prompt n_repeats times.
             for i, prompt in enumerate(all_prompts):
                 n_repeat = int(n_repeats[i])
+                # If in this line, n_repeat is larger than batch_size, we need to split it 
+                # into n_batches > 1 batches. These batches share the same indiv_subdir and orig_prompt.
+                # So no need to repeat them in advance. Just append n_batches copies of them 
+                # to batched_subdirs and batched_orig_prompts respectively below.
                 indiv_subdir = indiv_subdirs[i]
+                orig_prompt  = orig_prompts[i]
+                # The number of prompts in batched_prompts has to match the number of samples.
+                # So we need to repeat the prompt by n_repeat times.
                 prompts_repeated = [prompt] * n_repeat
                 n_batches = n_repeat // batch_size
                 if n_repeat % batch_size != 0:
@@ -325,14 +343,18 @@ def main(opt):
                     start_idx = batch_size * bi
                     end_idx   = batch_size * (bi + 1)
                     batched_prompts.append(prompts_repeated[start_idx:end_idx])
-                    batched_subdirs.append(indiv_subdir)
+
+                batched_subdirs.extend([indiv_subdir] * n_batches)
+                batched_orig_prompts.extend([orig_prompt] * n_batches)
+
             # Append None to the end of batched_subdirs, for indiv_subdir change detection.
             batched_subdirs.append(None)
 
-    if opt.from_file and opt.compare_with:
+    if opt.compare_with:
         clip_evator, dino_evator = init_evaluators(opt.gpu)
         all_sims_img, all_sims_text, all_sims_dino = [], [], []
-
+        if opt.is_face:
+            all_sims_face = []
     else:
         clip_evator, dino_evator = None, None
 
@@ -362,6 +384,7 @@ def main(opt):
                 for n in trange(opt.n_repeat, desc="Sampling"):
                     indiv_subdir = None
 
+                    # prompts in a batch are just repetitions of the same prompt.
                     for p_i, prompts in enumerate(tqdm(batched_prompts, desc="prompts")):
                         print(f"\n{p_i+1}/{prompt_block_count}", prompts[0], "...", prompts[-1])
                         uc = None
@@ -393,28 +416,23 @@ def main(opt):
                         x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
 
                         if not opt.skip_save:
-                            if opt.from_file:
-                                # Specify individual subdirectory for each sample in opt.from_file.
-                                indiv_subdir = batched_subdirs[p_i]
-                            else:
-                                # Use a common subdirectory opt.indiv_subdir for all samples.
-                                indiv_subdir = opt.indiv_subdir      
-
+                            indiv_subdir = batched_subdirs[p_i]
+                            orig_prompt  = batched_orig_prompts[p_i]
                             sample_dir = os.path.join(opt.outdir, indiv_subdir)
                             os.makedirs(sample_dir, exist_ok=True)                            
 
                             for i, x_sample in enumerate(x_samples_ddim):
                                 base_count = len(os.listdir(sample_dir))
-                                sample_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
+                                sample_file_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
 
-                                while os.path.exists(sample_path):
+                                while os.path.exists(sample_file_path):
                                     base_count += 1
-                                    sample_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
+                                    sample_file_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
 
                                 x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                                Image.fromarray(x_sample.astype(np.uint8)).save(sample_path)
+                                Image.fromarray(x_sample.astype(np.uint8)).save(sample_file_path)
 
-                            if opt.from_file and opt.compare_with:
+                            if opt.compare_with:
                                 # There's an extra "None" after the last indiv_subdir in batched_subdirs 
                                 # as boundary detection. So no need to worry (p_i + 1) may go out of bound.
                                 next_indiv_subdir = batched_subdirs[p_i + 1]
@@ -425,13 +443,17 @@ def main(opt):
                                     print()
                                     sim_img, sim_text, sim_dino = \
                                         compare_folders(clip_evator, dino_evator, 
-                                                        # prompts are just repetitions of the same prompt.
                                                         opt.compare_with, sample_dir, 
-                                                        prompts[0], len(prompts))
+                                                        orig_prompt, len(prompts))
+
                                     all_sims_img.append(sim_img.detach().cpu().numpy())
                                     all_sims_text.append(sim_text.detach().cpu().numpy())
                                     all_sims_dino.append(sim_dino.detach().cpu().numpy())
 
+                                    if opt.is_face:
+                                        sim_face = compare_face_folders(opt.compare_with, sample_dir)
+                                        all_sims_face.append(sim_face.detach().cpu().numpy())
+                                        
                         if not opt.skip_grid:
                             all_samples.append(x_samples_ddim)
 
@@ -478,10 +500,13 @@ def main(opt):
     else:
         print(f"Your samples are at: \n{opt.outdir}")
 
-    if opt.from_file and opt.compare_with:
+    if opt.compare_with:
         sims_img_avg, sims_text_avg, sims_dino_avg = np.mean(all_sims_img), np.mean(all_sims_text), np.mean(all_sims_dino)
         print(f"All samples mean image/text/dino sim: {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
-
+        if opt.is_face:
+            sims_face_avg = np.mean(all_sims_face)
+            print(f"All samples mean face sim: {sims_face_avg:.3f}")
+            
 if __name__ == "__main__":
     opt = parse_args()
     main(opt)
