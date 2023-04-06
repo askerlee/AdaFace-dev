@@ -149,6 +149,7 @@ if __name__ == "__main__":
             PROMPTS = open(prompt_filepath, "w")
         else:
             args.n_samples = 8
+            args.bs = 8
             prompt_list = [ "a z" ]
             orig_prompt_list = [ "a z" ]
 
@@ -172,7 +173,7 @@ if __name__ == "__main__":
             command_line += f" --from_file {prompt_filepath}"
         else:
             # Do not use a prompt file, but specify --n_samples.
-            command_line += f" --n_samples {args.n_samples}"
+            command_line += f" --n_samples {args.n_samples} --prompt {prompt}"
 
         if args.compare_with_pardir:
             subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)
