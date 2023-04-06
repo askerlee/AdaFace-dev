@@ -8,6 +8,16 @@ from evaluation.clip_eval import ImageDirEvaluator
 from evaluation.vit_eval import ViTEvaluator
 from deepface import DeepFace
 
+def set_tf_gpu(gpu_id):
+    import tensorflow as tf
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    if gpus:
+        try:
+            tf.config.experimental.set_visible_devices(gpus[gpu_id], 'GPU')
+            tf.config.experimental.set_memory_growth(gpus[gpu_id], True)
+        except RuntimeError as e:
+            print(e)
+
 def init_evaluators(gpu_id):
     clip_evator = ImageDirEvaluator(f'cuda:{gpu_id}')
     dino_evator = ViTEvaluator(f'cuda:{gpu_id}')

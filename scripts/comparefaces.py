@@ -2,7 +2,7 @@ import os
 import argparse
 import time
 import tensorflow as tf
-from eval_utils import compare_face_folders
+from eval_utils import compare_face_folders, set_tf_gpu
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -21,14 +21,7 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    gpus = tf.config.experimental.list_physical_devices('GPU')
-    if gpus:
-        # Restrict TensorFlow to only use the first GPU
-        try:
-            tf.config.experimental.set_visible_devices(gpus[args.gpu_id], 'GPU')
-        except RuntimeError as e:
-            # Visible devices must be set at program startup
-            print(e)
+    set_tf_gpu(args.gpu_id)
 
     skip_subjs = [ 'corgi', 'lilbub', 'jiffpom', 'princessmonstertruck' ]
 
