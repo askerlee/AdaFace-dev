@@ -167,7 +167,7 @@ if __name__ == "__main__":
             args.n_samples = 8
             args.bs = 8
             prompt_list = [ "a z" + z_suffix ]
-            orig_prompt_list = [ "a " + class_token_long ]
+            orig_prompt_list = [ "a " + class_token_long + z_suffix ]
 
         print(subject_name, ":")
 
