@@ -41,7 +41,7 @@ def parse_args():
                         help="parent directory containing checkpoints of all subjects")
     parser.add_argument("--ckpt_iter", type=int, default=4000,
                         help="checkpoint iteration to use")
-    parser.add_argument("--ckpt_extra_sig", type=str, default="",
+    parser.add_argument("--ckpt_sig", dest='ckpt_extra_sig', type=str, default="",
                         help="Extra signature that is part of the checkpoint directory name."
                              " Could be a regular expression.")
     

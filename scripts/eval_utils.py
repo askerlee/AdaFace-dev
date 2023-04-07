@@ -115,6 +115,10 @@ def compare_face_folders(path1, path2, num_samples=-1, verbose=False):
 
     avg_similarity = 1 - avg_distance
     print("Normal pairs: %d, exception pairs: %d" %(normal_pair_count, except_pair_count))
+    if path1[-1] == "/":
+        path1 = path1[:-1]
+    if path2[-1] == "/":
+        path2 = path2[:-1]
     path1_base = os.path.basename(path1)
     path2_base = os.path.basename(path2)
     print("'%s' vs '%s' avg similarity: %.3f" %(path1_base, path2_base, avg_similarity))

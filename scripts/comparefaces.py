@@ -1,7 +1,6 @@
 import os
 import argparse
 import time
-import tensorflow as tf
 from eval_utils import compare_face_folders, set_tf_gpu
 
 def parse_args():
