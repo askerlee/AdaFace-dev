@@ -134,7 +134,7 @@ if __name__ == "__main__":
             # Prepend a space to class_token to avoid "a zcat" -> "a z cat"
             z_suffix = " " + class_token
         else:
-            z_suffix = args.z_suffix_type
+            z_suffix = " " + args.z_suffix_type
 
         if len(args.extra_z_suffix) > 0:
             z_suffix += " " + args.extra_z_suffix + ","

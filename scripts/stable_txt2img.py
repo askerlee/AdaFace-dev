@@ -387,7 +387,7 @@ def main(opt):
 
                     # prompts in a batch are just repetitions of the same prompt.
                     for p_i, prompts in enumerate(tqdm(batched_prompts, desc="prompts")):
-                        print(f"\n{p_i+1}/{prompt_block_count}", prompts[0], "...", prompts[-1])
+                        print(f"\n{p_i+1}/{prompt_block_count}", prompts[0])
                         uc = None
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
