@@ -11,6 +11,8 @@ def parse_args():
     parser.add_argument("--placeholder", type=str, default="z", 
                         help="placeholder token for the subject")
     # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.
+    parser.add_argument("--prompt", type=str, default=None,
+                        help="Prompt to use for generating samples, using {} for placeholder (default: None)")
     parser.add_argument("--z_suffix_type", default="", 
                         help="Append this string to the subject placeholder token during inference (default: none)")
     # extra_z_suffix: usually reduces the similarity of generated images to the real images.
@@ -166,8 +168,10 @@ if __name__ == "__main__":
         else:
             args.n_samples = 8
             args.bs = 8
-            prompt_list = [ "a z" + z_suffix ]
-            orig_prompt_list = [ "a " + class_token_long + z_suffix ]
+            prompt      = args.prompt.format("z") if args.prompt else "a z"
+            orig_prompt = args.prompt.format(class_token_long) if args.prompt else "a " + class_token_long
+            prompt_list      = [ prompt + z_suffix ]
+            orig_prompt_list = [ orig_prompt + z_suffix ]
 
         print(subject_name, ":")
 
