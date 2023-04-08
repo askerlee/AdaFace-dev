@@ -209,13 +209,11 @@ def parse_args():
     parser.add_argument("--class_prompt", type=str, default=None,
                         help="the original prompt used for text/image matching evaluation "
                              "(requires --compare_with to be specified)")
-    parser.add_argument("--use_ref_prompt_mixing", action="store_true",
-                        help="Whether to mix a reference prompt with the subject prompt")
     parser.add_argument("--ref_prompt", type=str, default=None,
                         help="a class-level reference prompt to be mixed with the subject prompt "
                              "(if None, then don't mix with reference prompt)")
-    parser.add_argument("--ref_prompt_mix_weight", type=float, default=0.33,
-                        help="Weight of the reference prompt to be mixed with the subject prompt")
+    parser.add_argument("--ref_prompt_mix_weight", type=float, default=0,
+                        help="Weight of the reference prompt to be mixed with the subject prompt (0 to disable)")
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     parser.add_argument("--clip_last_layer_skip_scheme", type=str, choices=["add", "concat"], 
@@ -402,7 +400,8 @@ def main(opt):
                         uc = None
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
-                        if opt.use_ref_prompt_mixing:
+                        # ref_prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
+                        if opt.ref_prompt_mix_weight != 0:
                             # If opt.ref_prompt is None (default), then ref_c is None, i.e., no mixing.
                             ref_prompt = batched_ref_prompts[p_i]
                             if ref_prompt is not None:
@@ -505,6 +504,9 @@ def main(opt):
                     iter_sig = iter_mat.group(1)
 
                     embedding_sig = "-".join([date_sig, iter_sig, f"scale{opt.scale:.1f}"])
+                    if opt.ref_prompt_mix_weight:
+                        embedding_sig += f"-mix{opt.ref_prompt_mix_weight:.1f}"
+
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                     if opt.from_file:
                         prompt = prompts[0]

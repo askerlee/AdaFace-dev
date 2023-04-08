@@ -25,10 +25,7 @@ def parse_args():
                         help="suffix to append to the end of each prompt")
     parser.add_argument("--plain", action="store_true",
                         help="Whether to generate plain samples without compositional prompts")
-    # use_ref_prompt_mixing: usually reduces the similarity.
-    parser.add_argument("--use_ref_prompt_mixing", action="store_true",
-                        help="Whether to mix subject prompts with a class-level reference prompt when generating")
-    parser.add_argument("--ref_prompt_mix_weight", type=float, default=0.33,
+    parser.add_argument("--ref_prompt_mix_weight", type=float, default=0,
                         help="Weight of the reference prompt to be mixed with the subject prompt")    
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
@@ -212,14 +209,14 @@ if __name__ == "__main__":
             command_line += f" --n_samples {args.n_samples} --indiv_subdir {indiv_subdir}"
             command_line += f" --prompt \"{prompt}\" --class_prompt \"{class_long_prompt}\""
 
-            if args.use_ref_prompt_mixing:
+            if args.ref_prompt is not None:
                 # Use the class_short_prompt as the reference prompt, 
                 # as it's tokenwise aligned with the subject prompt.
                 command_line += f" --ref_prompt \"{class_short_prompt}\""
 
-        if args.use_ref_prompt_mixing:
+        # ref_prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
+        if args.ref_prompt_mix_weight != 0:
             # Only specify the flag here. The actual reference prompt will be read from the prompt file.
-            command_line += " --use_ref_prompt_mixing"
             command_line += f" --ref_prompt_mix_weight {args.ref_prompt_mix_weight}"
             
         if args.method != 'db':
