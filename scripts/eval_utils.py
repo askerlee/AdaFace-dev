@@ -269,14 +269,14 @@ def get_promt_list(placeholder, z_suffix, class_token_long, broad_class):
     return prompt_list, orig_prompt_list
 
 # c1, c2: [128, 77, 768]. c2: 
-# token_repl_mask: [batch_size, 1, prompt_token_num, 1]. 
-# 0 means the token is replaced with the subject embedding.
+# token_repl_mask: [128, 77, 1]. 
+# 1 means the token is replaced with the subject embedding. 0 means the token is not replaced.
 def mix_embeddings(c1, c2, mix_weight, token_repl_mask):
     # If a token is replaced, then the corresponding token_repl_mask is 0.
     # We want to keep the embedding in c1 unchanged. So c2_weight is 0.
     # Otherwise, then the corresponding token_repl_mask is 1. 
     # The corresponding embedding in c1 should be mixed with the embedding in c2 with 
     # weights (1 - mix_weight, mix_weight). So c2_weight is mix_weight.
-    c2_weights = token_repl_mask * mix_weight
-    c1_weights = 1 - c2_weights
+    c1_weights = token_repl_mask * mix_weight
+    c2_weights = 1 - c1_weights
     return c1_weights * c1 + c2_weights * c2

@@ -639,7 +639,7 @@ class EmbeddingManager(nn.Module):
             # mirror-reflect the embedding along the layer dimension, to make it symmetric 
             # in the encoder & decoder.
 
-        self.token_repl_mask = torch.ones(embedded_text.shape[0], n, 1, device=device)
+        self.token_repl_mask = torch.zeros(embedded_text.shape[0], n, 1, device=device)
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             placeholder_embedding = self.string_to_param_dict[placeholder_string].to(device)
@@ -680,7 +680,7 @@ class EmbeddingManager(nn.Module):
                 
                 embedded_text[placeholder_indices] = placeholder_embedding.repeat(OCCUR, 1) * self.subj_scale
                 # Mark where the placeholder token is replaced by the embedding.
-                self.token_repl_mask[placeholder_indices] = 0
+                self.token_repl_mask[placeholder_indices] = 1
 
                 delta_loss_emb_mask  = torch.ones(b, 1, n, 1, device=device)
                 # OCCUR is the real number of occurrences of placeholder. OCCUR <= b.
