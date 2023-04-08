@@ -209,7 +209,7 @@ if __name__ == "__main__":
             command_line += f" --n_samples {args.n_samples} --indiv_subdir {indiv_subdir}"
             command_line += f" --prompt \"{prompt}\" --class_prompt \"{class_long_prompt}\""
 
-            if args.ref_prompt is not None:
+            if args.ref_prompt_mix_weight != 0:
                 # Use the class_short_prompt as the reference prompt, 
                 # as it's tokenwise aligned with the subject prompt.
                 command_line += f" --ref_prompt \"{class_short_prompt}\""
