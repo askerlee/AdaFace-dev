@@ -268,6 +268,7 @@ def get_promt_list(placeholder, z_suffix, class_token_long, broad_class):
     orig_prompt_list = [ prompt.format("", class_token_long)  for prompt in orig_prompt_list ]
     return prompt_list, orig_prompt_list
 
+# c1, c2: [128, 77, 768]. c2: 
 # token_repl_mask: [batch_size, 1, prompt_token_num, 1]. 
 # 0 means the token is replaced with the subject embedding.
 def mix_embeddings(c1, c2, mix_weight, token_repl_mask):

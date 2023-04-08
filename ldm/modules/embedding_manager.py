@@ -610,7 +610,6 @@ class EmbeddingManager(nn.Module):
         # In the iterations when ada delta loss is enabled, in effect num_compositions_per_image is 1, 
         # even if it's specified as 2, so b=8.
         b, n, device = *tokenized_text.shape, tokenized_text.device
-        self.token_repl_mask = torch.ones(b, 1, n, 1, device=device)
 
         # gen_ada_embedding is dynamically switched on/off by  set_ada_layer_temp_info()/clear_ada_layer_temp_info().
         # No need to calculate delta_loss_emb_mask here, as the mask for ada embeddings is 
@@ -635,10 +634,12 @@ class EmbeddingManager(nn.Module):
             embedded_text = embedded_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1, 1).view(b * self.num_unet_layers, n, -1)
             # tokenized_text: [B, 16, N] => [16*B, N]
             # tokenized_text has to be repeated along the layer dimension as well, so that 
-            # placeholder_idx can index the embedding at each layer in the batch.
+            # placeholder_indices can index the embedding at each layer in the batch.
             tokenized_text = tokenized_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1).view(b * self.num_unet_layers, n)
             # mirror-reflect the embedding along the layer dimension, to make it symmetric 
             # in the encoder & decoder.
+
+        self.token_repl_mask = torch.ones(embedded_text.shape[0], n, 1, device=device)
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             placeholder_embedding = self.string_to_param_dict[placeholder_string].to(device)
@@ -651,18 +652,18 @@ class EmbeddingManager(nn.Module):
             # max_vectors_per_layer_per_token == 1: original num_vectors_per_token == 1, but 
             # self.use_layerwise_embedding could still be True.
             if self.max_vectors_per_layer_per_token == 1: # If there's only one vector per token, we can do a simple replacement
-                placeholder_idx = torch.where(tokenized_text == placeholder_token.to(device))
+                placeholder_indices = torch.where(tokenized_text == placeholder_token.to(device))
                 # No placeholder token is found in the current batch.
-                if placeholder_idx[0].numel() == 0:
+                if placeholder_indices[0].numel() == 0:
                     continue
 
-                # embedded_text[placeholder_idx] indexes the embedding at each instance in the batch.
-                # Non-layerwise: embedded_text[placeholder_idx]: [2, 768].  placeholder_embedding: [1, 768].
-                # layerwise: placeholder_idx =  
+                # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
+                # Non-layerwise: embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [1, 768].
+                # layerwise: placeholder_indices =  
                 # (tensor([ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]), 
                 #  tensor([ 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]))
-                # embedded_text[placeholder_idx]: [32, 768]. placeholder_embedding: [16, 768].
-                # The first 16 elements (0-8) in embedded_text[placeholder_idx] correspond to the 16 layers of the 
+                # embedded_text[placeholder_indices]: [32, 768]. placeholder_embedding: [16, 768].
+                # The first 16 elements (0-8) in embedded_text[placeholder_indices] correspond to the 16 layers of the 
                 # first instance in the batch.
                 # 16 layers of placeholder_embedding are repeated b times.
                 # placeholder_embedding: placeholder_embedding: [16, 768] repeat=> [32, 768]
@@ -673,18 +674,20 @@ class EmbeddingManager(nn.Module):
                 if self.use_layerwise_embedding:
                     # OCCUR: the actual number of occurrences of the placeholder in the current batch,
                     # not repetitively counting the occurrences in the embedded_text repeated for M layers.
-                    OCCUR = placeholder_idx[0].numel() // self.num_unet_layers
+                    OCCUR = placeholder_indices[0].numel() // self.num_unet_layers
                 else:
-                    OCCUR = placeholder_idx[0].numel()
+                    OCCUR = placeholder_indices[0].numel()
                 
-                embedded_text[placeholder_idx] = placeholder_embedding.repeat(OCCUR, 1) * self.subj_scale
+                embedded_text[placeholder_indices] = placeholder_embedding.repeat(OCCUR, 1) * self.subj_scale
+                # Mark where the placeholder token is replaced by the embedding.
+                self.token_repl_mask[placeholder_indices] = 0
 
                 delta_loss_emb_mask  = torch.ones(b, 1, n, 1, device=device)
                 # OCCUR is the real number of occurrences of placeholder. OCCUR <= b.
                 # The batch size b is usually small, so this loop is not a bottleneck.
                 for i in range(OCCUR):
-                    elem_idx  = placeholder_idx[0][i]
-                    start_idx = placeholder_idx[1][i] + 1
+                    elem_idx  = placeholder_indices[0][i]
+                    start_idx = placeholder_indices[1][i] + 1
                     assert tokenized_text[elem_idx][start_idx-1] == placeholder_token
                     has_suffix = True
                     for j in range(self.z_suffix_id_count):
@@ -693,13 +696,10 @@ class EmbeddingManager(nn.Module):
                             break
 
                     if has_suffix:
-                        end_idx   = placeholder_idx[1][i] + 1 + self.z_suffix_id_count
+                        end_idx   = placeholder_indices[1][i] + 1 + self.z_suffix_id_count
                         # Simply mask z_suffix_id_count tokens after the placeholder token.
                         # In effect, this masks the placeholder suffix following the placeholder token.
                         delta_loss_emb_mask[elem_idx][0][start_idx:end_idx] = 0
-
-                    # Mark where the placeholder token is replaced by the embedding.
-                    self.token_repl_mask[elem_idx][0][start_idx-1] = 0
 
                 self.set_delta_loss_emb_mask(delta_loss_emb_mask)
             # *multi-vector latent space*: In this space, S* is embedded into multiple 
@@ -777,22 +777,22 @@ class EmbeddingManager(nn.Module):
             # There's only one vector per token, we can do a simple replacement
             # embedded_text: [B, N, 768].
             # tokenized_text: [B, N].
-            placeholder_idx = torch.where(tokenized_text == placeholder_token.to(device))
+            placeholder_indices = torch.where(tokenized_text == placeholder_token.to(device))
             # Skip generating the ada embedding if there's no placeholder token in the batch.
-            if placeholder_idx[0].numel() == 0:
+            if placeholder_indices[0].numel() == 0:
                 continue
 
             # Generate the actual placeholder_embedding on the fly.
             # [B=2, 768]
             placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat, time_emb, self.img_mask)
-            # embedded_text[placeholder_idx] indexes the embedding at each instance in the batch.
-            # embedded_text[placeholder_idx]: [2, 768].  placeholder_embedding: [2, 768].
+            # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
+            # embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [2, 768].
             # Sometimes (e.g. during inference, some instances contain the placeholder token but
             # others don't. tokenized_text has a batch size of those containing the placeholder token only.
             # But layer_infeat is still of the full batch size. So placeholder_embedding has a batch size 
             # larger than the number of instances containing the placeholder token. We need to index
-            # placeholder_embedding with placeholder_idx[0] to get the matching new placeholder_embedding.
-            embedded_text[placeholder_idx] = placeholder_embedding[placeholder_idx[0]] * self.subj_scale
+            # placeholder_embedding with placeholder_indices[0] to get the matching new placeholder_embedding.
+            embedded_text[placeholder_indices] = placeholder_embedding[placeholder_indices[0]] * self.subj_scale
 
         return embedded_text
 
