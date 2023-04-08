@@ -404,7 +404,8 @@ def main(opt):
                             prompts = list(prompts)
                         c = model.get_learned_conditioning(prompts)
                         if ref_c is not None:
-                            c = c * (1 - opt.ref_prompt_mix_weight) + ref_c * opt.ref_prompt_mix_weight
+                            # c / ref_c are tuples of (cond, prompts, ada_embedder).
+                            c[0] = c[0] * (1 - opt.ref_prompt_mix_weight) + ref_c[0] * opt.ref_prompt_mix_weight
                             
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                         # When ada embedding is used, c is a tuple of (cond, ada_embedder).
