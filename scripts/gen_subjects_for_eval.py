@@ -28,6 +28,8 @@ def parse_args():
     # use_ref_prompt_mixing: usually reduces the similarity.
     parser.add_argument("--use_ref_prompt_mixing", action="store_true",
                         help="Whether to mix subject prompts with a class-level reference prompt when generating")
+    parser.add_argument("--ref_prompt_mix_weight", type=float, default=0.33,
+                        help="Weight of the reference prompt to be mixed with the subject prompt")    
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
     # subj_scale: sometimes it improves the similarity, somtimes it reduces it.
@@ -218,7 +220,8 @@ if __name__ == "__main__":
         if args.use_ref_prompt_mixing:
             # Only specify the flag here. The actual reference prompt will be read from the prompt file.
             command_line += " --use_ref_prompt_mixing"
-
+            command_line += f" --ref_prompt_mix_weight {args.ref_prompt_mix_weight}"
+            
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
