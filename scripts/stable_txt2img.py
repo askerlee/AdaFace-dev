@@ -208,7 +208,11 @@ def parse_args():
     parser.add_argument("--orig_prompt", type=str, default=None,
                         help="the original prompt used for text/image matching evaluation "
                              "(requires --compare_with to be specified)")
-
+    parser.add_argument("--ref_prompt", type=str, default=None,
+                        help="a class-level reference prompt to be mixed with the subject prompt "
+                             "(if None, then don't mix with reference prompt)")
+    parser.add_argument("--ref_prompt_mix_weight", type=float, default=0.5,
+                        help="Weight of the reference prompt to be mixed with the subject prompt")
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     parser.add_argument("--clip_last_layer_skip_scheme", type=str, choices=["add", "concat"], 
@@ -391,9 +395,17 @@ def main(opt):
                         uc = None
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
+                        if opt.ref_prompt is not None:
+                            ref_c = model.get_learned_conditioning(batch_size * [opt.ref_prompt])
+                        else:
+                            ref_c = None
+
                         if isinstance(prompts, tuple):
                             prompts = list(prompts)
                         c = model.get_learned_conditioning(prompts)
+                        if ref_c is not None:
+                            c = c * (1 - opt.ref_prompt_mix_weight) + ref_c * opt.ref_prompt_mix_weight
+                            
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                         # When ada embedding is used, c is a tuple of (cond, ada_embedder).
                         # When both unconditional and conditional guidance are passed to ddim sampler, 
