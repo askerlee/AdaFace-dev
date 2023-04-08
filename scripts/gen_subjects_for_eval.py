@@ -32,9 +32,9 @@ def parse_args():
     parser.add_argument("--subj_scale", type=float, default=1,
                         help="the subject embedding scale")
     
-    parser.add_argument("--n_samples", type=int, default=4, 
+    parser.add_argument("--n_samples", type=int, default=-1, 
                         help="number of samples to generate for each test case")
-    parser.add_argument("--bs", type=int, default=4, 
+    parser.add_argument("--bs", type=int, default=-1, 
                         help="batch size")
     
     parser.add_argument("--steps", type=int, default=50, 
@@ -161,13 +161,20 @@ if __name__ == "__main__":
         os.makedirs(outdir, exist_ok=True)
 
         if not args.plain:
+            if args.n_samples == -1:
+                args.n_samples = 4
+            if args.bs == -1:
+                args.bs = 4
             # E.g., get_promt_list(placeholder="z", z_suffix="cat", class_token_long="tabby cat", broad_class=1)
             prompt_list, orig_prompt_list = get_promt_list(placeholder, z_suffix, class_token_long, broad_class)
             prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
-            args.n_samples = 8
-            args.bs = 8
+            if args.n_samples == -1:
+                args.n_samples = 8
+            if args.bs == -1:
+                args.bs = 8
+
             prompt      = args.prompt.format("z") if args.prompt else "a z"
             orig_prompt = args.prompt.format(class_token_long) if args.prompt else "a " + class_token_long
             prompt_list      = [ prompt + z_suffix ]
