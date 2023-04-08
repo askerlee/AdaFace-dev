@@ -25,7 +25,9 @@ def parse_args():
                         help="suffix to append to the end of each prompt")
     parser.add_argument("--plain", action="store_true",
                         help="Whether to generate plain samples without compositional prompts")
-    
+    # use_ref_prompt_mixing: usually reduces the similarity.
+    parser.add_argument("--use_ref_prompt_mixing", action="store_true",
+                        help="Whether to mix subject prompts with a class-level reference prompt when generating")
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
     # subj_scale: sometimes it improves the similarity, somtimes it reduces it.
@@ -86,7 +88,7 @@ if __name__ == "__main__":
                                                      vars['broad_classes'], vars['sel_set']
     # db_prompts are phrases, and ada_prompts are multiple individual words.
     # So db_prompts better suit the CLIP text/image matching.
-    class_tokens_long = vars['db_prompts']
+    class_long_tokens = vars['db_prompts']
 
     if args.method == 'db':
         # For DreamBooth, use_z_suffix is the default.
@@ -114,7 +116,7 @@ if __name__ == "__main__":
         subject_name = subjects[subject_idx]
         class_token  = class_tokens[subject_idx]
         broad_class  = broad_classes[subject_idx]
-        class_token_long = class_tokens_long[subject_idx]
+        class_long_token = class_long_tokens[subject_idx]
         print("Generating samples for subject: " + subject_name)
 
         ckpt_sig   = subject_name + "-" + args.method
@@ -128,7 +130,7 @@ if __name__ == "__main__":
 
         if args.z_suffix_type == 'db_prompt':
             # DreamBooth always uses db_prompt as z_suffix.
-            z_suffix = " " + class_token_long
+            z_suffix = " " + class_long_token
         elif args.z_suffix_type == 'class_token':
             # For Ada/TI, if we append class token to "z" -> "z dog", 
             # the chance of occasional under-expression of the subject may be reduced.
@@ -165,8 +167,8 @@ if __name__ == "__main__":
                 args.n_samples = 4
             if args.bs == -1:
                 args.bs = 4
-            # E.g., get_promt_list(placeholder="z", z_suffix="cat", class_token_long="tabby cat", broad_class=1)
-            prompt_list, orig_prompt_list = get_promt_list(placeholder, z_suffix, class_token_long, broad_class)
+            # E.g., get_promt_list(placeholder="z", z_suffix="cat", class_long_token="tabby cat", broad_class=1)
+            prompt_list, class_prompt_list = get_promt_list(placeholder, z_suffix, class_long_token, broad_class)
             prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
@@ -175,22 +177,24 @@ if __name__ == "__main__":
             if args.bs == -1:
                 args.bs = 8
 
-            prompt      = args.prompt.format("z") if args.prompt else "a z"
-            orig_prompt = args.prompt.format(class_token_long) if args.prompt else "a " + class_token_long
-            prompt_list      = [ prompt + z_suffix ]
-            orig_prompt_list = [ orig_prompt + z_suffix ]
+            prompt             = args.prompt.format("z") if args.prompt else "a z"
+            class_short_prompt = args.prompt.format(class_token) if args.prompt else "a " + class_token
+            class_long_prompt  = args.prompt.format(class_long_token) if args.prompt else "a " + class_long_token
+            prompt_list             = [ prompt + z_suffix ]
+            class_short_prompt_list = [ class_short_prompt + z_suffix ]
+            class_long_prompt_list  = [ class_long_prompt  + z_suffix ]
 
         print(subject_name, ":")
 
-        for prompt, orig_prompt in zip(prompt_list, orig_prompt_list):
+        for prompt, class_short_prompt, class_long_prompt in zip(prompt_list, class_short_prompt_list, class_long_prompt_list):
             if len(args.prompt_suffix) > 0:
                 prompt = prompt + ", " + args.prompt_suffix
 
             print("  ", prompt)
             if not args.plain:
                 indiv_subdir = subject_name + "-" + prompt.replace(" ", "-")
-                # orig_prompt is saved in the prompt file as well, for evaluation later.
-                PROMPTS.write( "\t".join([str(args.n_samples), indiv_subdir, prompt, orig_prompt]) + "\n" )
+                # class_short_prompt, class_long_prompt are saved in the prompt file as well, for evaluation later.
+                PROMPTS.write( "\t".join([str(args.n_samples), indiv_subdir, prompt, class_long_prompt, class_short_prompt ]) + "\n" )
             else:
                 indiv_subdir = subject_name
 
@@ -202,8 +206,18 @@ if __name__ == "__main__":
             command_line += f" --from_file {prompt_filepath}"
         else:
             # Do not use a prompt file, but specify --n_samples, --prompt, and --indiv_subdir.
+            # Note only the last prompt/class_prompt/ref_prompt will be used. 
             command_line += f" --n_samples {args.n_samples} --indiv_subdir {indiv_subdir}"
-            command_line += f" --prompt \"{prompt}\" --orig_prompt \"{orig_prompt}\""
+            command_line += f" --prompt \"{prompt}\" --class_prompt \"{class_long_prompt}\""
+
+            if args.use_ref_prompt_mixing:
+                # Use the class_short_prompt as the reference prompt, 
+                # as it's tokenwise aligned with the subject prompt.
+                command_line += f" --ref_prompt \"{class_short_prompt}\""
+
+        if args.use_ref_prompt_mixing:
+            # Only specify the flag here. The actual reference prompt will be read from the prompt file.
+            command_line += " --use_ref_prompt_mixing"
 
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"

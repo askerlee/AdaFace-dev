@@ -206,9 +206,11 @@ def parse_args():
     parser.add_argument('--gpu', type=int,  default=0, help='ID of GPU to use')
     parser.add_argument("--compare_with", type=str, default=None,
                         help="Evaluate the similarity of generated samples with reference images in this folder")
-    parser.add_argument("--orig_prompt", type=str, default=None,
+    parser.add_argument("--class_prompt", type=str, default=None,
                         help="the original prompt used for text/image matching evaluation "
                              "(requires --compare_with to be specified)")
+    parser.add_argument("--use_ref_prompt_mixing", action="store_true",
+                        help="Whether to mix a reference prompt with the subject prompt")
     parser.add_argument("--ref_prompt", type=str, default=None,
                         help="a class-level reference prompt to be mixed with the subject prompt "
                              "(if None, then don't mix with reference prompt)")
@@ -313,7 +315,8 @@ def main(opt):
         batched_subdirs = [ opt.indiv_subdir ] * len(batched_prompts)
         # Append None to the end of batched_subdirs, for indiv_subdir change detection.
         batched_subdirs.append(None)
-        batched_orig_prompts = [ opt.orig_prompt ] * len(batched_prompts)
+        batched_class_long_prompts = [ opt.class_prompt ] * len(batched_prompts)
+        batched_ref_prompts        = [ opt.ref_prompt ] * len(batched_prompts)
 
     else:
         print(f"Reading prompts from {opt.from_file}")
@@ -321,23 +324,26 @@ def main(opt):
             # splitlines() will remove the trailing newline. So no need to strip().
             lines = f.read().splitlines()
             indiv_subdirs_prompts = [ line.split("\t") for line in lines ]
-            n_repeats, indiv_subdirs, all_prompts, orig_prompts = zip(*indiv_subdirs_prompts)
+            n_repeats, indiv_subdirs, all_prompts, class_long_prompts, class_short_prompts \
+                    = zip(*indiv_subdirs_prompts)
             # Repeat each prompt n_repeats times, and split into batches of size batch_size.
             # If there's remainder after chunks, the last chunk will be shorter than batch_size.
 
             batched_prompts = []
             batched_subdirs = []
-            batched_orig_prompts = []
-
+            batched_class_long_prompts = []
+            batched_ref_prompts = []
             # Repeat each prompt n_repeats times.
             for i, prompt in enumerate(all_prompts):
                 n_repeat = int(n_repeats[i])
                 # If in this line, n_repeat is larger than batch_size, we need to split it 
-                # into n_batches > 1 batches. These batches share the same indiv_subdir and orig_prompt.
+                # into n_batches > 1 batches. These batches share the same indiv_subdir,
+                # class_long_prompt, and ref_prompt.
                 # So no need to repeat them in advance. Just append n_batches copies of them 
-                # to batched_subdirs and batched_orig_prompts respectively below.
+                # to batched_subdirs and batched_class_long_prompts respectively below.
                 indiv_subdir = indiv_subdirs[i]
-                orig_prompt  = orig_prompts[i]
+                class_long_prompt = class_long_prompts[i]
+                class_short_prompt = class_short_prompts[i]
                 # The number of prompts in batched_prompts has to match the number of samples.
                 # So we need to repeat the prompt by n_repeat times.
                 prompts_repeated = [prompt] * n_repeat
@@ -350,8 +356,8 @@ def main(opt):
                     batched_prompts.append(prompts_repeated[start_idx:end_idx])
 
                 batched_subdirs.extend([indiv_subdir] * n_batches)
-                batched_orig_prompts.extend([orig_prompt] * n_batches)
-
+                batched_class_long_prompts.extend([class_long_prompt] * n_batches)
+                batched_ref_prompts.extend([class_short_prompt] * n_batches)
             # Append None to the end of batched_subdirs, for indiv_subdir change detection.
             batched_subdirs.append(None)
 
@@ -396,8 +402,13 @@ def main(opt):
                         uc = None
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
-                        if opt.ref_prompt is not None:
-                            ref_c = model.get_learned_conditioning(batch_size * [opt.ref_prompt])
+                        if opt.use_ref_prompt_mixing:
+                            # If opt.ref_prompt is None (default), then ref_c is None, i.e., no mixing.
+                            ref_prompt = batched_ref_prompts[p_i]
+                            if ref_prompt is not None:
+                                ref_c = model.get_learned_conditioning(batch_size * [opt.ref_prompt])
+                            else:
+                                ref_c = None
                         else:
                             ref_c = None
 
@@ -434,7 +445,7 @@ def main(opt):
 
                         if not opt.skip_save:
                             indiv_subdir = batched_subdirs[p_i]
-                            orig_prompt  = batched_orig_prompts[p_i]
+                            class_long_prompt = batched_class_long_prompts[p_i]
                             sample_dir = os.path.join(opt.outdir, indiv_subdir)
                             os.makedirs(sample_dir, exist_ok=True)                            
 
@@ -461,7 +472,7 @@ def main(opt):
                                     sim_img, sim_text, sim_dino = \
                                         compare_folders(clip_evator, dino_evator, 
                                                         opt.compare_with, sample_dir, 
-                                                        orig_prompt, len(prompts))
+                                                        class_long_prompt, len(prompts))
 
                                     all_sims_img.append(sim_img.item())
                                     all_sims_text.append(sim_text.item())
