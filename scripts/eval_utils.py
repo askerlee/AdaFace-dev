@@ -277,6 +277,6 @@ def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask):
     # Otherwise, then the corresponding token_repl_mask is 1. 
     # The corresponding embedding in c1 should be mixed with the embedding in c2 with 
     # weights (1 - mix_weight, mix_weight). So c2_weight is mix_weight.
-    c1_weights = token_repl_mask * (1 - c2_mix_weight)
-    c2_weights = 1 - c1_weights
+    c2_weights = token_repl_mask * c2_mix_weight
+    c1_weights = 1 - c2_weights
     return c1_weights * c1 + c2_weights * c2
