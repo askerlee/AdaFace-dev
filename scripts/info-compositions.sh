@@ -1,6 +1,6 @@
 #!/usr/bin/fish
 # " | " separated fields like "subject | prompt | folder | dreambooth-class-token".
-set -l cases "taylorswift | as aikido girl, sudamerican girl, clear face, casual, white training clothes with black hakama and black belt | taylorswift-aikido | girl, instagram"
+# set -l cases "taylorswift | as aikido girl, sudamerican girl, clear face, casual, white training clothes with black hakama and black belt | taylorswift-aikido | girl, instagram"
 set -a cases "zendaya | underwater among fish, highly detailed, art by Miho Hirano | zendaya-underwater | girl, instagram"
 set -a cases "zendaya | in a red dress traveling in indonesia, clear face | zendaya-indonesia | girl, instagram"
 set -a cases "selenagomez | smelling a flower, roses everywhere, highly detailed, digital painting, artstation, concept art, smooth, sharp focus, illustration, art by artgerm and greg rutkowski and alphonse mucha | selenagomez-roses | girl, instagram"

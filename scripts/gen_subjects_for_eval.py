@@ -192,7 +192,7 @@ if __name__ == "__main__":
         else:
             # Do not use a prompt file, but specify --n_samples, --prompt, and --indiv_subdir.
             command_line += f" --n_samples {args.n_samples} --indiv_subdir {indiv_subdir}"
-            command_line += f" --prompt '{prompt}' --orig_prompt '{orig_prompt}'"
+            command_line += f" --prompt \"{prompt}\" --orig_prompt \"{orig_prompt}\""
 
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
