@@ -594,6 +594,7 @@ class EmbeddingManager(nn.Module):
             self.loss_call_count = 0
             # Store the embedder to compute the delta loss.
             self.embedder = embedder
+            self.token_repl_mask = None
             print("EmbeddingManager initialized with layerwise_lora_rank={}, ada_emb_weight={}, placeholder_suffix={}".format(
                    layerwise_lora_rank, ada_emb_weight, placeholder_suffix))
             
@@ -609,6 +610,7 @@ class EmbeddingManager(nn.Module):
         # In the iterations when ada delta loss is enabled, in effect num_compositions_per_image is 1, 
         # even if it's specified as 2, so b=8.
         b, n, device = *tokenized_text.shape, tokenized_text.device
+        self.token_repl_mask = torch.ones(b, 1, n, 1, device=device)
 
         # gen_ada_embedding is dynamically switched on/off by  set_ada_layer_temp_info()/clear_ada_layer_temp_info().
         # No need to calculate delta_loss_emb_mask here, as the mask for ada embeddings is 
@@ -677,7 +679,7 @@ class EmbeddingManager(nn.Module):
                 
                 embedded_text[placeholder_idx] = placeholder_embedding.repeat(OCCUR, 1) * self.subj_scale
 
-                delta_loss_emb_mask = torch.ones(b, 1, n, 1, device=device)
+                delta_loss_emb_mask  = torch.ones(b, 1, n, 1, device=device)
                 # OCCUR is the real number of occurrences of placeholder. OCCUR <= b.
                 # The batch size b is usually small, so this loop is not a bottleneck.
                 for i in range(OCCUR):
@@ -695,6 +697,9 @@ class EmbeddingManager(nn.Module):
                         # Simply mask z_suffix_id_count tokens after the placeholder token.
                         # In effect, this masks the placeholder suffix following the placeholder token.
                         delta_loss_emb_mask[elem_idx][0][start_idx:end_idx] = 0
+
+                    # Mark where the placeholder token is replaced by the embedding.
+                    self.token_repl_mask[elem_idx][0][start_idx-1] = 0
 
                 self.set_delta_loss_emb_mask(delta_loss_emb_mask)
             # *multi-vector latent space*: In this space, S* is embedded into multiple 

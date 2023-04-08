@@ -17,7 +17,8 @@ from contextlib import nullcontext
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
-from scripts.eval_utils import compare_folders, compare_face_folders, init_evaluators, set_tf_gpu
+from scripts.eval_utils import compare_folders, compare_face_folders, \
+                                init_evaluators, set_tf_gpu, mix_embeddings
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -405,9 +406,10 @@ def main(opt):
                         c = model.get_learned_conditioning(prompts)
                         if ref_c is not None:
                             # c / ref_c are tuples of (cond, prompts, ada_embedder).
-                            c_0_mix = c[0] * (1 - opt.ref_prompt_mix_weight) + ref_c[0] * opt.ref_prompt_mix_weight
+                            c_0_mix = mix_embeddings(c[0], ref_c[0], opt.ref_prompt_mix_weight, 
+                                                     model.embedding_manager.token_repl_mask)
                             c = (c_0_mix, c[1], c[2])
-                            
+
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                         # When ada embedding is used, c is a tuple of (cond, ada_embedder).
                         # When both unconditional and conditional guidance are passed to ddim sampler, 
