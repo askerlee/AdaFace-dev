@@ -272,6 +272,10 @@ def get_promt_list(placeholder, z_suffix, class_token_long, broad_class):
 # token_repl_mask: [128, 77, 1]. 
 # 1 means the token is replaced with the subject embedding. 0 means the token is not replaced.
 def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask):
+    assert c1 is not None
+    if c2 is None:
+        return c1
+    
     # If a token is replaced, then the corresponding token_repl_mask is 0.
     # We want to keep the embedding in c1 unchanged. So c2_weight is 0.
     # Otherwise, then the corresponding token_repl_mask is 1. 
