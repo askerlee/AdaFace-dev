@@ -409,7 +409,7 @@ def main(opt):
                             uc = model.get_learned_conditioning(batch_size * [""])
                             # 'concat' doubles the number of channels of conditioning embeddings.
                             # So we need to repeat uc by 2.
-                            if opt.ref_prompt_mix_scheme == 'concat':
+                            if opt.ref_prompt_mix_scheme == 'concat' or opt.ref_prompt_mix_scheme == 'deltaconcat':
                                 uc_0 = uc[0].repeat(1, 2, 1)
                                 uc = (uc_0, uc[1], uc[2])
 
