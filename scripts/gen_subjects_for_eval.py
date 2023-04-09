@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 from scripts.eval_utils import parse_subject_file, parse_range_str, get_promt_list, find_first_match
 
 def parse_args():
@@ -141,7 +142,7 @@ if __name__ == "__main__":
             z_suffix = " " + class_token
         else:
             # z_suffix_type contains the actual z_suffix.
-            if z_suffix_type.match(r"^[a-zA-Z0-9_]"):
+            if re.match(r"^[a-zA-Z0-9_]", z_suffix_type):
                 # If z_suffix_type starts with a word, prepend a space to avoid "a zcat" -> "a z cat"
                 z_suffix = " " + z_suffix_type
             else:
