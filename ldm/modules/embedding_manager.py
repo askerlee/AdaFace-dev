@@ -681,7 +681,8 @@ class EmbeddingManager(nn.Module):
                 embedded_text[placeholder_indices] = placeholder_embedding.repeat(OCCUR, 1) * self.subj_scale
                 # Mark where the placeholder token is replaced by the embedding.
                 self.token_repl_mask[placeholder_indices] = 1
-
+                self.placeholder_indices = copy.copy(placeholder_indices)
+                
                 delta_loss_emb_mask  = torch.ones(b, 1, n, 1, device=device)
                 # OCCUR is the real number of occurrences of placeholder. OCCUR <= b.
                 # The batch size b is usually small, so this loop is not a bottleneck.

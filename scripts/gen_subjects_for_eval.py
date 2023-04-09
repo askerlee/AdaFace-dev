@@ -28,6 +28,9 @@ def parse_args():
                         help="Whether to generate plain samples without compositional prompts")
     parser.add_argument("--ref_prompt_mix_weight", type=float, default=0,
                         help="Weight of the reference prompt to be mixed with the subject prompt")    
+    parser.add_argument("--ref_prompt_mix_scheme", type=str, choices=["add", "concat"],
+                        default="add",
+                        help="Scheme for mixing the reference prompt with the subject prompt")    
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
     # subj_scale: sometimes it improves the similarity, somtimes it reduces it.
@@ -151,11 +154,6 @@ if __name__ == "__main__":
 
         if len(args.extra_z_suffix) > 0:
             z_suffix += " " + args.extra_z_suffix + ","
-        
-        if len(args.z_prefix) > 0:
-            placeholder = args.z_prefix + " " + args.placeholder
-        else:
-            placeholder = args.placeholder
 
         if args.method == 'db':
             config_file = "v1-inference.yaml"
@@ -178,7 +176,7 @@ if __name__ == "__main__":
                 args.bs = 4
             # E.g., get_promt_list(placeholder="z", z_suffix="cat", class_long_token="tabby cat", broad_class=1)
             prompt_list, class_short_prompt_list, class_long_prompt_list = \
-                get_promt_list(placeholder, z_suffix, class_token, class_long_token, broad_class)
+                get_promt_list(args.placeholder, args.z_prefix, z_suffix, class_token, class_long_token, broad_class)
             prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
@@ -187,8 +185,13 @@ if __name__ == "__main__":
             if args.bs == -1:
                 args.bs = 8
 
+            if len(args.z_prefix) > 0:
+                placeholder = args.z_prefix + " " + args.placeholder
+            else:
+                placeholder = args.placeholder
+
             prompt_tmpl = args.prompt if args.prompt else "a {}"
-            prompt = prompt_tmpl.format("z" + z_suffix)
+            prompt = prompt_tmpl.format(placeholder + z_suffix)
             class_long_prompt = prompt_tmpl.format(class_long_token + z_suffix)
             class_short_prompt = prompt_tmpl.format(class_token + z_suffix)
             prompt_list             = [ prompt ]
@@ -229,7 +232,7 @@ if __name__ == "__main__":
         # ref_prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
         if args.ref_prompt_mix_weight != 0:
             # Only specify the flag here. The actual reference prompt will be read from the prompt file.
-            command_line += f" --ref_prompt_mix_weight {args.ref_prompt_mix_weight}"
+            command_line += f" --ref_prompt_mix_weight {args.ref_prompt_mix_weight} --ref_prompt_mix_scheme {args.ref_prompt_mix_scheme}"
             
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"

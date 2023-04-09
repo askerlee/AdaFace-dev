@@ -214,6 +214,10 @@ def parse_args():
                              "(if None, then don't mix with reference prompt)")
     parser.add_argument("--ref_prompt_mix_weight", type=float, default=0,
                         help="Weight of the reference prompt to be mixed with the subject prompt (0 to disable)")
+    parser.add_argument("--ref_prompt_mix_scheme", type=str, choices=["add", "concat"],
+                        default="add",
+                        help="Scheme for mixing the reference prompt with the subject prompt")
+    
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     parser.add_argument("--clip_last_layer_skip_scheme", type=str, choices=["add", "concat"], 
@@ -417,7 +421,9 @@ def main(opt):
                         if ref_c is not None:
                             # c / ref_c are tuples of (cond, prompts, ada_embedder).
                             c_0_mix = mix_embeddings(c[0], ref_c[0], opt.ref_prompt_mix_weight, 
-                                                     model.embedding_manager.token_repl_mask)
+                                                     model.embedding_manager.token_repl_mask,
+                                                     model.embedding_manager.placeholder_indices,
+                                                     mix_scheme=opt.ref_prompt_mix_scheme)
                             c = (c_0_mix, c[1], c[2])
 
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
