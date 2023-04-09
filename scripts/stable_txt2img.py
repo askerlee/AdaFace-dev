@@ -214,9 +214,6 @@ def parse_args():
                              "(if None, then don't mix with reference prompt)")
     parser.add_argument("--ref_prompt_mix_weight", type=float, default=0,
                         help="Weight of the reference prompt to be mixed with the subject prompt (0 to disable)")
-    parser.add_argument("--subj_prompt_mix_weight_reduce", type=float, default=0,    
-                        help="Reduce the weight of the subject prompt by this factor "
-                             "(default: 0, no reduction)")
     parser.add_argument("--ref_prompt_mix_scheme", type=str, 
                         choices=["add", "concat", "sdeltaconcat", "adeltaconcat"],
                         default="adeltaconcat",
@@ -367,6 +364,9 @@ def main(opt):
             # Append None to the end of batched_subdirs, for indiv_subdir change detection.
             batched_subdirs.append(None)
 
+    if opt.ref_prompt_mix_weight != 0:
+        print(f"Using reference prompt mixing scheme '{opt.ref_prompt_mix_scheme}' with weight {opt.ref_prompt_mix_weight}")
+
     if opt.compare_with:
         clip_evator, dino_evator = init_evaluators(opt.gpu)
         all_sims_img, all_sims_text, all_sims_dino = [], [], []
@@ -407,7 +407,8 @@ def main(opt):
                         print(f"\n{p_i+1}/{prompt_block_count}", prompts[0])
                         uc = None
 
-                        # ref_prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
+                        # It's legal that ref_prompt_mix_weight < 0, in which case 
+                        # we enhance the expression of the subject.
                         if opt.ref_prompt_mix_weight != 0:
                             # If ref_prompt is None (default), then ref_c is None, i.e., no mixing.
                             ref_prompt = batched_ref_prompts[p_i]
@@ -434,7 +435,6 @@ def main(opt):
                             c0_mix = mix_embeddings(c[0], ref_c[0], opt.ref_prompt_mix_weight, 
                                                      model.embedding_manager.token_repl_mask,
                                                      model.embedding_manager.placeholder_indices,
-                                                     c1_weight_reduce=opt.subj_prompt_mix_weight_reduce,
                                                      mix_scheme=opt.ref_prompt_mix_scheme)
                             c = (c0_mix, c[1], c[2])
 

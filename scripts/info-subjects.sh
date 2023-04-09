@@ -6,8 +6,12 @@ set -l cls_tokens   girl                girl                  girl             m
 set -l ada_prompts  $db_prompts
 set -l ada_weights  "1 2 2"             "1 1 2"               "1 2"            "1 2"        "1 2"          "1 2"        "1 2"        "1 2"             "1 1"      "2 1 2"      "1 2"        "1 1 2"              "1 2"        "1 2"          "1 1 3"               "1 2"        "1 2"          "1 2"         "1 2"           "1 2"        "1 2"         "1 2"          "1 1 2"             "1 1 2"               "1 2 2"
 # broad_classes are all 1, i.e., humans/animals.
-set -l broad_classes  1                 1                     1                1           1              1            1            1                1          1                1            1                   1             1              1                     1            1             1              1               1            1             1              1                   1                     1           
+set -l broad_classes  1                 1                     1                1            1              1            1            1                 1          1            1            1                    1            1              1                     1            1              1             1               1            1             1              1                   1                     1           
 
+# Most subjects use a prompt_mix_w of 0.5, but caradelevingne, timotheechalamet use 4.
+set -l ref_prompt_mix_w  0.5            0.5                   4                0.5          0.5            0.5          0.5          0.5               0.5        0.5          0.5          0.5                  0.5          0.5            0.5                   0.5          0.5            0.5           0.5             0.5          0.5           0.5            4                   0.5                   0.5
+
+# All subjects are humans/animals. The other two classes are listed for completeness.
 #                     objects    humans/animals    cartoon characters
 set -l lrs            3e-4       8e-4              3e-4
 

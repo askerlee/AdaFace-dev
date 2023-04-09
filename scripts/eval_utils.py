@@ -279,13 +279,14 @@ def get_promt_list(placeholder, z_prefix, z_suffix, class_token, class_long_toke
 # 1 means the token is replaced with the subject embedding. 0 means the token is not replaced.
 # mix_scheme: 'add', 'concat', 'sdeltaconcat', 'adeltaconcat'.
 def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask, placeholder_indices, 
-                   c1_weight_reduce=0, mix_scheme='add'):
+                   mix_scheme='add', c1_weight_reduce=0):
     assert c1 is not None
     if c2 is None:
         return c1
 
     # The weight of c1, c1_weights is 1 almost everywhere, but 
     # 1 - c1_weight_reduce at the placeholder tokens.
+    # Default: all c1_weights are 1.
     c1_weights = 1 - token_repl_mask * c1_weight_reduce
 
     if mix_scheme == 'add':
