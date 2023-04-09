@@ -31,7 +31,7 @@ def parse_args():
     parser.add_argument("--subj_prompt_mix_weight_reduce", type=float, default=0,    
                         help="Reduce the weight of the subject prompt by this factor "
                              "(default: 0, no reduction)")     
-    parser.add_argument("--ref_prompt_mix_scheme", type=str, choices=["add", "concat"],
+    parser.add_argument("--ref_prompt_mix_scheme", type=str, choices=["add", "concat", "deltaconcat"],
                         default="add",
                         help="Scheme for mixing the reference prompt with the subject prompt")    
     parser.add_argument("--scale", type=float, default=5, 
