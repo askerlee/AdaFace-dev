@@ -27,7 +27,10 @@ def parse_args():
     parser.add_argument("--plain", action="store_true",
                         help="Whether to generate plain samples without compositional prompts")
     parser.add_argument("--ref_prompt_mix_weight", type=float, default=0,
-                        help="Weight of the reference prompt to be mixed with the subject prompt")    
+                        help="Weight of the reference prompt to be mixed with the subject prompt")   
+    parser.add_argument("--subj_prompt_mix_weight_reduce", type=float, default=0,    
+                        help="Reduce the weight of the subject prompt by this factor "
+                             "(default: 0, no reduction)")     
     parser.add_argument("--ref_prompt_mix_scheme", type=str, choices=["add", "concat"],
                         default="add",
                         help="Scheme for mixing the reference prompt with the subject prompt")    
@@ -232,7 +235,9 @@ if __name__ == "__main__":
         # ref_prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
         if args.ref_prompt_mix_weight != 0:
             # Only specify the flag here. The actual reference prompt will be read from the prompt file.
-            command_line += f" --ref_prompt_mix_weight {args.ref_prompt_mix_weight} --ref_prompt_mix_scheme {args.ref_prompt_mix_scheme}"
+            command_line += f" --ref_prompt_mix_weight {args.ref_prompt_mix_weight}" \
+                            f" --ref_prompt_mix_scheme {args.ref_prompt_mix_scheme}" \
+                            f" --subj_prompt_mix_weight_reduce {args.subj_prompt_mix_weight_reduce}"
             
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
