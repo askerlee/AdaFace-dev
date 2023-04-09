@@ -753,6 +753,12 @@ class UNetModel(nn.Module):
             if use_ada_context:
                 ada_context, ada_emb_weight = embedder(context_in, layer_idx, h, emb)
                 static_emb_weight = 1 - ada_emb_weight
+                
+                # static_context, ada_context: [8, 77, 768]
+                # If static_context is expanded in the inference code by doing prompt mixing,
+                # we need to expand ada_context here as well. This shouldn't happen in training.
+                if ada_context.shape[1] == static_context.shape[1] // 2:
+                    ada_context = ada_context.repeat(1, 2, 1)
                 mix_context  = static_context * static_emb_weight + ada_context * ada_emb_weight
                 return mix_context
             else:

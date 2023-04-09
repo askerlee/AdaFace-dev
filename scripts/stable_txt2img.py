@@ -407,6 +407,12 @@ def main(opt):
                         uc = None
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
+                            # 'concat' doubles the number of channels of conditioning embeddings.
+                            # So we need to repeat uc by 2.
+                            if opt.ref_prompt_mix_scheme == 'concat':
+                                uc_0 = uc[0].repeat(1, 2, 1)
+                                uc = (uc_0, uc[1], uc[2])
+
                         # ref_prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
                         if opt.ref_prompt_mix_weight != 0:
                             # If ref_prompt is None (default), then ref_c is None, i.e., no mixing.

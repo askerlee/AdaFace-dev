@@ -298,35 +298,16 @@ def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask, placeholder_indices,
         c_mix = c1_weights * c1 + c2_weights * c2
 
     elif mix_scheme == 'concat':
-        # Append c2[placeholder_indices] to c1.
-        c2_cls_tokens = c2[placeholder_indices]
-        assert c2_cls_tokens.shape[0] == c1.shape[0]
-
-        # We can specify c1_weight_reduce > 0 to reduce the impact of the subject embedding
-        # at the placeholder tokens, if the subject embedding suppresses composition.
-        c_mix = c1 * c1_weights
-        # Concatenating c1 and c2_cls_tokens will make the conditional embeddings 
-        # longer than the unconditional embeddings by 1, leading to exceptions.
-        # So we replace the last token (usually a padding token) in c1 with c2_cls_tokens.
-        # Multiply c2_cls_tokens with c2_mix_weight to control the influence of class prompts.
-        c_mix[:, -1, :] = c2_cls_tokens * c2_mix_weight
+        c_mix = torch.cat([ c1 * c1_weights, c2 * c2_mix_weight ], dim=1)
 
     elif mix_scheme == 'deltaconcat':
-        # Append delta_embedding \approx (c2[placeholder_indices] - c1[placeholder_indices]) to c1.
-        c2_cls_tokens = c2[placeholder_indices]
-        c1_cls_tokens = c1[placeholder_indices]
-        assert c2_cls_tokens.shape[0] == c1.shape[0]
-
         # delta_embedding is the difference between the subject embedding and the class embedding.
-        # In addition, it mixes with a little bit (c2_mix_weight / 4) of the class embedding.
-        delta_embedding = c2_cls_tokens * (1 + c2_mix_weight / 4) - c1_cls_tokens
-        # We can specify c1_weight_reduce > 0 to reduce the impact of the subject embedding
-        # at the placeholder tokens, if the subject embedding suppresses composition.
-        c_mix = c1 * c1_weights
-        # Concatenating c1 and c2_cls_tokens will make the conditional embeddings 
-        # longer than the unconditional embeddings by 1, leading to exceptions.
-        # So we replace the last token (usually a padding token) in c1 with delta_embedding.
-        # Multiply delta_embedding with c2_mix_weight (> 1) to amplify the influence of class prompts.
-        c_mix[:, -1, :] = delta_embedding * c2_mix_weight
+        delta_embedding = (c2 - c1)[placeholder_indices]
+        assert delta_embedding.shape[0] == c1.shape[0]
+
+        c2_delta = c2.clone()
+        # c2_mix_weight only boosts the delta embedding, not other tokens.
+        c2_delta[placeholder_indices] = delta_embedding * c2_mix_weight
+        c_mix = torch.cat([ c1 * c1_weights, c2_delta ], dim=1)
 
     return c_mix
