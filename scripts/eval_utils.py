@@ -277,6 +277,7 @@ def get_promt_list(placeholder, z_prefix, z_suffix, class_token, class_long_toke
 # c1, c2: [128, 77, 768]. c2: 
 # token_repl_mask: [128, 77, 1]. 
 # 1 means the token is replaced with the subject embedding. 0 means the token is not replaced.
+# mix_scheme: 'add', 'concat', 'deltaconcat'.
 def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask, placeholder_indices, 
                    c1_weight_reduce=0, mix_scheme='add'):
     assert c1 is not None
@@ -307,7 +308,22 @@ def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask, placeholder_indices,
         # Concatenating c1 and c2_cls_tokens will make the conditional embeddings 
         # longer than the unconditional embeddings by 1, leading to exceptions.
         # So we replace the last token (usually a padding token) in c1 with c2_cls_tokens.
-        # Multiply c2_cls_tokens with c2_mix_weight to limit the influence of class prompts.
+        # Multiply c2_cls_tokens with c2_mix_weight to control the influence of class prompts.
         c_mix[:, -1, :] = c2_cls_tokens * c2_mix_weight
+
+    elif mix_scheme == 'deltaconcat':
+        # Append delta_embedding = (c2[placeholder_indices] - c1[placeholder_indices]) to c1.
+        c2_cls_tokens = c2[placeholder_indices]
+        c1_cls_tokens = c1[placeholder_indices]
+        assert c2_cls_tokens.shape[0] == c1.shape[0]
+
+        # We can specify c1_weight_reduce > 0 to reduce the impact of the subject embedding
+        # at the placeholder tokens, if the subject embedding suppresses composition.
+        c_mix = c1 * c1_weights
+        # Concatenating c1 and c2_cls_tokens will make the conditional embeddings 
+        # longer than the unconditional embeddings by 1, leading to exceptions.
+        # So we replace the last token (usually a padding token) in c1 with delta_embedding.
+        # Multiply delta_embedding with c2_mix_weight (> 1) to amplify the influence of class prompts.
+        c_mix[:, -1, :] = (c2_cls_tokens - c1_cls_tokens) * c2_mix_weight
 
     return c_mix
