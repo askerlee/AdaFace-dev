@@ -141,7 +141,12 @@ if __name__ == "__main__":
             z_suffix = " " + class_token
         else:
             # z_suffix_type contains the actual z_suffix.
-            z_suffix = " " + z_suffix_type
+            if z_suffix_type.match(r"^[a-zA-Z0-9_]"):
+                # If z_suffix_type starts with a word, prepend a space to avoid "a zcat" -> "a z cat"
+                z_suffix = " " + z_suffix_type
+            else:
+                # z_suffix_type starts with a punctuation, e.g., ",".
+                z_suffix = z_suffix_type
 
         if len(args.extra_z_suffix) > 0:
             z_suffix += " " + args.extra_z_suffix + ","
