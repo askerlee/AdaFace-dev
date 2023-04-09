@@ -303,6 +303,7 @@ def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask, placeholder_indices,
         # longer than the unconditional embeddings by 1, leading to exceptions.
         # So we replace the last token (usually a padding token) in c1 with c2_cls_tokens.
         c_mix = c1.clone()
-        c_mix[:, -1, :] = c2_cls_tokens
+        # Multiply c2_cls_tokens with c2_mix_weight to limit the influence of class prompts.
+        c_mix[:, -1, :] = c2_cls_tokens * c2_mix_weight
 
     return c_mix
