@@ -33,7 +33,7 @@ def parse_args():
                              "(default: 0, no reduction)")     
     parser.add_argument("--ref_prompt_mix_scheme", type=str, 
                         choices=["add", "concat", "sdeltaconcat", "adeltaconcat"],
-                        default="add",
+                        default="adeltaconcat",
                         help="Scheme for mixing the reference prompt with the subject prompt")    
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")

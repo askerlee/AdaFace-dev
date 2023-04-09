@@ -219,7 +219,7 @@ def parse_args():
                              "(default: 0, no reduction)")
     parser.add_argument("--ref_prompt_mix_scheme", type=str, 
                         choices=["add", "concat", "sdeltaconcat", "adeltaconcat"],
-                        default="add",
+                        default="adeltaconcat",
                         help="Scheme for mixing the reference prompt with the subject prompt")
     
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
@@ -406,13 +406,6 @@ def main(opt):
                     for p_i, prompts in enumerate(tqdm(batched_prompts, desc="prompts")):
                         print(f"\n{p_i+1}/{prompt_block_count}", prompts[0])
                         uc = None
-                        if opt.scale != 1.0:
-                            uc = model.get_learned_conditioning(batch_size * [""])
-                            # 'concat' doubles the number of channels of conditioning embeddings.
-                            # So we need to repeat uc by 2.
-                            if 'concat' in opt.ref_prompt_mix_scheme:
-                                uc_0 = uc[0].repeat(1, 2, 1)
-                                uc = (uc_0, uc[1], uc[2])
 
                         # ref_prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
                         if opt.ref_prompt_mix_weight != 0:
@@ -424,6 +417,14 @@ def main(opt):
                                 ref_c = None
                         else:
                             ref_c = None
+
+                        if opt.scale != 1.0:
+                            uc = model.get_learned_conditioning(batch_size * [""])
+                            # The 3 'concat' schemes doubles the number of channels of conditioning embeddings.
+                            # So we need to repeat uc by 2.
+                            if 'concat' in opt.ref_prompt_mix_scheme and ref_c is not None:
+                                uc_0 = uc[0].repeat(1, 2, 1)
+                                uc = (uc_0, uc[1], uc[2])
 
                         if isinstance(prompts, tuple):
                             prompts = list(prompts)

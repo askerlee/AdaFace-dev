@@ -300,22 +300,22 @@ def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask, placeholder_indices,
     elif mix_scheme == 'concat':
         c_mix = torch.cat([ c1 * c1_weights, c2 * c2_mix_weight ], dim=1)
 
-    # sdeltaconcat: subject delta concat.
+    # sdeltaconcat: subject-delta concat.
     elif mix_scheme == 'sdeltaconcat':
         # delta_embedding is the difference between the subject embedding and the class embedding.
         delta_embedding = (c2 - c1)[placeholder_indices]
         assert delta_embedding.shape[0] == c1.shape[0]
 
         c2_delta = c2.clone()
-        # c2_mix_weight only boosts the delta embedding, not other tokens.
+        # c2_mix_weight only boosts the delta embedding, and other tokens in c2 always have weight 1.
         c2_delta[placeholder_indices] = delta_embedding * c2_mix_weight
         c_mix = torch.cat([ c1 * c1_weights, c2_delta ], dim=1)
 
-    # adeltaconcat: all delta concat.
+    # adeltaconcat: all-delta concat.
     elif mix_scheme == 'adeltaconcat':
-        # delta_embedding is the difference between the subject embedding and the class embedding.
-        delta_embedding = (c2 - c1)
-        # c2_mix_weight boosts all tokens in the class prompt.
+        # delta_embedding is the difference between all the subject tokens and the class tokens.
+        delta_embedding = c2 - c1
+        # c2_mix_weight boosts all tokens in delta_embedding.
         c_mix = torch.cat([ c1 * c1_weights, delta_embedding * c2_mix_weight ], dim=1)
 
     return c_mix
