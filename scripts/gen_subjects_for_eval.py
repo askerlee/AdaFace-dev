@@ -177,7 +177,8 @@ if __name__ == "__main__":
             if args.bs == -1:
                 args.bs = 4
             # E.g., get_promt_list(placeholder="z", z_suffix="cat", class_long_token="tabby cat", broad_class=1)
-            prompt_list, class_prompt_list = get_promt_list(placeholder, z_suffix, class_long_token, broad_class)
+            prompt_list, class_short_prompt_list, class_long_prompt_list = \
+                get_promt_list(placeholder, z_suffix, class_token, class_long_token, broad_class)
             prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
