@@ -271,7 +271,7 @@ def get_promt_list(placeholder, z_suffix, class_token_long, broad_class):
 # c1, c2: [128, 77, 768]. c2: 
 # token_repl_mask: [128, 77, 1]. 
 # 1 means the token is replaced with the subject embedding. 0 means the token is not replaced.
-def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask):
+def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask, weight_dampen_on_c1=0.5):
     assert c1 is not None
     if c2 is None:
         return c1
@@ -282,5 +282,7 @@ def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask):
     # The corresponding embedding in c1 should be mixed with the embedding in c2 with 
     # weights (1 - mix_weight, mix_weight). So c2_weight is mix_weight.
     c2_weights = token_repl_mask * c2_mix_weight
-    c1_weights = 1 - c2_weights
+    # The weight of c2 is c2_weights, but the weight of c1 is larger than 1 - c2_weights,
+    # to keep more subject-specific information.
+    c1_weights = 1 - c2_weights * weight_dampen_on_c1
     return c1_weights * c1 + c2_weights * c2
