@@ -278,11 +278,15 @@ def get_promt_list(placeholder, z_prefix, z_suffix, class_token, class_long_toke
 # token_repl_mask: [128, 77, 1]. 
 # 1 means the token is replaced with the subject embedding. 0 means the token is not replaced.
 def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask, placeholder_indices, 
-                   weight_dampen_on_c1=0.5, mix_scheme='add'):
+                   c1_weight_reduce=0, mix_scheme='add'):
     assert c1 is not None
     if c2 is None:
         return c1
-    
+
+    # The weight of c1, c1_weights is 1 almost everywhere, but 
+    # 1 - c1_weight_reduce at the placeholder tokens.
+    c1_weights = 1 - token_repl_mask * c1_weight_reduce
+
     if mix_scheme == 'add':
         # If a token is replaced, then the corresponding token_repl_mask is 0.
         # We want to keep the embedding in c1 unchanged. So c2_weight is 0.
@@ -290,19 +294,19 @@ def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask, placeholder_indices,
         # The corresponding embedding in c1 should be mixed with the embedding in c2 with 
         # weights (1 - mix_weight, mix_weight). So c2_weight is mix_weight.
         c2_weights = token_repl_mask * c2_mix_weight
-        # The weight of c2 is c2_weights, but the weight of c1 is larger than 1 - c2_weights,
-        # to keep more subject-specific information.
-        c1_weights = 1 - c2_weights * weight_dampen_on_c1
         c_mix = c1_weights * c1 + c2_weights * c2
 
     elif mix_scheme == 'concat':
         # Append c2[placeholder_indices] to c1.
         c2_cls_tokens = c2[placeholder_indices]
         assert c2_cls_tokens.shape[0] == c1.shape[0]
+
+        # We can specify c1_weight_reduce > 0 to reduce the impact of the subject embedding
+        # at the placeholder tokens, if the subject embedding suppresses composition.
+        c_mix = c1 * c1_weights
         # Concatenating c1 and c2_cls_tokens will make the conditional embeddings 
         # longer than the unconditional embeddings by 1, leading to exceptions.
         # So we replace the last token (usually a padding token) in c1 with c2_cls_tokens.
-        c_mix = c1.clone()
         # Multiply c2_cls_tokens with c2_mix_weight to limit the influence of class prompts.
         c_mix[:, -1, :] = c2_cls_tokens * c2_mix_weight
 
