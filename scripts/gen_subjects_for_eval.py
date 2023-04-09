@@ -89,14 +89,6 @@ if __name__ == "__main__":
     # So db_prompts better suit the CLIP text/image matching.
     class_long_tokens = vars['db_prompts']
 
-    if args.method == 'db':
-        # For DreamBooth, use_z_suffix is the default.
-        args.z_suffix_type = 'db_prompt'
-    elif not args.is_face and args.z_suffix_type == '':
-        # For ada/TI, if not human faces, and z_suffix_type is not specified, 
-        # then use class_token as the z suffix.
-        args.z_suffix_type = 'class_token'
-
     subject_indices = list(range(len(subjects)))
     if args.selset:
         subject_indices = sel_set
@@ -104,6 +96,10 @@ if __name__ == "__main__":
     range_indices   = parse_range_str(args.range)
     if range_indices is not None:
         subject_indices = [ subject_indices[i] for i in range_indices ]
+
+    if args.method == 'db':
+        # For DreamBooth, use_z_suffix is the default.
+        args.z_suffix_type = 'db_prompt'
 
     all_ckpts = os.listdir(args.ckpt_dir)
     # Sort all_ckpts by modification time, most recent first.
@@ -127,17 +123,25 @@ if __name__ == "__main__":
             continue
             # breakpoint()
 
-        if args.z_suffix_type == 'db_prompt':
+        if broad_class == 0 and args.z_suffix_type == '':
+            # For ada/TI, if not human faces / animals, and z_suffix_type is not specified, 
+            # then use class_token as the z suffix, to make sure the subject is always expressed.
+            z_suffix_type = 'class_token'
+        else:
+            z_suffix_type = args.z_suffix_type
+
+        if z_suffix_type == 'db_prompt':
             # DreamBooth always uses db_prompt as z_suffix.
             z_suffix = " " + class_long_token
-        elif args.z_suffix_type == 'class_token':
+        elif z_suffix_type == 'class_token':
             # For Ada/TI, if we append class token to "z" -> "z dog", 
             # the chance of occasional under-expression of the subject may be reduced.
             # (This trick is not needed for human faces)
             # Prepend a space to class_token to avoid "a zcat" -> "a z cat"
             z_suffix = " " + class_token
         else:
-            z_suffix = " " + args.z_suffix_type
+            # z_suffix_type contains the actual z_suffix.
+            z_suffix = " " + z_suffix_type
 
         if len(args.extra_z_suffix) > 0:
             z_suffix += " " + args.extra_z_suffix + ","
@@ -176,12 +180,13 @@ if __name__ == "__main__":
             if args.bs == -1:
                 args.bs = 8
 
-            prompt             = args.prompt.format("z") if args.prompt else "a z"
-            class_short_prompt = args.prompt.format(class_token) if args.prompt else "a " + class_token
-            class_long_prompt  = args.prompt.format(class_long_token) if args.prompt else "a " + class_long_token
-            prompt_list             = [ prompt + z_suffix ]
-            class_short_prompt_list = [ class_short_prompt + z_suffix ]
-            class_long_prompt_list  = [ class_long_prompt  + z_suffix ]
+            prompt_tmpl = args.prompt if args.prompt else "a {}"
+            prompt = prompt_tmpl.format("z" + z_suffix)
+            class_long_prompt = prompt_tmpl.format(class_long_token + z_suffix)
+            class_short_prompt = prompt_tmpl.format(class_token + z_suffix)
+            prompt_list             = [ prompt ]
+            class_short_prompt_list = [ class_short_prompt ]
+            class_long_prompt_list  = [ class_long_prompt ]
 
         print(subject_name, ":")
 
