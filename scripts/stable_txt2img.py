@@ -402,10 +402,10 @@ def main(opt):
                             uc = model.get_learned_conditioning(batch_size * [""])
                         # ref_prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
                         if opt.ref_prompt_mix_weight != 0:
-                            # If opt.ref_prompt is None (default), then ref_c is None, i.e., no mixing.
+                            # If ref_prompt is None (default), then ref_c is None, i.e., no mixing.
                             ref_prompt = batched_ref_prompts[p_i]
                             if ref_prompt is not None:
-                                ref_c = model.get_learned_conditioning(batch_size * [opt.ref_prompt])
+                                ref_c = model.get_learned_conditioning(batch_size * [ref_prompt])
                             else:
                                 ref_c = None
                         else:
