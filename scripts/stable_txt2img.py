@@ -217,7 +217,8 @@ def parse_args():
     parser.add_argument("--subj_prompt_mix_weight_reduce", type=float, default=0,    
                         help="Reduce the weight of the subject prompt by this factor "
                              "(default: 0, no reduction)")
-    parser.add_argument("--ref_prompt_mix_scheme", type=str, choices=["add", "concat", "deltaconcat"],
+    parser.add_argument("--ref_prompt_mix_scheme", type=str, 
+                        choices=["add", "concat", "sdeltaconcat", "adeltaconcat"],
                         default="add",
                         help="Scheme for mixing the reference prompt with the subject prompt")
     
@@ -409,7 +410,7 @@ def main(opt):
                             uc = model.get_learned_conditioning(batch_size * [""])
                             # 'concat' doubles the number of channels of conditioning embeddings.
                             # So we need to repeat uc by 2.
-                            if opt.ref_prompt_mix_scheme == 'concat' or opt.ref_prompt_mix_scheme == 'deltaconcat':
+                            if 'concat' in opt.ref_prompt_mix_scheme:
                                 uc_0 = uc[0].repeat(1, 2, 1)
                                 uc = (uc_0, uc[1], uc[2])
 
