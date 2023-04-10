@@ -10,17 +10,19 @@ set -l cls_tokens     backpack        backpack          toy               bowl  
 set -l ada_prompts    "red backpack"  "cute backpack"   "stuffed toy"     "berry bowl"    can     "glass candle"  cat     cat     "yellow clock"   sneaker           dog      dog     dog     dog     dog     dog     dog     toy             boot            "stuffed toy"           "monster toy"   glasses         toy             "toy car"  "cartoon monster"  toy             sneaker         "chinese teapot"  "stylish vase"  "stuffed toy"
 set -l ada_weights    "1 2"           "1 2"             "1 2"             "1 2"           1       "1 2"           1       1       "1 2"            1                 1        1       1       1       1       1       1       1               1               "1 2"                   "1 2"           1               1               "2 1"      "2 1"              1               1               "1 2"             "1 2"           "1 2"
 set -l broad_classes  0               0                 0                 0               0       0               1       1       0                0                 1        1       1       1       1       1       1       0               0               0                       0               0               0               0          2                  0               0               0                 0               0
-# All subjects use the same prompt mix weight 0.5.
-set -l ref_prompt_mix_w   0.5         0.5               0.5               0.5             0.5     0.5             0.5     0.5     0.5              0.5               0.5      0.5     0.5     0.5     0.5     0.5     0.5     0.5             0.5             0.5                     0.5             0.5             0.5             0.5        0.5                0.5             0.5             0.5               0.5             0.5
 
-#                     1        2            3       4    5           6
-#                     backpack backpack_dog candle clock monster_toy teapot
-# set -l sel_set        1        2            6       9    21          28 
+# All subjects use the same prompt mix weight 0.5, except cat, dog5, dog6 which use 2.
+set -l ref_prompt_mix_w   0.5         0.5               0.5               0.5             0.5     0.5             2      0.5     0.5              0.5               0.5      0.5     0.5      2       2       0.5     0.5     0.5             0.5             0.5                     0.5             0.5             0.5             0.5        0.5                0.5             0.5             0.5               0.5             0.5
+
+# sel_set contains a few selected test subjects.
 #                     backpack_dog  berry_bowl  rc_car wolf_plushie
 set -l sel_set        2             4           24     30
-# Individual LR for each class in the broad classes, according to their difficulties.
-#                     objects    animals    cartoon characters
-set -l lrs            3e-4       6e-4       3e-4
+
+#                     objects    animals           cartoon characters
+set -l lrs            3e-4       6e-4              3e-4
+set -l z_prefixes     ""         "portrait of"     ""
+# Individual LR for each class in the broad classes, according to their difficulties / inherent complexity.
+# A prefix of "portrait of" for animals/humans suggests SD to focus on the face area of the subject.
 
 set -Ux subjects        $subjects
 set -Ux db_prompts      $db_prompts

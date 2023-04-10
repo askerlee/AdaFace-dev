@@ -8,12 +8,16 @@ set -l ada_weights  "1 2 2"             "1 1 2"               "1 2"            "
 # broad_classes are all 1, i.e., humans/animals.
 set -l broad_classes  1                 1                     1                1            1              1            1            1                 1          1            1            1                    1            1              1                     1            1              1             1               1            1             1              1                   1                     1           
 
-# Most subjects use a prompt_mix_w of 0.5, but caradelevingne, timotheechalamet use 4.
-set -l ref_prompt_mix_w  0.5            0.5                   4                0.5          0.5            0.5          0.5          0.5               0.5        0.5          0.5          0.5                  0.5          0.5            0.5                   0.5          0.5            0.5           0.5             0.5          0.5           0.5            4                   0.5                   0.5
+# Most subjects use a prompt_mix_w of 0.5, but caradelevingne, taylorswift, timotheechalamet use 4. 
+# jenniferlawrence uses 2.
+set -l ref_prompt_mix_w  0.5            0.5                   4                0.5          0.5            0.5          0.5          2                 0.5        0.5          0.5          0.5                  0.5          0.5            0.5                   0.5          0.5            0.5           0.5             0.5          0.5           0.5            4                   0.5                   0.5
 
-# All subjects are humans/animals. The other two classes are listed for completeness.
 #                     objects    humans/animals    cartoon characters
 set -l lrs            3e-4       8e-4              3e-4
+set -l z_prefixes     ""         "portrait of"     ""
+# All subjects are humans/animals. The other two classes are listed for completeness.
+# Individual LR for each class in the broad classes, according to their difficulties / inherent complexity.
+# A prefix of "portrait of" for animals/humans suggests SD to focus on the face area of the subject.
 
 # donnieyen jenniferlawrence jiffpom lilbub lisa michelleyeoh selenagomez smitrimandhana taylorswift zendaya
 set -l sel_set      4 8 9 11 12 14 18 19 22 25

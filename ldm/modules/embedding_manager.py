@@ -86,11 +86,10 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, do_LN_first=Tru
     # Therefore, do layer normalization before cosine loss, 
     # to remove the effect of bias.
     # IN addition, different ada layers have significantly different scales. 
-    # Since cosine is scale invariant, the de-scale is not necessary.
+    # Since cosine is scale invariant, de-scale is not necessary and won't have effects.
     # LN = demean & de-scale. So LN is equivalent to demean() here.
     if do_LN_first:
-        #delta = demean(delta)
-        #ref_delta = demean(ref_delta)
+        # F.layer_norm doesn't apply elementwise-affine.
         delta     = F.layer_norm(delta, delta.shape[1:])
         ref_delta = F.layer_norm(ref_delta, ref_delta.shape[1:])
 

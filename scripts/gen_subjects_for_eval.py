@@ -19,7 +19,7 @@ def parse_args():
     # extra_z_suffix: usually reduces the similarity of generated images to the real images.
     parser.add_argument("--extra_z_suffix", type=str, default="",
                         help="Extra suffix to append to the z suffix")
-    parser.add_argument("--z_prefix", type=str, default="",
+    parser.add_argument("--z_prefix", type=str, default=None,
                         help="Prefix to prepend to z")
     # prompt_suffix: usually reduces the similarity.
     parser.add_argument("--prompt_suffix", type=str, default="",
@@ -113,6 +113,15 @@ if __name__ == "__main__":
     else:
         args.ref_prompt_mix_scheme = "adeltaconcat"
 
+    if args.z_prefix is not None:
+        # * 3 for 3 broad classes, i.e., all classes use the same args.z_prefix.
+        z_prefixes = [args.z_prefix] * 3    
+    elif 'z_prefixes' in vars:
+        z_prefixes = vars['z_prefixes']
+        assert len(z_prefixes) == 3
+    else:
+        z_prefixes = [""] * 3
+
     # db_prompts are phrases, and ada_prompts are multiple individual words.
     # So db_prompts better suit the CLIP text/image matching.
     class_long_tokens = vars['db_prompts']
@@ -141,6 +150,8 @@ if __name__ == "__main__":
         broad_class  = broad_classes[subject_idx]
         class_long_token = class_long_tokens[subject_idx]
         ref_prompt_mix_weight = ref_prompt_mix_weights[subject_idx]
+        z_prefix = z_prefixes[broad_class]
+
         print("Generating samples for subject: " + subject_name)
 
         ckpt_sig   = subject_name + "-" + args.method
@@ -201,7 +212,7 @@ if __name__ == "__main__":
                 args.bs = 4
             # E.g., get_promt_list(placeholder="z", z_suffix="cat", class_long_token="tabby cat", broad_class=1)
             prompt_list, class_short_prompt_list, class_long_prompt_list = \
-                get_promt_list(args.placeholder, args.z_prefix, z_suffix, class_token, class_long_token, broad_class)
+                get_promt_list(args.placeholder, z_prefix, z_suffix, class_token, class_long_token, broad_class)
             prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
@@ -210,8 +221,8 @@ if __name__ == "__main__":
             if args.bs == -1:
                 args.bs = 8
 
-            if len(args.z_prefix) > 0:
-                placeholder = args.z_prefix + " " + args.placeholder
+            if len(z_prefix) > 0:
+                placeholder = z_prefix + " " + args.placeholder
             else:
                 placeholder = args.placeholder
 
