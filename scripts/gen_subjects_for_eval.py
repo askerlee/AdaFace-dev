@@ -221,10 +221,11 @@ if __name__ == "__main__":
             if args.bs == -1:
                 args.bs = 8
 
+            placeholder = args.placeholder
             if len(z_prefix) > 0:
-                placeholder = z_prefix + " " + args.placeholder
-            else:
-                placeholder = args.placeholder
+                placeholder      = z_prefix + " " + placeholder
+                class_token      = z_prefix + " " + class_token
+                class_long_token = z_prefix + " " + class_long_token
 
             prompt_tmpl = args.prompt if args.prompt else "a {}"
             prompt = prompt_tmpl.format(placeholder + z_suffix)
