@@ -10,6 +10,9 @@ set -l cls_tokens     backpack        backpack          toy               bowl  
 set -l ada_prompts    "red backpack"  "cute backpack"   "stuffed toy"     "berry bowl"    can     "glass candle"  cat     cat     "yellow clock"   sneaker           dog      dog     dog     dog     dog     dog     dog     toy             boot            "stuffed toy"           "monster toy"   glasses         toy             "toy car"  "cartoon monster"  toy             sneaker         "chinese teapot"  "stylish vase"  "stuffed toy"
 set -l ada_weights    "1 2"           "1 2"             "1 2"             "1 2"           1       "1 2"           1       1       "1 2"            1                 1        1       1       1       1       1       1       1               1               "1 2"                   "1 2"           1               1               "2 1"      "2 1"              1               1               "1 2"             "1 2"           "1 2"
 set -l broad_classes  0               0                 0                 0               0       0               1       1       0                0                 1        1       1       1       1       1       1       0               0               0                       0               0               0               0          2                  0               0               0                 0               0
+# No subjects are human faces. $are_faces instructs the generation script 
+# whether to compute face similarity.
+for subject in $subjects; set -a are_faces 0; end
 
 # All subjects use the same prompt mix weight 0.5, except cat, dog5, dog6 which use 2.
 set -l ref_prompt_mix_w   0.5         0.5               0.5               0.5             0.5     0.5             2      0.5     0.5              0.5               0.5      0.5     0.5      2       2       0.5     0.5     0.5             0.5             0.5                     0.5             0.5             0.5             0.5        0.5                0.5             0.5             0.5               0.5             0.5
@@ -24,14 +27,17 @@ set -l z_prefixes     ""         "portrait of"     ""
 # Individual LR for each class in the broad classes, according to their difficulties / inherent complexity.
 # A prefix of "portrait of" for animals/humans suggests SD to focus on the face area of the subject.
 
-set -Ux subjects        $subjects
-set -Ux db_prompts      $db_prompts
-set -Ux ada_prompts     $ada_prompts
-set -Ux ada_weights     $ada_weights
-set -Ux cls_tokens      $cls_tokens
-set -Ux broad_classes   $broad_classes
-set -Ux sel_set         $sel_set
-set -Ux lrs             $lrs
+set -Ux subjects            $subjects
+set -Ux db_prompts          $db_prompts
+set -Ux ada_prompts         $ada_prompts
+set -Ux ada_weights         $ada_weights
+set -Ux cls_tokens          $cls_tokens
+set -Ux broad_classes       $broad_classes
+set -Ux are_faces           $are_faces
+set -Ux ref_prompt_mix_w    $ref_prompt_mix_w
+set -Ux sel_set             $sel_set
+set -Ux lrs                 $lrs
 # No suffix for the DreamBooth eval set, as they are objects/animals, as opposed to faces.
-set -Ux db_suffix       ""
-set -Ux data_folder     db-eval-dataset
+set -Ux db_suffix           ""
+set -Ux z_prefixes          $z_prefixes
+set -Ux data_folder         db-eval-dataset

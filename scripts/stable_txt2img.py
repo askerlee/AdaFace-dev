@@ -200,8 +200,9 @@ def parse_args():
     parser.add_argument("--broad_class", type=int, default=1,
                         help="Whether the subject is a human/animal, object or cartoon"
                              " (0: object, 1: human/animal, 2: cartoon)")
-    parser.add_argument("--is_face", action="store_true",
-                        help="Whether the generated samples are human faces")
+    parser.add_argument("--calc_face_sim", action="store_true",
+                        help="If specified, assume the generated samples are human faces, "
+                             "and compute face similarities with the groundtruth")
         
     parser.add_argument('--gpu', type=int,  default=0, help='ID of GPU to use')
     parser.add_argument("--compare_with", type=str, default=None,
@@ -370,7 +371,7 @@ def main(opt):
     if opt.compare_with:
         clip_evator, dino_evator = init_evaluators(opt.gpu)
         all_sims_img, all_sims_text, all_sims_dino = [], [], []
-        if opt.is_face:
+        if opt.calc_face_sim:
             all_sims_face = []
             set_tf_gpu(opt.gpu)
     else:
@@ -495,7 +496,7 @@ def main(opt):
                                     all_sims_text.append(sim_text.item())
                                     all_sims_dino.append(sim_dino.item())
 
-                                    if opt.is_face:
+                                    if opt.calc_face_sim:
                                         sim_face = compare_face_folders(opt.compare_with, sample_dir, len(prompts))
                                         # sim_face is a float, so no need to detach().cpu().numpy().
                                         all_sims_face.append(sim_face)
@@ -552,7 +553,7 @@ def main(opt):
     if opt.compare_with:
         sims_img_avg, sims_text_avg, sims_dino_avg = np.mean(all_sims_img), np.mean(all_sims_text), np.mean(all_sims_dino)
         print(f"All samples mean image/text/dino sim: {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
-        if opt.is_face:
+        if opt.calc_face_sim:
             sims_face_avg = np.mean(all_sims_face)
             print(f"All samples mean face sim: {sims_face_avg:.3f}")
 

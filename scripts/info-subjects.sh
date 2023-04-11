@@ -7,6 +7,12 @@ set -l ada_prompts  $db_prompts
 set -l ada_weights  "1 2"               "1 1 2"               "1 2"            "1 2"        "1 2"          "1 2"        "1 2"        "1 2"             "1 1"      "1 2"        "1 2"        "1 1 2"              "1 2"        "1 2"          "1 1 3"               "1 2"        "1 2"          "1 2"         "1 2"           "1 2"        "1 2"         "1 2"          "1 1 2"             "1 1 2"               "1 2"
 # broad_classes are all 1, i.e., humans/animals.
 set -l broad_classes  1                 1                     1                1            1              1            1            1                 1          1            1            1                    1            1              1                     1            1              1             1               1            1             1              1                   1                     1           
+# Most subjects are human faces, except for the 3 cats/dogs. $are_faces instructs the generation script 
+# whether to compute face similarity.
+for subject in $subjects; set -a are_faces 1; end
+set $are_faces[9]  0
+set $are_faces[11] 0
+set $are_faces[15] 0
 
 # Most subjects use a prompt_mix_w of 0.5, but caradelevingne, taylorswift, timotheechalamet use 4. 
 # jenniferlawrence uses 2.
@@ -20,15 +26,18 @@ set -l z_prefixes     ""         "portrait of"     ""
 # A prefix of "portrait of" for animals/humans suggests SD to focus on the face area of the subject.
 
 # donnieyen jenniferlawrence jiffpom lilbub lisa michelleyeoh selenagomez smitrimandhana taylorswift zendaya
-set -l sel_set      4 8 9 11 12 14 18 19 22 25
-set -Ux subjects        $subjects
-set -Ux db_prompts      $db_prompts
-set -Ux ada_prompts     $ada_prompts
-set -Ux ada_weights     $ada_weights
-set -Ux cls_tokens      $cls_tokens
-set -Ux broad_classes   $broad_classes
-set -Ux sel_set         $sel_set
-set -Ux lrs             $lrs
+set -l sel_set              4 8 9 11 12 14 18 19 22 25
+set -Ux subjects            $subjects
+set -Ux db_prompts          $db_prompts
+set -Ux ada_prompts         $ada_prompts
+set -Ux ada_weights         $ada_weights
+set -Ux cls_tokens          $cls_tokens
+set -Ux broad_classes       $broad_classes
+set -Ux are_faces           $are_faces
+set -Ux ref_prompt_mix_w    $ref_prompt_mix_w
+set -Ux sel_set             $sel_set
+set -Ux lrs                 $lrs
 # "instagram" for the main dataset, to focus on faces.
-set -Ux db_suffix       ", instagram"
-set -Ux data_folder     data
+set -Ux db_suffix           ", instagram"
+set -Ux z_prefixes          $z_prefixes
+set -Ux data_folder         data

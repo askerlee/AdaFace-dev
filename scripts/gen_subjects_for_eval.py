@@ -26,7 +26,7 @@ def parse_args():
                         help="suffix to append to the end of each prompt")
     parser.add_argument("--plain", action="store_true",
                         help="Whether to generate plain samples without compositional prompts")
-    parser.add_argument("--ref_prompt_mix_weight", type=float, default=-1,
+    parser.add_argument("--ref_prompt_mix_weight", type=float, default=argparse.SUPPRESS,
                         help="Weight of the reference prompt to be mixed with the subject prompt")      
     parser.add_argument("--ref_prompt_mix_scheme", type=str, 
                         choices=["none", "add", "concat", "sdeltaconcat", "adeltaconcat"],
@@ -73,12 +73,12 @@ def parse_args():
     parser.add_argument("--v14", dest='v15', action="store_false",
                         help="Whether to use v1.4 model (default: v1.5)")
 
-    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=-1,
+    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=argparse.SUPPRESS,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     parser.add_argument("--clip_last_layer_skip_scheme", type=str, choices=["add", "concat"], 
                         default="add", 
                         help="Scheme for the skip connection between the last layer and second last layer of CLIP text embedder")
-    parser.add_argument("--is_face", action="store_true",
+    parser.add_argument("--is_face", action="store_true", default=argparse.SUPPRESS,
                         help="Whether the generated samples are human faces")
                                                                     
     args = parser.parse_args()
@@ -92,7 +92,7 @@ if __name__ == "__main__":
                                                      vars['broad_classes'], vars['sel_set']
     
     # If ref_prompt_mix_weight is specified in the command line, then use it for all subjects.
-    if args.ref_prompt_mix_weight != -1:
+    if hasattr(args, 'ref_prompt_mix_weight'):
         ref_prompt_mix_weights = [args.ref_prompt_mix_weight] * len(subjects)
     # Otherwise, if ref_prompt_mix_w is specified in the subject file, then use them.
     elif 'ref_prompt_mix_w' in vars:
@@ -122,6 +122,13 @@ if __name__ == "__main__":
     else:
         z_prefixes = [""] * 3
 
+    if hasattr(args, 'is_face'):
+        are_faces = [args.is_face] * len(subjects)
+    elif 'are_faces' in vars:
+        are_faces = vars['are_faces']
+    else:
+        are_faces = [False] * len(subjects)
+
     # db_prompts are phrases, and ada_prompts are multiple individual words.
     # So db_prompts better suit the CLIP text/image matching.
     class_long_tokens = vars['db_prompts']
@@ -148,6 +155,7 @@ if __name__ == "__main__":
         subject_name = subjects[subject_idx]
         class_token  = class_tokens[subject_idx]
         broad_class  = broad_classes[subject_idx]
+        is_face      = are_faces[subject_idx]
         class_long_token = class_long_tokens[subject_idx]
         ref_prompt_mix_weight = ref_prompt_mix_weights[subject_idx]
         z_prefix = z_prefixes[broad_class]
@@ -275,7 +283,7 @@ if __name__ == "__main__":
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
-        if args.clip_last_layer_skip_weight > 0:
+        if hasattr(args, 'clip_last_layer_skip_weight'):
             command_line += f" --clip_last_layer_skip_weight {args.clip_last_layer_skip_weight}"
             command_line += f" --clip_last_layer_skip_scheme {args.clip_last_layer_skip_scheme}"
 
@@ -284,9 +292,9 @@ if __name__ == "__main__":
             subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)
             command_line += f" --compare_with {subject_gt_dir}"
 
-            if args.is_face:
+            if is_face:
                 # Tell stable_txt2img.py to do face-specific evaluation.
-                command_line += f" --is_face"
+                command_line += f" --calc_face_sim"
 
         print(command_line)
         os.system(command_line)
