@@ -111,7 +111,7 @@ def compare_face_folders(path1, path2, num_samples=-1, verbose=False):
     if normal_pair_count > 0:
         avg_distance = total_distance / normal_pair_count
     else:
-        avg_distance = 0
+        avg_distance = 1
 
     avg_similarity = 1 - avg_distance
     print("Normal pairs: %d, exception pairs: %d" %(normal_pair_count, except_pair_count))
