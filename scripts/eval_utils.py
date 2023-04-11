@@ -146,6 +146,8 @@ def parse_subject_file(subject_file_path, method):
                     substrings = split_string(mat.group(2))
                     if re.match("broad_classes|are_faces", var_name):
                         values = [ int(s) for s in substrings ]
+                    elif re.match("ref_prompt_mix_w", var_name):
+                        values = [ float(s) for s in substrings ]
                     elif var_name == 'sel_set':
                         values = [ int(s) - 1 for s in substrings ]
                     else:

@@ -1,6 +1,7 @@
 import argparse
 import os
 import re
+import numpy as np
 from scripts.eval_utils import parse_subject_file, parse_range_str, get_promt_list, find_first_match
 
 def parse_args():
@@ -27,7 +28,10 @@ def parse_args():
     parser.add_argument("--plain", action="store_true",
                         help="Whether to generate plain samples without compositional prompts")
     parser.add_argument("--ref_prompt_mix_weight", type=float, default=argparse.SUPPRESS,
-                        help="Weight of the reference prompt to be mixed with the subject prompt")      
+                        help="Weight of the reference prompt to be mixed with the subject prompt")  
+    parser.add_argument("--ref_prompt_mix_weight_scale", type=float, default=1,
+                        help="Scale coefficient to --ref_prompt_mix_weight")  
+        
     parser.add_argument("--ref_prompt_mix_scheme", type=str, 
                         choices=["none", "add", "concat", "sdeltaconcat", "adeltaconcat"],
                         default="none",
@@ -93,10 +97,10 @@ if __name__ == "__main__":
         
     # If ref_prompt_mix_weight is specified in the command line, then use it for all subjects.
     if hasattr(args, 'ref_prompt_mix_weight'):
-        ref_prompt_mix_weights = [args.ref_prompt_mix_weight] * len(subjects)
+        ref_prompt_mix_weights = [args.ref_prompt_mix_weight * args.ref_prompt_mix_weight_scale] * len(subjects)
     # Otherwise, if ref_prompt_mix_w is specified in the subject file, then use them.
     elif 'ref_prompt_mix_w' in vars:
-        ref_prompt_mix_weights = vars['ref_prompt_mix_w']
+        ref_prompt_mix_weights = np.array(vars['ref_prompt_mix_w']) * args.ref_prompt_mix_weight_scale
     # Otherwise, use the default value 0 (no prompt mixing) for all subjects.
     else:
         ref_prompt_mix_weights = [0] * len(subjects)
@@ -152,13 +156,13 @@ if __name__ == "__main__":
     for subject_idx in subject_indices:
         if args.skipselset and subject_idx in sel_set:
             continue
-        subject_name = subjects[subject_idx]
-        class_token  = class_tokens[subject_idx]
-        broad_class  = broad_classes[subject_idx]
-        is_face      = are_faces[subject_idx]
-        class_long_token = class_long_tokens[subject_idx]
+        subject_name        = subjects[subject_idx]
+        class_token         = class_tokens[subject_idx]
+        broad_class         = broad_classes[subject_idx]
+        is_face             = are_faces[subject_idx]
+        class_long_token    = class_long_tokens[subject_idx]
         ref_prompt_mix_weight = ref_prompt_mix_weights[subject_idx]
-        z_prefix = z_prefixes[broad_class]
+        z_prefix            = z_prefixes[broad_class]
 
         print("Generating samples for subject: " + subject_name)
 
