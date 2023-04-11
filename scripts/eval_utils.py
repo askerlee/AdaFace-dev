@@ -144,7 +144,7 @@ def parse_subject_file(subject_file_path, method):
                 if mat is not None:
                     var_name = mat.group(1)
                     substrings = split_string(mat.group(2))
-                    if var_name == "broad_classes":
+                    if re.match("broad_classes|are_faces", var_name):
                         values = [ int(s) for s in substrings ]
                     elif var_name == 'sel_set':
                         values = [ int(s) - 1 for s in substrings ]

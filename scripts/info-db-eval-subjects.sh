@@ -12,7 +12,7 @@ set -l ada_weights    "1 2"           "1 2"             "1 2"             "1 2" 
 set -l broad_classes  0               0                 0                 0               0       0               1       1       0                0                 1        1       1       1       1       1       1       0               0               0                       0               0               0               0          2                  0               0               0                 0               0
 # No subjects are human faces. $are_faces instructs the generation script 
 # whether to compute face similarity.
-for subject in $subjects; set -a are_faces 0; end
+set -l are_faces      0               0                 0                 0               0       0               0       0       0                0                 0        0       0       0       0       0       0       0               0               0                       0               0               0               0          0                  0               0               0                 0               0
 
 # All subjects use the same prompt mix weight 0.5, except cat, dog5, dog6 which use 2.
 set -l ref_prompt_mix_w   0.5         0.5               0.5               0.5             0.5     0.5             2      0.5     0.5              0.5               0.5      0.5     0.5      2       2       0.5     0.5     0.5             0.5             0.5                     0.5             0.5             0.5             0.5        0.5                0.5             0.5             0.5               0.5             0.5

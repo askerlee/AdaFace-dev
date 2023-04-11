@@ -9,11 +9,12 @@ set -l ada_weights  "1 2"               "1 1 2"               "1 2"            "
 set -l broad_classes  1                 1                     1                1            1              1            1            1                 1          1            1            1                    1            1              1                     1            1              1             1               1            1             1              1                   1                     1           
 # Most subjects are human faces, except for the 3 cats/dogs. $are_faces instructs the generation script 
 # whether to compute face similarity.
-for subject in $subjects; set -a are_faces 1; end
-set $are_faces[9]  0
-set $are_faces[11] 0
-set $are_faces[15] 0
+set -l are_faces     1                  1                     1                1            1              1            1            1                 0          1            0            1                    1            1              0                     1            1              1             1               1            1             1              1                   1                     1
 
+# ref_prompt_mix_w is the mixing weight for the reference prompt in the prompt mix.
+# The reference prompt is the prompt that is used for the reference image. 
+# It is also used for the first image in the mix.
+# The mixing weight is the weight of the reference prompt in the prompt mix.
 # Most subjects use a prompt_mix_w of 0.5, but caradelevingne, taylorswift, timotheechalamet use 4. 
 # jenniferlawrence uses 2.
 set -l ref_prompt_mix_w  0.5            0.5                   4                0.5          0.5            0.5          0.5          2                 0.5        0.5          0.5          0.5                  0.5          0.5            0.5                   0.5          0.5            0.5           0.5             0.5          0.5           0.5            4                   0.5                   0.5

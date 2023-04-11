@@ -90,7 +90,7 @@ if __name__ == "__main__":
     vars = parse_subject_file(args.subject_file, args.method)
     subjects, class_tokens, broad_classes, sel_set = vars['subjects'], vars['class_tokens'], \
                                                      vars['broad_classes'], vars['sel_set']
-    
+        
     # If ref_prompt_mix_weight is specified in the command line, then use it for all subjects.
     if hasattr(args, 'ref_prompt_mix_weight'):
         ref_prompt_mix_weights = [args.ref_prompt_mix_weight] * len(subjects)
