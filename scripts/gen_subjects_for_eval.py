@@ -22,6 +22,9 @@ def parse_args():
                         help="Extra suffix to append to the z suffix")
     parser.add_argument("--z_prefix", type=str, default=None,
                         help="Prefix to prepend to z")
+    # prompt_prefix
+    parser.add_argument("--prompt_prefix", type=str, default="",
+                        help="prefix to prepend to each prompt")
     # prompt_suffix: usually reduces the similarity.
     parser.add_argument("--prompt_suffix", type=str, default="",
                         help="suffix to append to the end of each prompt")
@@ -250,6 +253,8 @@ if __name__ == "__main__":
         print(subject_name, ":")
 
         for prompt, class_short_prompt, class_long_prompt in zip(prompt_list, class_short_prompt_list, class_long_prompt_list):
+            if len(args.prompt_prefix) > 0:
+                prompt = args.prompt_prefix + " " + prompt
             if len(args.prompt_suffix) > 0:
                 prompt = prompt + ", " + args.prompt_suffix
 
