@@ -64,7 +64,7 @@ def demean(x):
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
 # emb_mask: [2, 77, 1]
-def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, do_LN_first=True):
+def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, do_demean_first=True):
     # Mask out the placeholder suffix token(s).
     # If CLIP skip scheme is "concat", then the text embedding channel number is doubled.
     # In this case, we also duplicate the mask along the channel dimension.
@@ -83,15 +83,15 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, do_LN_first=Tru
 
     # A bias vector to a set of conditioning embeddings doesn't change the attention matrix 
     # (though changes the V tensor). So the bias is better removed.
-    # Therefore, do layer normalization before cosine loss, 
+    # Therefore, do demean() before cosine loss, 
     # to remove the effect of bias.
-    # IN addition, different ada layers have significantly different scales. 
-    # Since cosine is scale invariant, de-scale is not necessary and won't have effects.
-    # LN = demean & de-scale. So LN is equivalent to demean() here.
-    if do_LN_first:
-        # F.layer_norm doesn't apply elementwise-affine.
-        delta     = F.layer_norm(delta, delta.shape[1:])
-        ref_delta = F.layer_norm(ref_delta, ref_delta.shape[1:])
+    # In addition, different ada layers have significantly different scales. 
+    # But since cosine is scale invariant, de-scale is not necessary and won't have effects.
+    # LN = demean & de-scale. So in theory, LN is equivalent to demean() here. But LN may introduce
+    # numerical instability. So we use simple demean() here.
+    if do_demean_first:
+        delta     = demean(delta)
+        ref_delta = demean(ref_delta)
 
     # x * x.abs.pow(exponent - 1) will keep the sign of x after pow(exponent).
     ref_delta_pow = ref_delta * ref_delta.abs().pow(exponent - 1)

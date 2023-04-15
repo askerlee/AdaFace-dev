@@ -309,10 +309,10 @@ def mix_embeddings(c1, c2, c2_mix_weight, token_repl_mask, placeholder_indices,
         delta_embedding = (c2 - c1)[placeholder_indices]
         assert delta_embedding.shape[0] == c1.shape[0]
 
-        c2_delta = c2.clone()
+        c2_delta = c1.clone()
         # c2_mix_weight only boosts the delta embedding, and other tokens in c2 always have weight 1.
-        c2_delta[placeholder_indices] = delta_embedding * c2_mix_weight
-        c_mix = torch.cat([ c1 * c1_weights, c2_delta ], dim=1)
+        c2_delta[placeholder_indices] = delta_embedding
+        c_mix = torch.cat([ c1 * c1_weights, c2_delta * c2_mix_weight ], dim=1)
 
     # adeltaconcat: all-delta concat.
     elif mix_scheme == 'adeltaconcat':

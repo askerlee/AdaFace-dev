@@ -210,15 +210,6 @@ def parse_args():
     parser.add_argument("--class_prompt", type=str, default=None,
                         help="the original prompt used for text/image matching evaluation "
                              "(requires --compare_with to be specified)")
-    parser.add_argument("--ref_prompt", type=str, default=None,
-                        help="a class-level reference prompt to be mixed with the subject prompt "
-                             "(if None, then don't mix with reference prompt)")
-    parser.add_argument("--ref_prompt_mix_weight", type=float, default=0,
-                        help="Weight of the reference prompt to be mixed with the subject prompt (0 to disable)")
-    parser.add_argument("--ref_prompt_mix_scheme", type=str, 
-                        choices=["add", "concat", "sdeltaconcat", "adeltaconcat"],
-                        default="adeltaconcat",
-                        help="Scheme for mixing the reference prompt with the subject prompt")
     
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
@@ -320,7 +311,6 @@ def main(opt):
         # Append None to the end of batched_subdirs, for indiv_subdir change detection.
         batched_subdirs.append(None)
         batched_class_long_prompts = [ opt.class_prompt ] * len(batched_prompts)
-        batched_ref_prompts        = [ opt.ref_prompt ] * len(batched_prompts)
 
     else:
         print(f"Reading prompts from {opt.from_file}")
@@ -336,13 +326,12 @@ def main(opt):
             batched_prompts = []
             batched_subdirs = []
             batched_class_long_prompts = []
-            batched_ref_prompts = []
             # Repeat each prompt n_repeats times.
             for i, prompt in enumerate(all_prompts):
                 n_repeat = int(n_repeats[i])
                 # If in this line, n_repeat is larger than batch_size, we need to split it 
                 # into n_batches > 1 batches. These batches share the same indiv_subdir,
-                # class_long_prompt, and ref_prompt.
+                # class_long_prompt.
                 # So no need to repeat them in advance. Just append n_batches copies of them 
                 # to batched_subdirs and batched_class_long_prompts respectively below.
                 indiv_subdir = indiv_subdirs[i]
@@ -361,12 +350,8 @@ def main(opt):
 
                 batched_subdirs.extend([indiv_subdir] * n_batches)
                 batched_class_long_prompts.extend([class_long_prompt] * n_batches)
-                batched_ref_prompts.extend([class_short_prompt] * n_batches)
             # Append None to the end of batched_subdirs, for indiv_subdir change detection.
             batched_subdirs.append(None)
-
-    if opt.ref_prompt_mix_weight != 0:
-        print(f"Using reference prompt mixing scheme '{opt.ref_prompt_mix_scheme}' with weight {opt.ref_prompt_mix_weight}")
 
     if opt.compare_with:
         clip_evator, dino_evator = init_evaluators(opt.gpu)
@@ -408,36 +393,12 @@ def main(opt):
                         print(f"\n{p_i+1}/{prompt_block_count}", prompts[0])
                         uc = None
 
-                        # It's legal that ref_prompt_mix_weight < 0, in which case 
-                        # we enhance the expression of the subject.
-                        if opt.ref_prompt_mix_weight != 0:
-                            # If ref_prompt is None (default), then ref_c is None, i.e., no mixing.
-                            ref_prompt = batched_ref_prompts[p_i]
-                            if ref_prompt is not None:
-                                ref_c = model.get_learned_conditioning(batch_size * [ref_prompt])
-                            else:
-                                ref_c = None
-                        else:
-                            ref_c = None
-
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
-                            # The 3 'concat' schemes doubles the number of channels of conditioning embeddings.
-                            # So we need to repeat uc by 2.
-                            if 'concat' in opt.ref_prompt_mix_scheme and ref_c is not None:
-                                uc_0 = uc[0].repeat(1, 2, 1)
-                                uc = (uc_0, uc[1], uc[2])
 
                         if isinstance(prompts, tuple):
                             prompts = list(prompts)
                         c = model.get_learned_conditioning(prompts)
-                        if ref_c is not None:
-                            # c / ref_c are tuples of (cond, prompts, ada_embedder).
-                            c0_mix = mix_embeddings(c[0], ref_c[0], opt.ref_prompt_mix_weight, 
-                                                     model.embedding_manager.token_repl_mask,
-                                                     model.embedding_manager.placeholder_indices,
-                                                     mix_scheme=opt.ref_prompt_mix_scheme)
-                            c = (c0_mix, c[1], c[2])
 
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                         # When ada embedding is used, c is a tuple of (cond, ada_embedder).
@@ -523,8 +484,7 @@ def main(opt):
                     iter_sig = iter_mat.group(1)
 
                     embedding_sig = "-".join([date_sig, iter_sig, f"scale{opt.scale:.1f}"])
-                    if opt.ref_prompt_mix_weight:
-                        embedding_sig += f"-mix{opt.ref_prompt_mix_weight:.1f}"
+
 
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                     if opt.from_file:

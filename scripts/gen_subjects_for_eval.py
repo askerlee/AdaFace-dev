@@ -30,15 +30,6 @@ def parse_args():
                         help="suffix to append to the end of each prompt")
     parser.add_argument("--plain", action="store_true",
                         help="Whether to generate plain samples without compositional prompts")
-    parser.add_argument("--ref_prompt_mix_weight", type=float, default=argparse.SUPPRESS,
-                        help="Weight of the reference prompt to be mixed with the subject prompt")  
-    parser.add_argument("--ref_prompt_mix_weight_scale", type=float, default=1,
-                        help="Scale coefficient to --ref_prompt_mix_weight")  
-        
-    parser.add_argument("--ref_prompt_mix_scheme", type=str, 
-                        choices=["none", "add", "concat", "sdeltaconcat", "adeltaconcat"],
-                        default="none",
-                        help="Scheme for mixing the reference prompt with the subject prompt")    
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
     # subj_scale: sometimes it improves the similarity, somtimes it reduces it.
@@ -98,28 +89,6 @@ if __name__ == "__main__":
     subjects, class_tokens, broad_classes, sel_set = vars['subjects'], vars['class_tokens'], \
                                                      vars['broad_classes'], vars['sel_set']
         
-    # If ref_prompt_mix_weight is specified in the command line, then use it for all subjects.
-    if hasattr(args, 'ref_prompt_mix_weight'):
-        ref_prompt_mix_weights = [args.ref_prompt_mix_weight * args.ref_prompt_mix_weight_scale] * len(subjects)
-    # Otherwise, if ref_prompt_mix_w is specified in the subject file, then use them.
-    elif 'ref_prompt_mix_w' in vars:
-        ref_prompt_mix_weights = np.array(vars['ref_prompt_mix_w']) * args.ref_prompt_mix_weight_scale
-    # Otherwise, use the default value 0 (no prompt mixing) for all subjects.
-    else:
-        ref_prompt_mix_weights = [0] * len(subjects)
-
-    # ref_prompt_mix_scheme is global, not subject-specific.
-    # If ref_prompt_mix_scheme is specified in the command line, then use it.
-    if args.ref_prompt_mix_scheme != "none":
-        pass
-    # Otherwise, if ref_prompt_mix_scheme is specified in the subject file, then use it.
-    elif 'ref_prompt_mix_scheme' in vars:
-        args.ref_prompt_mix_scheme = vars['ref_prompt_mix_scheme']
-    # If ref_prompt_mix_scheme is neither specified in the command line nor the subject file, 
-    # then use the default scheme "adeltaconcat".
-    else:
-        args.ref_prompt_mix_scheme = "adeltaconcat"
-
     if args.z_prefix is not None:
         # * 3 for 3 broad classes, i.e., all classes use the same args.z_prefix.
         z_prefixes = [args.z_prefix] * 3    
@@ -164,7 +133,6 @@ if __name__ == "__main__":
         broad_class         = broad_classes[subject_idx]
         is_face             = are_faces[subject_idx]
         class_long_token    = class_long_tokens[subject_idx]
-        ref_prompt_mix_weight = ref_prompt_mix_weights[subject_idx]
         z_prefix            = z_prefixes[broad_class]
 
         print("Generating samples for subject: " + subject_name)
@@ -274,21 +242,10 @@ if __name__ == "__main__":
             command_line += f" --from_file {prompt_filepath}"
         else:
             # Do not use a prompt file, but specify --n_samples, --prompt, and --indiv_subdir.
-            # Note only the last prompt/class_prompt/ref_prompt will be used. 
+            # Note only the last prompt/class_prompt will be used. 
             command_line += f" --n_samples {args.n_samples} --indiv_subdir {indiv_subdir}"
             command_line += f" --prompt \"{prompt}\" --class_prompt \"{class_long_prompt}\""
 
-            if ref_prompt_mix_weight != 0:
-                # Use the class_short_prompt as the reference prompt, 
-                # as it's tokenwise aligned with the subject prompt.
-                command_line += f" --ref_prompt \"{class_short_prompt}\""
-
-        # ref_prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
-        if ref_prompt_mix_weight != 0:
-            # Only specify the flag here. The actual reference prompt will be read from the prompt file.
-            command_line += f" --ref_prompt_mix_weight {ref_prompt_mix_weight}" \
-                            f" --ref_prompt_mix_scheme {args.ref_prompt_mix_scheme}"
-            
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
