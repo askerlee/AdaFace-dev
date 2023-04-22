@@ -696,13 +696,6 @@ if __name__ == "__main__":
         config.model.params.cond_stage_config.params.last_layer_skip_weight   = opt.clip_last_layer_skip_weight
         config.model.params.cond_stage_config.params.last_layer_skip_scheme   = opt.clip_last_layer_skip_scheme
 
-        '''
-        if opt.cls_delta_token is None:
-            #                             object   human    cartoon character
-            default_cls_delta_tokens = [ "bike", "person", "mickey" ]
-            opt.cls_delta_token = default_cls_delta_tokens[opt.broad_class]
-        '''
-        
         config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
         config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
         # cls_delta_token is passed to the embedding manager, to check if the token consists of only
@@ -767,7 +760,7 @@ if __name__ == "__main__":
                 }
             },
         }
-        default_logger_cfg = default_logger_cfgs["testtube"]
+        default_logger_cfg = default_logger_cfgs["wandb"]
         if "logger" in lightning_config:
             logger_cfg = lightning_config.logger
         else:
