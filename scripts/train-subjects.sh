@@ -14,11 +14,11 @@ if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
-    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-db-eval-subjects.txt --use_cls_token ada 1 25"
+    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-db-eval-subjects.sh --use_cls_token ada 1 25"
     exit 1
 end
 
-set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file scripts/info-subjects.txt
+set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file scripts/info-subjects.sh
 fish $subj_file; or exit 1
 
 set -q _flag_gpu; and set GPU $_flag_gpu; or set GPU 0

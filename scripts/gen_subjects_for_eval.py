@@ -55,7 +55,7 @@ def parse_args():
                         help="Template of parent directory to save generated samples")
 
     # File path containing composition case information
-    parser.add_argument("--subject_file", type=str, default="scripts/info-db-eval-subjects.sh", 
+    parser.add_argument("--subjfile", type=str, default="scripts/info-subjects.sh", 
                         help="subject info script file")
     # The range of indices of subjects to generate
     parser.add_argument("--range", type=str, default=None, 
@@ -85,7 +85,7 @@ def parse_args():
 if __name__ == "__main__":
     
     args = parse_args()
-    vars = parse_subject_file(args.subject_file, args.method)
+    vars = parse_subject_file(args.subjfile, args.method)
     subjects, class_tokens, broad_classes, sel_set = vars['subjects'], vars['class_tokens'], \
                                                      vars['broad_classes'], vars['sel_set']
         

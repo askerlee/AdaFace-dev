@@ -14,7 +14,7 @@ set -q _flag_gpu; and set GPU $_flag_gpu; or set GPU 0
 set L $argv[1]
 set H $argv[2]
 
-set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file scripts/info-subjects.txt
+set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file scripts/info-subjects.sh
 fish $subj_file; or exit 1
 
 set MODEL_NAME "runwayml/stable-diffusion-v1-5"
