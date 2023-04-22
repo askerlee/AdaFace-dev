@@ -29,6 +29,7 @@ from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_t
 from ldm.models.diffusion.ddim import DDIMSampler
 import copy
 from functools import partial
+import random
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -80,8 +81,9 @@ class DDPM(pl.LightningModule):
                  logvar_init=0.,
                  use_layerwise_embedding=False,
                  use_ada_embedding=False,
-                 composition_delta_reg_iter_gap=-1,
+                 composition_regs_iter_gap=-1,
                  composition_delta_reg_weight=0.,
+                 composition_prompt_mix_reg_weight=0.,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -97,13 +99,14 @@ class DDPM(pl.LightningModule):
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.use_ada_embedding = use_layerwise_embedding and use_ada_embedding
-        self.composition_delta_reg_iter_gap = composition_delta_reg_iter_gap
-        self.composition_delta_reg_weight   = composition_delta_reg_weight
+        self.composition_regs_iter_gap       = composition_regs_iter_gap
+        self.composition_delta_reg_weight    = composition_delta_reg_weight
+        self.composition_prompt_mix_reg_weight = composition_prompt_mix_reg_weight
         self.do_static_comp_delta_reg       = False
         self.do_ada_comp_delta_reg          = False
+        self.do_comp_prompt_mix_reg         = False
 
-        self.model = DiffusionWrapper(unet_config, conditioning_key, 
-                                      use_layerwise_embedding, use_ada_embedding)
+        self.model = DiffusionWrapper(unet_config, conditioning_key)
         count_params(self.model, verbose=True)
         self.use_ema = use_ema
         if self.use_ema:
@@ -366,12 +369,36 @@ class DDPM(pl.LightningModule):
         return loss, loss_dict
 
     def training_step(self, batch, batch_idx):
-        self.do_static_comp_delta_reg = self.composition_delta_reg_iter_gap > 0 \
-                                            and self.composition_delta_reg_weight > 0
-        self.do_ada_comp_delta_reg    = self.do_static_comp_delta_reg \
-                                            and self.use_ada_embedding \
-                                            and self.global_step % self.composition_delta_reg_iter_gap == 0
-        
+        # No matter wheter the scheme is layerwise or not,
+        # as long as composition_delta_reg_weight > 0, do static comp delta reg.
+        self.do_static_comp_delta_reg = self.composition_delta_reg_weight > 0
+
+        # How many regularizations are done intermittently during the training iterations?
+        interm_reg_types = []
+        # do_ada_comp_delta_reg only if do_static_comp_delta_reg and use_ada_embedding.
+        if self.do_static_comp_delta_reg and self.use_ada_embedding:
+            interm_reg_types.append('do_ada_comp_delta_reg')
+        if self.composition_prompt_mix_reg_weight > 0:
+            interm_reg_types.append('do_comp_prompt_mix_reg')
+
+        N_INTERM_REGS = len(interm_reg_types)
+        self.do_ada_comp_delta_reg    = False
+        self.do_comp_prompt_mix_reg   = False
+
+        # If N_INTERM_REGS == 0, then no intermittent regularizations, set the two flags to False.
+        if N_INTERM_REGS > 0 and self.global_step % self.composition_regs_iter_gap == 0:
+            # Alternate among the regularizations in interm_reg_types. 
+            # If both do_ada_comp_delta_reg and do_comp_prompt_mix_reg,
+            # then alternate between do_ada_comp_delta_reg and do_comp_prompt_mix_reg.
+            # The two regularizations cannot be done in the same batch, as they require
+            # different handling of prompts and are calculated by different loss functions.
+            reg_type_idx = (self.global_step // self.composition_regs_iter_gap) % N_INTERM_REGS
+            reg_type     = interm_reg_types[reg_type_idx]
+            if reg_type   == 'do_ada_comp_delta_reg':
+                self.do_ada_comp_delta_reg    = True
+            elif reg_type == 'do_comp_prompt_mix_reg':
+                self.do_comp_prompt_mix_reg   = True
+            
         loss, loss_dict = self.shared_step(batch)
 
         self.log_dict(loss_dict, prog_bar=True,
@@ -621,36 +648,43 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
         return self.scale_factor * z
 
-    # c: a batch of templates, ['an illustration of a dirty z', ...]
-    def get_learned_conditioning(self, c, img_mask=None):
-        # print(c, id(self.cond_stage_model))
+    # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
+    def get_learned_conditioning(self, cond_in, img_mask=None):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
-                # c: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
+                # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
                 # each prompt in c is encoded as [1, 77, 768].
                 # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
-                c_in = copy.copy(c)
+                c_in = copy.copy(cond_in)
                 # c: [128, 77, 768]
-                c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
+                c = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
+                
+                extra_info = { 'use_layerwise_context': self.use_layerwise_embedding, 
+                               'use_ada_context':       self.use_ada_embedding }
+                
                 if self.use_ada_embedding:
-                    embedder = self.get_ada_conditioning
+                    ada_embedder = self.get_ada_conditioning
                     # Initialize the ada embedding cache, so that the subsequent calls to 
                     # EmbeddingManager.get_ada_embedding() will store the ada embedding 
                     # for each layer into the cache. 
                     # The cache will be used in composition_delta_loss().
                     self.embedding_manager.init_ada_embedding_cache()
-                    if self.do_ada_comp_delta_reg and img_mask is not None:
+                    # The image mask here is used when computing Ada embeddings in embedding_manager.
+                    # If do_comp_prompt_mix_reg, the image mask is also needed to repeat. 
+                    if (self.do_ada_comp_delta_reg or self.do_comp_prompt_mix_reg) and img_mask is not None:
                         # The image batch is repeated twice, so img_mask is also repeated twice.
                         img_mask = img_mask.repeat(2, 1, 1, 1)
                     self.embedding_manager.set_img_mask(img_mask)
-                    c = (c, c_in, embedder)
+                    extra_info['ada_embedder'] = ada_embedder
+
+                c = (c, c_in, extra_info)
             else:
-                c = self.cond_stage_model(c)
+                c = self.cond_stage_model(cond_in)
         else:
             assert hasattr(self.cond_stage_model, self.cond_stage_forward)
-            c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
+            c = getattr(self.cond_stage_model, self.cond_stage_forward)(cond_in)
         return c
 
     # get_ada_conditioning() is a callback function called iteratively by each layer in UNet
@@ -982,21 +1016,25 @@ class LatentDiffusion(DDPM):
     # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
     # batch: { 'caption':               ['an illustration of a dirty z',                    
     #                                    'a depiction of a z'], 
-    #          'subj_prompt_comp':      ['an illustration of a dirty z dancing with a boy', 
+    #          'subj_prompt_comps':     ['an illustration of a dirty z dancing with a boy', 
     #                                    'a depiction of a z kicking a punching bag'],
-    #          'cls_prompt_single':     ['an illustration of a dirty christopher',          
-    #                                    'a depiction of a john'],
-    #                                    'a depiction of a john kicking a punching bag']
-    #          'cls_prompt_comp'  :     ['an illustration of a dirty christopher dancing with a boy', 
+    #          'cls_prompt_single':     ['an illustration of a dirty person',          
+    #                                    'a depiction of a person'],
+    #                                    'a depiction of a person kicking a punching bag']
+    #          'cls_prompt_comps'  :    ['an illustration of a dirty person dancing with a boy', 
+    #                                    'a depiction of a person kicking a punching bag'],
     #          'image':   [2, 512, 512, 3] }
     # ANCHOR[id=shared_step]
     def shared_step(self, batch, **kwargs):
         # c = batch["caption"]
         x, c = self.get_input(batch, self.first_stage_key)
-        if self.do_static_comp_delta_reg:
+        # do_static_comp_delta_reg is applicable to Ada, Static layerwise embedding 
+        # or traditional TI.        
+        # do_ada_comp_delta_reg implies do_static_comp_delta_reg. So only check do_static_comp_delta_reg.
+        if self.do_static_comp_delta_reg or self.do_comp_prompt_mix_reg:
             subj_prompt_comps = []
             # Each prompt_comps consists of multiple prompts separated by "|".
-            # Split them into a list of subj_prompt_comp/cls_prompt_comp.
+            # Split them into a list of subj_prompt_comps/cls_prompt_comps.
             for prompt_comps in batch['subj_prompt_comp']:
                 subj_prompt_comps.append(prompt_comps.split("|"))
             cls_prompt_comps = []
@@ -1005,18 +1043,18 @@ class LatentDiffusion(DDPM):
             cls_prompt_single = batch['cls_prompt_single']
             # REPEATS: how many prompts correspond to each image.
             REPEATS = len(subj_prompt_comps[0])
-            if REPEATS == 1 or self.do_ada_comp_delta_reg:
-                # When this iter computes ada composition delta loss, 
+            if REPEATS == 1 or self.do_ada_comp_delta_reg or self.do_comp_prompt_mix_reg:
+                # When this iter computes ada composition delta loss / compositional prompt mix loss, 
                 # only use the first of the composition prompts (in effect num_compositions_per_image=1),
                 # otherwise it will use more than 40G RAM.
-                subj_prompt_comp = [ prompts[0] for prompts in subj_prompt_comps ]
-                cls_prompt_comp  = [ prompts[0] for prompts in cls_prompt_comps ]
-                composition_delta_prompts = (subj_prompt_comp, cls_prompt_single, cls_prompt_comp)
+                subj_prompt_comps = [ prompts[0] for prompts in subj_prompt_comps ]
+                cls_prompt_comps  = [ prompts[0] for prompts in cls_prompt_comps ]
+                composition_delta_prompts = (subj_prompt_comps, cls_prompt_single, cls_prompt_comps)
             else:
                 subj_prompt_comps2 = []
-                cls_prompt_comp2 = []
+                cls_prompt_comp2   = []
                 # Suppose R = num_compositions_per_image, and B the batch size.
-                # subj_prompt_comps, cls_prompt_comps are like [ (p1_1,..., p1_R), ..., (pB_1,..., pB_R) ].
+                # Each of subj_prompt_comps, cls_prompt_comps is like [ (p1_1,..., p1_R), ..., (pB_1,..., pB_R) ].
                 # Interlace the list of composition prompt lists into one list:
                 # [ p1_1, p2_1, ..., pB_1, p1_2, p2_2, ..., pB_2, ..., p1_R, p2_R, ..., pB_R ].
                 # Interlacing makes it easy to choose the first B prompts (just as for a normal batch). 
@@ -1052,59 +1090,101 @@ class LatentDiffusion(DDPM):
             # c: condition, a prompt template. 
             # get_learned_conditioning(): convert c to a [B, 77, 768] tensor.
             if self.cond_stage_trainable:
-                # c: ['an illustration of a dirty z', 'an illustration of the cool z']
-                if self.do_static_comp_delta_reg:
+                # do_static_comp_delta_reg is applicable to Ada, Static layerwise embedding 
+                # or traditional TI.
+                # do_ada_comp_delta_reg implies do_static_comp_delta_reg. So only check do_static_comp_delta_reg.
+                # c: subj_prompt_single, which are plain prompts like 
+                # ['an illustration of a dirty z', 'an illustration of the cool z']
+                if self.do_static_comp_delta_reg or self.do_comp_prompt_mix_reg:
                     subj_prompt_comps, cls_prompt_single, cls_prompt_comps = composition_delta_prompts
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
-                    N_INST   = len(x)
-                    N_EMBEDS = N_INST * N_LAYERS
-                    # c == subj_prompt_single.
-                    c_delta = c + subj_prompt_comps + cls_prompt_single + cls_prompt_comps
-                    # c_delta_static is a tuple: (c, c_in, embedder).  c_in = c_delta above.
-                    # *_static means static embeddings.
-                    c_delta_static = self.get_learned_conditioning(c_delta, img_mask=img_mask)
-                    if self.use_ada_embedding:
-                        # c_real: static embeddings, [128, 77, 768]. 128 = 8 * 16. 
-                        # 8 is the total number of prompts in c_delta. Each prompt is converted to 16 embeddings.
-                        c_real, c_in, embedder = c_delta_static
-                        if self.do_ada_comp_delta_reg:
-                            # Do ada composition delta loss in this iteration. 
-                            # Only keep the embeddings corresponding to subj_prompt_single (the real c_in) 
-                            # and subj_prompt_comp in c, as their corresponding ada embeddings 
-                            # are dynamical. On the other hand, cls_prompt_single and cls_prompt_comp 
-                            # are static, so no need to be fed to UNet.
-                            # In shared_step(), we have chosen a subset of the images, 
-                            # to make sure that the effective num_compositions_per_image = 1.
-                            # subj_prompt_comps, cls_prompt_comps are like: [ p1_1, p2_1, ..., pB_1 ].
-                            # c_in is the concatenation of
-                            # (real c_in, subj_prompt_comps, cls_prompt_single, cls_prompt_comps).
-                            # Each prompt is converted to 16 layerwise static embeddings in c_real.
-                            # So c_real[:N_EMBEDS*2] is the 2*B*16 static embeddings of (real c_in, subj_prompt_comps), 
-                            # and c_in[:N_INST*2] is (real c_in, subj_prompt_comps).
-                            # c_in is converted to 2*B*16 ada embeddings of (real c_in, subj_prompt_comps).
-                            # We need both sets of ada embeddings to compute the composition delta loss.
-                            c = (c_real[:N_EMBEDS*2], c_in[:N_INST*2], embedder)
-                        else:
-                            # Don't do ada composition delta loss in this iteration. 
-                            # So restore the original c.
-                            # Suppose R = num_compositions_per_image.
-                            # subj_prompt_comps, cls_prompt_comps are:
-                            # [ p1_1, p2_1, ..., pB_1, p1_2, p2_2, ..., pB_2, ..., p1_R, p2_R, ..., pB_R ].
-                            # c_in is the concatenation of 
-                            # (real c_in * R, subj_prompt_comps, cls_prompt_single, cls_prompt_comps).
-                            # Each prompt is converted to 16 layerwise static embeddings in c_real.
-                            # So c_real[:N_EMBEDS] is the B*16 embeddings of real c_in,
-                            # and c_in[:N_INST] is the real c_in.
-                            c = (c_real[:N_EMBEDS], c_in[:N_INST], embedder)
+                    ORIG_BS  = len(x)
+                    N_EMBEDS = ORIG_BS * N_LAYERS
+                    subj_prompt_single = c
+                    prompts_delta = subj_prompt_single + subj_prompt_comps \
+                                    + cls_prompt_single + cls_prompt_comps
+                    # c_static_emb: the static embeddings [4 * N_EMBEDS, 77, 768], 
+                    # 4 * N_EMBEDS = 4 * ORIG_BS * N_LAYERS,
+                    # whose layer dimension (N_LAYERS) is tucked into the batch dimension. 
+                    # c_in: a copy of prompts_delta.
+                    # extra_info: a dict that contains extra info.
+                    c_static_emb, c_in, extra_info = self.get_learned_conditioning(prompts_delta, img_mask=img_mask)
+                    extra_info['orig_bs'] = ORIG_BS
 
-                        self.c_delta_static = c_real
+                    # do_comp_prompt_mix_reg is exclusive with do_ada_comp_delta_reg.
+                    # i.e., they won't be activated at the same time.
+                    if self.do_comp_prompt_mix_reg:
+                        # Only keep the static embeddings and prompts of subj_prompt_comps.
+                        # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
+                        # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
+                        # So we keep the subset of c_in that corresponds to subj_prompt_comps, 
+                        # to get their ada embeddings.
+                        # Repeat c_static_emb2 twice. The second copy will be used to mix with
+                        # the embeddings of cls_prompt_comps.
+                        c_static_emb2 = c_static_emb[N_EMBEDS:N_EMBEDS*2].repeat(2, 1, 1)
+                        # Repeat subj_prompt_comps twice.
+                        c_in2         = c_in[ORIG_BS:ORIG_BS*2] * 2
+                        # c_static_emb[N_EMBEDS*3:] is the B*16 embeddings of cls_prompt_comps.
+                        # First element of the tuple, None, tells UNet that the embeddings of 
+                        # subj_prompt_single will be simply repeated to match the length of the mixed embeddings.
+                        # Second element of the tuple, c_static_emb[N_EMBEDS*3:], is the embeddings of cls_prompt_comps.
+                        # It tells UNet that the embeddings of subj_prompt_comps will be 
+                        # mixed (concatenated) with those of cls_prompt_comps.
+                        extra_info['mix_context_blocks'] = (None, c_static_emb[N_EMBEDS*3:])
+
+                    elif self.do_ada_comp_delta_reg:
+                        # Do ada composition delta loss in this iteration. 
+                        # c_static_emb: static embeddings, [128, 77, 768]. 128 = 8 * 16. 
+                        # 8 is the total number of prompts in prompts_delta. 
+                        # Each prompt is converted to 16 embeddings.
+                        # 8 = 2 * 4. 2: bs. 4: subj_prompt_single, subj_prompt_comps, cls_prompt_single, cls_prompt_comps.
+                        # if do_comp_prompt_mix_reg or do_ada_comp_delta_reg, then in shared_step(), 
+                        #LINK #shared_step 
+                        # we have chosen a subset of the images, to make sure 
+                        # effectively num_compositions_per_image = 1.
+                        # Only keep the static embeddings corresponding to subj_prompt_single
+                        # and subj_prompt_comps, as their corresponding ada embeddings 
+                        # are dynamic. The embeddings of cls_prompt_single and cls_prompt_comp are static, 
+                        # so no need to feed them to UNet.
+                        # subj_prompt_comps, cls_prompt_comps are like: [ p1_1, p2_1, ..., pB_1 ].
+                        # c_in is the concatenation of
+                        # (subj_prompt_single, subj_prompt_comps, cls_prompt_single, cls_prompt_comps).
+                        # Each prompt is converted to 16 layerwise static embeddings in c_static_emb.
+                        # So c_in[:ORIG_BS*2] is (subj_prompt_single, subj_prompt_comps),
+                        # which is converted to 2*B*16 static embeddings of (subj_prompt_single, subj_prompt_comps),
+                        # corresponding to c_static_emb[:N_EMBEDS*2].
+                        # c_in[:ORIG_BS*2] is also converted to two sets of ada embeddings of (subj_prompt_single, subj_prompt_comps),
+                        # totally 2*B*16 embeddings, the same as the static embeddings c_static_emb[:N_EMBEDS*2].
+                        # To compute the delta loss on ada embeddings, we need these two sets of ada embeddings.
+                        c_static_emb2 = c_static_emb[:N_EMBEDS*2]
+                        c_in2         = c_in[:ORIG_BS*2]
                     else:
-                        c = c_delta_static[:N_EMBEDS]
-                        self.c_delta_static = c_delta_static
+                        # Don't do ada composition delta loss or compositional mix loss in this iteration. 
+                        # This includes the subject scheme is static layerwise embedding or traditional TI.
+                        # So restore the original subj_prompt_single embeddings and prompts.
+                        # Suppose R = num_compositions_per_image.
+                        # subj_prompt_comps, cls_prompt_comps are:
+                        # [ p1_1, p2_1, ..., pB_1, p1_2, p2_2, ..., pB_2, ..., p1_R, p2_R, ..., pB_R ].
+                        # c_in is the concatenation of 
+                        # (subj_prompt_single * R, subj_prompt_comps, cls_prompt_single, cls_prompt_comps).
+                        # Each prompt is converted to 16 layerwise static embeddings in c_static_emb.
+                        # So c_static_emb[:N_EMBEDS] is the B*16 embeddings of subj_prompt_single,
+                        # and c_in[:ORIG_BS] is subj_prompt_single.
+                        c_static_emb2 = c_static_emb[:N_EMBEDS]
+                        c_in2         = c_in[:ORIG_BS]
+                    
+                    # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
+                    # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
+                    c = (c_static_emb2, c_in2, extra_info)
+                    # The full c_static_emb (embeddings of subj_prompt_single, subj_prompt_comps, 
+                    # cls_prompt_single, cls_prompt_comps) is backed up to be used 
+                    # to compute the static delta loss later.
+                    self.c_static_emb = c_static_emb
 
                 else:
+                    # No delta loss or compositional mix loss. Keep the tuple c unchanged.
                     c = self.get_learned_conditioning(c)
-                    self.c_delta_static = None
+                    self.c_static_emb = None
 
             # shorten_cond_schedule: False. Skipped.
             if self.shorten_cond_schedule:  # TODO: drop this option
@@ -1254,25 +1334,35 @@ class LatentDiffusion(DDPM):
         return mean_flat(kl_prior) / np.log(2.0)
 
     # t: steps.
-    # cond: (cc, c_in, embedder). c_in is the textual prompts. 
-    # embedder: a function to convert c_in to subject embeddings.
+    # cond: (c_static_emb, c_in, extra_info). c_in is the textual prompts. 
+    # extra_info: a dict that contains 'ada_embedder' and other fields. 
+    # ada_embedder: a function to convert c_in to ada embeddings.
     # ANCHOR[id=p_losses]
     def p_losses(self, x_start, cond, t, noise=None, img_mask=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        if self.use_ada_embedding and self.do_ada_comp_delta_reg:
-            # To compute the delta loss, we need two copies of the input noise, to go through 
-            # U-Net under different conditioning embeddings. 
+        if self.do_ada_comp_delta_reg or self.do_comp_prompt_mix_reg:
+            # To compute the delta loss / prompt mixing loss, we need two copies of the input noise, 
+            # to go through U-Net under different conditioning embeddings. 
             x_noisy = x_noisy.repeat(2, 1, 1, 1)
             t       = t.repeat(2)
 
         model_output = self.apply_model(x_noisy, t, cond)
-        if self.use_ada_embedding and self.do_ada_comp_delta_reg:
+
+        model_output_mix = None
+        if self.do_ada_comp_delta_reg:
             # Restore model_output and t.
-            # Do not use the second half of the model output, as they are used 
+            # Discard the second half of the model output, as they are used 
             # to obtain the ada embeddings only, which are then used as the input of 
-            # the delta regularization. The final images are useless.
+            # the delta regularization. The output images are useless.
+            # If using static layerwise embeddings, delta reg applies to all images. 
+            # No need to take out the second half.  
             model_output = model_output[:model_output.shape[0] // 2]
+            t = t[:t.shape[0] // 2]
+        elif self.do_comp_prompt_mix_reg:
+            # If we do compositional prompt mixing, we need the final images of the 
+            # second half as the reconstruction objective for compositional regularization.
+            model_output, model_output_mix = torch.split(model_output, model_output.shape[0] // 2, dim=0)
             t = t[:t.shape[0] // 2]
 
         loss_dict = {}
@@ -1289,38 +1379,58 @@ class LatentDiffusion(DDPM):
         if img_mask is not None:
             target       = target       * img_mask
             model_output = model_output * img_mask
+            if model_output_mix is not None:
+                model_output_mix = model_output_mix * img_mask
+                
+        # Ordinary image reconstruction loss under the guidance of subj_prompt_single.
+        if not self.do_comp_prompt_mix_reg:
+            # The losses of different sample images in the batch 
+            # will be weighted differently according to t.
+            loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
+            loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
 
-        loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
-        loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
+            logvar_t = self.logvar.to(self.device)[t]
+            loss = loss_simple / torch.exp(logvar_t) + logvar_t
+            # loss = loss_simple / torch.exp(self.logvar) + self.logvar
+            if self.learn_logvar:
+                loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
+                loss_dict.update({'logvar': self.logvar.data.mean()})
 
-        logvar_t = self.logvar.to(self.device)[t]
-        loss = loss_simple / torch.exp(logvar_t) + logvar_t
-        # loss = loss_simple / torch.exp(self.logvar) + self.logvar
-        if self.learn_logvar:
-            loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
-            loss_dict.update({'logvar': self.logvar.data.mean()})
+            # l_simple_weight = 1.
+            loss = self.l_simple_weight * loss.mean()
 
-        loss = self.l_simple_weight * loss.mean()
+            loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
+            loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
+            loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
+            # original_elbo_weight = 0, so that loss_vlb is disabled.
+            loss += (self.original_elbo_weight * loss_vlb)
+        else:
+            # Images generated under subj_prompt_comps should be similar to
+            # those generated under the mixture of (subj_prompt_comps, cls_prompt_comps). 
+            # No ordinary image reconstruction loss under subj_prompt_single.
+            # Similar to the ordinary reconstruction loss, the losses of different sample images 
+            # in the batch will be weighted differently according to t.
+            loss_comp_prompt_mix = self.get_loss(model_output, model_output_mix, mean=False).mean([1, 2, 3])
+            logvar_t = self.logvar.to(self.device)[t]
+            loss_comp_prompt_mix = loss_comp_prompt_mix / torch.exp(logvar_t) + logvar_t
 
-        loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
-        loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
-        loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
-        loss += (self.original_elbo_weight * loss_vlb)
-        loss_dict.update({f'{prefix}/loss': loss})
+            loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_comp_prompt_mix.mean()})
+            loss = self.composition_prompt_mix_reg_weight * loss_comp_prompt_mix.mean()
 
         if self.embedding_reg_weight > 0:
             loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
             loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg})
             loss += (self.embedding_reg_weight * loss_embedding_reg)
 
-            if self.do_static_comp_delta_reg:
-                loss_comp_delta_reg = self.embedding_manager.composition_delta_loss( 
-                                        self.do_ada_comp_delta_reg, self.c_delta_static
-                                      ).mean()
-                loss_dict.update({f'{prefix}/loss_comp_delta_reg': loss_comp_delta_reg})
-                loss += (self.composition_delta_reg_weight * loss_comp_delta_reg)
+        if self.do_static_comp_delta_reg:
+            # do_ada_comp_delta_reg controls whether to do ada comp delta reg here.
+            loss_comp_delta_reg = self.embedding_manager.composition_delta_loss( 
+                                    self.do_ada_comp_delta_reg, self.c_static_emb
+                                    ).mean()
+            loss_dict.update({f'{prefix}/loss_comp_delta_reg': loss_comp_delta_reg})
+            loss += (self.composition_delta_reg_weight * loss_comp_delta_reg)
 
-            loss_dict.update({f'{prefix}/loss': loss})
+        loss_dict.update({f'{prefix}/loss': loss})
 
         return loss, loss_dict
 
@@ -1752,15 +1862,12 @@ class LatentDiffusion(DDPM):
 
 
 class DiffusionWrapper(pl.LightningModule):
-    def __init__(self, diff_model_config, conditioning_key, 
-                 use_layerwise_embedding=False, use_ada_embedding=False):
+    def __init__(self, diff_model_config, conditioning_key):
         super().__init__()
         # diffusion_model: UNetModel
         self.diffusion_model = instantiate_from_config(diff_model_config)
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm']
-        self.use_layerwise_embedding = use_layerwise_embedding
-        self.use_ada_embedding       = use_ada_embedding
 
     # t: a 1-D batch of timesteps (during training: randomly sample one timestep for each instance).
     def forward(self, x, t, c_concat: list = None, c_crossattn: list = None):
@@ -1773,16 +1880,14 @@ class DiffusionWrapper(pl.LightningModule):
             # For textual inversion, there's usually only one element tensor in c_crossattn.
             # So we take c_crossattn[0] directly, instead of torch.cat() on a list of tensors.
             if isinstance(c_crossattn[0], tuple):
-                cc, c_in, embedder = c_crossattn[0]
+                c_static_emb, c_in, extra_info = c_crossattn[0]
             else:
-                cc       = c_crossattn[0]
-                c_in     = None
-                embedder = None
-            # cc = torch.cat(c_crossattn, 1)
+                c_static_emb    = c_crossattn[0]
+                c_in            = None
+                extra_info      = None
+            # c_static_emb = torch.cat(c_crossattn, 1)
             # self.diffusion_model: UNetModel.
-            out = self.diffusion_model(x, t, context=cc, context_in=c_in, embedder=embedder,
-                                       use_layerwise_context=self.use_layerwise_embedding,
-                                       use_ada_context=self.use_ada_embedding)
+            out = self.diffusion_model(x, t, context=c_static_emb, context_in=c_in, extra_info=extra_info)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
             cc = torch.cat(c_crossattn, 1)

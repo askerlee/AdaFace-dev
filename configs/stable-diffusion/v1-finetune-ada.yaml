@@ -24,8 +24,10 @@ model:
     model_lr: 0.0
     use_layerwise_embedding: True
     use_ada_embedding: True
-    composition_delta_reg_iter_gap: 5
-    composition_delta_reg_weight: 0.001
+    # composition_regs includes composition_delta_reg and composition_prompt_mix_reg.
+    composition_regs_iter_gap: 5
+    composition_delta_reg_weight:       0.001
+    composition_prompt_mix_reg_weight:  0.001
 
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
@@ -51,7 +53,9 @@ model:
         use_layerwise_embedding: True
         layerwise_lora_rank_token_ratio: 2
         ada_emb_weight: 0.5
-        composition_delta_reg_iter_gap: 5
+        # composition_regs alternates between composition_delta_reg and composition_prompt_mix_reg.
+        # So composition_delta_reg_iter_gap = 2 * composition_regs_iter_gap = 10.
+        composition_delta_reg_iter_gap: 10
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

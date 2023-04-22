@@ -215,16 +215,13 @@ def get_parser(**parser_kwargs):
         type=float, default=-1,
         help="Weight of ada embeddings (in contrast to static embeddings)")
 
-    # composition_delta_reg_weight
     parser.add_argument("--composition_delta_reg_weight",
         type=float, default=-1,
         help="Composition delta regularization weight")
 
-    # min_rand_scaling
     parser.add_argument("--min_rand_scaling",
                         type=float, default=0.7, 
                         help="Minimum random scaling factor of training images (set to -1 to disable)")
-    # max_rand_scaling
     parser.add_argument("--max_rand_scaling",
                         type=float, default=1,
                         help="Maximum random scaling factor of training images (default: 1)")
@@ -727,12 +724,6 @@ if __name__ == "__main__":
 
         if opt.embedding_reg_weight >= 0:
             config.model.params.embedding_reg_weight = opt.embedding_reg_weight
-
-        use_diff_ada_emb_weight = False
-        if use_diff_ada_emb_weight and opt.ada_emb_weight == -1:
-            # Smaller ada embedding weight for objects and cartoon characters, larger for humans.
-            default_ada_emb_weights = [ 0.2, 0.5, 0.2 ]
-            opt.ada_emb_weight = default_ada_emb_weights[opt.broad_class]
         
         if opt.ada_emb_weight != -1:
             config.model.params.personalization_config.params.ada_emb_weight = opt.ada_emb_weight

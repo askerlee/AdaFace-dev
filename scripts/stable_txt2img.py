@@ -18,7 +18,7 @@ from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from scripts.eval_utils import compare_folders, compare_face_folders, \
-                                init_evaluators, set_tf_gpu, mix_embeddings
+                                init_evaluators, set_tf_gpu
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -276,12 +276,6 @@ def main(opt):
     # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
     model.cond_stage_model.set_last_layer_skip(opt.clip_last_layer_skip_weight, 
                                                opt.clip_last_layer_skip_scheme)
-
-    use_diff_ada_emb_weight = False
-    if use_diff_ada_emb_weight and opt.ada_emb_weight == -1:
-        # Smaller ada embedding weight for objects and cartoon characters, larger for humans.
-        default_ada_emb_weights = [ 0.2, 0.5, 0.2 ]
-        opt.ada_emb_weight = default_ada_emb_weights[opt.broad_class]
 
     if opt.ada_emb_weight != -1:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight

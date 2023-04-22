@@ -12,6 +12,9 @@ from ldm.modules.diffusionmodules.util import make_ddim_sampling_parameters, mak
 class DDIMSampler(object):
     def __init__(self, model, schedule="linear", **kwargs):
         super().__init__()
+        # model: LatentDiffusion (inherits DDPM)
+        # model is used by calling model.apply_model() -> 
+        # DiffusionWrapper.forward() -> UNetModel.forward().
         self.model = model
         self.ddpm_num_timesteps = model.num_timesteps
         self.schedule = schedule
@@ -84,7 +87,8 @@ class DDIMSampler(object):
                 if cbs != batch_size:
                     print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
             else:
-                # When doing ada embedding, conditioning is changed to (conditioning, embedder).
+                # conditioning is actually (conditioning, c_in, extra_info).
+                # So conditioning[0] is the actual conditioning.
                 if isinstance(conditioning, tuple):
                     conditioning_ = conditioning[0]
                 else:
@@ -179,17 +183,18 @@ class DDIMSampler(object):
             x_in = torch.cat([x] * 2)
             t_in = torch.cat([t] * 2)
             if isinstance(c, tuple):
-                c_c, c_in_c, embedder = c
-                c_u, c_in_u, embedder = unconditional_conditioning
+                c_c, c_in_c, extra_info = c
+                c_u, c_in_u, _ = unconditional_conditioning
                 # Concatenated conditining embedding in the order of (unconditional, conditional)
                 uc_c = torch.cat([c_u, c_c])
                 # Concatenated input context (prompts) in the order of (unconditional, conditional)
                 uc_c_in = sum([c_in_u, c_in_c], [])
                 # Combined context tuple.
-                c2 = (uc_c, uc_c_in, embedder)
+                c2 = (uc_c, uc_c_in, extra_info)
             else:
                 c2 = torch.cat([unconditional_conditioning, c])
 
+            # model.apply_model() -> DiffusionWrapper.forward() -> UNetModel.forward().
             e_t_uncond, e_t = self.model.apply_model(x_in, t_in, c2).chunk(2)
             e_t = e_t_uncond + unconditional_guidance_scale * (e_t - e_t_uncond)
 
