@@ -1417,7 +1417,7 @@ class LatentDiffusion(DDPM):
 
             loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_comp_prompt_mix})
             loss = self.composition_prompt_mix_reg_weight * loss_comp_prompt_mix
-            print(f'loss_comp_prompt_mix: {loss_comp_prompt_mix.mean():.6f}')
+            #print(f'loss_comp_prompt_mix: {loss_comp_prompt_mix.mean():.6f}')
             
         if self.embedding_reg_weight > 0:
             loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
@@ -1431,7 +1431,7 @@ class LatentDiffusion(DDPM):
                                     ).mean()
             loss_dict.update({f'{prefix}/loss_comp_delta_reg': loss_comp_delta_reg})
             loss += (self.composition_delta_reg_weight * loss_comp_delta_reg)
-            print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
+            #print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
 
         loss_dict.update({f'{prefix}/loss': loss})
 
