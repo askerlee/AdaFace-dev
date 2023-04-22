@@ -1133,7 +1133,7 @@ class LatentDiffusion(DDPM):
                         c_in2 = subj_prompt_comps * 2
                         # The embeddings of subj_prompt_comps and cls_prompt_comps,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed.
-                        subj_comps_emb_mix = mix_embeddings(subj_comps_emb, cls_comps_emb, 
+                        subj_comps_emb_mix = mix_embeddings(subj_comps_emb.detach(), cls_comps_emb, 
                                                             c2_mix_weight=self.cls_prompt_mix_weight)
                         # This copy of subj_comps_emb will be simply repeated at the token dimension
                         # to match the token number of the mixed (concatenated) embeddings.
