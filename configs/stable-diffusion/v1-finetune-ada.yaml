@@ -26,9 +26,9 @@ model:
     use_ada_embedding: True
     # composition_regs includes composition_delta_reg and composition_prompt_mix_reg.
     composition_regs_iter_gap: 5
-    composition_delta_reg_weight:       0.001
-    composition_prompt_mix_reg_weight:  0.001
-    cls_prompt_mix_weight:  0.5
+    composition_delta_reg_weight:       0.0001
+    composition_prompt_mix_reg_weight:  0.1
+    cls_prompt_mix_weight:  1.
 
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler

@@ -84,7 +84,7 @@ class DDPM(pl.LightningModule):
                  composition_regs_iter_gap=-1,
                  composition_delta_reg_weight=0.,
                  composition_prompt_mix_reg_weight=0.,
-                 cls_prompt_mix_weight=0.5,
+                 cls_prompt_mix_weight=1.,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -1412,13 +1412,13 @@ class LatentDiffusion(DDPM):
             # No ordinary image reconstruction loss under subj_prompt_single.
             # Similar to the ordinary reconstruction loss, the losses of different sample images 
             # in the batch will be weighted differently according to t.
-            loss_comp_prompt_mix = self.get_loss(model_output, model_output_mix, mean=False).mean([1, 2, 3])
-            logvar_t = self.logvar.to(self.device)[t]
-            loss_comp_prompt_mix = loss_comp_prompt_mix / torch.exp(logvar_t) + logvar_t
+            loss_comp_prompt_mix = self.get_loss(model_output, model_output_mix, mean=True)
+            # logvar is all zero. So no need to do "loss_comp_prompt_mix / exp(logvar_t) + logvar_t".
 
-            loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_comp_prompt_mix.mean()})
-            loss = self.composition_prompt_mix_reg_weight * loss_comp_prompt_mix.mean()
-
+            loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_comp_prompt_mix})
+            loss = self.composition_prompt_mix_reg_weight * loss_comp_prompt_mix
+            print(f'loss_comp_prompt_mix: {loss_comp_prompt_mix.mean():.6f}')
+            
         if self.embedding_reg_weight > 0:
             loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
             loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg})
@@ -1431,6 +1431,7 @@ class LatentDiffusion(DDPM):
                                     ).mean()
             loss_dict.update({f'{prefix}/loss_comp_delta_reg': loss_comp_delta_reg})
             loss += (self.composition_delta_reg_weight * loss_comp_delta_reg)
+            print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
 
         loss_dict.update({f'{prefix}/loss': loss})
 
