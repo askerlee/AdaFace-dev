@@ -265,3 +265,37 @@ def noise_like(shape, device, repeat=False):
     repeat_noise = lambda: torch.randn((1, *shape[1:]), device=device).repeat(shape[0], *((1,) * (len(shape) - 1)))
     noise = lambda: torch.randn(shape, device=device)
     return repeat_noise() if repeat else noise()
+
+# c1, c2: [32, 77, 768].
+# mix_scheme: 'add', 'concat', 'sdeltaconcat', 'adeltaconcat'.
+def mix_embeddings(c1, c2, c2_mix_weight, mix_scheme='adeltaconcat', placeholder_indices=None):
+    assert c1 is not None
+    if c2 is None:
+        return c1
+
+    c1_weight = 1
+
+    if mix_scheme == 'add':
+        c_mix = c1 * c1_weight + c2 * c2_mix_weight
+    elif mix_scheme == 'concat':
+        c_mix = torch.cat([ c1 * c1_weight, c2 * c2_mix_weight ], dim=1)
+    # sdeltaconcat: subject-delta concat.
+    elif mix_scheme == 'sdeltaconcat':
+        assert placeholder_indices is not None
+        # delta_embedding is the difference between the subject embedding and the class embedding.
+        delta_embedding = (c2 - c1)[placeholder_indices]
+        assert delta_embedding.shape[0] == c1.shape[0]
+
+        c2_delta = c1.clone()
+        # c2_mix_weight only boosts the delta embedding, and other tokens in c2 always have weight 1.
+        c2_delta[placeholder_indices] = delta_embedding
+        c_mix = torch.cat([ c1 * c1_weight, c2_delta * c2_mix_weight ], dim=1)
+
+    # adeltaconcat: all-delta concat.
+    elif mix_scheme == 'adeltaconcat':
+        # delta_embedding is the difference between all the subject tokens and the class tokens.
+        delta_embedding = c2 - c1
+        # c2_mix_weight boosts all tokens in delta_embedding.
+        c_mix = torch.cat([ c1 * c1_weight, delta_embedding * c2_mix_weight ], dim=1)
+
+    return c_mix

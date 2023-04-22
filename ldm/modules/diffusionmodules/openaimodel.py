@@ -732,17 +732,7 @@ class UNetModel(nn.Module):
             # If use_layerwise_context, then context is static layerwise embeddings.
             # context: [16*B, N, 768] reshape => [B, 16, N, 768] permute => [16, B, N, 768]
             context = context.reshape(x.shape[0], 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
-        
-        mix_context_blocks    = extra_info.get('mix_context_blocks', None)
-        if mix_context_blocks is not None:
-            # Each mix_context_block should be of the batch size orig_bs = 2, instead of len(x) = 4.
-            orig_bs = extra_info.get('orig_bs', len(x))     
-            # mix_context_block: [16*2, N, 768] reshape => [2, 16, N, 768] permute => [16, 2, N, 768]
-            # Do nothing to None blocks.
-            mix_context_blocks = [ mix_context_block.reshape(orig_bs, 16, -1, mix_context_block.shape[-1]).permute(1, 0, 2, 3) \
-                                   if mix_context_block is not None else None for mix_context_block in mix_context_blocks ]
-            # print(context_in)
-            
+                    
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)
@@ -761,39 +751,24 @@ class UNetModel(nn.Module):
             if layer_idx not in layer_idx2emb_idx:
                 return None
             emb_idx = layer_idx2emb_idx[layer_idx]
-            layer_static_context = context[emb_idx]            
+            layer_static_context = context[emb_idx]
 
             if use_ada_context:
                 ada_embedder = extra_info['ada_embedder']
                 # emb: time embedding. h: features from the previous layer.
                 layer_ada_context, ada_emb_weight = ada_embedder(context_in, layer_idx, h, emb)
                 static_emb_weight = 1 - ada_emb_weight
-                
+
+                # If static context is expanded by doing prompt mixing,
+                # we need to expand layer_ada_context as well to match the shape.
+                if layer_ada_context.shape[1] == layer_static_context.shape[1] // 2:
+                    layer_ada_context = layer_ada_context.repeat(1, 2, 1)
+
                 # layer_static_context, layer_ada_context: [2, 77, 768]
                 # layer_context: layer context fed to the current UNet layer, [2, 77, 768]
                 layer_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
             else:
                 layer_context = layer_static_context
-
-            # if mix_context_blocks is specified, we do Compositional Prompt Mix Reg.
-            # Compositonal Prompt Mix Reg requires us to split layer_context into two blocks that correspond to
-            # subj_prompt_single, subj_prompt_comps, respectively.
-            # mix_context_blocks should contain: [None, embeddings of cls_prompt_comps].
-            # The first element, None, says that the layer_context of subj_prompt_single should be 
-            # concatenated to itself, i.e., repeated twice along the channel dimension, 
-            # to match the shape of the mixed context.
-            # The second element says that the layer_context of subj_prompt_comps 
-            # will be concatenated with the embeddings of cls_prompt_comps to do the compositional mixing.
-            if mix_context_blocks is not None:
-                # mix_context_blocks[0]: None. mix_context_blocks[1]: [16, 2, 77, 768] (already reshaped above.)
-                # layer_context: [4, 77, 768]. Each block of embeddings: [2, 77, 768], corresponding to a batch of inputs. 
-                layer_context_blocks = layer_context.split(orig_bs, dim=0)
-                # If None, concatenate with itself. Otherwise, concatenate with the layer embedding of this mix context block.
-                layer_mix_context_blocks    = [ mix_context_block[emb_idx] if mix_context_block is not None else layer_context_block \
-                                                for layer_context_block, mix_context_block in zip(layer_context_blocks, mix_context_blocks) ]
-                layer_mix_context_blocks    = [ th.cat([layer_context_block, layer_mix_context_block], dim=1) \
-                                                for layer_context_block, layer_mix_context_block in zip(layer_context_blocks, layer_mix_context_blocks) ]
-                layer_context = th.cat(layer_mix_context_blocks, dim=0)
 
             return layer_context
         

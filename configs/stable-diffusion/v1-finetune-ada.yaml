@@ -28,6 +28,7 @@ model:
     composition_regs_iter_gap: 5
     composition_delta_reg_weight:       0.001
     composition_prompt_mix_reg_weight:  0.001
+    cls_prompt_mix_weight:  0.5
 
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
