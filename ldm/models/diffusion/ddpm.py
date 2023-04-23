@@ -1062,7 +1062,7 @@ class LatentDiffusion(DDPM):
             # REPEATS: how many prompts correspond to each image.
             REPEATS = len(subj_prompt_comps[0])
             if REPEATS == 1 or self.do_ada_comp_delta_reg or self.do_comp_prompt_mix_reg:
-                # When this iter computes ada composition delta loss / compositional prompt mix loss, 
+                # When this iter computes ada composition delta loss / compositional prompt mixing loss, 
                 # only use the first of the composition prompts (in effect num_compositions_per_image=1),
                 # otherwise it will use more than 40G RAM.
                 subj_prompt_comps = [ prompts[0] for prompts in subj_prompt_comps ]

@@ -352,6 +352,8 @@ def main(opt):
         all_sims_img, all_sims_text, all_sims_dino = [], [], []
         if opt.calc_face_sim:
             all_sims_face = []
+            all_normal_pair_counts = []
+            all_except_pair_counts = []
             set_tf_gpu(opt.gpu)
     else:
         clip_evator, dino_evator = None, None
@@ -452,10 +454,12 @@ def main(opt):
                                     all_sims_dino.append(sim_dino.item())
 
                                     if opt.calc_face_sim:
-                                        sim_face = compare_face_folders(opt.compare_with, sample_dir, len(prompts))
+                                        sim_face, normal_pair_count, except_pair_count = compare_face_folders(opt.compare_with, sample_dir, len(prompts))
                                         # sim_face is a float, so no need to detach().cpu().numpy().
                                         all_sims_face.append(sim_face)
-                                        
+                                        all_normal_pair_counts.append(normal_pair_count)
+                                        all_except_pair_counts.append(except_pair_count)
+
                         if not opt.skip_grid:
                             all_samples.append(x_samples_ddim)
 
@@ -506,10 +510,15 @@ def main(opt):
 
     if opt.compare_with:
         sims_img_avg, sims_text_avg, sims_dino_avg = np.mean(all_sims_img), np.mean(all_sims_text), np.mean(all_sims_dino)
-        print(f"All samples mean image/text/dino sim: {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
         if opt.calc_face_sim:
             sims_face_avg = np.mean(all_sims_face)
-            print(f"All samples mean face sim: {sims_face_avg:.3f}")
+        else:
+            sims_face_avg = 0
+
+        print(f"All samples mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
+        if opt.calc_face_sim:
+            except_pair_percent = np.sum(all_except_pair_counts) / (np.sum(all_normal_pair_counts) + np.sum(all_except_pair_counts))
+            print(f"Except pair percent: {except_pair_percent*100:.1f}")
 
 if __name__ == "__main__":
     opt = parse_args()

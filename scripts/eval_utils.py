@@ -121,8 +121,8 @@ def compare_face_folders(path1, path2, num_samples=-1, verbose=False):
         path2 = path2[:-1]
     path1_base = os.path.basename(path1)
     path2_base = os.path.basename(path2)
-    print("'%s' vs '%s' avg similarity: %.3f" %(path1_base, path2_base, avg_similarity))
-    return avg_similarity
+    print("avg face sim: %.3f    '%s' vs '%s'" %(avg_similarity, path1_base, path2_base))
+    return avg_similarity, normal_pair_count, except_pair_count
 
 def split_string(input_string):
     pattern = r'"[^"]*"|\S+'
