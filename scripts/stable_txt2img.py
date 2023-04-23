@@ -454,7 +454,8 @@ def main(opt):
                                     all_sims_dino.append(sim_dino.item())
 
                                     if opt.calc_face_sim:
-                                        sim_face, normal_pair_count, except_pair_count = compare_face_folders(opt.compare_with, sample_dir, len(prompts))
+                                        sim_face, normal_pair_count, except_pair_count = \
+                                            compare_face_folders(opt.compare_with, sample_dir, path2_num_samples=len(prompts))
                                         # sim_face is a float, so no need to detach().cpu().numpy().
                                         all_sims_face.append(sim_face)
                                         all_normal_pair_counts.append(normal_pair_count)
