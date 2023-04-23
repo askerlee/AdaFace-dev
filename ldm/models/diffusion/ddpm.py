@@ -1149,15 +1149,18 @@ class LatentDiffusion(DDPM):
                         c_in2 = subj_prompt_comps * 2
                         # The embeddings of subj_prompt_comps and cls_prompt_comps,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed.
-                        subj_comps_emb_mix = mix_embeddings(subj_comps_emb.detach(), cls_comps_emb, 
+                        subj_comps_emb_mix = mix_embeddings(subj_comps_emb, cls_comps_emb, 
                                                             c2_mix_weight=self.cls_prompt_mix_weight)
                         # This copy of subj_comps_emb will be simply repeated at the token dimension
                         # to match the token number of the mixed (concatenated) embeddings.
                         subj_comps_emb = subj_comps_emb.repeat(1, 2, 1)
                         # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
                         # image generation and computing compositional mix loss.
-                        c_static_emb2  = torch.cat([subj_comps_emb, subj_comps_emb_mix], dim=0)
-                        #print(subj_prompt_comps + cls_prompt_comps)
+                        # Stop gradient on subj_comps_emb_mix, since it serves as the reference.
+                        # If we don't stop gradient on subj_comps_emb_mix, 
+                        # then chance is that subj_comps_emb_mix might be dominated by subj_comps_emb,
+                        # so that subj_comps_emb_mix will produce images similar as subj_comps_emb does.
+                        c_static_emb2  = torch.cat([subj_comps_emb, subj_comps_emb_mix.detach()], dim=0)
 
                     elif self.do_ada_comp_delta_reg:
                         # Do ada composition delta loss in this iteration. 
