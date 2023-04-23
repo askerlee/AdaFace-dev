@@ -269,21 +269,44 @@ class PersonalizedBase(Dataset):
         subj_prompt_single  = template.format(placeholder_string)
         cls_prompt_single   = template.format(cls_delta_token)
 
+        if self.broad_class == 1:
+            faceportrait_template = "a face portrait of a {}"
+            subj_prompt_single_fp = faceportrait_template.format(placeholder_string)
+            cls_prompt_single_fp  = faceportrait_template.format(cls_delta_token)
+            subj_prompt_comps_fp  = []
+            cls_prompt_comps_fp   = []
+
         subj_prompt_comps = []
         cls_prompt_comps  = []
+
         for _ in range(self.num_compositions_per_image):
             composition_partial = sample_compositions(1, self.is_animal)[0]
             subj_prompt_comp    = subj_prompt_single + " " + composition_partial
             cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
             subj_prompt_comps.append(subj_prompt_comp)
             cls_prompt_comps.append(cls_prompt_comp)
-        
+            if self.broad_class == 1:
+                subj_prompt_comp_fp = subj_prompt_single_fp + " " + composition_partial
+                cls_prompt_comp_fp  = cls_prompt_single_fp  + " " + composition_partial
+                subj_prompt_comps_fp.append(subj_prompt_comp_fp)
+                cls_prompt_comps_fp.append(cls_prompt_comp_fp)
+
         # Will split by "|" in the ddpm trainer.
         subj_prompt_comp = "|".join(subj_prompt_comps)
         cls_prompt_comp  = "|".join(cls_prompt_comps)
         example["cls_prompt_single"]    = cls_prompt_single
         example["subj_prompt_comp"]     = subj_prompt_comp
         example["cls_prompt_comp"]      = cls_prompt_comp
+        if self.broad_class == 1:
+            subj_prompt_comp_fp = "|".join(subj_prompt_comps_fp)
+            cls_prompt_comp_fp  = "|".join(cls_prompt_comps_fp)
+            # Delta loss requires subj_prompt_single/cls_prompt_single to be token-wise aligned
+            # with subj_prompt_comp/cls_prompt_comp, so we need to specify them in the dataloader as well.
+            example["subj_prompt_single_fp"] = subj_prompt_single_fp
+            example["cls_prompt_single_fp"]  = cls_prompt_single_fp
+            example["subj_prompt_comp_fp"]   = subj_prompt_comp_fp
+            example["cls_prompt_comp_fp"]    = cls_prompt_comp_fp
+
         #print(f"subj_prompt_comp: {subj_prompt_comp}")
         #print(f"cls_prompt_comp: {cls_prompt_comp}")
 

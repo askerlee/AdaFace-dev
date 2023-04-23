@@ -1026,6 +1026,7 @@ class LatentDiffusion(DDPM):
     #          'cls_prompt_comps'  :    ['an illustration of a dirty person dancing with a boy', 
     #                                    'a depiction of a person kicking a punching bag'],
     #          'image':   [2, 512, 512, 3] }
+    # 'caption' is not named 'subj_prompt_single' to keep it compatible with older code.
     # ANCHOR[id=shared_step]
     def shared_step(self, batch, **kwargs):
         # c = batch["caption"]
@@ -1035,14 +1036,29 @@ class LatentDiffusion(DDPM):
         # do_ada_comp_delta_reg implies do_static_comp_delta_reg. So only check do_static_comp_delta_reg.
         if self.do_static_comp_delta_reg or self.do_comp_prompt_mix_reg:
             subj_prompt_comps = []
+            # *_fp prompts are like "a face portrait of ...". They are advantageous over "a photo of ..."
+            # when doing compositional mix regularization. 
+            # However this trick is only applicable to humans/animals.
+            # For objects, *_fp prompts are not available in batch, so they won't be used.
+            if self.do_comp_prompt_mix_reg and 'subj_prompt_single_fp' in batch:
+                # Replace c = batch['caption'] by c = batch['subj_prompt_single_fp'].
+                c = batch['subj_prompt_single_fp']
+                SUBJ_PROMPT_COMP  = 'subj_prompt_comp_fp'
+                CLS_PROMPT_COMP   = 'cls_prompt_comp_fp'
+                CLS_PROMPT_SINGLE = 'cls_prompt_single_fp'
+            else:
+                SUBJ_PROMPT_COMP  = 'cls_prompt_comp'
+                CLS_PROMPT_COMP   = 'cls_prompt_comp'
+                CLS_PROMPT_SINGLE = 'cls_prompt_single'
+
             # Each prompt_comps consists of multiple prompts separated by "|".
             # Split them into a list of subj_prompt_comps/cls_prompt_comps.
-            for prompt_comps in batch['subj_prompt_comp']:
+            for prompt_comps in batch[SUBJ_PROMPT_COMP]:
                 subj_prompt_comps.append(prompt_comps.split("|"))
             cls_prompt_comps = []
-            for prompt_comps in batch['cls_prompt_comp']:
+            for prompt_comps in batch[CLS_PROMPT_COMP]:
                 cls_prompt_comps.append(prompt_comps.split("|"))
-            cls_prompt_single = batch['cls_prompt_single']
+            cls_prompt_single = batch[CLS_PROMPT_SINGLE]
             # REPEATS: how many prompts correspond to each image.
             REPEATS = len(subj_prompt_comps[0])
             if REPEATS == 1 or self.do_ada_comp_delta_reg or self.do_comp_prompt_mix_reg:
@@ -1141,6 +1157,7 @@ class LatentDiffusion(DDPM):
                         # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
                         # image generation and computing compositional mix loss.
                         c_static_emb2  = torch.cat([subj_comps_emb, subj_comps_emb_mix], dim=0)
+                        #print(subj_prompt_comps + cls_prompt_comps)
 
                     elif self.do_ada_comp_delta_reg:
                         # Do ada composition delta loss in this iteration. 
