@@ -269,9 +269,17 @@ class PersonalizedBase(Dataset):
         subj_prompt_single  = template.format(placeholder_string)
         cls_prompt_single   = template.format(cls_delta_token)
 
+        # "face portrait" trick for humans/animals.
         if self.broad_class == 1:
+            fp_trick_use_diff_templates = True
             faceportrait_template = "a face portrait of a {}"
-            subj_prompt_single_fp = faceportrait_template.format(placeholder_string)
+            if fp_trick_use_diff_templates:
+                # subj_prompt_fp_template intentionally doesn't use the "face portrait" template.
+                # It slightly improves compositionality at the cost of reducing face similarity.
+                subj_prompt_fp_template = "a good photo of a {}"
+            else:
+                subj_prompt_fp_template = faceportrait_template
+            subj_prompt_single_fp = subj_prompt_fp_template.format(placeholder_string)
             cls_prompt_single_fp  = faceportrait_template.format(cls_delta_token)
             subj_prompt_comps_fp  = []
             cls_prompt_comps_fp   = []

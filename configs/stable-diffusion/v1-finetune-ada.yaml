@@ -30,7 +30,7 @@ model:
     composition_delta_reg_weight:       0.0004
     # typical prompt mix reg loss: 4e-5, * weight -> 1.6e-6.
     composition_prompt_mix_reg_weight:  0.004
-    cls_prompt_mix_weight:  0.2
+    cls_prompt_mix_weight:  0.1
 
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
