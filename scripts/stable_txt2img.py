@@ -519,7 +519,7 @@ def main(opt):
         print(f"All samples mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
         if opt.calc_face_sim:
             except_pair_percent = np.sum(all_except_pair_counts) / (np.sum(all_normal_pair_counts) + np.sum(all_except_pair_counts))
-            print(f"Except pair percent: {except_pair_percent*100:.1f}")
+            print(f"Exception pair percent: {except_pair_percent*100:.1f}")
 
 if __name__ == "__main__":
     opt = parse_args()

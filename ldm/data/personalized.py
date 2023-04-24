@@ -275,6 +275,7 @@ class PersonalizedBase(Dataset):
             faceportrait_template = "a face portrait of a {}"
             if fp_trick_use_diff_templates:
                 # subj_prompt_fp_template intentionally doesn't use the "face portrait" template.
+                # Most tokens are still aligned.
                 # It slightly improves compositionality at the cost of reducing face similarity.
                 subj_prompt_fp_template = "a good photo of a {}"
             else:

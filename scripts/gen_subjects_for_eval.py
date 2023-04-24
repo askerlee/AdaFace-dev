@@ -22,7 +22,6 @@ def parse_args():
                         help="Extra suffix to append to the z suffix")
     parser.add_argument("--z_prefix", type=str, default=None,
                         help="Prefix to prepend to z")
-    # prompt_prefix
     parser.add_argument("--prompt_prefix", type=str, default="",
                         help="prefix to prepend to each prompt")
     # prompt_suffix: usually reduces the similarity.
@@ -223,13 +222,19 @@ if __name__ == "__main__":
         for prompt, class_short_prompt, class_long_prompt in zip(prompt_list, class_short_prompt_list, class_long_prompt_list):
             if len(args.prompt_prefix) > 0:
                 prompt = args.prompt_prefix + " " + prompt
+                class_short_prompt = args.prompt_prefix + " " + class_short_prompt
+                class_long_prompt  = args.prompt_prefix + " " + class_long_prompt
             if len(args.prompt_suffix) > 0:
                 prompt = prompt + ", " + args.prompt_suffix
+                class_short_prompt = class_short_prompt + ", " + args.prompt_suffix
+                class_long_prompt  = class_long_prompt  + ", " + args.prompt_suffix
 
             print("  ", prompt)
             if not args.plain:
                 indiv_subdir = subject_name + "-" + prompt.replace(" ", "-")
-                # class_short_prompt, class_long_prompt are saved in the prompt file as well, for evaluation later.
+                # class_short_prompt, class_long_prompt are saved in the prompt file as well.
+                # class_long_prompt is used for the CLIP text/image similarity evaluation.
+                # class_short_prompt is not used.
                 PROMPTS.write( "\t".join([str(args.n_samples), indiv_subdir, prompt, class_long_prompt, class_short_prompt ]) + "\n" )
             else:
                 indiv_subdir = subject_name
