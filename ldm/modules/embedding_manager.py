@@ -1116,7 +1116,7 @@ class EmbeddingManager(nn.Module):
         subj_prompt_single, subj_prompt_comp, cls_prompt_single, cls_prompt_comp = \
                     static_embeddings.split(BS, dim=0)
 
-        use_ortho_subtract = False
+        use_ortho_subtract = True
         if use_ortho_subtract:
             cls_delta    = ortho_subtract(cls_prompt_comp, cls_prompt_single)
             static_delta = ortho_subtract(subj_prompt_comp, subj_prompt_single)
