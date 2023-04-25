@@ -11,14 +11,6 @@ set -l broad_classes  1                 1                     1                1
 # whether to compute face similarity.
 set -l are_faces     1                  1                     1                1            1              1            1            1                 0          1            0            1                    1            1              0                     1            1              1             1               1            1             1              1                   1                     1
 
-# ref_prompt_mix_w is the mixing weight for the reference prompt in the prompt mix.
-# The reference prompt is the prompt that is used for the reference image. 
-# It is also used for the first image in the mix.
-# The mixing weight is the weight of the reference prompt in the prompt mix.
-# Most subjects use a prompt_mix_w of 0.5, but caradelevingne, taylorswift, timotheechalamet use 4. 
-# jenniferlawrence uses 2.
-set -l ref_prompt_mix_w  0.5            0.5                   4                0.5          0.5            0.5          0.5          2                 0.5        0.5          0.5          0.5                  0.5          0.5            0.5                   0.5          0.5            0.5           0.5             0.5          0.5           0.5            4                   0.5                   0.5
-
 #                     objects    humans/animals    cartoon characters
 set -l lrs            3e-4       8e-4              3e-4
 set -l z_prefixes     ""         "portrait of"     ""
@@ -35,7 +27,6 @@ set -Ux ada_weights         $ada_weights
 set -Ux cls_tokens          $cls_tokens
 set -Ux broad_classes       $broad_classes
 set -Ux are_faces           $are_faces
-set -Ux ref_prompt_mix_w    $ref_prompt_mix_w
 set -Ux sel_set             $sel_set
 set -Ux lrs                 $lrs
 # "instagram" for the main dataset, to focus on faces.

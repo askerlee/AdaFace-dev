@@ -14,9 +14,6 @@ set -l broad_classes  0               0                 0                 0     
 # whether to compute face similarity.
 set -l are_faces      0               0                 0                 0               0       0               0       0       0                0                 0        0       0       0       0       0       0       0               0               0                       0               0               0               0          0                  0               0               0                 0               0
 
-# All subjects use the same prompt mix weight 0.5, except cat, dog5, dog6 which use 2.
-set -l ref_prompt_mix_w   0.5         0.5               0.5               0.5             0.5     0.5             2      0.5     0.5              0.5               0.5      0.5     0.5      2       2       0.5     0.5     0.5             0.5             0.5                     0.5             0.5             0.5             0.5        0.5                0.5             0.5             0.5               0.5             0.5
-
 # sel_set contains a few selected test subjects.
 #                     backpack_dog  berry_bowl  rc_car wolf_plushie
 set -l sel_set        2             4           24     30
@@ -34,7 +31,6 @@ set -Ux ada_weights         $ada_weights
 set -Ux cls_tokens          $cls_tokens
 set -Ux broad_classes       $broad_classes
 set -Ux are_faces           $are_faces
-set -Ux ref_prompt_mix_w    $ref_prompt_mix_w
 set -Ux sel_set             $sel_set
 set -Ux lrs                 $lrs
 # No suffix for the DreamBooth eval set, as they are objects/animals, as opposed to faces.
