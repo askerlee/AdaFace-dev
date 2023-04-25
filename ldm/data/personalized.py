@@ -271,7 +271,7 @@ class PersonalizedBase(Dataset):
 
         # "face portrait" trick for humans/animals.
         if self.broad_class == 1:
-            fp_trick_use_diff_templates = True
+            fp_trick_use_diff_templates = False
             faceportrait_template = "a face portrait of a {}"
             if fp_trick_use_diff_templates:
                 # subj_prompt_fp_template intentionally doesn't use the "face portrait" template.
