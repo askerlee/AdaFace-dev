@@ -202,13 +202,14 @@ def parallel_data_prefetch(
     else:
         return gather_res
 
-# a, b are 3d tensors.
-# Optimal weighted subtraction of b from a.
-def optimal_subtract(a, b):
-    dot_a_b = torch.einsum('ijk,ijk->ij', a, b)
-    dot_b_b = torch.einsum('ijk,ijk->ij', b, b)
+# a, b are n-dimensional tensors.
+# Orthogonal subtraction of b from a: the result of a-w*b is orthogonal to b.
+def ortho_subtract(a, b):
+    assert a.shape == b.shape, "Tensors a and b must have the same shape"
+    dot_a_b = torch.einsum('...i,...i->...', a, b)
+    dot_b_b = torch.einsum('...i,...i->...', b, b)
     w_optimal = dot_a_b / dot_b_b
-    return a - b * w_optimal.unsqueeze(2)
+    return a - b * w_optimal.unsqueeze(-1)
 
 # c1, c2: [32, 77, 768].
 # mix_scheme: 'add', 'concat', 'sdeltaconcat', 'adeltaconcat'.
@@ -227,7 +228,7 @@ def mix_embeddings(c1, c2, c2_mix_weight, mix_scheme='adeltaconcat', placeholder
     elif mix_scheme == 'sdeltaconcat':
         assert placeholder_indices is not None
         # delta_embedding is the difference between the subject embedding and the class embedding.
-        delta_embedding = optimal_subtract(c2, c1)[placeholder_indices]
+        delta_embedding = ortho_subtract(c2, c1)[placeholder_indices]
         assert delta_embedding.shape[0] == c1.shape[0]
 
         c2_delta = c1.clone()
@@ -238,7 +239,7 @@ def mix_embeddings(c1, c2, c2_mix_weight, mix_scheme='adeltaconcat', placeholder
     # adeltaconcat: all-delta concat.
     elif mix_scheme == 'adeltaconcat':
         # delta_embedding is the difference between all the subject tokens and the class tokens.
-        delta_embedding = optimal_subtract(c2, c1)
+        delta_embedding = ortho_subtract(c2, c1)
         # c2_mix_weight scales all tokens in delta_embedding.
         c_mix = torch.cat([ c1 * c1_weight, delta_embedding * c2_mix_weight ], dim=1)
 

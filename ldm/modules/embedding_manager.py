@@ -58,6 +58,15 @@ def selective_reg_loss(x, loss_type='l2', selector=None):
     else:
         breakpoint()
 
+# a, b are n-dimensional tensors.
+# Orthogonal subtraction of b from a: the result of a-w*b is orthogonal to b.
+def ortho_subtract(a, b):
+    assert a.shape == b.shape, "Tensors a and b must have the same shape"
+    dot_a_b = torch.einsum('...i,...i->...', a, b)
+    dot_b_b = torch.einsum('...i,...i->...', b, b)
+    w_optimal = dot_a_b / dot_b_b
+    return a - b * w_optimal.unsqueeze(-1)
+
 def demean(x):
     return x - x.mean(dim=-1, keepdim=True)
 
@@ -1107,11 +1116,17 @@ class EmbeddingManager(nn.Module):
         subj_prompt_single, subj_prompt_comp, cls_prompt_single, cls_prompt_comp = \
                     static_embeddings.split(BS, dim=0)
 
-        # cls_delta: [2, 16, 77, 768]. Should be a repeat of a tensor [2, 1, 77, 768] 
-        # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
-        cls_delta = cls_prompt_comp - cls_prompt_single
-        # static_delta: [2, 16, 77, 768]. Different values for each layer along dim=1.
-        static_delta = subj_prompt_comp - subj_prompt_single
+        use_ortho_subtract = False
+        if use_ortho_subtract:
+            cls_delta    = ortho_subtract(cls_prompt_comp, cls_prompt_single)
+            static_delta = ortho_subtract(subj_prompt_comp, subj_prompt_single)
+        else:
+            # cls_delta: [2, 16, 77, 768]. Should be a repeat of a tensor [2, 1, 77, 768] 
+            # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
+            cls_delta = cls_prompt_comp - cls_prompt_single
+            # static_delta: [2, 16, 77, 768]. Different values for each layer along dim=1.
+            static_delta = subj_prompt_comp - subj_prompt_single
+
         # delta_loss_emb_mask is often obtained from an extended batch. So only uses the first BS elements.
         delta_loss_emb_mask = self.delta_loss_emb_mask[:BS] if self.delta_loss_emb_mask is not None else None
         static_delta_loss   = calc_delta_loss(static_delta, cls_delta, delta_loss_emb_mask)
@@ -1127,7 +1142,12 @@ class EmbeddingManager(nn.Module):
             # ada_embeddings: [4, 16, 77, 768]
             ada_embeddings = torch.stack(self.ada_embeddings, dim=1)
             ada_subj_emb_single, ada_subj_emb_comp = ada_embeddings.split(BS, dim=0)
-            ada_delta = ada_subj_emb_comp - ada_subj_emb_single
+            
+            if use_ortho_subtract:
+                ada_delta = ortho_subtract(ada_subj_emb_comp, ada_subj_emb_single)
+            else:
+                ada_delta = ada_subj_emb_comp - ada_subj_emb_single
+
             ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, delta_loss_emb_mask)
             # The cached ada embeddings are useless now, release them.
             self.clear_ada_embedding_cache()
