@@ -28,9 +28,11 @@ set -q argv[3]; and set H $argv[3]; or set H (count $subjects)
 set EXTRA_ARGS0 $argv[4..-1]
 
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ];
-    set -q _flag_maxiter; and set max_iters $_flag_maxiter; or set max_iters 4000
+    # -1: use the default max_iters in the config file.
+    set -q _flag_maxiter; and set max_iters $_flag_maxiter; or set max_iters -1
 else
-    set -q _flag_maxiter; and set max_iters $_flag_maxiter; or set max_iters 800
+    # -1: use the default max_iters in the config file.
+    set -q _flag_maxiter; and set max_iters $_flag_maxiter; or set max_iters -1
 end
 
 set -q _flag_lr; and set lr $_flag_lr; or set -e lr
