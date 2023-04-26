@@ -756,7 +756,8 @@ class UNetModel(nn.Module):
             if use_ada_context:
                 ada_embedder = extra_info['ada_embedder']
                 # emb: time embedding. h: features from the previous layer.
-                layer_ada_context, ada_emb_weight = ada_embedder(context_in, layer_idx, h, emb)
+                layer_ada_context, ada_emb_weight, token_weights \
+                    = ada_embedder(context_in, layer_idx, h, emb)
                 static_emb_weight = 1 - ada_emb_weight
 
                 # If static context is expanded by doing prompt mixing,
@@ -767,6 +768,8 @@ class UNetModel(nn.Module):
                 # layer_static_context, layer_ada_context: [2, 77, 768]
                 # layer_context: layer context fed to the current UNet layer, [2, 77, 768]
                 layer_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
+                if token_weights is not None:
+                    layer_context = layer_context * token_weights
             else:
                 layer_context = layer_static_context
 

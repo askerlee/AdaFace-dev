@@ -702,7 +702,8 @@ class LatentDiffusion(DDPM):
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, init_ada_embedding_cache() should have been called somewhere.
         self.embedding_manager.cache_ada_embedding(layer_idx, c)
-        return (c, self.embedding_manager.get_ada_emb_weight())
+        return (c, self.embedding_manager.get_ada_emb_weight(), 
+                self.embedding_manager.token_weights)
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)

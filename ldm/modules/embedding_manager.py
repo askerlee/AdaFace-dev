@@ -602,7 +602,7 @@ class EmbeddingManager(nn.Module):
             self.loss_call_count = 0
             # Store the embedder to compute the delta loss.
             self.embedder = embedder
-            self.token_repl_mask = None
+            self.token_weights = None
             print("EmbeddingManager initialized with layerwise_lora_rank={}, ada_emb_weight={}, placeholder_suffix={}".format(
                    layerwise_lora_rank, ada_emb_weight, placeholder_suffix))
             
@@ -647,7 +647,7 @@ class EmbeddingManager(nn.Module):
             # mirror-reflect the embedding along the layer dimension, to make it symmetric 
             # in the encoder & decoder.
 
-        self.token_repl_mask = torch.zeros(embedded_text.shape[0], n, 1, device=device)
+        self.token_weights = torch.ones(embedded_text.shape[0], n, 1, device=device)
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             placeholder_embedding = self.string_to_param_dict[placeholder_string].to(device)
@@ -686,9 +686,9 @@ class EmbeddingManager(nn.Module):
                 else:
                     OCCUR = placeholder_indices[0].numel()
                 
-                embedded_text[placeholder_indices] = placeholder_embedding.repeat(OCCUR, 1) * self.subj_scale
+                embedded_text[placeholder_indices] = placeholder_embedding.repeat(OCCUR, 1)
                 # Mark where the placeholder token is replaced by the embedding.
-                self.token_repl_mask[placeholder_indices] = 1
+                self.token_weights[placeholder_indices] = self.subj_scale
                 self.placeholder_indices = copy.copy(placeholder_indices)
                 
                 delta_loss_emb_mask  = torch.ones(b, 1, n, 1, device=device)
@@ -746,7 +746,7 @@ class EmbeddingManager(nn.Module):
 
                     new_token_row = torch.cat([tokenized_text[row][:col], placeholder_token.repeat(num_vectors_for_token).to(device), tokenized_text[row][col + 1:]], axis=0)[:n]
                     new_embed_row = torch.cat([embedded_text[row][:col],  
-                                               placeholder_embedding[:num_vectors_for_token] * self.subj_scale, 
+                                               placeholder_embedding[:num_vectors_for_token], 
                                                embedded_text[row][col + 1:]], axis=0)[:n]
 
                     # Locate the next placeholder token in the row, and replace the embedding in embedded_text.
@@ -801,7 +801,7 @@ class EmbeddingManager(nn.Module):
             # But layer_infeat is still of the full batch size. So placeholder_embedding has a batch size 
             # larger than the number of instances containing the placeholder token. We need to index
             # placeholder_embedding with placeholder_indices[0] to get the matching new placeholder_embedding.
-            embedded_text[placeholder_indices] = placeholder_embedding[placeholder_indices[0]] * self.subj_scale
+            embedded_text[placeholder_indices] = placeholder_embedding[placeholder_indices[0]]
 
         return embedded_text
 
@@ -921,13 +921,6 @@ class EmbeddingManager(nn.Module):
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
             if "ada_emb_weight" in ckpt:
                 self.set_ada_emb_weight(ckpt["ada_emb_weight"])
-
-    # get_embedding_norms_squared() is never used.
-    def get_embedding_norms_squared(self):
-        all_params = torch.cat(list(self.string_to_param_dict.values()), axis=0) # num_placeholders x embedding_dim
-        param_norm_squared = (all_params * all_params).sum(axis=-1)              # num_placeholders
-
-        return param_norm_squared
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
