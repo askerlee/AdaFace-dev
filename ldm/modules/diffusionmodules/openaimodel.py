@@ -775,8 +775,8 @@ class UNetModel(nn.Module):
                     if token_weights.shape[0] == layer_context.shape[0] // 2:
                         one_weights   = th.ones_like(token_weights)
                         token_weights = th.cat([one_weights, token_weights], dim=0)
-                    # Scaling up subject embeddings (even with weight=1.8) will easily 
-                    # cause severe artifacts. Instead, we scale down other token embeddings.
+                    # Scaling up subject embeddings (even with subj_scale=1.8) will easily 
+                    # lead to severe artifacts. Instead, we scale down other token embeddings.
                     # The artifact is much less severe, although the style is reduced a bit.
                     layer_context = layer_context * token_weights / token_weights.max()
             else:

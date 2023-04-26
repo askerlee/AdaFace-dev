@@ -213,7 +213,8 @@ def ortho_subtract(a, b):
 
 # c1, c2: [32, 77, 768].
 # mix_scheme: 'add', 'concat', 'sdeltaconcat', 'adeltaconcat'.
-def mix_embeddings(c1, c2, c2_mix_weight, mix_scheme='adeltaconcat', placeholder_indices=None):
+def mix_embeddings(c1, c2, c2_mix_weight, mix_scheme='adeltaconcat', placeholder_indices=None,
+                   use_ortho_subtract=True):
     assert c1 is not None
     if c2 is None:
         return c1
@@ -228,7 +229,12 @@ def mix_embeddings(c1, c2, c2_mix_weight, mix_scheme='adeltaconcat', placeholder
     elif mix_scheme == 'sdeltaconcat':
         assert placeholder_indices is not None
         # delta_embedding is the difference between the subject embedding and the class embedding.
-        delta_embedding = ortho_subtract(c2, c1)[placeholder_indices]
+        if use_ortho_subtract:
+            delta_embedding = ortho_subtract(c2, c1)
+        else:
+            delta_embedding = c2 - c1
+            
+        delta_embedding = delta_embedding[placeholder_indices]
         assert delta_embedding.shape[0] == c1.shape[0]
 
         c2_delta = c1.clone()
@@ -239,7 +245,11 @@ def mix_embeddings(c1, c2, c2_mix_weight, mix_scheme='adeltaconcat', placeholder
     # adeltaconcat: all-delta concat.
     elif mix_scheme == 'adeltaconcat':
         # delta_embedding is the difference between all the subject tokens and the class tokens.
-        delta_embedding = ortho_subtract(c2, c1)
+        if use_ortho_subtract:
+            delta_embedding = ortho_subtract(c2, c1)
+        else:
+            delta_embedding = c2 - c1
+            
         # c2_mix_weight scales all tokens in delta_embedding.
         c_mix = torch.cat([ c1 * c1_weight, delta_embedding * c2_mix_weight ], dim=1)
 
