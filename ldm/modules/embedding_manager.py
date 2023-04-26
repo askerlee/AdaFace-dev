@@ -784,6 +784,8 @@ class EmbeddingManager(nn.Module):
         if not self.use_layerwise_embedding:
             raise NotImplementedError("non-layerwise embedding not supported in get_ada_embedding().")
 
+        self.token_weights = torch.ones(embedded_text.shape[0], n, 1, device=device)
+
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             placeholder_embedder = self.string_to_ada_embedder_dict[placeholder_string].to(device)
             assert isinstance(placeholder_embedder, AdaEmbedding)
@@ -808,6 +810,11 @@ class EmbeddingManager(nn.Module):
             # placeholder_embedding with placeholder_indices[0] to get the matching new placeholder_embedding.
             embedded_text[placeholder_indices] = placeholder_embedding[placeholder_indices[0]]
 
+            # Mark where the placeholder token is replaced by the embedding.
+            self.token_weights[placeholder_indices] = self.subj_scale
+            # Only one copy. No need to remove repetitive copies like static layerwise embeddings.
+            # self.token_weights = self.token_weights[:OCCUR]
+            
         return embedded_text
 
     def get_ada_emb_weight(self):

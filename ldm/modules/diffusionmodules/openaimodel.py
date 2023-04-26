@@ -764,6 +764,8 @@ class UNetModel(nn.Module):
                 # we need to expand layer_ada_context as well to match the shape.
                 if layer_ada_context.shape[1] == layer_static_context.shape[1] // 2:
                     layer_ada_context = layer_ada_context.repeat(1, 2, 1)
+                    if token_weights is not None:
+                        token_weights = token_weights.repeat(1, 2, 1)
 
                 # layer_static_context, layer_ada_context: [2, 77, 768]
                 # layer_context: layer context fed to the current UNet layer, [2, 77, 768]
