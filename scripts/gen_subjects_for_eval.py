@@ -91,7 +91,9 @@ if __name__ == "__main__":
     if args.z_prefix is not None:
         # * 3 for 3 broad classes, i.e., all classes use the same args.z_prefix.
         z_prefixes = [args.z_prefix] * 3    
-    elif 'z_prefixes' in vars:
+    elif 'z_prefixes' in vars and not args.plain:
+        # Use z_prefixes from the subject info file if it exists, 
+        # but only if it's not plain (manual prompt) generation
         z_prefixes = vars['z_prefixes']
         assert len(z_prefixes) == 3
     else:
