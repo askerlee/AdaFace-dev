@@ -689,6 +689,8 @@ class EmbeddingManager(nn.Module):
                 embedded_text[placeholder_indices] = placeholder_embedding.repeat(OCCUR, 1)
                 # Mark where the placeholder token is replaced by the embedding.
                 self.token_weights[placeholder_indices] = self.subj_scale
+                # Remove repetitive copies, only keep the first copy of the weights.
+                self.token_weights = self.token_weights[:OCCUR]
                 self.placeholder_indices = copy.copy(placeholder_indices)
                 
                 delta_loss_emb_mask  = torch.ones(b, 1, n, 1, device=device)
@@ -697,7 +699,10 @@ class EmbeddingManager(nn.Module):
                 for i in range(OCCUR):
                     elem_idx  = placeholder_indices[0][i]
                     start_idx = placeholder_indices[1][i] + 1
-                    assert tokenized_text[elem_idx][start_idx-1] == placeholder_token
+                    try:
+                        assert tokenized_text[elem_idx][start_idx-1] == placeholder_token
+                    except:
+                        breakpoint()
                     has_suffix = True
                     for j in range(self.z_suffix_id_count):
                         if tokenized_text[elem_idx][start_idx+j] != self.z_suffix_ids[j]:
