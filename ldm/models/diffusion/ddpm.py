@@ -1152,7 +1152,8 @@ class LatentDiffusion(DDPM):
                         # The embeddings of subj_prompt_comps and cls_prompt_comps,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed.
                         subj_comps_emb_mix = mix_embeddings(subj_comps_emb, cls_comps_emb, 
-                                                            c2_mix_weight=self.cls_prompt_mix_weight)
+                                                            c2_mix_weight=self.cls_prompt_mix_weight,
+                                                            use_ortho_subtract=True)
                         # If mix_stop_grad, stop gradient on subj_comps_emb_mix, 
                         # since it serves as the reference.
                         # If we don't stop gradient on subj_comps_emb_mix, 
