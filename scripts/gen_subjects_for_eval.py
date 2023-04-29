@@ -21,7 +21,7 @@ def parse_args():
     # extra_z_suffix: usually reduces the similarity of generated images to the real images.
     parser.add_argument("--extra_z_suffix", type=str, default="",
                         help="Extra suffix to append to the z suffix")
-    parser.add_argument("--z_prefix", type=str, default=None,
+    parser.add_argument("--z_prefix", type=str, default=argparse.SUPPRESS,
                         help="Prefix to prepend to z")
     parser.add_argument("--prompt_prefix", type=str, default="",
                         help="prefix to prepend to each prompt")
@@ -89,7 +89,7 @@ if __name__ == "__main__":
     subjects, class_tokens, broad_classes, sel_set = vars['subjects'], vars['class_tokens'], \
                                                      vars['broad_classes'], vars['sel_set']
         
-    if args.z_prefix is not None:
+    if hasattr(args, 'z_prefix'):
         # * 3 for 3 broad classes, i.e., all classes use the same args.z_prefix.
         z_prefixes = [args.z_prefix] * 3    
     elif 'z_prefixes' in vars and not args.plain:
@@ -152,9 +152,9 @@ if __name__ == "__main__":
             if broad_class == 1:
                 # For ada/TI, if not human faces / animals, and z_suffix_type is not specified, 
                 # then use class_token as the z suffix, to make sure the subject is always expressed.
-                z_suffix_type = 'class_token'
+                z_suffix_type = '' 
             else:
-                z_suffix_type = ''
+                z_suffix_type = 'class_token'
         else:
             z_suffix_type = args.z_suffix_type
 
