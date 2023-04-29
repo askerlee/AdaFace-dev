@@ -148,10 +148,13 @@ if __name__ == "__main__":
             continue
             # breakpoint()
 
-        if (broad_class != 1) and not hasattr(args, 'z_suffix_type'):
-            # For ada/TI, if not human faces / animals, and z_suffix_type is not specified, 
-            # then use class_token as the z suffix, to make sure the subject is always expressed.
-            z_suffix_type = 'class_token'
+        if not hasattr(args, 'z_suffix_type'):
+            if broad_class == 1:
+                # For ada/TI, if not human faces / animals, and z_suffix_type is not specified, 
+                # then use class_token as the z suffix, to make sure the subject is always expressed.
+                z_suffix_type = 'class_token'
+            else:
+                z_suffix_type = ''
         else:
             z_suffix_type = args.z_suffix_type
 
