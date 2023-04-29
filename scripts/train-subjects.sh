@@ -6,7 +6,7 @@ echo $self $argv
 argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'use_cls_token' 'use_z_suffix' 'v14' -- $argv
 or begin
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
-    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-db-eval-subjects.sh --use_cls_token ada 1 25"
+    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-dbeval-subjects.sh --use_cls_token ada 1 25"
     exit 1
 end
 
@@ -14,7 +14,7 @@ if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
-    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-db-eval-subjects.sh --use_cls_token ada 1 25"
+    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-dbeval-subjects.sh --use_cls_token ada 1 25"
     exit 1
 end
 

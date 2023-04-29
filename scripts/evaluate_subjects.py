@@ -12,7 +12,7 @@ def parse_args():
     parser.add_argument(
         "--gt_dir",
         type=str,
-        default="db-eval-dataset",
+        default="dbeval-dataset",
         help="Directory with images of subjects used to train the model"
     )
 
@@ -25,7 +25,7 @@ def parse_args():
     parser.add_argument(
         "--subject_file",
         type=str,
-        default="scripts/info-db-eval-subjects.sh",
+        default="scripts/info-dbeval-subjects.sh",
         help="File with subjects to evaluate"
     )
     parser.add_argument(

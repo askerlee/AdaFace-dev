@@ -14,9 +14,9 @@ set -l broad_classes  0               0                 0                 0     
 # whether to compute face similarity.
 set -l are_faces      0               0                 0                 0               0       0               0       0       0                0                 0        0       0       0       0       0       0       0               0               0                       0               0               0               0          0                  0               0               0                 0               0
 
-# sel_set contains a few selected test subjects.
-#                     backpack_dog  berry_bowl  rc_car wolf_plushie
-set -l sel_set        2             4           24     30
+# sel_set contains a few selected challenging test subjects.
+#                     backpack_dog  berry_bowl  can  candle  rc_car robot_toy
+set -l sel_set        2             4           5    6       24     26
 
 #                     objects    animals           cartoon characters
 set -l lrs            3e-4       6e-4              3e-4
@@ -36,4 +36,4 @@ set -Ux lrs                 $lrs
 # No suffix for the DreamBooth eval set, as they are objects/animals, as opposed to faces.
 set -Ux db_suffix           ""
 set -Ux z_prefixes          $z_prefixes
-set -Ux data_folder         db-eval-dataset
+set -Ux data_folder         dbeval-dataset
