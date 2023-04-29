@@ -391,7 +391,11 @@ class AdaEmbedding(nn.Module):
             # basis_dyn_weight: [B, r] = [2, 12].
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
             # infeat_pooled: [B, C_layer]
-            infeat_pooled    = self.avgpool(layer_infeat, img_mask).detach()
+            infeat_pooled    = self.avgpool(layer_infeat, img_mask)
+            stop_infeat_grad = True
+            if stop_infeat_grad:
+                infeat_pooled = infeat_pooled.detach()
+                
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
             # as the time embedding is highly redundant, and the first TD dimensions are sufficient
