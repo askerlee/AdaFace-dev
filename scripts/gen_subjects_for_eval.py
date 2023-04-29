@@ -15,8 +15,9 @@ def parse_args():
     # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.
     parser.add_argument("--prompt", type=str, default=None,
                         help="Prompt to use for generating samples, using {} for placeholder (default: None)")
-    parser.add_argument("--z_suffix_type", default="", 
-                        help="Append this string to the subject placeholder token during inference (default: none)")
+    parser.add_argument("--z_suffix_type", default=argparse.SUPPRESS, 
+                        help="Append this string to the subject placeholder token during inference "
+                             "(default: '' for humans/animals, 'class_token' for others)")
     # extra_z_suffix: usually reduces the similarity of generated images to the real images.
     parser.add_argument("--extra_z_suffix", type=str, default="",
                         help="Extra suffix to append to the z suffix")
@@ -147,7 +148,7 @@ if __name__ == "__main__":
             continue
             # breakpoint()
 
-        if broad_class == 0 and args.z_suffix_type == '':
+        if (broad_class != 1) and not hasattr(args, 'z_suffix_type'):
             # For ada/TI, if not human faces / animals, and z_suffix_type is not specified, 
             # then use class_token as the z suffix, to make sure the subject is always expressed.
             z_suffix_type = 'class_token'
