@@ -394,8 +394,8 @@ class AdaEmbedding(nn.Module):
             # infeat_pooled: [B, C_layer]
             infeat_pooled    = self.avgpool(layer_infeat, img_mask)
             # Set to <1 to sometimes "stop the gradient flow into the UNet", sometimes not.
-            stop_infeat_prob = 1
-            stop_infeat_grad = random.random() < stop_infeat_prob
+            stop_infeat_grad_prob = 1
+            stop_infeat_grad = random.random() < stop_infeat_grad_prob
             if stop_infeat_grad:
                 infeat_pooled = infeat_pooled.detach()
                 
