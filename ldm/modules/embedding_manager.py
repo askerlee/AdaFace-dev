@@ -3,6 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 import numpy as np
 import copy
+import random
 
 from ldm.data.personalized import per_img_token_list
 from transformers import CLIPTokenizer
@@ -392,7 +393,9 @@ class AdaEmbedding(nn.Module):
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
             # infeat_pooled: [B, C_layer]
             infeat_pooled    = self.avgpool(layer_infeat, img_mask)
-            stop_infeat_grad = True
+            # Set to <1 to sometimes "stop the gradient flow into the UNet", sometimes not.
+            stop_infeat_prob = 1
+            stop_infeat_grad = random.random() < stop_infeat_prob
             if stop_infeat_grad:
                 infeat_pooled = infeat_pooled.detach()
                 
