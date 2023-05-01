@@ -423,8 +423,9 @@ class AdaEmbedding(nn.Module):
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
             # infeat_pooled: [B, C_layer]
             infeat_pooled    = self.avgpool(layer_infeat, img_mask)
-            # Set to <1 to sometimes "stop the gradient flow into the UNet", sometimes not.
-            stop_infeat_grad_scale = 0.5
+            # Set to < 1 to reduce the gradient flow into the UNet.
+            # Set to 0 to completely cut off the gradient flow into the UNet.
+            stop_infeat_grad_scale = 0.25
             if stop_infeat_grad_scale == 0:
                 infeat_pooled_gradscaled = infeat_pooled.detach()
             else:
