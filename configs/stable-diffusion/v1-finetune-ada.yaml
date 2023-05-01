@@ -133,7 +133,7 @@ lightning:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 1201
+        batch_frequency: 8000     # 8000 > max_steps = 5000, effectively disabling image logger.
         max_images: 8
         increase_log_steps: False
 
