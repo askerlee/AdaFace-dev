@@ -430,9 +430,9 @@ class AdaEmbedding(nn.Module):
             # Since low-level layers more focus on overall structures instead of fine details,
             # and high-level layers are opposite,
             # we only BP into the UNet at these layers, i.e., layer_idx <= self.unet_midlayer_idx.
-            if bp_to_unet and layer_idx <= self.unet_midlayer_idx:
+            if bp_to_unet: # and layer_idx <= self.unet_midlayer_idx:
                 # Set to < 1 to reduce the gradient flow into the UNet.
-                stop_infeat_grad_scale = 1.
+                stop_infeat_grad_scale = 0.5
                 if stop_infeat_grad_scale < 1:
                     grad_scaler = GradientScaler(stop_infeat_grad_scale)
                     grad_scaler = grad_scaler.cuda()

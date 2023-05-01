@@ -723,11 +723,13 @@ class UNetModel(nn.Module):
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"
         hs = []
+        hs2 = []
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
         use_layerwise_context = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
         use_ada_context       = extra_info.get('use_ada_context', False)       if extra_info is not None else False
-        
+        iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
+
         if use_layerwise_context:
             # If use_layerwise_context, then context is static layerwise embeddings.
             # context: [16*B, N, 768] reshape => [B, 16, N, 768] permute => [16, B, N, 768]
@@ -813,6 +815,10 @@ class UNetModel(nn.Module):
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, layer_context)
         layer_idx += 1
+
+        if iter_type =='do_comp_prompt_mix_reg':
+            hs2 = hs + [h]
+            extra_info['mid_feats'] = hs2
 
         # 14 [2, 1280, 8,  8]
         # 15 [2, 1280, 8,  8]

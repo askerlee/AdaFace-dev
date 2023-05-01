@@ -1169,6 +1169,7 @@ class LatentDiffusion(DDPM):
                         # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
                         # image generation and computing compositional mix loss.
                         c_static_emb2  = torch.cat([subj_comps_emb, subj_comps_emb_mix], dim=0)
+                        extra_info['iter_type']      = 'do_comp_prompt_mix_reg'
                         extra_info['ada_bp_to_unet'] = True
 
                     elif self.do_ada_comp_delta_reg:
@@ -1195,8 +1196,9 @@ class LatentDiffusion(DDPM):
                         # To compute the delta loss on ada embeddings, we need these two sets of ada embeddings.
                         c_static_emb2 = torch.cat([subj_single_emb, subj_comps_emb], dim=0)
                         c_in2         = subj_prompt_single + subj_prompt_comps
-                        extra_info['ada_bp_to_unet'] = True
-                                                
+                        extra_info['iter_type']      = 'do_ada_comp_delta_reg'
+                        extra_info['ada_bp_to_unet'] = False
+
                     else:
                         # Don't do ada composition delta loss or compositional mix loss in this iteration. 
                         # This includes the subject scheme is static layerwise embedding or traditional TI.
@@ -1205,7 +1207,9 @@ class LatentDiffusion(DDPM):
                         # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
                         c_static_emb2 = subj_single_emb[:N_EMBEDS]
                         c_in2         = subj_prompt_single[:ORIG_BS]
-                    
+                        extra_info['iter_type']      = 'normal_recon'
+                        extra_info['ada_bp_to_unet'] = False
+
                     # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
                     # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
                     c = (c_static_emb2, c_in2, extra_info)
@@ -1397,6 +1401,7 @@ class LatentDiffusion(DDPM):
             # second half as the reconstruction objective for compositional regularization.
             model_output, model_output_mix = torch.split(model_output, model_output.shape[0] // 2, dim=0)
             t = t[:t.shape[0] // 2]
+            mid_feats = cond[2]['mid_feats']
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
@@ -1443,7 +1448,13 @@ class LatentDiffusion(DDPM):
             # No ordinary image reconstruction loss under subj_prompt_single.
             # Similar to the ordinary reconstruction loss, the losses of different sample images 
             # in the batch will be weighted differently according to t.
-            loss_comp_prompt_mix = self.get_loss(model_output, model_output_mix, mean=True)
+            pixel_weight = 0.1
+            loss_comp_prompt_mix = self.get_loss(model_output, model_output_mix, mean=True) * pixel_weight
+            layer_weight = 1. / len(mid_feats) * 0.02
+            for mid_feat in mid_feats:
+                mid_feat_subj, mid_feat_cls = torch.split(mid_feat, mid_feat.shape[0] // 2, dim=0)
+                loss_comp_prompt_mix += self.get_loss(mid_feat_subj, mid_feat_cls, mean=True) * layer_weight
+
             # logvar is all zero. So no need to do "loss_comp_prompt_mix / exp(logvar_t) + logvar_t".
 
             loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_comp_prompt_mix})
