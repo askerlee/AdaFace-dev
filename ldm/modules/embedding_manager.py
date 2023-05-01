@@ -348,6 +348,7 @@ class AdaEmbedding(nn.Module):
         self.dim2 = dim2
         self.r = r
         self.device_type = device_type
+        self.unet_midlayer_idx = 13
         self.layer_idx2emb_idx = layer_idx2emb_idx
         self.emb_idx2layer_idx = { v: k for k, v in layer_idx2emb_idx.items() }
 
@@ -423,14 +424,21 @@ class AdaEmbedding(nn.Module):
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
             # infeat_pooled: [B, C_layer]
             infeat_pooled    = self.avgpool(layer_infeat, img_mask)
-            # Set to < 1 to reduce the gradient flow into the UNet.
-            # Set to 0 to completely cut off the gradient flow into the UNet.
-            if bp_to_unet:
-                stop_infeat_grad_scale = 0.5
-                # embedding regularization iterations. BP into the UNet.
-                grad_scaler = GradientScaler(stop_infeat_grad_scale)
-                grad_scaler = grad_scaler.cuda()
-                infeat_pooled_gradscaled = grad_scaler(infeat_pooled)
+            # When not bp_to_unet, completely cut off the gradient flow into the UNet.
+            # bp_to_unet is enabled when doing composition regularization iterations. 
+            # Composition regularization should focus on overall structures instead of fine details.
+            # Since low-level layers more focus on overall structures instead of fine details,
+            # and high-level layers are opposite,
+            # we only BP into the UNet at these layers, i.e., layer_idx <= self.unet_midlayer_idx.
+            if bp_to_unet and layer_idx <= self.unet_midlayer_idx:
+                # Set to < 1 to reduce the gradient flow into the UNet.
+                stop_infeat_grad_scale = 1.
+                if stop_infeat_grad_scale < 1:
+                    grad_scaler = GradientScaler(stop_infeat_grad_scale)
+                    grad_scaler = grad_scaler.cuda()
+                    infeat_pooled_gradscaled = grad_scaler(infeat_pooled)
+                else:
+                    infeat_pooled_gradscaled = infeat_pooled
             else:
                 # Ordinary image reconstruction iterations. No BP into the UNet.
                 infeat_pooled_gradscaled = infeat_pooled.detach()
