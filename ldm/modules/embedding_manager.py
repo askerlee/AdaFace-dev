@@ -148,7 +148,37 @@ class MaskedAvgPool2d(nn.Module):
         x = x * mask
         x = x.sum(dim=(2,3)) / mask.sum(dim=(2,3))
         return x
-        
+
+# Revised from RevGrad, by removing the grad negation.
+class ScaleGrad(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input_, alpha_):
+        ctx.save_for_backward(input_, alpha_)
+        output = input_
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):  # pragma: no cover
+        grad_input = None
+        _, alpha_ = ctx.saved_tensors
+        if ctx.needs_input_grad[0]:
+            grad_input = grad_output * alpha_
+        return grad_input, None
+
+class GradientScaler(nn.Module):
+    def __init__(self, alpha=1., *args, **kwargs):
+        """
+        A gradient reversal layer.
+        This layer has no parameters, and simply reverses the gradient
+        in the backward pass.
+        """
+        super().__init__(*args, **kwargs)
+
+        self._alpha = torch.tensor(alpha, requires_grad=False)
+
+    def forward(self, input_):
+        return ScaleGrad.apply(input_, self._alpha)
+
 class StaticLayerwiseEmbedding(nn.Module):
     # dim1: 16 (9 layers out of 25 of UNet are skipped), dim2: 768, r: 12.
     # If using init_vecs, init_noise_stds are applied to basis_rand_weights. 
@@ -394,11 +424,14 @@ class AdaEmbedding(nn.Module):
             # infeat_pooled: [B, C_layer]
             infeat_pooled    = self.avgpool(layer_infeat, img_mask)
             # Set to <1 to sometimes "stop the gradient flow into the UNet", sometimes not.
-            stop_infeat_grad_prob = 1
-            stop_infeat_grad = random.random() < stop_infeat_grad_prob
-            if stop_infeat_grad:
-                infeat_pooled = infeat_pooled.detach()
-                
+            stop_infeat_grad_scale = 0.5
+            if stop_infeat_grad_scale == 0:
+                infeat_pooled_gradscaled = infeat_pooled.detach()
+            else:
+                grad_scaler = GradientScaler(stop_infeat_grad_scale)
+                grad_scaler = grad_scaler.cuda()
+                infeat_pooled_gradscaled = grad_scaler(infeat_pooled)
+
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
             # as the time embedding is highly redundant, and the first TD dimensions are sufficient
@@ -409,7 +442,7 @@ class AdaEmbedding(nn.Module):
             # TD is C_layer/2, so that the time embeddings won't dominate the image features infeat_pooled.
             TD = self.TDs[emb_idx]
             # cat(ln(infeat_pooled), ln(time_emb)) as the input features.
-            infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled, time_emb[:, :TD])
+            infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled_gradscaled, time_emb[:, :TD])
             basis_dyn_weight = self.layer_maps[emb_idx](infeat_time)
             # bias: [1, 768]
             bias = self.bias[emb_idx].unsqueeze(0)
