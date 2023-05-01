@@ -414,7 +414,7 @@ class AdaEmbedding(nn.Module):
     # layer_infeat: 4D image feature tensor [B, C, H, W].
     # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
     # time_emb: [B, 1280].
-    def forward(self, layer_idx, layer_infeat, time_emb, img_mask=None):
+    def forward(self, layer_idx, layer_infeat, time_emb, img_mask=None, bp_to_unet=False):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
         self.avgpool = MaskedAvgPool2d()
         
@@ -425,13 +425,15 @@ class AdaEmbedding(nn.Module):
             infeat_pooled    = self.avgpool(layer_infeat, img_mask)
             # Set to < 1 to reduce the gradient flow into the UNet.
             # Set to 0 to completely cut off the gradient flow into the UNet.
-            stop_infeat_grad_scale = 0.25
-            if stop_infeat_grad_scale == 0:
-                infeat_pooled_gradscaled = infeat_pooled.detach()
-            else:
+            if bp_to_unet:
+                stop_infeat_grad_scale = 0.5
+                # embedding regularization iterations. BP into the UNet.
                 grad_scaler = GradientScaler(stop_infeat_grad_scale)
                 grad_scaler = grad_scaler.cuda()
                 infeat_pooled_gradscaled = grad_scaler(infeat_pooled)
+            else:
+                # Ordinary image reconstruction iterations. No BP into the UNet.
+                infeat_pooled_gradscaled = infeat_pooled.detach()
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
@@ -644,6 +646,7 @@ class EmbeddingManager(nn.Module):
             # Store the embedder to compute the delta loss.
             self.embedder = embedder
             self.token_weights = None
+            self.ada_bp_to_unet = False
             print("EmbeddingManager initialized with layerwise_lora_rank={}, ada_emb_weight={}, placeholder_suffix={}".format(
                    layerwise_lora_rank, ada_emb_weight, placeholder_suffix))
             
@@ -670,7 +673,7 @@ class EmbeddingManager(nn.Module):
             # a previous call of  set_ada_layer_temp_info() from UNet.
             embedded_text = \
                 self.get_ada_embedding(self.layer_idx, self.layer_infeat, self.time_emb,
-                                       tokenized_text, embedded_text)
+                                       tokenized_text, embedded_text, self.ada_bp_to_unet)
             emb_idx = self.layer_idx2emb_idx[self.layer_idx]
             # Remove ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
@@ -811,6 +814,7 @@ class EmbeddingManager(nn.Module):
             time_emb,               # time embedding of the current iteration.
             tokenized_text,         # [B, N]. Identical B copies along the batch dimension.
             embedded_text,          # [B, N, 768]. Identical B copies along the batch dimension.
+            ada_bp_to_unet=False
     ):
         b, n, device = *tokenized_text.shape, tokenized_text.device
 
@@ -841,7 +845,8 @@ class EmbeddingManager(nn.Module):
 
             # Generate the actual placeholder_embedding on the fly.
             # [B=2, 768]
-            placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat, time_emb, self.img_mask)
+            placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat, time_emb, 
+                                                         self.img_mask, ada_bp_to_unet)
             # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
             # embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [2, 768].
             # Sometimes (e.g. during inference, some instances contain the placeholder token but
@@ -874,11 +879,12 @@ class EmbeddingManager(nn.Module):
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
 
-    def set_ada_layer_temp_info(self, layer_idx, layer_infeat, time_emb):
+    def set_ada_layer_temp_info(self, layer_idx, layer_infeat, time_emb, ada_bp_to_unet):
         self.gen_ada_embedding = True
         self.layer_idx      = layer_idx
         self.layer_infeat   = layer_infeat
         self.time_emb       = time_emb
+        self.ada_bp_to_unet = ada_bp_to_unet
         # Initialize the ada_embeddings cache list.
 
     # ada_embeddings is used to cache the embeddings of all layers, 
