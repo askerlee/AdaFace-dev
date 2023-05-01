@@ -1195,6 +1195,8 @@ class LatentDiffusion(DDPM):
                         # To compute the delta loss on ada embeddings, we need these two sets of ada embeddings.
                         c_static_emb2 = torch.cat([subj_single_emb, subj_comps_emb], dim=0)
                         c_in2         = subj_prompt_single + subj_prompt_comps
+                        extra_info['ada_bp_to_unet'] = True
+                                                
                     else:
                         # Don't do ada composition delta loss or compositional mix loss in this iteration. 
                         # This includes the subject scheme is static layerwise embedding or traditional TI.
