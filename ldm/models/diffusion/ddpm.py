@@ -1170,7 +1170,7 @@ class LatentDiffusion(DDPM):
                         # image generation and computing compositional mix loss.
                         c_static_emb2  = torch.cat([subj_comps_emb, subj_comps_emb_mix], dim=0)
                         extra_info['iter_type']      = 'do_comp_prompt_mix_reg'
-                        extra_info['ada_bp_to_unet'] = True
+                        extra_info['ada_bp_to_unet'] = False #True
 
                     elif self.do_ada_comp_delta_reg:
                         # Do ada composition delta loss in this iteration. 
