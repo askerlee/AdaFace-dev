@@ -723,7 +723,6 @@ class UNetModel(nn.Module):
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"
         hs = []
-        hs2 = []
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
         use_layerwise_context = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
@@ -818,7 +817,6 @@ class UNetModel(nn.Module):
 
         if iter_type =='do_comp_prompt_mix_reg':
             hs2 = hs + [h]
-            extra_info['mid_feats'] = hs2
 
         # 14 [2, 1280, 8,  8]
         # 15 [2, 1280, 8,  8]
@@ -837,6 +835,11 @@ class UNetModel(nn.Module):
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
             layer_idx += 1
+            if iter_type =='do_comp_prompt_mix_reg':
+                hs2.append(h)
+
+        if iter_type =='do_comp_prompt_mix_reg':
+            extra_info['unet_feats'] = hs2
 
         # [2, 320, 64, 64]
         h = h.type(x.dtype)

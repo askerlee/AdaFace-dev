@@ -1401,7 +1401,7 @@ class LatentDiffusion(DDPM):
             # second half as the reconstruction objective for compositional regularization.
             model_output, model_output_mix = torch.split(model_output, model_output.shape[0] // 2, dim=0)
             t = t[:t.shape[0] // 2]
-            mid_feats = cond[2]['mid_feats']
+        # Otherwise, ordinary image reconstruction loss. No need to split the model output.
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
@@ -1443,23 +1443,27 @@ class LatentDiffusion(DDPM):
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
         else:
-            # Images generated under subj_prompt_comps should be similar to
+            # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss under subj_prompt_single.
+            # Images and middle features generated under subj_prompt_comps should be similar to
             # those generated under the mixed prompts of (subj_prompt_comps, cls_prompt_comps). 
-            # No ordinary image reconstruction loss under subj_prompt_single.
-            # Similar to the ordinary reconstruction loss, the losses of different sample images 
-            # in the batch will be weighted differently according to t.
-            pixel_weight = 0.1
-            loss_comp_prompt_mix = self.get_loss(model_output, model_output_mix, mean=True) * pixel_weight
-            layer_weight = 1. / len(mid_feats) * 0.02
-            for mid_feat in mid_feats:
-                mid_feat_subj, mid_feat_cls = torch.split(mid_feat, mid_feat.shape[0] // 2, dim=0)
-                loss_comp_prompt_mix += self.get_loss(mid_feat_subj, mid_feat_cls, mean=True) * layer_weight
+            pixel_distill_weight = 0.1
+            if pixel_distill_weight > 0:
+                loss_comp_prompt_mix = self.get_loss(model_output, model_output_mix, mean=True) * pixel_distill_weight
+            else:
+                loss_comp_prompt_mix = 0
+
+            unet_feats = cond[2]['unet_feats']
+            # Discard the top 1/3 layers from distillation.
+            # len(unet_feats) = 25, BOTTOM_LAYER_NUM = 16.
+            BOTTOM_LAYER_NUM = len(unet_feats) * 2 // 3
+            layer_distill_weight = 1. / BOTTOM_LAYER_NUM * 0.02
+            for unet_feat in unet_feats:
+                unet_feat_subj, unet_feat_cls = torch.split(unet_feat, unet_feat.shape[0] // 2, dim=0)
+                loss_comp_prompt_mix += self.get_loss(unet_feat_subj, unet_feat_cls, mean=True) * layer_distill_weight
 
             # logvar is all zero. So no need to do "loss_comp_prompt_mix / exp(logvar_t) + logvar_t".
-
             loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_comp_prompt_mix})
             loss = self.composition_prompt_mix_reg_weight * loss_comp_prompt_mix
-            #print(f'loss_comp_prompt_mix: {loss_comp_prompt_mix.mean():.6f}')
             
         if self.embedding_reg_weight > 0:
             loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()

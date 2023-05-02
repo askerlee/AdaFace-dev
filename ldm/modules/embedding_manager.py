@@ -426,11 +426,7 @@ class AdaEmbedding(nn.Module):
             infeat_pooled    = self.avgpool(layer_infeat, img_mask)
             # When not bp_to_unet, completely cut off the gradient flow into the UNet.
             # bp_to_unet is enabled when doing composition regularization iterations. 
-            # Composition regularization should focus on overall structures instead of fine details.
-            # Since low-level layers more focus on overall structures instead of fine details,
-            # and high-level layers are opposite,
-            # we only BP into the UNet at these layers, i.e., layer_idx <= self.unet_midlayer_idx.
-            if bp_to_unet: # and layer_idx <= self.unet_midlayer_idx:
+            if bp_to_unet:
                 # Set to < 1 to reduce the gradient flow into the UNet.
                 stop_infeat_grad_scale = 0.5
                 if stop_infeat_grad_scale < 1:
