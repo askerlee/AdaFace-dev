@@ -1170,7 +1170,8 @@ class LatentDiffusion(DDPM):
                         # image generation and computing compositional mix loss.
                         c_static_emb2  = torch.cat([subj_comps_emb, subj_comps_emb_mix], dim=0)
                         extra_info['iter_type']      = 'do_comp_prompt_mix_reg'
-                        extra_info['ada_bp_to_unet'] = False #True
+                        # Set ada_bp_to_unet to False will reduce performance.
+                        extra_info['ada_bp_to_unet'] = True
 
                     elif self.do_ada_comp_delta_reg:
                         # Do ada composition delta loss in this iteration. 
@@ -1446,7 +1447,7 @@ class LatentDiffusion(DDPM):
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss under subj_prompt_single.
             # Images and middle features generated under subj_prompt_comps should be similar to
             # those generated under the mixed prompts of (subj_prompt_comps, cls_prompt_comps). 
-            pixel_distill_weight = 0.1
+            pixel_distill_weight = 0.2
             if pixel_distill_weight > 0:
                 loss_comp_prompt_mix = self.get_loss(model_output, model_output_mix, mean=True) * pixel_distill_weight
             else:
@@ -1457,7 +1458,7 @@ class LatentDiffusion(DDPM):
             # len(unet_feats) = 25, BOTTOM_LAYER_NUM = 16.
             BOTTOM_LAYER_NUM = len(unet_feats) * 2 // 3
             layer_distill_weight = 1. / BOTTOM_LAYER_NUM * 0.02
-            for unet_feat in unet_feats:
+            for unet_feat in unet_feats[:BOTTOM_LAYER_NUM]:
                 unet_feat_subj, unet_feat_cls = torch.split(unet_feat, unet_feat.shape[0] // 2, dim=0)
                 loss_comp_prompt_mix += self.get_loss(unet_feat_subj, unet_feat_cls, mean=True) * layer_distill_weight
 
