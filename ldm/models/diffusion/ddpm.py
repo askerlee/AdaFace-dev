@@ -1454,10 +1454,11 @@ class LatentDiffusion(DDPM):
                 loss_comp_prompt_mix = 0
 
             unet_feats = cond[2]['unet_feats']
-            # Discard the top 1/3 layers from distillation.
-            # len(unet_feats) = 25, BOTTOM_LAYER_NUM = 16.
-            BOTTOM_LAYER_NUM = len(unet_feats) * 2 // 3
-            layer_distill_weight = 1. / BOTTOM_LAYER_NUM * 0.02
+            # Discard the top 1/2 layers from distillation.
+            # len(unet_feats) = 16, BOTTOM_LAYER_NUM = 8 (0~7)
+            # (original indices: 1, 2, 4, 5, 7, 8, 12, 16 out of 0~24)
+            BOTTOM_LAYER_NUM = len(unet_feats) // 2
+            layer_distill_weight = 1. / BOTTOM_LAYER_NUM * 0.01
             for unet_feat in unet_feats[:BOTTOM_LAYER_NUM]:
                 unet_feat_subj, unet_feat_cls = torch.split(unet_feat, unet_feat.shape[0] // 2, dim=0)
                 loss_comp_prompt_mix += self.get_loss(unet_feat_subj, unet_feat_cls, mean=True) * layer_distill_weight
