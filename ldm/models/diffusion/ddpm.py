@@ -306,12 +306,15 @@ class DDPM(pl.LightningModule):
         return (extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start +
                 extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise)
 
-    def get_loss(self, pred, target, mean=True):
-        if self.loss_type == 'l1':
+    def get_loss(self, pred, target, mean=True, loss_type=None):
+        if loss_type is None:
+            loss_type = self.loss_type
+
+        if loss_type == 'l1':
             loss = (target - pred).abs()
             if mean:
                 loss = loss.mean()
-        elif self.loss_type == 'l2':
+        elif loss_type == 'l2':
             if mean:
                 loss = torch.nn.functional.mse_loss(target, pred)
             else:
@@ -1447,21 +1450,30 @@ class LatentDiffusion(DDPM):
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss under subj_prompt_single.
             # Images and middle features generated under subj_prompt_comps should be similar to
             # those generated under the mixed prompts of (subj_prompt_comps, cls_prompt_comps). 
-            pixel_distill_weight = 0 #0.2
+            pixel_distill_weight = 0.1
             if pixel_distill_weight > 0:
                 loss_comp_prompt_mix = self.get_loss(model_output, model_output_mix, mean=True) * pixel_distill_weight
             else:
                 loss_comp_prompt_mix = 0
 
+            # unet_feats is a dict as: layer_idx -> unet_feat.
             unet_feats = cond[2]['unet_feats']
-            # Discard the top 1/2 layers from distillation.
-            # len(unet_feats) = 16, BOTTOM_LAYER_NUM = 8 (0~7)
+            # Discard top layers and the first few bottom layers from distillation.
             # (original indices: 1, 2, 4, 5, 7, 8, 12, 16 out of 0~24)
-            BOTTOM_LAYER_NUM = len(unet_feats) // 2
-            layer_distill_weight = 1. / BOTTOM_LAYER_NUM * 0.01
-            for unet_feat in unet_feats[:BOTTOM_LAYER_NUM]:
+            # distill_layer_weights: relative weight of each distillation layer. 
+            # distill_layer_weights are normalized using distill_overall_weight.
+            distill_layer_weights = { 7: 5., 8: 5., 12: 1., 16: 1. }
+            distill_overall_weight = 0.01 / np.sum(list(distill_layer_weights.values()))
+            distill_loss_type = 'l2'
+            for unet_layer_idx, unet_feat in unet_feats.items():
+                if unet_layer_idx not in distill_layer_weights:
+                    continue
+                distill_layer_weight = distill_layer_weights[unet_layer_idx]
                 unet_feat_subj, unet_feat_cls = torch.split(unet_feat, unet_feat.shape[0] // 2, dim=0)
-                loss_comp_prompt_mix += self.get_loss(unet_feat_subj, unet_feat_cls, mean=True) * layer_distill_weight
+                loss_layer_comp_prompt_mix = self.get_loss(unet_feat_subj, unet_feat_cls, 
+                                                           mean=True, loss_type=distill_loss_type)
+                print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
+                loss_comp_prompt_mix += loss_layer_comp_prompt_mix * distill_layer_weight * distill_overall_weight
 
             # logvar is all zero. So no need to do "loss_comp_prompt_mix / exp(logvar_t) + logvar_t".
             loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_comp_prompt_mix})

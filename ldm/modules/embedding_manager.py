@@ -951,6 +951,9 @@ class EmbeddingManager(nn.Module):
         self.string_to_param_dict           = nn.ParameterDict()
         self.string_to_ada_embedder_dict   = nn.ModuleDict()
 
+        if isinstance(ckpt_paths, str):
+            ckpt_paths = [ckpt_paths]
+
         for ckpt_path in ckpt_paths:
             ckpt_path_parts = ckpt_path.split(":")
             ckpt_path = ckpt_path_parts[0]
