@@ -1447,7 +1447,7 @@ class LatentDiffusion(DDPM):
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss under subj_prompt_single.
             # Images and middle features generated under subj_prompt_comps should be similar to
             # those generated under the mixed prompts of (subj_prompt_comps, cls_prompt_comps). 
-            pixel_distill_weight = 0.2
+            pixel_distill_weight = 0 #0.2
             if pixel_distill_weight > 0:
                 loss_comp_prompt_mix = self.get_loss(model_output, model_output_mix, mean=True) * pixel_distill_weight
             else:
