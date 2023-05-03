@@ -1450,7 +1450,7 @@ class LatentDiffusion(DDPM):
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss under subj_prompt_single.
             # Images and middle features generated under subj_prompt_comps should be similar to
             # those generated under the mixed prompts of (subj_prompt_comps, cls_prompt_comps). 
-            pixel_distill_weight = 0.1
+            pixel_distill_weight = 0
             if pixel_distill_weight > 0:
                 loss_comp_prompt_mix = self.get_loss(model_output, model_output_mix, mean=True) * pixel_distill_weight
             else:
@@ -1462,7 +1462,8 @@ class LatentDiffusion(DDPM):
             # (original indices: 1, 2, 4, 5, 7, 8, 12, 16 out of 0~24)
             # distill_layer_weights: relative weight of each distillation layer. 
             # distill_layer_weights are normalized using distill_overall_weight.
-            distill_layer_weights = { 7: 5., 8: 5., 12: 1., 16: 1. }
+            # Effectively, 7: 0.44, 8: 0.44, 12: 0.08, 16: 0.04
+            distill_layer_weights = { 7: 5.5, 8: 5.5, 12: 1., 16: 0.5 }
             distill_overall_weight = 0.01 / np.sum(list(distill_layer_weights.values()))
             distill_loss_type = 'l2'
             for unet_layer_idx, unet_feat in unet_feats.items():
