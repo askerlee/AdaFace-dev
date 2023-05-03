@@ -1472,7 +1472,7 @@ class LatentDiffusion(DDPM):
                 unet_feat_subj, unet_feat_cls = torch.split(unet_feat, unet_feat.shape[0] // 2, dim=0)
                 loss_layer_comp_prompt_mix = self.get_loss(unet_feat_subj, unet_feat_cls, 
                                                            mean=True, loss_type=distill_loss_type)
-                print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
+                # print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
                 loss_comp_prompt_mix += loss_layer_comp_prompt_mix * distill_layer_weight * distill_overall_weight
 
             # logvar is all zero. So no need to do "loss_comp_prompt_mix / exp(logvar_t) + logvar_t".
