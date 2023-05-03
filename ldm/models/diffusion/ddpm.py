@@ -1462,8 +1462,8 @@ class LatentDiffusion(DDPM):
             # (original indices: 1, 2, 4, 5, 7, 8, 12, 16 out of 0~24)
             # distill_layer_weights: relative weight of each distillation layer. 
             # distill_layer_weights are normalized using distill_overall_weight.
-            # Effectively, 7: 0.44, 8: 0.44, 12: 0.08, 16: 0.04
-            distill_layer_weights = { 7: 5.5, 8: 5.5, 12: 1., 16: 0.5 }
+            # Effectively, 7: 0.364, 8: 0.364, 12: 0.182, 16: 0.09
+            distill_layer_weights = { 7: 2., 8: 2., 12: 1, 16: 0.5 }
             distill_overall_weight = 0.01 / np.sum(list(distill_layer_weights.values()))
             distill_loss_type = 'l2'
             for unet_layer_idx, unet_feat in unet_feats.items():
