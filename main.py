@@ -228,7 +228,7 @@ def get_parser(**parser_kwargs):
     
     # num_compositions_per_image: a value > 1 leads to better performance on prompt compositions
     parser.add_argument("--num_compositions_per_image",
-                        type=int, default=2,
+                        type=int, default=1,
                         help="Number of composition samples for each image in a batch (default: 2)")
     parser.add_argument("--broad_class", type=int, default=1,
                         help="Whether the subject is a human/animal, object or cartoon (0: object, 1: human/animal, 2: cartoon)")
