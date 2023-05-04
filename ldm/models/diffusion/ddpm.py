@@ -1466,7 +1466,7 @@ class LatentDiffusion(DDPM):
             # Layer 16 has strong face semantics, so it is given a small weight as well.
             # Effectively, 7: 0.235, 8: 0.235, 9-11: 0.06, 12: 0.118, 13-15: 0.06, 16: 0.06
             distill_layer_weights = { 7:  2., 8: 2.,  9: 0.5,  10: 0.5,  11: 0.5, 
-                                      12: 1, 13: 0.5, 14: 0.5, 15: 0.25, 16: 0.25 }
+                                      12: 1, 13: 0.25, 14: 0.25, 15: 0.25, 16: 0.25 }
             distill_overall_weight = 0.01 / np.sum(list(distill_layer_weights.values()))
             distill_loss_type = 'l2'
             for unet_layer_idx, unet_feat in unet_feats.items():
