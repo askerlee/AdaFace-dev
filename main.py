@@ -238,6 +238,8 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--clip_last_layer_skip_scheme", type=str, choices=["add", "concat"], 
                         default="add", 
                         help="Scheme for the skip connection between the last layer and second last layer of CLIP text embedder")
+    parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
+                        help="Disable wandb logging")    
     return parser
 
 def nondefault_trainer_args(opt):
@@ -760,7 +762,8 @@ if __name__ == "__main__":
                 }
             },
         }
-        default_logger_cfg = default_logger_cfgs["wandb"]
+        logger_name = "wandb" if opt.use_wandb else "testtube"
+        default_logger_cfg = default_logger_cfgs[logger_name]
         if "logger" in lightning_config:
             logger_cfg = lightning_config.logger
         else:

@@ -1052,7 +1052,7 @@ class LatentDiffusion(DDPM):
                 CLS_PROMPT_COMP   = 'cls_prompt_comp_fp'
                 CLS_PROMPT_SINGLE = 'cls_prompt_single_fp'
             else:
-                SUBJ_PROMPT_COMP  = 'cls_prompt_comp'
+                SUBJ_PROMPT_COMP  = 'subj_prompt_comp'
                 CLS_PROMPT_COMP   = 'cls_prompt_comp'
                 CLS_PROMPT_SINGLE = 'cls_prompt_single'
 
