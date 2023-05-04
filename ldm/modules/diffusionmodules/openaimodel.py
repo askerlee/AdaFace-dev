@@ -809,14 +809,14 @@ class UNetModel(nn.Module):
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
             hs.append(h)
-            if iter_type =='do_comp_prompt_mix_reg' and layer_context is not None:
+            if iter_type =='do_comp_prompt_mix_reg':
                 hs2[layer_idx] = h
             layer_idx += 1
         
         layer_context = get_layer_context(layer_idx, h)
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, layer_context)
-        if iter_type =='do_comp_prompt_mix_reg' and layer_context is not None:
+        if iter_type =='do_comp_prompt_mix_reg':
             hs2[layer_idx] = h
         layer_idx += 1
 
@@ -836,7 +836,7 @@ class UNetModel(nn.Module):
             h = th.cat([h, hs.pop()], dim=1)
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
-            if iter_type =='do_comp_prompt_mix_reg' and layer_context is not None:
+            if iter_type =='do_comp_prompt_mix_reg':
                 hs2[layer_idx] = h
             layer_idx += 1
 
