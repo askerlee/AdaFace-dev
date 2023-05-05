@@ -1152,8 +1152,12 @@ class LatentDiffusion(DDPM):
                         # to get their ada embeddings. 
                         # Repeat subj_prompt_comps twice.
                         c_in2 = subj_prompt_comps * 2
-                        # The embeddings of subj_prompt_comps and cls_prompt_comps,
+                        # The static embeddings of subj_prompt_comps and cls_prompt_comps,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed.
+                        # Ada embeddings won't be mixed.
+                        # Mixed embedding subj_comps_emb_mix = 
+                        # concat(subj_comps_emb, cls_comps_emb -| subj_comps_emb)_dim1. 
+                        # -| means orthogonal subtraction.
                         subj_comps_emb_mix = mix_embeddings(subj_comps_emb, cls_comps_emb, 
                                                             c2_mix_weight=self.cls_prompt_mix_weight,
                                                             use_ortho_subtract=True)

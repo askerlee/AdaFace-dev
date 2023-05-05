@@ -1156,15 +1156,15 @@ class EmbeddingManager(nn.Module):
 
     # Textual inversion is supported, where static_embeddings is only one embedding.
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
-    # embeddings of subj_prompt_single, subj_prompt_comp, cls_prompt_single, cls_prompt_comp. 
+    # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
     # cls_prompt_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
     def composition_delta_loss(self, do_ada_comp_delta_reg, static_embeddings):
         # The composition delta loss for ada embeddings is only applied 
         # every composition_delta_reg_iter_gap iterations. So the ada loss 
         # should be boosted proportionally to composition_delta_reg_iter_gap. 
-        # Divide it by 2 to reduce the proportion of ada emb loss relative to 
+        # Divide it by 4 to reduce the proportion of ada emb loss relative to 
         # static emb loss in the total loss.
-        ada_comp_loss_boost_ratio = self.composition_delta_reg_iter_gap / 2
+        ada_comp_loss_boost_ratio = self.composition_delta_reg_iter_gap / 4
         # If do_ada_comp_delta_reg,     BS = 2.
         # If not do_ada_comp_delta_reg, BS = 2 * num_compositions_per_image = 4.
         BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
@@ -1172,21 +1172,21 @@ class EmbeddingManager(nn.Module):
         # static_embeddings: [8, 16, 77, 768]
         static_embeddings = static_embeddings.view(BS * 4, -1, max_token_num, static_embeddings.shape[-1])
         # Each is [2, 16, 77, 768]
-        subj_prompt_single, subj_prompt_comp, cls_prompt_single, cls_prompt_comp = \
-                    static_embeddings.split(BS, dim=0)
+        static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
+                static_embeddings.split(BS, dim=0)
 
         use_ortho_subtract = True
         if use_ortho_subtract:
-            cls_delta    = ortho_subtract(cls_prompt_comp, cls_prompt_single)
-            static_delta = ortho_subtract(subj_prompt_comp, subj_prompt_single)
+            cls_delta    = ortho_subtract(static_cls_comp_emb,  static_cls_single_emb)
+            static_delta = ortho_subtract(static_subj_comp_emb, static_subj_single_emb)
         else:
             # cls_delta: [2, 16, 77, 768]. Should be a repeat of a tensor [2, 1, 77, 768] 
             # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
-            cls_delta = cls_prompt_comp - cls_prompt_single
+            cls_delta    = static_cls_comp_emb - static_cls_single_emb
             # static_delta: [2, 16, 77, 768]. Different values for each layer along dim=1.
-            static_delta = subj_prompt_comp - subj_prompt_single
+            static_delta = static_subj_comp_emb - static_subj_single_emb
 
-        # delta_loss_emb_mask is often obtained from an extended batch. So only uses the first BS elements.
+        # delta_loss_emb_mask is often obtained from an extended batch. So only use the first BS elements.
         delta_loss_emb_mask = self.delta_loss_emb_mask[:BS] if self.delta_loss_emb_mask is not None else None
         static_delta_loss   = calc_delta_loss(static_delta, cls_delta, delta_loss_emb_mask)
 
@@ -1200,12 +1200,12 @@ class EmbeddingManager(nn.Module):
 
             # ada_embeddings: [4, 16, 77, 768]
             ada_embeddings = torch.stack(self.ada_embeddings, dim=1)
-            ada_subj_emb_single, ada_subj_emb_comp = ada_embeddings.split(BS, dim=0)
+            ada_subj_single_emb, ada_subj_comp_emb = ada_embeddings.split(BS, dim=0)
             
             if use_ortho_subtract:
-                ada_delta = ortho_subtract(ada_subj_emb_comp, ada_subj_emb_single)
+                ada_delta = ortho_subtract(ada_subj_comp_emb, ada_subj_single_emb)
             else:
-                ada_delta = ada_subj_emb_comp - ada_subj_emb_single
+                ada_delta = ada_subj_comp_emb - ada_subj_single_emb
 
             ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, delta_loss_emb_mask)
             # The cached ada embeddings are useless now, release them.

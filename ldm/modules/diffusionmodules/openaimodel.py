@@ -746,7 +746,8 @@ class UNetModel(nn.Module):
             if not use_layerwise_context:
                 return context
 
-            # skipped_layers = set([0, 3, 6, 9, 10, 11, 13, 14, 15])
+            # skipped_layers: 0, 3, 6, 9, 10, 11, 13, 14, 15
+            # 25 layers, among which 16 layers are conditioned.
             layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                   17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
             # Simply return None, as the context is not used anyway.
@@ -764,8 +765,9 @@ class UNetModel(nn.Module):
                 static_emb_weight = 1 - ada_emb_weight
 
                 # If static context is expanded by doing prompt mixing,
-                # we need to expand layer_ada_context as well to match the shape.
-                if layer_ada_context.shape[1] == layer_static_context.shape[1] // 2:
+                # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
+                if iter_type =='do_comp_prompt_mix_reg':
+                    assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
                     layer_ada_context = layer_ada_context.repeat(1, 2, 1)
                     if token_weights is not None:
                         token_weights = token_weights.repeat(1, 2, 1)
