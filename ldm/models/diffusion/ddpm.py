@@ -22,7 +22,9 @@ from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
-                       count_params, instantiate_from_config, mix_embeddings
+                       count_params, instantiate_from_config, mix_embeddings, \
+                       calc_delta_loss, ortho_subtract
+
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
@@ -382,8 +384,8 @@ class DDPM(pl.LightningModule):
         # How many regularizations are done intermittently during the training iterations?
         interm_reg_types = []
         # do_ada_comp_delta_reg only if do_static_comp_delta_reg and use_ada_embedding.
-        if self.do_static_comp_delta_reg and self.use_ada_embedding:
-            interm_reg_types.append('do_ada_comp_delta_reg')
+        #if self.do_static_comp_delta_reg and self.use_ada_embedding:
+        #    interm_reg_types.append('do_ada_comp_delta_reg')
         if self.composition_prompt_mix_reg_weight > 0:
             interm_reg_types.append('do_comp_prompt_mix_reg')
 
@@ -1122,6 +1124,8 @@ class LatentDiffusion(DDPM):
                     subj_prompt_comps, cls_prompt_single, cls_prompt_comps = composition_delta_prompts
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     ORIG_BS  = len(x)
+                    # HALF_BS is at least 1. So if ORIG_BS == 1, then HALF_BS = 1.
+                    HALF_BS  = max(ORIG_BS // 2, 1)
                     N_EMBEDS = ORIG_BS * N_LAYERS
                     subj_prompt_single = c
                     # PROMPT_BS = ORIG_BS * num_compositions_per_image.
@@ -1145,13 +1149,25 @@ class LatentDiffusion(DDPM):
                     # do_comp_prompt_mix_reg is exclusive with do_ada_comp_delta_reg.
                     # i.e., they won't be activated at the same time.
                     if self.do_comp_prompt_mix_reg:
-                        # Only keep the static embeddings and prompts of subj_prompt_comps.
+                        # Only keep the first half of the static embeddings and prompts of subj_prompt_comps.
                         # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
                         # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
                         # So we keep the subset of c_in that corresponds to subj_prompt_comps, 
                         # to get their ada embeddings. 
-                        # Repeat subj_prompt_comps twice.
-                        c_in2 = subj_prompt_comps * 2
+                        subj_prompt_single, subj_prompt_comps, cls_prompt_single, cls_prompt_comps = \
+                            subj_prompt_single[:HALF_BS], subj_prompt_comps[:HALF_BS], \
+                            cls_prompt_single[:HALF_BS],  cls_prompt_comps[:HALF_BS]
+                        subj_single_emb, subj_comps_emb, cls_single_emb, cls_comps_emb = \
+                            subj_single_emb[:HALF_BS], subj_comps_emb[:HALF_BS], \
+                            cls_single_emb[:HALF_BS],  cls_comps_emb[:HALF_BS]
+                        
+                        # Arrange c_in2 in the same layout as the static embeddings.
+                        # The cls_prompt_single within c_in2 will only be used to generate ordinary 
+                        # prompt embeddings, i.e., 
+                        # it doesn't contain subject token, and no ada embedding will be injected.
+                        # The second subj_prompt_comps is used to generate the ada embedding for
+                        # the mixed embeddings of (subj_prompt_comps, cls_prompt_comps).
+                        c_in2 = subj_prompt_single + subj_prompt_comps + cls_prompt_single + subj_prompt_comps
                         # The static embeddings of subj_prompt_comps and cls_prompt_comps,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed.
                         # Ada embeddings won't be mixed.
@@ -1170,12 +1186,16 @@ class LatentDiffusion(DDPM):
                         stop_mix_grad = True
                         if stop_mix_grad:
                             subj_comps_emb_mix = subj_comps_emb_mix.detach()
-                        # This copy of subj_comps_emb will be simply repeated at the token dimension
-                        # to match the token number of the mixed (concatenated) embeddings.
-                        subj_comps_emb = subj_comps_emb.repeat(1, 2, 1)
+                        # This copy of subj_single_emb, subj_comps_emb, cls_single_emb will be simply 
+                        # repeated at the token dimension to match 
+                        # the token number of the mixed (concatenated) embeddings.
                         # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
                         # image generation and computing compositional mix loss.
-                        c_static_emb2  = torch.cat([subj_comps_emb, subj_comps_emb_mix], dim=0)
+                        c_static_emb2  = torch.cat([subj_single_emb.repeat(1, 2, 1), 
+                                                    subj_comps_emb.repeat(1, 2, 1), 
+                                                    cls_single_emb.repeat(1, 2, 1), 
+                                                    subj_comps_emb_mix], dim=0)
+                        
                         extra_info['iter_type']      = 'do_comp_prompt_mix_reg'
                         # Set ada_bp_to_unet to False will reduce performance.
                         extra_info['ada_bp_to_unet'] = True
@@ -1386,15 +1406,19 @@ class LatentDiffusion(DDPM):
     def p_losses(self, x_start, cond, t, noise=None, img_mask=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        if self.do_ada_comp_delta_reg or self.do_comp_prompt_mix_reg:
+        if self.do_ada_comp_delta_reg:
             # To compute the delta loss / prompt mixing loss, we need two copies of the input noise, 
             # to go through U-Net under different conditioning embeddings. 
             x_noisy = x_noisy.repeat(2, 1, 1, 1)
             t       = t.repeat(2)
+        if self.do_comp_prompt_mix_reg:
+            HALF_BS = max(x_noisy.shape[0] // 2, 1)
+            x_noisy = x_noisy[:HALF_BS].repeat(4, 1, 1, 1)
+            t       = t[:HALF_BS].repeat(4)
 
         model_output = self.apply_model(x_noisy, t, cond)
+        model_outputs = None
 
-        model_output_mix = None
         if self.do_ada_comp_delta_reg:
             # Restore model_output and t.
             # Discard the second half of the model output, as they are used 
@@ -1407,8 +1431,8 @@ class LatentDiffusion(DDPM):
         elif self.do_comp_prompt_mix_reg:
             # If we do compositional prompt mixing, we need the final images of the 
             # second half as the reconstruction objective for compositional regularization.
-            model_output, model_output_mix = torch.split(model_output, model_output.shape[0] // 2, dim=0)
-            t = t[:t.shape[0] // 2]
+            model_outputs = torch.split(model_output, model_output.shape[0] // 4, dim=0)
+            t = t[:t.shape[0] // 4]
         # Otherwise, ordinary image reconstruction loss. No need to split the model output.
 
         loss_dict = {}
@@ -1425,11 +1449,13 @@ class LatentDiffusion(DDPM):
         if img_mask is not None:
             target       = target       * img_mask
             model_output = model_output * img_mask
-            if model_output_mix is not None:
-                model_output_mix = model_output_mix * img_mask
-                
+            if model_outputs is not None:
+                model_outputs = [ model_output * img_mask for model_output in model_outputs ]
+        
+        iter_type = cond[2]['iter_type']
+
         # Ordinary image reconstruction loss under the guidance of subj_prompt_single.
-        if not self.do_comp_prompt_mix_reg:
+        if iter_type == 'normal_recon':
             # The losses of different sample images in the batch 
             # will be weighted differently according to t.
             loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
@@ -1450,15 +1476,14 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
-        else:
-            # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss under subj_prompt_single.
-            # Images and middle features generated under subj_prompt_comps should be similar to
-            # those generated under the mixed prompts of (subj_prompt_comps, cls_prompt_comps). 
-            pixel_distill_weight = 0
-            if pixel_distill_weight > 0:
-                loss_comp_prompt_mix = self.get_loss(model_output, model_output_mix, mean=True) * pixel_distill_weight
-            else:
-                loss_comp_prompt_mix = 0
+
+        elif iter_type == 'do_comp_prompt_mix_reg':
+            # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
+            # Only regularize on intermediate features, i.e., intermediate features generated 
+            # under subj_prompt_comps should satisfy the delta loss constraint:
+            # F(subj_prompt_comps)  - F(mix(subj_prompt_comps, cls_prompt_comps)) \approx 
+            # F(subj_prompt_single) - F(cls_prompt_single)
+            loss_comp_prompt_mix = 0
 
             # unet_feats is a dict as: layer_idx -> unet_feat.
             unet_feats = cond[2]['unet_feats']
@@ -1477,9 +1502,13 @@ class LatentDiffusion(DDPM):
                 if unet_layer_idx not in distill_layer_weights:
                     continue
                 distill_layer_weight = distill_layer_weights[unet_layer_idx]
-                unet_feat_subj, unet_feat_cls = torch.split(unet_feat, unet_feat.shape[0] // 2, dim=0)
-                loss_layer_comp_prompt_mix = self.get_loss(unet_feat_subj, unet_feat_cls, 
-                                                           mean=True, loss_type=distill_loss_type)
+                feat_subj_single, feat_subj_comps, feat_cls_single, feat_cls_comps \
+                    = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
+
+                feat_cls_delta  = ortho_subtract(feat_cls_comps,  feat_cls_single)
+                feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
+
+                loss_layer_comp_prompt_mix = calc_delta_loss(feat_subj_delta, feat_cls_delta)
                 # print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
                 loss_comp_prompt_mix += loss_layer_comp_prompt_mix * distill_layer_weight * distill_overall_weight
 

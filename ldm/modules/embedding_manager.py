@@ -6,6 +6,7 @@ import copy
 import random
 
 from ldm.data.personalized import per_img_token_list
+from ldm.util import ortho_subtract, calc_delta_loss
 from transformers import CLIPTokenizer
 from functools import partial
 
@@ -59,55 +60,6 @@ def selective_reg_loss(x, loss_type='l2', selector=None):
     else:
         breakpoint()
 
-# a, b are n-dimensional tensors.
-# Orthogonal subtraction of b from a: the result of a-w*b is orthogonal to b.
-def ortho_subtract(a, b):
-    assert a.shape == b.shape, "Tensors a and b must have the same shape"
-    dot_a_b = torch.einsum('...i,...i->...', a, b)
-    dot_b_b = torch.einsum('...i,...i->...', b, b)
-    w_optimal = dot_a_b / dot_b_b
-    return a - b * w_optimal.unsqueeze(-1)
-
-def demean(x):
-    return x - x.mean(dim=-1, keepdim=True)
-
-# Eq.(2) in the StyleGAN-NADA paper.
-# delta, ref_delta: [2, 16, 77, 768].
-# emb_mask: [2, 77, 1]
-def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, do_demean_first=True):
-    # Mask out the placeholder suffix token(s).
-    # If CLIP skip scheme is "concat", then the text embedding channel number is doubled.
-    # In this case, we also duplicate the mask along the channel dimension.
-    if (emb_mask is not None) and emb_mask.shape[1] == delta.shape[1] // 2:
-        emb_mask = emb_mask.repeat(1, 2, 1)
-
-    try:
-        delta = delta * emb_mask if emb_mask is not None else delta
-    except:
-        breakpoint()
-
-    # Flatten delta and ref_delta, by tucking the layer and token dimensions into the batch dimension.
-    # dela: [2464, 768], ref_delta: [2464, 768]
-    delta = delta.view(delta.numel() // delta.shape[-1], -1)
-    ref_delta = ref_delta.view(ref_delta.numel() // ref_delta.shape[-1], -1)
-
-    # A bias vector to a set of conditioning embeddings doesn't change the attention matrix 
-    # (though changes the V tensor). So the bias is better removed.
-    # Therefore, do demean() before cosine loss, 
-    # to remove the effect of bias.
-    # In addition, different ada layers have significantly different scales. 
-    # But since cosine is scale invariant, de-scale is not necessary and won't have effects.
-    # LN = demean & de-scale. So in theory, LN is equivalent to demean() here. But LN may introduce
-    # numerical instability. So we use simple demean() here.
-    if do_demean_first:
-        delta     = demean(delta)
-        ref_delta = demean(ref_delta)
-
-    # x * x.abs.pow(exponent - 1) will keep the sign of x after pow(exponent).
-    ref_delta_pow = ref_delta * ref_delta.abs().pow(exponent - 1)
-    loss = F.cosine_embedding_loss(delta, ref_delta_pow.detach(), 
-                                   torch.ones_like(delta[:, 0]))
-    return loss
 
 def calc_stats(emb_name, embeddings):
     print("%s:" %emb_name)
