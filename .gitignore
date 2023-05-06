@@ -15,3 +15,4 @@ __pycache__/
 /models/stable-diffusion-v-1-5
 /*.txt
 !requirements.txt
+/src/taming-transformers

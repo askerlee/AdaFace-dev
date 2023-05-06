@@ -1124,9 +1124,11 @@ class LatentDiffusion(DDPM):
                     subj_prompt_comps, cls_prompt_single, cls_prompt_comps = composition_delta_prompts
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     ORIG_BS  = len(x)
+                    N_EMBEDS = ORIG_BS * N_LAYERS
                     # HALF_BS is at least 1. So if ORIG_BS == 1, then HALF_BS = 1.
                     HALF_BS  = max(ORIG_BS // 2, 1)
-                    N_EMBEDS = ORIG_BS * N_LAYERS
+                    HALF_EMBEDS = HALF_BS * N_LAYERS
+
                     subj_prompt_single = c
                     # PROMPT_BS = ORIG_BS * num_compositions_per_image.
                     # So when num_compositions_per_image > 1, subj_prompt_single/cls_prompt_single contains repeated prompts,
@@ -1158,8 +1160,8 @@ class LatentDiffusion(DDPM):
                             subj_prompt_single[:HALF_BS], subj_prompt_comps[:HALF_BS], \
                             cls_prompt_single[:HALF_BS],  cls_prompt_comps[:HALF_BS]
                         subj_single_emb, subj_comps_emb, cls_single_emb, cls_comps_emb = \
-                            subj_single_emb[:HALF_BS], subj_comps_emb[:HALF_BS], \
-                            cls_single_emb[:HALF_BS],  cls_comps_emb[:HALF_BS]
+                            subj_single_emb[:HALF_EMBEDS], subj_comps_emb[:HALF_EMBEDS], \
+                            cls_single_emb[:HALF_EMBEDS],  cls_comps_emb[:HALF_EMBEDS]
                         
                         # Arrange c_in2 in the same layout as the static embeddings.
                         # The cls_prompt_single within c_in2 will only be used to generate ordinary 
@@ -1415,9 +1417,10 @@ class LatentDiffusion(DDPM):
             x_noisy = x_noisy.repeat(2, 1, 1, 1)
             t       = t.repeat(2)
         if self.do_comp_prompt_mix_reg:
-            HALF_BS = max(x_noisy.shape[0] // 2, 1)
-            x_noisy = x_noisy[:HALF_BS].repeat(4, 1, 1, 1)
-            t       = t[:HALF_BS].repeat(4)
+            HALF_BS  = max(x_noisy.shape[0] // 2, 1)
+            x_noisy  = x_noisy[:HALF_BS].repeat(4, 1, 1, 1)
+            img_mask = img_mask[:HALF_BS]
+            t        = t[:HALF_BS].repeat(4)
 
         model_output = self.apply_model(x_noisy, t, cond)
         model_outputs = None
@@ -1451,9 +1454,10 @@ class LatentDiffusion(DDPM):
         # Only compute the loss on the masked region.
         if img_mask is not None:
             target       = target       * img_mask
-            model_output = model_output * img_mask
             if model_outputs is not None:
                 model_outputs = [ model_output * img_mask for model_output in model_outputs ]
+            else:
+                model_output = model_output * img_mask
         
         iter_type = cond[2]['iter_type']
 
@@ -1500,7 +1504,6 @@ class LatentDiffusion(DDPM):
             distill_layer_weights = { 7:  2., 8: 2.,  9: 0.5,  10: 0.5,  11: 0.5, 
                                       12: 1, 13: 0.25, 14: 0.25, 15: 0.25, 16: 0.25 }
             distill_overall_weight = 0.01 / np.sum(list(distill_layer_weights.values()))
-            distill_loss_type = 'l2'
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if unet_layer_idx not in distill_layer_weights:
                     continue
@@ -1511,7 +1514,11 @@ class LatentDiffusion(DDPM):
                 feat_cls_delta  = ortho_subtract(feat_cls_comps,  feat_cls_single)
                 feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
 
-                loss_layer_comp_prompt_mix = calc_delta_loss(feat_subj_delta, feat_cls_delta)
+                # feat_subj_delta, feat_cls_delta: [1, 1280, 16, 16], ...
+                # Pool the spatial dimensions H, W to remove spatial information.
+                loss_layer_comp_prompt_mix = calc_delta_loss(feat_subj_delta, feat_cls_delta, 
+                                                             last_n_dims_to_pool=2,
+                                                             first_n_dims_to_flatten=1)
                 # print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
                 loss_comp_prompt_mix += loss_layer_comp_prompt_mix * distill_layer_weight * distill_overall_weight
 

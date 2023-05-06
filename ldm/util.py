@@ -1,6 +1,7 @@
 import importlib
 
 import torch
+import torch.nn.functional as F
 import numpy as np
 from collections import abc
 from einops import rearrange
@@ -261,7 +262,14 @@ def demean(x):
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
 # emb_mask: [2, 77, 1]
-def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, do_demean_first=True):
+def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, 
+                    do_demean_first=True, last_n_dims_to_pool=0,
+                    first_n_dims_to_flatten=3):
+    if last_n_dims_to_pool > 0:
+        # Compute the mean along the last last_n_dims_to_pool dimensions.
+        delta     = delta.mean(dim=tuple(range(-last_n_dims_to_pool, 0)))
+        ref_delta = ref_delta.mean(dim=tuple(range(-last_n_dims_to_pool, 0)))
+
     # Mask out the placeholder suffix token(s).
     # If CLIP skip scheme is "concat", then the text embedding channel number is doubled.
     # In this case, we also duplicate the mask along the channel dimension.
@@ -275,8 +283,8 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, do_demean_first
 
     # Flatten delta and ref_delta, by tucking the layer and token dimensions into the batch dimension.
     # dela: [2464, 768], ref_delta: [2464, 768]
-    delta = delta.view(delta.numel() // delta.shape[-1], -1)
-    ref_delta = ref_delta.view(ref_delta.numel() // ref_delta.shape[-1], -1)
+    delta     = delta.view(delta.shape[:first_n_dims_to_flatten].numel(), -1)
+    ref_delta = ref_delta.view(ref_delta.shape[:first_n_dims_to_flatten].numel(), -1)
 
     # A bias vector to a set of conditioning embeddings doesn't change the attention matrix 
     # (though changes the V tensor). So the bias is better removed.
