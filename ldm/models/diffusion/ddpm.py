@@ -1249,6 +1249,9 @@ class LatentDiffusion(DDPM):
                 else:
                     # No delta loss or compositional mix loss. Keep the tuple c unchanged.
                     c = self.get_learned_conditioning(c)
+                    # c[2]: extra_info. Here is only reached when do_static_comp_delta_reg = False.
+                    # Either composition_delta_reg_weight == 0 or it's called by self.validation_step().
+                    c[2]['iter_type'] = 'normal_recon'
                     self.c_static_emb = None
 
             # shorten_cond_schedule: False. Skipped.
