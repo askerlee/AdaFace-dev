@@ -1523,7 +1523,7 @@ class LatentDiffusion(DDPM):
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
 
                 # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
-                feat_mix_delta  = ortho_subtract(feat_mix_comps + feat_subj_single,  feat_cls_single)
+                feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_cls_single)
                 # feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
                 feat_subj_delta = feat_subj_comps
 
