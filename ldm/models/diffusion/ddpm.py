@@ -681,9 +681,13 @@ class LatentDiffusion(DDPM):
                     self.embedding_manager.init_ada_embedding_cache()
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
                     # If do_comp_prompt_mix_reg, the image mask is also needed to repeat. 
-                    if (self.do_ada_comp_delta_reg or self.do_comp_prompt_mix_reg) and img_mask is not None:
+                    if self.do_ada_comp_delta_reg and img_mask is not None:
                         # The image batch is repeated twice, so img_mask is also repeated twice.
                         img_mask = img_mask.repeat(2, 1, 1, 1)
+                    if self.do_comp_prompt_mix_reg and img_mask is not None:
+                        HALF_BS  = max(img_mask.shape[0] // 2, 1)
+                        img_mask = img_mask[:HALF_BS].repeat(4, 1, 1, 1)
+
                     self.embedding_manager.set_img_mask(img_mask)
                     extra_info['ada_embedder'] = ada_embedder
 
@@ -1462,7 +1466,7 @@ class LatentDiffusion(DDPM):
         iter_type = cond[2]['iter_type']
 
         # Ordinary image reconstruction loss under the guidance of subj_prompt_single.
-        if iter_type == 'normal_recon':
+        if iter_type == 'normal_recon' or iter_type == 'do_ada_comp_delta_reg':
             # The losses of different sample images in the batch 
             # will be weighted differently according to t.
             loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
@@ -1503,21 +1507,25 @@ class LatentDiffusion(DDPM):
             # Effectively, 7: 0.235, 8: 0.235, 9-11: 0.06, 12: 0.118, 13-15: 0.06, 16: 0.06
             distill_layer_weights = { 7:  2., 8: 2.,  9: 0.5,  10: 0.5,  11: 0.5, 
                                       12: 1, 13: 0.25, 14: 0.25, 15: 0.25, 16: 0.25 }
-            distill_overall_weight = 0.01 / np.sum(list(distill_layer_weights.values()))
+            distill_overall_weight = 0.001 / np.sum(list(distill_layer_weights.values()))
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if unet_layer_idx not in distill_layer_weights:
                     continue
                 distill_layer_weight = distill_layer_weights[unet_layer_idx]
+                # Pool the spatial dimensions H, W to remove spatial information.
+                unet_feat = unet_feat.mean(dim=(2, 3))
                 feat_subj_single, feat_subj_comps, feat_cls_single, feat_cls_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
 
+                # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
                 feat_cls_delta  = ortho_subtract(feat_cls_comps,  feat_cls_single)
                 feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
 
-                # feat_subj_delta, feat_cls_delta: [1, 1280, 16, 16], ...
+                # feat_subj_delta, feat_cls_delta: [1, 1280], ...
                 # Pool the spatial dimensions H, W to remove spatial information.
+                # feat_cls_delta is the reference delta (ref_delta), and the gradient flow to it is stopped.
+                # So the gradient only goes back to feat_subj_delta -> feat_subj_comps and feat_subj_single.
                 loss_layer_comp_prompt_mix = calc_delta_loss(feat_subj_delta, feat_cls_delta, 
-                                                             last_n_dims_to_pool=2,
                                                              first_n_dims_to_flatten=1)
                 # print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
                 loss_comp_prompt_mix += loss_layer_comp_prompt_mix * distill_layer_weight * distill_overall_weight
