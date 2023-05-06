@@ -263,13 +263,8 @@ def demean(x):
 # delta, ref_delta: [2, 16, 77, 768].
 # emb_mask: [2, 77, 1]
 def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, 
-                    do_demean_first=True, last_n_dims_to_pool=0,
+                    do_demean_first=True, 
                     first_n_dims_to_flatten=3):
-    if last_n_dims_to_pool > 0:
-        # Compute the mean along the last last_n_dims_to_pool dimensions.
-        delta     = delta.mean(dim=tuple(range(-last_n_dims_to_pool, 0)))
-        ref_delta = ref_delta.mean(dim=tuple(range(-last_n_dims_to_pool, 0)))
-
     # Mask out the placeholder suffix token(s).
     # If CLIP skip scheme is "concat", then the text embedding channel number is doubled.
     # In this case, we also duplicate the mask along the channel dimension.
