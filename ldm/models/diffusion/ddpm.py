@@ -1500,39 +1500,31 @@ class LatentDiffusion(DDPM):
             # F(subj_prompt_single) - F(cls_prompt_single)
             loss_comp_prompt_mix = 0
 
-            # unet_feats is a dict as: layer_idx -> unet_feat. 
+            # unet_attns is a dict as: layer_idx -> attn_mat. 
             # It contains all the intermediate 25 layers of UNet features.
-            unet_feats = cond[2]['unet_feats']
+            unet_attns = cond[2]['unet_attns']
             # Discard top layers and the first few bottom layers from distillation.
             # distill_layer_weights: relative weight of each distillation layer. 
             # distill_layer_weights are normalized using distill_overall_weight.
             # Conditioning layers are 7, 8, 12, 16. 
-            # But intermediate layers also contribute to distillation. They have small weights.
-            # Layer 16 has strong face semantics, so it is given a small weight.
-            distill_layer_weights = { 7:  1., 8: 1.,   9:  0.5, 10: 0.5, 11: 0.5, 
-                                      12: 1., 13: 0.5, 14: 0.5, 15: 0.5, 16: 0.5 }
-            distill_overall_weight = 0.001 / np.sum(list(distill_layer_weights.values()))
-            for unet_layer_idx, unet_feat in unet_feats.items():
+            distill_layer_weights = { 7:  1., 8: 1., 12: 1., 16: 1. }
+            distill_overall_weight = 0.01 / np.sum(list(distill_layer_weights.values()))
+            for unet_layer_idx, attn_mat in unet_attns.items():
                 if unet_layer_idx not in distill_layer_weights:
                     continue
                 distill_layer_weight = distill_layer_weights[unet_layer_idx]
-                # Pool the spatial dimensions H, W to remove spatial information.
-                unet_feat = unet_feat.mean(dim=(2, 3))
-                feat_subj_single, feat_subj_comps, feat_cls_single, feat_mix_comps \
-                    = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
+                # [4, 8, 4096, 77] / [4, 8, 1024, 77] / [4, 8, 256, 77], ...
+                attn_subj_single, attn_subj_comps, attn_cls_single, attn_mix_comps \
+                    = torch.split(attn_mat, attn_mat.shape[0] // 4, dim=0)
 
                 # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
-                feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_cls_single)
-                feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
+                #attn_mix_delta  = ortho_subtract(attn_mix_comps,  attn_cls_single)
+                #attn_subj_delta = ortho_subtract(attn_subj_comps, attn_subj_single)
+                attn_mix_delta   = attn_mix_comps
+                attn_subj_delta  = attn_subj_comps
 
-                # feat_subj_delta, feat_cls_delta: [1, 1280], ...
-                # Pool the spatial dimensions H, W to remove spatial information.
-                # feat_cls_delta is the reference delta (ref_delta), and the gradient flow to it is stopped.
-                # So the gradient only goes back to feat_subj_delta -> feat_subj_comps and feat_subj_single.
-                loss_layer_comp_prompt_mix = calc_delta_loss(feat_subj_delta, feat_mix_delta, 
-                                                             first_n_dims_to_flatten=1)
-
-                # print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
+                loss_layer_comp_prompt_mix = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
+                print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
                 loss_comp_prompt_mix += loss_layer_comp_prompt_mix * distill_layer_weight * distill_overall_weight
 
             # logvar is all zero. So no need to do "loss_comp_prompt_mix / exp(logvar_t) + logvar_t".
