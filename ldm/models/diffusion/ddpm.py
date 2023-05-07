@@ -1509,23 +1509,24 @@ class LatentDiffusion(DDPM):
             # Conditioning layers are 7, 8, 12, 16. 
             # But intermediate layers also contribute to distillation. They have small weights.
             # Layer 16 has strong face semantics, so it is given a small weight.
-            # Effectively, 7: 0.276, 8: 0.276, 9-11: 0.069, 12: 0.138, 13-15: 0.035.
-            distill_layer_weights = { 7:  2., 8: 2.,  9: 0.5,  10: 0.5,  11: 0.5, 
-                                      12: 1, 13: 0.25, 14: 0.25, 15: 0.25, 16: 0.25 }
+            distill_layer_weights = { 7:  1., 8: 1.,   9:  0.5, 10: 0.5, 11: 0.5, 
+                                      12: 1., 13: 0.5, 14: 0.5, 15: 0.5, 16: 1. }
             distill_overall_weight = 0.001 / np.sum(list(distill_layer_weights.values()))
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if unet_layer_idx not in distill_layer_weights:
                     continue
                 distill_layer_weight = distill_layer_weights[unet_layer_idx]
+                pooler2x2 = nn.AdaptiveAvgPool2d((2, 2))
                 # Pool the spatial dimensions H, W to remove spatial information.
-                unet_feat = unet_feat.mean(dim=(2, 3))
+                unet_feat = pooler2x2(unet_feat)
+                # Tuck the 2x2 spatial dimension into the feature dimension.
+                unet_feat = unet_feat.view(unet_feat.shape[0], -1)
                 feat_subj_single, feat_subj_comps, feat_cls_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
 
                 # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
                 feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_cls_single)
-                # feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
-                feat_subj_delta = feat_subj_comps
+                feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
 
                 # feat_subj_delta, feat_cls_delta: [1, 1280], ...
                 # Pool the spatial dimensions H, W to remove spatial information.
