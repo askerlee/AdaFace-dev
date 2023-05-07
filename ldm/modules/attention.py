@@ -169,6 +169,7 @@ class CrossAttention(nn.Module):
 
     def forward(self, x, context=None, mask=None):
         h = self.heads
+
         q = self.to_q(x)
         context = default(context, x)
         k = self.to_k(context)
@@ -186,9 +187,6 @@ class CrossAttention(nn.Module):
 
         # attention, what we cannot get enough of
         attn = sim.softmax(dim=-1)
-        # Stored for debugging purposes
-        # attn: [16, 1024, 77]. 16: batch 2 * num_heads 8.
-        self.attn_mat = rearrange(attn, '(b h) i j -> b h i j', h=h)
 
         out = einsum('b i j, b j d -> b i d', attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)

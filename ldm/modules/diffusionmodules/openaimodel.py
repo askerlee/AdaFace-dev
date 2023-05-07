@@ -723,7 +723,7 @@ class UNetModel(nn.Module):
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"
         hs = []
-        attns = {}
+        hs2 = {}
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
         use_layerwise_context = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
@@ -806,22 +806,20 @@ class UNetModel(nn.Module):
         # 12            [2, 1280, 8,  8]
         layer_idx = 0
 
-        # All conditioned modules are TimestepEmbedSequential.
         for module in self.input_blocks:
             layer_context = get_layer_context(layer_idx, h)
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
             hs.append(h)
-            if iter_type =='do_comp_prompt_mix_reg' and layer_context is not None:
-                attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat            
+            if iter_type =='do_comp_prompt_mix_reg':
+                hs2[layer_idx] = h
             layer_idx += 1
         
         layer_context = get_layer_context(layer_idx, h)
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, layer_context)
-        if iter_type =='do_comp_prompt_mix_reg' and layer_context is not None:
-            attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.attn_mat
-
+        if iter_type =='do_comp_prompt_mix_reg':
+            hs2[layer_idx] = h
         layer_idx += 1
 
         # 14 [2, 1280, 8,  8]
@@ -840,11 +838,11 @@ class UNetModel(nn.Module):
             h = th.cat([h, hs.pop()], dim=1)
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
-            if iter_type =='do_comp_prompt_mix_reg' and layer_context is not None:
-                attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat            
+            if iter_type =='do_comp_prompt_mix_reg':
+                hs2[layer_idx] = h
             layer_idx += 1
 
-        extra_info['unet_attns'] = attns
+        extra_info['unet_feats'] = hs2
 
         # [2, 320, 64, 64]
         h = h.type(x.dtype)
