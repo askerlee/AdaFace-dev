@@ -1520,7 +1520,7 @@ class LatentDiffusion(DDPM):
                 # Pool the spatial dimensions H, W to remove spatial information.
                 unet_feat = pooler2x2(unet_feat)
                 # Tuck the 2x2 spatial dimension into the feature dimension.
-                unet_feat = unet_feat.view(unet_feat.shape[0], -1)
+                unet_feat = unet_feat.reshape(unet_feat.shape[0], -1)
                 feat_subj_single, feat_subj_comps, feat_cls_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
 
