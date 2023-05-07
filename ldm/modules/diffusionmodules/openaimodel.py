@@ -810,17 +810,27 @@ class UNetModel(nn.Module):
         for module in self.input_blocks:
             layer_context = get_layer_context(layer_idx, h)
             # layer_context: [2, 77, 768], emb: [2, 1280].
+            if iter_type =='do_comp_prompt_mix_reg' and layer_context is not None:
+                module[1].transformer_blocks[0].attn2.save_attn_mat = True
+
             h = module(h, emb, layer_context)
             hs.append(h)
+
             if iter_type =='do_comp_prompt_mix_reg' and layer_context is not None:
-                attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat            
+                attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
+                module[1].transformer_blocks[0].attn2.save_attn_mat = False
+
             layer_idx += 1
         
         layer_context = get_layer_context(layer_idx, h)
+        if iter_type =='do_comp_prompt_mix_reg' and layer_context is not None:
+            self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = True
+
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, layer_context)
         if iter_type =='do_comp_prompt_mix_reg' and layer_context is not None:
             attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.attn_mat
+            self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = False
 
         layer_idx += 1
 
@@ -839,9 +849,15 @@ class UNetModel(nn.Module):
             layer_context = get_layer_context(layer_idx, h)
             h = th.cat([h, hs.pop()], dim=1)
             # layer_context: [2, 77, 768], emb: [2, 1280].
-            h = module(h, emb, layer_context)
             if iter_type =='do_comp_prompt_mix_reg' and layer_context is not None:
-                attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat            
+                module[1].transformer_blocks[0].attn2.save_attn_mat = True
+
+            h = module(h, emb, layer_context)
+
+            if iter_type =='do_comp_prompt_mix_reg' and layer_context is not None:
+                attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat  
+                module[1].transformer_blocks[0].attn2.save_attn_mat = False
+
             layer_idx += 1
 
         extra_info['unet_attns'] = attns
