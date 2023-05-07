@@ -768,7 +768,9 @@ class UNetModel(nn.Module):
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
                 if iter_type =='do_comp_prompt_mix_reg':
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
-                    layer_ada_context = layer_ada_context.repeat(1, 2, 1)
+                    # Do not BP into ada embeddings. Ada embeddings are more high-freq than static embeddings.
+                    # Mainly static embeddings are responsible for layout and composition.
+                    layer_ada_context = layer_ada_context.repeat(1, 2, 1).detach()
                     if token_weights is not None:
                         token_weights = token_weights.repeat(1, 2, 1)
 
