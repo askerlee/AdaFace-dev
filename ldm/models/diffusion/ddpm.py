@@ -1510,17 +1510,14 @@ class LatentDiffusion(DDPM):
             # But intermediate layers also contribute to distillation. They have small weights.
             # Layer 16 has strong face semantics, so it is given a small weight.
             distill_layer_weights = { 7:  1., 8: 1.,   9:  0.5, 10: 0.5, 11: 0.5, 
-                                      12: 1., 13: 0.5, 14: 0.5, 15: 0.5, 16: 1. }
+                                      12: 1., 13: 0.5, 14: 0.5, 15: 0.5, 16: 0.5 }
             distill_overall_weight = 0.001 / np.sum(list(distill_layer_weights.values()))
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if unet_layer_idx not in distill_layer_weights:
                     continue
                 distill_layer_weight = distill_layer_weights[unet_layer_idx]
-                pooler2x2 = nn.AdaptiveAvgPool2d((2, 2))
                 # Pool the spatial dimensions H, W to remove spatial information.
-                unet_feat = pooler2x2(unet_feat)
-                # Tuck the 2x2 spatial dimension into the feature dimension.
-                unet_feat = unet_feat.reshape(unet_feat.shape[0], -1)
+                unet_feat = unet_feat.mean(dim=(2, 3))
                 feat_subj_single, feat_subj_comps, feat_cls_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
 
