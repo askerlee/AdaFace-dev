@@ -681,12 +681,9 @@ class LatentDiffusion(DDPM):
                     self.embedding_manager.init_ada_embedding_cache()
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
                     # If do_comp_prompt_mix_reg, the image mask is also needed to repeat. 
-                    if self.do_ada_comp_delta_reg and img_mask is not None:
+                    if (self.do_ada_comp_delta_reg or self.do_comp_prompt_mix_reg) and img_mask is not None:
                         # The image batch is repeated twice, so img_mask is also repeated twice.
                         img_mask = img_mask.repeat(2, 1, 1, 1)
-                    if self.do_comp_prompt_mix_reg and img_mask is not None:
-                        HALF_BS  = max(img_mask.shape[0] // 2, 1)
-                        img_mask = img_mask[:HALF_BS].repeat(4, 1, 1, 1)
 
                     self.embedding_manager.set_img_mask(img_mask)
                     extra_info['ada_embedder'] = ada_embedder
@@ -1129,9 +1126,6 @@ class LatentDiffusion(DDPM):
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     ORIG_BS  = len(x)
                     N_EMBEDS = ORIG_BS * N_LAYERS
-                    # HALF_BS is at least 1. So if ORIG_BS == 1, then HALF_BS = 1.
-                    HALF_BS  = max(ORIG_BS // 2, 1)
-                    HALF_EMBEDS = HALF_BS * N_LAYERS
 
                     subj_prompt_single = c
                     # PROMPT_BS = ORIG_BS * num_compositions_per_image.
@@ -1155,27 +1149,17 @@ class LatentDiffusion(DDPM):
                     # do_comp_prompt_mix_reg is exclusive with do_ada_comp_delta_reg.
                     # i.e., they won't be activated at the same time.
                     if self.do_comp_prompt_mix_reg:
-                        # Only keep the first half of the static embeddings and prompts of subj_prompt_comps.
                         # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
                         # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
                         # So we keep the subset of c_in that corresponds to subj_prompt_comps, 
                         # to get their ada embeddings. 
-                        subj_prompt_single, subj_prompt_comps, cls_prompt_single, cls_prompt_comps = \
-                            subj_prompt_single[:HALF_BS], subj_prompt_comps[:HALF_BS], \
-                            cls_prompt_single[:HALF_BS],  cls_prompt_comps[:HALF_BS]
-                        subj_single_emb, subj_comps_emb, cls_single_emb, cls_comps_emb = \
-                            subj_single_emb[:HALF_EMBEDS], subj_comps_emb[:HALF_EMBEDS], \
-                            cls_single_emb[:HALF_EMBEDS],  cls_comps_emb[:HALF_EMBEDS]
                         
                         # Arrange c_in2 in the same layout as the static embeddings.
-                        # The cls_prompt_single within c_in2 will only be used to generate ordinary 
-                        # prompt embeddings, i.e., 
-                        # it doesn't contain subject token, and no ada embedding will be injected.
-                        # The last set is another subj_prompt_comps, which is NOT A BUG.
+                        # The subj_prompt_comps is repeated, which is NOT A BUG.
                         # This subj_prompt_comps is used to generate the ada embedding for
                         # the subj_prompt_comps, used for the mixed embeddings of 
                         # (subj_prompt_comps, cls_prompt_comps).
-                        c_in2 = subj_prompt_single + subj_prompt_comps + cls_prompt_single + subj_prompt_comps
+                        c_in2 = subj_prompt_comps + subj_prompt_comps
                         # The static embeddings of subj_prompt_comps and cls_prompt_comps,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed.
                         # Ada embeddings won't be mixed.
@@ -1199,9 +1183,7 @@ class LatentDiffusion(DDPM):
                         # the token number of the mixed (concatenated) embeddings.
                         # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
                         # image generation and computing compositional mix loss.
-                        c_static_emb2  = torch.cat([subj_single_emb.repeat(1, 2, 1), 
-                                                    subj_comps_emb.repeat(1, 2, 1), 
-                                                    cls_single_emb.repeat(1, 2, 1), 
+                        c_static_emb2  = torch.cat([subj_comps_emb.repeat(1, 2, 1), 
                                                     subj_comps_emb_mix], dim=0)
                         
                         extra_info['iter_type']      = 'do_comp_prompt_mix_reg'
@@ -1417,16 +1399,11 @@ class LatentDiffusion(DDPM):
     def p_losses(self, x_start, cond, t, noise=None, img_mask=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        if self.do_ada_comp_delta_reg:
+        if self.do_ada_comp_delta_reg or self.do_comp_prompt_mix_reg:
             # To compute the delta loss / prompt mixing loss, we need two copies of the input noise, 
             # to go through U-Net under different conditioning embeddings. 
             x_noisy = x_noisy.repeat(2, 1, 1, 1)
             t       = t.repeat(2)
-        if self.do_comp_prompt_mix_reg:
-            HALF_BS  = max(x_noisy.shape[0] // 2, 1)
-            x_noisy  = x_noisy[:HALF_BS].repeat(4, 1, 1, 1)
-            img_mask = img_mask[:HALF_BS]
-            t        = t[:HALF_BS].repeat(4)
 
         model_output = self.apply_model(x_noisy, t, cond)
         model_outputs = None
@@ -1443,8 +1420,8 @@ class LatentDiffusion(DDPM):
         elif self.do_comp_prompt_mix_reg:
             # If we do compositional prompt mixing, we need the final images of the 
             # second half as the reconstruction objective for compositional regularization.
-            model_outputs = torch.split(model_output, model_output.shape[0] // 4, dim=0)
-            t = t[:t.shape[0] // 4]
+            model_outputs = torch.split(model_output, model_output.shape[0] // 2, dim=0)
+            t = t[:t.shape[0] // 2]
         # Otherwise, ordinary image reconstruction loss. No need to split the model output.
 
         loss_dict = {}
@@ -1513,17 +1490,9 @@ class LatentDiffusion(DDPM):
                 if unet_layer_idx not in distill_layer_weights:
                     continue
                 distill_layer_weight = distill_layer_weights[unet_layer_idx]
-                # [4, 8, 4096, 77] / [4, 8, 1024, 77] / [4, 8, 256, 77], ...
-                attn_subj_single, attn_subj_comps, attn_cls_single, attn_mix_comps \
-                    = torch.split(attn_mat, attn_mat.shape[0] // 4, dim=0)
-
-                # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
-                #attn_mix_delta  = ortho_subtract(attn_mix_comps,  attn_cls_single)
-                #attn_subj_delta = ortho_subtract(attn_subj_comps, attn_subj_single)
-                attn_mix_delta   = attn_mix_comps
-                attn_subj_delta  = attn_subj_comps
-
-                loss_layer_comp_prompt_mix = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
+                # attn_mat: [4, 8, 4096, 77] / [4, 8, 1024, 77] / [4, 8, 256, 77], ...
+                attn_subj_comps, attn_mix_comps = torch.split(attn_mat, attn_mat.shape[0] // 2, dim=0)
+                loss_layer_comp_prompt_mix = self.get_loss(attn_subj_comps, attn_mix_comps, mean=True)
                 # print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
                 loss_comp_prompt_mix += loss_layer_comp_prompt_mix * distill_layer_weight * distill_overall_weight
 
