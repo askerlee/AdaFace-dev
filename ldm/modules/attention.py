@@ -188,8 +188,11 @@ class CrossAttention(nn.Module):
         attn = sim.softmax(dim=-1)
         # Stored for debugging purposes
         # attn: [16, 1024, 77]. 16: batch 2 * num_heads 8.
-        self.attn_mat = rearrange(attn, '(b h) i j -> b h i j', h=h)
-
+        if self.training:
+            self.attn_mat = rearrange(attn, '(b h) i j -> b h i j', h=h)
+        else:
+            self.attn_mat = None
+            
         out = einsum('b i j, b j d -> b i d', attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
         return self.to_out(out)
