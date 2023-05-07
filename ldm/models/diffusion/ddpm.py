@@ -1524,7 +1524,7 @@ class LatentDiffusion(DDPM):
                 attn_subj_delta  = attn_subj_comps
 
                 loss_layer_comp_prompt_mix = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
-                # print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
+                print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
                 loss_comp_prompt_mix += loss_layer_comp_prompt_mix * distill_layer_weight * distill_overall_weight
 
             # logvar is all zero. So no need to do "loss_comp_prompt_mix / exp(logvar_t) + logvar_t".
