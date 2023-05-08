@@ -1516,15 +1516,24 @@ class LatentDiffusion(DDPM):
                                     }
             distill_overall_weight = 0.001 / np.sum(list(distill_layer_weights.values()))
 
-            def est_chan_weights(feat):
+            def calc_chan_locality(feat):
                 feat_mean = feat.mean(dim=(0, 2, 3))
                 feat_absmean = feat.abs().mean(dim=(0, 2, 3))
                 # Max weight is 5. Always feat_absmean >= feat_mean.abs(). 
                 # The closer they are, the more uniform the feature values are within this channel.
                 # More weights are given to polarized channels. Less weights are given to uniform channels.
+                # feat_absmean >= feat_mean.abs(). So chan_weights >=1, and no need to clip from below.
                 chan_weights = torch.clip(feat_absmean / (feat_mean.abs() + 0.001), max=5)
-                chan_weights = chan_weights.detach() / chan_weights.mean()
-                return chan_weights
+                #chan_weights = chan_weights.detach() / chan_weights.mean()
+                return chan_weights.detach()
+            
+            def calc_chan_locality_ratio(feat_single, feat_comp):
+                chan_locality_single = calc_chan_locality(feat_single)
+                chan_locality_comp   = calc_chan_locality(feat_comp)
+                # The closer the ratio is to 1, the more similar the locality of the two types of feature maps.
+                # The closer the ratio is to 0, the more different the locality of the two types of feature maps.
+                chan_locality_ratio = torch.clip(chan_locality_comp / (chan_locality_single + 0.001), min=0.2, max=5)
+                return chan_locality_ratio
             
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if unet_layer_idx not in distill_layer_weights:
@@ -1534,7 +1543,10 @@ class LatentDiffusion(DDPM):
                 feat_subj_single, feat_subj_comps, feat_cls_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
-                chan_weights = est_chan_weights(torch.cat([feat_subj_comps, feat_mix_comps], dim=0))
+                chan_weights = calc_chan_locality_ratio( torch.cat([feat_subj_single, feat_cls_single], dim=0),
+                                                         torch.cat([feat_subj_comps,  feat_mix_comps],  dim=0) )
+                chan_weights = chan_weights.unsqueeze(0)
+                
                 # Pool the H, W dimensions to remove spatial information.
                 # feat_subj_single, feat_subj_comps, feat_cls_single, feat_mix_comps: [1, 1280], ...
                 feat_subj_single = feat_subj_single.mean(dim=(2, 3))
