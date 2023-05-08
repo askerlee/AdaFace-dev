@@ -1537,6 +1537,7 @@ class LatentDiffusion(DDPM):
                 ratio_exponent = 0.5
                 chan_locality_ratio = torch.clip(torch.pow(chan_locality_comp, 1 + ratio_exponent) 
                                                  / (torch.pow(chan_locality_single, ratio_exponent) + 0.001), min=0.2, max=5)
+                chan_locality_ratio = chan_locality_ratio / chan_locality_ratio.mean()
                 return chan_locality_ratio
             
             for unet_layer_idx, unet_feat in unet_feats.items():
