@@ -298,3 +298,8 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3,
     loss = F.cosine_embedding_loss(delta, ref_delta_pow.detach(), 
                                    torch.ones_like(delta[:, 0]))
     return loss
+
+def calc_stats(ts, ts_name=None):
+    if ts_name is not None:
+        print("%s: " %ts_name, end='')
+    print("max: %.4f, min: %.4f, mean: %.4f, std: %.4f" %(ts.max(), ts.min(), ts.mean(), ts.std()))

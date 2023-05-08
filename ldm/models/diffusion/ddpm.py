@@ -23,7 +23,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, mix_embeddings, \
-                       calc_delta_loss, ortho_subtract
+                       calc_delta_loss, ortho_subtract, calc_stats
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -1532,7 +1532,11 @@ class LatentDiffusion(DDPM):
                 chan_locality_comp   = calc_chan_locality(feat_comp)
                 # The closer the ratio is to 1, the more similar the locality of the two types of feature maps.
                 # The closer the ratio is to 0, the more different the locality of the two types of feature maps.
-                chan_locality_ratio = torch.clip(chan_locality_comp / (chan_locality_single + 0.001), min=0.2, max=5)
+                # As ratio_exponent -> 0, chan_locality_ratio -> chan_locality_comp, i.e., the impact of 
+                # chan_locality_single is smaller.
+                ratio_exponent = 0.5
+                chan_locality_ratio = torch.clip(torch.pow(chan_locality_comp, 1 + ratio_exponent) 
+                                                 / (torch.pow(chan_locality_single, ratio_exponent) + 0.001), min=0.2, max=5)
                 return chan_locality_ratio
             
             for unet_layer_idx, unet_feat in unet_feats.items():
@@ -1545,6 +1549,7 @@ class LatentDiffusion(DDPM):
                 
                 chan_weights = calc_chan_locality_ratio( torch.cat([feat_subj_single, feat_cls_single], dim=0),
                                                          torch.cat([feat_subj_comps,  feat_mix_comps],  dim=0) )
+                # calc_stats(chan_weights)
                 chan_weights = chan_weights.unsqueeze(0)
                 
                 # Pool the H, W dimensions to remove spatial information.
