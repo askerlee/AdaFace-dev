@@ -189,6 +189,9 @@ if __name__ == "__main__":
             else:
                 ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
             emb_path    = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{args.ckpt_iter}.pt"
+            if not os.path.exists(emb_path):
+                print(f"ERROR: Subject embedding not found: '{emb_path}'")
+                continue
 
         outdir = args.out_dir_tmpl + "-" + args.method
         os.makedirs(outdir, exist_ok=True)
