@@ -384,8 +384,8 @@ class DDPM(pl.LightningModule):
         # How many regularizations are done intermittently during the training iterations?
         interm_reg_types = []
         # do_ada_comp_delta_reg only if do_static_comp_delta_reg and use_ada_embedding.
-        #if self.do_static_comp_delta_reg and self.use_ada_embedding:
-        #    interm_reg_types.append('do_ada_comp_delta_reg')
+        if self.do_static_comp_delta_reg and self.use_ada_embedding:
+            interm_reg_types.append('do_ada_comp_delta_reg')
         if self.composition_prompt_mix_reg_weight > 0:
             interm_reg_types.append('do_comp_prompt_mix_reg')
 
@@ -1524,7 +1524,7 @@ class LatentDiffusion(DDPM):
                 # More weights are given to polarized channels. Less weights are given to uniform channels.
                 # feat_absmean >= feat_mean.abs(). So chan_weights >=1, and no need to clip from below.
                 chan_weights = torch.clip(feat_absmean / (feat_mean.abs() + 0.001), max=5)
-                #chan_weights = chan_weights.detach() / chan_weights.mean()
+                chan_weights = chan_weights.detach() / chan_weights.mean()
                 return chan_weights.detach()
             
             def calc_chan_locality_ratio(feat_single, feat_comp):
@@ -1548,8 +1548,7 @@ class LatentDiffusion(DDPM):
                 feat_subj_single, feat_subj_comps, feat_cls_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
-                chan_weights = calc_chan_locality_ratio( torch.cat([feat_subj_single, feat_cls_single], dim=0),
-                                                         torch.cat([feat_subj_comps,  feat_mix_comps],  dim=0) )
+                chan_weights = calc_chan_locality( torch.cat([feat_subj_single, feat_cls_single], dim=0) )
                 # calc_stats(chan_weights)
                 chan_weights = chan_weights.unsqueeze(0)
                 
