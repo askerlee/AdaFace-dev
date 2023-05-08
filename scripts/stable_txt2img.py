@@ -352,8 +352,8 @@ def main(opt):
         all_sims_img, all_sims_text, all_sims_dino = [], [], []
         if opt.calc_face_sim:
             all_sims_face = []
-            all_normal_pair_counts = []
-            all_except_pair_counts = []
+            all_normal_img_counts = []
+            all_except_img_counts = []
             set_tf_gpu(opt.gpu)
     else:
         clip_evator, dino_evator = None, None
@@ -454,12 +454,12 @@ def main(opt):
                                     all_sims_dino.append(sim_dino.item())
 
                                     if opt.calc_face_sim:
-                                        sim_face, normal_pair_count, except_pair_count = \
-                                            compare_face_folders(opt.compare_with, sample_dir, path2_num_samples=len(prompts))
+                                        sim_face, normal_img_count, except_img_count = \
+                                            compare_face_folders(opt.compare_with, sample_dir, dst_num_samples=len(prompts))
                                         # sim_face is a float, so no need to detach().cpu().numpy().
                                         all_sims_face.append(sim_face)
-                                        all_normal_pair_counts.append(normal_pair_count)
-                                        all_except_pair_counts.append(except_pair_count)
+                                        all_normal_img_counts.append(normal_img_count)
+                                        all_except_img_counts.append(except_img_count)
 
                         if not opt.skip_grid:
                             all_samples.append(x_samples_ddim)
@@ -518,8 +518,8 @@ def main(opt):
 
         print(f"All samples mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
         if opt.calc_face_sim:
-            except_pair_percent = np.sum(all_except_pair_counts) / (np.sum(all_normal_pair_counts) + np.sum(all_except_pair_counts))
-            print(f"Exception pair percent: {except_pair_percent*100:.1f}")
+            except_img_percent = np.sum(all_except_img_counts) / (np.sum(all_normal_img_counts) + np.sum(all_except_img_counts))
+            print(f"Exception image percent: {except_img_percent*100:.1f}")
 
 if __name__ == "__main__":
     opt = parse_args()
