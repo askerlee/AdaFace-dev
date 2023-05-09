@@ -37,4 +37,5 @@ set -Ux lrs                 $lrs
 # No suffix for the DreamBooth eval set, as they are objects/animals, as opposed to faces.
 set -Ux db_suffix           ""
 set -Ux z_prefixes          $z_prefixes
+set -Ux maxiters            $maxiters
 set -Ux data_folder         dbeval-dataset

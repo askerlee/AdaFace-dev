@@ -33,4 +33,5 @@ set -Ux lrs                 $lrs
 # "instagram" for the main dataset, to focus on faces.
 set -Ux db_suffix           ", instagram"
 set -Ux z_prefixes          $z_prefixes
+set -Ux maxiters            $maxiters
 set -Ux data_folder         data
