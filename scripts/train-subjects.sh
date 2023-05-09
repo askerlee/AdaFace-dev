@@ -72,14 +72,13 @@ for i in $indices
         # If $broad_classes are specified in subjfile, then use it. Otherwise, use the default value 1.
         set -q broad_classes; and set broad_class $broad_classes[$i]; or set broad_class 1
 
-        if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ];
-            if not set -q _flag_maxiter
-                # -1: use the default max_iters.
-                set -q maxiters; and set max_iters $maxiters[(math $broad_class+1)]; or set max_iters -1
-            else
-                # Use the specified max_iters.
-                set max_iters $_flag_maxiter
-            end
+        if not set -q _flag_maxiter
+            # -1: use the default max_iters.
+            set -q maxiters; and set max_iters $maxiters[(math $broad_class+1)]; or set max_iters -1
+        else
+            # Use the specified max_iters.
+            set max_iters $_flag_maxiter
+        end
 
         # Reset EXTRA_ARGS1 to EXTRA_ARGS0 each time. 
         set EXTRA_ARGS1 $EXTRA_ARGS0
