@@ -27,14 +27,6 @@ set -q argv[2]; and set L $argv[2]; or set L 1
 set -q argv[3]; and set H $argv[3]; or set H (count $subjects)
 set EXTRA_ARGS0 $argv[4..-1]
 
-if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ];
-    # -1: use the default max_iters in the config file.
-    set -q _flag_maxiter; and set max_iters $_flag_maxiter; or set max_iters -1
-else
-    # -1: use the default max_iters in the config file.
-    set -q _flag_maxiter; and set max_iters $_flag_maxiter; or set max_iters -1
-end
-
 set -q _flag_lr; and set lr $_flag_lr; or set -e lr
 set -q _flag_min_rand_scaling; and set min_rand_scaling $_flag_min_rand_scaling; or set -e min_rand_scaling
 #set fish_trace 1
@@ -77,6 +69,18 @@ for i in $indices
             set init_word_weights 1
         end
 
+        # If $broad_classes are specified in subjfile, then use it. Otherwise, use the default value 1.
+        set -q broad_classes; and set broad_class $broad_classes[$i]; or set broad_class 1
+
+        if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ];
+            if not set -q _flag_maxiter
+                # -1: use the default max_iters.
+                set -q maxiters; and set max_iters $maxiters[(math $broad_class+1)]; or set max_iters -1
+            else
+                # Use the specified max_iters.
+                set max_iters $_flag_maxiter
+            end
+
         # Reset EXTRA_ARGS1 to EXTRA_ARGS0 each time. 
         set EXTRA_ARGS1 $EXTRA_ARGS0
 
@@ -91,8 +95,6 @@ for i in $indices
         set -q _flag_use_z_suffix;  and set z_suffix $cls_token; or set -e z_suffix
         set -q z_suffix; and set EXTRA_ARGS1 $EXTRA_ARGS1 --placeholder_suffix $z_suffix
 
-        # If $broad_classes are specified in subjfile, then use it. Otherwise, use the default value 1.
-        set -q broad_classes; and set broad_class $broad_classes[$i]; or set broad_class 1
         if not set -q _flag_lr
             set -q lrs; and set lr $lrs[(math $broad_class+1)]
         end
@@ -104,6 +106,9 @@ for i in $indices
         python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_ARGS1
     else
         echo $subject: $db_prompt
+
+        # -1: use the default max_iters.
+        set -q _flag_maxiter; and set max_iters $_flag_maxiter; or set max_iters -1        
         set fish_trace 1
         # $EXTRA_ARGS is not for DreamBooth. It is for AdaPrompt/TI only.
         python3 main.py --base configs/stable-diffusion/v1-finetune_unfrozen.yaml -t --actual_resume $sd_ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-dreambooth --no-test --max_steps $max_iters --lr $lr --token "z" --class_word $db_prompt
