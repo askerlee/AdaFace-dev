@@ -181,18 +181,8 @@ class PersonalizedBase(Dataset):
             self.cls_delta_token = cls_delta_token
             self.use_default_cls_delta_token = False
 
-        if cls_distill_token is None:
-            self.cls_distill_token = cls_delta_token
-        else:
-            self.cls_distill_token = cls_distill_token
-
+        self.cls_distill_token = cls_distill_token
         self.placeholder_suffix = placeholder_suffix
-        if self.placeholder_suffix is not None:
-            # Appending the suffix to the placeholder token randomly (sometimes append, sometimes not) 
-            # only leads to worse performance. So set p_add_suffix to 1 to always append the suffix.
-            self.p_add_suffix = 1
-        else:
-            self.p_add_suffix = 0
 
         self.center_crop = center_crop
         self.mixing_prob = mixing_prob
@@ -248,7 +238,8 @@ class PersonalizedBase(Dataset):
 
         # Appending the suffix to the placeholder token randomly (sometimes append, sometimes not) 
         # only leads to worse performance. So set p_add_suffix to 1 to always append the suffix.
-        if (self.placeholder_suffix is not None) and random.random() < self.p_add_suffix:
+        if self.placeholder_suffix is not None:
+            # If placeholder_suffix = 'cat', then placeholder_string = "z cat".
             placeholder_string = f"{placeholder_string} {self.placeholder_suffix}"
             if self.use_default_cls_delta_token:
                 # It may be inappropriate to append the suffix to cls_delta_token,

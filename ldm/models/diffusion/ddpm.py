@@ -1176,6 +1176,7 @@ class LatentDiffusion(DDPM):
                         # the subj_prompt_comps, used for the mixed embeddings of 
                         # (subj_prompt_comps, cls_prompt_comps).
                         c_in2 = subj_prompt_single + subj_prompt_comps + cls_prompt_single + subj_prompt_comps
+                        #print(c_in2)
                         # The static embeddings of subj_prompt_comps and cls_prompt_comps,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed.
                         # Ada embeddings won't be mixed.
