@@ -153,6 +153,7 @@ class PersonalizedBase(Dataset):
                  placeholder_token="z",
                  # cls token used to compute the delta loss.
                  cls_delta_token=None,  
+                 cls_distill_token=None,
                  # suffix to append to the placeholder token, e.g., "toy". 
                  # Used mainly for objects/animals.
                  # cls_delta_token can only contain one token, but placeholder_suffix could be multiple. 
@@ -179,6 +180,11 @@ class PersonalizedBase(Dataset):
         else:
             self.cls_delta_token = cls_delta_token
             self.use_default_cls_delta_token = False
+
+        if cls_distill_token is None:
+            self.cls_distill_token = cls_delta_token
+        else:
+            self.cls_distill_token = cls_distill_token
 
         self.placeholder_suffix = placeholder_suffix
         if self.placeholder_suffix is not None:
@@ -265,9 +271,14 @@ class PersonalizedBase(Dataset):
                 # so that cls_prompt_comp is token-wise aligned with subj_prompt_comp.
                 cls_delta_token    = f"{cls_delta_token} {self.placeholder_suffix}"
 
+        if self.cls_distill_token is None:
+            cls_distill_token = cls_delta_token
+        else:
+            cls_distill_token = self.cls_distill_token
+
         template = random.choice(imagenet_templates_small)
         subj_prompt_single  = template.format(placeholder_string)
-        cls_prompt_single   = template.format(cls_delta_token)
+        cls_prompt_single   = template.format(cls_distill_token)
 
         # "face portrait" trick for humans/animals.
         if self.broad_class == 1:
@@ -281,7 +292,7 @@ class PersonalizedBase(Dataset):
             else:
                 subj_prompt_fp_template = faceportrait_template
             subj_prompt_single_fp = subj_prompt_fp_template.format(placeholder_string)
-            cls_prompt_single_fp  = faceportrait_template.format(cls_delta_token)
+            cls_prompt_single_fp  = faceportrait_template.format(cls_distill_token)
             subj_prompt_comps_fp  = []
             cls_prompt_comps_fp   = []
 
