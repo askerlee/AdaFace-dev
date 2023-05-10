@@ -19,7 +19,7 @@ set -l are_faces      0               0                 0                 0     
 set -l sel_set        2             4           5    6       24     26
 
 #                     objects    animals           cartoon characters
-set -l lrs            3.5e-4     7e-4              3.5e-4
+set -l lrs            3e-4       6e-4              3e-4
 set -l z_prefixes     ""         "portrait of"     ""
 set -l maxiters       3500       4000              3500
 # Individual LR for each class in the broad classes, according to their difficulties / inherent complexity.
