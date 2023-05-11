@@ -3,18 +3,18 @@
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'use_cls_token' 'use_z_suffix' 'v14' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'cls_token_as_delta' 'cls_token_as_distill' 'use_z_suffix' 'v14' -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
-    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-dbeval-subjects.sh --use_cls_token ada 1 25"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
 
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--use_cls_token] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
-    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-dbeval-subjects.sh --use_cls_token ada 1 25"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
 
@@ -55,7 +55,7 @@ for i in $indices
     # So we need an individual cls_tokens for non-human subjects. 
     # For "stuffed animal", the corresponding cls_token is "toy".
     # For humans, this is optional. If not specified, then cls_token = last word of ada_prompt.
-    # Only use cls_token when --use_cls_token is specified.
+    # Only use cls_token as delta token when --cls_token_as_delta is specified.
     set -q cls_tokens; and set cls_token $cls_tokens[$i]; or set cls_token (string split " " $ada_prompt)[-1]
     set db_prompt0 "$db_prompts[$i]"
     set db_prompt  "$db_prompt0$db_suffix"
@@ -84,10 +84,11 @@ for i in $indices
         set EXTRA_ARGS1 $EXTRA_ARGS0
 
         # cls_token: the class token used in delta loss computation.
-        # If --use_cls_token, and cls_tokens is provided in the subjfile, then use cls_token. 
+        # If --cls_token_as_delta, and cls_tokens is provided in the subjfile, then use cls_token. 
         # Otherwise use the default cls_token "person".
-        set -q _flag_use_cls_token; and set EXTRA_ARGS1 $EXTRA_ARGS1 --cls_delta_token $cls_token
-
+        set -q _flag_cls_token_as_delta; and set EXTRA_ARGS1 $EXTRA_ARGS1 --cls_delta_token $cls_token
+        set -q _flag_cls_token_as_distill; and set EXTRA_ARGS1 $EXTRA_ARGS1 --cls_distill_token $cls_token
+        
         # z_suffix: append $cls_token as a suffix to "z" in the prompt. The prompt will be "a z <cls_token> <prompt>".
         # E.g., cls_token="toy", prompt="in a chair", then full prompt="a z toy in a chair".
         # If not specified, then no suffix is appended. The prompt will be "a z <prompt>". E.g. "a z in a chair".
