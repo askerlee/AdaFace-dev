@@ -635,6 +635,11 @@ class EmbeddingManager(nn.Module):
             self.clear_ada_layer_temp_info()
             return embedded_text
 
+        # Exclude the starting and padding tokens from delta loss.
+        delta_loss_emb_mask  = (tokenized_text != 49406 ) & (tokenized_text != 49407)
+        # [b, n] => [b, 1, n, 1]
+        delta_loss_emb_mask  = delta_loss_emb_mask.float().unsqueeze(1).unsqueeze(3)
+
         if self.use_layerwise_embedding:
             # embedded_text: [B, 16, N, 768] => [16*B, N, 768].
             # "Tuck" the layer dimension into the batch dimension, 
@@ -693,7 +698,6 @@ class EmbeddingManager(nn.Module):
                 self.token_weights = self.token_weights[:OCCUR]
                 self.placeholder_indices = copy.copy(placeholder_indices)
                 
-                delta_loss_emb_mask  = torch.ones(b, 1, n, 1, device=device)
                 # OCCUR is the real number of occurrences of placeholder. OCCUR <= b.
                 # The batch size b is usually small, so this loop is not a bottleneck.
                 for i in range(OCCUR):
@@ -872,14 +876,11 @@ class EmbeddingManager(nn.Module):
     # Such delta_loss_emb_mask won't be used in composition_delta_loss() and won't be cleared.
     # delta_loss_emb_mask: [B, N, 768], where N is the padded prompt length.
     def set_delta_loss_emb_mask(self, delta_loss_emb_mask):
-        if self.z_suffix_id_count > 0 and delta_loss_emb_mask is not None:
-            self.delta_loss_emb_mask = delta_loss_emb_mask
-        # Otherwise, z_suffix_id_count == 0, so we don't need to use it to mask a region 
-        # when computing the compositional delta loss.
+        self.delta_loss_emb_mask = delta_loss_emb_mask
 
     def clear_delta_loss_emb_mask(self):
         self.delta_loss_emb_mask = None
-
+ 
     # There are image margins after the original image is scaled down.
     # When doing average pooling of image features, the margin area contains no signal, so we use 
     # img_mask to mask it out. 
@@ -1127,6 +1128,20 @@ class EmbeddingManager(nn.Module):
         static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
                 static_embeddings.split(BS, dim=0)
 
+        if self.delta_loss_emb_mask is not None:
+            subj_single_mask, subj_comp_mask, cls_single_mask, cls_comp_mask = \
+                    self.delta_loss_emb_mask.split(BS, dim=0)
+            
+            # cls_single_mask == subj_single_mask, cls_comp_mask == subj_comp_mask
+            # So only compute using subj_single_mask and subj_comp_mask.
+            delta_loss_emb_mask = subj_single_mask + subj_comp_mask
+            # The i-th token appears in only comp prompts. Give it a small weight.
+            delta_loss_emb_mask[delta_loss_emb_mask == 1] = 0.2
+            # The i-th token appears in both single and comp prompts. Give it a normal weight.
+            delta_loss_emb_mask[delta_loss_emb_mask == 2] = 1
+        else:
+            delta_loss_emb_mask = None
+
         use_ortho_subtract = True
         if use_ortho_subtract:
             cls_delta    = ortho_subtract(static_cls_comp_emb,  static_cls_single_emb)
@@ -1138,8 +1153,6 @@ class EmbeddingManager(nn.Module):
             # static_delta: [2, 16, 77, 768]. Different values for each layer along dim=1.
             static_delta = static_subj_comp_emb - static_subj_single_emb
 
-        # delta_loss_emb_mask is often obtained from an extended batch. So only use the first BS elements.
-        delta_loss_emb_mask = self.delta_loss_emb_mask[:BS] if self.delta_loss_emb_mask is not None else None
         static_delta_loss   = calc_delta_loss(static_delta, cls_delta, delta_loss_emb_mask)
 
         if do_ada_comp_delta_reg:
