@@ -213,10 +213,7 @@ def parse_args():
     
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
-    parser.add_argument("--clip_last_layer_skip_scheme", type=str, choices=["add", "concat"], 
-                        default="add", 
-                        help="Scheme for the skip connection between the last layer and second last layer of CLIP text embedder")
-                                
+   
     args = parser.parse_args()
     return args
 
@@ -274,8 +271,7 @@ def main(opt):
     model.embedding_manager.subj_scale  = opt.subj_scale
 
     # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
-    model.cond_stage_model.set_last_layer_skip(opt.clip_last_layer_skip_weight, 
-                                               opt.clip_last_layer_skip_scheme)
+    model.cond_stage_model.set_last_layer_skip_weight(opt.clip_last_layer_skip_weight)
 
     if opt.ada_emb_weight != -1:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight

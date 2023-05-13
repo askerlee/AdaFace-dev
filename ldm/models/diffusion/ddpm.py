@@ -23,7 +23,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, mix_embeddings, \
-                       calc_delta_loss, ortho_subtract, calc_stats
+                       ortho_subtract, calc_stats
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution

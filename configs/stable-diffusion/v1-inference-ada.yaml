@@ -76,4 +76,3 @@ model:
       target: ldm.modules.encoders.modules.FrozenCLIPEmbedder
       params:
         last_layer_skip_weight: 0.5
-        last_layer_skip_scheme: 'add'

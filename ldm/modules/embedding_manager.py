@@ -1136,7 +1136,7 @@ class EmbeddingManager(nn.Module):
             # So only compute using subj_single_mask and subj_comp_mask.
             delta_loss_emb_mask = subj_single_mask + subj_comp_mask
             # The i-th token appears in only comp prompts. Give it a small weight.
-            delta_loss_emb_mask[delta_loss_emb_mask == 1] = 0.2
+            delta_loss_emb_mask[delta_loss_emb_mask == 1] = 0.5
             # The i-th token appears in both single and comp prompts. Give it a normal weight.
             delta_loss_emb_mask[delta_loss_emb_mask == 2] = 1
         else:

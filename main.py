@@ -239,9 +239,6 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
-    parser.add_argument("--clip_last_layer_skip_scheme", type=str, choices=["add", "concat"], 
-                        default="add", 
-                        help="Scheme for the skip connection between the last layer and second last layer of CLIP text embedder")
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
                         help="Disable wandb logging")    
     return parser
@@ -700,7 +697,6 @@ if __name__ == "__main__":
         config.data.params.validation.params.broad_class  = opt.broad_class
 
         config.model.params.cond_stage_config.params.last_layer_skip_weight   = opt.clip_last_layer_skip_weight
-        config.model.params.cond_stage_config.params.last_layer_skip_scheme   = opt.clip_last_layer_skip_scheme
 
         config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
         config.data.params.validation.params.cls_delta_token = opt.cls_delta_token

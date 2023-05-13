@@ -73,9 +73,6 @@ def parse_args():
 
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=argparse.SUPPRESS,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
-    parser.add_argument("--clip_last_layer_skip_scheme", type=str, choices=["add", "concat"], 
-                        default="add", 
-                        help="Scheme for the skip connection between the last layer and second last layer of CLIP text embedder")
     parser.add_argument("--is_face", action="store_true", default=argparse.SUPPRESS,
                         help="Whether the generated samples are human faces")
                                                                     
@@ -265,7 +262,6 @@ if __name__ == "__main__":
 
         if hasattr(args, 'clip_last_layer_skip_weight'):
             command_line += f" --clip_last_layer_skip_weight {args.clip_last_layer_skip_weight}"
-            command_line += f" --clip_last_layer_skip_scheme {args.clip_last_layer_skip_scheme}"
 
         if args.compare_with_pardir:
             # Do evaluation on authenticity/composition.

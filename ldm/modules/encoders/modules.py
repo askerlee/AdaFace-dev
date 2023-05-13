@@ -157,13 +157,13 @@ class SpatialRescaler(nn.Module):
 class FrozenCLIPEmbedder(AbstractEncoder):
     """Uses the CLIP transformer encoder for text (from Hugging Face)"""
     def __init__(self, version="openai/clip-vit-large-patch14", device="cuda", max_length=77,
-                 last_layer_skip_weight=0.0, last_layer_skip_scheme='add'):
+                 last_layer_skip_weight=0.0):
         super().__init__()
         self.tokenizer = CLIPTokenizer.from_pretrained(version)
         self.transformer = CLIPTextModel.from_pretrained(version)
         self.device = device
         self.max_length = max_length
-        self.set_last_layer_skip(last_layer_skip_weight, last_layer_skip_scheme)
+        self.set_last_layer_skip_weight(last_layer_skip_weight)
 
         def embedding_forward(
                 self,
@@ -321,17 +321,10 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 # According to NovelAI's practice, the penultimate_hidden_states is layernormed
                 # with the same parameters as the last_hidden_states.
                 # penultimate_hidden_states = self.final_layer_norm(penultimate_hidden_states)
-                if self.last_layer_skip_scheme == "add":
-                    # penultimate_hidden_states: [32, 77, 768], last_hidden_states: [32, 77, 768]
-                    last_hidden_states = self.last_layer_skip_weight * penultimate_hidden_states + \
-                                        (1 - self.last_layer_skip_weight) * last_hidden_states
-                else:
-                    # Concatenate the two layers' embeddings after scaling them 
-                    # according to last_layer_skip_weight.
-                    # penultimate_hidden_states: [32, 77, 768], last_hidden_states: [32, 77, 768]
-                    last_hidden_states = torch.cat([last_hidden_states * (1 - self.last_layer_skip_weight),
-                                                    penultimate_hidden_states * self.last_layer_skip_weight
-                                                   ], dim=1)
+                # penultimate_hidden_states: [32, 77, 768], last_hidden_states: [32, 77, 768]
+                last_hidden_states = self.last_layer_skip_weight * penultimate_hidden_states + \
+                                    (1 - self.last_layer_skip_weight) * last_hidden_states
+
 
             last_hidden_states = self.final_layer_norm(last_hidden_states)
             return last_hidden_states
@@ -371,10 +364,9 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         # Therefore, the method is intercepted without modifying the implicit object "transformer".
         self.transformer.forward = transformer_forward.__get__(self.transformer)
 
-    def set_last_layer_skip(self, weight, scheme):
+    def set_last_layer_skip_weight(self, weight):
         self.transformer.text_model.last_layer_skip_weight = weight
-        self.transformer.text_model.last_layer_skip_scheme = scheme
-        print(f"CLIP last_layer_skip_weight = {weight}, last_layer_skip_scheme = {scheme}")
+        print(f"CLIP last_layer_skip_weight = {weight}")
               
     def freeze(self):
         self.transformer = self.transformer.eval()
