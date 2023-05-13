@@ -282,16 +282,18 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3,
                 # truncate_mask is squeezed to 1D, so that it can be used to index the
                 # 4D tensor delta_i, ref_delta_i, emb_mask_i. 
                 truncate_mask = (emb_mask_i > 0).squeeze()
-                emb_mask_i    = emb_mask_i[:, :, truncate_mask]
                 delta_i       = delta_i[:, :, truncate_mask]
                 ref_delta_i   = ref_delta_i[:, :, truncate_mask]
+                # Make emb_mask_i have the same shape as delta_i without the last (embedding) dimension.
+                emb_mask_i    = emb_mask_i[:, :, truncate_mask, 0].expand(delta_i.shape[:-1])
             except:
                 breakpoint()
 
         # Flatten delta and ref_delta, by tucking the layer and token dimensions into the batch dimension.
         # dela: [2464, 768], ref_delta: [2464, 768]
         delta_i     = delta_i.view(delta_i.shape[:first_n_dims_to_flatten].numel(), -1)
-        ref_delta_i = ref_delta_i.view(ref_delta_i.shape[:first_n_dims_to_flatten].numel(), -1)
+        ref_delta_i = ref_delta_i.view(delta_i.shape)
+        emb_mask_i  = emb_mask_i.flatten() if emb_mask_i is not None else None
 
         # A bias vector to a set of conditioning embeddings doesn't change the attention matrix 
         # (though changes the V tensor). So the bias is better removed.
