@@ -1,5 +1,6 @@
-torch==1.13.0+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
-torchvision==0.14.0+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
+-i https://download.pytorch.org/whl/cu117
+torch==1.13.0+cu117 
+torchvision==0.14.0+cu117
 albumentations>=1.1.0
 opencv-python>=4.2.0.34
 pudb>=2019.2
