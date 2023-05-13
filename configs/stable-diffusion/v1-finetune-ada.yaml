@@ -30,7 +30,7 @@ model:
     composition_delta_reg_weight:       0.0001
     # typical prompt mix reg loss: 2e-4, * weight -> 8e-6.
     composition_prompt_mix_reg_weight:  0.004
-    cls_prompt_mix_weight:  0.2
+    cls_prompt_mix_weight_max:  0.4
 
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
@@ -41,7 +41,7 @@ model:
         max_decay_steps: 4500
         lr_start: 0.01
         lr_max: 1.0
-        lr_min: 0.3
+        lr_min: 0.25
 
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager

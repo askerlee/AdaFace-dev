@@ -87,7 +87,7 @@ class DDPM(pl.LightningModule):
                  composition_regs_iter_gap=-1,
                  composition_delta_reg_weight=0.,
                  composition_prompt_mix_reg_weight=0.,
-                 cls_prompt_mix_weight=1.,
+                 cls_prompt_mix_weight_max=1.,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -106,7 +106,7 @@ class DDPM(pl.LightningModule):
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.composition_delta_reg_weight    = composition_delta_reg_weight
         self.composition_prompt_mix_reg_weight = composition_prompt_mix_reg_weight
-        self.cls_prompt_mix_weight          = cls_prompt_mix_weight
+        self.cls_prompt_mix_weight_max      = cls_prompt_mix_weight_max
         self.do_static_comp_delta_reg       = False
         self.do_ada_comp_delta_reg          = False
         self.do_comp_prompt_mix_reg         = False
@@ -121,6 +121,8 @@ class DDPM(pl.LightningModule):
         self.use_scheduler = scheduler_config is not None
         if self.use_scheduler:
             self.scheduler_config = scheduler_config
+        else:
+            self.scheduler = None
 
         self.v_posterior = v_posterior
         self.original_elbo_weight = original_elbo_weight
@@ -1177,6 +1179,17 @@ class LatentDiffusion(DDPM):
                         # (subj_prompt_comps, cls_prompt_comps).
                         c_in2 = subj_prompt_single + subj_prompt_comps + cls_prompt_single + subj_prompt_comps
                         #print(c_in2)
+
+                        # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
+                        if self.scheduler is not None:
+                            lr_lambda = self.scheduler.get_lr()[0] / self.scheduler.base_lrs[0]
+                            # print(f'lr_lambda: {lr_lambda}')
+                        else:
+                            lr_lambda = 1.0
+                        # Near the end of training, c2_mix_weight should be 1/4 of cls_prompt_mix_weight_max.
+                        # If cls_prompt_mix_weight_max=0.4, then c2_mix_weight changes from 0.4 -> 0.1.
+                        c2_mix_weight = self.cls_prompt_mix_weight_max * lr_lambda
+
                         # The static embeddings of subj_prompt_comps and cls_prompt_comps,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed.
                         # Ada embeddings won't be mixed.
@@ -1184,7 +1197,7 @@ class LatentDiffusion(DDPM):
                         # concat(subj_comps_emb, cls_comps_emb -| subj_comps_emb)_dim1. 
                         # -| means orthogonal subtraction.
                         subj_comps_emb_mix = mix_embeddings(subj_comps_emb, cls_comps_emb, 
-                                                            c2_mix_weight=self.cls_prompt_mix_weight,
+                                                            c2_mix_weight=c2_mix_weight,
                                                             use_ortho_subtract=True)
                         # If stop_mix_grad, stop gradient on subj_comps_emb_mix, 
                         # since it serves as the reference.
@@ -1962,8 +1975,10 @@ class LatentDiffusion(DDPM):
                     'interval': 'step',
                     'frequency': 1
                 }]
+            
+            self.scheduler = scheduler[0]['scheduler']
             return [opt], scheduler
-
+        
         return opt
 
     # configure_opt_embedding() is never called.
