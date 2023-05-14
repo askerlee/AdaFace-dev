@@ -30,6 +30,7 @@ from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianD
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
+from evaluation.clip_eval import CLIPEvaluator
 import copy
 from functools import partial
 import random
@@ -87,7 +88,8 @@ class DDPM(pl.LightningModule):
                  composition_regs_iter_gap=-1,
                  composition_delta_reg_weight=0.,
                  composition_prompt_mix_reg_weight=0.,
-                 cls_prompt_mix_weight_max=1.,
+                 cls_prompt_mix_weight_max=0.4,
+                 clip_text_loss_weight=0,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -107,10 +109,12 @@ class DDPM(pl.LightningModule):
         self.composition_delta_reg_weight    = composition_delta_reg_weight
         self.composition_prompt_mix_reg_weight = composition_prompt_mix_reg_weight
         self.cls_prompt_mix_weight_max      = cls_prompt_mix_weight_max
+        self.clip_text_loss_weight          = clip_text_loss_weight
         self.do_static_comp_delta_reg       = False
         self.do_ada_comp_delta_reg          = False
         self.do_comp_prompt_mix_reg         = False
-
+        self.do_clip_text_loss              = False
+        
         self.model = DiffusionWrapper(unet_config, conditioning_key)
         count_params(self.model, verbose=True)
         self.use_ema = use_ema
@@ -147,6 +151,10 @@ class DDPM(pl.LightningModule):
         if self.learn_logvar:
             self.logvar = nn.Parameter(self.logvar, requires_grad=True)
 
+        if self.clip_text_loss_weight > 0:
+            self.clip_evaluator = CLIPEvaluator(device=self.device)
+        else:
+            self.clip_evaluator = None
 
     def register_schedule(self, given_betas=None, beta_schedule="linear", timesteps=1000,
                           linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3):
@@ -394,6 +402,7 @@ class DDPM(pl.LightningModule):
         N_INTERM_REGS = len(interm_reg_types)
         self.do_ada_comp_delta_reg    = False
         self.do_comp_prompt_mix_reg   = False
+        self.do_clip_text_loss        = False
 
         # If N_INTERM_REGS == 0, then no intermittent regularizations, set the two flags to False.
         if N_INTERM_REGS > 0 and self.global_step % self.composition_regs_iter_gap == 0:
@@ -409,6 +418,8 @@ class DDPM(pl.LightningModule):
             elif reg_type == 'do_comp_prompt_mix_reg':
                 self.do_comp_prompt_mix_reg   = True
             
+            self.do_clip_text_loss = (self.clip_text_loss_weight > 0)
+
         loss, loss_dict = self.shared_step(batch)
 
         self.log_dict(loss_dict, prog_bar=True,
@@ -1260,6 +1271,8 @@ class LatentDiffusion(DDPM):
                         extra_info['iter_type']      = 'normal_recon'
                         extra_info['ada_bp_to_unet'] = False
 
+                    extra_info['cls_prompt_comps'] = cls_prompt_comps
+
                     # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
                     # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
                     c = (c_static_emb2, c_in2, extra_info)
@@ -1452,13 +1465,26 @@ class LatentDiffusion(DDPM):
             # the delta regularization. The output images are useless.
             # If using static layerwise embeddings, delta reg applies to all images. 
             # No need to take out the second half.  
-            model_output = model_output[:model_output.shape[0] // 2]
+            model_output_single, model_output_comps = torch.split(model_output, model_output.shape[0] // 2, dim=0)
+            model_output = model_output_single
             t = t[:t.shape[0] // 2]
+            if self.do_clip_text_loss:
+                clip_images = model_output_comps
+                clip_prompts = cond[2]['cls_prompt_comps']
+                if len(clip_images) != len(clip_prompts):
+                    breakpoint()
+
         elif self.do_comp_prompt_mix_reg:
             # If we do compositional prompt mixing, we need the final images of the 
             # second half as the reconstruction objective for compositional regularization.
             model_outputs = torch.split(model_output, model_output.shape[0] // 4, dim=0)
             t = t[:t.shape[0] // 4]
+            if self.do_clip_text_loss:
+                clip_images  = model_outputs[1]
+                clip_prompts = cond[2]['cls_prompt_comps']
+                if len(clip_images) != len(clip_prompts):
+                    breakpoint()
+
         # Otherwise, ordinary image reconstruction loss. No need to split the model output.
 
         loss_dict = {}
@@ -1603,6 +1629,14 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_comp_delta_reg': loss_comp_delta_reg})
             loss += (self.composition_delta_reg_weight * loss_comp_delta_reg)
             #print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
+
+        if self.do_clip_text_loss:
+            clip_images = self.differentiable_decode_first_stage(clip_images)
+            # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
+            # to keep the loss positive.
+            loss_clip_text = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts, clip_images)
+            loss_dict.update({f'{prefix}/loss_clip_text': loss_clip_text})
+            loss += (self.clip_text_loss_weight * loss_clip_text)
 
         loss_dict.update({f'{prefix}/loss': loss})
 

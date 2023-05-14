@@ -22,7 +22,6 @@ class CLIPEvaluator(object):
     def encode_text(self, tokens: list) -> torch.Tensor:
         return self.model.encode_text(tokens)
 
-    @torch.no_grad()
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         images = self.preprocess(images).to(self.device)
         return self.model.encode_image(images)
@@ -54,6 +53,10 @@ class CLIPEvaluator(object):
 
         return (src_img_features @ gen_img_features.T).mean()
 
+    # The gradient is cut to prevent from going back to get_text_features(). 
+    # So if text-image similarity is used as loss,
+    # the text embedding from the compared input text will not be updated. 
+    # The generated images and their conditioning text embeddings will be updated.
     def txt_to_img_similarity(self, text, generated_images):
         text_features    = self.get_text_features(text)
         gen_img_features = self.get_image_features(generated_images)
