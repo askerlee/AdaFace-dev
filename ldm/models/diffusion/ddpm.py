@@ -1054,6 +1054,7 @@ class LatentDiffusion(DDPM):
     # ANCHOR[id=shared_step]
     def shared_step(self, batch, **kwargs):
         # c = batch["caption"]
+        # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
         x, c = self.get_input(batch, self.first_stage_key)
         # do_static_comp_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
@@ -1232,6 +1233,10 @@ class LatentDiffusion(DDPM):
                         extra_info['iter_type']      = 'do_comp_prompt_mix_reg'
                         # Set ada_bp_to_unet to False will reduce performance.
                         extra_info['ada_bp_to_unet'] = True
+                        # cls_prompt_comps is still used to compute the CLIP text-image
+                        # loss on images guided by the mixed embeddings. 
+                        # (since the composition is the same)
+                        extra_info['cls_prompt_comps'] = cls_prompt_comps + cls_prompt_comps
 
                     elif self.do_ada_comp_delta_reg:
                         # Do ada composition delta loss in this iteration. 
@@ -1259,6 +1264,7 @@ class LatentDiffusion(DDPM):
                         c_in2         = subj_prompt_single + subj_prompt_comps
                         extra_info['iter_type']      = 'do_ada_comp_delta_reg'
                         extra_info['ada_bp_to_unet'] = False
+                        extra_info['cls_prompt_comps'] = cls_prompt_comps
 
                     else:
                         # Don't do ada composition delta loss or compositional mix loss in this iteration. 
@@ -1270,8 +1276,7 @@ class LatentDiffusion(DDPM):
                         c_in2         = subj_prompt_single[:ORIG_BS]
                         extra_info['iter_type']      = 'normal_recon'
                         extra_info['ada_bp_to_unet'] = False
-
-                    extra_info['cls_prompt_comps'] = cls_prompt_comps
+                        extra_info['cls_prompt_comps'] = cls_prompt_comps
 
                     # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
                     # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
@@ -1480,7 +1485,9 @@ class LatentDiffusion(DDPM):
             model_outputs = torch.split(model_output, model_output.shape[0] // 4, dim=0)
             t = t[:t.shape[0] // 4]
             if self.do_clip_text_loss:
-                clip_images  = model_outputs[1]
+                # Images generated both under subj_prompt_comps and subj_prompt_mix_comps 
+                # are subject to the CLIP text-image loss.
+                clip_images  = torch.cat([ model_outputs[1], model_outputs[3] ], dim=0)
                 clip_prompts = cond[2]['cls_prompt_comps']
                 if len(clip_images) != len(clip_prompts):
                     breakpoint()
