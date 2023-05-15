@@ -67,7 +67,9 @@ def parse_args():
     
     parser.add_argument("--compare_with_pardir", type=str, default=None,
                         help="Parent folder of subject images used for computing similarity with generated samples")
-    
+
+    parser.add_argument("--ema", action="store_true",
+                        help="Use the EMA model weights")
     parser.add_argument("--v14", dest='v15', action="store_false",
                         help="Whether to use v1.4 model (default: v1.5)")
 
@@ -181,7 +183,9 @@ if __name__ == "__main__":
             ckpt_path   = f"logs/{ckpt_name}/checkpoints/last.ckpt"
         else:
             config_file = "v1-inference-" + args.method + ".yaml"
-            if args.v15:
+            if args.ema:
+                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt"
+            elif args.v15:
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned.ckpt"
             else:
                 ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
