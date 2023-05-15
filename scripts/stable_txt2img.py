@@ -145,7 +145,7 @@ def parse_args():
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="models/ldm/stable-diffusion-v1/model.ckpt",
+        default="models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt",
         help="path to checkpoint of model",
     )    
     parser.add_argument(
@@ -369,6 +369,7 @@ def main(opt):
     if opt.fixed_code:
         start_code = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
+    use_ema_model = ('emaonly' in opt.ckpt)
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     with torch.no_grad():
         with precision_scope("cuda"):
@@ -479,7 +480,8 @@ def main(opt):
                     iter_sig = iter_mat.group(1)
 
                     embedding_sig = "-".join([date_sig, iter_sig, f"scale{opt.scale:.1f}"])
-
+                    if use_ema_model:
+                        embedding_sig += "-ema"
 
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                     if opt.from_file:
