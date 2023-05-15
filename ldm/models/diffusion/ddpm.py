@@ -816,6 +816,7 @@ class LatentDiffusion(DDPM):
 
         return fold, unfold, normalization, weighting
 
+    # k: key for the images, i.e., 'image'. k is not a number.
     @torch.no_grad()
     def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
                   cond_key=None, return_original_cond=False, bs=None):
@@ -1053,6 +1054,11 @@ class LatentDiffusion(DDPM):
     # 'caption' is not named 'subj_prompt_single' to keep it compatible with older code.
     # ANCHOR[id=shared_step]
     def shared_step(self, batch, **kwargs):
+        # In prompt mixing steps, we don't do image recon. So replace the images with noise,
+        # to increase the diversity of the input to the prompt mixing loss.
+        if self.do_comp_prompt_mix_reg:
+            batch[self.first_stage_key] = torch.randn_like(batch[self.first_stage_key])
+            
         # c = batch["caption"]
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
         x, c = self.get_input(batch, self.first_stage_key)

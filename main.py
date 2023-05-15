@@ -224,11 +224,11 @@ def get_parser(**parser_kwargs):
         help="Composition delta regularization weight")
 
     parser.add_argument("--min_rand_scaling",
-                        type=float, default=0.7, 
+                        type=float, default=0.8, 
                         help="Minimum random scaling factor of training images (set to -1 to disable)")
     parser.add_argument("--max_rand_scaling",
-                        type=float, default=1,
-                        help="Maximum random scaling factor of training images (default: 1)")
+                        type=float, default=1.05,
+                        help="Maximum random scaling factor of training images (default: 1.05)")
     
     # num_compositions_per_image: a value > 1 leads to better performance on prompt compositions
     parser.add_argument("--num_compositions_per_image",
