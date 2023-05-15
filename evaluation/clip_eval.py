@@ -113,7 +113,7 @@ class ImageDirEvaluator(CLIPEvaluator):
     def evaluate(self, gen_samples, src_images, target_text):
 
         sim_samples_to_img  = self.img_to_img_similarity(src_images, gen_samples)
-        sim_samples_to_text = self.txt_to_img_similarity(target_text.replace("*", ""), gen_samples)
+        sim_samples_to_text = self.txt_to_img_similarity(target_text, gen_samples)
 
         return sim_samples_to_img, sim_samples_to_text
     
