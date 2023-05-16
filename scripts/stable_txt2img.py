@@ -277,6 +277,10 @@ def main(opt):
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
 
     torch.cuda.set_device(opt.gpu)
+    # No GPUs detected. Use CPU instead.
+    if not torch.cuda.is_available():
+        opt.gpu = -1
+
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model  = model.to(device)
 
