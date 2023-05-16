@@ -28,7 +28,7 @@ pip install -r requirements.txt
 
 Please also install fish with `apt install fish`, which is required for running batch training/test scripts.
 
-You will also need the official Stable Diffusion downloadable at [https://huggingface.co/CompVis/stable-diffusion-v1-4](https://huggingface.co/CompVis/stable-diffusion-v1-4).
+You will also need the official Stable Diffusion downloadable at [https://huggingface.co/runwayml/stable-diffusion-v1-5](https://huggingface.co/runwayml/stable-diffusion-v1-5).
 
 ## Usage
 
@@ -38,7 +38,7 @@ To invert an image set, run:
 
 ```bash
 python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml
-         -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt
+         -t --actual_resume models/stable-diffusion-v-1-5/v1-5-pruned.ckpt
          -n <run_name> --gpus 0, --no-test
          --data_root data/subject_images/
          --placeholder_string <placeholder_string>
@@ -49,7 +49,7 @@ Example:
 
 ```jsx
 python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml 
-         -t --actual_resume models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt          
+         -t --actual_resume models/stable-diffusion-v-1-5/v1-5-pruned.ckpt          
          -n alexachung-ada --gpus 0, --no-test 
          --data_root data/alexachung/  
          --placeholder_string "z"  
@@ -76,11 +76,11 @@ Embeddings and output images will be saved in the log/<run_name> directory.
 To generate new images of the learned subject(s), run:
 
 ```bash
-python scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-ada.yaml --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt --ddim_eta 0.0
-  --n_samples 8 --ddim_steps 100 --gpu 0 
-  --embedding_paths logs/<run_name1>/checkpoints/embeddings_gs-4000.pt 
-                    logs/<run_name2>/checkpoints/embeddings_gs-4000.pt
-  --prompt "text containing the subject placeholder(s)" --scale 5 --n_iter 2
+python scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-ada.yaml --ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt --ddim_eta 0.0
+  --n_samples 8 --ddim_steps 50 --gpu 0 
+  --embedding_paths logs/<run_name1>/checkpoints/embeddings_gs-4500.pt 
+                    logs/<run_name2>/checkpoints/embeddings_gs-4500.pt
+  --prompt "text containing the subject placeholder(s)" --scale 10 --n_iter 2
 ```
 
 where multiple embedding paths can be specified for multi-subject composition. The prompt contains one or more placeholder tokens corresponding to the embedding checkpoints.
@@ -88,12 +88,12 @@ where multiple embedding paths can be specified for multi-subject composition. T
 Example:
 
 ```bash
-python3 scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-ada.yaml --ckpt models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt 
---ddim_eta 0.0 --n_samples 8 --ddim_teps 100 --gpu 0
+python3 scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference-ada.yaml --ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt
+--ddim_eta 0.0 --n_samples 8 --ddim_teps 50 --gpu 0
 --embedding_paths 
-   logs/donnieyen2023-02-20T23-52-39_donnieyen-ada/checkpoints/embeddings_gs-4000.pt 
-   logs/lilbub2023-02-21T08-18-18_lilbub-ada/checkpoints/embeddings_gs-4000.pt 
---prompt "a z hugging a y" --scale 5 --n_iter 2
+   logs/donnieyen2023-02-20T23-52-39_donnieyen-ada/checkpoints/embeddings_gs-4500.pt 
+   logs/lilbub2023-02-21T08-18-18_lilbub-ada/checkpoints/embeddings_gs-4500.pt 
+--prompt "a z hugging a y" --scale 10 --n_iter 2
 ```
 
 ## Citation
