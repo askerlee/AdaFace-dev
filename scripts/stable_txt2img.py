@@ -204,7 +204,7 @@ def parse_args():
                         help="If specified, assume the generated samples are human faces, "
                              "and compute face similarities with the groundtruth")
         
-    parser.add_argument('--gpu', type=int,  default=0, help='ID of GPU to use')
+    parser.add_argument('--gpu', type=int,  default=0, help='ID of GPU to use. Set to -1 to use CPU (slow).')
     parser.add_argument("--compare_with", type=str, default=None,
                         help="Evaluate the similarity of generated samples with reference images in this folder")
     parser.add_argument("--class_prompt", type=str, default=None,

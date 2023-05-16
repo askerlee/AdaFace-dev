@@ -13,17 +13,25 @@ from deepface.commons import functions as deepface_functions
 
 def set_tf_gpu(gpu_id):
     import tensorflow as tf
-    gpus = tf.config.experimental.list_physical_devices('GPU')
-    if gpus:
-        try:
-            tf.config.experimental.set_visible_devices(gpus[gpu_id], 'GPU')
-            tf.config.experimental.set_memory_growth(gpus[gpu_id], True)
-        except RuntimeError as e:
-            print(e)
+    if gpu_id >= 0:
+        gpus = tf.config.experimental.list_physical_devices('GPU')
+        if gpus:
+            try:
+                tf.config.experimental.set_visible_devices(gpus[gpu_id], 'GPU')
+                tf.config.experimental.set_memory_growth(gpus[gpu_id], True)
+            except RuntimeError as e:
+                print(e)
+    else:
+        cpus = tf.config.experimental.list_physical_devices(device_type='CPU')
+        tf.config.experimental.set_visible_devices(devices=cpus, device_type='CPU')
 
 def init_evaluators(gpu_id):
-    clip_evator = ImageDirEvaluator(f'cuda:{gpu_id}')
-    dino_evator = ViTEvaluator(f'cuda:{gpu_id}')
+    if gpu_id == -1:
+        device = 'cpu'
+    else:
+        device = f'cuda:{gpu_id}'
+    clip_evator = ImageDirEvaluator(device)
+    dino_evator = ViTEvaluator(device)
     return clip_evator, dino_evator
 
 # num_samples: only evaluate the last (latest) num_samples images. 
