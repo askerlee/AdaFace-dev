@@ -326,3 +326,11 @@ def calc_stats(ts, ts_name=None):
     if ts_name is not None:
         print("%s: " %ts_name, end='')
     print("max: %.4f, min: %.4f, mean: %.4f, std: %.4f" %(ts.max(), ts.min(), ts.mean(), ts.std()))
+
+def rand_like(x):
+    x_2d = x.reshape(-1, x.shape[-1])
+    std = x_2d.std(dim=0, keepdim=True)
+    mean = x_2d.mean(dim=0, keepdim=True)
+    rand_2d = torch.randn_like(x_2d)
+    rand_2d = rand_2d * std + mean
+    return rand_2d.view(x.shape)

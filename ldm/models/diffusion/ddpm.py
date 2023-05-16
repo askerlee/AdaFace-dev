@@ -23,7 +23,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, mix_embeddings, \
-                       ortho_subtract, calc_stats
+                       ortho_subtract, calc_stats, rand_like
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -1056,8 +1056,12 @@ class LatentDiffusion(DDPM):
     def shared_step(self, batch, **kwargs):
         # In prompt mixing steps, we don't do image recon. So replace the images with noise,
         # to increase the diversity of the input to the prompt mixing loss.
-        if self.do_comp_prompt_mix_reg:
-            batch[self.first_stage_key] = torch.randn_like(batch[self.first_stage_key])
+        # Only do this after the warmup steps, when the model has learned a rough
+        # representation of the subject. And only do 50% of the time.
+        if self.do_comp_prompt_mix_reg \
+         and self.global_step >= self.scheduler_config.params.warm_up_steps \
+         and random.random() < 0.5:
+            batch[self.first_stage_key] = rand_like(batch[self.first_stage_key])
             
         # c = batch["caption"]
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
@@ -1644,6 +1648,7 @@ class LatentDiffusion(DDPM):
             #print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
 
         if self.do_clip_text_loss:
+            #print(clip_prompts)
             clip_images = self.differentiable_decode_first_stage(clip_images)
             # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
             # to keep the loss positive.
