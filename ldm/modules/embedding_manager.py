@@ -383,7 +383,7 @@ class AdaEmbedding(nn.Module):
                 stop_infeat_grad_scale = 0.5
                 if stop_infeat_grad_scale < 1:
                     grad_scaler = GradientScaler(stop_infeat_grad_scale)
-                    grad_scaler = grad_scaler.cuda()
+                    #grad_scaler = grad_scaler.cuda()
                     infeat_pooled_gradscaled = grad_scaler(infeat_pooled)
                 else:
                     infeat_pooled_gradscaled = infeat_pooled
