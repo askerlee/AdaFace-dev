@@ -792,6 +792,16 @@ class UNetModel(nn.Module):
 
             return layer_context
         
+        def sync_blocks_01(feat):
+            feat_subj, feat_cls = feat.split(feat.shape[0] // 2, dim=0)
+            copy_1to0 = np.random.random() < 0.5
+            if copy_1to0:
+                feat_subj = feat_cls
+            else:
+                feat_cls = feat_subj
+            feat = th.cat([feat_subj, feat_cls], dim=0)
+            return feat
+        
         # 0  input h:   [2, 4,    64, 64]
         # 1             [2, 320,  64, 64]
         # 2             [2, 320,  64, 64]
@@ -806,8 +816,19 @@ class UNetModel(nn.Module):
         # 11            [2, 1280, 8,  8]
         # 12            [2, 1280, 8,  8]
         layer_idx = 0
+        if iter_type =='do_comp_prompt_mix_reg':
+            # Synchronize features of blocks 1 and 3 at a layer randomly 
+            # selected from layers [7, 8, 12, 16]. So that the delta loss
+            # of this and the following layers will be more accurate, as the input
+            # at this layer are the same.
+            sync_blocks_01_layer_idx = np.random.choice([7, 8, 12, 16])
+        else:
+            sync_blocks_01_layer_idx = -1
 
         for module in self.input_blocks:
+            if iter_type =='do_comp_prompt_mix_reg' and layer_idx == sync_blocks_01_layer_idx:
+                h = sync_blocks_01(h)
+
             layer_context = get_layer_context(layer_idx, h)
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
@@ -816,6 +837,9 @@ class UNetModel(nn.Module):
                 hs2[layer_idx] = h
             layer_idx += 1
         
+        if iter_type =='do_comp_prompt_mix_reg' and layer_idx == sync_blocks_01_layer_idx:
+            h = sync_blocks_01(h)
+
         layer_context = get_layer_context(layer_idx, h)
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, layer_context)
@@ -834,7 +858,11 @@ class UNetModel(nn.Module):
         # 22 [2, 640,  64, 64]
         # 23 [2, 320,  64, 64]
         # 24 [2, 320,  64, 64]
+        
         for module in self.output_blocks:
+            if iter_type =='do_comp_prompt_mix_reg' and layer_idx == sync_blocks_01_layer_idx:
+                h = sync_blocks_01(h)
+
             layer_context = get_layer_context(layer_idx, h)
             h = th.cat([h, hs.pop()], dim=1)
             # layer_context: [2, 77, 768], emb: [2, 1280].
