@@ -1218,12 +1218,12 @@ class LatentDiffusion(DDPM):
                         # Mixed embedding subj_comps_emb_mix = 
                         # concat(subj_comps_emb, cls_comps_emb -| subj_comps_emb)_dim1. 
                         # -| means orthogonal subtraction.
-                        subj_comps_emb_mix = mix_embeddings(subj_comps_emb, cls_comps_emb, 
-                                                            c2_mix_weight=c2_mix_weight,
-                                                            use_ortho_subtract=True)
+                        subj_comps_emb_mix  = mix_embeddings(subj_comps_emb, cls_comps_emb, 
+                                                             c2_mix_weight=c2_mix_weight,
+                                                             use_ortho_subtract=True)
                         subj_single_emb_mix = mix_embeddings(subj_single_emb, cls_single_emb,
-                                                            c2_mix_weight=c2_mix_weight,
-                                                            use_ortho_subtract=True)
+                                                             c2_mix_weight=c2_mix_weight,
+                                                             use_ortho_subtract=True)
                         
                         # If stop_mix_grad, stop gradient on subj_comps_emb_mix, 
                         # since it serves as the reference.
@@ -1233,7 +1233,7 @@ class LatentDiffusion(DDPM):
                         # stop_mix_grad will improve compositionality but reduce face similarity.
                         stop_mix_grad = True
                         if stop_mix_grad:
-                            subj_comps_emb_mix = subj_comps_emb_mix.detach()
+                            subj_comps_emb_mix  = subj_comps_emb_mix.detach()
                             subj_single_emb_mix = subj_single_emb_mix.detach()
 
                         # This copy of subj_single_emb, subj_comps_emb will be simply 

@@ -794,7 +794,7 @@ class UNetModel(nn.Module):
         
         def sync_blocks_01(feat):
             feat_subj, feat_cls = feat.split(feat.shape[0] // 2, dim=0)
-            copy_1to0 = np.random.random() < 0.5
+            copy_1to0 = True #np.random.random() < 0.5
             if copy_1to0:
                 feat_subj = feat_cls
             else:
