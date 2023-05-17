@@ -328,6 +328,7 @@ def calc_stats(ts, ts_name=None):
     print("max: %.4f, min: %.4f, mean: %.4f, std: %.4f" %(ts.max(), ts.min(), ts.mean(), ts.std()))
 
 def rand_like(x):
+    # Collapse all dimensions except the last one (channel dimension).
     x_2d = x.reshape(-1, x.shape[-1])
     std = x_2d.std(dim=0, keepdim=True)
     mean = x_2d.mean(dim=0, keepdim=True)

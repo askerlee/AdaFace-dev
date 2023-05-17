@@ -1221,6 +1221,10 @@ class LatentDiffusion(DDPM):
                         subj_comps_emb_mix = mix_embeddings(subj_comps_emb, cls_comps_emb, 
                                                             c2_mix_weight=c2_mix_weight,
                                                             use_ortho_subtract=True)
+                        subj_single_emb_mix = mix_embeddings(subj_single_emb, cls_single_emb,
+                                                            c2_mix_weight=c2_mix_weight,
+                                                            use_ortho_subtract=True)
+                        
                         # If stop_mix_grad, stop gradient on subj_comps_emb_mix, 
                         # since it serves as the reference.
                         # If we don't stop gradient on subj_comps_emb_mix, 
@@ -1230,23 +1234,22 @@ class LatentDiffusion(DDPM):
                         stop_mix_grad = True
                         if stop_mix_grad:
                             subj_comps_emb_mix = subj_comps_emb_mix.detach()
-                        # This copy of subj_single_emb, subj_comps_emb, cls_single_emb will be simply 
+                            subj_single_emb_mix = subj_single_emb_mix.detach()
+
+                        # This copy of subj_single_emb, subj_comps_emb will be simply 
                         # repeated at the token dimension to match 
-                        # the token number of the mixed (concatenated) embeddings.
+                        # the token number of the mixed (concatenated) 
+                        # subj_single_emb_mix and subj_comps_emb_mix embeddings.
                         # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
                         # image generation and computing compositional mix loss.
                         c_static_emb2  = torch.cat([subj_single_emb.repeat(1, 2, 1), 
                                                     subj_comps_emb.repeat(1, 2, 1), 
-                                                    cls_single_emb.repeat(1, 2, 1), 
+                                                    subj_single_emb_mix, 
                                                     subj_comps_emb_mix], dim=0)
                         
                         extra_info['iter_type']      = 'do_comp_prompt_mix_reg'
                         # Set ada_bp_to_unet to False will reduce performance.
                         extra_info['ada_bp_to_unet'] = True
-                        # cls_prompt_comps is still used to compute the CLIP text-image
-                        # loss on images guided by the mixed embeddings. 
-                        # (since the composition is the same)
-                        extra_info['cls_prompt_comps'] = cls_prompt_comps + cls_prompt_comps
 
                     elif self.do_ada_comp_delta_reg:
                         # Do ada composition delta loss in this iteration. 
@@ -1274,7 +1277,6 @@ class LatentDiffusion(DDPM):
                         c_in2         = subj_prompt_single + subj_prompt_comps
                         extra_info['iter_type']      = 'do_ada_comp_delta_reg'
                         extra_info['ada_bp_to_unet'] = False
-                        extra_info['cls_prompt_comps'] = cls_prompt_comps
 
                     else:
                         # Don't do ada composition delta loss or compositional mix loss in this iteration. 
@@ -1286,8 +1288,9 @@ class LatentDiffusion(DDPM):
                         c_in2         = subj_prompt_single[:ORIG_BS]
                         extra_info['iter_type']      = 'normal_recon'
                         extra_info['ada_bp_to_unet'] = False
-                        extra_info['cls_prompt_comps'] = cls_prompt_comps
 
+                    extra_info['cls_prompt_comps']  = cls_prompt_comps
+                    extra_info['cls_prompt_single'] = cls_prompt_single
                     # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
                     # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
                     c = (c_static_emb2, c_in2, extra_info)
@@ -1481,13 +1484,14 @@ class LatentDiffusion(DDPM):
             # If using static layerwise embeddings, delta reg applies to all images. 
             # No need to take out the second half.  
             model_output_single, model_output_comps = torch.split(model_output, model_output.shape[0] // 2, dim=0)
-            model_output = model_output_single
-            t = t[:t.shape[0] // 2]
             if self.do_clip_text_loss:
                 clip_images = model_output_comps
                 clip_prompts = cond[2]['cls_prompt_comps']
                 if len(clip_images) != len(clip_prompts):
                     breakpoint()
+
+            model_output = model_output_single
+            t = t[:t.shape[0] // 2]
 
         elif self.do_comp_prompt_mix_reg:
             # If we do compositional prompt mixing, we need the final images of the 
@@ -1497,8 +1501,12 @@ class LatentDiffusion(DDPM):
             if self.do_clip_text_loss:
                 # Images generated both under subj_prompt_comps and subj_prompt_mix_comps 
                 # are subject to the CLIP text-image loss.
+                # cls_prompt_comps is still used to compute the CLIP text-image loss on
+                # images guided by the mixed embeddings (as the composition is the same).
                 clip_images  = torch.cat([ model_outputs[1], model_outputs[3] ], dim=0)
-                clip_prompts = cond[2]['cls_prompt_comps']
+                # The first  cls_prompt_comps is for subj_comps_emb, and 
+                # the second cls_prompt_comps is for subj_comps_emb_mix.                
+                clip_prompts = cond[2]['cls_prompt_comps'] + cond[2]['cls_prompt_comps']
                 if len(clip_images) != len(clip_prompts):
                     breakpoint()
 
@@ -1602,22 +1610,22 @@ class LatentDiffusion(DDPM):
                     continue
                 distill_layer_weight = distill_layer_weights[unet_layer_idx]
 
-                feat_subj_single, feat_subj_comps, feat_cls_single, feat_mix_comps \
+                feat_subj_single, feat_subj_comps, feat_single_mix, feat_comps_mix \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
-                chan_weights = calc_chan_locality( torch.cat([feat_subj_single, feat_cls_single], dim=0) )
+                chan_weights = calc_chan_locality( torch.cat([feat_subj_single, feat_single_mix], dim=0) )
                 # calc_stats(chan_weights)
                 chan_weights = chan_weights.unsqueeze(0)
                 
                 # Pool the H, W dimensions to remove spatial information.
-                # feat_subj_single, feat_subj_comps, feat_cls_single, feat_mix_comps: [1, 1280], ...
+                # feat_subj_single, feat_subj_comps, feat_single_mix, feat_comps_mix: [1, 1280], ...
                 feat_subj_single = feat_subj_single.mean(dim=(2, 3))
                 feat_subj_comps  = feat_subj_comps.mean(dim=(2, 3))
-                feat_cls_single  = feat_cls_single.mean(dim=(2, 3))
-                feat_mix_comps   = feat_mix_comps.mean(dim=(2, 3))
+                feat_single_mix  = feat_single_mix.mean(dim=(2, 3))
+                feat_comps_mix   = feat_comps_mix.mean(dim=(2, 3))
 
                 # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
-                feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_cls_single)
+                feat_mix_delta  = ortho_subtract(feat_comps_mix,  feat_single_mix)
                 feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
 
                 # feat_subj_delta, feat_cls_delta: [1, 1280], ...
