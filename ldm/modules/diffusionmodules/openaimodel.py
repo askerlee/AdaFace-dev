@@ -816,7 +816,9 @@ class UNetModel(nn.Module):
         # 11            [2, 1280, 8,  8]
         # 12            [2, 1280, 8,  8]
         layer_idx = 0
-        if iter_type =='do_comp_prompt_mix_reg':
+
+        do_sync_blocks = False
+        if do_sync_blocks and iter_type =='do_comp_prompt_mix_reg':
             # Synchronize features of blocks 1 and 3 at a layer randomly 
             # selected from layers [7, 8, 12, 16]. So that the delta loss
             # of this and the following layers will be more accurate, as the input
