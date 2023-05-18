@@ -1581,9 +1581,9 @@ class LatentDiffusion(DDPM):
             # But intermediate layers also contribute to distillation. They have small weights.
             # Layer 16 has strong face semantics, so it is given a small weight.
             distill_layer_weights = { 7:  1., 8: 1.,   
-                                      9:  0.5, 10: 0.5, 11: 0.5, 
+                                      #9:  0.5, 10: 0.5, 11: 0.5, 
                                       12: 0.5, 
-                                      13: 0.25, 14: 0.25, 15: 0.25, 
+                                      #13: 0.25, 14: 0.25, 15: 0.25, 
                                       16: 0.25,
                                     }
             distill_overall_weight = 0.001 / np.sum(list(distill_layer_weights.values()))
