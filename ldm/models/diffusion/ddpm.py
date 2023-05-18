@@ -153,6 +153,8 @@ class DDPM(pl.LightningModule):
 
         if self.clip_text_loss_weight > 0:
             self.clip_evaluator = CLIPEvaluator(device=self.device)
+            for param in self.clip_evaluator.model.parameters():
+                param.requires_grad = False
         else:
             self.clip_evaluator = None
 
@@ -1065,7 +1067,7 @@ class LatentDiffusion(DDPM):
         # representation of the subject. And only do 50% of the time.
         if self.do_comp_prompt_mix_reg \
          and self.global_step >= self.scheduler_config.params.warm_up_steps \
-         and random.random() < 0.5:
+         and random.random() < 0.75:
             batch[self.first_stage_key] = rand_like(batch[self.first_stage_key])
             
         # c = batch["caption"]

@@ -14,6 +14,9 @@ model:
     cond_stage_key: caption
     image_size: 64
     channels: 4
+    # cond_stage_trainable has no effect, as it's checked within ddpm.instantiate_cond_stage().
+    # After this call, the model sets requires_grad=False for all params of cond_stage (CLIP encoder) 
+    # after seeing unfreeze_model = False.
     cond_stage_trainable: true   # Note: different from the one we trained before
     conditioning_key: crossattn
     monitor: val/loss_simple_ema
