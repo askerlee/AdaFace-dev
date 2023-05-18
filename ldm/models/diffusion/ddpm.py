@@ -1485,7 +1485,7 @@ class LatentDiffusion(DDPM):
             # No need to take out the second half.  
             model_output_single, model_output_comps = torch.split(model_output, model_output.shape[0] // 2, dim=0)
             if self.do_clip_text_loss:
-                clip_images = model_output_comps
+                clip_images = model_output_comps * img_mask
                 clip_prompts = cond[2]['cls_prompt_comps']
                 if len(clip_images) != len(clip_prompts):
                     breakpoint()
@@ -1503,7 +1503,8 @@ class LatentDiffusion(DDPM):
                 # are subject to the CLIP text-image loss.
                 # cls_prompt_comps is still used to compute the CLIP text-image loss on
                 # images guided by the mixed embeddings (as the composition is the same).
-                clip_images  = torch.cat([ model_outputs[1], model_outputs[3] ], dim=0)
+                clip_images  = torch.cat([ model_outputs[1] * img_mask, 
+                                           model_outputs[3] * img_mask ], dim=0)
                 # The first  cls_prompt_comps is for subj_comps_emb, and 
                 # the second cls_prompt_comps is for subj_comps_emb_mix.                
                 clip_prompts = cond[2]['cls_prompt_comps'] + cond[2]['cls_prompt_comps']

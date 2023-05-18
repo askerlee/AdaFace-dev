@@ -817,7 +817,7 @@ class UNetModel(nn.Module):
         # 12            [2, 1280, 8,  8]
         layer_idx = 0
 
-        do_sync_blocks = False
+        do_sync_blocks = True
         if do_sync_blocks and iter_type =='do_comp_prompt_mix_reg':
             # Synchronize features of blocks 1 and 3 at a layer randomly 
             # selected from layers [7, 8, 12, 16]. So that the delta loss
@@ -832,7 +832,8 @@ class UNetModel(nn.Module):
                 h = sync_blocks_01(h)
 
             layer_context = get_layer_context(layer_idx, h)
-            # layer_context: [2, 77, 768], emb: [2, 1280].
+            # layer_context: [2, 77, 768], conditioning embedding.
+            # emb: [2, 1280], time embedding.
             h = module(h, emb, layer_context)
             hs.append(h)
             if iter_type =='do_comp_prompt_mix_reg':
