@@ -393,13 +393,17 @@ class DDPM(pl.LightningModule):
 
         # How many regularizations are done intermittently during the training iterations?
         interm_reg_types = []
+        interm_reg_probs = []
         # do_ada_comp_delta_reg only if do_static_comp_delta_reg and use_ada_embedding.
         if self.do_static_comp_delta_reg and self.use_ada_embedding:
             interm_reg_types.append('do_ada_comp_delta_reg')
+            interm_reg_probs.append(1.)
         if self.composition_prompt_mix_reg_weight > 0:
             interm_reg_types.append('do_comp_prompt_mix_reg')
+            interm_reg_probs.append(2.)
 
         N_INTERM_REGS = len(interm_reg_types)
+        interm_reg_probs = np.array(interm_reg_probs) / np.sum(interm_reg_probs)
         self.do_ada_comp_delta_reg    = False
         self.do_comp_prompt_mix_reg   = False
         self.do_clip_text_loss        = False
@@ -411,7 +415,8 @@ class DDPM(pl.LightningModule):
             # then alternate between do_ada_comp_delta_reg and do_comp_prompt_mix_reg.
             # The two regularizations cannot be done in the same batch, as they require
             # different handling of prompts and are calculated by different loss functions.
-            reg_type_idx = (self.global_step // self.composition_regs_iter_gap) % N_INTERM_REGS
+            # reg_type_idx = (self.global_step // self.composition_regs_iter_gap) % N_INTERM_REGS
+            reg_type_idx = np.random.choice(N_INTERM_REGS, p=interm_reg_probs)
             reg_type     = interm_reg_types[reg_type_idx]
             if reg_type   == 'do_ada_comp_delta_reg':
                 self.do_ada_comp_delta_reg    = True
@@ -1576,9 +1581,10 @@ class LatentDiffusion(DDPM):
             # But intermediate layers also contribute to distillation. They have small weights.
             # Layer 16 has strong face semantics, so it is given a small weight.
             distill_layer_weights = { 7:  1., 8: 1.,   
-                                      #9:  0.5, 10: 0.5, 11: 0.5, 
-                                      12: 0.5, 16: 0.25,
-                                      # 13: 0.5, 14: 0.5, 15: 0.5,  
+                                      9:  0.5, 10: 0.5, 11: 0.5, 
+                                      12: 0.5, 
+                                      13: 0.25, 14: 0.25, 15: 0.25, 
+                                      16: 0.25,
                                     }
             distill_overall_weight = 0.001 / np.sum(list(distill_layer_weights.values()))
 
