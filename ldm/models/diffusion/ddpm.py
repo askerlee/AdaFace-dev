@@ -1211,7 +1211,7 @@ class LatentDiffusion(DDPM):
 
                         # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
                         if self.scheduler is not None:
-                            lr_lambda = self.scheduler.get_lr()[0] / self.scheduler.base_lrs[0]
+                            lr_lambda = self.scheduler.get_last_lr()[0] / self.scheduler.base_lrs[0]
                             # print(f'lr_lambda: {lr_lambda}')
                         else:
                             lr_lambda = 1.0
