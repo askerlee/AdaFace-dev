@@ -125,6 +125,7 @@ class DDPM(pl.LightningModule):
         self.use_scheduler = scheduler_config is not None
         if self.use_scheduler:
             self.scheduler_config = scheduler_config
+            self.warmup_steps     = scheduler_config.params.warm_up_steps
         else:
             self.scheduler = None
 
@@ -426,6 +427,13 @@ class DDPM(pl.LightningModule):
                 self.do_comp_prompt_mix_reg   = True
             
             self.do_clip_text_loss = (self.clip_text_loss_weight > 0)
+
+        # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
+        if self.scheduler is not None:
+            self.lr_scale = self.scheduler.get_last_lr()[0] / self.scheduler.base_lrs[0]
+            # print(f'lr_lambda: {lr_lambda}')
+        else:
+            self.lr_scale = 1.0
 
         loss, loss_dict = self.shared_step(batch)
 
@@ -1066,7 +1074,7 @@ class LatentDiffusion(DDPM):
         # Only do this after the warmup steps, when the model has learned a rough
         # representation of the subject. And only do 50% of the time.
         if self.do_comp_prompt_mix_reg \
-         and self.global_step >= self.scheduler_config.params.warm_up_steps \
+         and self.global_step >= self.warmup_steps \
          and random.random() < 0.75:
             batch[self.first_stage_key] = rand_like(batch[self.first_stage_key])
             
@@ -1209,15 +1217,9 @@ class LatentDiffusion(DDPM):
                         c_in2 = subj_prompt_single + subj_prompt_comps + cls_prompt_single + subj_prompt_comps
                         #print(c_in2)
 
-                        # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
-                        if self.scheduler is not None:
-                            lr_lambda = self.scheduler.get_last_lr()[0] / self.scheduler.base_lrs[0]
-                            # print(f'lr_lambda: {lr_lambda}')
-                        else:
-                            lr_lambda = 1.0
                         # Near the end of training, c2_mix_weight should be 1/4 of cls_prompt_mix_weight_max.
-                        # If cls_prompt_mix_weight_max=0.4, then c2_mix_weight changes from 0.4 -> 0.1.
-                        c2_mix_weight = self.cls_prompt_mix_weight_max * lr_lambda
+                        # If cls_prompt_mix_weight_max=0.4, then c2_mix_weight changes as 0 -> 0.4 -> 0.1.
+                        c2_mix_weight = self.cls_prompt_mix_weight_max * self.lr_scale
 
                         # The static embeddings of subj_prompt_comps and cls_prompt_comps,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed.
