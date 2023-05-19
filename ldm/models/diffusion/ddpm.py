@@ -1218,7 +1218,16 @@ class LatentDiffusion(DDPM):
                         # Near the end of training, c2_mix_weight should be 1/4 of cls_prompt_mix_weight_max.
                         # If cls_prompt_mix_weight_max=0.4, then c2_mix_weight changes from 0 to 0.4
                         # and stays at 0.4.
-                        c2_mix_weight = self.cls_prompt_mix_weight_max * self.warmup_scale
+                        # c2_mix_weight = self.cls_prompt_mix_weight_max * self.warmup_scale
+
+                        # If cls_prompt_mix_weight_max=0.4, then c2_mix_weight changes as 0 -> 0.4 -> 0.1.                        
+                        if self.scheduler is not None:
+                            lr_scale = self.scheduler.get_last_lr()[0] / self.scheduler.base_lrs[0]
+                            # print(f'lr_lambda: {lr_lambda}')
+                        else:
+                            lr_scale = self.warmup_scale
+
+                        c2_mix_weight = self.cls_prompt_mix_weight_max * lr_scale
 
                         # The static embeddings of subj_prompt_comps and cls_prompt_comps,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed.
