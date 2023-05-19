@@ -1216,7 +1216,8 @@ class LatentDiffusion(DDPM):
                         #print(c_in2)
 
                         # Near the end of training, c2_mix_weight should be 1/4 of cls_prompt_mix_weight_max.
-                        # If cls_prompt_mix_weight_max=0.4, then c2_mix_weight changes from 0.4 -> 0.1.
+                        # If cls_prompt_mix_weight_max=0.4, then c2_mix_weight changes from 0 to 0.4
+                        # and stays at 0.4.
                         c2_mix_weight = self.cls_prompt_mix_weight_max * self.warmup_scale
 
                         # The static embeddings of subj_prompt_comps and cls_prompt_comps,
@@ -1674,7 +1675,7 @@ class LatentDiffusion(DDPM):
             # to keep the loss positive.
             loss_clip_text = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts, clip_images)
             loss_dict.update({f'{prefix}/loss_clip_text': loss_clip_text})
-            loss += (self.clip_text_loss_weight * loss_clip_text)
+            loss += (self.clip_text_loss_weight * loss_clip_text * self.warmup_scale)
 
         loss_dict.update({f'{prefix}/loss': loss})
 
