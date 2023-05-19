@@ -125,8 +125,10 @@ class DDPM(pl.LightningModule):
         self.use_scheduler = scheduler_config is not None
         if self.use_scheduler:
             self.scheduler_config = scheduler_config
+            self.warm_up_steps = scheduler_config.warm_up_steps
         else:
             self.scheduler = None
+            self.warm_up_steps = 500
 
         self.v_posterior = v_posterior
         self.original_elbo_weight = original_elbo_weight
@@ -400,7 +402,10 @@ class DDPM(pl.LightningModule):
         if self.do_static_comp_delta_reg and self.use_ada_embedding:
             interm_reg_types.append('do_ada_comp_delta_reg')
             interm_reg_probs.append(1.)
-        if self.composition_prompt_mix_reg_weight > 0:
+        # Only do comp_prompt_mix_reg after warm_up_steps (500) iterations.
+        # So that subject-level prompts are already able to generate rough subject images 
+        # to compute a reasonable mixing loss.
+        if self.composition_prompt_mix_reg_weight > 0 and self.global_step > self.warm_up_steps:
             interm_reg_types.append('do_comp_prompt_mix_reg')
             interm_reg_probs.append(2.)
 
@@ -425,7 +430,8 @@ class DDPM(pl.LightningModule):
             elif reg_type == 'do_comp_prompt_mix_reg':
                 self.do_comp_prompt_mix_reg   = True
             
-            self.do_clip_text_loss = (self.clip_text_loss_weight > 0)
+            self.do_clip_text_loss = (self.clip_text_loss_weight > 0) \
+                                      and (self.global_step >= self.warm_up_steps)
 
         loss, loss_dict = self.shared_step(batch)
 
@@ -1066,7 +1072,7 @@ class LatentDiffusion(DDPM):
         # Only do this after the warmup steps, when the model has learned a rough
         # representation of the subject. And only do 50% of the time.
         if self.do_comp_prompt_mix_reg \
-         and self.global_step >= self.scheduler_config.params.warm_up_steps \
+         and self.global_step >= self.warm_up_steps \
          and random.random() < 0.75:
             batch[self.first_stage_key] = rand_like(batch[self.first_stage_key])
             
