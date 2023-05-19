@@ -128,6 +128,7 @@ class DDPM(pl.LightningModule):
             self.warmup_steps     = scheduler_config.params.warm_up_steps
         else:
             self.scheduler = None
+            self.warm_up_steps = 500
 
         self.v_posterior = v_posterior
         self.original_elbo_weight = original_elbo_weight
@@ -401,9 +402,14 @@ class DDPM(pl.LightningModule):
         if self.do_static_comp_delta_reg and self.use_ada_embedding:
             interm_reg_types.append('do_ada_comp_delta_reg')
             interm_reg_probs.append(1.)
+        # Only do comp_prompt_mix_reg after warm_up_steps (500) iterations.
+        # So that subject-level prompts are already able to generate rough subject images 
+        # to compute a reasonable mixing loss.
         if self.composition_prompt_mix_reg_weight > 0:
             interm_reg_types.append('do_comp_prompt_mix_reg')
             interm_reg_probs.append(2.)
+
+        self.warmup_scale = min(1.0, self.global_step / self.warm_up_steps)
 
         N_INTERM_REGS = len(interm_reg_types)
         interm_reg_probs = np.array(interm_reg_probs) / np.sum(interm_reg_probs)
@@ -1071,8 +1077,8 @@ class LatentDiffusion(DDPM):
     def shared_step(self, batch, **kwargs):
         # In prompt mixing steps, we don't do image recon. So replace the images with noise,
         # to increase the diversity of the input to the prompt mixing loss.
-        # Only do this after the warmup steps, when the model has learned a rough
-        # representation of the subject. And only do 50% of the time.
+        # During warmup, the probability of random images is gradually increased to 75%.
+        # After the warmup steps, do it with 75% probability.
         if self.do_comp_prompt_mix_reg \
          and self.global_step >= self.warmup_steps \
          and random.random() < 0.75:
@@ -1590,7 +1596,10 @@ class LatentDiffusion(DDPM):
                                       #13: 0.25, 14: 0.25, 15: 0.25, 
                                       16: 0.25,
                                     }
-            distill_overall_weight = 0.001 / np.sum(list(distill_layer_weights.values()))
+            # The weight of the mix distillation loss is scaled by warmup_scale.
+            # That is, the weight of mix distillation loss gradually increases during first 500 steps.
+            # After that, the sum of the overall weights stays at 0.001.
+            distill_overall_weight = 0.001 * self.warmup_scale / np.sum(list(distill_layer_weights.values()))
 
             def calc_chan_locality(feat):
                 feat_mean = feat.mean(dim=(0, 2, 3))
@@ -1673,7 +1682,7 @@ class LatentDiffusion(DDPM):
             # to keep the loss positive.
             loss_clip_text = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts, clip_images)
             loss_dict.update({f'{prefix}/loss_clip_text': loss_clip_text})
-            loss += (self.clip_text_loss_weight * loss_clip_text)
+            loss += (self.clip_text_loss_weight * loss_clip_text * self.warmup_scale)
 
         loss_dict.update({f'{prefix}/loss': loss})
 
