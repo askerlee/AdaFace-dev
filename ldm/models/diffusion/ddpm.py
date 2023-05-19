@@ -125,7 +125,7 @@ class DDPM(pl.LightningModule):
         self.use_scheduler = scheduler_config is not None
         if self.use_scheduler:
             self.scheduler_config = scheduler_config
-            self.warm_up_steps = scheduler_config.warm_up_steps
+            self.warm_up_steps = scheduler_config.params.warm_up_steps
         else:
             self.scheduler = None
             self.warm_up_steps = 500
