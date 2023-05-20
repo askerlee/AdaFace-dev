@@ -114,7 +114,7 @@ data:
   target: main.DataModuleFromConfig
   params:
     batch_size: 2
-    num_workers: 2
+    num_workers: 4
     wrap: false
     train:
       target: ldm.data.personalized.PersonalizedBase

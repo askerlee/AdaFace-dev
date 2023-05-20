@@ -114,7 +114,8 @@ class DDPM(pl.LightningModule):
         self.do_ada_comp_delta_reg          = False
         self.do_comp_prompt_mix_reg         = False
         self.do_clip_text_loss              = False
-        
+        self.do_deep_mix                    = False
+
         self.model = DiffusionWrapper(unet_config, conditioning_key)
         count_params(self.model, verbose=True)
         self.use_ema = use_ema
@@ -1226,28 +1227,50 @@ class LatentDiffusion(DDPM):
                         c2_mix_weight = self.cls_prompt_mix_weight_max * self.lr_scale
 
                         # The static embeddings of subj_prompt_comps and cls_prompt_comps,
-                        # i.e., subj_comps_emb and cls_comps_emb will be mixed.
+                        # i.e., subj_comps_emb and cls_comps_emb will be mixed (concatenated),
+                        # and the token number will be the double of subj_comps_emb.
                         # Ada embeddings won't be mixed.
                         # Mixed embedding subj_comps_emb_mix = 
                         # concat(subj_comps_emb, cls_comps_emb -| subj_comps_emb)_dim1. 
                         # -| means orthogonal subtraction.
-                        subj_comps_emb_mix  = mix_embeddings(subj_comps_emb, cls_comps_emb, 
+                        subj_comps_emb_mix_all_layers  = mix_embeddings(subj_comps_emb, cls_comps_emb, 
                                                              c2_mix_weight=c2_mix_weight,
                                                              use_ortho_subtract=True)
-                        subj_single_emb_mix = mix_embeddings(subj_single_emb, cls_single_emb,
+                        subj_single_emb_mix_all_layers = mix_embeddings(subj_single_emb, cls_single_emb,
                                                              c2_mix_weight=c2_mix_weight,
                                                              use_ortho_subtract=True)
-                        
+
                         # If stop_mix_grad, stop gradient on subj_comps_emb_mix, 
                         # since it serves as the reference.
                         # If we don't stop gradient on subj_comps_emb_mix, 
                         # then chance is that subj_comps_emb_mix might be dominated by subj_comps_emb,
                         # so that subj_comps_emb_mix will produce images similar as subj_comps_emb does.
                         # stop_mix_grad will improve compositionality but reduce face similarity.
-                        stop_mix_grad = True
+                        stop_mix_grad = False
                         if stop_mix_grad:
-                            subj_comps_emb_mix  = subj_comps_emb_mix.detach()
-                            subj_single_emb_mix = subj_single_emb_mix.detach()
+                            subj_comps_emb_mix_all_layers  = subj_comps_emb_mix_all_layers.detach()
+                            subj_single_emb_mix_all_layers = subj_single_emb_mix_all_layers.detach()
+
+                        if self.use_layerwise_embedding:
+                            # 4, 5, 6, 7 correspond to original layer indices 7, 8, 12, 16 
+                            # (same as used in computing mixing loss)
+                            sync_layer_indices = [4, 5, 6, 7]
+                            mask = torch.zeros_like(subj_comps_emb_mix_all_layers).reshape(-1, N_LAYERS, *subj_comps_emb_mix_all_layers.shape[1:])
+                            mask[:, sync_layer_indices] = 1
+                            mask = mask.reshape(-1, *subj_comps_emb_mix_all_layers.shape[1:])
+                            
+                            # Use most of the layers of embeddings in subj_comps_emb, but 
+                            # replace sync_layer_indices layers with those from subj_comps_emb_mix_all_layers.
+                            # Do not assign with sync_layers as indices, which destroys the computation graph.
+                            subj_comps_emb_mix  = subj_comps_emb.repeat(1, 2, 1) * (1 - mask) \
+                                                  + subj_comps_emb_mix_all_layers * mask
+
+                            subj_single_emb_mix = subj_single_emb.repeat(1, 2, 1) * (1 - mask) \
+                                                  + subj_single_emb_mix_all_layers * mask
+                        else:
+                            # There is only one layer of embeddings.
+                            subj_comps_emb_mix  = subj_comps_emb_mix_all_layers
+                            subj_single_emb_mix = subj_single_emb_mix_all_layers
 
                         # This copy of subj_single_emb, subj_comps_emb will be simply 
                         # repeated at the token dimension to match 
@@ -1294,13 +1317,16 @@ class LatentDiffusion(DDPM):
                     else:
                         # Don't do ada composition delta loss or compositional mix loss in this iteration. 
                         # This includes the subject scheme is static layerwise embedding or traditional TI.
-                        # So use the original subj_prompt_single embeddings and prompts.
-                        # When num_compositions_per_image > 1, subj_prompt_single contains repeated prompts,
-                        # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
-                        c_static_emb2 = subj_single_emb[:N_EMBEDS]
-                        c_in2         = subj_prompt_single[:ORIG_BS]
-                        extra_info['iter_type']      = 'normal_recon'
-                        extra_info['ada_bp_to_unet'] = False
+                        if self.do_deep_mix:
+                            pass
+                        else:
+                            # The original scheme. Use the original subj_prompt_single embeddings and prompts.
+                            # When num_compositions_per_image > 1, subj_prompt_single contains repeated prompts,
+                            # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
+                            c_static_emb2 = subj_single_emb[:N_EMBEDS]
+                            c_in2         = subj_prompt_single[:ORIG_BS]
+                            extra_info['iter_type']      = 'normal_recon'
+                            extra_info['ada_bp_to_unet'] = False
 
                     extra_info['cls_prompt_comps']  = cls_prompt_comps
                     extra_info['cls_prompt_single'] = cls_prompt_single
