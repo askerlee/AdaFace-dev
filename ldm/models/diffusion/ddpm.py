@@ -1246,7 +1246,7 @@ class LatentDiffusion(DDPM):
                         # then chance is that subj_comps_emb_mix might be dominated by subj_comps_emb,
                         # so that subj_comps_emb_mix will produce images similar as subj_comps_emb does.
                         # stop_mix_grad will improve compositionality but reduce face similarity.
-                        stop_mix_grad = False
+                        stop_mix_grad = True
                         if stop_mix_grad:
                             subj_comps_emb_mix_all_layers  = subj_comps_emb_mix_all_layers.detach()
                             subj_single_emb_mix_all_layers = subj_single_emb_mix_all_layers.detach()
