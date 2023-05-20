@@ -770,23 +770,11 @@ class UNetModel(nn.Module):
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
                     # Do not BP into ada embeddings that's added with the mixed embeddings. 
                     layer_ada_context = th.cat([layer_ada_context, layer_ada_context.detach()], dim=1)
-                    if token_weights is not None:
-                        token_weights = token_weights.repeat(1, 2, 1)
 
                 # layer_static_context, layer_ada_context: [2, 77, 768]
                 # layer_context: layer context fed to the current UNet layer, [2, 77, 768]
                 layer_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
-                if token_weights is not None:
-                    # During inference, text conditioning is the concat of uncondined and conditioned.
-                    # So the batch size is doubled. Token weights should be applied only to 
-                    # the second (conditioned) part.
-                    if token_weights.shape[0] == layer_context.shape[0] // 2:
-                        one_weights   = th.ones_like(token_weights)
-                        token_weights = th.cat([one_weights, token_weights], dim=0)
-                    # Scaling up subject embeddings (even with subj_scale=1.8) will easily 
-                    # lead to severe artifacts. Instead, we scale down other token embeddings.
-                    # The artifact is much less severe, although the style is reduced a bit.
-                    layer_context = layer_context * token_weights / token_weights.max()
+
             else:
                 layer_context = layer_static_context
 
