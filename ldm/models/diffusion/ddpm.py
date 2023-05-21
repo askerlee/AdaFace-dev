@@ -1247,7 +1247,7 @@ class LatentDiffusion(DDPM):
                         # then chance is that subj_comps_emb_mix might be dominated by subj_comps_emb,
                         # so that subj_comps_emb_mix will produce images similar as subj_comps_emb does.
                         # stop_mix_grad will improve compositionality but reduce face similarity.
-                        stop_mix_grad = False
+                        stop_mix_grad = True
                         mix_grad_scale = 0.2
                         if stop_mix_grad:
                             subj_comps_emb_mix_all_layers  = subj_comps_emb_mix_all_layers.detach()
@@ -1712,7 +1712,7 @@ class LatentDiffusion(DDPM):
             # to keep the loss positive.
             loss_clip_comp_text   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp, clip_images)
             loss_clip_single_text = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images)
-            loss_clip_text = loss_clip_comp_text * 0.7 + loss_clip_single_text * 0.3
+            loss_clip_text = loss_clip_comp_text * 0.8 + loss_clip_single_text * 0.2
             loss_dict.update({f'{prefix}/loss_clip_text': loss_clip_text})
             loss += (self.clip_text_loss_weight * loss_clip_text)
 
