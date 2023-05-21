@@ -1623,7 +1623,7 @@ class LatentDiffusion(DDPM):
                                       17: 0.125
                                     }
 
-            distill_overall_weight = 0.1 / np.sum(list(distill_layer_weights.values()))
+            distill_overall_weight = 1 / np.sum(list(distill_layer_weights.values()))
 
             def calc_chan_locality(feat):
                 feat_mean = feat.mean(dim=(0, 2, 3))
