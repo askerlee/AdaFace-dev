@@ -766,7 +766,7 @@ class UNetModel(nn.Module):
 
                 # If static context is expanded by doing prompt mixing,
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
-                if iter_type =='do_comp_prompt_mix_reg':
+                if iter_type == 'do_comp_prompt_mix_reg' or 'do_inf_comp_prompt_mix':
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
                     # Do not BP into ada embeddings that's added with the mixed embeddings. 
                     layer_ada_context = th.cat([layer_ada_context, layer_ada_context.detach()], dim=1)
