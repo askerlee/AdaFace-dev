@@ -23,7 +23,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, mix_embeddings, \
-                       ortho_subtract, calc_stats, rand_like
+                       ortho_subtract, calc_stats, rand_like, GradientScaler
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -1246,10 +1246,15 @@ class LatentDiffusion(DDPM):
                         # then chance is that subj_comps_emb_mix might be dominated by subj_comps_emb,
                         # so that subj_comps_emb_mix will produce images similar as subj_comps_emb does.
                         # stop_mix_grad will improve compositionality but reduce face similarity.
-                        stop_mix_grad = True
+                        stop_mix_grad = False
+                        mix_grad_scale = 0.3
                         if stop_mix_grad:
                             subj_comps_emb_mix_all_layers  = subj_comps_emb_mix_all_layers.detach()
                             subj_single_emb_mix_all_layers = subj_single_emb_mix_all_layers.detach()
+                        elif mix_grad_scale != 1:
+                            grad_scaler = GradientScaler(mix_grad_scale)
+                            subj_comps_emb_mix_all_layers  = grad_scaler(subj_comps_emb_mix_all_layers)
+                            subj_single_emb_mix_all_layers = grad_scaler(subj_single_emb_mix_all_layers)
 
                         if self.use_layerwise_embedding:
                             # 4, 5, 6, 7 correspond to original layer indices 7, 8, 12, 16 

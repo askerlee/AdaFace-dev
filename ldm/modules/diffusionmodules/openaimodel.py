@@ -813,7 +813,7 @@ class UNetModel(nn.Module):
             # at this layer are the same.
             # There is still 25% chance that no feature synchronization is done.
             # If we want to increase the chance of "no sync", just add more "-1" to this list of choices.
-            sync_blocks_01_layer_idx = np.random.choice([-1, 8, 12, 16])
+            sync_blocks_01_layer_idx = np.random.choice([-1, 8, 12, 16, 17])
         else:
             sync_blocks_01_layer_idx = -1
 
