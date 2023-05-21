@@ -205,7 +205,7 @@ def parallel_data_prefetch(
         return gather_res
 
 # a, b are n-dimensional tensors.
-# Orthogonal subtraction of b from a: the result of a-w*b is orthogonal to b.
+# Orthogonal subtraction of b from a: the result of a-w*b is orthogonal to b (on the last dimension).
 def ortho_subtract(a, b):
     assert a.shape == b.shape, "Tensors a and b must have the same shape"
     dot_a_b = torch.einsum('...i,...i->...', a, b)
@@ -215,11 +215,20 @@ def ortho_subtract(a, b):
 
 # c1, c2: [32, 77, 768].
 # mix_scheme: 'add', 'concat', 'sdeltaconcat', 'adeltaconcat'.
-def mix_embeddings(c1, c2, c2_mix_weight, mix_scheme='adeltaconcat', placeholder_indices=None,
-                   use_ortho_subtract=True):
-    assert c1 is not None
-    if c2 is None:
-        return c1
+# The masked tokens will have the same embeddings after mixing.
+def mix_embeddings(c1_, c2_, c2_mix_weight, mix_scheme='adeltaconcat', placeholder_indices=None,
+                   use_ortho_subtract=True, token_mask=None):
+
+    assert c1_ is not None
+    if c2_ is None:
+        return c1_
+
+    if token_mask is not None:
+        c1 = c1_ * token_mask
+        c2 = c2_ * token_mask
+    else:
+        c1 = c1_
+        c2 = c2_
 
     c1_weight = 1
 
@@ -254,6 +263,12 @@ def mix_embeddings(c1, c2, c2_mix_weight, mix_scheme='adeltaconcat', placeholder
             
         # c2_mix_weight scales all tokens in delta_embedding.
         c_mix = torch.cat([ c1 * c1_weight, delta_embedding * c2_mix_weight ], dim=1)
+
+
+    # Fill in the masked token embeddings. 
+    # Therefore, the masked tokens will have the same embeddings after mixing.
+    if (token_mask is not None) and 'concat' in mix_scheme:
+        c_mix = c_mix + torch.cat([ c1_ * (1 - token_mask), c2_ * (1 - token_mask) ], dim=1)
 
     return c_mix
 

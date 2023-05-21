@@ -766,7 +766,7 @@ class UNetModel(nn.Module):
 
                 # If static context is expanded by doing prompt mixing,
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
-                if iter_type =='do_comp_prompt_mix_reg':
+                if iter_type =='do_comp_prompt_mix_reg' or iter_type == 'do_inf_comp_prompt_mix':
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
                     # Do not BP into ada embeddings that's added with the mixed embeddings. 
                     layer_ada_context = th.cat([layer_ada_context, layer_ada_context.detach()], dim=1)
@@ -813,7 +813,7 @@ class UNetModel(nn.Module):
             # at this layer are the same.
             # There is still 20% chance that no feature synchronization is done.
             # If we want to increase the chance of "no sync", just add more "-1" to this list of choices.
-            sync_blocks_01_layer_idx = np.random.choice([-1, 8, 12, 16, 17])
+            sync_blocks_01_layer_idx = np.random.choice([-1, 8, 12, 16])
         else:
             sync_blocks_01_layer_idx = -1
 

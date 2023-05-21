@@ -426,14 +426,14 @@ def main(opt):
                             prompts = list(prompts)
                         c = model.get_learned_conditioning(prompts)
                         if ref_c is not None:
-                            # c / ref_c are tuples of (cond, prompts, ada_embedder).
-                            c0_mix_all_layers = mix_embeddings(c[0], ref_c[0], opt.ref_prompt_mix_weight)
+                            # c / ref_c are tuples of (cond, prompts, extra_info).
+                            c0_mix_all_layers = mix_embeddings(c[0], ref_c[0], opt.ref_prompt_mix_weight, 
+                                                               mix_scheme='adeltaconcat')
 
                             if use_layerwise_embedding:
                                 # 4, 5, 6, 7 correspond to original layer indices 7, 8, 12, 16 
-                                # 8 corresponds to original layer index 17.
                                 # (same as used in computing mixing loss)
-                                sync_layer_indices = [4, 5, 6, 7, 8]
+                                sync_layer_indices = [4, 5]
                                 mask = torch.zeros_like(c0_mix_all_layers).reshape(-1, 16, *c0_mix_all_layers.shape[1:])
                                 mask[:, sync_layer_indices] = 1
                                 mask = mask.reshape(-1, *c0_mix_all_layers.shape[1:])
@@ -448,6 +448,7 @@ def main(opt):
                                 # There is only one layer of embeddings.
                                 c0_mix = c0_mix_all_layers
 
+                            c[2]['iter_type'] = 'do_inf_comp_prompt_mix'
                             c = (c0_mix, c[1], c[2])
                             
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]

@@ -78,7 +78,7 @@ def parse_args():
     parser.add_argument("--is_face", action="store_true", default=argparse.SUPPRESS,
                         help="Whether the generated samples are human faces")
 
-    parser.add_argument("--ref_prompt_mix_weight", type=float, default=argparse.SUPPRESS,
+    parser.add_argument("--ref_prompt_mix_weight", type=float, default=0,
                         help="Weight of the reference prompt to be mixed with the subject prompt")  
                                                                         
     args = parser.parse_args()

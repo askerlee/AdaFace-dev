@@ -3,14 +3,9 @@ from torch import nn
 import torch.nn.functional as F
 import numpy as np
 import copy
-import random
 
-from ldm.data.personalized import per_img_token_list
 from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler
-from transformers import CLIPTokenizer
 from functools import partial
-
-DEFAULT_PLACEHOLDER_TOKEN = ["*"]
 
 PROGRESSIVE_SCALE = 2000
 
