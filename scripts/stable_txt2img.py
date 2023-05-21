@@ -448,6 +448,7 @@ def main(opt):
                                 # There is only one layer of embeddings.
                                 c0_mix = c0_mix_all_layers
 
+                            c[2]['iter_type'] = 'do_inf_comp_prompt_mix'
                             c = (c0_mix, c[1], c[2])
 
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
