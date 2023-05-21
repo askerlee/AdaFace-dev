@@ -77,7 +77,10 @@ def parse_args():
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     parser.add_argument("--is_face", action="store_true", default=argparse.SUPPRESS,
                         help="Whether the generated samples are human faces")
-                                                                    
+
+    parser.add_argument("--ref_prompt_mix_weight", type=float, default=argparse.SUPPRESS,
+                        help="Weight of the reference prompt to be mixed with the subject prompt")  
+                                                                        
     args = parser.parse_args()
     return args
 
@@ -261,6 +264,16 @@ if __name__ == "__main__":
             command_line += f" --n_samples {args.n_samples} --indiv_subdir {indiv_subdir}"
             command_line += f" --prompt \"{prompt}\" --class_prompt \"{class_long_prompt}\""
 
+            if args.ref_prompt_mix_weight != 0:
+                # Use the class_short_prompt as the reference prompt, 
+                # as it's tokenwise aligned with the subject prompt.
+                command_line += f" --ref_prompt \"{class_short_prompt}\""
+
+        # ref_prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
+        if args.ref_prompt_mix_weight != 0:
+            # Only specify the flag here. The actual reference prompt will be read from the prompt file.
+            command_line += f" --ref_prompt_mix_weight {args.ref_prompt_mix_weight}"
+            
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 

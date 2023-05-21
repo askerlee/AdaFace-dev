@@ -14,7 +14,7 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import instantiate_from_config
+from ldm.util import instantiate_from_config, mix_embeddings
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from scripts.eval_utils import compare_folders, compare_face_folders, \
@@ -210,7 +210,12 @@ def parse_args():
     parser.add_argument("--class_prompt", type=str, default=None,
                         help="the original prompt used for text/image matching evaluation "
                              "(requires --compare_with to be specified)")
-    
+    parser.add_argument("--ref_prompt", type=str, default=None,
+                        help="a class-level reference prompt to be mixed with the subject prompt "
+                             "(if None, then don't mix with reference prompt)")
+    parser.add_argument("--ref_prompt_mix_weight", type=float, default=0,
+                        help="Weight of the reference prompt to be mixed with the subject prompt (0 to disable)")
+        
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
    
@@ -274,7 +279,7 @@ def main(opt):
 
     if opt.ada_emb_weight != -1:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
-
+    
     torch.cuda.set_device(opt.gpu)
     # No GPUs detected. Use CPU instead.
     if not torch.cuda.is_available():
@@ -304,6 +309,7 @@ def main(opt):
         # Append None to the end of batched_subdirs, for indiv_subdir change detection.
         batched_subdirs.append(None)
         batched_class_long_prompts = [ opt.class_prompt ] * len(batched_prompts)
+        batched_ref_prompts        = [ opt.ref_prompt ] * len(batched_prompts)
 
     else:
         print(f"Reading prompts from {opt.from_file}")
@@ -319,6 +325,8 @@ def main(opt):
             batched_prompts = []
             batched_subdirs = []
             batched_class_long_prompts = []
+            batched_ref_prompts = []
+
             # Repeat each prompt n_repeats times.
             for i, prompt in enumerate(all_prompts):
                 n_repeat = int(n_repeats[i])
@@ -343,6 +351,8 @@ def main(opt):
 
                 batched_subdirs.extend([indiv_subdir] * n_batches)
                 batched_class_long_prompts.extend([class_long_prompt] * n_batches)
+                batched_ref_prompts.extend([class_short_prompt] * n_batches)
+
             # Append None to the end of batched_subdirs, for indiv_subdir change detection.
             batched_subdirs.append(None)
 
@@ -372,6 +382,8 @@ def main(opt):
     if opt.fixed_code:
         start_code = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
+    use_layerwise_embedding = config.model.params.use_layerwise_embedding
+
     use_ema_model = ('emaonly' in opt.ckpt)
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     with torch.no_grad():
@@ -389,13 +401,55 @@ def main(opt):
                         print(f"\n{p_i+1}/{prompt_block_count}", prompts[0])
                         uc = None
 
+                        # It's legal that ref_prompt_mix_weight < 0, in which case 
+                        # we enhance the expression of the subject.
+                        if opt.ref_prompt_mix_weight != 0:
+                            # If ref_prompt is None (default), then ref_c is None, i.e., no mixing.
+                            ref_prompt = batched_ref_prompts[p_i]
+                            if ref_prompt is not None:
+                                ref_c = model.get_learned_conditioning(batch_size * [ref_prompt])
+                            else:
+                                ref_c = None
+                        else:
+                            ref_c = None
+
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
+
+                            # ref_prompt_mix doubles the number of channels of conditioning embeddings.
+                            # So we need to repeat uc by 2.
+                            if ref_c is not None:
+                                uc_0 = uc[0].repeat(1, 2, 1)
+                                uc = (uc_0, uc[1], uc[2])
 
                         if isinstance(prompts, tuple):
                             prompts = list(prompts)
                         c = model.get_learned_conditioning(prompts)
+                        if ref_c is not None:
+                            # c / ref_c are tuples of (cond, prompts, ada_embedder).
+                            c0_mix_all_layers = mix_embeddings(c[0], ref_c[0], opt.ref_prompt_mix_weight)
 
+                            if use_layerwise_embedding:
+                                # 4, 5, 6, 7 correspond to original layer indices 7, 8, 12, 16 
+                                # 8 corresponds to original layer index 17.
+                                # (same as used in computing mixing loss)
+                                sync_layer_indices = [4, 5, 6, 7, 8]
+                                mask = torch.zeros_like(c0_mix_all_layers).reshape(-1, 16, *c0_mix_all_layers.shape[1:])
+                                mask[:, sync_layer_indices] = 1
+                                mask = mask.reshape(-1, *c0_mix_all_layers.shape[1:])
+                                
+                                # Use most of the layers of embeddings in subj_comps_emb, but 
+                                # replace sync_layer_indices layers with those from subj_comps_emb_mix_all_layers.
+                                # Do not assign with sync_layers as indices, which destroys the computation graph.
+                                c0_mix  = c[0].repeat(1, 2, 1) * (1 - mask) \
+                                          + c0_mix_all_layers * mask
+
+                            else:
+                                # There is only one layer of embeddings.
+                                c0_mix = c0_mix_all_layers
+
+                            c = (c0_mix, c[1], c[2])
+                            
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                         # When ada embedding is used, c is a tuple of (cond, ada_embedder).
                         # When both unconditional and conditional guidance are passed to ddim sampler, 
