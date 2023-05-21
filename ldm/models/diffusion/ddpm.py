@@ -1253,8 +1253,9 @@ class LatentDiffusion(DDPM):
 
                         if self.use_layerwise_embedding:
                             # 4, 5, 6, 7 correspond to original layer indices 7, 8, 12, 16 
+                            # 8 corresponds to original layer index 17.
                             # (same as used in computing mixing loss)
-                            sync_layer_indices = [4, 5, 6, 7]
+                            sync_layer_indices = [4, 5, 6, 7, 8]
                             mask = torch.zeros_like(subj_comps_emb_mix_all_layers).reshape(-1, N_LAYERS, *subj_comps_emb_mix_all_layers.shape[1:])
                             mask[:, sync_layer_indices] = 1
                             mask = mask.reshape(-1, *subj_comps_emb_mix_all_layers.shape[1:])
@@ -1619,9 +1620,10 @@ class LatentDiffusion(DDPM):
                                       12: 0.5, 
                                       #13: 0.25, 14: 0.25, 15: 0.25, 
                                       16: 0.25,
+                                      17: 0.125
                                     }
 
-            distill_overall_weight = 0.001 / np.sum(list(distill_layer_weights.values()))
+            distill_overall_weight = 0.1 / np.sum(list(distill_layer_weights.values()))
 
             def calc_chan_locality(feat):
                 feat_mean = feat.mean(dim=(0, 2, 3))
