@@ -1261,18 +1261,18 @@ class LatentDiffusion(DDPM):
                             # 8 corresponds to original layer index 17.
                             # (same as used in computing mixing loss)
                             sync_layer_indices = [4, 5, 6, 7, 8]
-                            mask = torch.zeros_like(subj_comps_emb_mix_all_layers).reshape(-1, N_LAYERS, *subj_comps_emb_mix_all_layers.shape[1:])
-                            mask[:, sync_layer_indices] = 1
-                            mask = mask.reshape(-1, *subj_comps_emb_mix_all_layers.shape[1:])
+                            layer_mask = torch.zeros_like(subj_comps_emb_mix_all_layers).reshape(-1, N_LAYERS, *subj_comps_emb_mix_all_layers.shape[1:])
+                            layer_mask[:, sync_layer_indices] = 1
+                            layer_mask = layer_mask.reshape(-1, *subj_comps_emb_mix_all_layers.shape[1:])
                             
                             # Use most of the layers of embeddings in subj_comps_emb, but 
                             # replace sync_layer_indices layers with those from subj_comps_emb_mix_all_layers.
                             # Do not assign with sync_layers as indices, which destroys the computation graph.
-                            subj_comps_emb_mix  = subj_comps_emb.repeat(1, 2, 1) * (1 - mask) \
-                                                  + subj_comps_emb_mix_all_layers * mask
+                            subj_comps_emb_mix  = subj_comps_emb.repeat(1, 2, 1) * (1 - layer_mask) \
+                                                  + subj_comps_emb_mix_all_layers * layer_mask
 
-                            subj_single_emb_mix = subj_single_emb.repeat(1, 2, 1) * (1 - mask) \
-                                                  + subj_single_emb_mix_all_layers * mask
+                            subj_single_emb_mix = subj_single_emb.repeat(1, 2, 1) * (1 - layer_mask) \
+                                                  + subj_single_emb_mix_all_layers * layer_mask
                         else:
                             # There is only one layer of embeddings.
                             subj_comps_emb_mix  = subj_comps_emb_mix_all_layers
