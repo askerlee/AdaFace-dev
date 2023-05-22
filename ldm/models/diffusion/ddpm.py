@@ -1660,28 +1660,40 @@ class LatentDiffusion(DDPM):
                     continue
                 distill_layer_weight = distill_layer_weights[unet_layer_idx]
 
-                feat_subj_single, feat_subj_comps, feat_single_mix, feat_comps_mix \
+                feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
-                chan_weights = calc_chan_locality( torch.cat([feat_subj_single, feat_single_mix], dim=0) )
+                chan_weights = calc_chan_locality( torch.cat([feat_subj_single, feat_mix_single], dim=0) )
                 # calc_stats(chan_weights)
                 chan_weights = chan_weights.unsqueeze(0)
                 
                 # Pool the H, W dimensions to remove spatial information.
-                # feat_subj_single, feat_subj_comps, feat_single_mix, feat_comps_mix: [1, 1280], ...
+                # After pooling, feat_subj_single, feat_subj_comps, 
+                # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...
                 feat_subj_single = feat_subj_single.mean(dim=(2, 3))
                 feat_subj_comps  = feat_subj_comps.mean(dim=(2, 3))
-                feat_single_mix  = feat_single_mix.mean(dim=(2, 3))
-                feat_comps_mix   = feat_comps_mix.mean(dim=(2, 3))
+                feat_mix_single  = feat_mix_single.mean(dim=(2, 3))
+                feat_mix_comps   = feat_mix_comps.mean(dim=(2, 3))
+
+                stop_single_grad = True
+                if stop_single_grad:
+                    feat_subj_single = feat_subj_single.detach()
+                    feat_mix_single  = feat_mix_single.detach()
 
                 # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
-                feat_mix_delta  = ortho_subtract(feat_comps_mix,  feat_single_mix)
+                feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_mix_single)
                 feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
 
-                # feat_subj_delta, feat_cls_delta: [1, 1280], ...
+                # feat_subj_delta, feat_mix_delta: [1, 1280], ...
                 # Pool the spatial dimensions H, W to remove spatial information.
-                # feat_cls_delta is the reference delta (ref_delta), and the gradient flow to it is stopped.
-                # So the gradient only goes back to feat_subj_delta -> feat_subj_comps and feat_subj_single.
+                # The gradient goes back to feat_subj_delta -> feat_subj_comps,
+                # as well as feat_mix_delta -> feat_mix_comps.
+                # If stop_single_grad, the gradients to feat_subj_single and feat_mix_single are stopped, 
+                # as these two images should look good by themselves (since they only contain the subject).
+                # Note the learning strategy to the single image features should be different from 
+                # the single embeddings, as the former should be optimized to look good by itself,
+                # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
+                # and 2) the embeddings are amendable to composition.
                 loss_layer_comp_prompt_mix = (self.get_loss(feat_subj_delta, feat_mix_delta, mean=False) * chan_weights).mean()
                 
                 # print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
