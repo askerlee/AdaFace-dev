@@ -1722,7 +1722,7 @@ class LatentDiffusion(DDPM):
             clip_images = self.differentiable_decode_first_stage(clip_images)
             # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
             # to keep the loss positive.
-            loss_clip_comp_text   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp, clip_images)
+            loss_clip_comp_text   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images)
             loss_clip_single_text = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images)
             loss_clip_text = loss_clip_comp_text * 0.8 + loss_clip_single_text * 0.2
             loss_dict.update({f'{prefix}/loss_clip_text': loss_clip_text})

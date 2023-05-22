@@ -22,3 +22,7 @@ if [ ! -z "$4" ]
 then
  feh  --scale-down -g 1600x200+0+690 "$folder$4" &
 fi
+if [ ! -z "$5" ]
+then
+ feh  --scale-down -g 1600x200+0+910 "$folder$5" &
+fi
