@@ -1675,10 +1675,15 @@ class LatentDiffusion(DDPM):
                 feat_mix_single  = feat_mix_single.mean(dim=(2, 3))
                 feat_mix_comps   = feat_mix_comps.mean(dim=(2, 3))
 
-                stop_single_grad = True
+                stop_single_grad = False
+                single_grad_scale = 0.2
                 if stop_single_grad:
                     feat_subj_single = feat_subj_single.detach()
                     feat_mix_single  = feat_mix_single.detach()
+                elif single_grad_scale != 1:
+                    grad_scaler = GradientScaler(single_grad_scale)
+                    feat_subj_single = grad_scaler(feat_subj_single)
+                    feat_mix_single  = grad_scaler(feat_mix_single)
 
                 # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
                 feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_mix_single)
