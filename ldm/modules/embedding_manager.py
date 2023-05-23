@@ -619,7 +619,6 @@ class EmbeddingManager(nn.Module):
 
         self.token_weights = torch.ones(embedded_text.shape[0], n, 1, device=device)
         OCCUR = -1
-        debug = False
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             placeholder_embedding = self.string_to_param_dict[placeholder_string].to(device)
@@ -660,8 +659,6 @@ class EmbeddingManager(nn.Module):
                 
                 embedded_text[placeholder_indices] = placeholder_embedding.repeat(OCCUR, 1)
                 # Mark where the placeholder token is replaced by the embedding.
-                if debug:
-                    breakpoint()
 
                 self.token_weights[placeholder_indices] = self.subj_scale
                 self.placeholder_indices = copy.copy(placeholder_indices)
@@ -675,10 +672,7 @@ class EmbeddingManager(nn.Module):
                         assert tokenized_text[elem_idx][start_idx-1] == placeholder_token
                     except:
                         breakpoint()
-
-                    if i == OCCUR - 1:
-                        debug = True
-
+                        
                     has_suffix = True
                     for j in range(self.z_suffix_id_count):
                         if tokenized_text[elem_idx][start_idx+j] != self.z_suffix_ids[j]:
