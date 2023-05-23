@@ -12,8 +12,8 @@ set default_folder "samples-ada/"
 set WIDTH 1600
 set HEIGHT 1200
 set max_images 5
-set padding 20
-set img_height (math (math $HEIGHT - 30) / $max_images - $padding)
+set padding 10
+set img_height (math (math $HEIGHT - 20) / $max_images - $padding)
 
 set start_idx (count $argv)
 set end_idx (math max 1, (math $start_idx - $max_images + 1))
@@ -27,7 +27,7 @@ for img_idx in (seq $start_idx -1 $end_idx)
    else
       set folder $default_folder
    end
-   
+
   #echo $argv[$img_idx]
   feh  --scale-down -g {$WIDTH}x200+0+{$h_offset}  "$folder$argv[$img_idx]" &
   set h_offset (math $h_offset + $img_height)
