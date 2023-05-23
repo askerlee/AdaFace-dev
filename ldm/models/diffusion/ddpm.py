@@ -1676,7 +1676,7 @@ class LatentDiffusion(DDPM):
                 feat_mix_comps   = feat_mix_comps.mean(dim=(2, 3))
 
                 stop_single_grad = False
-                single_grad_scale = 0.2
+                single_grad_scale = 0.05
                 if stop_single_grad:
                     feat_subj_single = feat_subj_single.detach()
                     feat_mix_single  = feat_mix_single.detach()
