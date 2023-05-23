@@ -618,6 +618,8 @@ class EmbeddingManager(nn.Module):
             # in the encoder & decoder.
 
         self.token_weights = torch.ones(embedded_text.shape[0], n, 1, device=device)
+        OCCUR = -1
+        debug = False
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             placeholder_embedding = self.string_to_param_dict[placeholder_string].to(device)
@@ -658,9 +660,10 @@ class EmbeddingManager(nn.Module):
                 
                 embedded_text[placeholder_indices] = placeholder_embedding.repeat(OCCUR, 1)
                 # Mark where the placeholder token is replaced by the embedding.
+                if debug:
+                    breakpoint()
+
                 self.token_weights[placeholder_indices] = self.subj_scale
-                # Remove repetitive copies, only keep the first copy of the weights.
-                self.token_weights = self.token_weights[:OCCUR]
                 self.placeholder_indices = copy.copy(placeholder_indices)
                 
                 # OCCUR is the real number of occurrences of placeholder. OCCUR <= b.
@@ -672,6 +675,10 @@ class EmbeddingManager(nn.Module):
                         assert tokenized_text[elem_idx][start_idx-1] == placeholder_token
                     except:
                         breakpoint()
+
+                    if i == OCCUR - 1:
+                        debug = True
+
                     has_suffix = True
                     for j in range(self.z_suffix_id_count):
                         if tokenized_text[elem_idx][start_idx+j] != self.z_suffix_ids[j]:
@@ -726,6 +733,10 @@ class EmbeddingManager(nn.Module):
                     # Locate the next placeholder token in the row, and replace the embedding in embedded_text.
                     embedded_text[row]  = new_embed_row
                     tokenized_text[row] = new_token_row
+
+        if OCCUR > 0:
+            # Remove repetitive copies, only keep the first copy of the weights.
+            self.token_weights = self.token_weights[:OCCUR]
 
         return embedded_text
 
