@@ -9,6 +9,7 @@ from einops import rearrange
 from torchvision.utils import make_grid
 import time
 import re
+import csv
 
 from pytorch_lightning import seed_everything
 from torch import autocast
@@ -218,7 +219,10 @@ def parse_args():
         
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
-   
+
+    parser.add_argument("--scores_csv", type=str, default=None,
+                        help="CSV file to save the evaluation scores")
+       
     args = parser.parse_args()
     return args
 
@@ -294,6 +298,12 @@ def main(opt):
         sampler = DDIMSampler(model)
 
     os.makedirs(opt.outdir, exist_ok=True)
+
+    if opt.scores_csv:
+        SCORES_CSV_FILE = open(opt.scores_csv, "a")
+        SCORES_CSV = csv.writer(SCORES_CSV_FILE)
+    else:
+        SCORES_CSV = None
 
     batch_size = opt.n_samples if opt.bs == -1 else opt.bs
     n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
@@ -530,29 +540,30 @@ def main(opt):
 
                     # to image
                     grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
-                    # logs/name2022-12-27T23-03-14_name/checkpoints/embeddings_gs-1200.pt
-                    date_mat = re.search(r"(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.embedding_paths[0])
-                    date_sig = date_mat.group(1)
-                    ckpt_postfix = date_mat.group(2)
+                    # logs/gabrielleunion2023-05-24T18-33-34_gabrielleunion-ada/checkpoints/embeddings_gs-4500.pt
+                    subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.embedding_paths[0])
+                    date_sig = subjfolder_mat.group(2)
+                    # subjname_method: gabrielleunion-ada
+                    subjname_method = subjfolder_mat.group(3)
                     iter_mat = re.search(r"(\d+).pt", opt.embedding_paths[0])
                     iter_sig = iter_mat.group(1)
-
-                    embedding_sig = "-".join([date_sig, iter_sig, f"scale{opt.scale:.1f}"])
+                    
+                    experiment_sig = "-".join([date_sig, iter_sig, f"scale{opt.scale:.1f}"])
                     if use_ema_model:
-                        embedding_sig += "-ema"
+                        experiment_sig += "-ema"
 
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                     if opt.from_file:
                         prompt = prompts[0]
                     # Otherwise, use the prompt passed by the command line.
                     prompt_sig = prompt.replace(" ", "-")[:40]  # Cut too long prompt
-                    grid_filepath = os.path.join(opt.outdir, f'{ckpt_postfix}-{prompt_sig}-{embedding_sig}.jpg')
+                    grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}.jpg')
                     if os.path.exists(grid_filepath):
                         grid_count = 2
-                        grid_filepath = os.path.join(opt.outdir, f'{ckpt_postfix}-{prompt_sig}-{embedding_sig}-{grid_count}.jpg')
+                        grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
                         while os.path.exists(grid_filepath):
                             grid_count += 1
-                            grid_filepath = os.path.join(opt.outdir, f'{ckpt_postfix}-{prompt_sig}-{embedding_sig}-{grid_count}.jpg')
+                            grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
 
                     Image.fromarray(grid.astype(np.uint8)).save(grid_filepath)
 
@@ -572,10 +583,21 @@ def main(opt):
         else:
             sims_face_avg = 0
 
-        print(f"All samples mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
         if opt.calc_face_sim:
             except_img_percent = np.sum(all_except_img_counts) / (np.sum(all_normal_img_counts) + np.sum(all_except_img_counts))
             print(f"Exception image percent: {except_img_percent*100:.1f}")
+        else:
+            except_img_percent = 0
+
+        print(f"All samples mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
+        if SCORES_CSV is not None:
+            subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.embedding_paths[0])
+            emb_sig  = subjfolder_mat.group(1) + subjfolder_mat.group(2)
+            scores   = [sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent]
+            scores   = [ f"{score:.4f}" for score in scores ]
+            SCORES_CSV.writerow([emb_sig] + scores)
+
+    SCORES_CSV_FILE.close()
 
 if __name__ == "__main__":
     opt = parse_args()

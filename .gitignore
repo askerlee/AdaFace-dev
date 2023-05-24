@@ -16,6 +16,7 @@ __pycache__/
 /models/stable-diffusion-v-1-4-original
 /models/stable-diffusion-v-1-5
 /*.txt
+/*.csv
 !requirements.txt
 /src/taming-transformers
 /.vscode/*

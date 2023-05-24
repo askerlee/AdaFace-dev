@@ -2,6 +2,7 @@ import argparse
 import os
 import re
 import numpy as np
+import csv
 from scripts.eval_utils import parse_subject_file, parse_range_str, get_promt_list, find_first_match
 
 def parse_args():
@@ -13,6 +14,9 @@ def parse_args():
     parser.add_argument("--placeholder", type=str, default="z", 
                         help="placeholder token for the subject")
     # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.
+    parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],
+                        help="Subset of prompts to evaluate if --prompt is not specified")
+    
     parser.add_argument("--prompt", type=str, default=None,
                         help="Prompt to use for generating samples, using {} for placeholder (default: None)")
     parser.add_argument("--z_suffix_type", default=argparse.SUPPRESS, 
@@ -28,8 +32,6 @@ def parse_args():
     # prompt_suffix: usually reduces the similarity.
     parser.add_argument("--prompt_suffix", type=str, default="",
                         help="suffix to append to the end of each prompt")
-    parser.add_argument("--plain", action="store_true",
-                        help="Whether to generate plain samples without compositional prompts")
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
     # subj_scale: sometimes it improves the similarity, somtimes it reduces it.
@@ -53,7 +55,9 @@ def parse_args():
     
     parser.add_argument("--out_dir_tmpl", type=str, default="samples-dbeval",
                         help="Template of parent directory to save generated samples")
-
+    parser.add_argument("--scores_csv", type=str, default="scores.csv",
+                        help="CSV file to save the evaluation scores")
+    
     # File path containing composition case information
     parser.add_argument("--subjfile", type=str, default="scripts/info-subjects.sh", 
                         help="subject info script file")
@@ -94,9 +98,9 @@ if __name__ == "__main__":
     if hasattr(args, 'z_prefix'):
         # * 3 for 3 broad classes, i.e., all classes use the same args.z_prefix.
         z_prefixes = [args.z_prefix] * 3    
-    elif 'z_prefixes' in vars and not args.plain:
+    elif 'z_prefixes' in vars and args.prompt is None:
         # Use z_prefixes from the subject info file if it exists, 
-        # but only if it's not plain (manual prompt) generation
+        # but only if it's not manual prompt generation
         z_prefixes = vars['z_prefixes']
         assert len(z_prefixes) == 3
     else:
@@ -183,7 +187,7 @@ if __name__ == "__main__":
 
         if args.method == 'db':
             config_file = "v1-inference.yaml"
-            ckpt_path   = f"logs/{ckpt_name}/checkpoints/last.ckpt"
+            ckpt_path   = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/last.ckpt"
         else:
             config_file = "v1-inference-" + args.method + ".yaml"
             if args.ema:
@@ -198,22 +202,25 @@ if __name__ == "__main__":
             else:
                 ckpt_iter = args.ckpt_iter
 
-            emb_path    = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{ckpt_iter}.pt"
+            emb_path    = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/embeddings_gs-{ckpt_iter}.pt"
             if not os.path.exists(emb_path):
-                print(f"ERROR: Subject embedding not found: '{emb_path}'")
-                continue
+                emb_path = f"{args.ckpt_dir}/{ckpt_name}/embeddings_gs-{ckpt_iter}.pt"
+                if not os.path.exists(emb_path):
+                    print(f"ERROR: Subject embedding not found: '{emb_path}'")
+                    continue
 
         outdir = args.out_dir_tmpl + "-" + args.method
         os.makedirs(outdir, exist_ok=True)
 
-        if not args.plain:
+        if args.prompt is None:
             if args.n_samples == -1:
                 args.n_samples = 4
             if args.bs == -1:
                 args.bs = 4
             # E.g., get_promt_list(placeholder="z", z_suffix="cat", class_long_token="tabby cat", broad_class=1)
             prompt_list, class_short_prompt_list, class_long_prompt_list = \
-                get_promt_list(args.placeholder, z_prefix, z_suffix, class_token, class_long_token, broad_class)
+                get_promt_list(args.placeholder, z_prefix, z_suffix, class_token, class_long_token, 
+                               broad_class, args.prompt_set)
             prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
@@ -228,7 +235,7 @@ if __name__ == "__main__":
                 class_token      = z_prefix + " " + class_token
                 class_long_token = z_prefix + " " + class_long_token
 
-            prompt_tmpl = args.prompt if args.prompt else "a {}"
+            prompt_tmpl = args.prompt if args.prompt != "" else "a {}"
             prompt = prompt_tmpl.format(placeholder + z_suffix)
             class_long_prompt = prompt_tmpl.format(class_long_token + z_suffix)
             class_short_prompt = prompt_tmpl.format(class_token + z_suffix)
@@ -249,7 +256,7 @@ if __name__ == "__main__":
                 class_long_prompt  = class_long_prompt  + ", " + args.prompt_suffix
 
             print("  ", prompt)
-            if not args.plain:
+            if args.prompt is None:
                 indiv_subdir = subject_name + "-" + prompt.replace(" ", "-")
                 # class_short_prompt, class_long_prompt are saved in the prompt file as well.
                 # class_long_prompt is used for the CLIP text/image similarity evaluation.
@@ -260,7 +267,7 @@ if __name__ == "__main__":
 
         command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --scale {args.scale} --subj_scale {args.subj_scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
 
-        if not args.plain:
+        if args.prompt is None:
             PROMPTS.close()
             # Since we use a prompt file, we don't need to specify --n_samples.
             command_line += f" --from_file {prompt_filepath}"
@@ -274,6 +281,9 @@ if __name__ == "__main__":
                 # Use the class_short_prompt as the reference prompt, 
                 # as it's tokenwise aligned with the subject prompt.
                 command_line += f" --ref_prompt \"{class_short_prompt}\""
+
+        if args.scores_csv is not None:
+            command_line += f" --scores_csv {args.scores_csv}"
 
         # ref_prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
         if args.ref_prompt_mix_weight != 0:
@@ -297,3 +307,26 @@ if __name__ == "__main__":
 
         print(command_line)
         os.system(command_line)
+
+    if args.scores_csv is not None:
+        if not os.path.exists(args.scores_csv):
+            print(f"Error: {args.scores_csv} not found.")
+            exit(0)
+
+        print(f"Scores are saved to {args.scores_csv}")
+        # Read the scores and print the average.
+        csv_reader = csv.reader(open(args.scores_csv))
+        scores = []
+        for row in csv_reader:
+            emb_sig, sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = row
+            print(f"{emb_sig}:\t{sims_face_avg}\t{sims_img_avg}\t{sims_text_avg}\t{sims_dino_avg}\t{except_img_percent}")
+
+            sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = \
+                float(sims_face_avg), float(sims_img_avg), float(sims_text_avg), float(sims_dino_avg), float(except_img_percent)
+            scores.append( [sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent] )
+
+        scores = np.array(scores)
+        sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = np.mean(scores, axis=0)
+        print(f"Average face similarity/exception: {sims_face_avg}\t{except_img_percent*100:.1f}")
+        print(f"All subjects mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
+
