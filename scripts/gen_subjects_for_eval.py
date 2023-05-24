@@ -197,8 +197,8 @@ if __name__ == "__main__":
                 ckpt_iter = ckpt_iters[broad_class]
             else:
                 ckpt_iter = args.ckpt_iter
-                
-            emb_path    = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{args.ckpt_iter}.pt"
+
+            emb_path    = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{ckpt_iter}.pt"
             if not os.path.exists(emb_path):
                 print(f"ERROR: Subject embedding not found: '{emb_path}'")
                 continue
