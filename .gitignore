@@ -18,3 +18,5 @@ __pycache__/
 /*.txt
 !requirements.txt
 /src/taming-transformers
+/.vscode/*
+/.vscode

@@ -394,7 +394,8 @@ class DDPM(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         # No matter wheter the scheme is layerwise or not,
         # as long as composition_delta_reg_weight > 0, do static comp delta reg.
-        self.do_static_comp_delta_reg = self.composition_delta_reg_weight > 0
+        self.do_static_comp_delta_reg = self.composition_regs_iter_gap > 0 \
+                                          and self.composition_delta_reg_weight > 0
 
         # How many regularizations are done intermittently during the training iterations?
         interm_reg_types = []
@@ -417,7 +418,8 @@ class DDPM(pl.LightningModule):
         self.do_clip_text_loss        = False
 
         # If N_INTERM_REGS == 0, then no intermittent regularizations, set the two flags to False.
-        if N_INTERM_REGS > 0 and self.global_step % self.composition_regs_iter_gap == 0:
+        if N_INTERM_REGS > 0 and self.composition_regs_iter_gap > 0 \
+            and self.global_step % self.composition_regs_iter_gap == 0:
             # Alternate among the regularizations in interm_reg_types. 
             # If both do_ada_comp_delta_reg and do_comp_prompt_mix_reg,
             # then alternate between do_ada_comp_delta_reg and do_comp_prompt_mix_reg.

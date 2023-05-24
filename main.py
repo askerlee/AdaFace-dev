@@ -230,6 +230,11 @@ def get_parser(**parser_kwargs):
                         type=float, default=1.05,
                         help="Maximum random scaling factor of training images (default: 1.05)")
     
+    parser.add_argument("--composition_regs_iter_gap",
+                        type=int, default=argparse.SUPPRESS,
+                        help="Gap between iterations for composition regularization. "
+                             "Set to -1 to disable for ablation.")
+    
     # num_compositions_per_image: a value > 1 leads to better performance on prompt compositions
     parser.add_argument("--num_compositions_per_image",
                         type=int, default=1,
@@ -711,7 +716,10 @@ if __name__ == "__main__":
             config.data.params.train.params.placeholder_suffix              = opt.placeholder_suffix
             config.data.params.validation.params.placeholder_suffix         = opt.placeholder_suffix
             config.model.params.personalization_config.params.placeholder_suffix = opt.placeholder_suffix
-            
+
+        if hasattr(opt, 'composition_regs_iter_gap'):
+            config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
+
         config.data.params.train.params.num_compositions_per_image = opt.num_compositions_per_image
         config.data.params.train.params.rand_scaling_range = (opt.min_rand_scaling, opt.max_rand_scaling)
 
