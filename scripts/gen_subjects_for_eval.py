@@ -45,7 +45,7 @@ def parse_args():
                         help="number of DDIM steps to generate samples")
     parser.add_argument("--ckpt_dir", type=str, default="logs",
                         help="parent directory containing checkpoints of all subjects")
-    parser.add_argument("--ckpt_iter", type=int, default=4000,
+    parser.add_argument("--ckpt_iter", type=int, default=-1,
                         help="checkpoint iteration to use")
     parser.add_argument("--ckpt_sig", dest='ckpt_extra_sig', type=str, default="",
                         help="Extra signature that is part of the checkpoint directory name."
@@ -88,9 +88,9 @@ if __name__ == "__main__":
     
     args = parse_args()
     vars = parse_subject_file(args.subjfile, args.method)
-    subjects, class_tokens, broad_classes, sel_set = vars['subjects'], vars['class_tokens'], \
-                                                     vars['broad_classes'], vars['sel_set']
-        
+    subjects, class_tokens, broad_classes, sel_set, ckpt_iters = \
+            vars['subjects'], vars['class_tokens'], vars['broad_classes'], vars['sel_set'], vars['maxiters']
+
     if hasattr(args, 'z_prefix'):
         # * 3 for 3 broad classes, i.e., all classes use the same args.z_prefix.
         z_prefixes = [args.z_prefix] * 3    
@@ -192,6 +192,12 @@ if __name__ == "__main__":
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned.ckpt"
             else:
                 ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
+            
+            if args.ckpt_iter == -1:
+                ckpt_iter = ckpt_iters[broad_class]
+            else:
+                ckpt_iter = args.ckpt_iter
+                
             emb_path    = f"logs/{ckpt_name}/checkpoints/embeddings_gs-{args.ckpt_iter}.pt"
             if not os.path.exists(emb_path):
                 print(f"ERROR: Subject embedding not found: '{emb_path}'")
