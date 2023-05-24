@@ -1636,10 +1636,12 @@ class LatentDiffusion(DDPM):
             def calc_chan_locality(feat):
                 feat_mean = feat.mean(dim=(0, 2, 3))
                 feat_absmean = feat.abs().mean(dim=(0, 2, 3))
-                # Max weight is 5. Always feat_absmean >= feat_mean.abs(). 
-                # The closer they are, the more uniform the feature values are within this channel.
-                # More weights are given to polarized channels. Less weights are given to uniform channels.
-                # feat_absmean >= feat_mean.abs(). So chan_weights >=1, and no need to clip from below.
+                # Max weight is capped at 5.
+                # The closer feat_absmean are with feat_mean.abs(), 
+                # the more spatially uniform (spanned across H, W) the feature values are.
+                # Bigger  weights are given to locally  distributed channels. 
+                # Smaller weights are given to globally distributed channels.
+                # feat_absmean >= feat_mean.abs(). So always chan_weights >=1, and no need to clip from below.
                 chan_weights = torch.clip(feat_absmean / (feat_mean.abs() + 0.001), max=5)
                 chan_weights = chan_weights.detach() / chan_weights.mean()
                 return chan_weights.detach()
