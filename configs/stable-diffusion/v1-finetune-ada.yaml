@@ -29,8 +29,8 @@ model:
     use_ada_embedding: True
     # composition_regs includes composition_delta_reg and composition_prompt_mix_reg.
     composition_regs_iter_gap: 5
-    # typical delta reg loss: 0.75, * weight -> 7.5e-5
-    composition_delta_reg_weight:       0.0001
+    # typical delta reg loss: 0.75, * weight -> 7.5e-6
+    composition_delta_reg_weight:       0.00001
     # typical prompt mix reg loss: 0.2, * weight -> 2e-5.
     composition_prompt_mix_reg_weight:  0.0001
     cls_prompt_mix_weight_max:  0.4

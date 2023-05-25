@@ -1654,7 +1654,7 @@ class LatentDiffusion(DDPM):
                 feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
-                learn_chan_weights = False
+                learn_chan_weights = True
                 # chan_weights: [BS, 1280] or [BS, 640].
                 # If learn_chan_weights, channels that are too different between mix and single features
                 # will be given smaller weights. This may help keep the learned subject characteristics?
