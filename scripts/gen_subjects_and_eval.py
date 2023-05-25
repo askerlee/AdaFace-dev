@@ -330,8 +330,11 @@ if __name__ == "__main__":
                 float(sims_face_avg), float(sims_img_avg), float(sims_text_avg), float(sims_dino_avg), float(except_img_percent)
             scores.append( [sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent] )
 
-        scores = np.array(scores)
-        sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = np.mean(scores, axis=0)
-        print(f"Average face similarity/exception: {sims_face_avg:.3f}\t{except_img_percent*100:.1f}%")
-        print(f"All subjects mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
+        if len(scores) == 0:
+            print(f"Error: no scores found in {args.scores_csv}.")
+        else:
+            scores = np.array(scores)
+            sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = np.mean(scores, axis=0)
+            print(f"All subjects mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
+            print(f"Face exception: {except_img_percent*100:.1f}%")
 

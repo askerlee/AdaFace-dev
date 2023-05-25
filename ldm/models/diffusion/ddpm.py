@@ -593,9 +593,9 @@ class LatentDiffusion(DDPM):
         
         self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
 
-        # embedding_manager.embedding_parameters(): string_to_param_dict, 
+        # embedding_manager.optimized_parameters(): string_to_param_dict, 
         # which maps custom tokens to embeddings
-        for param in self.embedding_manager.embedding_parameters():
+        for param in self.embedding_manager.optimized_parameters():
             param.requires_grad = True
         
     def make_cond_schedule(self, ):
@@ -1592,14 +1592,14 @@ class LatentDiffusion(DDPM):
             logvar_t = self.logvar.to(self.device)[t]
             # In theory, the loss can be weighted according to t. However in practice,
             # all the weights are the same, so this step is useless.
-            loss = loss_simple / torch.exp(logvar_t) + logvar_t
+            loss_simple = loss_simple / torch.exp(logvar_t) + logvar_t
             # loss = loss_simple / torch.exp(self.logvar) + self.logvar
             if self.learn_logvar:
-                loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
+                loss_dict.update({f'{prefix}/loss_gamma': loss_simple.mean()})
                 loss_dict.update({'logvar': self.logvar.data.mean()})
 
             # l_simple_weight = 1.
-            loss = self.l_simple_weight * loss.mean()
+            loss = self.l_simple_weight * loss_simple.mean()
 
             loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
             loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
@@ -1632,8 +1632,7 @@ class LatentDiffusion(DDPM):
                                     }
 
             distill_overall_weight = 1. / np.sum(list(distill_layer_weights.values()))
-            distill_overall_weight *= self.lr_scale 
-            
+
             def calc_chan_locality(feat):
                 feat_mean = feat.mean(dim=(0, 2, 3))
                 feat_absmean = feat.abs().mean(dim=(0, 2, 3))
@@ -1646,32 +1645,32 @@ class LatentDiffusion(DDPM):
                 chan_weights = torch.clip(feat_absmean / (feat_mean.abs() + 0.001), max=5)
                 chan_weights = chan_weights.detach() / chan_weights.mean()
                 return chan_weights.detach()
-            
-            def calc_chan_locality_ratio(feat_single, feat_comp):
-                chan_locality_single = calc_chan_locality(feat_single)
-                chan_locality_comp   = calc_chan_locality(feat_comp)
-                # The closer the ratio is to 1, the more similar the locality of the two types of feature maps.
-                # The closer the ratio is to 0, the more different the locality of the two types of feature maps.
-                # As ratio_exponent -> 0, chan_locality_ratio -> chan_locality_comp, i.e., the impact of 
-                # chan_locality_single is smaller.
-                ratio_exponent = 0.5
-                chan_locality_ratio = torch.clip(torch.pow(chan_locality_comp, 1 + ratio_exponent) 
-                                                 / (torch.pow(chan_locality_single, ratio_exponent) + 0.001), min=0.2, max=5)
-                chan_locality_ratio = chan_locality_ratio / chan_locality_ratio.mean()
-                return chan_locality_ratio
-            
+                        
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if unet_layer_idx not in distill_layer_weights:
                     continue
-                distill_layer_weight = distill_layer_weights[unet_layer_idx]
+                distill_layer_weight = distill_layer_weights[str(unet_layer_idx)]
 
                 feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
-                chan_weights = calc_chan_locality( torch.cat([feat_subj_single, feat_mix_single], dim=0) )
-                # calc_stats(chan_weights)
-                chan_weights = chan_weights.unsqueeze(0)
-                
+                learn_chan_weights = False
+                # chan_weights: [BS, 1280] or [BS, 640].
+                # If learn_chan_weights, channels that are too different between mix and single features
+                # will be given smaller weights. This may help keep the learned subject characteristics?
+                if learn_chan_weights:
+                    # unet_mix_chan_weights are learnable weights that are optimized to minimize
+                    # the CLIP loss. 
+                    # They are put in the embedding_manager, so that we don't need to
+                    # explicitly add them to the optimizer.
+                    chan_weights = self.embedding_manager.unet_mix_chan_weights[unet_layer_idx]
+                    # normalize chan_weights to sum to 1.
+                    chan_weights = chan_weights / chan_weights.sum()
+                else:
+                    chan_weights = calc_chan_locality( torch.cat([feat_subj_single, feat_mix_single], dim=0) )
+                    # calc_stats(chan_weights)
+                    chan_weights = chan_weights.unsqueeze(0)
+
                 # Pool the H, W dimensions to remove spatial information.
                 # After pooling, feat_subj_single, feat_subj_comps, 
                 # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...
@@ -1711,7 +1710,7 @@ class LatentDiffusion(DDPM):
 
             # logvar is all zero. So no need to do "loss_comp_prompt_mix / exp(logvar_t) + logvar_t".
             loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_comp_prompt_mix})
-            loss = self.composition_prompt_mix_reg_weight * loss_comp_prompt_mix
+            loss = self.composition_prompt_mix_reg_weight * loss_comp_prompt_mix * self.lr_scale
             
         if self.embedding_reg_weight > 0:
             loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
@@ -2078,7 +2077,7 @@ class LatentDiffusion(DDPM):
 
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 
-            embedding_params = list(self.embedding_manager.embedding_parameters())
+            embedding_params = list(self.embedding_manager.optimized_parameters())
             # unfreeze_model:
             # Are we allowing the base model to train? If so, set two different parameter groups.
             if self.unfreeze_model: 
@@ -2127,11 +2126,11 @@ class LatentDiffusion(DDPM):
         for param in self.model.parameters():
             param.requires_grad = False
 
-        for param in self.embedding_manager.embedding_parameters():
+        for param in self.embedding_manager.optimized_parameters():
             param.requires_grad = True
 
         lr = self.learning_rate
-        params = list(self.embedding_manager.embedding_parameters())
+        params = list(self.embedding_manager.optimized_parameters())
         opt = torch.optim.AdamW(params, lr=lr)
         return opt
 
@@ -2143,11 +2142,11 @@ class LatentDiffusion(DDPM):
         for param in self.model.parameters():
             param.requires_grad = True
 
-        for param in self.embedding_manager.embedding_parameters():
+        for param in self.embedding_manager.optimized_parameters():
             param.requires_grad = True
 
         model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
-        embedding_params = list(self.embedding_manager.embedding_parameters())
+        embedding_params = list(self.embedding_manager.optimized_parameters())
         return torch.optim.AdamW([{"params": embedding_params, "lr": self.learning_rate}, {"params": model_params}], lr=self.model_lr)
 
     @torch.no_grad()

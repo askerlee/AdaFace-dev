@@ -8,9 +8,9 @@ end
 
 set default_folder "samples-ada/"
 
-# screen dimensions: 1600x1200
+# screen dimensions: 1600x1080
 set WIDTH 1600
-set HEIGHT 1200
+set HEIGHT 1080
 set max_images 5
 set padding 10
 set img_height (math (math $HEIGHT - 20) / $max_images - $padding)

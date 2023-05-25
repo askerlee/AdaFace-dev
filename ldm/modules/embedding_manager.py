@@ -559,17 +559,27 @@ class EmbeddingManager(nn.Module):
                 self.z_suffix_ids      = None
                 self.z_suffix_id_count = 0
 
-            self.clear_ada_layer_temp_info()
-            self.clear_delta_loss_emb_mask()
-            self.img_mask = None
-            self.layer_idx2emb_idx = layer_idx2emb_idx
-            self.loss_call_count = 0
-            # Store the embedder to compute the delta loss.
-            self.embedder = embedder
-            self.token_weights = None
-            self.ada_bp_to_unet = False
-            print("EmbeddingManager initialized with layerwise_lora_rank={}, ada_emb_weight={}, placeholder_suffix={}".format(
-                   layerwise_lora_rank, ada_emb_weight, placeholder_suffix))
+        unet_layer_dims = [ 4,    320,  320,  320,  320,  640,  640,  640, 1280, 1280, 1280, 1280, 
+                            1280,
+                            1280, 1280, 1280, 1280, 1280, 1280, 1280, 640, 640,  640,  320,  320 ]
+        unet_mix_layer_indices = [7, 8, 12, 16]
+        # 640, 1280, 1280, 1280
+        unet_mix_layer_dims = [ unet_layer_dims[i] for i in unet_mix_layer_indices ]
+        self.unet_mix_chan_weights = nn.ParameterDict()
+        for i, dim in zip(unet_mix_layer_indices, unet_mix_layer_dims):
+            self.unet_mix_chan_weights[str(i)] = nn.Parameter(torch.ones(1, dim, dtype=torch.float32), requires_grad=True)
+
+        self.clear_ada_layer_temp_info()
+        self.clear_delta_loss_emb_mask()
+        self.img_mask = None
+        self.layer_idx2emb_idx = layer_idx2emb_idx
+        self.loss_call_count = 0
+        # Store the embedder to compute the delta loss.
+        self.embedder = embedder
+        self.token_weights = None
+        self.ada_bp_to_unet = False
+        print("EmbeddingManager initialized with layerwise_lora_rank={}, ada_emb_weight={}, placeholder_suffix={}".format(
+                layerwise_lora_rank, ada_emb_weight, placeholder_suffix))
             
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then max_vectors_per_token = num_unet_layers = 16.
@@ -863,7 +873,8 @@ class EmbeddingManager(nn.Module):
         torch.save({ "string_to_token":         self.string_to_token_dict,
                      "string_to_param":         self.string_to_param_dict,
                      "string_to_ada_embedder":  self.string_to_ada_embedder_dict,
-                     "ada_emb_weight":          self.ada_emb_weight, }, 
+                     "ada_emb_weight":          self.ada_emb_weight, 
+                     "unet_mix_chan_weights":   self.unet_mix_chan_weights }, 
                     ckpt_path)
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
@@ -913,9 +924,10 @@ class EmbeddingManager(nn.Module):
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
-    def embedding_parameters(self):
+    def optimized_parameters(self):
         return list(self.string_to_param_dict.parameters()) \
-               + list(self.string_to_ada_embedder_dict.parameters())
+               + list(self.string_to_ada_embedder_dict.parameters()) \
+               + list(self.unet_mix_chan_weights.parameters())
 
     def embedding_attractor_loss(self):
         loss = 0.
