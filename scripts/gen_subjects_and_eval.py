@@ -133,6 +133,11 @@ if __name__ == "__main__":
     # Sort all_ckpts by modification time, most recent first.
     all_ckpts.sort(key=lambda x: os.path.getmtime(os.path.join(args.ckpt_dir, x)), reverse=True)
 
+    # Create scores_csv file. If it exists, overwrite it.
+    if args.scores_csv is not None:
+        SCORES_CSV_FILE = open(args.scores_csv, "w")
+        SCORES_CSV_FILE.close()
+
     for subject_idx in subject_indices:
         if args.skipselset and subject_idx in sel_set:
             continue
