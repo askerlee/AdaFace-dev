@@ -1649,7 +1649,7 @@ class LatentDiffusion(DDPM):
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if unet_layer_idx not in distill_layer_weights:
                     continue
-                distill_layer_weight = distill_layer_weights[str(unet_layer_idx)]
+                distill_layer_weight = distill_layer_weights[unet_layer_idx]
 
                 feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
@@ -1663,7 +1663,7 @@ class LatentDiffusion(DDPM):
                     # the CLIP loss. 
                     # They are put in the embedding_manager, so that we don't need to
                     # explicitly add them to the optimizer.
-                    chan_weights = self.embedding_manager.unet_mix_chan_weights[unet_layer_idx]
+                    chan_weights = self.embedding_manager.unet_mix_chan_weights[str(unet_layer_idx)]
                     # normalize chan_weights to sum to 1.
                     chan_weights = chan_weights / chan_weights.sum()
                 else:

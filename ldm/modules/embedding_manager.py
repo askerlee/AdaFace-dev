@@ -563,8 +563,8 @@ class EmbeddingManager(nn.Module):
                             1280,
                             1280, 1280, 1280, 1280, 1280, 1280, 1280, 640, 640,  640,  320,  320 ]
         unet_mix_layer_indices = [7, 8, 12, 16]
-        # 640, 1280, 1280, 1280
-        unet_mix_layer_dims = [ unet_layer_dims[i] for i in unet_mix_layer_indices ]
+        # 1280, 1280, 1280, 1280
+        unet_mix_layer_dims = [ unet_layer_dims[i+1] for i in unet_mix_layer_indices ]
         self.unet_mix_chan_weights = nn.ParameterDict()
         for i, dim in zip(unet_mix_layer_indices, unet_mix_layer_dims):
             self.unet_mix_chan_weights[str(i)] = nn.Parameter(torch.ones(1, dim, dtype=torch.float32), requires_grad=True)
