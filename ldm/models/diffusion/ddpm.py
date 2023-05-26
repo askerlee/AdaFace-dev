@@ -1653,12 +1653,12 @@ class LatentDiffusion(DDPM):
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if unet_layer_idx not in distill_layer_weights:
                     continue
-                distill_layer_weight = distill_layer_weights[str(unet_layer_idx)]
+                distill_layer_weight = distill_layer_weights[unet_layer_idx]
 
                 feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
-                learn_chan_weights = True
+                learn_chan_weights = False
                 # chan_weights: [BS, 1280] or [BS, 640].
                 # If learn_chan_weights, channels that are too different between mix and single features
                 # will be given smaller weights. This may help keep the learned subject characteristics?
@@ -1667,7 +1667,7 @@ class LatentDiffusion(DDPM):
                     # the CLIP loss. 
                     # They are put in the embedding_manager, so that we don't need to
                     # explicitly add them to the optimizer.
-                    chan_weights = self.embedding_manager.unet_mix_chan_weights[unet_layer_idx]
+                    chan_weights = self.embedding_manager.unet_mix_chan_weights[str(unet_layer_idx)]
                     # normalize chan_weights to sum to 1.
                     chan_weights = chan_weights / chan_weights.sum()
                 else:
@@ -1683,15 +1683,18 @@ class LatentDiffusion(DDPM):
                 feat_mix_single  = feat_mix_single.mean(dim=(2, 3))
                 feat_mix_comps   = feat_mix_comps.mean(dim=(2, 3))
 
-                stop_single_grad = False
-                single_grad_scale = 0.05
-                if stop_single_grad:
-                    feat_subj_single = feat_subj_single.detach()
+                stop_mix_grad = False
+                mix_grad_scale = 0.05
+                if stop_mix_grad:
+                    # feat_subj_single = feat_subj_single.detach()
                     feat_mix_single  = feat_mix_single.detach()
-                elif single_grad_scale != 1:
-                    grad_scaler = GradientScaler(single_grad_scale)
-                    feat_subj_single = grad_scaler(feat_subj_single)
+                    feat_mix_comps   = feat_mix_comps.detach()
+
+                elif mix_grad_scale != 1:
+                    grad_scaler = GradientScaler(mix_grad_scale)
+                    # feat_subj_single = grad_scaler(feat_subj_single)
                     feat_mix_single  = grad_scaler(feat_mix_single)
+                    feat_mix_comps   = grad_scaler(feat_mix_comps)
 
                 # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
                 feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_mix_single)
