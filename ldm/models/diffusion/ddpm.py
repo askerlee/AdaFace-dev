@@ -26,6 +26,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, calc_stats, rand_like, GradientScaler
 
 from ldm.modules.ema import LitEma
+from ldm.modules.sophia import SophiaG
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
@@ -79,6 +80,7 @@ class DDPM(pl.LightningModule):
                  l_simple_weight=1.,
                  conditioning_key=None,
                  parameterization="eps",  # all assuming fixed variance schedules
+                 optimizer_type='AdamW',
                  scheduler_config=None,
                  use_positional_encodings=False,
                  learn_logvar=False,
@@ -123,6 +125,7 @@ class DDPM(pl.LightningModule):
             self.model_ema = LitEma(self.model)
             print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
 
+        self.optimizer_type = optimizer_type
         self.use_scheduler = scheduler_config is not None
         if self.use_scheduler:
             self.scheduler_config = scheduler_config
@@ -393,7 +396,8 @@ class DDPM(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         # No matter wheter the scheme is layerwise or not,
-        # as long as composition_delta_reg_weight > 0, do static comp delta reg.
+        # as long as composition_regs_iter_gap > 0 and composition_delta_reg_weight > 0, 
+        # do static comp delta reg.
         self.do_static_comp_delta_reg = self.composition_regs_iter_gap > 0 \
                                           and self.composition_delta_reg_weight > 0
 
@@ -2073,7 +2077,15 @@ class LatentDiffusion(DDPM):
         # self.learning_rate and self.weight_decay are set in main.py.
         # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
         lr = self.learning_rate
+        model_lr = self.model_lr
         weight_decay = self.weight_decay
+
+        if self.optimizer_type == 'sophia':
+            lr = lr / 2
+            model_lr = model_lr / 2
+            OptimizerClass = SophiaG
+        else:
+            OptimizerClass = torch.optim.AdamW
 
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 
@@ -2082,10 +2094,10 @@ class LatentDiffusion(DDPM):
             # Are we allowing the base model to train? If so, set two different parameter groups.
             if self.unfreeze_model: 
                 model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
-                opt = torch.optim.AdamW([{"params": embedding_params, "lr": lr}, {"params": model_params}], lr=self.model_lr)
+                opt = OptimizerClass([{"params": embedding_params, "lr": lr}, {"params": model_params}], lr=model_lr)
             # Otherwise, train only embedding
             else:
-                opt = torch.optim.AdamW(embedding_params, lr=lr, weight_decay=weight_decay)
+                opt = OptimizerClass(embedding_params, lr=lr, weight_decay=weight_decay)
         else:
             params = list(self.model.parameters())
             if self.cond_stage_trainable:
@@ -2093,9 +2105,9 @@ class LatentDiffusion(DDPM):
                 params = params + list(self.cond_stage_model.parameters())
             if self.learn_logvar:
                 print('Diffusion model optimizing logvar')
-                params.append(self.logvar)
+                params.ap
 
-            opt = torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay)
+            opt = OptimizerClass(params, lr=lr, weight_decay=weight_decay)
 
         if self.use_scheduler:
             assert 'target' in self.scheduler_config

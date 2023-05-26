@@ -37,6 +37,7 @@ model:
     # typical clip text loss: 0.3, * weight -> 3e-4.
     clip_text_loss_weight:      0.001
 
+    optimizer_type: sophia          # AdamW
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:
