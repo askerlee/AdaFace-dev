@@ -1700,7 +1700,6 @@ class LatentDiffusion(DDPM):
                     mix_single_spatial_weight  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
                     mix_comps_spatial_weight   = convert_attn_to_spatial_weight(subj_attn_mix_comps,   HALF_BS, feat_mix_comps.shape[2:])
 
-                    breakpoint()
                     feat_subj_single = feat_subj_single * subj_single_spatial_weight
                     feat_subj_comps  = feat_subj_comps  * subj_comps_spatial_weight
                     feat_mix_single  = feat_mix_single  * mix_single_spatial_weight
