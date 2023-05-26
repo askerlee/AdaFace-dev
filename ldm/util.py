@@ -352,6 +352,44 @@ def rand_like(x):
     rand_2d = rand_2d * std + mean
     return rand_2d.view(x.shape)
 
+def calc_chan_locality(feat):
+    feat_mean = feat.mean(dim=(0, 2, 3))
+    feat_absmean = feat.abs().mean(dim=(0, 2, 3))
+    # Max weight is capped at 5.
+    # The closer feat_absmean are with feat_mean.abs(), 
+    # the more spatially uniform (spanned across H, W) the feature values are.
+    # Bigger  weights are given to locally  distributed channels. 
+    # Smaller weights are given to globally distributed channels.
+    # feat_absmean >= feat_mean.abs(). So always chan_weights >=1, and no need to clip from below.
+    chan_weights = torch.clip(feat_absmean / (feat_mean.abs() + 0.001), max=5)
+    chan_weights = chan_weights.detach() / chan_weights.mean()
+    return chan_weights.detach()
+
+# flat_attn: [2, 8, 256] => [1, 2, 8, 256] => max/mean => [1, 256] => spatial_attn: [1, 16, 16].
+# spatial_attn [1, 16, 16] => spatial_weight [1, 16, 16]
+def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
+    # flat_attn: [2, 8, 256] => [1, 2, 8, 256].
+    # The 1 in dim 0 is BS, the batch size of each group of prompts.
+    # The 2 in dim 1 is the two occurrences of the subject tokens
+    # in the comp mix prompts (or repeated single prompts).
+    # The 8 in dim 2 is the 8 transformer heads.
+    # The 256 in dim 3 is the number of image tokens in the current layer.
+    flat_attn = flat_attn.reshape(BS, -1, *flat_attn.shape[1:])
+    # [1, 2, 8, 256] => max/mean => [1, 256] => [1, 16, 16].
+    # Un-flatten the attention map to the spatial dimensions, so as to
+    # apply them as weights.
+    # Max among the 8 heads, then mean across the 2 occurrences of the subject tokens.
+    spatial_attn = flat_attn.max(dim=2)[0].mean(dim=1).reshape(-1, *spatial_shape)
+    attn_mean, attn_std = spatial_attn.mean(dim=(1,2), keepdim=True), spatial_attn.std(dim=(1,2), keepdim=True)
+    # Convert spatial_attn with mean and std, so that mean attn values are 1, 
+    # and mean + x*std = exp(-x), i.e., the higher the attention value, the lower the weight.
+    # The lower the attention value, the higher the weight, but no more than 1.
+    spatial_weight = torch.exp(-(spatial_attn - attn_mean) / (attn_std + 0.001)).clamp(max=1)
+    # Normalize spatial_weight so that the average weight is 1.
+    spatial_weight = spatial_weight / spatial_weight.mean()
+    spatial_weight = spatial_weight.unsqueeze(1)
+    
+    return spatial_weight
 
 # Revised from RevGrad, by removing the grad negation.
 class ScaleGrad(torch.autograd.Function):

@@ -679,13 +679,13 @@ class EmbeddingManager(nn.Module):
                     elem_idx  = placeholder_indices[0][i]
                     start_idx = placeholder_indices[1][i] + 1
                     try:
-                        assert tokenized_text[elem_idx][start_idx-1] == placeholder_token
+                        assert orig_tokenized_text[elem_idx][start_idx-1] == placeholder_token
                     except:
                         breakpoint()
                         
                     has_suffix = True
                     for j in range(self.z_suffix_id_count):
-                        if tokenized_text[elem_idx][start_idx+j] != self.z_suffix_ids[j]:
+                        if orig_tokenized_text[elem_idx][start_idx+j] != self.z_suffix_ids[j]:
                             has_suffix = False
                             break
 

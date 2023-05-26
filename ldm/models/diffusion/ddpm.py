@@ -23,7 +23,8 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, mix_embeddings, \
-                       ortho_subtract, calc_stats, rand_like, GradientScaler
+                       ortho_subtract, calc_stats, rand_like, GradientScaler, \
+                       calc_chan_locality, convert_attn_to_spatial_weight
 
 from ldm.modules.ema import LitEma
 from ldm.modules.sophia import SophiaG
@@ -1635,45 +1636,35 @@ class LatentDiffusion(DDPM):
 
             distill_overall_weight = 1. / np.sum(list(distill_layer_weights.values()))
 
-            def calc_chan_locality(feat):
-                feat_mean = feat.mean(dim=(0, 2, 3))
-                feat_absmean = feat.abs().mean(dim=(0, 2, 3))
-                # Max weight is capped at 5.
-                # The closer feat_absmean are with feat_mean.abs(), 
-                # the more spatially uniform (spanned across H, W) the feature values are.
-                # Bigger  weights are given to locally  distributed channels. 
-                # Smaller weights are given to globally distributed channels.
-                # feat_absmean >= feat_mean.abs(). So always chan_weights >=1, and no need to clip from below.
-                chan_weights = torch.clip(feat_absmean / (feat_mean.abs() + 0.001), max=5)
-                chan_weights = chan_weights.detach() / chan_weights.mean()
-                return chan_weights.detach()
+            use_subj_attn_as_spatial_weights = True
 
-            orig_placeholder_ind_B, orig_placeholder_ind_T = self.embedding_manager.placeholder_indices
-            # cat_placeholder_ind_B: a list of instance indices in the batch.
-            # cat_placeholder_ind_T: a list of token indices of the placeholder token.
-            cat_placeholder_ind_B  = orig_placeholder_ind_B.clone()
-            cat_placeholder_ind_T  = orig_placeholder_ind_T.clone()
-            # cond[0].shape[1]: 154, number of tokens in the mixed prompts.
-            # Right shift the subject token indices by 77, 
-            # to locate the subject token (placeholder) in the concatenated comp prompts.
-            cat_placeholder_ind_T += cond[0].shape[1] // 2
-            # stack -> flatten, to interlace the two lists.
-            placeholder_indices_B = torch.stack([orig_placeholder_ind_B, cat_placeholder_ind_B], dim=1).flatten()
-            # The class prompts are at the latter half of all the prompts.
-            # So we need to add the batch indices of the subject prompts, to locate
-            # the corresponding class prompts.
-            cls_placeholder_indices_B = placeholder_indices_B + HALF_BS * 2
-            # Concatenate the placeholder indices of the subject prompts and class prompts.
-            placeholder_indices_B = torch.cat([placeholder_indices_B, cls_placeholder_indices_B], dim=0)
-            # stack then flatten() to interlace the two lists.
-            placeholder_indices_T = torch.stack([orig_placeholder_ind_T, cat_placeholder_ind_T], dim=1).flatten()
-            # The token indices in the class prompts are the 
-            # same as in the subject prompts. No offset is needed. 
-            placeholder_indices_T = placeholder_indices_T.repeat(2)
-            # placeholder_indices: 
-            # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
-            #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
-            placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
+            if use_subj_attn_as_spatial_weights:
+                orig_placeholder_ind_B, orig_placeholder_ind_T = self.embedding_manager.placeholder_indices
+                # cat_placeholder_ind_B: a list of instance indices in the batch.
+                # cat_placeholder_ind_T: a list of token indices of the placeholder token.
+                cat_placeholder_ind_B  = orig_placeholder_ind_B.clone()
+                cat_placeholder_ind_T  = orig_placeholder_ind_T.clone()
+                # cond[0].shape[1]: 154, number of tokens in the mixed prompts.
+                # Right shift the subject token indices by 77, 
+                # to locate the subject token (placeholder) in the concatenated comp prompts.
+                cat_placeholder_ind_T += cond[0].shape[1] // 2
+                # stack -> flatten, to interlace the two lists.
+                placeholder_indices_B = torch.stack([orig_placeholder_ind_B, cat_placeholder_ind_B], dim=1).flatten()
+                # The class prompts are at the latter half of all the prompts.
+                # So we need to add the batch indices of the subject prompts, to locate
+                # the corresponding class prompts.
+                cls_placeholder_indices_B = placeholder_indices_B + HALF_BS * 2
+                # Concatenate the placeholder indices of the subject prompts and class prompts.
+                placeholder_indices_B = torch.cat([placeholder_indices_B, cls_placeholder_indices_B], dim=0)
+                # stack then flatten() to interlace the two lists.
+                placeholder_indices_T = torch.stack([orig_placeholder_ind_T, cat_placeholder_ind_T], dim=1).flatten()
+                # The token indices in the class prompts are the 
+                # same as in the subject prompts. No offset is needed. 
+                placeholder_indices_T = placeholder_indices_T.repeat(2)
+                # placeholder_indices: 
+                # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
+                #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
+                placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
 
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if unet_layer_idx not in distill_layer_weights:
@@ -1683,44 +1674,39 @@ class LatentDiffusion(DDPM):
                 feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
-                # [4, 8, 256, 154] / [4, 8, 64, 154] =>
-                # [4, 154, 8, 256] / [4, 154, 8, 64]
-                # We don't need BP through attention into UNet.
-                attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2).detach()
-                # subj_attn: [8, 8, 256] / [8, 8, 64]
-                subj_attn = attn_mat[placeholder_indices]
-                # subjattn_subj_single, ...: [2, 8, 256]
-                subjattn_subj_single, subjattn_subj_comps, \
-                subjattn_cls_single,  subjattn_mix_comps \
-                    = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)
-                
-                # subjattn_subj_comps: [2, 8, 256] => [1, 2, 8, 256] 
-                # The 1 in dim 0 is HALF_BS, the batch size of each group of prompts.
-                # The 2 in dim 1 is the two occurrences of the subject tokens 
-                # in the comp mix prompts (or repeated single prompts).
-                subjattn_subj_comps = subjattn_subj_comps.reshape(HALF_BS, -1, *subjattn_subj_comps.shape[1:])
-                # [1, 2, 8, 256] => mean => [1, 256] => [1, 16, 16].
-                # Un-flatten the attention map to the spatial dimensions, so as to
-                # apply them as weights.
-                subjattn_subj_comps = subjattn_subj_comps.mean(dim=(1,2)).reshape(-1, *feat_subj_comps.shape[2:])
-
-                subjattn_mix_comps  = subjattn_mix_comps.reshape(HALF_BS, -1, *subjattn_mix_comps.shape[1:])
-                subjattn_mix_comps  = subjattn_mix_comps.mean(dim=(1,2)).reshape(-1, *feat_mix_comps.shape[2:])
-                subjattn_subj_single = subjattn_subj_single.reshape(HALF_BS, -1, *subjattn_subj_single.shape[1:])
-                subjattn_subj_single = subjattn_subj_single.mean(dim=(1,2)).reshape(-1, *feat_subj_single.shape[2:])
-                subjattn_cls_single  = subjattn_cls_single.reshape(HALF_BS, -1, *subjattn_cls_single.shape[1:])
-                subjattn_cls_single  = subjattn_cls_single.mean(dim=(1,2)).reshape(-1, *feat_mix_single.shape[2:])
-                breakpoint()
-
-                use_locality_chan_weights = False
+                use_locality_as_chan_weights = False
                 # chan_weights: [BS, 1280].
-                if use_locality_chan_weights:
+                if use_locality_as_chan_weights:
                     chan_weights = calc_chan_locality( torch.cat([feat_subj_single, feat_mix_single], dim=0) )
                     # calc_stats(chan_weights)
                     chan_weights = chan_weights.unsqueeze(0)
                 else:
                     chan_weights = 1
-                
+
+                if use_subj_attn_as_spatial_weights:
+                    # [4, 8, 256, 154] / [4, 8, 64, 154] =>
+                    # [4, 154, 8, 256] / [4, 154, 8, 64]
+                    # We don't need BP through attention into UNet.
+                    attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2).detach()
+                    # subj_attn: [8, 8, 256] / [8, 8, 64]
+                    subj_attn = attn_mat[placeholder_indices]
+                    # subj_attn_subj_single, ...: [2, 8, 256]
+                    subj_attn_subj_single, subj_attn_subj_comps, \
+                    subj_attn_mix_single,  subj_attn_mix_comps \
+                        = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)
+                    
+                    subj_single_spatial_weight = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
+                    subj_comps_spatial_weight  = convert_attn_to_spatial_weight(subj_attn_subj_comps,  HALF_BS, feat_subj_comps.shape[2:])
+                    mix_single_spatial_weight  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
+                    mix_comps_spatial_weight   = convert_attn_to_spatial_weight(subj_attn_mix_comps,   HALF_BS, feat_mix_comps.shape[2:])
+
+                    breakpoint()
+                    feat_subj_single = feat_subj_single * subj_single_spatial_weight
+                    feat_subj_comps  = feat_subj_comps  * subj_comps_spatial_weight
+                    feat_mix_single  = feat_mix_single  * mix_single_spatial_weight
+                    feat_mix_comps   = feat_mix_comps   * mix_comps_spatial_weight
+
+
                 # Pool the H, W dimensions to remove spatial information.
                 # After pooling, feat_subj_single, feat_subj_comps, 
                 # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...
@@ -1735,7 +1721,6 @@ class LatentDiffusion(DDPM):
                     # feat_subj_single = feat_subj_single.detach()
                     feat_mix_single  = feat_mix_single.detach()
                     feat_mix_comps   = feat_mix_comps.detach()
-
                 elif mix_grad_scale != 1:
                     grad_scaler = GradientScaler(mix_grad_scale)
                     # feat_subj_single = grad_scaler(feat_subj_single)
