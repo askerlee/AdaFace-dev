@@ -166,6 +166,7 @@ class CrossAttention(nn.Module):
             nn.Linear(inner_dim, query_dim),
             nn.Dropout(dropout)
         )
+        self.save_attn_mat = False
 
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -187,6 +188,9 @@ class CrossAttention(nn.Module):
 
         # attention, what we cannot get enough of
         attn = sim.softmax(dim=-1)
+
+        if self.save_attn_mat:
+            self.attn_mat = rearrange(attn, '(b h) i j -> b h i j', h=h)
 
         out = einsum('b i j, b j d -> b i d', attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)

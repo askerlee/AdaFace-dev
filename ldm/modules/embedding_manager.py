@@ -576,7 +576,6 @@ class EmbeddingManager(nn.Module):
         self.loss_call_count = 0
         # Store the embedder to compute the delta loss.
         self.embedder = embedder
-        self.token_weights = None
         self.ada_bp_to_unet = False
         print("EmbeddingManager initialized with layerwise_lora_rank={}, ada_emb_weight={}, placeholder_suffix={}".format(
                 layerwise_lora_rank, ada_emb_weight, placeholder_suffix))
@@ -627,7 +626,6 @@ class EmbeddingManager(nn.Module):
             # mirror-reflect the embedding along the layer dimension, to make it symmetric 
             # in the encoder & decoder.
 
-        self.token_weights = torch.ones(embedded_text.shape[0], n, 1, device=device)
         OCCUR = -1
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
@@ -669,9 +667,6 @@ class EmbeddingManager(nn.Module):
                 
                 embedded_text[placeholder_indices] = placeholder_embedding.repeat(OCCUR, 1)
                 # Mark where the placeholder token is replaced by the embedding.
-
-                self.token_weights[placeholder_indices] = self.subj_scale
-                self.placeholder_indices = copy.copy(placeholder_indices)
                 
                 # OCCUR is the real number of occurrences of placeholder. OCCUR <= b.
                 # The batch size b is usually small, so this loop is not a bottleneck.
@@ -696,6 +691,9 @@ class EmbeddingManager(nn.Module):
                         delta_loss_emb_mask[elem_idx][0][start_idx:end_idx] = 0
 
                 self.set_delta_loss_emb_mask(delta_loss_emb_mask)
+                # TODO: support multiple subject tokens.
+                self.placeholder_indices = copy.copy(placeholder_indices[:OCCUR])
+
             # *multi-vector latent space*: In this space, S* is embedded into multiple 
             # learned embeddings, an approach that is equivalent to describing
             # the concept through multiple learned pseudo-words. 
@@ -738,10 +736,6 @@ class EmbeddingManager(nn.Module):
                     embedded_text[row]  = new_embed_row
                     tokenized_text[row] = new_token_row
 
-        if OCCUR > 0:
-            # Remove repetitive copies, only keep the first copy of the weights.
-            self.token_weights = self.token_weights[:OCCUR]
-
         return embedded_text
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
@@ -769,8 +763,6 @@ class EmbeddingManager(nn.Module):
         if not self.use_layerwise_embedding:
             raise NotImplementedError("non-layerwise embedding not supported in get_ada_embedding().")
 
-        self.token_weights = torch.ones(embedded_text.shape[0], n, 1, device=device)
-
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             placeholder_embedder = self.string_to_ada_embedder_dict[placeholder_string].to(device)
             assert isinstance(placeholder_embedder, AdaEmbedding)
@@ -795,11 +787,6 @@ class EmbeddingManager(nn.Module):
             # larger than the number of instances containing the placeholder token. We need to index
             # placeholder_embedding with placeholder_indices[0] to get the matching new placeholder_embedding.
             embedded_text[placeholder_indices] = placeholder_embedding[placeholder_indices[0]]
-
-            # Mark where the placeholder token is replaced by the embedding.
-            self.token_weights[placeholder_indices] = self.subj_scale
-            # Only one copy. No need to remove repetitive copies like static layerwise embeddings.
-            # self.token_weights = self.token_weights[:OCCUR]
             
         return embedded_text
 

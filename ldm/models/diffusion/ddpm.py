@@ -751,8 +751,7 @@ class LatentDiffusion(DDPM):
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, init_ada_embedding_cache() should have been called somewhere.
         self.embedding_manager.cache_ada_embedding(layer_idx, c)
-        return (c, self.embedding_manager.get_ada_emb_weight(), 
-                self.embedding_manager.token_weights)
+        return c, self.embedding_manager.get_ada_emb_weight()
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)
@@ -1622,6 +1621,11 @@ class LatentDiffusion(DDPM):
             # unet_feats is a dict as: layer_idx -> unet_feat. 
             # It contains all the intermediate 25 layers of UNet features.
             unet_feats = cond[2]['unet_feats']
+            # unet_attns is a dict as: layer_idx -> attn_mat. 
+            # It contains the 4 specified conditioned layers of UNet attentions, 
+            # i.e., layers 7, 8, 12, 16.
+            unet_attns = cond[2]['unet_attns']
+
             # Discard top layers and the first few bottom layers from distillation.
             # distill_layer_weights: relative weight of each distillation layer. 
             # distill_layer_weights are normalized using distill_overall_weight.
@@ -1649,7 +1653,17 @@ class LatentDiffusion(DDPM):
                 chan_weights = torch.clip(feat_absmean / (feat_mean.abs() + 0.001), max=5)
                 chan_weights = chan_weights.detach() / chan_weights.mean()
                 return chan_weights.detach()
-                        
+
+            orig_placeholder_indices = self.embedding_manager.placeholder_indices
+            cat_placeholder_indices  = orig_placeholder_indices.clone()
+            # cat_placeholder_indices[0]: a list of instance indices in the batch.
+            # cat_placeholder_indices[1]: a list of token indices of the placeholder token.
+            cat_placeholder_indices[1] += 77
+            # stack -> flatten, to interlace the two lists.
+            placeholder_indices_B = torch.stack([orig_placeholder_indices, cat_placeholder_indices], dim=1).flatten()
+            placeholder_indices_T = torch.stack([cat_placeholder_indices, orig_placeholder_indices], dim=1).flatten()
+            placeholder_indices   = (placeholder_indices_B.flatten(), placeholder_indices_T.flatten())
+
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if unet_layer_idx not in distill_layer_weights:
                     continue
@@ -1658,23 +1672,24 @@ class LatentDiffusion(DDPM):
                 feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
-                learn_chan_weights = False
-                # chan_weights: [BS, 1280] or [BS, 640].
-                # If learn_chan_weights, channels that are too different between mix and single features
-                # will be given smaller weights. This may help keep the learned subject characteristics?
-                if learn_chan_weights:
-                    # unet_mix_chan_weights are learnable weights that are optimized to minimize
-                    # the CLIP loss. 
-                    # They are put in the embedding_manager, so that we don't need to
-                    # explicitly add them to the optimizer.
-                    chan_weights = self.embedding_manager.unet_mix_chan_weights[str(unet_layer_idx)]
-                    # normalize chan_weights to sum to 1.
-                    chan_weights = chan_weights / chan_weights.sum()
-                else:
+                # [4, 8, 4096, 154] / [4, 8, 1024, 154] / [4, 8, 256, 154] =>
+                # [4, 154, 8, 4096] / [4, 154, 8, 1024] / [4, 154, 8, 256]
+                attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
+                # subj_attn: [4, ]
+                subj_attn = attn_mat[placeholder_indices]
+
+                attn_subj_single, attn_subj_comps, attn_cls_single, attn_mix_comps \
+                    = torch.split(attn_mat, attn_mat.shape[0] // 4, dim=0)
+                
+                use_locality_chan_weights = False
+                # chan_weights: [BS, 1280].
+                if use_locality_chan_weights:
                     chan_weights = calc_chan_locality( torch.cat([feat_subj_single, feat_mix_single], dim=0) )
                     # calc_stats(chan_weights)
                     chan_weights = chan_weights.unsqueeze(0)
-
+                else:
+                    pass
+                
                 # Pool the H, W dimensions to remove spatial information.
                 # After pooling, feat_subj_single, feat_subj_comps, 
                 # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...

@@ -724,6 +724,8 @@ class UNetModel(nn.Module):
         ), "must specify y if and only if the model is class-conditional"
         hs = []
         hs2 = {}
+        attns = {}
+
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
         use_layerwise_context = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
@@ -760,7 +762,7 @@ class UNetModel(nn.Module):
                 ada_embedder   = extra_info['ada_embedder']
                 ada_bp_to_unet = extra_info.get('ada_bp_to_unet', False)
                 # emb: time embedding. h: features from the previous layer.
-                layer_ada_context, ada_emb_weight, token_weights \
+                layer_ada_context, ada_emb_weight \
                     = ada_embedder(context_in, layer_idx, h, emb, ada_bp_to_unet)
                 static_emb_weight = 1 - ada_emb_weight
 
@@ -817,27 +819,47 @@ class UNetModel(nn.Module):
         else:
             sync_blocks_01_layer_idx = -1
 
+        save_attn_layer_indices = [7, 8, 12, 16]
+
         for module in self.input_blocks:
             if iter_type =='do_comp_prompt_mix_reg' and layer_idx == sync_blocks_01_layer_idx:
                 h = sync_blocks_01(h)
 
             layer_context = get_layer_context(layer_idx, h)
+
+            if iter_type =='do_comp_prompt_mix_reg' and layer_context in save_attn_layer_indices:
+                module[1].transformer_blocks[0].attn2.save_attn_mat = True
+
             # layer_context: [2, 77, 768], conditioning embedding.
             # emb: [2, 1280], time embedding.
             h = module(h, emb, layer_context)
             hs.append(h)
             if iter_type =='do_comp_prompt_mix_reg':
                 hs2[layer_idx] = h
+
+                if layer_context in save_attn_layer_indices:
+                    attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
+                    module[1].transformer_blocks[0].attn2.save_attn_mat = False
+
             layer_idx += 1
         
         if iter_type =='do_comp_prompt_mix_reg' and layer_idx == sync_blocks_01_layer_idx:
             h = sync_blocks_01(h)
 
         layer_context = get_layer_context(layer_idx, h)
+
+        if iter_type =='do_comp_prompt_mix_reg' and layer_context in save_attn_layer_indices:
+            self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = True
+
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, layer_context)
         if iter_type =='do_comp_prompt_mix_reg':
             hs2[layer_idx] = h
+
+            if layer_context in save_attn_layer_indices:
+                attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
+                module[1].transformer_blocks[0].attn2.save_attn_mat = False
+
         layer_idx += 1
 
         # 14 [2, 1280, 8,  8]
@@ -858,13 +880,23 @@ class UNetModel(nn.Module):
 
             layer_context = get_layer_context(layer_idx, h)
             h = th.cat([h, hs.pop()], dim=1)
+
+            if iter_type =='do_comp_prompt_mix_reg' and layer_context in save_attn_layer_indices:
+                module[1].transformer_blocks[0].attn2.save_attn_mat = True
+
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
             if iter_type =='do_comp_prompt_mix_reg':
                 hs2[layer_idx] = h
+
+                if layer_context in save_attn_layer_indices:
+                    attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
+                    module[1].transformer_blocks[0].attn2.save_attn_mat = False
+
             layer_idx += 1
 
         extra_info['unet_feats'] = hs2
+        extra_info['unet_attns'] = attns
 
         # [2, 320, 64, 64]
         h = h.type(x.dtype)
