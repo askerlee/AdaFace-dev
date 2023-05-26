@@ -613,9 +613,10 @@ class EmbeddingManager(nn.Module):
         delta_loss_emb_mask  = (tokenized_text != 49406 ) & (tokenized_text != 49407)
         # [b, n] => [b, 1, n, 1]
         delta_loss_emb_mask  = delta_loss_emb_mask.float().unsqueeze(1).unsqueeze(3)
+        orig_tokenized_text = tokenized_text
 
         if self.use_layerwise_embedding:
-            # embedded_text: [B, 16, N, 768] => [16*B, N, 768].
+            # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
             # "Tuck" the layer dimension into the batch dimension, 
             # to keep embedded_text in 3D, same as the input.
             embedded_text = embedded_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1, 1).view(b * self.num_unet_layers, n, -1)
@@ -626,7 +627,7 @@ class EmbeddingManager(nn.Module):
             # mirror-reflect the embedding along the layer dimension, to make it symmetric 
             # in the encoder & decoder.
 
-        OCCUR = -1
+        REAL_OCCUR = -1
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             placeholder_embedding = self.string_to_param_dict[placeholder_string].to(device)
@@ -643,7 +644,7 @@ class EmbeddingManager(nn.Module):
                 # No placeholder token is found in the current batch.
                 if placeholder_indices[0].numel() == 0:
                     continue
-
+                
                 # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
                 # Non-layerwise: embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [1, 768].
                 # layerwise: placeholder_indices =  
@@ -659,18 +660,22 @@ class EmbeddingManager(nn.Module):
                 # Possible BUG: if the placeholder appears in > 1 times in one prompt, then the 
                 # filling order may be wrong. Check in the future.
                 if self.use_layerwise_embedding:
-                    # OCCUR: the actual number of occurrences of the placeholder in the current batch,
+                    # REAL_OCCUR: the real number of occurrences of the placeholder in the current batch,
                     # not repetitively counting the occurrences in the embedded_text repeated for M layers.
-                    OCCUR = placeholder_indices[0].numel() // self.num_unet_layers
+                    REAL_OCCUR = placeholder_indices[0].numel() // self.num_unet_layers
                 else:
-                    OCCUR = placeholder_indices[0].numel()
+                    REAL_OCCUR = placeholder_indices[0].numel()
                 
-                embedded_text[placeholder_indices] = placeholder_embedding.repeat(OCCUR, 1)
+                embedded_text[placeholder_indices] = placeholder_embedding.repeat(REAL_OCCUR, 1)
                 # Mark where the placeholder token is replaced by the embedding.
                 
-                # OCCUR is the real number of occurrences of placeholder. OCCUR <= b.
+                # The placeholder_indices above are on the x16 repeated tokenized_text.
+                # So we find the original placeholder_indices by search placeholder_token
+                # within orig_tokenized_text.
+                placeholder_indices = torch.where(orig_tokenized_text == placeholder_token.to(device))
+                # REAL_OCCUR is the real number of occurrences of placeholder. REAL_OCCUR <= b.
                 # The batch size b is usually small, so this loop is not a bottleneck.
-                for i in range(OCCUR):
+                for i in range(REAL_OCCUR):
                     elem_idx  = placeholder_indices[0][i]
                     start_idx = placeholder_indices[1][i] + 1
                     try:
@@ -692,7 +697,7 @@ class EmbeddingManager(nn.Module):
 
                 self.set_delta_loss_emb_mask(delta_loss_emb_mask)
                 # TODO: support multiple subject tokens.
-                self.placeholder_indices = copy.copy(placeholder_indices[:OCCUR])
+                self.placeholder_indices = copy.copy(placeholder_indices)
 
             # *multi-vector latent space*: In this space, S* is embedded into multiple 
             # learned embeddings, an approach that is equivalent to describing

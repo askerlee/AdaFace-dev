@@ -827,7 +827,7 @@ class UNetModel(nn.Module):
 
             layer_context = get_layer_context(layer_idx, h)
 
-            if iter_type =='do_comp_prompt_mix_reg' and layer_context in save_attn_layer_indices:
+            if iter_type =='do_comp_prompt_mix_reg' and layer_idx in save_attn_layer_indices:
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
 
             # layer_context: [2, 77, 768], conditioning embedding.
@@ -837,7 +837,7 @@ class UNetModel(nn.Module):
             if iter_type =='do_comp_prompt_mix_reg':
                 hs2[layer_idx] = h
 
-                if layer_context in save_attn_layer_indices:
+                if layer_idx in save_attn_layer_indices:
                     attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
 
@@ -848,7 +848,7 @@ class UNetModel(nn.Module):
 
         layer_context = get_layer_context(layer_idx, h)
 
-        if iter_type =='do_comp_prompt_mix_reg' and layer_context in save_attn_layer_indices:
+        if iter_type =='do_comp_prompt_mix_reg' and layer_idx in save_attn_layer_indices:
             self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = True
 
         # 13 [2, 1280, 8, 8]
@@ -856,9 +856,9 @@ class UNetModel(nn.Module):
         if iter_type =='do_comp_prompt_mix_reg':
             hs2[layer_idx] = h
 
-            if layer_context in save_attn_layer_indices:
-                attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
-                module[1].transformer_blocks[0].attn2.save_attn_mat = False
+            if layer_idx in save_attn_layer_indices:
+                attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.attn_mat 
+                self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = False
 
         layer_idx += 1
 
@@ -881,7 +881,7 @@ class UNetModel(nn.Module):
             layer_context = get_layer_context(layer_idx, h)
             h = th.cat([h, hs.pop()], dim=1)
 
-            if iter_type =='do_comp_prompt_mix_reg' and layer_context in save_attn_layer_indices:
+            if iter_type =='do_comp_prompt_mix_reg' and layer_idx in save_attn_layer_indices:
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
 
             # layer_context: [2, 77, 768], emb: [2, 1280].
@@ -889,7 +889,7 @@ class UNetModel(nn.Module):
             if iter_type =='do_comp_prompt_mix_reg':
                 hs2[layer_idx] = h
 
-                if layer_context in save_attn_layer_indices:
+                if layer_idx in save_attn_layer_indices:
                     attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
 
