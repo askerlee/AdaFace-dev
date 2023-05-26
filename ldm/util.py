@@ -379,7 +379,7 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     # Un-flatten the attention map to the spatial dimensions, so as to
     # apply them as weights.
     # Max among the 8 heads, then mean across the 2 occurrences of the subject tokens.
-    spatial_attn = flat_attn.max(dim=2)[0].mean(dim=1).reshape(-1, *spatial_shape)
+    spatial_attn = flat_attn.mean(dim=2).mean(dim=1).reshape(-1, *spatial_shape)
     attn_mean, attn_std = spatial_attn.mean(dim=(1,2), keepdim=True), spatial_attn.std(dim=(1,2), keepdim=True)
     # Convert spatial_attn with mean and std, so that mean attn values are 1, 
     # and mean + x*std = exp(-x), i.e., the higher the attention value, the lower the weight.
@@ -388,7 +388,7 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     # Normalize spatial_weight so that the average weight is 1.
     spatial_weight = spatial_weight / spatial_weight.mean()
     spatial_weight = spatial_weight.unsqueeze(1)
-    
+
     return spatial_weight
 
 # Revised from RevGrad, by removing the grad negation.
