@@ -337,8 +337,12 @@ if __name__ == "__main__":
         else:
             scores = np.array(scores)
             sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = np.mean(scores[:, 1:], axis=0)
-            # Skip 0 face similarity scores, as they are probably not on humans.
-            sims_face_avg = np.mean(scores[:, 0][scores[:, 0] > 0])
+            if np.sum(scores[:, 0] > 0) > 0:
+                # Skip 0 face similarity scores, as they are probably not on humans.
+                sims_face_avg = np.mean(scores[:, 0][scores[:, 0] > 0])
+            else:
+                sims_face_avg = 0
+
             print(f"All subjects mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
             print(f"Face exception: {except_img_percent*100:.1f}%")
 
