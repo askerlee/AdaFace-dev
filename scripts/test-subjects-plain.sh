@@ -24,7 +24,7 @@ set -q _flag_ckptiter; and set ckpt_iter $_flag_ckptiter; or set ckpt_iter 4000
 set -q argv[2]; and set L $argv[2]; or set L 1
 set -q argv[3]; and set H $argv[3]; or set H 25
 
-set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file scripts/info-subjects.sh
+set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file evaluation/info-subjects.sh
 # Read the subject list by fish shell.
 fish $subj_file
 

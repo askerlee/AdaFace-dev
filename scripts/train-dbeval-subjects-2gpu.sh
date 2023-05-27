@@ -14,7 +14,7 @@ end
 
 set EXTRA_ARGS $argv[2..-1]
 
-set info_file scripts/info-dbeval-subjects.sh
+set info_file evaluation/info-dbeval-subjects.sh
 
 if set -q _flag_selset
     fish $info_file

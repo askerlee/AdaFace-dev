@@ -1,7 +1,7 @@
 import argparse, os
 import numpy as np
 
-from scripts.eval_utils import init_evaluators, compare_folders, parse_subject_file, parse_range_str
+from evaluation.eval_utils import init_evaluators, compare_folders, parse_subject_file, parse_range_str
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -25,7 +25,7 @@ def parse_args():
     parser.add_argument(
         "--subject_file",
         type=str,
-        default="scripts/info-dbeval-subjects.sh",
+        default="evaluation/info-dbeval-subjects.sh",
         help="File with subjects to evaluate"
     )
     parser.add_argument(

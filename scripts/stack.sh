@@ -1,6 +1,5 @@
 #!/usr/bin/fish
 set scriptname (status -f)
-
 if test (count $argv) -lt 1
  echo "Usage: $scriptname file1 file2 ..."
  exit

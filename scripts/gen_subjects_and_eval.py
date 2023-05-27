@@ -3,7 +3,7 @@ import os
 import re
 import numpy as np
 import csv
-from scripts.eval_utils import parse_subject_file, parse_range_str, get_promt_list, find_first_match
+from evaluation.eval_utils import parse_subject_file, parse_range_str, get_promt_list, find_first_match
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -59,7 +59,7 @@ def parse_args():
                         help="CSV file to save the evaluation scores")
     
     # File path containing composition case information
-    parser.add_argument("--subjfile", type=str, default="scripts/info-subjects.sh", 
+    parser.add_argument("--subjfile", type=str, default="evaluation/info-subjects.sh", 
                         help="subject info script file")
     # The range of indices of subjects to generate
     parser.add_argument("--range", type=str, default=None, 
@@ -334,7 +334,9 @@ if __name__ == "__main__":
             print(f"Error: no scores found in {args.scores_csv}.")
         else:
             scores = np.array(scores)
-            sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = np.mean(scores, axis=0)
+            sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = np.mean(scores[:, 1:], axis=0)
+            # Skip 0 face similarity scores, as they are probably not on humans.
+            sims_face_avg = np.mean(scores[:, 0][scores[:, 0] > 0])
             print(f"All subjects mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
             print(f"Face exception: {except_img_percent*100:.1f}%")
 

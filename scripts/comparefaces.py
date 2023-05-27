@@ -1,7 +1,7 @@
 import os
 import argparse
 import time
-from eval_utils import compare_face_folders, set_tf_gpu
+from evaluation.eval_utils import compare_face_folders, set_tf_gpu
 
 def parse_args():
     parser = argparse.ArgumentParser()

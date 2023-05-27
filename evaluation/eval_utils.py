@@ -8,6 +8,7 @@ import numpy as np
 from ldm.data.personalized import PersonalizedBase
 from evaluation.clip_eval import ImageDirEvaluator
 from evaluation.vit_eval import ViTEvaluator
+from evaluation.hard_compositional_prompts import hard_prompt_list
 from deepface import DeepFace
 from deepface.commons import functions as deepface_functions
 
@@ -430,9 +431,8 @@ def get_promt_list(placeholder, z_prefix, z_suffix, class_token,
     'a cube shaped {0}{1}'
     ]
 
-    animal_hard_prompt_indices = [ 1, 3, 4, 5, 8, 9, 13, 15, 16, 23 ]
     if subset == 'hard':
-        animal_prompt_list = [ animal_prompt_list[i] for i in animal_hard_prompt_indices ]
+        animal_prompt_list = [ prompt.replace("{}", "{0}{1}") for prompt in hard_prompt_list ]
         
     # humans/animals and cartoon characters.
     if broad_class == 1 or broad_class == 2:

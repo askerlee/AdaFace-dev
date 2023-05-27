@@ -18,7 +18,7 @@ from contextlib import nullcontext
 from ldm.util import instantiate_from_config, mix_embeddings
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
-from scripts.eval_utils import compare_folders, compare_face_folders, \
+from evaluation.eval_utils import compare_folders, compare_face_folders, \
                                 init_evaluators, set_tf_gpu
 
 def parse_args():

@@ -6,7 +6,7 @@ echo $self $argv
 argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'cls_token_as_delta' 'cls_token_as_distill' 'use_z_suffix' 'ema' 'v14' -- $argv
 or begin
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
-    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
+    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
 
@@ -14,11 +14,11 @@ if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
-    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile scripts/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
+    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
 
-set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file scripts/info-subjects.sh
+set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file evaluation/info-subjects.sh
 fish $subj_file; or exit 1
 
 set -q _flag_gpu; and set GPU $_flag_gpu; or set GPU 0
