@@ -263,6 +263,8 @@ if __name__ == "__main__":
             print("  ", prompt)
             if args.prompt is None:
                 indiv_subdir = subject_name + "-" + prompt.replace(" ", "-")
+                # In case some folder names are extremely long, truncate to 80 characters.
+                indiv_subdir = indiv_subdir[:80]
                 # class_short_prompt, class_long_prompt are saved in the prompt file as well.
                 # class_long_prompt is used for the CLIP text/image similarity evaluation.
                 # class_short_prompt is not used.

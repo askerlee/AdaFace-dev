@@ -1,6 +1,7 @@
 hard_prompt_list = [
 "{} as aikido teacher, clear face, casual, white training clothes with black hakama and black belt, loose hair, photorealistic detailed, intricate, cinematic lighting, 8k, focused, extreme details, super resolution, wind, realistic",
 "{} underwater surrounded by tropical fish and coral reefs",
+"a happy {} catching a tennis ball underwater, clear face, closeup shot in the style of Seth Casteel, highly detailed underwater photography",
 "{} in a red dress traveling in indonesia, clear face",
 "{} smelling a flower, roses everywhere, highly detailed, digital painting, artstation, concept art, smooth, sharp focus, illustration, art by artgerm and greg rutkowski and alphonse mucha",
 "portrait of a {} wearing a green satin dress with fine gold filigree, autumn leaves falling, dramatic volumetric lighting, god rays, global illumination, soft, sharp focus, ivy, masterpiece, moss, trending on artstation, concept art by artgerm and Alphonse Mucha and Greg Rutkowski and Ryan Lang",
@@ -15,7 +16,6 @@ hard_prompt_list = [
 "a portrait of a {}, clear face, posing with a tabby cat, by justin gerard and greg rutkowski, digital art, realistic painting, dnd, character design, trending on artstation",
 "{} dressed as mario, digital art, hyperdetailed, illustration, trending on artstation, matte painting, CGSociety, pinterest",
 "{} leading an army on a holy war on Mars, clear face",
-"a happy {} catching a tennis ball underwater, clear face, closeup shot in the style of Seth Casteel, highly detailed underwater photography",
 "{} wearing dune costume, closeup, in a rocky desert landscape, from the movie dune",
 "{} wearing blue silk dress diamond studded lily iris flowers, clear face, fashion model style, high resolution, realistic anatomy photography",
 "{} wearing creative jewel suit with high collar and purple blue gemstone wings and glass crown, fashion model style, high resolution, realistic anatomy photography",
