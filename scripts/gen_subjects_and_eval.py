@@ -55,7 +55,7 @@ def parse_args():
     
     parser.add_argument("--out_dir_tmpl", type=str, default="samples-dbeval",
                         help="Template of parent directory to save generated samples")
-    parser.add_argument("--scores_csv", type=str, default="scores.csv",
+    parser.add_argument("--scores_csv", type=str, default=None,
                         help="CSV file to save the evaluation scores")
     
     # File path containing composition case information
@@ -133,10 +133,12 @@ if __name__ == "__main__":
     # Sort all_ckpts by modification time, most recent first.
     all_ckpts.sort(key=lambda x: os.path.getmtime(os.path.join(args.ckpt_dir, x)), reverse=True)
 
-    # Create scores_csv file. If it exists, overwrite it.
-    if args.scores_csv is not None:
-        SCORES_CSV_FILE = open(args.scores_csv, "w")
-        SCORES_CSV_FILE.close()
+    if args.scores_csv is None:
+        args.scores_csv = f"{args.method}-{args.range}.csv"
+
+    # Ty to create scores_csv file. If it already exists, make it empty.
+    SCORES_CSV_FILE = open(args.scores_csv, "w")
+    SCORES_CSV_FILE.close()
 
     for subject_idx in subject_indices:
         if args.skipselset and subject_idx in sel_set:
