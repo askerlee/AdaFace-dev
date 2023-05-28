@@ -365,12 +365,15 @@ class AdaEmbedding(nn.Module):
             # and the last dimensions tend to be the same for all time steps.
             # TD is C_layer/2, so that the time embeddings won't dominate the image features infeat_pooled.
             TD = self.TDs[emb_idx]
+            
+            ablate_time = True
+            if ablate_time:
+                time_feat = torch.zeros_like(time_emb[:, :TD])
+            else:
+                time_feat = time_emb[:, :TD]
+
             # cat(ln(infeat_pooled), ln(time_emb)) as the input features.
-            infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled_gradscaled, 
-                                                           # ablation of time_emb
-                                                           torch.zeros_like(time_emb[:, :TD])  
-                                                           #time_emb[:, :TD]
-                                                           )
+            infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled_gradscaled, time_feat)
             basis_dyn_weight = self.layer_maps[emb_idx](infeat_time)
             # bias: [1, 768]
             bias = self.bias[emb_idx].unsqueeze(0)
