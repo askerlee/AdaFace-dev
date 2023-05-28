@@ -13,9 +13,10 @@ hard_prompt_list = [
 "{} having a cup of coffee",
 "{} surfing on the sea, clear face",
 "astronaut {} in the outer space",
-"{} as gandalf the grey, with wizard hat and robe, from the movie of lord of the rings, hdr, cinematic shot",
+# {class_long_token} is a more verbose version of the subject class.
+"{} {class_long_token} as young gandalf with wizard hat and robe, from the movie of lord of the rings, hdr, cinematic shot",
 "{} as a jedi with lightsaber, star wars, by artgerm and moebius, beautiful, hyperrealism, highly detailed, 8k, intricate, closeup, dynamic dramatic dark moody lighting, shadows, artstation, concept art, octane render, 8k",
-"{} dressed as mario, digital art, hyperdetailed, illustration, trending on artstation, matte painting, CGSociety, pinterest",
+"portrait of {} {class_long_token} dressed as mario in super mario bros movie 1993, concept art",
 "portrait of {} wearing iron man armor while using infinity stones",
 "{} wearing dune costume, closeup, in a rocky desert landscape, from the movie dune",
 "{} wearing blue silk robe diamond studded lily iris flowers, clear face, fashion model style, high resolution, realistic anatomy photography",

@@ -13,12 +13,12 @@ def parse_args():
                         help="method to use for generating samples")
     parser.add_argument("--placeholder", type=str, default="z", 
                         help="placeholder token for the subject")
-    # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.
     parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
     
     parser.add_argument("--prompt", type=str, default=None,
                         help="Prompt to use for generating samples, using {} for placeholder (default: None)")
+    # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.
     parser.add_argument("--z_suffix_type", default=argparse.SUPPRESS, 
                         help="Append this string to the subject placeholder token during inference "
                              "(default: '' for humans/animals, 'class_token' for others)")
