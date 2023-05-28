@@ -441,17 +441,18 @@ def get_promt_list(placeholder, z_prefix, z_suffix, class_token,
         # object.
         orig_prompt_list = object_prompt_list
 
-    if len(z_prefix) > 0:
-        placeholder      = z_prefix + " " + placeholder
-        class_token      = z_prefix + " " + class_token
-        class_long_token = z_prefix + " " + class_long_token
-    
-    # Do not append class_long_token after the placeholder, if z_suffix is provided.
+    # If z_suffix is provided, do not append class_long_token after the placeholder
     if len(z_suffix) > 0:
         class_long_token2 = ""
     else:
         class_long_token2 = class_long_token
 
+    # z_prefix is usually "portrait of"
+    if len(z_prefix) > 0:
+        placeholder      = z_prefix + " " + placeholder
+        class_token      = z_prefix + " " + class_token
+        class_long_token = z_prefix + " " + class_long_token
+    
     prompt_list            = [ prompt.format(placeholder, z_suffix, class_long_token=class_long_token2) for prompt in orig_prompt_list ]
     orig_short_prompt_list = [ prompt.format("", class_token, class_long_token="")       for prompt in orig_prompt_list ]
     orig_long_prompt_list  = [ prompt.format("", class_long_token, class_long_token="")  for prompt in orig_prompt_list ]
