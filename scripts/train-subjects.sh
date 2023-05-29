@@ -10,7 +10,7 @@ or begin
     exit 1
 end
 
-if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
+if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'static-layerwise' ]; or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
@@ -67,8 +67,8 @@ for i in $indices
     set db_prompt0 "$db_prompts[$i]"
     set db_prompt  "$db_prompt0$db_suffix"
 
-    if [ $method = 'ti' ]; or [ $method = 'ada' ]
-        if [ $method = 'ada' ]
+    if [ $method = 'ti' ]; or [ $method = 'ada' ]; or [ $method = 'static-layerwise' ]
+        if [ $method = 'ada' ]; or [ $method = 'static-layerwise' ]
             set initword $ada_prompt
             set init_word_weights $ada_weight
         else

@@ -366,7 +366,7 @@ class AdaEmbedding(nn.Module):
             # TD is C_layer/2, so that the time embeddings won't dominate the image features infeat_pooled.
             TD = self.TDs[emb_idx]
             
-            ablate_time = True
+            ablate_time = False
             if ablate_time:
                 time_feat = torch.zeros_like(time_emb[:, :TD])
             else:
