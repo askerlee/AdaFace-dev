@@ -35,7 +35,7 @@ set -g are_faces           $are_faces
 set -g sel_set             $sel_set
 set -g lrs                 $lrs
 # No suffix for the DreamBooth eval set, as they are objects/animals, as opposed to faces.
-set -Ux db_suffix           ""
-set -Ux z_prefixes          $z_prefixes
-set -Ux maxiters            $maxiters
-set -Ux data_folder         ti-dataset
+set -g db_suffix           ""
+set -g z_prefixes          $z_prefixes
+set -g maxiters            $maxiters
+set -g data_folder         ti-dataset
