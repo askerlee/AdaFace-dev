@@ -26,7 +26,7 @@ set -q argv[3]; and set H $argv[3]; or set H 25
 
 set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file evaluation/info-subjects.sh
 # Read the subject list by fish shell.
-fish $subj_file
+source $subj_file
 
 set outdir samples-$method
 if [ "$argv[1]" = 'db' ]

@@ -25,17 +25,6 @@ set -l maxiters       3500       4000              3500
 # Individual LR for each class in the broad classes, according to their difficulties / inherent complexity.
 # A prefix of "portrait of" for animals/humans suggests SD to focus on the face area of the subject.
 
-set -Ux subjects            $subjects
-set -Ux db_prompts          $db_prompts
-set -Ux ada_prompts         $ada_prompts
-set -Ux ada_weights         $ada_weights
-set -Ux cls_tokens          $cls_tokens
-set -Ux broad_classes       $broad_classes
-set -Ux are_faces           $are_faces
-set -Ux sel_set             $sel_set
-set -Ux lrs                 $lrs
 # No suffix for the DreamBooth eval set, as they are objects/animals, as opposed to faces.
-set -Ux db_suffix           ""
-set -Ux z_prefixes          $z_prefixes
-set -Ux maxiters            $maxiters
-set -Ux data_folder         ti-dataset
+set db_suffix           ""
+set data_folder         ti-dataset

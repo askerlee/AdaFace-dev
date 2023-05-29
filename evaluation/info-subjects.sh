@@ -21,17 +21,6 @@ set -l maxiters       3500       4500              3500
 
 # donnieyen jenniferlawrence jiffpom lilbub lisa michelleyeoh selenagomez smitrimandhana taylorswift zendaya
 set -l sel_set              4 8 9 11 12 14 18 19 22 25
-set -Ux subjects            $subjects
-set -Ux db_prompts          $db_prompts
-set -Ux ada_prompts         $ada_prompts
-set -Ux ada_weights         $ada_weights
-set -Ux cls_tokens          $cls_tokens
-set -Ux broad_classes       $broad_classes
-set -Ux are_faces           $are_faces
-set -Ux sel_set             $sel_set
-set -Ux lrs                 $lrs
 # "instagram" for the main dataset, to focus on faces.
-set -Ux db_suffix           ", instagram"
-set -Ux z_prefixes          $z_prefixes
-set -Ux maxiters            $maxiters
-set -Ux data_folder         data
+set db_suffix           ", instagram"
+set data_folder         data
