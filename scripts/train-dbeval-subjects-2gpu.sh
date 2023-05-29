@@ -17,7 +17,7 @@ set EXTRA_ARGS $argv[2..-1]
 set info_file evaluation/info-dbeval-subjects.sh
 
 if set -q _flag_selset
-    fish $info_file
+    source $info_file
     if not set -q _flag_selset
         echo "Error: 'sel_set' is not specified in $info_file."
         exit 1
