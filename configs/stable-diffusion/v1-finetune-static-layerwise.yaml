@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1e-03
+  base_learning_rate: 8e-04
   weight_decay: 0.0
 
   target: ldm.models.diffusion.ddpm.LatentDiffusion
@@ -14,6 +14,9 @@ model:
     cond_stage_key: caption
     image_size: 64
     channels: 4
+    # cond_stage_trainable has no effect, as it's checked within ddpm.instantiate_cond_stage().
+    # After this call, the model sets requires_grad=False for all params of cond_stage (CLIP encoder) 
+    # after seeing unfreeze_model = False.
     cond_stage_trainable: true   # Note: different from the one we trained before
     conditioning_key: crossattn
     monitor: val/loss_simple_ema
@@ -24,19 +27,28 @@ model:
     model_lr: 0.0
     use_layerwise_embedding: True
     use_ada_embedding: False
-    composition_delta_reg_iter_gap: 5
-    composition_delta_reg_weight: 0.005
+    # composition_regs includes composition_delta_reg and composition_prompt_mix_reg.
+    composition_regs_iter_gap: 5
+    # typical delta reg loss: 0.75, * weight -> 7.5e-5
+    composition_delta_reg_weight:       0.0001
+    # typical prompt mix reg loss: 0.2, * weight -> 2e-5.
+    composition_prompt_mix_reg_weight:  0.0001
+    cls_prompt_mix_weight_max:  0.4
+    # typical clip text loss: 0.3, * weight -> 3e-4.
+    clip_text_loss_weight:      0.001
+
+    optimizer_type: AdamW     # sophia
 
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:
         verbosity_interval: 0
         warm_up_steps: 500
-        # max_decay_steps = max_steps = 4000. The final LR is 0.2*base_lr.
-        max_decay_steps: 4000
+        # max_decay_steps = max_steps = 4500. The final LR is 0.2*base_lr.
+        max_decay_steps: 4500
         lr_start: 0.01
         lr_max: 1.0
-        lr_min: 0.2
+        lr_min: 0.25
 
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
@@ -45,12 +57,14 @@ model:
         initializer_words: ["sculpture"]
         initializer_weights: [ None ]
         # Negative prompts lead to worse images.
-        initializer_neg_words: [ ]        # "poor bad ugly"
+        initializer_neg_words: [ ]
         num_vectors_per_token: 1
         progressive_words: False
         use_layerwise_embedding: True
-        layerwise_lora_rank_token_ratio: 3
-        composition_delta_reg_iter_gap: 5
+        layerwise_lora_rank_token_ratio: 2
+        # composition_regs alternates between composition_delta_reg and composition_prompt_mix_reg.
+        # So composition_delta_reg_iter_gap = 2 * composition_regs_iter_gap = 10.
+        composition_delta_reg_iter_gap: 10
         
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
@@ -94,23 +108,26 @@ model:
 
     cond_stage_config:
       target: ldm.modules.encoders.modules.FrozenCLIPEmbedder
+      params:
+        last_layer_skip_weight: 0.5
+
 
 data:
   target: main.DataModuleFromConfig
   params:
     batch_size: 2
-    num_workers: 2
+    num_workers: 4
     wrap: false
     train:
       target: ldm.data.personalized.PersonalizedBase
       params:
-        size: 512
+        size: 512       # Image resolution
         set: train
         repeats: 100
     validation:
       target: ldm.data.personalized.PersonalizedBase
       params:
-        size: 512
+        size: 512       # Image resolution
         set: val
         repeats: 10
 
@@ -122,10 +139,10 @@ lightning:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 1201
+        batch_frequency: 8000     # 8000 > max_steps = 4500, effectively disabling image logger.
         max_images: 8
         increase_log_steps: False
 
   trainer:
     benchmark: True
-    max_steps: 4000
+    max_steps: 4500
