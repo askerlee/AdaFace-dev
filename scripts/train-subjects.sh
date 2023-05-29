@@ -113,8 +113,16 @@ for i in $indices
         python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_ARGS1
 
         if set -q _flag_eval
-            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl samples  --compare_with_pardir $data_folder --range $i
+            if $data_folder = 'dbeval-dataset'
+                set out_dir_tmpl 'samples-dbeval'
+            elif $data_folder = 'ti-dataset'
+                set out_dir_tmpl 'samples-tieval'
+            else
+                set out_dir_tmpl 'samples'
+            end
+            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i
         end
+
     else
         echo $subject: $db_prompt
 
