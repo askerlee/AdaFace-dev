@@ -3,9 +3,9 @@
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'cls_token_as_delta' 'cls_token_as_distill' 'use_z_suffix' 'ema' 'v14' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'cls_token_as_delta' 'cls_token_as_distill' 'use_z_suffix' 'eval' 'ema' 'v14' -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -13,7 +13,7 @@ end
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'static-layerwise' ]; or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -111,6 +111,10 @@ for i in $indices
         echo $subject: --init_word $initword $EXTRA_ARGS1
         set fish_trace 1
         python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_ARGS1
+
+        if set -q _flag_eval
+            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl samples  --compare_with_pardir $data_folder --range $i
+        end
     else
         echo $subject: $db_prompt
 
