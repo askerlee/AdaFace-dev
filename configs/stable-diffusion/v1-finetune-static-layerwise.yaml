@@ -44,7 +44,7 @@ model:
       params:
         verbosity_interval: 0
         warm_up_steps: 500
-        # max_decay_steps = max_steps = 4500. The final LR is 0.2*base_lr.
+        # max_decay_steps = max_steps = 4500. The final LR is 0.25*base_lr.
         max_decay_steps: 4500
         lr_start: 0.01
         lr_max: 1.0
