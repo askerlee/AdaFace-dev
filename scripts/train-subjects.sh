@@ -19,7 +19,11 @@ else
 end
 
 set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file evaluation/info-subjects.sh
-source $subj_file; or exit 1
+if ! test -e $subj_file
+    echo "Error: Subject file '$subj_file' does not exist."
+    exit 1
+end
+source $subj_file
 
 set -q _flag_gpu; and set GPU $_flag_gpu; or set GPU 0
 # BUGGY: if L, H are not specified, then $argv[2], $argv[3] may contain unrecognized arguments.

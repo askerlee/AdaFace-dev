@@ -298,6 +298,9 @@ class AdaEmbedding(nn.Module):
         self.avgpool = MaskedAvgPool2d() # nn.AdaptiveAvgPool2d((1, 1))
 
         # First TD_frac of dimensions of the time embeddings will be used.
+        # Time embedding channel num: 1280, *0.125 = 160. 
+        # 160 dim should contain enough info, and avoid
+        # overweighing the image features.
         self.TD_frac = 0.125
 
         layer_maps = []
