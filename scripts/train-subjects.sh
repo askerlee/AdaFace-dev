@@ -136,7 +136,7 @@ for i in $indices
         # $EXTRA_ARGS is not for DreamBooth. It is for AdaPrompt/TI only.
         # --lr and --max_steps are absent in DreamBooth. 
         # It always uses the default lr and max_steps specified in the config file.
-        python3 main_db.py --base configs/stable-diffusion/v1-finetune-db.yaml -t --actual_resume $sd_ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-dreambooth --no-test --token "z" --class_word $db_prompt
+        python3 main_db.py --base configs/stable-diffusion/v1-finetune-db.yaml -t --actual_resume $sd_ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-db --no-test --token "z" --class_word $db_prompt
         
         if set -q _flag_eval
             if [ "$data_folder"  = 'dbeval-dataset' ]
