@@ -549,7 +549,7 @@ def main(opt):
                         date_sig = subjfolder_mat.group(2)
                         # subjname_method: gabrielleunion-ada
                         subjname_method = subjfolder_mat.group(3)
-                        iter_mat = re.search(r"(\d+).pt", opt.embedding_paths[0])
+                        iter_mat = re.search(r"(\d+).pt", opt.subj_model_path)
                         iter_sig = iter_mat.group(1)
                     else:
                         subjname_method = "unknown"
@@ -604,7 +604,7 @@ def main(opt):
                 emb_sig  = subjfolder_mat.group(1) + subjfolder_mat.group(2)
             else:
                 emb_sig  = "unknown"
-                
+
             scores   = [sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent]
             scores   = [ f"{score:.4f}" for score in scores ]
             SCORES_CSV.writerow([emb_sig] + scores)
