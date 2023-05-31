@@ -1,8 +1,9 @@
 model:
   base_learning_rate: 1.0e-06
+  weight_decay: 0.0
+
   target: ldm.models.diffusion.ddpm.LatentDiffusion
   params:
-    reg_weight: 1.0
     linear_start: 0.00085
     linear_end: 0.0120
     num_timesteps_cond: 1
@@ -20,15 +21,12 @@ model:
     embedding_reg_weight: 0.0
     unfreeze_model: True
     model_lr: 1.0e-6
-
-    personalization_config:
-      target: ldm.modules.embedding_manager.EmbeddingManager
-      params:
-        placeholder_strings: ["*"]
-        initializer_words: ["sculpture"]
-        per_image_tokens: false
-        num_vectors_per_token: 1
-        progressive_words: False
+    is_db_training: true
+    use_layerwise_embedding: false
+    use_ada_embedding: false
+    # No compositional regularizations.
+    composition_regs_iter_gap: -1
+    clip_text_loss_weight: 0
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
@@ -72,22 +70,24 @@ model:
 
     cond_stage_config:
       target: ldm.modules.encoders.modules.FrozenCLIPEmbedder
+      params:
+        last_layer_skip_weight: 0.5      
 
 data:
-  target: main.DataModuleFromConfig
+  target: main_db.DataModuleFromConfig
   params:
     batch_size: 2
-    num_workers: 1
+    num_workers: 4
     wrap: false
     train:
-      target: ldm.data.personalized.PersonalizedBase
+      target: ldm.data.personalized_db.PersonalizedBase
       params:
         size: 512
         set: train
         per_image_tokens: false
         repeats: 100
     reg:
-      target: ldm.data.personalized.PersonalizedBase
+      target: ldm.data.personalized_db.PersonalizedBase
       params:
         size: 512
         set: train
@@ -96,7 +96,7 @@ data:
         repeats: 10
         
     validation:
-      target: ldm.data.personalized.PersonalizedBase
+      target: ldm.data.personalized_db.PersonalizedBase
       params:
         size: 512
         set: val
@@ -106,10 +106,10 @@ data:
 lightning:
   modelcheckpoint:
     params:
-      every_n_train_steps: 500
+      every_n_train_steps: 400
   callbacks:
     image_logger:
-      target: main.ImageLogger
+      target: main_db.ImageLogger
       params:
         batch_frequency: 1500
         max_images: 8

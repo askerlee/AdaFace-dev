@@ -192,9 +192,16 @@ def get_parser(**parser_kwargs):
         required=False,
         help="Match class_word to the category of images you want to train. Example: 'man', 'woman', or 'dog'.")
 
-    parser.add_argument("--init_words", 
-        type=str, 
-        help="Comma separated list of words used to initialize the embeddigs for training.")
+    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
+                        help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
+
+    parser.add_argument("--min_rand_scaling",
+                        type=float, default=0.8, 
+                        help="Minimum random scaling factor of training images (set to -1 to disable)")
+    parser.add_argument("--max_rand_scaling",
+                        type=float, default=1.05,
+                        help="Maximum random scaling factor of training images (default: 1.05)")
+    
 
     return parser
 
@@ -244,6 +251,9 @@ class ConcatDataset(Dataset):
     def __len__(self):
         return min(len(d) for d in self.datasets)
     
+# LightningDataModule: https://pytorch-lightning.readthedocs.io/en/stable/notebooks/lightning_examples/datamodules.html
+# train: ldm.data.personalized_db.PersonalizedBase
+# validation path is the same as train.
 class DataModuleFromConfig(pl.LightningDataModule):
     def __init__(self, batch_size, train=None, reg = None, validation=None, test=None, predict=None,
                  wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
@@ -423,7 +433,7 @@ class ImageLogger(Callback):
             grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
             grid = grid.numpy()
             grid = (grid * 255).astype(np.uint8)
-            filename = "{}gs-{:06}_e-{:06}_b-{:06}.jpg".format(
+            filename = "{}_gs-{:06}_e-{:06}_b-{:06}.jpg".format(
                 k,
                 global_step,
                 current_epoch,
@@ -510,6 +520,7 @@ class CUDACallback(Callback):
         except AttributeError:
             pass
 
+# ModeSwapCallback is never used in the code.
 class ModeSwapCallback(Callback):
 
     def __init__(self, swap_step=2000):
@@ -646,13 +657,10 @@ if __name__ == "__main__":
         trainer_opt = argparse.Namespace(**trainer_config)
         lightning_config.trainer = trainer_config
 
-        if opt.init_words:
-            config.model.params.personalization_config.params.initializer_words = [ 
-                    init_word.strip() for init_word in opt.init_words.split(',')
-                ]
-
-        # if opt.init_word:
-        #     config.model.params.personalization_config.params.initializer_words[0] = opt.init_word
+        # model
+        # No embedding manager needed for DreamBooth.
+        config.model.params.personalization_config = None
+        config.model.params.cond_stage_config.params.last_layer_skip_weight   = opt.clip_last_layer_skip_weight
 
         # Setup the token and class word to get passed to personalized.py
         if not opt.reg_data_root:
@@ -667,17 +675,22 @@ if __name__ == "__main__":
             config.data.params.train.params.coarse_class_text = opt.class_word
             config.data.params.validation.params.coarse_class_text = opt.class_word
 
-        config.data.params.train.params.data_root = opt.data_root
         config.data.params.train.params.placeholder_token = opt.token
         config.data.params.train.params.token_only = opt.token_only or not opt.class_word
-
         config.data.params.validation.params.placeholder_token = opt.token
-        config.data.params.validation.params.data_root = opt.data_root
+
+        if opt.lr > 0:
+            config.model.base_learning_rate = opt.lr
+
+        if opt.max_steps > 0:
+            trainer_opt.max_steps = opt.max_steps
+            config.model.params.scheduler_config.params.max_decay_steps = opt.max_steps
 
         if opt.actual_resume:
             model = load_model_from_config(config, opt.actual_resume)
         else:
             model = instantiate_from_config(config.model)
+        # model: ldm.models.diffusion.ddpm.LatentDiffusion, inherits from LightningModule.
 
         # trainer and callbacks
         trainer_kwargs = dict()
@@ -805,6 +818,18 @@ if __name__ == "__main__":
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         trainer.logdir = logdir  ###
 
+        # config.data:
+        # {'target': 'main.DataModuleFromConfig', 'params': {'batch_size': 2, 'num_workers': 2, 
+        #  'wrap': False, 'train': {'target': 'ldm.data.personalized_db.PersonalizedBase', 
+        #  'params': {'size': 512, 'set': 'train', 'repeats': 100, 
+        #  'placeholder_token': 'z', 'data_root': 'data/spikelee/'}}, 
+        #  'validation': {'target': 'ldm.data.personalized_db.PersonalizedBase', 
+        #  'params': {'size': 512, 'set': 'val', 'repeats': 10, 
+        #  'placeholder_token': 'z', 'data_root': 'data/spikelee/'}}}}
+        config.data.params.train.params.data_root = opt.data_root
+        config.data.params.validation.params.data_root = opt.data_root
+
+        # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
 
         # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
@@ -817,7 +842,10 @@ if __name__ == "__main__":
             print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
 
         # configure learning rate
-        bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
+        bs, base_lr, weight_decay = config.data.params.batch_size, config.model.base_learning_rate, \
+                                    config.model.weight_decay
+
+
         if not cpu:
             ngpu = len(lightning_config.trainer.gpus.strip(",").split(','))
         else:
@@ -828,6 +856,7 @@ if __name__ == "__main__":
             accumulate_grad_batches = 1
         print(f"accumulate_grad_batches = {accumulate_grad_batches}")
         lightning_config.trainer.accumulate_grad_batches = accumulate_grad_batches
+        # scale_lr = False by default. 
         if opt.scale_lr:
             model.learning_rate = accumulate_grad_batches * ngpu * bs * base_lr
             print(
@@ -838,6 +867,7 @@ if __name__ == "__main__":
             print("++++ NOT USING LR SCALING ++++")
             print(f"Setting learning rate to {model.learning_rate:.2e}")
 
+        model.weight_decay = weight_decay
 
         # allow checkpointing via USR1
         def melk(*args, **kwargs):
@@ -863,6 +893,7 @@ if __name__ == "__main__":
         # run
         if opt.train:
             try:
+                # trainer: pytorch_lightning.trainer.trainer.Trainer
                 trainer.fit(model, data)
             except Exception:
                 melk()

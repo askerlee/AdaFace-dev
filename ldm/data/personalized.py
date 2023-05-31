@@ -161,7 +161,6 @@ class PersonalizedBase(Dataset):
                  # but sometimes different, such as "stuffed animal" vs. "toy".
                  placeholder_suffix=None,     
                  center_crop=False,
-                 mixing_prob=0.25,
                  num_compositions_per_image=1,
                  broad_class=1,
                  ):
@@ -185,7 +184,6 @@ class PersonalizedBase(Dataset):
         self.placeholder_suffix = placeholder_suffix
 
         self.center_crop = center_crop
-        self.mixing_prob = mixing_prob
 
         if set == "train":
             self.is_training = True

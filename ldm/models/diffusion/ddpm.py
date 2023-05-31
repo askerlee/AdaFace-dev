@@ -118,6 +118,8 @@ class DDPM(pl.LightningModule):
         self.do_comp_prompt_mix_reg         = False
         self.do_clip_text_loss              = False
         self.do_deep_mix                    = False
+        # Is this for DreamBooth training? Will be overwritten in LatentDiffusion.
+        self.is_db_training                 = False
 
         self.model = DiffusionWrapper(unet_config, conditioning_key)
         count_params(self.model, verbose=True)
@@ -382,6 +384,7 @@ class DDPM(pl.LightningModule):
 
     def get_input(self, batch, k):
         x = batch[k]
+
         if len(x.shape) == 3:
             x = x[..., None]
         x = rearrange(x, 'b h w c -> b c h w')
@@ -447,7 +450,16 @@ class DDPM(pl.LightningModule):
         else:
             self.lr_scale = 1.0
 
-        loss, loss_dict = self.shared_step(batch)
+        if self.is_db_training:
+            # DreamBooth uses ConcatDataset to make batch a tuple of train_batch and reg_batch.
+            # train_batch: normal subject image recon. reg_batch: general class regularization.
+            train_batch = batch[0]
+            reg_batch   = batch[1]
+            loss_train, loss_dict = self.shared_step(train_batch)
+            loss_reg, _ = self.shared_step(reg_batch)
+            loss = loss_train + self.db_reg_weight * loss_reg
+        else:            
+            loss, loss_dict = self.shared_step(batch)
 
         self.log_dict(loss_dict, prog_bar=True,
                       logger=True, on_step=True, on_epoch=True)
@@ -543,6 +555,8 @@ class LatentDiffusion(DDPM):
                  conditioning_key=None,
                  scale_factor=1.0,
                  scale_by_std=False,
+                 # To do DreamBooth training, set is_db_training=True.
+                 is_db_training=False,
                  *args, **kwargs):
 
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -596,12 +610,18 @@ class LatentDiffusion(DDPM):
             for param in self.model.parameters():
                 param.requires_grad = False
         
-        self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
+        self.is_db_training = is_db_training
+        self.db_reg_weight  = 1.
+        if not is_db_training:
+            self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
+            # embedding_manager.optimized_parameters(): string_to_param_dict, 
+            # which maps custom tokens to embeddings
+            for param in self.embedding_manager.optimized_parameters():
+                param.requires_grad = True
+        else:
+            # For DreamBooth.
+            self.embedding_manager = None
 
-        # embedding_manager.optimized_parameters(): string_to_param_dict, 
-        # which maps custom tokens to embeddings
-        for param in self.embedding_manager.optimized_parameters():
-            param.requires_grad = True
         
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -2213,9 +2233,8 @@ class LatentDiffusion(DDPM):
         if not self.unfreeze_model: # If we are not tuning the model itself, zero-out the checkpoint content to preserve memory.
             checkpoint.clear()
         
-        if os.path.isdir(self.trainer.checkpoint_callback.dirpath):
+        if os.path.isdir(self.trainer.checkpoint_callback.dirpath) and self.embedding_manager is not None:
             self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, "embeddings.pt"))
-
             self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
 
 
