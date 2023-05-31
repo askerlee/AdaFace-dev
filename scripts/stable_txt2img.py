@@ -602,7 +602,8 @@ def main(opt):
             scores   = [ f"{score:.4f}" for score in scores ]
             SCORES_CSV.writerow([emb_sig] + scores)
 
-    SCORES_CSV_FILE.close()
+    if SCORES_CSV is not None:
+        SCORES_CSV_FILE.close()
 
 if __name__ == "__main__":
     opt = parse_args()
