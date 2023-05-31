@@ -277,6 +277,9 @@ def main(opt):
     if opt.embedding_paths is not None:
         model.embedding_manager.load(opt.embedding_paths)
         model.embedding_manager.subj_scale  = opt.subj_scale
+        opt.subj_model_path = opt.embedding_paths[0]
+    else:
+        opt.subj_model_path = opt.ckpt
 
     # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
     model.cond_stage_model.set_last_layer_skip_weight(opt.clip_last_layer_skip_weight)
@@ -541,8 +544,8 @@ def main(opt):
                     # to image
                     grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
                     # logs/gabrielleunion2023-05-24T18-33-34_gabrielleunion-ada/checkpoints/embeddings_gs-4500.pt
-                    if (opt.embedding_paths is not None) and len(opt.embedding_paths) > 0:
-                        subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.embedding_paths[0])
+                    subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.subj_model_path)
+                    if subjfolder_mat:
                         date_sig = subjfolder_mat.group(2)
                         # subjname_method: gabrielleunion-ada
                         subjname_method = subjfolder_mat.group(3)
@@ -596,8 +599,12 @@ def main(opt):
 
         print(f"All samples mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
         if SCORES_CSV is not None:
-            subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.embedding_paths[0])
-            emb_sig  = subjfolder_mat.group(1) + subjfolder_mat.group(2)
+            subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.subj_model_path)
+            if subjfolder_mat:
+                emb_sig  = subjfolder_mat.group(1) + subjfolder_mat.group(2)
+            else:
+                emb_sig  = "unknown"
+                
             scores   = [sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent]
             scores   = [ f"{score:.4f}" for score in scores ]
             SCORES_CSV.writerow([emb_sig] + scores)
