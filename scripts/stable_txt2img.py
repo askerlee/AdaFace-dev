@@ -140,7 +140,7 @@ def parse_args():
     parser.add_argument(
         "--config",
         type=str,
-        default="configs/stable-diffusion/v1-inference.yaml",
+        default="configs/stable-diffusion/v1-inference-ada.yaml",
         help="path to config which constructs model",
     )
     parser.add_argument(
@@ -541,13 +541,18 @@ def main(opt):
                     # to image
                     grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
                     # logs/gabrielleunion2023-05-24T18-33-34_gabrielleunion-ada/checkpoints/embeddings_gs-4500.pt
-                    subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.embedding_paths[0])
-                    date_sig = subjfolder_mat.group(2)
-                    # subjname_method: gabrielleunion-ada
-                    subjname_method = subjfolder_mat.group(3)
-                    iter_mat = re.search(r"(\d+).pt", opt.embedding_paths[0])
-                    iter_sig = iter_mat.group(1)
-                    
+                    if len(opt.embedding_paths) > 0:
+                        subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.embedding_paths[0])
+                        date_sig = subjfolder_mat.group(2)
+                        # subjname_method: gabrielleunion-ada
+                        subjname_method = subjfolder_mat.group(3)
+                        iter_mat = re.search(r"(\d+).pt", opt.embedding_paths[0])
+                        iter_sig = iter_mat.group(1)
+                    else:
+                        subjname_method = "unknown"
+                        date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
+                        iter_sig = "unknown"
+                        
                     experiment_sig = "-".join([date_sig, iter_sig, f"scale{opt.scale:.1f}"])
                     if use_ema_model:
                         experiment_sig += "-ema"

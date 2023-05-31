@@ -16,7 +16,22 @@ model:
     monitor: val/loss_simple_ema
     scale_factor: 0.18215
     use_ema: False
-        
+    is_dreambooth: true
+    use_layerwise_embedding: false
+    use_ada_embedding: false
+
+    # A dummy EmbeddingManager that does nothing and has no impact.
+    personalization_config:
+      target: ldm.modules.embedding_manager.EmbeddingManager
+      params:
+        placeholder_strings: ["*"]
+        initializer_words: ["sculpture"]
+        initializer_weights: [ None ]
+        num_vectors_per_token: 1
+        progressive_words: False
+        use_layerwise_embedding: False
+        composition_delta_reg_iter_gap: 0
+
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:

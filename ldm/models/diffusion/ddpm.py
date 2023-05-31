@@ -119,7 +119,7 @@ class DDPM(pl.LightningModule):
         self.do_clip_text_loss              = False
         self.do_deep_mix                    = False
         # Is this for DreamBooth training? Will be overwritten in LatentDiffusion.
-        self.is_db_training                 = False
+        self.is_dreambooth                 = False
 
         self.model = DiffusionWrapper(unet_config, conditioning_key)
         count_params(self.model, verbose=True)
@@ -450,7 +450,7 @@ class DDPM(pl.LightningModule):
         else:
             self.lr_scale = 1.0
 
-        if self.is_db_training:
+        if self.is_dreambooth:
             # DreamBooth uses ConcatDataset to make batch a tuple of train_batch and reg_batch.
             # train_batch: normal subject image recon. reg_batch: general class regularization.
             train_batch = batch[0]
@@ -555,8 +555,8 @@ class LatentDiffusion(DDPM):
                  conditioning_key=None,
                  scale_factor=1.0,
                  scale_by_std=False,
-                 # To do DreamBooth training, set is_db_training=True.
-                 is_db_training=False,
+                 # To do DreamBooth training, set is_dreambooth=True.
+                 is_dreambooth=False,
                  *args, **kwargs):
 
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -610,9 +610,9 @@ class LatentDiffusion(DDPM):
             for param in self.model.parameters():
                 param.requires_grad = False
         
-        self.is_db_training = is_db_training
+        self.is_dreambooth = is_dreambooth
         self.db_reg_weight  = 1.
-        if not is_db_training:
+        if not is_dreambooth:
             self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
             # embedding_manager.optimized_parameters(): string_to_param_dict, 
             # which maps custom tokens to embeddings

@@ -21,12 +21,24 @@ model:
     embedding_reg_weight: 0.0
     unfreeze_model: True
     model_lr: 1.0e-6
-    is_db_training: true
+    is_dreambooth: true
     use_layerwise_embedding: false
     use_ada_embedding: false
     # No compositional regularizations.
     composition_regs_iter_gap: -1
     clip_text_loss_weight: 0
+
+    # A dummy EmbeddingManager that does nothing and has no impact.
+    personalization_config:
+      target: ldm.modules.embedding_manager.EmbeddingManager
+      params:
+        placeholder_strings: ["*"]
+        initializer_words: ["sculpture"]
+        initializer_weights: [ None ]
+        num_vectors_per_token: 1
+        progressive_words: False
+        use_layerwise_embedding: False
+        composition_delta_reg_iter_gap: 0
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
