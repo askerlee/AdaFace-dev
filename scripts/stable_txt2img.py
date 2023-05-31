@@ -276,12 +276,12 @@ def main(opt):
     model  = load_model_from_config(config, f"{opt.ckpt}")
     if opt.embedding_paths is not None:
         model.embedding_manager.load(opt.embedding_paths)
-    model.embedding_manager.subj_scale  = opt.subj_scale
+        model.embedding_manager.subj_scale  = opt.subj_scale
 
     # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
     model.cond_stage_model.set_last_layer_skip_weight(opt.clip_last_layer_skip_weight)
 
-    if opt.ada_emb_weight != -1:
+    if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
     
     torch.cuda.set_device(opt.gpu)
