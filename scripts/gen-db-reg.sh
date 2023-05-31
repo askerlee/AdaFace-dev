@@ -26,7 +26,7 @@ for i in $indices
 
     # if regularization_images/$db_prompt0_nospace exists, then skip
     if test -e regularization_images/$db_prompt0_nospace
-        set reg_img_count (count (ls regularization_images/$db_prompt0_nospace/'*.jpg'))
+        set reg_img_count (count (find regularization_images/$db_prompt0_nospace -maxdepth 1 -name '*jpg'))
         if test $reg_img_count -gt $N
             echo "'regularization_images/$db_prompt0_nospace' contains $reg_img_count images. Skip $i: $subjects[$i]"
             continue
@@ -35,7 +35,7 @@ for i in $indices
 
     set fish_trace 1
 
-    python3 scripts/stable_txt2img.py --ddim_eta 0.0 --n_samples 8 --n_repeat $n_repeat --scale 10.0 --ddim_steps 50  --ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt --gpu $GPU --prompt $db_prompt --outdir regularization_images/$db_prompt0_nospace --indiv_subdir ""
+    python3 scripts/stable_txt2img.py --ddim_eta 0.0 --n_samples 8 --n_repeat $n_repeat --scale 10.0 --ddim_steps 50  --ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt --gpu $GPU --prompt $db_prompt --outdir regularization_images/$db_prompt0_nospace --indiv_subdir "" --no_preview
 
     set -e fish_trace
 end
