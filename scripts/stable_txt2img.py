@@ -550,7 +550,10 @@ def main(opt):
                         # subjname_method: gabrielleunion-ada
                         subjname_method = subjfolder_mat.group(3)
                         iter_mat = re.search(r"(\d+).pt", opt.subj_model_path)
-                        iter_sig = iter_mat.group(1)
+                        if iter_mat is not None:
+                            iter_sig = iter_mat.group(1)
+                        else:
+                            iter_sig = "unknown"
                     else:
                         subjname_method = "unknown"
                         date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
