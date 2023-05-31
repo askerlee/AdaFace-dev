@@ -27,7 +27,7 @@ for i in $indices
     # if regularization_images/$db_prompt0_nospace exists, then skip
     if test -e regularization_images/$db_prompt0_nospace
         set reg_img_count (count (find regularization_images/$db_prompt0_nospace -maxdepth 1 -name '*jpg'))
-        if test $reg_img_count -gt $N
+        if test $reg_img_count -ge $N
             echo "'regularization_images/$db_prompt0_nospace' contains $reg_img_count images. Skip $i: $subjects[$i]"
             continue
         end
