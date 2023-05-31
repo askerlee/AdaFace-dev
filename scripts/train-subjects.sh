@@ -134,7 +134,19 @@ for i in $indices
         set -q _flag_maxiter; and set max_iters $_flag_maxiter; or set max_iters -1        
         set fish_trace 1
         # $EXTRA_ARGS is not for DreamBooth. It is for AdaPrompt/TI only.
-        python3 main.py --base configs/stable-diffusion/v1-finetune_unfrozen.yaml -t --actual_resume $sd_ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-dreambooth --no-test --max_steps $max_iters --lr $lr --token "z" --class_word $db_prompt
+        # --lr and --max_steps are absent in DreamBooth. 
+        # It always uses the default lr and max_steps specified in the config file.
+        python3 main_db.py --base configs/stable-diffusion/v1-finetune-db.yaml -t --actual_resume $sd_ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-dreambooth --no-test --token "z" --class_word $db_prompt
+        
+        if set -q _flag_eval
+            if [ "$data_folder"  = 'dbeval-dataset' ]
+                set out_dir_tmpl 'samples-dbeval'
+            elif [ "$data_folder" = 'ti-dataset' ]
+                set out_dir_tmpl 'samples-tieval'
+            else
+                set out_dir_tmpl 'samples'
+            end
+            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i
     end
 
     set -e fish_trace

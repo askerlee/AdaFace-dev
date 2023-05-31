@@ -1,4 +1,5 @@
 import argparse, os, sys, datetime, glob
+from ldm.modules.pruningckptio import PruningCheckpointIO
 import numpy as np
 import time
 import torch
@@ -135,31 +136,36 @@ def get_parser(**parser_kwargs):
         type=float, 
         default=-1,
         help="learning rate",
-    )
+    )    
     parser.add_argument(
         "--scale_lr",
         type=str2bool,
         nargs="?",
-        const=True,
-        default=True,
+        const=False,
+        default=False,
         help="scale base-lr by ngpu * batch_size * n_accumulate",
     )
-    # max_steps is inherent in Trainer class. No need to specify it here.
-    '''
+
     parser.add_argument(
-        "--max_steps",
-        type=int,
-        default=-1,
-        help="max steps",
-    )
-    '''
-    parser.add_argument(
-        "--datadir_in_name", 
-        type=str2bool, 
-        nargs="?", 
-        const=True, 
-        default=True, 
+        "--datadir_in_name",
+        type=str2bool,
+        nargs="?",
+        const=True,
+        default=True,
         help="Prepend the final directory in the data_root to the output directory name")
+
+    parser.add_argument(
+        "--token",
+        type=str,
+        required=True,
+        help="Unique token you want to represent your trained model. Ex: firstNameLastName.")
+
+    parser.add_argument("--token_only", 
+        type=str2bool,
+        const=True,
+        default=False,
+        nargs="?",
+        help="Train only using the token and no class.")
 
     parser.add_argument("--actual_resume", 
         type=str,
@@ -170,83 +176,28 @@ def get_parser(**parser_kwargs):
         type=str, 
         required=True, 
         help="Path to directory with training images")
+    
+    parser.add_argument("--reg_data_root", 
+        type=str, 
+        required=False, 
+        help="Path to directory with regularization images")
 
     parser.add_argument("--embedding_manager_ckpt", 
         type=str, 
         default="", 
         help="Initialize embedding manager from a checkpoint")
 
-    parser.add_argument("--placeholder_string", 
+    parser.add_argument("--class_word", 
+        type=str,
+        required=False,
+        help="Match class_word to the category of images you want to train. Example: 'man', 'woman', or 'dog'.")
+
+    parser.add_argument("--init_words", 
         type=str, 
-        help="Placeholder string which will be used to denote the concept in future prompts. Overwrites the config options.")
+        help="Comma separated list of words used to initialize the embeddigs for training.")
 
-    parser.add_argument("--placeholder_suffix", 
-        type=str, default=None,
-        help="Suffix to append to the placeholder string")
-    
-    parser.add_argument("--init_word", 
-        type=str, 
-        help="Words used to initialize token embedding")
-
-    parser.add_argument("--init_word_weights", nargs="*", 
-        type=float, 
-        help="Weights of each token in init_word")
-
-    parser.add_argument("--init_neg_words", 
-        type=str, default=None,
-        help="Negative words (commma separated) used to initialize token embedding")
-
-    parser.add_argument("--cls_delta_token",
-        type=str, default=None,
-        help="A single word to use in class-level prompts for delta loss")
-
-    parser.add_argument("--cls_distill_token",
-        type=str, default=None,
-        help="A single word to use in class-level prompts for prompt distillation")
-
-    # layerwise_lora_rank_token_ratio. When there are two tokens, 
-    # it seems that increasing the rank to 3 doesn't help.
-    parser.add_argument("--layerwise_lora_rank_token_ratio", 
-        type=float, default=-1,
-        help="Layerwise lora rank/token ratio")
-
-    # embedding_reg_weight
-    parser.add_argument("--embedding_reg_weight",
-        type=float, default=-1,
-        help="Embedding regularization weight")
-    
-    parser.add_argument("--ada_emb_weight",
-        type=float, default=-1,
-        help="Weight of ada embeddings (in contrast to static embeddings)")
-
-    parser.add_argument("--composition_delta_reg_weight",
-        type=float, default=-1,
-        help="Composition delta regularization weight")
-
-    parser.add_argument("--min_rand_scaling",
-                        type=float, default=0.8, 
-                        help="Minimum random scaling factor of training images (set to -1 to disable)")
-    parser.add_argument("--max_rand_scaling",
-                        type=float, default=1.05,
-                        help="Maximum random scaling factor of training images (default: 1.05)")
-    
-    parser.add_argument("--composition_regs_iter_gap",
-                        type=int, default=argparse.SUPPRESS,
-                        help="Gap between iterations for composition regularization. "
-                             "Set to -1 to disable for ablation.")
-    
-    # num_compositions_per_image: a value > 1 leads to better performance on prompt compositions
-    parser.add_argument("--num_compositions_per_image",
-                        type=int, default=1,
-                        help="Number of composition samples for each image in a batch (default: 2)")
-    parser.add_argument("--broad_class", type=int, default=1,
-                        help="Whether the subject is a human/animal, object or cartoon (0: object, 1: human/animal, 2: cartoon)")
-
-    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
-                        help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
-    parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
-                        help="Disable wandb logging")    
     return parser
+
 
 def nondefault_trainer_args(opt):
     parser = argparse.ArgumentParser()
@@ -283,21 +234,32 @@ def worker_init_fn(_):
     else:
         return np.random.seed(np.random.get_state()[1][0] + worker_id)
 
-# LightningDataModule: https://pytorch-lightning.readthedocs.io/en/stable/notebooks/lightning_examples/datamodules.html
-# train: ldm.data.personalized.PersonalizedBase
-# validation path is the same as train.
+class ConcatDataset(Dataset):
+    def __init__(self, *datasets):
+        self.datasets = datasets
+
+    def __getitem__(self, idx):
+        return tuple(d[idx] for d in self.datasets)
+
+    def __len__(self):
+        return min(len(d) for d in self.datasets)
+    
 class DataModuleFromConfig(pl.LightningDataModule):
-    def __init__(self, batch_size, train=None, validation=None, test=None, predict=None,
+    def __init__(self, batch_size, train=None, reg = None, validation=None, test=None, predict=None,
                  wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
                  shuffle_val_dataloader=False):
         super().__init__()
         self.batch_size = batch_size
         self.dataset_configs = dict()
         self.num_workers = num_workers if num_workers is not None else batch_size * 2
-        self.use_worker_init_fn = use_worker_init_fn        # False
+        self.use_worker_init_fn = use_worker_init_fn
         if train is not None:
             self.dataset_configs["train"] = train
-            self.train_dataloader = self._train_dataloader
+        if reg is not None:
+            self.dataset_configs["reg"] = reg
+        
+        self.train_dataloader = self._train_dataloader
+        
         if validation is not None:
             self.dataset_configs["validation"] = validation
             self.val_dataloader = partial(self._val_dataloader, shuffle=shuffle_val_dataloader)
@@ -327,7 +289,13 @@ class DataModuleFromConfig(pl.LightningDataModule):
             init_fn = worker_init_fn
         else:
             init_fn = None
-        return DataLoader(self.datasets["train"], batch_size=self.batch_size,
+
+        train_set = self.datasets["train"]
+        if 'reg' in self.datasets:
+            reg_set = self.datasets["reg"]
+            train_set = ConcatDataset(train_set, reg_set)
+
+        return DataLoader(train_set, batch_size=self.batch_size,
                           num_workers=self.num_workers, shuffle=False if is_iterable_dataset else True,
                           worker_init_fn=init_fn)
 
@@ -412,6 +380,7 @@ class SetupCallback(Callback):
                 except FileNotFoundError:
                     pass
 
+
 class ImageLogger(Callback):
     def __init__(self, batch_frequency, max_images, clamp=True, increase_log_steps=True,
                  rescale=True, disabled=False, log_on_batch_idx=False, log_first_step=False,
@@ -454,7 +423,7 @@ class ImageLogger(Callback):
             grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
             grid = grid.numpy()
             grid = (grid * 255).astype(np.uint8)
-            filename = "{}_gs-{:06}_e-{:06}_b-{:06}.jpg".format(
+            filename = "{}gs-{:06}_e-{:06}_b-{:06}.jpg".format(
                 k,
                 global_step,
                 current_epoch,
@@ -511,11 +480,12 @@ class ImageLogger(Callback):
             self.log_img(pl_module, batch, batch_idx, split="train")
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
-        if not self.disabled and pl_module.global_step > 0:
-            self.log_img(pl_module, batch, batch_idx, split="val")
-        if hasattr(pl_module, 'calibrate_grad_norm'):
-            if (pl_module.calibrate_grad_norm and batch_idx % 25 == 0) and batch_idx > 0:
-                self.log_gradients(trainer, pl_module, batch_idx=batch_idx)
+        pass
+        #if not self.disabled and pl_module.global_step > 0:
+            #self.log_img(pl_module, batch, batch_idx, split="val")
+        #if hasattr(pl_module, 'calibrate_grad_norm'):
+            #if (pl_module.calibrate_grad_norm and batch_idx % 25 == 0) and batch_idx > 0:
+                #self.log_gradients(trainer, pl_module, batch_idx=batch_idx)
 
 
 class CUDACallback(Callback):
@@ -540,7 +510,6 @@ class CUDACallback(Callback):
         except AttributeError:
             pass
 
-# ModeSwapCallback is never used in the code.
 class ModeSwapCallback(Callback):
 
     def __init__(self, swap_step=2000):
@@ -661,10 +630,10 @@ if __name__ == "__main__":
         cli = OmegaConf.from_dotlist(unknown)
         config = OmegaConf.merge(*configs, cli)
         lightning_config = config.pop("lightning", OmegaConf.create())
+
         # merge trainer cli with config
         trainer_config = lightning_config.get("trainer", OmegaConf.create())
-        # default to ddp
-        trainer_config["accelerator"] = "ddp"
+
         for k in nondefault_trainer_args(opt):
             trainer_config[k] = getattr(opt, k)
         if not "gpus" in trainer_config:
@@ -677,78 +646,38 @@ if __name__ == "__main__":
         trainer_opt = argparse.Namespace(**trainer_config)
         lightning_config.trainer = trainer_config
 
-        # model
+        if opt.init_words:
+            config.model.params.personalization_config.params.initializer_words = [ 
+                    init_word.strip() for init_word in opt.init_words.split(',')
+                ]
 
-        if len(opt.init_word_weights) > 0:
-            assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_word))
+        # if opt.init_word:
+        #     config.model.params.personalization_config.params.initializer_words[0] = opt.init_word
 
-        config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
-        if opt.placeholder_string:
-            config.model.params.personalization_config.params.placeholder_strings = [opt.placeholder_string]
-            config.data.params.train.params.placeholder_token       = opt.placeholder_string
-            config.data.params.validation.params.placeholder_token  = opt.placeholder_string
-
-        # Currently, only supports one group of initial words and weights.
-        if opt.init_word:
-            config.model.params.personalization_config.params.initializer_words[0] = opt.init_word
-            if len(opt.init_word_weights) > 0:
-                config.model.params.personalization_config.params.initializer_weights[0] = opt.init_word_weights
-
-        if opt.init_neg_words is not None:
-            init_neg_words = re.split(r",\s*", opt.init_neg_words)
-            config.model.params.personalization_config.params.initializer_neg_words = init_neg_words
-
-        config.data.params.train.params.broad_class       = opt.broad_class
-        config.data.params.validation.params.broad_class  = opt.broad_class
-
-        config.model.params.cond_stage_config.params.last_layer_skip_weight   = opt.clip_last_layer_skip_weight
-
-        config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
-        config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
-        config.data.params.train.params.cls_distill_token      = opt.cls_distill_token
-        config.data.params.validation.params.cls_distill_token = opt.cls_distill_token
-        # cls_delta_token is passed to the embedding manager, to check if the token consists of only
-        # one token in the CLIP vocabulary. (if it's a rare word, it may be split to multiple tokens,
-        # which will cause misalignment when calculating the delta loss)
-        config.model.params.personalization_config.params.cls_delta_token   = opt.cls_delta_token
-            
-        if opt.placeholder_suffix is not None:
-            config.data.params.train.params.placeholder_suffix              = opt.placeholder_suffix
-            config.data.params.validation.params.placeholder_suffix         = opt.placeholder_suffix
-            config.model.params.personalization_config.params.placeholder_suffix = opt.placeholder_suffix
-
-        if hasattr(opt, 'composition_regs_iter_gap'):
-            config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
-
-        config.data.params.train.params.num_compositions_per_image = opt.num_compositions_per_image
-        config.data.params.train.params.rand_scaling_range = (opt.min_rand_scaling, opt.max_rand_scaling)
-
-        if opt.layerwise_lora_rank_token_ratio > 0:
-            config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \
-                                    opt.layerwise_lora_rank_token_ratio
-
-        if opt.embedding_reg_weight >= 0:
-            config.model.params.embedding_reg_weight = opt.embedding_reg_weight
+        # Setup the token and class word to get passed to personalized.py
+        if not opt.reg_data_root:
+            config.data.params.reg = None
+        else:
+            config.data.params.reg.params.data_root = opt.reg_data_root
+            config.data.params.reg.params.coarse_class_text = opt.class_word
+            config.data.params.reg.params.placeholder_token = opt.token
         
-        if opt.ada_emb_weight != -1:
-            config.model.params.personalization_config.params.ada_emb_weight = opt.ada_emb_weight
 
-        # Setting composition_delta_reg_weight to 0 will disable composition delta regularization.
-        if opt.composition_delta_reg_weight >= 0:
-            config.model.params.composition_delta_reg_weight = opt.composition_delta_reg_weight
+        if opt.class_word:
+            config.data.params.train.params.coarse_class_text = opt.class_word
+            config.data.params.validation.params.coarse_class_text = opt.class_word
 
-        if opt.lr > 0:
-            config.model.base_learning_rate = opt.lr
+        config.data.params.train.params.data_root = opt.data_root
+        config.data.params.train.params.placeholder_token = opt.token
+        config.data.params.train.params.token_only = opt.token_only or not opt.class_word
 
-        if opt.max_steps > 0:
-            trainer_opt.max_steps = opt.max_steps
-            config.model.params.scheduler_config.params.max_decay_steps = opt.max_steps
+        config.data.params.validation.params.placeholder_token = opt.token
+        config.data.params.validation.params.data_root = opt.data_root
 
         if opt.actual_resume:
             model = load_model_from_config(config, opt.actual_resume)
         else:
             model = instantiate_from_config(config.model)
-        # model: ldm.models.diffusion.ddpm.LatentDiffusion, inherits from LightningModule.
 
         # trainer and callbacks
         trainer_kwargs = dict()
@@ -772,8 +701,7 @@ if __name__ == "__main__":
                 }
             },
         }
-        logger_name = "wandb" if opt.use_wandb else "testtube"
-        default_logger_cfg = default_logger_cfgs[logger_name]
+        default_logger_cfg = default_logger_cfgs["testtube"]
         if "logger" in lightning_config:
             logger_cfg = lightning_config.logger
         else:
@@ -872,22 +800,13 @@ if __name__ == "__main__":
 
         trainer_kwargs["callbacks"] = [instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg]
         trainer_kwargs["max_steps"] = trainer_opt.max_steps
-
+        trainer_kwargs["plugins"] = PruningCheckpointIO()
+    
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         trainer.logdir = logdir  ###
 
-        # config.data:
-        # {'target': 'main.DataModuleFromConfig', 'params': {'batch_size': 2, 'num_workers': 2, 
-        #  'wrap': False, 'train': {'target': 'ldm.data.personalized.PersonalizedBase', 
-        #  'params': {'size': 512, 'set': 'train', 'repeats': 100, 
-        #  'placeholder_token': 'z', 'data_root': 'data/spikelee/'}}, 
-        #  'validation': {'target': 'ldm.data.personalized.PersonalizedBase', 
-        #  'params': {'size': 512, 'set': 'val', 'repeats': 10, 
-        #  'placeholder_token': 'z', 'data_root': 'data/spikelee/'}}}}
-        config.data.params.train.params.data_root = opt.data_root
-        config.data.params.validation.params.data_root = opt.data_root
-        # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
+
         # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
         # calling these ourselves should not be necessary but it is.
         # lightning still takes care of proper multiprocessing though
@@ -898,10 +817,7 @@ if __name__ == "__main__":
             print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
 
         # configure learning rate
-        bs, base_lr, weight_decay = config.data.params.batch_size, config.model.base_learning_rate, \
-                                    config.model.weight_decay
-
-
+        bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
         if not cpu:
             ngpu = len(lightning_config.trainer.gpus.strip(",").split(','))
         else:
@@ -912,7 +828,6 @@ if __name__ == "__main__":
             accumulate_grad_batches = 1
         print(f"accumulate_grad_batches = {accumulate_grad_batches}")
         lightning_config.trainer.accumulate_grad_batches = accumulate_grad_batches
-        # scale_lr = True by default. So learning_rate is set to 2*base_lr.
         if opt.scale_lr:
             model.learning_rate = accumulate_grad_batches * ngpu * bs * base_lr
             print(
@@ -922,8 +837,7 @@ if __name__ == "__main__":
             model.learning_rate = base_lr
             print("++++ NOT USING LR SCALING ++++")
             print(f"Setting learning rate to {model.learning_rate:.2e}")
-        
-        model.weight_decay = weight_decay
+
 
         # allow checkpointing via USR1
         def melk(*args, **kwargs):
@@ -942,13 +856,13 @@ if __name__ == "__main__":
 
         import signal
 
+
         signal.signal(signal.SIGUSR1, melk)
         signal.signal(signal.SIGUSR2, divein)
 
         # run
         if opt.train:
             try:
-                # trainer: pytorch_lightning.trainer.trainer.Trainer
                 trainer.fit(model, data)
             except Exception:
                 melk()
