@@ -193,7 +193,7 @@ if __name__ == "__main__":
             z_suffix += " " + args.extra_z_suffix + ","
 
         if args.method == 'db':
-            config_file = "v1-inference.yaml"
+            config_file = "v1-inference-db.yaml"
             ckpt_path   = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/last.ckpt"
         else:
             config_file = "v1-inference-" + args.method + ".yaml"
