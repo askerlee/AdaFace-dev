@@ -541,7 +541,7 @@ def main(opt):
                     # to image
                     grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
                     # logs/gabrielleunion2023-05-24T18-33-34_gabrielleunion-ada/checkpoints/embeddings_gs-4500.pt
-                    if opt.embedding_paths is not None and len(opt.embedding_paths) > 0:
+                    if (opt.embedding_paths is not None) and len(opt.embedding_paths) > 0:
                         subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.embedding_paths[0])
                         date_sig = subjfolder_mat.group(2)
                         # subjname_method: gabrielleunion-ada
