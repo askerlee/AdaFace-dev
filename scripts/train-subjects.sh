@@ -147,6 +147,7 @@ for i in $indices
                 set out_dir_tmpl 'samples'
             end
             python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i
+        end
     end
 
     set -e fish_trace

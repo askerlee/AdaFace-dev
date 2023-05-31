@@ -297,7 +297,8 @@ class AdaEmbedding(nn.Module):
         self.infeat_dims = list(infeat_dims)
         self.avgpool = MaskedAvgPool2d() # nn.AdaptiveAvgPool2d((1, 1))
 
-        # First TD_frac of dimensions of the time embeddings will be used.
+        # The dimension of the time embeddings used will be 
+        # the first TD_frac dimensions of image features.
         # Most infeat_dims: 1280, *0.25 = 320. 
         # 320 dim should contain enough info, and avoid
         # overweighing the image features.
