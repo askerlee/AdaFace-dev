@@ -119,7 +119,7 @@ for i in $indices
         if set -q _flag_eval
             if [ "$data_folder"  = 'dbeval-dataset' ]
                 set out_dir_tmpl 'samples-dbeval'
-            elif [ "$data_folder" = 'ti-dataset' ]
+            else if [ "$data_folder" = 'ti-dataset' ]
                 set out_dir_tmpl 'samples-tieval'
             else
                 set out_dir_tmpl 'samples'
