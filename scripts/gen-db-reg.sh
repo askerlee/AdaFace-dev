@@ -1,8 +1,9 @@
 #!/usr/bin/fish
-argparse 'gpu=' 'N=' 'subjfile=' -- $argv
+argparse 'gpu=' 'N=' 'subjfile=' 'bs=' -- $argv
 
 set -q _flag_gpu; and set GPU $_flag_gpu; or set GPU 0
 set -q _flag_N; and set N $_flag_N; or set N 128
+set -q _flag_bs; and set bs $_flag_bs; or set bs 8
 set n_repeat (math ceil $N / 8)
 
 set -q _flag_subjfile; and set subj_file $_flag_subjfile; or set subj_file evaluation/info-subjects.sh
@@ -35,7 +36,7 @@ for i in $indices
 
     set fish_trace 1
 
-    python3 scripts/stable_txt2img.py --ddim_eta 0.0 --n_samples 8 --n_repeat $n_repeat --scale 10.0 --ddim_steps 50  --ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt --gpu $GPU --prompt $db_prompt --outdir regularization_images/$db_prompt0_nospace --indiv_subdir "" --no_preview
+    python3 scripts/stable_txt2img.py --ddim_eta 0.0 --n_samples 8 --bs $bs --n_repeat $n_repeat --scale 10.0 --ddim_steps 50  --ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt --gpu $GPU --prompt $db_prompt --outdir regularization_images/$db_prompt0_nospace --indiv_subdir "" --no_preview
 
     set -e fish_trace
 end
