@@ -26,15 +26,15 @@ model:
     model_lr: 0.0
     use_layerwise_embedding: False
     use_ada_embedding: False
-    # composition_regs includes composition_delta_reg and composition_prompt_mix_reg.
+    # composition_regs includes prompt_delta_reg and composition_prompt_mix_reg.
     composition_regs_iter_gap: 5
     # typical delta reg loss: 0.75, * weight -> 7.5e-5
-    composition_delta_reg_weight:       0.0001
+    prompt_delta_reg_weight:       0.0001
     # typical prompt mix reg loss: 0.2, * weight -> 2e-5.
     composition_prompt_mix_reg_weight:  0.0001
     cls_prompt_mix_weight_max:  0.4
     # typical clip text loss: 0.3, * weight -> 3e-4.
-    clip_text_loss_weight:      0.001
+    clip_loss_weight:      0.001
 
     optimizer_type: AdamW     # sophia
     
@@ -58,9 +58,9 @@ model:
         num_vectors_per_token: 1
         progressive_words: False
         use_layerwise_embedding: False
-        # composition_regs alternates between composition_delta_reg and composition_prompt_mix_reg.
-        # So composition_delta_reg_iter_gap = 2 * composition_regs_iter_gap = 10.
-        composition_delta_reg_iter_gap: 0
+        # composition_regs alternates between prompt_delta_reg and composition_prompt_mix_reg.
+        # So prompt_delta_reg_iter_gap = 2 * composition_regs_iter_gap = 10.
+        prompt_delta_reg_iter_gap: 0
         
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

@@ -89,10 +89,11 @@ class DDPM(pl.LightningModule):
                  use_layerwise_embedding=False,
                  use_ada_embedding=False,
                  composition_regs_iter_gap=-1,
-                 composition_delta_reg_weight=0.,
+                 prompt_delta_reg_weight=0.,
                  composition_prompt_mix_reg_weight=0.,
                  cls_prompt_mix_weight_max=0.4,
-                 clip_text_loss_weight=0,
+                 clip_loss_weight=0,
+                 promt_mix_scheme='hijk',       # 'hijk' or 'concat_cls'
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -109,17 +110,17 @@ class DDPM(pl.LightningModule):
         self.use_layerwise_embedding = use_layerwise_embedding
         self.use_ada_embedding = use_layerwise_embedding and use_ada_embedding
         self.composition_regs_iter_gap       = composition_regs_iter_gap
-        self.composition_delta_reg_weight    = composition_delta_reg_weight
+        self.prompt_delta_reg_weight    = prompt_delta_reg_weight
         self.composition_prompt_mix_reg_weight = composition_prompt_mix_reg_weight
         self.cls_prompt_mix_weight_max      = cls_prompt_mix_weight_max
-        self.clip_text_loss_weight          = clip_text_loss_weight
+        self.clip_loss_weight          = clip_loss_weight
+        self.promt_mix_scheme               = promt_mix_scheme
         self.do_static_comp_delta_reg       = False
         self.do_ada_comp_delta_reg          = False
         self.do_comp_prompt_mix_reg         = False
-        self.do_clip_text_loss              = False
-        self.do_deep_mix                    = False
-        # Is this for DreamBooth training? Will be overwritten in LatentDiffusion.
-        self.is_dreambooth                 = False
+        self.do_clip_loss                   = False
+        # Is this for DreamBooth training? Will be overwritten in LatentDiffusion ctor.
+        self.is_dreambooth                  = False
 
         self.model = DiffusionWrapper(unet_config, conditioning_key)
         count_params(self.model, verbose=True)
@@ -160,7 +161,7 @@ class DDPM(pl.LightningModule):
         if self.learn_logvar:
             self.logvar = nn.Parameter(self.logvar, requires_grad=True)
 
-        if self.clip_text_loss_weight > 0:
+        if self.clip_loss_weight > 0:
             self.clip_evaluator = CLIPEvaluator(device=self.device)
             for param in self.clip_evaluator.model.parameters():
                 param.requires_grad = False
@@ -400,10 +401,10 @@ class DDPM(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         # No matter wheter the scheme is layerwise or not,
-        # as long as composition_regs_iter_gap > 0 and composition_delta_reg_weight > 0, 
+        # as long as composition_regs_iter_gap > 0 and prompt_delta_reg_weight > 0, 
         # do static comp delta reg.
         self.do_static_comp_delta_reg = self.composition_regs_iter_gap > 0 \
-                                          and self.composition_delta_reg_weight > 0
+                                          and self.prompt_delta_reg_weight > 0
 
         # How many regularizations are done intermittently during the training iterations?
         interm_reg_types = []
@@ -421,9 +422,9 @@ class DDPM(pl.LightningModule):
 
         N_INTERM_REGS = len(interm_reg_types)
         interm_reg_probs = np.array(interm_reg_probs) / np.sum(interm_reg_probs)
-        self.do_ada_comp_delta_reg    = False
-        self.do_comp_prompt_mix_reg   = False
-        self.do_clip_text_loss        = False
+        self.do_ada_comp_delta_reg  = False
+        self.do_comp_prompt_mix_reg = False
+        self.do_clip_loss           = False
 
         # If N_INTERM_REGS == 0, then no intermittent regularizations, set the two flags to False.
         if N_INTERM_REGS > 0 and self.composition_regs_iter_gap > 0 \
@@ -440,15 +441,17 @@ class DDPM(pl.LightningModule):
                 self.do_ada_comp_delta_reg    = True
             elif reg_type == 'do_comp_prompt_mix_reg':
                 self.do_comp_prompt_mix_reg   = True
-            
-            self.do_clip_text_loss = (self.clip_text_loss_weight > 0)
+
+            # In reg iters we always do clip loss.
+            self.do_clip_loss = (self.clip_loss_weight > 0)
 
         # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
         if self.scheduler is not None:
-            self.lr_scale = self.scheduler.get_last_lr()[0] / self.scheduler.base_lrs[0]
+            lr_scale = self.scheduler.get_last_lr()[0] / self.scheduler.base_lrs[0]
+            self.mix_weight_scale = lr_scale
             # print(f'lr_lambda: {lr_lambda}')
         else:
-            self.lr_scale = 1.0
+            self.mix_weight_scale = 1.0
 
         if self.is_dreambooth:
             # DreamBooth uses ConcatDataset to make batch a tuple of train_batch and reg_batch.
@@ -737,7 +740,7 @@ class LatentDiffusion(DDPM):
                     # Initialize the ada embedding cache, so that the subsequent calls to 
                     # EmbeddingManager.get_ada_embedding() will store the ada embedding 
                     # for each layer into the cache. 
-                    # The cache will be used in composition_delta_loss().
+                    # The cache will be used in calc_prompt_delta_loss().
                     self.embedding_manager.init_ada_embedding_cache()
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
                     # If do_comp_prompt_mix_reg, the image mask is also needed to repeat. 
@@ -1144,12 +1147,12 @@ class LatentDiffusion(DDPM):
             # REPEATS: how many prompts correspond to each image.
             REPEATS = len(subj_comp_prompts[0])
             if REPEATS == 1 or self.do_ada_comp_delta_reg or self.do_comp_prompt_mix_reg:
-                # When this iter computes ada composition delta loss / compositional prompt mixing loss, 
+                # When this iter computes ada prompt delta loss / prompt mixing loss, 
                 # only use the first of the composition prompts (in effect num_compositions_per_image=1),
                 # otherwise it will use more than 40G RAM.
                 subj_comp_prompts = [ prompts[0] for prompts in subj_comp_prompts ]
                 cls_comp_prompts  = [ prompts[0] for prompts in cls_comp_prompts ]
-                composition_delta_prompts = (subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+                prompt_delta_prompts = (subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
             else:
                 subj_comp_prompts2 = []
                 cls_prompt_comp2   = []
@@ -1167,9 +1170,9 @@ class LatentDiffusion(DDPM):
                 cls_comp_prompts  = cls_prompt_comp2
                 c = c * REPEATS
                 cls_single_prompts = cls_single_prompts * REPEATS
-                composition_delta_prompts = (subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+                prompt_delta_prompts = (subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
         else:
-            composition_delta_prompts = None
+            prompt_delta_prompts = None
 
         if 'mask' in batch:
             img_mask = batch['mask']
@@ -1178,12 +1181,12 @@ class LatentDiffusion(DDPM):
         else:
             img_mask = None
 
-        loss = self(x, c, composition_delta_prompts, img_mask=img_mask, **kwargs)
+        loss = self(x, c, prompt_delta_prompts, img_mask=img_mask, **kwargs)
         return loss
 
     # LatentDiffusion.forward() is only called during training, by shared_step().
     #LINK #shared_step
-    def forward(self, x, c, composition_delta_prompts=None, img_mask=None, *args, **kwargs):
+    def forward(self, x, c, prompt_delta_prompts=None, img_mask=None, *args, **kwargs):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         if self.model.conditioning_key is not None:
             assert c is not None
@@ -1196,7 +1199,7 @@ class LatentDiffusion(DDPM):
                 # c: subj_single_prompts, which are plain prompts like 
                 # ['an illustration of a dirty z', 'an illustration of the cool z']
                 if self.do_static_comp_delta_reg or self.do_comp_prompt_mix_reg:
-                    subj_comp_prompts, cls_single_prompts, cls_comp_prompts = composition_delta_prompts
+                    subj_comp_prompts, cls_single_prompts, cls_comp_prompts = prompt_delta_prompts
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     ORIG_BS  = len(x)
                     N_EMBEDS = ORIG_BS * N_LAYERS
@@ -1245,7 +1248,7 @@ class LatentDiffusion(DDPM):
 
                         # Near the end of training, c2_mix_weight should be 1/4 of cls_prompt_mix_weight_max.
                         # If cls_prompt_mix_weight_max=0.4, then c2_mix_weight changes as 0 -> 0.4 -> 0.1.
-                        c2_mix_weight = self.cls_prompt_mix_weight_max * self.lr_scale
+                        c2_mix_weight = self.cls_prompt_mix_weight_max * self.mix_weight_scale
 
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed (concatenated),
@@ -1261,19 +1264,19 @@ class LatentDiffusion(DDPM):
                                                              c2_mix_weight=c2_mix_weight,
                                                              use_ortho_subtract=True)
 
-                        # If stop_mix_grad, stop gradient on subj_comps_emb_mix, 
+                        # If stop_prompt_mix_grad, stop gradient on subj_comps_emb_mix, 
                         # since it serves as the reference.
                         # If we don't stop gradient on subj_comps_emb_mix, 
                         # then chance is that subj_comps_emb_mix might be dominated by subj_comps_emb,
                         # so that subj_comps_emb_mix will produce images similar as subj_comps_emb does.
-                        # stop_mix_grad will improve compositionality but reduce face similarity.
-                        stop_mix_grad = True
-                        mix_grad_scale = 0.2
-                        if stop_mix_grad:
+                        # stop_prompt_mix_grad will improve compositionality but reduce face similarity.
+                        stop_prompt_mix_grad = False
+                        prompt_mix_grad_scale = 0.1
+                        if stop_prompt_mix_grad:
                             subj_comps_emb_mix_all_layers  = subj_comps_emb_mix_all_layers.detach()
                             subj_single_emb_mix_all_layers = subj_single_emb_mix_all_layers.detach()
-                        elif mix_grad_scale != 1:
-                            grad_scaler = GradientScaler(mix_grad_scale)
+                        elif prompt_mix_grad_scale != 1:
+                            grad_scaler = GradientScaler(prompt_mix_grad_scale)
                             subj_comps_emb_mix_all_layers  = grad_scaler(subj_comps_emb_mix_all_layers)
                             subj_single_emb_mix_all_layers = grad_scaler(subj_single_emb_mix_all_layers)
 
@@ -1298,6 +1301,8 @@ class LatentDiffusion(DDPM):
                             subj_comps_emb_mix  = subj_comps_emb_mix_all_layers
                             subj_single_emb_mix = subj_single_emb_mix_all_layers
 
+                        # c_static_emb2 will be added with the ada embeddings to form the 
+                        # conditioning embeddings in the U-Net.
                         # This copy of subj_single_emb, subj_comps_emb will be simply 
                         # repeated at the token dimension to match 
                         # the token number of the mixed (concatenated) 
@@ -1309,12 +1314,12 @@ class LatentDiffusion(DDPM):
                                                     subj_single_emb_mix, 
                                                     subj_comps_emb_mix], dim=0)
                         
-                        extra_info['iter_type']      = 'do_comp_prompt_mix_reg'
+                        extra_info['iter_type']      = self.promt_mix_scheme
                         # Set ada_bp_to_unet to False will reduce performance.
                         extra_info['ada_bp_to_unet'] = True
 
                     elif self.do_ada_comp_delta_reg:
-                        # Do ada composition delta loss in this iteration. 
+                        # Do ada prompt delta loss in this iteration. 
                         # c_static_emb: static embeddings, [128, 77, 768]. 128 = 8 * 16. 
                         # 8 is the total number of prompts in prompts_delta. 
                         # Each prompt is converted to 16 embeddings.
@@ -1341,18 +1346,13 @@ class LatentDiffusion(DDPM):
                         extra_info['ada_bp_to_unet'] = False
 
                     else:
-                        # Don't do ada composition delta loss or compositional mix loss in this iteration. 
-                        # This includes the subject scheme is static layerwise embedding or traditional TI.
-                        if self.do_deep_mix:
-                            pass
-                        else:
-                            # The original scheme. Use the original subj_single_prompts embeddings and prompts.
-                            # When num_compositions_per_image > 1, subj_single_prompts contains repeated prompts,
-                            # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
-                            c_static_emb2 = subj_single_emb[:N_EMBEDS]
-                            c_in2         = subj_single_prompts[:ORIG_BS]
-                            extra_info['iter_type']      = 'normal_recon'
-                            extra_info['ada_bp_to_unet'] = False
+                        # The original scheme. Use the original subj_single_prompts embeddings and prompts.
+                        # When num_compositions_per_image > 1, subj_single_prompts contains repeated prompts,
+                        # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
+                        c_static_emb2 = subj_single_emb[:N_EMBEDS]
+                        c_in2         = subj_single_prompts[:ORIG_BS]
+                        extra_info['iter_type']      = 'normal_recon'
+                        extra_info['ada_bp_to_unet'] = False
 
                     extra_info['cls_comp_prompts']  = cls_comp_prompts
                     extra_info['cls_single_prompts'] = cls_single_prompts
@@ -1368,7 +1368,7 @@ class LatentDiffusion(DDPM):
                     # No delta loss or compositional mix loss. Keep the tuple c unchanged.
                     c = self.get_learned_conditioning(c)
                     # c[2]: extra_info. Here is only reached when do_static_comp_delta_reg = False.
-                    # Either composition_delta_reg_weight == 0 or it's called by self.validation_step().
+                    # Either prompt_delta_reg_weight == 0 or it's called by self.validation_step().
                     c[2]['iter_type'] = 'normal_recon'
                     self.c_static_emb = None
 
@@ -1549,7 +1549,7 @@ class LatentDiffusion(DDPM):
             # If using static layerwise embeddings, delta reg applies to all images. 
             # No need to take out the second half.  
             model_output_single, model_output_comps = torch.split(model_output, model_output.shape[0] // 2, dim=0)
-            if self.do_clip_text_loss:
+            if self.do_clip_loss:
                 clip_images = model_output_comps * img_mask
                 clip_prompts_comp   = cond[2]['cls_comp_prompts']
                 clip_prompts_single = cond[2]['cls_single_prompts']
@@ -1564,7 +1564,7 @@ class LatentDiffusion(DDPM):
             # second half as the reconstruction objective for compositional regularization.
             model_outputs = torch.split(model_output, model_output.shape[0] // 4, dim=0)
             t = t[:t.shape[0] // 4]
-            if self.do_clip_text_loss:
+            if self.do_clip_loss:
                 # Images generated both under subj_comp_prompts and subj_prompt_mix_comps 
                 # are subject to the CLIP text-image loss.
                 # cls_comp_prompts is still used to compute the CLIP text-image loss on
@@ -1625,7 +1625,7 @@ class LatentDiffusion(DDPM):
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
 
-        elif iter_type == 'do_comp_prompt_mix_reg':
+        elif iter_type == 'do_comp_prompt_mix_reg' and self.promt_mix_scheme == 'concat_cls':
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
             # Only regularize on intermediate features, i.e., intermediate features generated 
             # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -1660,8 +1660,8 @@ class LatentDiffusion(DDPM):
 
             if use_subj_attn_as_spatial_weights:
                 orig_placeholder_ind_B, orig_placeholder_ind_T = self.embedding_manager.placeholder_indices
-                # cat_placeholder_ind_B: a list of instance indices in the batch.
-                # cat_placeholder_ind_T: a list of token indices of the placeholder token.
+                # cat_placeholder_ind_B: a list of batch indices that point to individual instances.
+                # cat_placeholder_ind_T: a list of token indices that point to the placeholder token in each instance.
                 cat_placeholder_ind_B  = orig_placeholder_ind_B.clone()
                 cat_placeholder_ind_T  = orig_placeholder_ind_T.clone()
                 # cond[0].shape[1]: 154, number of tokens in the mixed prompts.
@@ -1736,14 +1736,14 @@ class LatentDiffusion(DDPM):
                 feat_mix_single  = feat_mix_single.mean(dim=(2, 3))
                 feat_mix_comps   = feat_mix_comps.mean(dim=(2, 3))
 
-                stop_mix_grad = False
-                mix_grad_scale = 0.05
-                if stop_mix_grad:
+                stop_feat_mix_grad = False
+                feat_mix_grad_scale = 0.05
+                if stop_feat_mix_grad:
                     # feat_subj_single = feat_subj_single.detach()
                     feat_mix_single  = feat_mix_single.detach()
                     feat_mix_comps   = feat_mix_comps.detach()
-                elif mix_grad_scale != 1:
-                    grad_scaler = GradientScaler(mix_grad_scale)
+                elif feat_mix_grad_scale != 1:
+                    grad_scaler = GradientScaler(feat_mix_grad_scale)
                     # feat_subj_single = grad_scaler(feat_subj_single)
                     feat_mix_single  = grad_scaler(feat_mix_single)
                     feat_mix_comps   = grad_scaler(feat_mix_comps)
@@ -1769,9 +1769,12 @@ class LatentDiffusion(DDPM):
 
             # logvar is all zero. So no need to do "loss_comp_prompt_mix / exp(logvar_t) + logvar_t".
             loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_comp_prompt_mix})
-            loss = self.composition_prompt_mix_reg_weight * loss_comp_prompt_mix * self.lr_scale
+            loss = self.composition_prompt_mix_reg_weight * loss_comp_prompt_mix * self.mix_weight_scale
             
             self.embedding_manager.placeholder_indices = None
+        else:
+            # A dummy loss to avoid the error of "loss.backward()".
+            loss = 0
 
         if self.embedding_reg_weight > 0:
             loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
@@ -1780,23 +1783,23 @@ class LatentDiffusion(DDPM):
 
         if self.do_static_comp_delta_reg:
             # do_ada_comp_delta_reg controls whether to do ada comp delta reg here.
-            loss_comp_delta_reg = self.embedding_manager.composition_delta_loss( 
+            loss_comp_delta_reg = self.embedding_manager.calc_prompt_delta_loss( 
                                     self.do_ada_comp_delta_reg, self.c_static_emb
                                     ).mean()
             loss_dict.update({f'{prefix}/loss_comp_delta_reg': loss_comp_delta_reg})
-            loss += (self.composition_delta_reg_weight * loss_comp_delta_reg)
+            loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
             #print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
 
-        if self.do_clip_text_loss:
+        if self.do_clip_loss:
             #print(clip_prompts_comp)
             clip_images = self.differentiable_decode_first_stage(clip_images)
             # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
             # to keep the loss positive.
-            loss_clip_comp_text   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images)
-            loss_clip_single_text = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images)
-            loss_clip_text = loss_clip_comp_text * 0.8 + loss_clip_single_text * 0.2
-            loss_dict.update({f'{prefix}/loss_clip_text': loss_clip_text})
-            loss += (self.clip_text_loss_weight * loss_clip_text)
+            loss_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images)
+            loss_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images)
+            loss_clip = loss_clip_comp * 0.8 + loss_clip_single * 0.2
+            loss_dict.update({f'{prefix}/loss_clip': loss_clip})
+            loss += (self.clip_loss_weight * loss_clip)
 
         loss_dict.update({f'{prefix}/loss': loss})
 

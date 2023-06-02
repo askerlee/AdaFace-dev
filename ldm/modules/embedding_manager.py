@@ -437,7 +437,7 @@ class EmbeddingManager(nn.Module):
             layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                   17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             ada_emb_weight=0.5, 
-            composition_delta_reg_iter_gap=-1,       
+            prompt_delta_reg_iter_gap=-1,       
             subj_scale=1.0,
             **kwargs
     ):
@@ -452,7 +452,7 @@ class EmbeddingManager(nn.Module):
         self.progressive_counter = 0
         self.subj_scale = subj_scale
         self.set_ada_emb_weight(ada_emb_weight, init=True)
-        self.composition_delta_reg_iter_gap = composition_delta_reg_iter_gap
+        self.prompt_delta_reg_iter_gap = prompt_delta_reg_iter_gap
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
@@ -831,7 +831,7 @@ class EmbeddingManager(nn.Module):
         # Initialize the ada_embeddings cache list.
 
     # ada_embeddings is used to cache the embeddings of all layers, 
-    # for computing the composition delta loss.
+    # for computing the prompt delta loss.
     def init_ada_embedding_cache(self):
         self.ada_embeddings = [ None for i in range(self.num_unet_layers) ]
 
@@ -856,7 +856,7 @@ class EmbeddingManager(nn.Module):
     # -> EmbeddingManager.forward() -> here.
     # Occasionally, image_logger is called, which calls LatentDiffusion.log_images ->
     # .get_learned_conditioning() -> ... -> here.
-    # Such delta_loss_emb_mask won't be used in composition_delta_loss() and won't be cleared.
+    # Such delta_loss_emb_mask won't be used in calc_prompt_delta_loss() and won't be cleared.
     # delta_loss_emb_mask: [B, N, 768], where N is the padded prompt length.
     def set_delta_loss_emb_mask(self, delta_loss_emb_mask):
         self.delta_loss_emb_mask = delta_loss_emb_mask
@@ -1096,13 +1096,13 @@ class EmbeddingManager(nn.Module):
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
     # cls_prompt_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
-    def composition_delta_loss(self, do_ada_comp_delta_reg, static_embeddings):
-        # The composition delta loss for ada embeddings is only applied 
-        # every composition_delta_reg_iter_gap iterations. So the ada loss 
-        # should be boosted proportionally to composition_delta_reg_iter_gap. 
+    def calc_prompt_delta_loss(self, do_ada_comp_delta_reg, static_embeddings):
+        # The prompt delta loss for ada embeddings is only applied 
+        # every prompt_delta_reg_iter_gap iterations. So the ada loss 
+        # should be boosted proportionally to prompt_delta_reg_iter_gap. 
         # Divide it by 4 to reduce the proportion of ada emb loss relative to 
         # static emb loss in the total loss.
-        ada_comp_loss_boost_ratio = self.composition_delta_reg_iter_gap / 4
+        ada_comp_loss_boost_ratio = self.prompt_delta_reg_iter_gap / 4
         # If do_ada_comp_delta_reg,     BS = 2.
         # If not do_ada_comp_delta_reg, BS = 2 * num_compositions_per_image = 4.
         BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
@@ -1144,7 +1144,7 @@ class EmbeddingManager(nn.Module):
             # Each emb is of [4, 77, 768]. 4 = 2 * batch_size.
             for i, emb in enumerate(self.ada_embeddings):
                 # ada embeddings of all layers should have been stored in self.ada_embeddings
-                # before calling composition_delta_loss().
+                # before calling calc_prompt_delta_loss().
                 if emb is None:
                     breakpoint()
 

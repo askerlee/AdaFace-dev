@@ -26,7 +26,7 @@ model:
     use_ada_embedding: false
     # No compositional regularizations.
     composition_regs_iter_gap: -1
-    clip_text_loss_weight: 0
+    clip_loss_weight: 0
 
     # A dummy EmbeddingManager that does nothing and has no impact.
     personalization_config:
@@ -38,7 +38,7 @@ model:
         num_vectors_per_token: 1
         progressive_words: False
         use_layerwise_embedding: False
-        composition_delta_reg_iter_gap: 0
+        prompt_delta_reg_iter_gap: 0
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

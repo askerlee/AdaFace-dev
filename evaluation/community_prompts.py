@@ -32,3 +32,12 @@ female_prompt_list = [
 "{} as a Disney Princess",
 
 ]
+
+misc_prompt_list = [
+"underwater photograph of a {} backlighting watching a precise reflection on ice, " \
+    "magazine quality, 8k resolution, dramatic breathtaking dark background",
+"a {} taking a hyper-realistic selfie, GoPro camera, swimming with a great white shark",
+"a {} taking a hyper-realistic selfie, GoPro camera, with a roaring T-rex",
+"outdoor photo of a cute {} wearing sport clothes working out in the park, " \
+    "in the style of matte painting, backlit photography, life-size figures, photo-realistic techniques, stylish costume design",
+]

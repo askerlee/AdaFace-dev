@@ -757,6 +757,7 @@ class UNetModel(nn.Module):
                 return None
             emb_idx = layer_idx2emb_idx[layer_idx]
             layer_static_context = context[emb_idx]
+            hijk_layer_idx = [7, 8, 12, 16]
 
             if use_ada_context:
                 ada_embedder   = extra_info['ada_embedder']
@@ -768,15 +769,25 @@ class UNetModel(nn.Module):
 
                 # If static context is expanded by doing prompt mixing,
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
-                if iter_type =='do_comp_prompt_mix_reg' or iter_type == 'do_inf_comp_prompt_mix':
+                if iter_type =='concat_cls' or iter_type == 'hijk':
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
-                    # Do not BP into ada embeddings that's added with the mixed embeddings. 
-                    layer_ada_context = th.cat([layer_ada_context, layer_ada_context.detach()], dim=1)
+                    if iter_type == 'concat_cls':
+                        # Do not BP into the copy of ada embeddings that are added with the mixed embeddings. 
+                        layer_ada_context = th.cat([layer_ada_context, layer_ada_context.detach()], dim=1)
+                    else:
+                        # iter_type == 'hijk'. Separate layer_static_context.
+                        layer_static_context, layer_mix_context = \
+                            layer_static_context.split(layer_static_context.shape[1] // 2, dim=1)
 
                 # layer_static_context, layer_ada_context: [2, 77, 768]
                 # layer_context: layer context fed to the current UNet layer, [2, 77, 768]
                 layer_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
-
+                if iter_type == 'hijk' and layer_idx in hijk_layer_idx:
+                    # Pass both embeddings for hijacking the key of layer_context by layer_mix_context.
+                    layer_context = (layer_context, layer_mix_context)
+                # Otherwise even if iter_type == 'hijk', since this layer is not mixed. 
+                # In this case, layer_mix_context == layer_static_context, 
+                # and we just discard layer_mix_context.
             else:
                 layer_context = layer_static_context
 
@@ -807,8 +818,8 @@ class UNetModel(nn.Module):
         # 12            [2, 1280, 8,  8]
         layer_idx = 0
 
-        do_sync_blocks = True
-        if do_sync_blocks and iter_type =='do_comp_prompt_mix_reg':
+        do_sync_blocks = (iter_type == 'concat_cls')
+        if do_sync_blocks:
             # Synchronize features of blocks 1 and 3 at a layer randomly 
             # selected from layers [7, 8, 12, 16]. So that the delta loss
             # of this and the following layers will be more accurate, as the input
@@ -819,22 +830,26 @@ class UNetModel(nn.Module):
         else:
             sync_blocks_01_layer_idx = -1
 
-        save_attn_layer_indices = [7, 8, 12, 16]
+        if iter_type == 'concat_cls':
+            save_attn_layer_indices = [7, 8, 12, 16]
+        else:
+            # If iter_type == 'hijk', do not store attention matrices.
+            save_attn_layer_indices = []
 
         for module in self.input_blocks:
-            if iter_type =='do_comp_prompt_mix_reg' and layer_idx == sync_blocks_01_layer_idx:
+            if layer_idx == sync_blocks_01_layer_idx:
                 h = sync_blocks_01(h)
 
             layer_context = get_layer_context(layer_idx, h)
 
-            if iter_type =='do_comp_prompt_mix_reg' and layer_idx in save_attn_layer_indices:
+            if layer_idx in save_attn_layer_indices:
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
 
             # layer_context: [2, 77, 768], conditioning embedding.
             # emb: [2, 1280], time embedding.
             h = module(h, emb, layer_context)
             hs.append(h)
-            if iter_type =='do_comp_prompt_mix_reg':
+            if iter_type =='concat_cls':
                 hs2[layer_idx] = h
 
                 if layer_idx in save_attn_layer_indices:
@@ -843,17 +858,17 @@ class UNetModel(nn.Module):
 
             layer_idx += 1
         
-        if iter_type =='do_comp_prompt_mix_reg' and layer_idx == sync_blocks_01_layer_idx:
+        if layer_idx == sync_blocks_01_layer_idx:
             h = sync_blocks_01(h)
 
         layer_context = get_layer_context(layer_idx, h)
 
-        if iter_type =='do_comp_prompt_mix_reg' and layer_idx in save_attn_layer_indices:
+        if layer_idx in save_attn_layer_indices:
             self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = True
 
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, layer_context)
-        if iter_type =='do_comp_prompt_mix_reg':
+        if iter_type =='concat_cls':
             hs2[layer_idx] = h
 
             if layer_idx in save_attn_layer_indices:
@@ -875,18 +890,18 @@ class UNetModel(nn.Module):
         # 24 [2, 320,  64, 64]
         
         for module in self.output_blocks:
-            if iter_type =='do_comp_prompt_mix_reg' and layer_idx == sync_blocks_01_layer_idx:
+            if layer_idx == sync_blocks_01_layer_idx:
                 h = sync_blocks_01(h)
 
             layer_context = get_layer_context(layer_idx, h)
             h = th.cat([h, hs.pop()], dim=1)
 
-            if iter_type =='do_comp_prompt_mix_reg' and layer_idx in save_attn_layer_indices:
+            if layer_idx in save_attn_layer_indices:
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
 
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
-            if iter_type =='do_comp_prompt_mix_reg':
+            if iter_type =='concat_cls':
                 hs2[layer_idx] = h
 
                 if layer_idx in save_attn_layer_indices:

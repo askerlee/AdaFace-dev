@@ -8,7 +8,7 @@ import numpy as np
 from ldm.data.personalized import PersonalizedBase
 from evaluation.clip_eval import ImageDirEvaluator
 from evaluation.vit_eval import ViTEvaluator
-from evaluation.hard_compositional_prompts import hard_prompt_list
+from evaluation.community_prompts import hard_prompt_list
 from deepface import DeepFace
 from deepface.commons import functions as deepface_functions
 

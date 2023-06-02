@@ -219,9 +219,9 @@ def get_parser(**parser_kwargs):
         type=float, default=-1,
         help="Weight of ada embeddings (in contrast to static embeddings)")
 
-    parser.add_argument("--composition_delta_reg_weight",
+    parser.add_argument("--prompt_delta_reg_weight",
         type=float, default=-1,
-        help="Composition delta regularization weight")
+        help="Prompt delta regularization weight")
 
     parser.add_argument("--min_rand_scaling",
                         type=float, default=0.8, 
@@ -733,9 +733,9 @@ if __name__ == "__main__":
         if opt.ada_emb_weight != -1:
             config.model.params.personalization_config.params.ada_emb_weight = opt.ada_emb_weight
 
-        # Setting composition_delta_reg_weight to 0 will disable composition delta regularization.
-        if opt.composition_delta_reg_weight >= 0:
-            config.model.params.composition_delta_reg_weight = opt.composition_delta_reg_weight
+        # Setting prompt_delta_reg_weight to 0 will disable prompt delta regularization.
+        if opt.prompt_delta_reg_weight >= 0:
+            config.model.params.prompt_delta_reg_weight = opt.prompt_delta_reg_weight
 
         if opt.lr > 0:
             config.model.base_learning_rate = opt.lr
