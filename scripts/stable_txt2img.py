@@ -420,6 +420,7 @@ def main(opt):
                             # If ref_prompt is None (default), then ref_c is None, i.e., no mixing.
                             ref_prompt = batched_ref_prompts[p_i]
                             if ref_prompt is not None:
+                                print("Mix with", ref_prompt)
                                 ref_c = model.get_learned_conditioning(batch_size * [ref_prompt])
                             else:
                                 ref_c = None
@@ -446,11 +447,10 @@ def main(opt):
                             if use_layerwise_embedding:
                                 # 4, 5, 6, 7 correspond to original layer indices 7, 8, 12, 16 
                                 # (same as used in computing mixing loss)
-                                sync_layer_indices = [4, 5, 6, 7, 8]
+                                sync_layer_indices = [4, 5, 6, 7]
                                 layer_mask = torch.zeros_like(c0_mix_all_layers).reshape(-1, 16, *c0_mix_all_layers.shape[1:])
                                 layer_mask[:, sync_layer_indices] = 1
                                 layer_mask = layer_mask.reshape(-1, *c0_mix_all_layers.shape[1:])
-                                
                                 # Use most of the layers of embeddings in subj_comps_emb, but 
                                 # replace sync_layer_indices layers with those from subj_comps_emb_mix_all_layers.
                                 # Do not assign with sync_layers as indices, which destroys the computation graph.
@@ -461,7 +461,8 @@ def main(opt):
                                 # There is only one layer of embeddings.
                                 c0_mix = c0_mix_all_layers
 
-                            c[2]['iter_type'] = 'concat_cls'
+                            c[2]['iter_type'] = 'hijk'
+                            # c / ref_c are tuples of (cond, prompts, extra_info).
                             c = (c0_mix, c[1], c[2])
 
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]

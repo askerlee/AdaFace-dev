@@ -1625,13 +1625,13 @@ class LatentDiffusion(DDPM):
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
 
-        elif iter_type == 'do_comp_prompt_mix_reg' and self.promt_mix_scheme == 'concat_cls':
+        elif iter_type == 'do_comp_prompt_mix_reg':
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
             # Only regularize on intermediate features, i.e., intermediate features generated 
             # under subj_comp_prompts should satisfy the delta loss constraint:
             # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
             # F(subj_single_prompts) - F(cls_single_prompts)
-            loss_comp_prompt_mix = 0
+            loss_prompt_mix_reg = 0
 
             # unet_feats is a dict as: layer_idx -> unet_feat. 
             # It contains all the intermediate 25 layers of UNet features.
@@ -1762,14 +1762,14 @@ class LatentDiffusion(DDPM):
                 # the single embeddings, as the former should be optimized to look good by itself,
                 # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
                 # and 2) the embeddings are amendable to composition.
-                loss_layer_comp_prompt_mix = (self.get_loss(feat_subj_delta, feat_mix_delta, mean=False) * chan_weights).mean()
+                loss_layer_prompt_mix_reg = (self.get_loss(feat_subj_delta, feat_mix_delta, mean=False) * chan_weights).mean()
                 
-                # print(f'layer {unet_layer_idx} loss: {loss_layer_comp_prompt_mix:.4f}')
-                loss_comp_prompt_mix += loss_layer_comp_prompt_mix * distill_layer_weight * distill_overall_weight
+                # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
+                loss_prompt_mix_reg += loss_layer_prompt_mix_reg * distill_layer_weight * distill_overall_weight
 
-            # logvar is all zero. So no need to do "loss_comp_prompt_mix / exp(logvar_t) + logvar_t".
-            loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_comp_prompt_mix})
-            loss = self.composition_prompt_mix_reg_weight * loss_comp_prompt_mix * self.mix_weight_scale
+            # logvar is all zero. So no need to do "loss_prompt_mix_reg / exp(logvar_t) + logvar_t".
+            loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_prompt_mix_reg})
+            loss = self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.mix_weight_scale
             
             self.embedding_manager.placeholder_indices = None
         else:
