@@ -1743,20 +1743,20 @@ class LatentDiffusion(DDPM):
 
 
                 if iter_type == 'mix_concat_cls':
-                    pool_spatial = True
+                    pool_spatial_size = (1, 1)
                 else:
-                    pool_spatial = False
-                    
-                if pool_spatial:
-                    # Pool the H, W dimensions to remove spatial information.
-                    # After pooling, feat_subj_single, feat_subj_comps, 
-                    # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...
-                    feat_subj_single = feat_subj_single.mean(dim=(2, 3))
-                    feat_subj_comps  = feat_subj_comps.mean(dim=(2, 3))
-                    feat_mix_single  = feat_mix_single.mean(dim=(2, 3))
-                    feat_mix_comps   = feat_mix_comps.mean(dim=(2, 3))
+                    pool_spatial_size = (2, 2)
 
-                stop_feat_mix_grad = False
+                pooler = nn.AdaptiveAvgPool2d(pool_spatial_size)
+                # Pool the H, W dimensions to remove spatial information.
+                # After pooling, feat_subj_single, feat_subj_comps, 
+                # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...
+                feat_subj_single = pooler(feat_subj_single).reshape(feat_subj_single.shape[0], -1)
+                feat_subj_comps  = pooler(feat_subj_comps).reshape(feat_subj_comps.shape[0], -1)
+                feat_mix_single  = pooler(feat_mix_single).reshape(feat_mix_single.shape[0], -1)
+                feat_mix_comps   = pooler(feat_mix_comps).reshape(feat_mix_comps.shape[0], -1)
+
+                stop_feat_mix_grad  = False
                 feat_mix_grad_scale = 0.05
                 if stop_feat_mix_grad:
                     # feat_subj_single = feat_subj_single.detach()
