@@ -36,8 +36,8 @@ model:
     cls_prompt_mix_weight_max:  0.4
     # typical clip loss: 0.3, * weight -> 3e-4.
     clip_loss_weight:      0.001
-    # promt_mix_scheme: 'hijk' or 'concat_cls'
-    promt_mix_scheme:      'hijk'
+    # promt_mix_scheme: 'mix_hijk' or 'mix_concat_cls'
+    promt_mix_scheme:      'mix_hijk'
 
     optimizer_type: AdamW     # sophia
     scheduler_config:

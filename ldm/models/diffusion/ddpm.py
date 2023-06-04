@@ -93,7 +93,7 @@ class DDPM(pl.LightningModule):
                  composition_prompt_mix_reg_weight=0.,
                  cls_prompt_mix_weight_max=0.4,
                  clip_loss_weight=0,
-                 promt_mix_scheme='hijk',       # 'hijk' or 'concat_cls'
+                 promt_mix_scheme='mix_hijk',       # 'mix_hijk' or 'mix_concat_cls'
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -1561,6 +1561,10 @@ class LatentDiffusion(DDPM):
         elif self.do_comp_prompt_mix_reg:
             # If we do compositional prompt mixing, we need the final images of the 
             # second half as the reconstruction objective for compositional regularization.
+            # The subj_single and cls_single images, although seemingly subject to
+            # the image recon loss, are actually not reconstructable, 
+            # since 75% of the chance, x_start is totally randomized.
+            # LINK #shared_step
             model_outputs = torch.split(model_output, model_output.shape[0] // 4, dim=0)
             t = t[:t.shape[0] // 4]
             if self.do_clip_loss:
@@ -1573,6 +1577,9 @@ class LatentDiffusion(DDPM):
                 # The first  cls_comp_prompts is for subj_comps_emb, and 
                 # the second cls_comp_prompts is for subj_comps_emb_mix.                
                 clip_prompts_comp   = cond[2]['cls_comp_prompts']   + cond[2]['cls_comp_prompts']
+                # Compositional images are also subject to the single-prompt CLIP loss,
+                # as they must contain the subject. This is to reduce the chance that
+                # the output image only contains elements other than the subject.
                 clip_prompts_single = cond[2]['cls_single_prompts'] + cond[2]['cls_single_prompts']
                 if len(clip_images) != len(clip_prompts_comp) or len(clip_images) != len(clip_prompts_single):
                     breakpoint()
@@ -1624,7 +1631,7 @@ class LatentDiffusion(DDPM):
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
 
-        elif iter_type == 'do_comp_prompt_mix_reg':
+        elif iter_type.startswith("mix_"):
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
             # Only regularize on intermediate features, i.e., intermediate features generated 
             # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -1666,9 +1673,13 @@ class LatentDiffusion(DDPM):
                 # cond[0].shape[1]: 154, number of tokens in the mixed prompts.
                 # Right shift the subject token indices by 77, 
                 # to locate the subject token (placeholder) in the concatenated comp prompts.
-                cat_placeholder_ind_T += cond[0].shape[1] // 2
-                # stack -> flatten, to interlace the two lists.
-                placeholder_indices_B = torch.stack([orig_placeholder_ind_B, cat_placeholder_ind_B], dim=1).flatten()
+                if iter_type == 'mix_concat_cls':
+                    cat_placeholder_ind_T += cond[0].shape[1] // 2
+                    # stack -> flatten, to interlace the two lists.
+                    placeholder_indices_B = torch.stack([orig_placeholder_ind_B, cat_placeholder_ind_B], dim=1).flatten()
+                else:
+                    placeholder_indices_B = orig_placeholder_ind_B
+
                 # The class prompts are at the latter half of all the prompts.
                 # So we need to add the batch indices of the subject prompts, to locate
                 # the corresponding class prompts.
@@ -1677,9 +1688,10 @@ class LatentDiffusion(DDPM):
                 placeholder_indices_B = torch.cat([placeholder_indices_B, cls_placeholder_indices_B], dim=0)
                 # stack then flatten() to interlace the two lists.
                 placeholder_indices_T = torch.stack([orig_placeholder_ind_T, cat_placeholder_ind_T], dim=1).flatten()
-                # The token indices in the class prompts are the 
-                # same as in the subject prompts. No offset is needed. 
-                placeholder_indices_T = placeholder_indices_T.repeat(2)
+                if iter_type == 'mix_concat_cls':
+                    # The token indices in the class prompts are the 
+                    # same as in the subject prompts. No offset is needed. 
+                    placeholder_indices_T = placeholder_indices_T.repeat(2)
                 # placeholder_indices: 
                 # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
                 #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
@@ -1709,7 +1721,10 @@ class LatentDiffusion(DDPM):
                     attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2).detach()
                     # subj_attn: [8, 8, 256] / [8, 8, 64]
                     subj_attn = attn_mat[placeholder_indices]
-                    # subj_attn_subj_single, ...: [2, 8, 256]
+                    # subj_attn_subj_single, ...: [2, 8, 256].
+                    # The first dim 2 is the two occurrences of the subject token 
+                    # in the two sets of prompts. Therefore, HALF_BS is still needed to 
+                    # determine its batch size in convert_attn_to_spatial_weight().
                     subj_attn_subj_single, subj_attn_subj_comps, \
                     subj_attn_mix_single,  subj_attn_mix_comps \
                         = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)

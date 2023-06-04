@@ -461,7 +461,7 @@ def main(opt):
                                 # There is only one layer of embeddings.
                                 c0_mix = c0_mix_all_layers
 
-                            c[2]['iter_type'] = 'hijk'
+                            c[2]['iter_type'] = 'mix_hijk'
                             # c / ref_c are tuples of (cond, prompts, extra_info).
                             c = (c0_mix, c[1], c[2])
 

@@ -378,18 +378,21 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     # [1, 2, 8, 256] => max/mean => [1, 256] => [1, 16, 16].
     # Un-flatten the attention map to the spatial dimensions, so as to
     # apply them as weights.
-    # Max among the 8 heads, then mean across the 2 occurrences of the subject tokens.
+    # Mean among the 8 heads, then sum across the 2 occurrences of the subject tokens.
+
     spatial_attn = flat_attn.mean(dim=2).sum(dim=1).reshape(-1, *spatial_shape)
     attn_mean, attn_std = spatial_attn.mean(dim=(1,2), keepdim=True), spatial_attn.std(dim=(1,2), keepdim=True)
+    # Lower bound of denom is attn_mean / 2, in case attentions are too uniform and attn_std is too small.
     denom = torch.clamp(attn_std + 0.001, min = attn_mean / 2)
-    # Convert spatial_attn with mean and std, so that mean attn values are 1, 
+    # Normalize spatial_attn with mean and std, so that mean attn values are 0.
     # and mean + x*std = exp(-x), i.e., the higher the attention value, the lower the weight.
     # The lower the attention value, the higher the weight, but no more than 1.
     spatial_weight = torch.exp(-(spatial_attn - attn_mean) / denom).clamp(max=1)
     # Normalize spatial_weight so that the average weight is 1.
     spatial_weight = spatial_weight / spatial_weight.mean()
     spatial_weight = spatial_weight.unsqueeze(1)
-
+    
+    # flat_attn has been detached before passing to this function. So no need to detach spatial_weight.
     return spatial_weight
 
 # Revised from RevGrad, by removing the grad negation.

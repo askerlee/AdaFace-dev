@@ -769,24 +769,24 @@ class UNetModel(nn.Module):
 
                 # If static context is expanded by doing prompt mixing,
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
-                if iter_type =='concat_cls' or iter_type == 'hijk':
+                if iter_type.startswith("mix_"):
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
-                    if iter_type == 'concat_cls':
+                    if iter_type == 'mix_concat_cls':
                         # Do not BP into the copy of ada embeddings that are added with the mixed embeddings. 
                         layer_ada_context = th.cat([layer_ada_context, layer_ada_context.detach()], dim=1)
                     else:
-                        # iter_type == 'hijk'. Separate layer_static_context.
+                        # iter_type == 'mix_hijk'. Separate layer_static_context.
                         layer_static_context, layer_mix_static_context = \
                             layer_static_context.split(layer_static_context.shape[1] // 2, dim=1)
 
                 # layer_static_context, layer_ada_context: [2, 77, 768]
                 # layer_context: layer context fed to the current UNet layer, [2, 77, 768]
                 layer_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
-                if iter_type == 'hijk' and layer_idx in hijk_layer_indices:
+                if iter_type == 'mix_hijk' and layer_idx in hijk_layer_indices:
                     layer_mix_context = layer_mix_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
                     # Pass both embeddings for hijacking the key of layer_context by layer_mix_context.
                     layer_context = (layer_context, layer_mix_context)
-                # Otherwise even if iter_type == 'hijk', since this layer is not mixed. 
+                # Otherwise even if iter_type == 'mix_hijk', since this layer is not mixed. 
                 # In this case, layer_mix_context == layer_static_context, 
                 # and we just discard layer_mix_context.
             else:
@@ -819,7 +819,7 @@ class UNetModel(nn.Module):
         # 12            [2, 1280, 8,  8]
         layer_idx = 0
 
-        do_sync_blocks = (iter_type == 'concat_cls')
+        do_sync_blocks = (iter_type == 'mix_concat_cls')
         if do_sync_blocks:
             # Synchronize features of blocks 1 and 3 at a layer randomly 
             # selected from layers [7, 8, 12, 16]. So that the delta loss
@@ -831,10 +831,10 @@ class UNetModel(nn.Module):
         else:
             sync_blocks_01_layer_idx = -1
 
-        if iter_type == 'concat_cls' or iter_type == 'hijk':
+        if iter_type.startswith("mix_"):
+            # If iter_type == 'mix_hijk', also store attention matrices.
             save_attn_layer_indices = [7, 8, 12, 16]
         else:
-            # If iter_type == 'hijk', do not store attention matrices.
             save_attn_layer_indices = []
 
         for module in self.input_blocks:
@@ -850,7 +850,7 @@ class UNetModel(nn.Module):
             # emb: [2, 1280], time embedding.
             h = module(h, emb, layer_context)
             hs.append(h)
-            if iter_type =='concat_cls':
+            if iter_type.startswith("mix_"):
                 hs2[layer_idx] = h
 
                 if layer_idx in save_attn_layer_indices:
@@ -869,7 +869,7 @@ class UNetModel(nn.Module):
 
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, layer_context)
-        if iter_type =='concat_cls':
+        if iter_type.startswith("mix_"):
             hs2[layer_idx] = h
 
             if layer_idx in save_attn_layer_indices:
@@ -902,7 +902,7 @@ class UNetModel(nn.Module):
 
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
-            if iter_type =='concat_cls':
+            if iter_type.startswith("mix_"):
                 hs2[layer_idx] = h
 
                 if layer_idx in save_attn_layer_indices:
