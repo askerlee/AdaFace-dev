@@ -1742,13 +1742,19 @@ class LatentDiffusion(DDPM):
                     feat_mix_comps   = feat_mix_comps   * spatial_weight_mix_comps
 
 
-                # Pool the H, W dimensions to remove spatial information.
-                # After pooling, feat_subj_single, feat_subj_comps, 
-                # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...
-                feat_subj_single = feat_subj_single.mean(dim=(2, 3))
-                feat_subj_comps  = feat_subj_comps.mean(dim=(2, 3))
-                feat_mix_single  = feat_mix_single.mean(dim=(2, 3))
-                feat_mix_comps   = feat_mix_comps.mean(dim=(2, 3))
+                if iter_type == 'mix_concat_cls':
+                    pool_spatial = True
+                else:
+                    pool_spatial = False
+                    
+                if pool_spatial:
+                    # Pool the H, W dimensions to remove spatial information.
+                    # After pooling, feat_subj_single, feat_subj_comps, 
+                    # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...
+                    feat_subj_single = feat_subj_single.mean(dim=(2, 3))
+                    feat_subj_comps  = feat_subj_comps.mean(dim=(2, 3))
+                    feat_mix_single  = feat_mix_single.mean(dim=(2, 3))
+                    feat_mix_comps   = feat_mix_comps.mean(dim=(2, 3))
 
                 stop_feat_mix_grad = False
                 feat_mix_grad_scale = 0.05
