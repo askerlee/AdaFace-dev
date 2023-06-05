@@ -734,19 +734,10 @@ class UNetModel(nn.Module):
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
 
         if use_layerwise_context:
-            if use_sep_key_embs:
-                # If use_sep_key_embs, context is an extended batch 32*B as (context_qv, context_key).
-                # Each 16 vectors of context_qv (corresponding to an image) has to be aligned with 
-                # the corresponding 16 vectors of context_key (corresponding to the same image).
-                # So they are concatenated at dim 1 (tokens dim), and then handled 
-                # in the same way as mixed embeddings.
-                # [32*B, 77, 768] => [16*B, 154, 768].
-                context_qv, context_key = context.split(context.shape[0] // 2, dim=0)
-                context = th.cat([context_qv, context_key], dim=1)
-
+            B = x.shape[0]
             # If use_layerwise_context, then context is static layerwise embeddings.
             # context: [16*B, N, 768] reshape => [B, 16, N, 768] permute => [16, B, N, 768]
-            context = context.reshape(x.shape[0], 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
+            context = context.reshape(B, 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
                     
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)

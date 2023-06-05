@@ -766,6 +766,16 @@ class LatentDiffusion(DDPM):
                     self.embedding_manager.set_img_mask(img_mask)
                     extra_info['ada_embedder'] = ada_embedder
 
+                if self.use_sep_key_embs:
+                    # If use_sep_key_embs, context is an extended batch 32*B as (B*context_qv, B*context_key).
+                    # Each 16 vectors of context_qv (corresponding to an image) has to be aligned with 
+                    # the corresponding 16 vectors of context_key (corresponding to the same image).
+                    # So they are concatenated at dim 1 (tokens dim), and then handled 
+                    # in the same way as mixed embeddings.
+                    # [32*B, 77, 768] => [16*B, 154, 768].
+                    c_v, c_k = torch.split(c, c.shape[0] // 2, dim=0)
+                    c = torch.cat([c_v, c_k], dim=1)
+
                 c = (c, c_in, extra_info)
             else:
                 c = self.cond_stage_model(cond_in)
@@ -1213,15 +1223,7 @@ class LatentDiffusion(DDPM):
                 if self.do_static_prompt_delta_reg or self.do_comp_prompt_mix_reg or self.do_sep_key_emb_reg:
                     subj_comp_prompts, cls_single_prompts, cls_comp_prompts = prompt_delta_prompts
 
-                    if self.use_layerwise_embedding:
-                        # Using separate key embeddings doubles the batch size.
-                        if self.use_sep_key_embs:
-                            N_LAYERS = 32
-                        else:
-                            N_LAYERS = 16
-                    else:
-                        N_LAYERS = 1
-
+                    N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     ORIG_BS  = len(x)
                     N_EMBEDS = ORIG_BS * N_LAYERS
                     # HALF_BS is at least 1. So if ORIG_BS == 1, then HALF_BS = 1.
