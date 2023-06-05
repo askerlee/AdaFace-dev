@@ -431,7 +431,7 @@ class EmbeddingManager(nn.Module):
             use_layerwise_embedding=False,
             use_sep_key_embs=False,
             num_unet_layers=16,
-            # Only replace keys in these layers. Correspond to 7, 8, 12, 16 in the UNet.
+            # Only apply separate keys in these layers, corresponding to layers 7, 8, 12, 16 in the UNet.
             sep_key_layer_indices=[4, 5, 6, 7], 
             # If two tokens, lora rank=4. That means,
             # compress 16 embeddings to the linear combination of 4 embeddings,
@@ -663,7 +663,7 @@ class EmbeddingManager(nn.Module):
             # Use most of the layers of embeddings in static_embeddings, but 
             # replace sep_key_layer_indices layers with those from key_embeddings.
             key_embeddings_all_layers  = static_embeddings * (1 - layer_mask) \
-                                         + key_embeddings * layer_mask
+                                         + key_embeddings  *  layer_mask
             # Combine the static and key embeddings into an extended batch.
             # [64, 77, 768] + [64, 77, 768] => [128, 77, 768].
             # B = 2, 32*B = 64.
