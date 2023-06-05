@@ -431,6 +431,8 @@ class EmbeddingManager(nn.Module):
             use_layerwise_embedding=False,
             use_sep_key_embs=False,
             num_unet_layers=16,
+            # Only replace keys in these layers. Correspond to 7, 8, 12, 16 in the UNet.
+            sep_key_layer_indices=[4, 5, 6, 7], 
             # If two tokens, lora rank=4. That means,
             # compress 16 embeddings to the linear combination of 4 embeddings,
             # in which two are initialized as the two token embeddings, and two are learned through BP.
@@ -468,6 +470,7 @@ class EmbeddingManager(nn.Module):
         # instead of layer-wise embedding.
         self.max_vectors_per_layer_per_token = num_vectors_per_token
         self.use_sep_key_embs = use_sep_key_embs
+        self.sep_key_layer_indices = sep_key_layer_indices
         if self.use_sep_key_embs:
             assert initializer_words is not None, "initializer_words must be specified when using separate key embeddings"
 
@@ -537,14 +540,19 @@ class EmbeddingManager(nn.Module):
                     avg_init_word_embedding = (init_word_embeddings * init_word_weights.unsqueeze(1)).sum(dim=0, keepdim=True)
 
                 if layerwise_lora_rank > 0:
-                    token_params        = StaticLayerwiseEmbedding(num_vectors_per_token, self.token_dim, layerwise_lora_rank, (0.1, 0.02), 
+                    token_params        = StaticLayerwiseEmbedding(num_vectors_per_token, self.token_dim, layerwise_lora_rank, 
+                                                                   (0.1, 0.02), 
                                                                    init_word_embeddings, init_word_weights, 
                                                                    init_neg_vecs=init_neg_embeddings)
 
                     token_ada_embedder  = AdaEmbedding(num_vectors_per_token, self.token_dim, 
                                                        layerwise_lora_rank, init_word_embeddings)                                                        
                     if self.use_sep_key_embs:
-                        token_key_embedder = StaticLayerwiseEmbedding(num_vectors_per_token, self.token_dim, layerwise_lora_rank, (0.1, 0.02),
+                        # The rank is set to N + 1, i.e., number of init vectors + 1, 
+                        # where 1 is for the all-zero vector. This is the minimal rank, and no random base vectors 
+                        # are to be learned. But the init vectors are still learned through BP.
+                        token_key_embedder = StaticLayerwiseEmbedding(num_vectors_per_token, self.token_dim, N + 1, 
+                                                                      (0.1, 0.02),
                                                                       init_word_embeddings, init_word_weights)                    
 
                 else:
@@ -642,13 +650,24 @@ class EmbeddingManager(nn.Module):
                                                       B, N, device, update_mask=True)
 
         if self.use_sep_key_embs:
+            # key_embeddings are only for UNet layers 7, 8, 12, 16. 
+            # Other layers will still use static_embeddings.
             key_embeddings = self.get_static_embedding(tokenized_text, embedded_text.clone(), 
                                                        self.string_to_key_embedder_dict,
                                                        B, N, device, update_mask=False)
+            layer_mask = torch.zeros_like(static_embeddings).reshape(-1, self.num_unet_layers, 
+                                                                     *static_embeddings.shape[1:])
+            layer_mask[:, self.sep_key_layer_indices] = 1
+            layer_mask = layer_mask.reshape(-1, *static_embeddings.shape[1:])
+            
+            # Use most of the layers of embeddings in static_embeddings, but 
+            # replace sep_key_layer_indices layers with those from key_embeddings.
+            key_embeddings_all_layers  = static_embeddings * (1 - layer_mask) \
+                                         + key_embeddings * layer_mask
             # Combine the static and key embeddings into an extended batch.
             # [64, 77, 768] + [64, 77, 768] => [128, 77, 768].
             # B = 2, 32*B = 64.
-            static_embeddings = torch.cat([static_embeddings, key_embeddings], dim=0)
+            static_embeddings = torch.cat([static_embeddings, key_embeddings_all_layers], dim=0)
 
         return static_embeddings
     
