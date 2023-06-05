@@ -31,6 +31,7 @@ model:
         num_vectors_per_token: 1
         progressive_words: False
         use_layerwise_embedding: True
+        use_sep_key_embs:  True
         ada_emb_weight: 0.5
         
     unet_config:
