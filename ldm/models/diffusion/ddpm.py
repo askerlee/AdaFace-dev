@@ -756,12 +756,13 @@ class LatentDiffusion(DDPM):
                     self.embedding_manager.init_ada_embedding_cache()
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
                     # If do_comp_prompt_mix_reg, the image mask is also needed to repeat. 
-                    if self.do_ada_prompt_delta_reg and img_mask is not None:
-                        # The image batch is repeated twice, so img_mask is also repeated twice.
-                        img_mask = img_mask.repeat(2, 1, 1, 1)
-                    if self.do_comp_prompt_mix_reg and img_mask is not None:
+                    if img_mask is not None:
                         HALF_BS  = max(img_mask.shape[0] // 2, 1)
-                        img_mask = img_mask[:HALF_BS].repeat(4, 1, 1, 1)
+                        if self.do_ada_prompt_delta_reg:
+                            # The image batch is repeated twice, so img_mask is also repeated twice.
+                            img_mask = img_mask[:HALF_BS].repeat(2, 1, 1, 1)
+                        if self.do_comp_prompt_mix_reg:
+                            img_mask = img_mask[:HALF_BS].repeat(4, 1, 1, 1)
 
                     self.embedding_manager.set_img_mask(img_mask)
                     extra_info['ada_embedder'] = ada_embedder
@@ -1231,7 +1232,7 @@ class LatentDiffusion(DDPM):
 
                     subj_single_prompts = c
 
-                    if self.do_comp_prompt_mix_reg:
+                    if self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg:
                         # Only keep the first half of the static embeddings and prompts of subj_comp_prompts.
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
@@ -1367,7 +1368,7 @@ class LatentDiffusion(DDPM):
                         c_in2         = subj_single_prompts + subj_comp_prompts
                         extra_info['iter_type']      = 'do_ada_prompt_delta_reg'
                         extra_info['ada_bp_to_unet'] = False
-
+                        
                     elif self.do_sep_key_emb_reg:
                         c_in2 = subj_comp_prompts
                         c_static_emb2 = subj_comps_emb
@@ -1391,7 +1392,12 @@ class LatentDiffusion(DDPM):
                     # The full c_static_emb (embeddings of subj_single_prompts, subj_comp_prompts, 
                     # cls_single_prompts, cls_comp_prompts) is backed up to be used 
                     # to compute the static delta loss later.
-                    self.c_static_emb = c_static_emb
+                    if self.use_sep_key_embs:
+                        # Discard the key embeddings from regularization.
+                        # [128, 154, 768] => [128, 77, 768]
+                        self.c_static_emb, _ = c_static_emb.split(c_static_emb.shape[1] // 2, dim=1)
+                    else:
+                        self.c_static_emb = c_static_emb
 
                 else:
                     # No delta loss or compositional mix loss. Keep the tuple c unchanged.
@@ -1556,13 +1562,19 @@ class LatentDiffusion(DDPM):
     def p_losses(self, x_start, cond, t, noise=None, img_mask=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        HALF_BS  = max(x_noisy.shape[0] // 2, 1)
         if self.do_ada_prompt_delta_reg:
             # To compute the delta loss / prompt mixing loss, we need two copies of the input noise, 
             # to go through U-Net under different conditioning embeddings. 
-            x_noisy = x_noisy.repeat(2, 1, 1, 1)
-            t       = t.repeat(2)
+            x_noisy  = x_noisy[:HALF_BS].repeat(2, 1, 1, 1)
+            img_mask = img_mask[:HALF_BS]
+            t        = t[:HALF_BS].repeat(2)
+            # Only keep the first half of the images that correspond to subj_single_prompts.
+            # Take the first halves of x_start and noise for the reconstruction loss.
+            x_start  = x_start[:HALF_BS]
+            noise    = noise[:HALF_BS]
+
         if self.do_comp_prompt_mix_reg:
-            HALF_BS  = max(x_noisy.shape[0] // 2, 1)
             x_noisy  = x_noisy[:HALF_BS].repeat(4, 1, 1, 1)
             img_mask = img_mask[:HALF_BS]
             t        = t[:HALF_BS].repeat(4)
