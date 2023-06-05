@@ -730,6 +730,7 @@ class UNetModel(nn.Module):
         emb = self.time_embed(t_emb)
         use_layerwise_context = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
         use_ada_context       = extra_info.get('use_ada_context', False)       if extra_info is not None else False
+        use_sep_key_embs      = extra_info.get('use_sep_key_embs', False)      if extra_info is not None else False
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
 
         if use_layerwise_context:
@@ -769,26 +770,28 @@ class UNetModel(nn.Module):
 
                 # If static context is expanded by doing prompt mixing,
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
-                if iter_type.startswith("mix_"):
+                if iter_type.startswith("mix_") or use_sep_key_embs:
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
                     if iter_type == 'mix_concat_cls':
                         # Do not BP into the copy of ada embeddings that are added with the mixed embeddings. 
                         layer_ada_context = th.cat([layer_ada_context, layer_ada_context.detach()], dim=1)
                     else:
                         # iter_type == 'mix_hijk'. Separate layer_static_context.
-                        layer_static_context, layer_mix_static_context = \
+                        layer_static_context, layer_static_key_context = \
                             layer_static_context.split(layer_static_context.shape[1] // 2, dim=1)
 
                 # layer_static_context, layer_ada_context: [2, 77, 768]
                 # layer_context: layer context fed to the current UNet layer, [2, 77, 768]
+                #breakpoint()
                 layer_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
-                if iter_type == 'mix_hijk' and layer_idx in hijk_layer_indices:
-                    layer_mix_context = layer_mix_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
-                    # Pass both embeddings for hijacking the key of layer_context by layer_mix_context.
-                    layer_context = (layer_context, layer_mix_context)
-                # Otherwise even if iter_type == 'mix_hijk', since this layer is not mixed. 
-                # In this case, layer_mix_context == layer_static_context, 
-                # and we just discard layer_mix_context.
+                if (iter_type == 'mix_hijk' and layer_idx in hijk_layer_indices) \
+                  or use_sep_key_embs:
+                    layer_key_context = layer_static_key_context * static_emb_weight + layer_ada_context * ada_emb_weight
+                    # Pass both embeddings for hijacking the key of layer_context by layer_key_context.
+                    layer_context = (layer_context, layer_key_context)
+                # Otherwise, iter_type == 'mix_hijk' but layer_idx not in hijk_layer_indices.
+                # i.e., this layer is not mixed. In that case, 
+                # layer_key_context == layer_static_context, and we just discard layer_key_context.
             else:
                 layer_context = layer_static_context
 

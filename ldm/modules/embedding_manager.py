@@ -97,7 +97,9 @@ class MaskedAvgPool2d(nn.Module):
         return x
 
 class StaticLayerwiseEmbedding(nn.Module):
-    # dim1: 16 (9 layers out of 25 of UNet are skipped), dim2: 768, r: 12.
+    # dim1: 16 (9 layers out of 25 of UNet are skipped), dim2: 768, 
+    # r: rank of basis vectors. Usually set as (num of init words * ratio), ratio=2 or 3.
+    # num of init words is usually 2. So r is usually 4~6.
     # If using init_vecs, init_noise_stds are applied to basis_rand_weights. 
     # Otherwise, init_up_noise_stds has no effect.
     # init_vec_weights: weights of init_vecs, not "init weights of vecs".
@@ -108,7 +110,7 @@ class StaticLayerwiseEmbedding(nn.Module):
     # Extra copies of init_vecs are added with random noises to avoid the non-identifiability issue.
     # init_up_noise_stds[1] << init_up_noise_stds[0].
     # has_bias: if enabled, the output vectors will be dominated by self.bias.
-    def __init__(self, dim1=16, dim2=768, r=12, init_noise_stds=(0.1, 0.04), init_vecs=None, 
+    def __init__(self, dim1=16, dim2=768, r=6, init_noise_stds=(0.1, 0.04), init_vecs=None, 
                  init_vec_weights=None, init_neg_vecs=None, has_bias=True, device_type="cuda"):
         super().__init__()
 
@@ -427,11 +429,12 @@ class EmbeddingManager(nn.Module):
             num_vectors_per_token=1,
             progressive_words=False,
             use_layerwise_embedding=False,
+            use_sep_key_embs=False,
             num_unet_layers=16,
             # If two tokens, lora rank=4. That means,
             # compress 16 embeddings to the linear combination of 4 embeddings,
             # in which two are initialized as the two token embeddings, and two are learned through BP.
-            layerwise_lora_rank_token_ratio=3,
+            layerwise_lora_rank_token_ratio=2,
             # If no initializer words are specified, then lora rank=2.
             layerwise_lora_default_rank=2,
             layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
@@ -446,6 +449,9 @@ class EmbeddingManager(nn.Module):
         
         self.string_to_param_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict = nn.ModuleDict()
+        # If not use_sep_key_embs, then string_to_key_embedder_dict 
+        # is filled with None.
+        self.string_to_key_embedder_dict = nn.ModuleDict()
         self.initial_embeddings = nn.ParameterDict() # These should not be optimized
 
         self.progressive_words = progressive_words
@@ -461,6 +467,10 @@ class EmbeddingManager(nn.Module):
         # When the passed argument num_vectors_per_token > 1, it means multi-token embedding, 
         # instead of layer-wise embedding.
         self.max_vectors_per_layer_per_token = num_vectors_per_token
+        self.use_sep_key_embs = use_sep_key_embs
+        if self.use_sep_key_embs:
+            assert initializer_words is not None, "initializer_words must be specified when using separate key embeddings"
+
         # multi-token and multi-layer embedding are not supported at the same time.
         if self.use_layerwise_embedding:
             assert num_vectors_per_token == 1, \
@@ -502,6 +512,8 @@ class EmbeddingManager(nn.Module):
             init_neg_embeddings = None
             NEG = 0
 
+        token_key_embedder = None
+
         for idx, placeholder_string in enumerate(placeholder_strings):
             # get_token_for_string <= get_clip_token_for_string.
             # force_single_token = True, as there should be only one token in placeholder_string.
@@ -531,6 +543,10 @@ class EmbeddingManager(nn.Module):
 
                     token_ada_embedder  = AdaEmbedding(num_vectors_per_token, self.token_dim, 
                                                        layerwise_lora_rank, init_word_embeddings)                                                        
+                    if self.use_sep_key_embs:
+                        token_key_embedder = StaticLayerwiseEmbedding(num_vectors_per_token, self.token_dim, layerwise_lora_rank, (0.1, 0.02),
+                                                                      init_word_embeddings, init_word_weights)                    
+
                 else:
                     # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
                     token_params = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
@@ -540,10 +556,11 @@ class EmbeddingManager(nn.Module):
             else:
                 if self.use_layerwise_embedding and layerwise_lora_default_rank > 0:
                     token_params        = StaticLayerwiseEmbedding(num_vectors_per_token, self.token_dim, layerwise_lora_default_rank, (0.1, 0.02),
-                                                              None, None, init_neg_embeddings=init_neg_embeddings)
+                                                                   None, None, init_neg_embeddings=init_neg_embeddings)
                                                   
                     token_ada_embedder  = AdaEmbedding(num_vectors_per_token, self.token_dim, 
                                                         layerwise_lora_default_rank, init_word_embeddings)   
+                    
                 else:
                     token_params = torch.nn.Parameter(torch.rand(size=(num_vectors_per_token, self.token_dim), requires_grad=True))
                     token_ada_embedder = None
@@ -553,6 +570,8 @@ class EmbeddingManager(nn.Module):
             # Pytorch >= 1.12.0 allows to put an nn.Module object into an nn.ParameterDict.
             self.string_to_param_dict[placeholder_string] = token_params
             self.string_to_ada_embedder_dict[placeholder_string] = token_ada_embedder
+            # If not self.use_sep_key_embs, token_key_embedder is None.
+            self.string_to_key_embedder_dict[placeholder_string] = token_key_embedder
 
             self.cls_delta_token    = cls_delta_token
             if self.cls_delta_token is not None:
@@ -569,16 +588,6 @@ class EmbeddingManager(nn.Module):
             else:
                 self.z_suffix_ids      = None
                 self.z_suffix_id_count = 0
-
-        unet_layer_dims = [ 4,    320,  320,  320,  320,  640,  640,  640, 1280, 1280, 1280, 1280, 
-                            1280,
-                            1280, 1280, 1280, 1280, 1280, 1280, 1280, 640, 640,  640,  320,  320 ]
-        unet_mix_layer_indices = [7, 8, 12, 16]
-        # 1280, 1280, 1280, 1280
-        unet_mix_layer_dims = [ unet_layer_dims[i+1] for i in unet_mix_layer_indices ]
-        self.unet_mix_chan_weights = nn.ParameterDict()
-        for i, dim in zip(unet_mix_layer_indices, unet_mix_layer_dims):
-            self.unet_mix_chan_weights[str(i)] = nn.Parameter(torch.ones(1, dim, dtype=torch.float32), requires_grad=True)
 
         self.clear_ada_layer_temp_info()
         self.clear_delta_loss_emb_mask()
@@ -598,11 +607,11 @@ class EmbeddingManager(nn.Module):
             tokenized_text,         # [B, N]. 
             embedded_text,          # [B, N, 768]. 
     ):
-        # When delta loss is used, b is not batch_size, but batch_size * 4 * num_compositions_per_image.
-        # If bs=2, num_compositions_per_image=2, then b=16.
+        # When delta loss is used, B is not batch_size, but batch_size * 4 * num_compositions_per_image.
+        # If bs=2, num_compositions_per_image=2, then B=16.
         # In the iterations when ada delta loss is enabled, in effect num_compositions_per_image is 1, 
-        # even if it's specified as 2, so b=8.
-        b, n, device = *tokenized_text.shape, tokenized_text.device
+        # even if it's specified as 2, so B=8.
+        B, N, device = *tokenized_text.shape, tokenized_text.device
 
         # gen_ada_embedding is dynamically switched on/off by  set_ada_layer_temp_info()/clear_ada_layer_temp_info().
         # No need to calculate delta_loss_emb_mask here, as the mask for ada embeddings is 
@@ -612,36 +621,55 @@ class EmbeddingManager(nn.Module):
         if self.gen_ada_embedding:
             # self.layer_idx, self.layer_infeat, self.time_emb were cached by 
             # a previous call of  set_ada_layer_temp_info() from UNet.
-            embedded_text = \
+            ada_embedded_text = \
                 self.get_ada_embedding(self.layer_idx, self.layer_infeat, self.time_emb,
                                        tokenized_text, embedded_text, self.ada_bp_to_unet)
-            emb_idx = self.layer_idx2emb_idx[self.layer_idx]
             # Remove ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
-            return embedded_text
+            return ada_embedded_text
 
         # Exclude the starting and padding tokens from delta loss.
         delta_loss_emb_mask  = (tokenized_text != 49406 ) & (tokenized_text != 49407)
-        # [b, n] => [b, 1, n, 1]
+        # [B, N] => [B, 1, N, 1]
         delta_loss_emb_mask  = delta_loss_emb_mask.float().unsqueeze(1).unsqueeze(3)
+        self.set_delta_loss_emb_mask(delta_loss_emb_mask)
+
+        # We need to clone embedded_text, as sometimes (when it's not layerwise such as TI) 
+        # the modification in get_static_embedding() is in-place. 
+        # If use_sep_key_embs, then the key embeddings will overwrite the static embeddings.
+        static_embeddings = self.get_static_embedding(tokenized_text, embedded_text.clone(), 
+                                                      self.string_to_param_dict,
+                                                      B, N, device, update_mask=True)
+
+        if self.use_sep_key_embs:
+            key_embeddings = self.get_static_embedding(tokenized_text, embedded_text.clone(), 
+                                                       self.string_to_key_embedder_dict,
+                                                       B, N, device, update_mask=False)
+            # Combine the static and key embeddings into an extended batch.
+            static_embeddings = torch.cat([static_embeddings, key_embeddings], dim=0)
+
+        return static_embeddings
+    
+    def get_static_embedding(self, tokenized_text, embedded_text, embedder_dict, 
+                             B, N, device, update_mask=True):
         orig_tokenized_text = tokenized_text
 
         if self.use_layerwise_embedding:
             # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
             # "Tuck" the layer dimension into the batch dimension, 
             # to keep embedded_text in 3D, same as the input.
-            embedded_text = embedded_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1, 1).view(b * self.num_unet_layers, n, -1)
+            embedded_text = embedded_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1, 1).view(B * self.num_unet_layers, N, -1)
             # tokenized_text: [B, 16, N] => [16*B, N]
             # tokenized_text has to be repeated along the layer dimension as well, so that 
             # placeholder_indices can index the embedding at each layer in the batch.
-            tokenized_text = tokenized_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1).view(b * self.num_unet_layers, n)
+            tokenized_text = tokenized_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1).view(B * self.num_unet_layers, N)
             # mirror-reflect the embedding along the layer dimension, to make it symmetric 
             # in the encoder & decoder.
 
         REAL_OCCUR = -1
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
-            placeholder_embedding = self.string_to_param_dict[placeholder_string].to(device)
+            placeholder_embedding = embedder_dict[placeholder_string].to(device)
             if isinstance(placeholder_embedding, StaticLayerwiseEmbedding):
                 # Generate the actual placeholder_embedding on the fly.
                 # The 16 Static LoRA embeddings are formed by linearly combining the basis vectors.
@@ -664,7 +692,7 @@ class EmbeddingManager(nn.Module):
                 # embedded_text[placeholder_indices]: [32, 768]. placeholder_embedding: [16, 768].
                 # The first 16 elements (0-8) in embedded_text[placeholder_indices] correspond to the 16 layers of the 
                 # first instance in the batch.
-                # 16 layers of placeholder_embedding are repeated b times.
+                # 16 layers of placeholder_embedding are repeated B times.
                 # placeholder_embedding: placeholder_embedding: [16, 768] repeat=> [32, 768]
                 # Note that the 16 layers are initialized with the same embedding. 
                 # LINK #init_embed
@@ -680,35 +708,36 @@ class EmbeddingManager(nn.Module):
                 embedded_text[placeholder_indices] = placeholder_embedding.repeat(REAL_OCCUR, 1)
                 # Mark where the placeholder token is replaced by the embedding.
                 
-                # The placeholder_indices above are on the x16 repeated tokenized_text.
-                # So we find the original placeholder_indices by search placeholder_token
-                # within orig_tokenized_text.
-                placeholder_indices = torch.where(orig_tokenized_text == placeholder_token.to(device))
-                # REAL_OCCUR is the real number of occurrences of placeholder. REAL_OCCUR <= b.
-                # The batch size b is usually small, so this loop is not a bottleneck.
-                for i in range(REAL_OCCUR):
-                    elem_idx  = placeholder_indices[0][i]
-                    start_idx = placeholder_indices[1][i] + 1
-                    try:
-                        assert orig_tokenized_text[elem_idx][start_idx-1] == placeholder_token
-                    except:
-                        breakpoint()
-                        
-                    has_suffix = True
-                    for j in range(self.z_suffix_id_count):
-                        if orig_tokenized_text[elem_idx][start_idx+j] != self.z_suffix_ids[j]:
-                            has_suffix = False
-                            break
+                if update_mask:
+                    # The placeholder_indices above are on the x16 repeated tokenized_text.
+                    # So we find the original placeholder_indices by search placeholder_token
+                    # within orig_tokenized_text.
+                    placeholder_indices = torch.where(orig_tokenized_text == placeholder_token.to(device))
+                    # REAL_OCCUR is the real number of occurrences of placeholder. REAL_OCCUR <= B.
+                    # The batch size B is usually small, so this loop is not a bottleneck.
+                    for i in range(REAL_OCCUR):
+                        elem_idx  = placeholder_indices[0][i]
+                        start_idx = placeholder_indices[1][i] + 1
+                        try:
+                            assert orig_tokenized_text[elem_idx][start_idx-1] == placeholder_token
+                        except:
+                            breakpoint()
+                            
+                        has_suffix = True
+                        for j in range(self.z_suffix_id_count):
+                            if orig_tokenized_text[elem_idx][start_idx+j] != self.z_suffix_ids[j]:
+                                has_suffix = False
+                                break
 
-                    if has_suffix:
-                        end_idx   = placeholder_indices[1][i] + 1 + self.z_suffix_id_count
-                        # Simply mask z_suffix_id_count tokens after the placeholder token.
-                        # In effect, this masks the placeholder suffix following the placeholder token.
-                        delta_loss_emb_mask[elem_idx][0][start_idx:end_idx] = 0
+                        if has_suffix:
+                            end_idx   = placeholder_indices[1][i] + 1 + self.z_suffix_id_count
+                            # Simply mask z_suffix_id_count tokens after the placeholder token.
+                            # In effect, this masks the placeholder suffix following the placeholder token.
+                            self.delta_loss_emb_mask[elem_idx][0][start_idx:end_idx] = 0
 
-                self.set_delta_loss_emb_mask(delta_loss_emb_mask)
-                # TODO: support multiple subject tokens.
-                self.placeholder_indices = copy.copy(placeholder_indices)
+                    # This only saves the last subject token indices.
+                    # TODO: support multiple subject tokens.
+                    self.placeholder_indices = copy.copy(placeholder_indices)
 
             # *multi-vector latent space*: In this space, S* is embedded into multiple 
             # learned embeddings, an approach that is equivalent to describing
@@ -743,10 +772,10 @@ class EmbeddingManager(nn.Module):
                     row = sorted_rows[idx]
                     col = sorted_cols[idx]
 
-                    new_token_row = torch.cat([tokenized_text[row][:col], placeholder_token.repeat(num_vectors_for_token).to(device), tokenized_text[row][col + 1:]], axis=0)[:n]
+                    new_token_row = torch.cat([tokenized_text[row][:col], placeholder_token.repeat(num_vectors_for_token).to(device), tokenized_text[row][col + 1:]], axis=0)[:N]
                     new_embed_row = torch.cat([embedded_text[row][:col],  
                                                placeholder_embedding[:num_vectors_for_token], 
-                                               embedded_text[row][col + 1:]], axis=0)[:n]
+                                               embedded_text[row][col + 1:]], axis=0)[:N]
 
                     # Locate the next placeholder token in the row, and replace the embedding in embedded_text.
                     embedded_text[row]  = new_embed_row
@@ -766,7 +795,7 @@ class EmbeddingManager(nn.Module):
             embedded_text,          # [B, N, 768]. Identical B copies along the batch dimension.
             ada_bp_to_unet=False
     ):
-        b, n, device = *tokenized_text.shape, tokenized_text.device
+        device = tokenized_text.device
 
         # max_vectors_per_layer_per_token == 1: original num_vectors_per_token == 1, but 
         # self.use_layerwise_embedding could still be True.
@@ -876,8 +905,9 @@ class EmbeddingManager(nn.Module):
         torch.save({ "string_to_token":         self.string_to_token_dict,
                      "string_to_param":         self.string_to_param_dict,
                      "string_to_ada_embedder":  self.string_to_ada_embedder_dict,
-                     "ada_emb_weight":          self.ada_emb_weight, 
-                     "unet_mix_chan_weights":   self.unet_mix_chan_weights }, 
+                     "string_to_key_embedder":  self.string_to_key_embedder_dict,
+                     "ada_emb_weight":          self.ada_emb_weight,  
+                   }, 
                     ckpt_path)
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
@@ -886,7 +916,8 @@ class EmbeddingManager(nn.Module):
         # So before loading, remove it from these dicts first.
         self.string_to_token_dict           = {}
         self.string_to_param_dict           = nn.ParameterDict()
-        self.string_to_ada_embedder_dict   = nn.ModuleDict()
+        self.string_to_ada_embedder_dict    = nn.ModuleDict()
+        self.string_to_key_embedder_dict    = nn.ModuleDict()
 
         if isinstance(ckpt_paths, str):
             ckpt_paths = [ckpt_paths]
@@ -919,6 +950,8 @@ class EmbeddingManager(nn.Module):
                 self.string_to_token_dict[k2]        = k2_token
                 self.string_to_param_dict[k2]        = ckpt["string_to_param"][k]
                 self.string_to_ada_embedder_dict[k2] = ckpt["string_to_ada_embedder"][k]
+                self.string_to_key_embedder_dict[k2] = ckpt["string_to_key_embedder"][k]
+
                 print(f"Loaded {k}->{k2} from {ckpt_path}")
 
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
@@ -930,7 +963,7 @@ class EmbeddingManager(nn.Module):
     def optimized_parameters(self):
         return list(self.string_to_param_dict.parameters()) \
                + list(self.string_to_ada_embedder_dict.parameters()) \
-               + list(self.unet_mix_chan_weights.parameters())
+               + list(self.string_to_key_embedder_dict.parameters())
 
     def embedding_attractor_loss(self):
         loss = 0.
@@ -1017,8 +1050,12 @@ class EmbeddingManager(nn.Module):
         T = 1.5
 
         for key in self.initial_embeddings:
-            for embobj in (self.string_to_param_dict[key], self.string_to_ada_embedder_dict[key]):
+            for embobj in (self.string_to_param_dict[key], 
+                           self.string_to_ada_embedder_dict[key],
+                           self.string_to_key_embedder_dict[key]):
                 # Skip non-layerwise embeddings.
+                # If not self.use_sep_key_embs, then 
+                # self.string_to_key_embedder_dict[key] is None and skipped.
                 if not isinstance(embobj, StaticLayerwiseEmbedding) \
                   and not isinstance(embobj, AdaEmbedding):
                     continue
