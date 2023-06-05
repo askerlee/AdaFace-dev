@@ -646,7 +646,7 @@ class EmbeddingManager(nn.Module):
                                                        self.string_to_key_embedder_dict,
                                                        B, N, device, update_mask=False)
             # Combine the static and key embeddings into an extended batch.
-            static_embeddings = torch.cat([static_embeddings, key_embeddings], dim=1)
+            static_embeddings = torch.cat([static_embeddings, key_embeddings], dim=0)
 
         return static_embeddings
     
