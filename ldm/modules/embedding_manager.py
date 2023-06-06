@@ -431,7 +431,6 @@ class EmbeddingManager(nn.Module):
             progressive_words=False,
             use_layerwise_embedding=False,
             use_sep_key_embs=False,
-            sep_key_embs_scale=0.2,
             num_unet_layers=16,
             # Only apply separate keys in these layers, corresponding to layers 7, 8, 12, 16 in the UNet.
             sep_key_layer_indices=[4, 5, 6, 7], 
@@ -472,7 +471,6 @@ class EmbeddingManager(nn.Module):
         # instead of layer-wise embedding.
         self.max_vectors_per_layer_per_token = num_vectors_per_token
         self.use_sep_key_embs = use_sep_key_embs
-        self.sep_key_embs_scale = sep_key_embs_scale
         self.sep_key_layer_indices = sep_key_layer_indices
 
         # multi-token and multi-layer embedding are not supported at the same time.
@@ -686,19 +684,19 @@ class EmbeddingManager(nn.Module):
             else:
                 key_embeddings_gradscaled = key_embeddings
 
-            key_embeddings_gradscaled = key_embeddings_gradscaled  * self.sep_key_embs_scale
 
             # Use most of the layers of embeddings in static_embeddings, but 
             # **add** (not replace) sep_key_layer_indices layers with those from key_embeddings.
             # So key_embeddings are just residuals, and the resulted 
             # key_embeddings_all_layers are not very far from static_embeddings.
             # This simulates the "addconcat" embedding mixing scheme used for distillation.
-            # sep_key_embs_scale: default=0.2.
+            # sep_key_embs_scale: default=0.15.
             # key_embeddings_all_layers  = static_embeddings + key_embeddings_gradscaled
             
             # Combine the static and key embeddings into an extended batch.
             # [64, 77, 768] + [4, 77, 768] => [68, 77, 768].
             # B = 2, 32*B = 64.
+             # final key embeddings = (static_embeddings * 0.85 + key_embeddings_gradscaled * 0.15)
             static_embeddings = torch.cat([static_embeddings, key_embeddings_gradscaled], dim=0)
 
         return static_embeddings

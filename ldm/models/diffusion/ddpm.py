@@ -90,6 +90,7 @@ class DDPM(pl.LightningModule):
                  use_ada_embedding=False,
                  use_sep_key_embs=False,
                  sep_key_layer_indices=[4, 5, 6, 7],    # correspond to original layers 7, 8, 12, 16
+                 sep_key_embs_scale=0.15,
                  composition_regs_iter_gap=-1,
                  prompt_delta_reg_weight=0.,
                  composition_prompt_mix_reg_weight=0.,
@@ -114,6 +115,7 @@ class DDPM(pl.LightningModule):
         self.use_sep_key_embs  = use_sep_key_embs
         self.sep_key_layer_indices = sep_key_layer_indices
         self.num_sep_key_layers    = len(sep_key_layer_indices)
+        self.sep_key_embs_scale    = sep_key_embs_scale
 
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.prompt_delta_reg_weight         = prompt_delta_reg_weight
@@ -781,14 +783,14 @@ class LatentDiffusion(DDPM):
                     # Fill in the four layers of separate key embeddings 
                     # in the shape of [B, layer_num, 77, 768].
                     c_k_all_layers[:, self.sep_key_layer_indices] = \
-                        c_k.reshape(B, self.num_sep_key_layers, *c_v.shape[1:])
+                        c_k.reshape(B, self.num_sep_key_layers, *c_v.shape[1:]) * self.sep_key_embs_scale
                     c_k_all_layers = c_k_all_layers.reshape(c_v.shape)
                     # Use most of the layers of embeddings in static_embeddings, but 
                     # **add** (not replace) sep_key_layer_indices layers with those from key_embeddings.
                     # So key_embeddings are just residuals, and the resulted 
                     # key_embeddings_all_layers are not very far from static_embeddings.
                     # This simulates the "addconcat" embedding mixing scheme used for distillation.
-                    c_k_all_layers = c_k_all_layers + c_v
+                    c_k_all_layers = c_k_all_layers + c_v * (1 - self.sep_key_embs_scale)
                     c = torch.cat([c_v, c_k_all_layers], dim=1)
 
                 c = (c, c_in, extra_info)

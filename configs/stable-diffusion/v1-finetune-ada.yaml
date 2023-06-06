@@ -40,6 +40,7 @@ model:
     clip_loss_weight:      0.001
     # promt_mix_scheme: 'mix_hijk' or 'mix_concat_cls'
     promt_mix_scheme:      'mix_hijk'
+    sep_key_embs_scale: 0.15
 
     optimizer_type: AdamW     # sophia
     scheduler_config:
@@ -65,7 +66,6 @@ model:
         progressive_words: False
         use_layerwise_embedding: True
         use_sep_key_embs:  True
-        sep_key_embs_scale: 0.2
         layerwise_lora_rank_token_ratio: 2
         ada_emb_weight: 0.5
         # composition_regs alternates between prompt_delta_reg and composition_prompt_mix_reg.
