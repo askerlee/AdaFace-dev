@@ -1308,7 +1308,7 @@ class LatentDiffusion(DDPM):
                         # then chance is that subj_comps_emb_mix might be dominated by subj_comps_emb,
                         # so that subj_comps_emb_mix will produce images similar as subj_comps_emb does.
                         # stop_prompt_mix_grad will improve compositionality but reduce face similarity.
-                        stop_prompt_mix_grad = False
+                        stop_prompt_mix_grad = True
                         prompt_mix_grad_scale = 0.1
                         if stop_prompt_mix_grad:
                             subj_comps_emb_mix_all_layers  = subj_comps_emb_mix_all_layers.detach()
@@ -1333,6 +1333,8 @@ class LatentDiffusion(DDPM):
                                 # subj_single_emb_mix and subj_comps_emb_mix embeddings.
                                 subj_comps_emb  = subj_comps_emb.repeat(1, 2, 1)
                                 subj_single_emb = subj_single_emb.repeat(1, 2, 1)
+                            # Otherwise, the second halves of subj_comps_emb/cls_comps_emb
+                            # are already key embeddings. No need to repeat.
 
                             # Use most of the layers of embeddings in subj_comps_emb, but 
                             # replace sync_layer_indices layers with those from subj_comps_emb_mix_all_layers.
@@ -1821,7 +1823,7 @@ class LatentDiffusion(DDPM):
                 feat_mix_single  = pooler(feat_mix_single).reshape(feat_mix_single.shape[0], -1)
                 feat_mix_comps   = pooler(feat_mix_comps).reshape(feat_mix_comps.shape[0], -1)
 
-                stop_feat_mix_grad  = False
+                stop_feat_mix_grad  = True
                 feat_mix_grad_scale = 0.05
                 if stop_feat_mix_grad:
                     # feat_subj_single = feat_subj_single.detach()
