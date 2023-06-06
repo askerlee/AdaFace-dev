@@ -93,7 +93,7 @@ class DDPM(pl.LightningModule):
                  composition_regs_iter_gap=-1,
                  prompt_delta_reg_weight=0.,
                  composition_prompt_mix_reg_weight=0.,
-                 cls_prompt_mix_weight_max=0.4,
+                 cls_prompt_mix_weight_max=0.3,
                  clip_loss_weight=0,
                  promt_mix_scheme='mix_hijk',       # 'mix_hijk' or 'mix_concat_cls'
                  ):
@@ -1286,7 +1286,7 @@ class LatentDiffusion(DDPM):
 
                         # mix_weight_scale borrows the weight scale of the LR scheduler.
                         # Near the end of training, c2_mix_weight should be 1/4 of cls_prompt_mix_weight_max.
-                        # If cls_prompt_mix_weight_max=0.4, then c2_mix_weight changes as 0 -> 0.4 -> 0.1.
+                        # If cls_prompt_mix_weight_max=0.3, then c2_mix_weight changes as 0 -> 0.3 -> 0.075.
                         c2_mix_weight = self.cls_prompt_mix_weight_max * self.mix_weight_scale
 
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,

@@ -235,7 +235,7 @@ def mix_embeddings(c1_, c2_, c2_mix_weight, mix_scheme='adeltaconcat', placehold
     elif mix_scheme == 'concat':
         c_mix = torch.cat([ c1, c2 * c2_mix_weight ], dim=1)
     elif mix_scheme == 'addconcat':
-        c_mix = torch.cat([ c1, c1 + c2 * c2_mix_weight ], dim=1)
+        c_mix = torch.cat([ c1, c1 * (1 - c2_mix_weight) + c2 * c2_mix_weight ], dim=1)
 
     # sdeltaconcat: subject-delta concat. Requires placeholder_indices.
     elif mix_scheme == 'sdeltaconcat':
