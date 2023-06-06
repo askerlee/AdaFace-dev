@@ -568,7 +568,7 @@ class EmbeddingManager(nn.Module):
                         #                                              (0.1, 0.02),
                         #                                              init_word_embeddings, init_word_weights)                    
                         # token_key_embeddings: [16, 768]
-                        token_key_embeddings = nn.Parameter(self.cls_delta_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
+                        token_key_embeddings = nn.Parameter(self.cls_delta_embedding.repeat(self.num_sep_key_layers, 1), requires_grad=True)
                 else:
                     # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
                     token_params = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
