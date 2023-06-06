@@ -1303,7 +1303,7 @@ class LatentDiffusion(DDPM):
                         # then chance is that subj_comps_emb_mix might be dominated by subj_comps_emb,
                         # so that subj_comps_emb_mix will produce images similar as subj_comps_emb does.
                         # stop_prompt_mix_grad will improve compositionality but reduce face similarity.
-                        stop_prompt_mix_grad = True
+                        stop_prompt_mix_grad = False
                         prompt_mix_grad_scale = 0.1
                         if stop_prompt_mix_grad:
                             subj_comps_emb_mix_all_layers  = subj_comps_emb_mix_all_layers.detach()
@@ -1806,8 +1806,8 @@ class LatentDiffusion(DDPM):
                 feat_mix_single  = pooler(feat_mix_single).reshape(feat_mix_single.shape[0], -1)
                 feat_mix_comps   = pooler(feat_mix_comps).reshape(feat_mix_comps.shape[0], -1)
 
-                stop_feat_mix_grad  = True
-                feat_mix_grad_scale = 0.05
+                stop_feat_mix_grad  = False
+                feat_mix_grad_scale = 0.1
                 if stop_feat_mix_grad:
                     # feat_subj_single = feat_subj_single.detach()
                     feat_mix_single  = feat_mix_single.detach()
