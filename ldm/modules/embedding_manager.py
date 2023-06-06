@@ -351,9 +351,9 @@ class AdaEmbedding(nn.Module):
             # bp_to_unet is enabled when doing composition regularization iterations. 
             if bp_to_unet:
                 # Set to < 1 to reduce the gradient flow into the UNet.
-                stop_infeat_grad_scale = 0.5
-                if stop_infeat_grad_scale < 1:
-                    grad_scaler = GradientScaler(stop_infeat_grad_scale)
+                infeat_grad_scale = 0.5
+                if infeat_grad_scale < 1:
+                    grad_scaler = GradientScaler(infeat_grad_scale)
                     #grad_scaler = grad_scaler.cuda()
                     infeat_pooled_gradscaled = grad_scaler(infeat_pooled)
                 else:
@@ -560,6 +560,7 @@ class EmbeddingManager(nn.Module):
                     token_params = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
                     token_ada_embedder = None
                 # initial_embeddings are only used to compute the regularization loss.
+                # Wrap with Parameter so that they will be saved to checkpoints.
                 self.initial_embeddings[placeholder_string] = torch.nn.Parameter(init_word_embeddings, requires_grad=False)
             else:
                 if self.use_layerwise_embedding and layerwise_lora_default_rank > 0:
@@ -660,10 +661,17 @@ class EmbeddingManager(nn.Module):
             layer_mask[:, self.sep_key_layer_indices] = 1
             layer_mask = layer_mask.reshape(-1, *static_embeddings.shape[1:])
             
+            key_grad_scale = 0.2
+            if key_grad_scale < 1:
+                grad_scaler = GradientScaler(key_grad_scale)
+                key_embeddings_scaled = grad_scaler(key_embeddings)
+            else:
+                key_embeddings_scaled = key_embeddings
+
             # Use most of the layers of embeddings in static_embeddings, but 
             # replace sep_key_layer_indices layers with those from key_embeddings.
             key_embeddings_all_layers  = static_embeddings * (1 - layer_mask) \
-                                         + key_embeddings  *  layer_mask
+                                         + key_embeddings_scaled  *  layer_mask
             # Combine the static and key embeddings into an extended batch.
             # [64, 77, 768] + [64, 77, 768] => [128, 77, 768].
             # B = 2, 32*B = 64.

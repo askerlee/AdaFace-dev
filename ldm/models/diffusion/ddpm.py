@@ -120,7 +120,6 @@ class DDPM(pl.LightningModule):
         self.promt_mix_scheme               = promt_mix_scheme
         self.do_static_prompt_delta_reg     = False
         self.do_ada_prompt_delta_reg        = False
-        self.do_sep_key_emb_reg             = False
         self.do_comp_prompt_mix_reg         = False
         self.do_clip_loss                   = False
         # Is this for DreamBooth training? Will be overwritten in LatentDiffusion ctor.
@@ -423,17 +422,11 @@ class DDPM(pl.LightningModule):
         if self.composition_prompt_mix_reg_weight > 0:
             interm_reg_types.append('do_comp_prompt_mix_reg')
             interm_reg_probs.append(2.)
-        # Only do_sep_key_emb_reg when not doing comp_prompt_mix_reg, 
-        # as do_sep_key_emb_reg only uses CLIP loss, which is part of comp_prompt_mix_reg.
-        if self.use_sep_key_embs and self.composition_prompt_mix_reg_weight <= 0:
-            interm_reg_types.append('do_sep_key_emb_reg')
-            interm_reg_probs.append(1.)
 
         N_INTERM_REGS = len(interm_reg_types)
         interm_reg_probs = np.array(interm_reg_probs) / np.sum(interm_reg_probs)
         self.do_ada_prompt_delta_reg  = False
         self.do_comp_prompt_mix_reg   = False
-        self.do_sep_key_emb_reg       = False
         self.do_clip_loss             = False
 
         # If N_INTERM_REGS == 0, then no intermittent regularizations, set the two flags to False.
@@ -451,8 +444,6 @@ class DDPM(pl.LightningModule):
                 self.do_ada_prompt_delta_reg  = True
             elif reg_type == 'do_comp_prompt_mix_reg':
                 self.do_comp_prompt_mix_reg   = True
-            elif reg_type == 'do_sep_key_emb_reg':
-                self.do_sep_key_emb_reg       = True
                 
             # In reg iters we always do clip loss.
             self.do_clip_loss = (self.clip_loss_weight > 0)
@@ -1144,13 +1135,13 @@ class LatentDiffusion(DDPM):
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
         # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
-        if self.do_static_prompt_delta_reg or self.do_comp_prompt_mix_reg or self.do_sep_key_emb_reg:
+        if self.do_static_prompt_delta_reg or self.do_comp_prompt_mix_reg:
             subj_comp_prompts = []
             # *_fp prompts are like "a face portrait of ...". They are advantageous over "a photo of ..."
             # when doing compositional mix regularization. 
             # However this trick is only applicable to humans/animals.
             # For objects, *_fp prompts are not available in batch, so they won't be used.
-            if (self.do_comp_prompt_mix_reg or self.do_sep_key_emb_reg) and 'subj_prompt_single_fp' in batch:
+            if self.do_comp_prompt_mix_reg and 'subj_prompt_single_fp' in batch:
                 # Replace c = batch['caption'] by c = batch['subj_prompt_single_fp'].
                 c = batch['subj_prompt_single_fp']
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_fp'
@@ -1171,7 +1162,7 @@ class LatentDiffusion(DDPM):
             cls_single_prompts = batch[CLS_PROMPT_SINGLE]
             # REPEATS: how many prompts correspond to each image.
             REPEATS = len(subj_comp_prompts[0])
-            if REPEATS == 1 or self.do_ada_prompt_delta_reg or self.do_comp_prompt_mix_reg or self.do_sep_key_emb_reg:
+            if REPEATS == 1 or self.do_ada_prompt_delta_reg or self.do_comp_prompt_mix_reg:
                 # When this iter computes ada prompt delta loss / prompt mixing loss, 
                 # only use the first of the composition prompts (in effect num_compositions_per_image=1),
                 # otherwise it will use more than 40G RAM.
@@ -1223,7 +1214,7 @@ class LatentDiffusion(DDPM):
                 # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
                 # c: subj_single_prompts, which are plain prompts like 
                 # ['an illustration of a dirty z', 'an illustration of the cool z']
-                if self.do_static_prompt_delta_reg or self.do_comp_prompt_mix_reg or self.do_sep_key_emb_reg:
+                if self.do_static_prompt_delta_reg or self.do_comp_prompt_mix_reg:
                     subj_comp_prompts, cls_single_prompts, cls_comp_prompts = prompt_delta_prompts
 
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
@@ -1389,12 +1380,6 @@ class LatentDiffusion(DDPM):
                         extra_info['iter_type']      = 'do_ada_prompt_delta_reg'
                         extra_info['ada_bp_to_unet'] = False
                         
-                    elif self.do_sep_key_emb_reg:
-                        c_in2 = subj_comp_prompts
-                        c_static_emb2 = subj_comps_emb
-                        extra_info['iter_type']      = 'do_sep_key_emb_reg'
-                        extra_info['ada_bp_to_unet'] = True
-
                     else:
                         # The original scheme. Use the original subj_single_prompts embeddings and prompts.
                         # When num_compositions_per_image > 1, subj_single_prompts contains repeated prompts,
@@ -1644,12 +1629,6 @@ class LatentDiffusion(DDPM):
                 clip_prompts_single = cond[2]['cls_single_prompts'] + cond[2]['cls_single_prompts']
                 if len(clip_images) != len(clip_prompts_comp) or len(clip_images) != len(clip_prompts_single):
                     breakpoint()
-
-        elif self.do_sep_key_emb_reg:
-            assert self.do_clip_loss
-            clip_images = model_output * img_mask
-            clip_prompts_comp   = cond[2]['cls_comp_prompts']
-            clip_prompts_single = cond[2]['cls_single_prompts']
 
         # Otherwise, ordinary image reconstruction loss. No need to split the model output.
 
