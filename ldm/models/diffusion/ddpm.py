@@ -1280,17 +1280,21 @@ class LatentDiffusion(DDPM):
                             cls_comps_emb_v, _   = cls_comps_emb.split(cls_comps_emb.shape[1] // 2, dim=1)
                             subj_single_emb_v, _ = subj_single_emb.split(subj_single_emb.shape[1] // 2, dim=1)
                             cls_single_emb_v, _  = cls_single_emb.split(cls_single_emb.shape[1] // 2, dim=1)
+                            mix_scheme           = 'addconcat'
                         else:
                             subj_comps_emb_v  = subj_comps_emb
                             cls_comps_emb_v   = cls_comps_emb
                             subj_single_emb_v = subj_single_emb
                             cls_single_emb_v  = cls_single_emb
+                            mix_scheme        = 'adeltaconcat'
 
                         subj_comps_emb_mix_all_layers  = mix_embeddings(subj_comps_emb_v, cls_comps_emb_v, 
                                                                         c2_mix_weight=c2_mix_weight,
+                                                                        mix_scheme=mix_scheme,
                                                                         use_ortho_subtract=True)
                         subj_single_emb_mix_all_layers = mix_embeddings(subj_single_emb_v, cls_single_emb_v,
                                                                         c2_mix_weight=c2_mix_weight,
+                                                                        mix_scheme=mix_scheme,
                                                                         use_ortho_subtract=True)
 
                         # If stop_prompt_mix_grad, stop gradient on subj_comps_emb_mix, 

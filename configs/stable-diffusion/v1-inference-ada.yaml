@@ -32,6 +32,7 @@ model:
         progressive_words: False
         use_layerwise_embedding: True
         use_sep_key_embs:  True
+        sep_key_embs_scale: 0.2
         ada_emb_weight: 0.5
         
     unet_config:
