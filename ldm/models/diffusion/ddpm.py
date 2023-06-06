@@ -423,7 +423,9 @@ class DDPM(pl.LightningModule):
         if self.composition_prompt_mix_reg_weight > 0:
             interm_reg_types.append('do_comp_prompt_mix_reg')
             interm_reg_probs.append(2.)
-        if self.use_sep_key_embs:
+        # Only do_sep_key_emb_reg when not doing comp_prompt_mix_reg, 
+        # as do_sep_key_emb_reg only uses CLIP loss, which is part of comp_prompt_mix_reg.
+        if self.use_sep_key_embs and self.composition_prompt_mix_reg_weight <= 0:
             interm_reg_types.append('do_sep_key_emb_reg')
             interm_reg_probs.append(1.)
 
