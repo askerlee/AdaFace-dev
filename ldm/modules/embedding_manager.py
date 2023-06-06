@@ -29,6 +29,7 @@ def get_clip_tokens_for_string(tokenizer, string, force_single_token=False):
     if force_single_token:
         assert token_count == 1, f"String '{string}' maps to more than a single token. Please use another string"
 
+    # Remove start and end tokens.
     return tokens[0, 1:1+token_count]
 
 def get_bert_tokens_for_string(tokenizer, string):
@@ -451,9 +452,9 @@ class EmbeddingManager(nn.Module):
         
         self.string_to_param_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict = nn.ModuleDict()
-        # If not use_sep_key_embs, then string_to_key_embedder_dict 
+        # If not use_sep_key_embs, then string_to_key_embedding_dict 
         # is filled with None.
-        self.string_to_key_embedder_dict = nn.ModuleDict()
+        self.string_to_key_embedding_dict = nn.ParameterDict()
         self.initial_embeddings = nn.ParameterDict() # These should not be optimized
 
         self.progressive_words = progressive_words
@@ -472,7 +473,7 @@ class EmbeddingManager(nn.Module):
         self.use_sep_key_embs = use_sep_key_embs
         self.sep_key_layer_indices = sep_key_layer_indices
         if self.use_sep_key_embs:
-            assert initializer_words is not None, "initializer_words must be specified when using separate key embeddings"
+            assert cls_delta_token is not None, "cls_delta_token must be specified when using separate key embeddings"
 
         # multi-token and multi-layer embedding are not supported at the same time.
         if self.use_layerwise_embedding:
@@ -515,7 +516,7 @@ class EmbeddingManager(nn.Module):
             init_neg_embeddings = None
             NEG = 0
 
-        token_key_embedder = None
+        token_key_embeddings = None
 
         for idx, placeholder_string in enumerate(placeholder_strings):
             # get_token_for_string <= get_clip_token_for_string.
@@ -551,10 +552,16 @@ class EmbeddingManager(nn.Module):
                         # The rank is set to N + 1, i.e., number of init vectors + 1, 
                         # where 1 is for the all-zero vector. This is the minimal rank, and no random base vectors 
                         # are to be learned. But the init vectors are still learned through BP.
-                        token_key_embedder = StaticLayerwiseEmbedding(num_vectors_per_token, self.token_dim, N + 1, 
-                                                                      (0.1, 0.02),
-                                                                      init_word_embeddings, init_word_weights)                    
-
+                        #token_key_embedder = StaticLayerwiseEmbedding(num_vectors_per_token, self.token_dim, N + 1, 
+                        #                                              (0.1, 0.02),
+                        #                                              init_word_embeddings, init_word_weights)                    
+                        with torch.no_grad():
+                            # cls_delta_token_id: [33306]
+                            cls_delta_token_id  = get_tokens_for_string(cls_delta_token)
+                            # cls_delta_embedding: [1, 768]
+                            cls_delta_embedding = get_embeddings_for_tokens(cls_delta_token_id.cpu())
+                        # token_key_embeddings: [16, 768]
+                        token_key_embeddings = nn.Parameter(cls_delta_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
                 else:
                     # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
                     token_params = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
@@ -579,8 +586,8 @@ class EmbeddingManager(nn.Module):
             # Pytorch >= 1.12.0 allows to put an nn.Module object into an nn.ParameterDict.
             self.string_to_param_dict[placeholder_string] = token_params
             self.string_to_ada_embedder_dict[placeholder_string] = token_ada_embedder
-            # If not self.use_sep_key_embs, token_key_embedder is None.
-            self.string_to_key_embedder_dict[placeholder_string] = token_key_embedder
+            # If not self.use_sep_key_embs, token_key_embeddings is None.
+            self.string_to_key_embedding_dict[placeholder_string] = token_key_embeddings
 
             self.cls_delta_token    = cls_delta_token
             if self.cls_delta_token is not None:
@@ -654,7 +661,7 @@ class EmbeddingManager(nn.Module):
             # key_embeddings are only for UNet layers 7, 8, 12, 16. 
             # Other layers will still use static_embeddings.
             key_embeddings = self.get_static_embedding(tokenized_text, embedded_text.clone(), 
-                                                       self.string_to_key_embedder_dict,
+                                                       self.string_to_key_embedding_dict,
                                                        B, N, device, update_mask=False)
             layer_mask = torch.zeros_like(static_embeddings).reshape(-1, self.num_unet_layers, 
                                                                      *static_embeddings.shape[1:])
@@ -934,7 +941,7 @@ class EmbeddingManager(nn.Module):
         torch.save({ "string_to_token":         self.string_to_token_dict,
                      "string_to_param":         self.string_to_param_dict,
                      "string_to_ada_embedder":  self.string_to_ada_embedder_dict,
-                     "string_to_key_embedder":  self.string_to_key_embedder_dict,
+                     "string_to_key_embedder":  self.string_to_key_embedding_dict,
                      "ada_emb_weight":          self.ada_emb_weight,  
                    }, 
                     ckpt_path)
@@ -946,7 +953,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_token_dict           = {}
         self.string_to_param_dict           = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
-        self.string_to_key_embedder_dict    = nn.ModuleDict()
+        self.string_to_key_embedding_dict   = nn.ParameterDict()
 
         if isinstance(ckpt_paths, str):
             ckpt_paths = [ckpt_paths]
@@ -979,7 +986,7 @@ class EmbeddingManager(nn.Module):
                 self.string_to_token_dict[k2]        = k2_token
                 self.string_to_param_dict[k2]        = ckpt["string_to_param"][k]
                 self.string_to_ada_embedder_dict[k2] = ckpt["string_to_ada_embedder"][k]
-                self.string_to_key_embedder_dict[k2] = ckpt["string_to_key_embedder"][k]
+                self.string_to_key_embedding_dict[k2] = ckpt["string_to_key_embedder"][k]
 
                 print(f"Loaded {k}->{k2} from {ckpt_path}")
 
@@ -992,7 +999,7 @@ class EmbeddingManager(nn.Module):
     def optimized_parameters(self):
         return list(self.string_to_param_dict.parameters()) \
                + list(self.string_to_ada_embedder_dict.parameters()) \
-               + list(self.string_to_key_embedder_dict.parameters())
+               + list(self.string_to_key_embedding_dict.parameters())
 
     def embedding_attractor_loss(self):
         loss = 0.
@@ -1080,11 +1087,8 @@ class EmbeddingManager(nn.Module):
 
         for key in self.initial_embeddings:
             for embobj in (self.string_to_param_dict[key], 
-                           self.string_to_ada_embedder_dict[key],
-                           self.string_to_key_embedder_dict[key]):
+                           self.string_to_ada_embedder_dict[key]):
                 # Skip non-layerwise embeddings.
-                # If not self.use_sep_key_embs, then 
-                # self.string_to_key_embedder_dict[key] is None and skipped.
                 if not isinstance(embobj, StaticLayerwiseEmbedding) \
                   and not isinstance(embobj, AdaEmbedding):
                     continue
