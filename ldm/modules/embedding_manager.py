@@ -472,8 +472,6 @@ class EmbeddingManager(nn.Module):
         self.max_vectors_per_layer_per_token = num_vectors_per_token
         self.use_sep_key_embs = use_sep_key_embs
         self.sep_key_layer_indices = sep_key_layer_indices
-        if self.use_sep_key_embs:
-            assert cls_delta_token is not None, "cls_delta_token must be specified when using separate key embeddings"
 
         # multi-token and multi-layer embedding are not supported at the same time.
         if self.use_layerwise_embedding:
@@ -497,6 +495,17 @@ class EmbeddingManager(nn.Module):
 
         # Save this function to be used in load() when doing placeholder substitution.
         self.get_tokens_for_string = get_tokens_for_string
+
+        if self.use_sep_key_embs:
+            assert cls_delta_token is not None, "cls_delta_token must be specified when using separate key embeddings"
+            with torch.no_grad():
+                # cls_delta_token_id: [33306]
+                cls_delta_token_id  = get_tokens_for_string(cls_delta_token)
+                # cls_delta_embedding: [1, 768]
+                cls_delta_embedding = get_embeddings_for_tokens(cls_delta_token_id.cpu())
+                # cls_delta_embedding is fixed.
+                # Wrap cls_delta_embedding with Parameter to save it to the checkpoint.
+                self.cls_delta_embedding = nn.Parameter(cls_delta_embedding, requires_grad=False)
 
         if initializer_neg_words is not None and len(initializer_neg_words) > 0:
             init_neg_embeddings = []
@@ -555,13 +564,8 @@ class EmbeddingManager(nn.Module):
                         #token_key_embedder = StaticLayerwiseEmbedding(num_vectors_per_token, self.token_dim, N + 1, 
                         #                                              (0.1, 0.02),
                         #                                              init_word_embeddings, init_word_weights)                    
-                        with torch.no_grad():
-                            # cls_delta_token_id: [33306]
-                            cls_delta_token_id  = get_tokens_for_string(cls_delta_token)
-                            # cls_delta_embedding: [1, 768]
-                            cls_delta_embedding = get_embeddings_for_tokens(cls_delta_token_id.cpu())
                         # token_key_embeddings: [16, 768]
-                        token_key_embeddings = nn.Parameter(cls_delta_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
+                        token_key_embeddings = nn.Parameter(self.cls_delta_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
                 else:
                     # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
                     token_params = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
@@ -1148,6 +1152,11 @@ class EmbeddingManager(nn.Module):
                 else:
                     loss_boost = 1.
                 loss = loss + curr_loss * loss_boost
+
+            if self.use_sep_key_embs:
+                key_embeddings = self.string_to_key_embedding_dict[key]
+                loss_key_pre_vecs = selective_reg_loss(key_embeddings - self.cls_delta_embedding, loss_type=euc_loss_type)
+                loss = loss + loss_key_pre_vecs * pre_vecs_reg_weight
 
         return loss / num_placeholders
 
