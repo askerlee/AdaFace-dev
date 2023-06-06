@@ -777,7 +777,7 @@ class LatentDiffusion(DDPM):
 
                     # num_sep_key_layers: 4.
                     c_v, c_k = torch.split(c, (16 * B, self.num_sep_key_layers * B), dim=0)
-                    c_k_all_layers = torch.zeros(B, 16, *c_v.shape[1:])
+                    c_k_all_layers = torch.zeros(B, 16, *c_v.shape[1:], device=c_v.device)
                     # Fill in the four layers of separate key embeddings 
                     # in the shape of [B, layer_num, 77, 768].
                     c_k_all_layers[:, self.sep_key_layer_indices] = \
