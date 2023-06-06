@@ -1270,6 +1270,7 @@ class LatentDiffusion(DDPM):
                         c_in2 = subj_single_prompts + subj_comp_prompts + cls_single_prompts + subj_comp_prompts
                         #print(c_in2)
 
+                        # mix_weight_scale borrows the weight scale of the LR scheduler.
                         # Near the end of training, c2_mix_weight should be 1/4 of cls_prompt_mix_weight_max.
                         # If cls_prompt_mix_weight_max=0.4, then c2_mix_weight changes as 0 -> 0.4 -> 0.1.
                         c2_mix_weight = self.cls_prompt_mix_weight_max * self.mix_weight_scale
@@ -1281,12 +1282,23 @@ class LatentDiffusion(DDPM):
                         # Mixed embedding subj_comps_emb_mix = 
                         # concat(subj_comps_emb, cls_comps_emb -| subj_comps_emb)_dim1. 
                         # -| means orthogonal subtraction.
-                        subj_comps_emb_mix_all_layers  = mix_embeddings(subj_comps_emb, cls_comps_emb, 
-                                                             c2_mix_weight=c2_mix_weight,
-                                                             use_ortho_subtract=True)
-                        subj_single_emb_mix_all_layers = mix_embeddings(subj_single_emb, cls_single_emb,
-                                                             c2_mix_weight=c2_mix_weight,
-                                                             use_ortho_subtract=True)
+                        if self.use_sep_key_embs:
+                            subj_comps_emb_v, _  = subj_comps_emb.split(subj_comps_emb.shape[1] // 2, dim=1)
+                            cls_comps_emb_v, _   = cls_comps_emb.split(cls_comps_emb.shape[1] // 2, dim=1)
+                            subj_single_emb_v, _ = subj_single_emb.split(subj_single_emb.shape[1] // 2, dim=1)
+                            cls_single_emb_v, _  = cls_single_emb.split(cls_single_emb.shape[1] // 2, dim=1)
+                        else:
+                            subj_comps_emb_v  = subj_comps_emb
+                            cls_comps_emb_v   = cls_comps_emb
+                            subj_single_emb_v = subj_single_emb
+                            cls_single_emb_v  = cls_single_emb
+
+                        subj_comps_emb_mix_all_layers  = mix_embeddings(subj_comps_emb_v, cls_comps_emb_v, 
+                                                                        c2_mix_weight=c2_mix_weight,
+                                                                        use_ortho_subtract=True)
+                        subj_single_emb_mix_all_layers = mix_embeddings(subj_single_emb_v, cls_single_emb_v,
+                                                                        c2_mix_weight=c2_mix_weight,
+                                                                        use_ortho_subtract=True)
 
                         # If stop_prompt_mix_grad, stop gradient on subj_comps_emb_mix, 
                         # since it serves as the reference.
@@ -1312,13 +1324,21 @@ class LatentDiffusion(DDPM):
                             layer_mask[:, sync_layer_indices] = 1
                             layer_mask = layer_mask.reshape(-1, *subj_comps_emb_mix_all_layers.shape[1:])
                             
+                            if not self.use_sep_key_embs:
+                                # This copy of subj_single_emb, subj_comps_emb will be simply 
+                                # repeated at the token dimension to match 
+                                # the token number of the mixed (concatenated) 
+                                # subj_single_emb_mix and subj_comps_emb_mix embeddings.
+                                subj_comps_emb  = subj_comps_emb.repeat(1, 2, 1)
+                                subj_single_emb = subj_single_emb.repeat(1, 2, 1)
+
                             # Use most of the layers of embeddings in subj_comps_emb, but 
                             # replace sync_layer_indices layers with those from subj_comps_emb_mix_all_layers.
                             # Do not assign with sync_layers as indices, which destroys the computation graph.
-                            subj_comps_emb_mix  = subj_comps_emb.repeat(1, 2, 1) * (1 - layer_mask) \
+                            subj_comps_emb_mix  = subj_comps_emb * (1 - layer_mask) \
                                                   + subj_comps_emb_mix_all_layers * layer_mask
 
-                            subj_single_emb_mix = subj_single_emb.repeat(1, 2, 1) * (1 - layer_mask) \
+                            subj_single_emb_mix = subj_single_emb * (1 - layer_mask) \
                                                   + subj_single_emb_mix_all_layers * layer_mask
                         else:
                             # There is only one layer of embeddings.
@@ -1327,14 +1347,10 @@ class LatentDiffusion(DDPM):
 
                         # c_static_emb2 will be added with the ada embeddings to form the 
                         # conditioning embeddings in the U-Net.
-                        # This copy of subj_single_emb, subj_comps_emb will be simply 
-                        # repeated at the token dimension to match 
-                        # the token number of the mixed (concatenated) 
-                        # subj_single_emb_mix and subj_comps_emb_mix embeddings.
                         # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
                         # image generation and computing compositional mix loss.
-                        c_static_emb2  = torch.cat([subj_single_emb.repeat(1, 2, 1), 
-                                                    subj_comps_emb.repeat(1, 2, 1), 
+                        c_static_emb2 = torch.cat([ subj_single_emb, 
+                                                    subj_comps_emb, 
                                                     subj_single_emb_mix, 
                                                     subj_comps_emb_mix], dim=0)
                         
