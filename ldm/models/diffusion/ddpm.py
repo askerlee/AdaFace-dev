@@ -89,6 +89,7 @@ class DDPM(pl.LightningModule):
                  use_layerwise_embedding=False,
                  use_ada_embedding=False,
                  use_sep_key_embs=False,
+                 sep_key_layer_indices=[4, 5, 6, 7],    # correspond to original layers 7, 8, 12, 16
                  composition_regs_iter_gap=-1,
                  prompt_delta_reg_weight=0.,
                  composition_prompt_mix_reg_weight=0.,
@@ -111,6 +112,8 @@ class DDPM(pl.LightningModule):
         self.use_layerwise_embedding = use_layerwise_embedding
         self.use_ada_embedding = use_layerwise_embedding and use_ada_embedding
         self.use_sep_key_embs  = use_sep_key_embs
+        self.sep_key_layer_indices = sep_key_layer_indices
+        self.num_sep_key_layers    = len(sep_key_layer_indices)
 
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.prompt_delta_reg_weight         = prompt_delta_reg_weight
@@ -766,9 +769,27 @@ class LatentDiffusion(DDPM):
                     # the corresponding 16 vectors of context_key (corresponding to the same image).
                     # So they are concatenated at dim 1 (tokens dim), and then handled 
                     # in the same way as mixed embeddings.
-                    # [32*B, 77, 768] => [16*B, 154, 768].
-                    c_v, c_k = torch.split(c, c.shape[0] // 2, dim=0)
-                    c = torch.cat([c_v, c_k], dim=1)
+                    # [(16+4)*B, 77, 768] => value_embeddings [16*B, 77, 768].                    
+                    #                                                                            concat = [16*B, 154, 768]
+                    #                     => key_embeddings   [4*B,  77, 768] => [16*B, 77, 768] 
+                    B = len(c_in)
+                    assert c.shape[0] == (16 + self.num_sep_key_layers) * B 
+
+                    # num_sep_key_layers: 4.
+                    c_v, c_k = torch.split(c, (16 * B, self.num_sep_key_layers * B), dim=0)
+                    c_k_all_layers = torch.zeros(B, 16, *c_v.shape[1:])
+                    # Fill in the four layers of separate key embeddings 
+                    # in the shape of [B, layer_num, 77, 768].
+                    c_k_all_layers[:, self.sep_key_layer_indices] = \
+                        c_k.reshape(B, self.num_sep_key_layers, *c_v.shape[1:])
+                    c_k_all_layers = c_k_all_layers.reshape(c_v.shape)
+                    # Use most of the layers of embeddings in static_embeddings, but 
+                    # **add** (not replace) sep_key_layer_indices layers with those from key_embeddings.
+                    # So key_embeddings are just residuals, and the resulted 
+                    # key_embeddings_all_layers are not very far from static_embeddings.
+                    # This simulates the "addconcat" embedding mixing scheme used for distillation.
+                    c_k_all_layers = c_k_all_layers + c_v
+                    c = torch.cat([c_v, c_k_all_layers], dim=1)
 
                 c = (c, c_in, extra_info)
             else:
@@ -1790,7 +1811,6 @@ class LatentDiffusion(DDPM):
                     feat_subj_comps  = feat_subj_comps  * spatial_weight_mix_comps
                     feat_mix_single  = feat_mix_single  * spatial_weight_mix_single
                     feat_mix_comps   = feat_mix_comps   * spatial_weight_mix_comps
-
 
                 if iter_type == 'mix_concat_cls':
                     pool_spatial_size = (1, 1)

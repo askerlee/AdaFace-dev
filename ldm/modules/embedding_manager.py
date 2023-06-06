@@ -500,6 +500,7 @@ class EmbeddingManager(nn.Module):
 
         if self.use_sep_key_embs:
             assert cls_delta_token is not None, "cls_delta_token must be specified when using separate key embeddings"
+            self.num_sep_key_layers = len(sep_key_layer_indices)
             with torch.no_grad():
                 # cls_delta_token_id: [33306]
                 cls_delta_token_id  = get_tokens_for_string(cls_delta_token)
@@ -661,19 +662,23 @@ class EmbeddingManager(nn.Module):
         # If use_sep_key_embs, then the key embeddings will overwrite the static embeddings.
         static_embeddings = self.get_static_embedding(tokenized_text, embedded_text.clone(), 
                                                       self.string_to_param_dict,
-                                                      B, N, device, update_mask=True)
+                                                      B, N, self.num_unet_layers, device, 
+                                                      update_mask=True)
 
         if self.use_sep_key_embs:
             # key_embeddings are only for UNet layers 7, 8, 12, 16. 
             # Other layers will still use static_embeddings.
             key_embeddings = self.get_static_embedding(tokenized_text, embedded_text.clone(), 
                                                        self.string_to_key_embedding_dict,
-                                                       B, N, device, update_mask=False)
+                                                       B, N, self.num_sep_key_layers, device, 
+                                                       update_mask=False)
+            '''
             layer_mask = torch.zeros_like(static_embeddings).reshape(-1, self.num_unet_layers, 
                                                                      *static_embeddings.shape[1:])
             layer_mask[:, self.sep_key_layer_indices] = 1
             layer_mask = layer_mask.reshape(-1, *static_embeddings.shape[1:])
-            
+            '''
+
             key_grad_scale = 0.2
             if key_grad_scale < 1:
                 grad_scaler = GradientScaler(key_grad_scale)
@@ -681,35 +686,36 @@ class EmbeddingManager(nn.Module):
             else:
                 key_embeddings_gradscaled = key_embeddings
 
+            key_embeddings_gradscaled = key_embeddings_gradscaled  * self.sep_key_embs_scale
+
             # Use most of the layers of embeddings in static_embeddings, but 
             # **add** (not replace) sep_key_layer_indices layers with those from key_embeddings.
             # So key_embeddings are just residuals, and the resulted 
             # key_embeddings_all_layers are not very far from static_embeddings.
             # This simulates the "addconcat" embedding mixing scheme used for distillation.
             # sep_key_embs_scale: default=0.2.
-            key_embeddings_all_layers  = static_embeddings  \
-                                         + key_embeddings_gradscaled * layer_mask * self.sep_key_embs_scale
+            # key_embeddings_all_layers  = static_embeddings + key_embeddings_gradscaled
             
             # Combine the static and key embeddings into an extended batch.
-            # [64, 77, 768] + [64, 77, 768] => [128, 77, 768].
+            # [64, 77, 768] + [4, 77, 768] => [68, 77, 768].
             # B = 2, 32*B = 64.
-            static_embeddings = torch.cat([static_embeddings, key_embeddings_all_layers], dim=0)
+            static_embeddings = torch.cat([static_embeddings, key_embeddings_gradscaled], dim=0)
 
         return static_embeddings
     
     def get_static_embedding(self, tokenized_text, embedded_text, embedder_dict, 
-                             B, N, device, update_mask=True):
+                             B, N, num_unet_layers, device, update_mask=True):
         orig_tokenized_text = tokenized_text
 
         if self.use_layerwise_embedding:
             # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
             # "Tuck" the layer dimension into the batch dimension, 
             # to keep embedded_text in 3D, same as the input.
-            embedded_text = embedded_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1, 1).view(B * self.num_unet_layers, N, -1)
+            embedded_text = embedded_text.unsqueeze(1).repeat(1, num_unet_layers, 1, 1).view(B * num_unet_layers, N, -1)
             # tokenized_text: [B, 16, N] => [16*B, N]
             # tokenized_text has to be repeated along the layer dimension as well, so that 
             # placeholder_indices can index the embedding at each layer in the batch.
-            tokenized_text = tokenized_text.unsqueeze(1).repeat(1, self.num_unet_layers, 1).view(B * self.num_unet_layers, N)
+            tokenized_text = tokenized_text.unsqueeze(1).repeat(1, num_unet_layers, 1).view(B * num_unet_layers, N)
             # mirror-reflect the embedding along the layer dimension, to make it symmetric 
             # in the encoder & decoder.
 
@@ -748,7 +754,7 @@ class EmbeddingManager(nn.Module):
                 if self.use_layerwise_embedding:
                     # REAL_OCCUR: the real number of occurrences of the placeholder in the current batch,
                     # not repetitively counting the occurrences in the embedded_text repeated for M layers.
-                    REAL_OCCUR = placeholder_indices[0].numel() // self.num_unet_layers
+                    REAL_OCCUR = placeholder_indices[0].numel() // num_unet_layers
                 else:
                     REAL_OCCUR = placeholder_indices[0].numel()
                 
