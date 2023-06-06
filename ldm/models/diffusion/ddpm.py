@@ -788,7 +788,7 @@ class LatentDiffusion(DDPM):
                     # So key_embeddings are just residuals, and the resulted 
                     # key_embeddings_all_layers are not very far from static_embeddings.
                     # This simulates the "addconcat" embedding mixing scheme used for distillation.
-                    c_k_all_layers = c_k_all_layers + c_v
+                    c_k_all_layers = c_k_all_layers + c_k
                     c = torch.cat([c_v, c_k_all_layers], dim=1)
 
                 c = (c, c_in, extra_info)
