@@ -1138,36 +1138,43 @@ class EmbeddingManager(nn.Module):
                 if type(loss_bias) == int:
                     breakpoint()
 
+                if self.use_sep_key_embs:
+                    key_embeddings = self.string_to_key_embedding_dict[key]
+                    loss_key_pre_vecs = selective_reg_loss(key_embeddings - self.cls_delta_embedding, loss_type=euc_loss_type)
+                else:
+                    loss_key_pre_vecs = 0.
+
                 curr_loss = loss_bias               * bias_reg_weight \
                             + loss_basis            * basis_reg_weight \
                             + loss_pre_vecs         * pre_vecs_reg_weight \
                             + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
-                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight 
+                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight \
+                            + loss_key_pre_vecs     * pre_vecs_reg_weight
 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
-                    print_str = f'loss_bias={loss_bias.item():.4f}, ' \
-                                f'loss_basis={loss_basis.item():.4f}, ' \
-                                f'loss_pre_vecs={loss_pre_vecs.item():.4f}, '
+                    print_str = f'reg_bias={loss_bias.item():.4f}, ' \
+                                f'reg_basis={loss_basis.item():.4f}, ' \
+                                f'reg_pre_vecs={loss_pre_vecs.item():.4f}, ' \
+                                f'reg_key={loss_key_pre_vecs.item():.4f}, ' \
+                                
                     if isinstance(embobj, AdaEmbedding):
                         print_str += f'loss_ada_maps_weight={loss_ada_maps_weight.item():.4f}, ' \
                                      f'loss_ada_maps_bias={loss_ada_maps_bias.item():.4f}'
 
                     print(print_str)
 
+                # default: l2
                 if euc_loss_type   == 'l2':
                     if isinstance(embobj, AdaEmbedding):
-                        loss_boost = ada_l2_loss_boost
+                        loss_boost = ada_l2_loss_boost      # 10
                     else:
-                        loss_boost = static_l2_loss_boost
+                        loss_boost = static_l2_loss_boost   # 5
                 else:
+                    # l1 loss is numerically much larger than l2 loss, 
+                    # hence it has smaller weight than l2 loss.
                     loss_boost = 1.
                 loss = loss + curr_loss * loss_boost
-
-            if self.use_sep_key_embs:
-                key_embeddings = self.string_to_key_embedding_dict[key]
-                loss_key_pre_vecs = selective_reg_loss(key_embeddings - self.cls_delta_embedding, loss_type=euc_loss_type)
-                loss = loss + loss_key_pre_vecs * pre_vecs_reg_weight
 
         return loss / num_placeholders
 
@@ -1186,15 +1193,16 @@ class EmbeddingManager(nn.Module):
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
     # cls_prompt_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
-    def calc_prompt_delta_loss(self, do_ada_comp_delta_reg, static_embeddings):
+    def calc_prompt_delta_loss(self, do_ada_prompt_delta_reg, static_embeddings):
         # The prompt delta loss for ada embeddings is only applied 
         # every prompt_delta_reg_iter_gap iterations. So the ada loss 
         # should be boosted proportionally to prompt_delta_reg_iter_gap. 
         # Divide it by 4 to reduce the proportion of ada emb loss relative to 
         # static emb loss in the total loss.
         ada_comp_loss_boost_ratio = self.prompt_delta_reg_iter_gap / 4
-        # If do_ada_comp_delta_reg,     BS = 2.
-        # If not do_ada_comp_delta_reg, BS = 2 * num_compositions_per_image = 4.
+        # If do_ada_prompt_delta_reg, then BS = 1, 
+        # and ada embeddings contain 4 types of embeddings:
+        # subj_single, subj_comp, cls_single, cls_comp.
         BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
         max_token_num = static_embeddings.shape[1]
         # static_embeddings: [8, 16, 77, 768]
@@ -1230,8 +1238,8 @@ class EmbeddingManager(nn.Module):
 
         static_delta_loss   = calc_delta_loss(static_delta, cls_delta, delta_loss_emb_mask)
 
-        if do_ada_comp_delta_reg:
-            # Each emb is of [4, 77, 768]. 4 = 2 * batch_size.
+        if do_ada_prompt_delta_reg:
+            # Each emb is of [4, 77, 768]. 
             for i, emb in enumerate(self.ada_embeddings):
                 # ada embeddings of all layers should have been stored in self.ada_embeddings
                 # before calling calc_prompt_delta_loss().
@@ -1240,7 +1248,11 @@ class EmbeddingManager(nn.Module):
 
             # ada_embeddings: [4, 16, 77, 768]
             ada_embeddings = torch.stack(self.ada_embeddings, dim=1)
-            ada_subj_single_emb, ada_subj_comp_emb = ada_embeddings.split(BS, dim=0)
+            # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
+            # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
+            # the subject token.
+            ada_subj_single_emb, ada_subj_comp_emb, ada_cls_single_emb, ada_cls_comp_emb \
+                = ada_embeddings.split(BS, dim=0)
             
             if use_ortho_subtract:
                 ada_delta = ortho_subtract(ada_subj_comp_emb, ada_subj_single_emb)
