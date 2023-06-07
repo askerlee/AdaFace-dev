@@ -618,6 +618,7 @@ class EmbeddingManager(nn.Module):
         # Store the embedder to compute the delta loss.
         self.embedder = embedder
         self.ada_bp_to_unet = False
+        self.is_comp_iter   = False
         print("EmbeddingManager initialized with layerwise_lora_rank={}, ada_emb_weight={}, placeholder_suffix={}".format(
                 layerwise_lora_rank, ada_emb_weight, placeholder_suffix))
             
@@ -1091,7 +1092,7 @@ class EmbeddingManager(nn.Module):
         # So this weight doesn't matter much.
         ada_maps_bias_reg_weight    = 0.001   # 0.02 -> 0.001
         pre_vecs_reg_weight         = 0.1
-        key_pre_vecs_reg_weight     = 0.02
+        key_pre_vecs_reg_weight0     = 0.02
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
         ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
@@ -1141,9 +1142,14 @@ class EmbeddingManager(nn.Module):
                 if self.use_sep_key_embs:
                     key_embeddings = self.string_to_key_embedding_dict[key]
                     loss_key_pre_vecs = selective_reg_loss(key_embeddings - self.cls_delta_embedding, loss_type=euc_loss_type)
+                    if self.is_comp_iter:
+                        key_pre_vecs_reg_weight = key_pre_vecs_reg_weight0
+                    else:
+                        key_pre_vecs_reg_weight = 0.
                 else:
                     loss_key_pre_vecs = 0.
-
+                    key_pre_vecs_reg_weight = 0.
+                    
                 curr_loss = loss_bias               * bias_reg_weight \
                             + loss_basis            * basis_reg_weight \
                             + loss_pre_vecs         * pre_vecs_reg_weight \
@@ -1155,8 +1161,9 @@ class EmbeddingManager(nn.Module):
                 if debug and self.loss_call_count % 100 == 0:
                     print_str = f'reg_bias={loss_bias.item():.4f}, ' \
                                 f'reg_basis={loss_basis.item():.4f}, ' \
-                                f'reg_pre_vecs={loss_pre_vecs.item():.4f}, ' \
-                                f'reg_key={loss_key_pre_vecs.item():.4f}, ' \
+                                f'reg_pre_vecs={loss_pre_vecs.item():.4f}, '
+                    if self.use_sep_key_embs:
+                        print_str += f'reg_key={loss_key_pre_vecs.item():.4f}, ' \
                                 
                     if isinstance(embobj, AdaEmbedding):
                         print_str += f'loss_ada_maps_weight={loss_ada_maps_weight.item():.4f}, ' \

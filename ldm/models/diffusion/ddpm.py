@@ -1588,8 +1588,9 @@ class LatentDiffusion(DDPM):
     def p_losses(self, x_start, cond, t, noise=None, img_mask=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        is_comp_iter = (self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg)
 
-        if self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg:
+        if is_comp_iter:
             HALF_BS  = max(x_noisy.shape[0] // 2, 1)
             x_noisy  = x_noisy[:HALF_BS].repeat(4, 1, 1, 1)
             img_mask = img_mask[:HALF_BS]
@@ -1602,7 +1603,7 @@ class LatentDiffusion(DDPM):
         model_output = self.apply_model(x_noisy, t, cond)
         model_outputs = None
 
-        if self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg:
+        if is_comp_iter:
             # If we do compositional prompt mixing, we need the final images of the 
             # second half as the reconstruction objective for compositional regularization.
             # The subj_single and cls_single images, although seemingly subject to
@@ -1675,6 +1676,7 @@ class LatentDiffusion(DDPM):
             loss += (self.original_elbo_weight * loss_vlb)
 
         if self.embedding_reg_weight > 0:
+            self.embedding_manager.is_comp_iter = is_comp_iter
             loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
             loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg})
             loss += (self.embedding_reg_weight * loss_embedding_reg)
