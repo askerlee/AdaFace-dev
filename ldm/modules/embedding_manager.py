@@ -1091,6 +1091,7 @@ class EmbeddingManager(nn.Module):
         # So this weight doesn't matter much.
         ada_maps_bias_reg_weight    = 0.001   # 0.02 -> 0.001
         pre_vecs_reg_weight         = 0.1
+        key_pre_vecs_reg_weight     = 0
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
         ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
@@ -1137,8 +1138,7 @@ class EmbeddingManager(nn.Module):
                 if type(loss_bias) == int:
                     breakpoint()
 
-                reg_key_embs = False
-                if self.use_sep_key_embs and reg_key_embs:
+                if self.use_sep_key_embs:
                     key_embeddings = self.string_to_key_embedding_dict[key]
                     loss_key_pre_vecs = selective_reg_loss(key_embeddings - self.cls_delta_embedding, loss_type=euc_loss_type)
                 else:
@@ -1149,7 +1149,7 @@ class EmbeddingManager(nn.Module):
                             + loss_pre_vecs         * pre_vecs_reg_weight \
                             + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
                             + loss_ada_maps_bias    * ada_maps_bias_reg_weight \
-                            + loss_key_pre_vecs     * pre_vecs_reg_weight
+                            + loss_key_pre_vecs     * key_pre_vecs_reg_weight
 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
