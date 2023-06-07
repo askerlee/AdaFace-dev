@@ -1649,6 +1649,7 @@ class LatentDiffusion(DDPM):
                 model_output = model_output * img_mask
         
         iter_type = cond[2]['iter_type']
+        loss = 0
 
         if iter_type == 'normal_recon':
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
@@ -1673,7 +1674,32 @@ class LatentDiffusion(DDPM):
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
 
-        elif iter_type.startswith("mix_"):
+        if self.embedding_reg_weight > 0:
+            loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
+            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg})
+            loss += (self.embedding_reg_weight * loss_embedding_reg)
+
+        if self.do_static_prompt_delta_reg:
+            # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
+            loss_comp_delta_reg = self.embedding_manager.calc_prompt_delta_loss( 
+                                    self.do_ada_prompt_delta_reg, self.c_static_emb
+                                    ).mean()
+            loss_dict.update({f'{prefix}/loss_comp_delta_reg': loss_comp_delta_reg})
+            loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
+            #print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
+
+        if self.do_clip_loss:
+            #print(clip_prompts_comp)
+            clip_images = self.differentiable_decode_first_stage(clip_images)
+            # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
+            # to keep the loss positive.
+            loss_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images)
+            loss_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images)
+            loss_clip = loss_clip_comp * 0.8 + loss_clip_single * 0.2
+            loss_dict.update({f'{prefix}/loss_clip': loss_clip})
+            loss += (self.clip_loss_weight * loss_clip)
+
+        if iter_type.startswith("mix_"):
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
             # Only regularize on intermediate features, i.e., intermediate features generated 
             # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -1821,37 +1847,10 @@ class LatentDiffusion(DDPM):
 
             # logvar is all zero. So no need to do "loss_prompt_mix_reg / exp(logvar_t) + logvar_t".
             loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_prompt_mix_reg})
-            loss = self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.mix_weight_scale
+            loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.mix_weight_scale
             
             self.embedding_manager.placeholder_indices = None
-        else:
-            # A dummy loss to avoid the error of "loss.backward()".
-            loss = 0
 
-        if self.embedding_reg_weight > 0:
-            loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
-            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg})
-            loss += (self.embedding_reg_weight * loss_embedding_reg)
-
-        if self.do_static_prompt_delta_reg:
-            # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
-            loss_comp_delta_reg = self.embedding_manager.calc_prompt_delta_loss( 
-                                    self.do_ada_prompt_delta_reg, self.c_static_emb
-                                    ).mean()
-            loss_dict.update({f'{prefix}/loss_comp_delta_reg': loss_comp_delta_reg})
-            loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
-            #print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
-
-        if self.do_clip_loss:
-            #print(clip_prompts_comp)
-            clip_images = self.differentiable_decode_first_stage(clip_images)
-            # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
-            # to keep the loss positive.
-            loss_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images)
-            loss_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images)
-            loss_clip = loss_clip_comp * 0.8 + loss_clip_single * 0.2
-            loss_dict.update({f'{prefix}/loss_clip': loss_clip})
-            loss += (self.clip_loss_weight * loss_clip)
 
         loss_dict.update({f'{prefix}/loss': loss})
 
