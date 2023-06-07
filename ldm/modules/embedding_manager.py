@@ -677,13 +677,12 @@ class EmbeddingManager(nn.Module):
             layer_mask = layer_mask.reshape(-1, *static_embeddings.shape[1:])
             '''
 
-            key_grad_scale = 0.2
+            key_grad_scale = 1 #0.2
             if key_grad_scale < 1:
                 grad_scaler = GradientScaler(key_grad_scale)
                 key_embeddings_gradscaled = grad_scaler(key_embeddings)
             else:
                 key_embeddings_gradscaled = key_embeddings
-
 
             # Use most of the layers of embeddings in static_embeddings, but 
             # **add** (not replace) sep_key_layer_indices layers with those from key_embeddings.
@@ -1138,7 +1137,8 @@ class EmbeddingManager(nn.Module):
                 if type(loss_bias) == int:
                     breakpoint()
 
-                if self.use_sep_key_embs:
+                reg_key_embs = False
+                if self.use_sep_key_embs and reg_key_embs:
                     key_embeddings = self.string_to_key_embedding_dict[key]
                     loss_key_pre_vecs = selective_reg_loss(key_embeddings - self.cls_delta_embedding, loss_type=euc_loss_type)
                 else:
