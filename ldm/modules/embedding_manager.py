@@ -617,6 +617,7 @@ class EmbeddingManager(nn.Module):
         self.loss_call_count = 0
         # Store the embedder to compute the delta loss.
         self.embedder = embedder
+        self.ada_embeddings = None
         self.ada_bp_to_unet = False
         self.is_comp_iter   = False
         print("EmbeddingManager initialized with layerwise_lora_rank={}, ada_emb_weight={}, placeholder_suffix={}".format(
@@ -1092,7 +1093,7 @@ class EmbeddingManager(nn.Module):
         # So this weight doesn't matter much.
         ada_maps_bias_reg_weight    = 0.001   # 0.02 -> 0.001
         pre_vecs_reg_weight         = 0.1
-        key_pre_vecs_reg_weight0     = 0.02
+        key_pre_vecs_reg_weight0    = 0.02
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
         ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
@@ -1143,13 +1144,16 @@ class EmbeddingManager(nn.Module):
                     key_embeddings = self.string_to_key_embedding_dict[key]
                     loss_key_pre_vecs = selective_reg_loss(key_embeddings - self.cls_delta_embedding, loss_type=euc_loss_type)
                     if self.is_comp_iter:
+                        # key_pre_vecs_reg_weight: 0.02. Only applied once every 5 iters.
+                        # Cf. pre_vecs_reg_weight: 0.1. Applied in every iter.
+                        # So pre_vecs_reg is 25 times stronger than key_pre_vecs_reg.
                         key_pre_vecs_reg_weight = key_pre_vecs_reg_weight0
                     else:
                         key_pre_vecs_reg_weight = 0.
                 else:
                     loss_key_pre_vecs = 0.
                     key_pre_vecs_reg_weight = 0.
-                    
+
                 curr_loss = loss_bias               * bias_reg_weight \
                             + loss_basis            * basis_reg_weight \
                             + loss_pre_vecs         * pre_vecs_reg_weight \
@@ -1207,13 +1211,19 @@ class EmbeddingManager(nn.Module):
         # Divide it by 4 to reduce the proportion of ada emb loss relative to 
         # static emb loss in the total loss.
         ada_comp_loss_boost_ratio = self.prompt_delta_reg_iter_gap / 4
-        # If do_ada_prompt_delta_reg, then BS = 1, 
-        # and ada embeddings contain 4 types of embeddings:
+        if self.use_layerwise_embedding:
+            num_embed_layers = self.num_unet_layers
+        else:
+            num_embed_layers = 1
+
+        # num_unet_layers = 16. 
+        # If do_ada_prompt_delta_reg, then static_embeddings: [64, 77, 768]. 
+        # So BS = 1.
+        # static_embeddings / ada_embeddings contain 4 types of embeddings:
         # subj_single, subj_comp, cls_single, cls_comp.
-        BS = static_embeddings.shape[0] // (4 * self.num_unet_layers)
-        max_token_num = static_embeddings.shape[1]
-        # static_embeddings: [8, 16, 77, 768]
-        static_embeddings = static_embeddings.view(BS * 4, -1, max_token_num, static_embeddings.shape[-1])
+        BS = static_embeddings.shape[0] // (4 * num_embed_layers)
+        # static_embeddings: [64, 77, 768] => [4, 16, 77, 768]
+        static_embeddings = static_embeddings.view(BS * 4, -1, *static_embeddings.shape[1:])
         # Each is [2, 16, 77, 768]
         static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
                 static_embeddings.split(BS, dim=0)
@@ -1245,7 +1255,7 @@ class EmbeddingManager(nn.Module):
 
         static_delta_loss   = calc_delta_loss(static_delta, cls_delta, delta_loss_emb_mask)
 
-        if do_ada_prompt_delta_reg:
+        if do_ada_prompt_delta_reg and self.ada_embeddings is not None:
             # Each emb is of [4, 77, 768]. 
             for i, emb in enumerate(self.ada_embeddings):
                 # ada embeddings of all layers should have been stored in self.ada_embeddings

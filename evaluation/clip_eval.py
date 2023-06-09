@@ -10,10 +10,22 @@ class CLIPEvaluator(object):
         self.model, clip_preprocess = clip.load(clip_model, device=self.device)
 
         self.clip_preprocess = clip_preprocess
-        
+
+        # preprocessing: (input_image + 1) / 2
         self.preprocess = transforms.Compose([transforms.Normalize(mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0])] + # Un-normalize from [-1.0, 1.0] (generator output) to [0, 1].
                                               clip_preprocess.transforms[:2] +                                      # to match CLIP input scale assumptions
                                               clip_preprocess.transforms[4:])                                       # + skip convert PIL to tensor
+
+        '''
+        preprocess:
+        Compose(
+            Normalize(mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0])
+            Resize(size=224, interpolation=bicubic, max_size=None, antialias=None)
+            CenterCrop(size=(224, 224))
+            Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711))
+        )
+        [[1, 1, 1]] => [[1.93, 2.07, 2.15]]
+        '''
 
     def tokenize(self, strings: list):
         return clip.tokenize(strings).to(self.device)
@@ -45,30 +57,61 @@ class CLIPEvaluator(object):
 
         return image_features
 
-    def img_to_img_similarity(self, src_images, generated_images):
+    # images1 and images2 should be tensors, not PIL images or numpy arrays,
+    # as transforms.Normalize() in self.preprocess() expects tensors.
+    def image_pairwise_similarity(self, images1, images2, reduction='mean'):
         # [B1, 512]
-        src_img_features = self.get_image_features(src_images)
+        images1_features = self.get_image_features(images1)
         # [B2, 512]
-        gen_img_features = self.get_image_features(generated_images)
+        images2_features = self.get_image_features(images2)
 
-        return (src_img_features @ gen_img_features.T).mean()
+        sim_scores = images1_features @ images2_features.T
+
+        if reduction == 'mean':
+            return sim_scores.mean()
+        elif reduction == 'diag':
+            assert len(images1) == len(images2), f"Number of images1 {len(images1)} != Number of images2 {len(images2)}"
+            return sim_scores.diag()
+        elif reduction == 'diagmean':
+            assert len(images1) == len(images2), f"Number of images1 {len(images1)} != Number of images {len(images2)}"
+            return sim_scores.diag().mean()
+        elif reduction == 'none':
+            return sim_scores
+        else:
+            raise NotImplementedError
 
     # The gradient is cut to prevent from going back to get_text_features(). 
     # So if text-image similarity is used as loss,
     # the text embedding from the compared input text will not be updated. 
     # The generated images and their conditioning text embeddings will be updated.
-    def txt_to_img_similarity(self, text, generated_images):
-        text_features    = self.get_text_features(text)
-        gen_img_features = self.get_image_features(generated_images)
+    # txt_to_img_similarity() assumes images are tensors with mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0].
+    def txt_to_img_similarity(self, text, images, reduction='mean'):
+        # text_features: [1, 512], gen_img_features: [4, 512]
+        text_features   = self.get_text_features(text)
+        img_features    = self.get_image_features(images)
 
-        return (text_features @ gen_img_features.T).mean()
+        # sim_scores: [1, 4], example: [[0.2788, 0.2612, 0.2561, 0.2800]]
+        sim_scores = text_features @ img_features.T
+
+        if reduction == 'mean':
+            return sim_scores.mean()
+        elif reduction == 'diag':
+            assert len(text) == len(images), f"Number of prompts {len(text)} != Number of images {len(images)}"
+            return sim_scores.diag()
+        elif reduction == 'diagmean':
+            assert len(text) == len(images), f"Number of prompts {len(text)} != Number of images {len(images)}"
+            return sim_scores.diag().mean()
+        elif reduction == 'none':
+            return sim_scores
+        else:
+            raise NotImplementedError
 
 
 class LDMCLIPEvaluator(CLIPEvaluator):
     def __init__(self, device, clip_model='ViT-B/32') -> None:
         super().__init__(device, clip_model)
 
-    def gen_and_evaluate(self, ldm_model, src_images, target_text, n_samples=64, n_steps=50):
+    def gen_and_evaluate(self, ldm_model, ref_images, target_text, n_samples=64, n_steps=50):
         
         sampler = DDIMSampler(ldm_model)
 
@@ -100,7 +143,7 @@ class LDMCLIPEvaluator(CLIPEvaluator):
         
         all_samples = torch.cat(all_samples, axis=0)
 
-        sim_samples_to_img  = self.img_to_img_similarity(src_images, all_samples)
+        sim_samples_to_img  = self.image_pairwise_similarity(ref_images, all_samples)
         sim_samples_to_text = self.txt_to_img_similarity(target_text.replace("*", ""), all_samples)
 
         return sim_samples_to_img, sim_samples_to_text
@@ -110,9 +153,9 @@ class ImageDirEvaluator(CLIPEvaluator):
     def __init__(self, device, clip_model='ViT-B/32') -> None:
         super().__init__(device, clip_model)
 
-    def evaluate(self, gen_samples, src_images, target_text):
+    def evaluate(self, gen_samples, ref_images, target_text):
 
-        sim_samples_to_img  = self.img_to_img_similarity(src_images, gen_samples)
+        sim_samples_to_img  = self.image_pairwise_similarity(ref_images, gen_samples)
         sim_samples_to_text = self.txt_to_img_similarity(target_text, gen_samples)
 
         return sim_samples_to_img, sim_samples_to_text

@@ -15,7 +15,7 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import instantiate_from_config, mix_embeddings
+from ldm.util import instantiate_from_config, mix_embeddings, save_grid
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders, \
@@ -488,8 +488,9 @@ def main(opt):
                                                          x_T=start_code)
 
                         x_samples_ddim = model.decode_first_stage(samples_ddim)
+                        # x_samples_ddim: -1 ~ +1 -> 0 ~ 1.
                         x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
-
+                
                         if not opt.skip_save:
                             indiv_subdir = batched_subdirs[p_i]
                             class_long_prompt = batched_class_long_prompts[p_i]
@@ -541,12 +542,6 @@ def main(opt):
                 # After opt.n_repeat passes of batched_prompts, save all sample images as an image grid
                 if not opt.skip_grid:
                     # additionally, save as grid
-                    grid = torch.stack(all_samples, 0)
-                    grid = rearrange(grid, 'n b c h w -> (n b) c h w')
-                    grid = make_grid(grid, nrow=n_rows)
-
-                    # to image
-                    grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
                     # logs/gabrielleunion2023-05-24T18-33-34_gabrielleunion-ada/checkpoints/embeddings_gs-4500.pt
                     subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.subj_model_path)
                     if subjfolder_mat:
@@ -580,8 +575,8 @@ def main(opt):
                             grid_count += 1
                             grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
 
-                    Image.fromarray(grid.astype(np.uint8)).save(grid_filepath)
-
+                    save_grid(all_samples, grid_filepath, nrow=n_rows)
+                    
                 toc = time.time()
 
     if not opt.skip_grid:

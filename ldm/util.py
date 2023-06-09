@@ -14,7 +14,7 @@ from queue import Queue
 
 from inspect import isfunction
 from PIL import Image, ImageDraw, ImageFont
-
+from torchvision.utils import make_grid
 
 def log_txt_as_img(wh, xc, size=10):
     # wh a tuple of (width, height)
@@ -424,3 +424,18 @@ class GradientScaler(nn.Module):
 
     def forward(self, input_):
         return ScaleGrad.apply(input_, self._alpha)
+
+# samples: a list of (B, C, H, W) tensors.
+# If not do_normalize, samples should be between [0, 1].
+# If do_normalize, samples should be between [-1, 1] (raw output from SD decode_first_stage()).
+def save_grid(samples, grid_filepath, nrow, do_normalize=False):
+    grid = torch.stack(samples, 0)
+    if do_normalize:
+        grid = torch.clamp((grid + 1.0) / 2.0, min=0.0, max=1.0)
+        
+    grid = rearrange(grid, 'n b c h w -> (n b) c h w')
+    grid = make_grid(grid, nrow=nrow)
+
+    # to image
+    grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
+    Image.fromarray(grid.astype(np.uint8)).save(grid_filepath)

@@ -5,6 +5,7 @@ model:
   target: ldm.models.diffusion.ddpm.LatentDiffusion
   params:
     # linear_start/linear_end: params for linear beta schedule.
+    beta_schedule: linear
     linear_start: 0.00085
     linear_end: 0.0120
     num_timesteps_cond: 1
@@ -27,17 +28,18 @@ model:
     model_lr: 0.0
     use_layerwise_embedding: True
     use_ada_embedding: True
-    use_sep_key_embs:  True
+    use_sep_key_embs:  False
     # composition_regs includes prompt_delta_reg and composition_prompt_mix_reg.
     composition_regs_iter_gap: 5
     # typical delta reg loss: 0.75, * weight -> 7.5e-5
-    prompt_delta_reg_weight:       0.0001
+    prompt_delta_reg_weight:       1e-4
     # typical prompt mix reg loss: 0.2, * weight -> 2e-5.
     composition_prompt_mix_reg_weight:  0.0001
     # cls_prompt_mix_weight_min = cls_prompt_mix_weight_max * 0.25 (lr_min) = 0.075.
     cls_prompt_mix_weight_max:  0.3
     # typical clip loss: 0.3, * weight -> 3e-4.
-    clip_loss_weight:      0.001
+    clip_loss_weight:      0 #1e-3
+    filter_with_clip_loss: True
     # promt_mix_scheme: 'mix_hijk' or 'mix_concat_cls'
     promt_mix_scheme:      'mix_hijk'
     sep_key_embs_scale: 0.15
@@ -65,7 +67,7 @@ model:
         num_vectors_per_token: 1
         progressive_words: False
         use_layerwise_embedding: True
-        use_sep_key_embs:  True
+        use_sep_key_embs:  False
         layerwise_lora_rank_token_ratio: 2
         ada_emb_weight: 0.5
         # composition_regs alternates between prompt_delta_reg and composition_prompt_mix_reg.
