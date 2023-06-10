@@ -1764,8 +1764,8 @@ class LatentDiffusion(DDPM):
             self.num_total_clip_iters += 1
             self.num_teachable_iters += int(is_teachable)
             teachable_frac = self.num_teachable_iters / self.num_total_clip_iters
-            print("CLIP losses: {}, teachable frac: {:.1f}%".format( \
-                    clip_losses, teachable_frac*100))
+            #print("CLIP losses: {}, teachable frac: {:.1f}%".format( \
+            #        clip_losses, teachable_frac*100))
             loss_dict.update({f'{prefix}/teachable_frac': teachable_frac})
 
         else:
