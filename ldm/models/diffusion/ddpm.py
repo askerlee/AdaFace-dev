@@ -1892,7 +1892,7 @@ class LatentDiffusion(DDPM):
                     feat_mix_single  = grad_scaler(feat_mix_single)
                     feat_mix_comps   = grad_scaler(feat_mix_comps)
 
-                distill_on_delta = False
+                distill_on_delta = True
                 if distill_on_delta:
                     # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
                     feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_mix_single)
