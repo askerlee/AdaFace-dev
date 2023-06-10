@@ -72,7 +72,7 @@ model:
         ada_emb_weight: 0.5
         # composition_regs alternates between prompt_delta_reg and composition_prompt_mix_reg.
         # So prompt_delta_reg_iter_gap = 2 * composition_regs_iter_gap = 10.
-        prompt_delta_reg_iter_gap: 10
+        prompt_delta_reg_iter_gap: 3
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
