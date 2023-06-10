@@ -1700,7 +1700,8 @@ class LatentDiffusion(DDPM):
                                     self.do_ada_prompt_delta_reg, self.c_static_emb
                                     )
             loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean()})
-            loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean()})
+            if ada_delta_loss != 0:
+                loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean()})
             ada_comp_loss_boost_ratio = 2 #self.prompt_delta_reg_iter_gap / 4
             loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
             loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
