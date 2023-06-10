@@ -1210,7 +1210,7 @@ class EmbeddingManager(nn.Module):
         # should be boosted proportionally to prompt_delta_reg_iter_gap. 
         # Divide it by 4 to reduce the proportion of ada emb loss relative to 
         # static emb loss in the total loss.
-        ada_comp_loss_boost_ratio = 1 #self.prompt_delta_reg_iter_gap / 4
+        ada_comp_loss_boost_ratio = 2 #self.prompt_delta_reg_iter_gap / 4
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_layers
         else:
