@@ -38,7 +38,7 @@ model:
     # cls_prompt_mix_weight_min = cls_prompt_mix_weight_max * 0.25 (lr_min) = 0.075.
     cls_prompt_mix_weight_max:  0.3
     # typical clip loss: 0.3, * weight -> 3e-4.
-    clip_loss_weight:      0 #1e-3
+    clip_loss_weight:      1e-3
     filter_with_clip_loss: True
     # promt_mix_scheme: 'mix_hijk' or 'mix_concat_cls'
     promt_mix_scheme:      'mix_hijk'
