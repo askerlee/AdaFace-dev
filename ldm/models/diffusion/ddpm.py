@@ -1762,7 +1762,7 @@ class LatentDiffusion(DDPM):
             # Just don't care about teachability.
             is_teachable = True
 
-        if iter_type.startswith("mix_") and is_teachable:
+        if self.do_comp_prompt_mix_reg and is_teachable:
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
             # Only regularize on intermediate features, i.e., intermediate features generated 
             # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -1889,10 +1889,15 @@ class LatentDiffusion(DDPM):
                     feat_mix_single  = grad_scaler(feat_mix_single)
                     feat_mix_comps   = grad_scaler(feat_mix_comps)
 
-                # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
-                feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_mix_single)
-                feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
-
+                distill_on_delta = False
+                if distill_on_delta:
+                    # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
+                    feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_mix_single)
+                    feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
+                else:
+                    feat_mix_delta  = feat_mix_comps
+                    feat_subj_delta = feat_subj_comps
+                    
                 # feat_subj_delta, feat_mix_delta: [1, 1280], ...
                 # Pool the spatial dimensions H, W to remove spatial information.
                 # The gradient goes back to feat_subj_delta -> feat_subj_comps,
