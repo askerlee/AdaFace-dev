@@ -1696,10 +1696,13 @@ class LatentDiffusion(DDPM):
 
         if self.do_static_prompt_delta_reg:
             # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
-            loss_comp_delta_reg = self.embedding_manager.calc_prompt_delta_loss( 
+            static_delta_loss, ada_delta_loss = self.embedding_manager.calc_prompt_delta_loss( 
                                     self.do_ada_prompt_delta_reg, self.c_static_emb
-                                    ).mean()
-            loss_dict.update({f'{prefix}/loss_comp_delta_reg': loss_comp_delta_reg})
+                                    )
+            loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean()})
+            loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean()})
+            ada_comp_loss_boost_ratio = 2 #self.prompt_delta_reg_iter_gap / 4
+            loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
             loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
             #print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
 
@@ -1738,7 +1741,9 @@ class LatentDiffusion(DDPM):
             loss_clip_nograd = losses_clip.mean().detach()
             # loss_dict is only used for logging. So we can pass 
             # the unfiltered detached loss.
-            loss_dict.update({f'{prefix}/loss_clip': loss_clip_nograd})
+            losses_clip_subj_comp, losses_clip_cls_comp = losses_clip_comp.split(losses_clip_comp.shape[0] // 2, dim=0)
+            loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean()})
+            loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_cls_comp.mean()})
 
             comp_clip_loss_thres, single_clip_loss_thres = 0.28, 0.27
             are_output_qualified = (losses_clip_comp <= comp_clip_loss_thres) & \
@@ -1749,7 +1754,7 @@ class LatentDiffusion(DDPM):
 
             # Hard-code here. Suppose HALF_BS=1, i.e., two instances are in clip_images.
             # So the teacher instance is always indexed by 1.
-            # The teacher instance is only teachable if it's qualified, and the 
+            # is_teachable: The teacher instance is only teachable if it's qualified, and the 
             # compositional clip loss is smaller than the student.
             is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_single[0]
 
@@ -1760,6 +1765,7 @@ class LatentDiffusion(DDPM):
             teachable_frac = self.num_teachable_iters / self.num_total_clip_iters
             print("CLIP losses: {}, teachable frac: {:.1f}%".format( \
                     clip_losses, teachable_frac*100))
+            loss_dict.update({f'{prefix}/teachable_frac': teachable_frac})
 
         else:
             # Just don't care about teachability.
