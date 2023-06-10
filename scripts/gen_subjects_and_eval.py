@@ -130,8 +130,8 @@ if __name__ == "__main__":
         args.z_suffix_type = 'db_prompt'
 
     all_ckpts = os.listdir(args.ckpt_dir)
-    # Sort all_ckpts by modification time, most recent first.
-    all_ckpts.sort(key=lambda x: os.path.getmtime(os.path.join(args.ckpt_dir, x)), reverse=True)
+    # Sort all_ckpts by name (actually by timestamp in the name), so that most recent first.
+    all_ckpts.sort(reverse=True)
 
     if args.scores_csv is None:
         args.scores_csv = f"{args.method}-{args.range}.csv"
