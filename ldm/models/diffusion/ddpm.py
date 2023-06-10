@@ -1610,7 +1610,10 @@ class LatentDiffusion(DDPM):
             x_start  = x_start[:HALF_BS].repeat(4, 1, 1, 1)
             # Use the same noise.
             noise    = noise[:HALF_BS].repeat(4, 1, 1, 1)
-            img_mask = img_mask[:HALF_BS]
+            if img_mask is not None:
+                img_mask = img_mask[:HALF_BS]
+            else:
+                img_mask = 1
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
         model_output = self.apply_model(x_noisy, t, cond)
