@@ -44,8 +44,8 @@ else
 end
 
 # If --selset is given, then only train on the selected subjects, specified in $subj_file.
-set -q _flag_selset; and set -l indices0 $sel_set; or set -l indices0 (seq 1 (count $subjects))
-set -l indices $indices0[(seq $L $H)]
+set -q _flag_selset; and set indices0 $sel_set; or set indices0 (seq 1 (count $subjects))
+set indices $indices0[(seq $L $H)]
 
 echo Training on $subjects[$indices]
 
@@ -99,6 +99,9 @@ for i in $indices
         # Otherwise use the default cls_token "person".
         set -q _flag_cls_token_as_delta; and set EXTRA_ARGS1 $EXTRA_ARGS1 --cls_delta_token $cls_token
         set -q _flag_cls_token_as_distill; and set EXTRA_ARGS1 $EXTRA_ARGS1 --cls_distill_token $cls_token
+        # By default --use_fp_trick is enabled, unless $use_fp_trick[$i] is set to 0 in the subject file.
+        # On objects, --use_fp_trick will be ignored, no matter whether --use_fp_trick is enabled.
+        set -q use_fp_trick; and set EXTRA_ARGS1 $EXTRA_ARGS1 --use_fp_trick $use_fp_trick[$i]
         
         # z_suffix: append $cls_token as a suffix to "z" in the prompt. The prompt will be "a z <cls_token> <prompt>".
         # E.g., cls_token="toy", prompt="in a chair", then full prompt="a z toy in a chair".

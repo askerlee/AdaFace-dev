@@ -99,6 +99,8 @@ class DDPM(pl.LightningModule):
                  clip_loss_weight=0,
                  filter_with_clip_loss=False,
                  prompt_mix_scheme='mix_hijk',       # 'mix_hijk' or 'mix_concat_cls'
+                 # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
+                 use_fp_trick=True,                  
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -125,7 +127,9 @@ class DDPM(pl.LightningModule):
         self.cls_prompt_mix_weight_max      = cls_prompt_mix_weight_max
         self.clip_loss_weight               = clip_loss_weight
         self.filter_with_clip_loss          = filter_with_clip_loss
-        self.prompt_mix_scheme               = prompt_mix_scheme
+        self.prompt_mix_scheme              = prompt_mix_scheme
+        self.use_fp_trick                   = use_fp_trick
+
         self.do_static_prompt_delta_reg     = False
         self.do_ada_prompt_delta_reg        = False
         self.do_comp_prompt_mix_reg         = False
@@ -1170,7 +1174,7 @@ class LatentDiffusion(DDPM):
             # when doing compositional mix regularization. 
             # However this trick is only applicable to humans/animals.
             # For objects, *_fp prompts are not available in batch, so they won't be used.
-            if self.do_comp_prompt_mix_reg and 'subj_prompt_single_fp' in batch:
+            if self.do_comp_prompt_mix_reg and self.use_fp_trick and 'subj_prompt_single_fp' in batch:
                 # Replace c = batch['caption'] by c = batch['subj_prompt_single_fp'].
                 c = batch['subj_prompt_single_fp']
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_fp'

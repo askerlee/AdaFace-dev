@@ -241,7 +241,10 @@ def get_parser(**parser_kwargs):
                         help="Number of composition samples for each image in a batch (default: 2)")
     parser.add_argument("--broad_class", type=int, default=1,
                         help="Whether the subject is a human/animal, object or cartoon (0: object, 1: human/animal, 2: cartoon)")
-
+    # nargs="?" and const=True: --use_fp_trick or --use_fp_trick True or --use_fp_trick 1 
+    # are all equavalent.
+    parser.add_argument("--use_fp_trick", nargs="?", type=str2bool, const=True, default=True,
+                        help="Whether to use the 'face portrait' trick for the subject")
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
@@ -679,6 +682,7 @@ if __name__ == "__main__":
 
         # model
         config.model.params.cond_stage_config.params.last_layer_skip_weight   = opt.clip_last_layer_skip_weight
+        config.model.params.use_fp_trick = opt.use_fp_trick
 
         if len(opt.init_word_weights) > 0:
             assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_word))

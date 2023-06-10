@@ -306,9 +306,9 @@ def parse_subject_file(subject_file_path, method):
         lines = f.readlines()
         lines = [line.strip() for line in lines]
         for line in lines:
-            if re.search(r"^set -[la] [a-zA-Z_]+ ", line):
-                # set -l subjects  alexachung    alita...
-                mat = re.search(r"^set -[la] ([a-zA-Z_]+)\s+(\S.+\S)", line)
+            if re.search(r"^set -g [a-zA-Z_]+ ", line):
+                # set -g subjects  alexachung    alita...
+                mat = re.search(r"^set -g ([a-zA-Z_]+)\s+(\S.+\S)", line)
                 if mat is not None:
                     var_name = mat.group(1)
                     substrings = split_string(mat.group(2))

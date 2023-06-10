@@ -13,10 +13,10 @@ if ! test -e $subj_file
 end
 source $subj_file
 
-set -l indices0 (seq 1 (count $subjects))
+set indices0 (seq 1 (count $subjects))
 set -q argv[1]; and set L $argv[1]; or set L 1
 set -q argv[2]; and set H $argv[2]; or set H (count $subjects)
-set -l indices $indices0[(seq $L $H)]
+set indices $indices0[(seq $L $H)]
 
 echo Generating reg images for $subjects[$indices]
 
