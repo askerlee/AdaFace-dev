@@ -16,6 +16,8 @@ __pycache__/
 /samples*/*
 /models/stable-diffusion-v-1-4-original
 /models/stable-diffusion-v-1-5
+/models/ffqh_pretrained/*
+/models/ffqh_pretrained/
 /*.txt
 /*.csv
 !requirements.txt
@@ -24,3 +26,4 @@ __pycache__/
 /.vscode
 scripts/stable_txt2img_db.py
 /regularization_images
+*.zip

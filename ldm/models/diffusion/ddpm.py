@@ -1831,6 +1831,30 @@ class LatentDiffusion(DDPM):
                 #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
                 placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
 
+                # [4, 8, 256, 154] / [4, 8, 64, 154] =>
+                # [4, 154, 8, 256] / [4, 154, 8, 64]
+                # We don't need BP through attention into UNet.
+                top_layer_idx = np.max(list(distill_layer_weights.keys()))
+                attn_mat = unet_attns[top_layer_idx].permute(0, 3, 1, 2).detach()
+                # subj_attn: [8, 8, 256] / [8, 8, 64]
+                subj_attn = attn_mat[placeholder_indices]
+                # subj_attn_subj_single, ...: [2, 8, 256].
+                # The first dim 2 is the two occurrences of the subject token 
+                # in the two sets of prompts. Therefore, HALF_BS is still needed to 
+                # determine its batch size in convert_attn_to_spatial_weight().
+                subj_attn_subj_single, subj_attn_subj_comps, \
+                subj_attn_mix_single,  subj_attn_mix_comps \
+                    = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)
+                
+                unet_feat = unet_feats[top_layer_idx]
+                feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
+                    = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
+                
+                spatial_weight_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
+                spatial_weight_subj_comps  = convert_attn_to_spatial_weight(subj_attn_subj_comps,  HALF_BS, feat_subj_comps.shape[2:])
+                spatial_weight_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
+                spatial_weight_mix_comps   = convert_attn_to_spatial_weight(subj_attn_mix_comps,   HALF_BS, feat_mix_comps.shape[2:])
+
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if unet_layer_idx not in distill_layer_weights:
                     continue
@@ -1840,31 +1864,14 @@ class LatentDiffusion(DDPM):
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
                 if use_subj_attn_as_spatial_weights:
-                    # [4, 8, 256, 154] / [4, 8, 64, 154] =>
-                    # [4, 154, 8, 256] / [4, 154, 8, 64]
-                    # We don't need BP through attention into UNet.
-                    attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2).detach()
-                    # subj_attn: [8, 8, 256] / [8, 8, 64]
-                    subj_attn = attn_mat[placeholder_indices]
-                    # subj_attn_subj_single, ...: [2, 8, 256].
-                    # The first dim 2 is the two occurrences of the subject token 
-                    # in the two sets of prompts. Therefore, HALF_BS is still needed to 
-                    # determine its batch size in convert_attn_to_spatial_weight().
-                    subj_attn_subj_single, subj_attn_subj_comps, \
-                    subj_attn_mix_single,  subj_attn_mix_comps \
-                        = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)
-                    
-                    spatial_weight_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
-                    spatial_weight_subj_comps  = convert_attn_to_spatial_weight(subj_attn_subj_comps,  HALF_BS, feat_subj_comps.shape[2:])
-                    spatial_weight_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
-                    spatial_weight_mix_comps   = convert_attn_to_spatial_weight(subj_attn_mix_comps,   HALF_BS, feat_mix_comps.shape[2:])
-
                     # Use mix single/comps weights on both subject-only and mix features, 
                     # to reduce misalignment and facilitate distillation.
-                    feat_subj_single = feat_subj_single * spatial_weight_mix_single
-                    feat_subj_comps  = feat_subj_comps  * spatial_weight_mix_comps
-                    feat_mix_single  = feat_mix_single  * spatial_weight_mix_single
-                    feat_mix_comps   = feat_mix_comps   * spatial_weight_mix_comps
+                    spatial_weight_mix_single_resized = F.interpolate(spatial_weight_mix_single, size=feat_subj_single.shape[2:], mode='bilinear', align_corners=False)
+                    spatial_weight_mix_comps_resized  = F.interpolate(spatial_weight_mix_comps,  size=feat_subj_comps.shape[2:],  mode='bilinear', align_corners=False)
+                    feat_subj_single = feat_subj_single * spatial_weight_mix_single_resized
+                    feat_subj_comps  = feat_subj_comps  * spatial_weight_mix_comps_resized
+                    feat_mix_single  = feat_mix_single  * spatial_weight_mix_single_resized
+                    feat_mix_comps   = feat_mix_comps   * spatial_weight_mix_comps_resized
 
                 if iter_type == 'mix_concat_cls':
                     pool_spatial_size = (1, 1)
