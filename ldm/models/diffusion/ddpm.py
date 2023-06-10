@@ -98,7 +98,7 @@ class DDPM(pl.LightningModule):
                  cls_prompt_mix_weight_max=0.3,
                  clip_loss_weight=0,
                  filter_with_clip_loss=False,
-                 promt_mix_scheme='mix_hijk',       # 'mix_hijk' or 'mix_concat_cls'
+                 prompt_mix_scheme='mix_hijk',       # 'mix_hijk' or 'mix_concat_cls'
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -125,7 +125,7 @@ class DDPM(pl.LightningModule):
         self.cls_prompt_mix_weight_max      = cls_prompt_mix_weight_max
         self.clip_loss_weight               = clip_loss_weight
         self.filter_with_clip_loss          = filter_with_clip_loss
-        self.promt_mix_scheme               = promt_mix_scheme
+        self.prompt_mix_scheme               = prompt_mix_scheme
         self.do_static_prompt_delta_reg     = False
         self.do_ada_prompt_delta_reg        = False
         self.do_comp_prompt_mix_reg         = False
@@ -1390,7 +1390,7 @@ class LatentDiffusion(DDPM):
                                                     subj_single_emb_mix, 
                                                     subj_comps_emb_mix ], dim=0)
                         
-                        extra_info['iter_type']      = self.promt_mix_scheme
+                        extra_info['iter_type']      = self.prompt_mix_scheme
                         # Set ada_bp_to_unet to False will reduce performance.
                         extra_info['ada_bp_to_unet'] = True
 
