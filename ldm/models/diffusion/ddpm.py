@@ -1751,18 +1751,18 @@ class LatentDiffusion(DDPM):
                 # which is consistent with the output transformation in stable_txt2img.py.
                 losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, 
                                                                                      reduction='diag')
-                losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
-                                                                                     reduction='diag')
+                # losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
+                #                                                                     reduction='diag')
             else:
                 with torch.no_grad():
                     clip_images = self.differentiable_decode_first_stage(clip_images_code)
                     self.cache_and_log_generations(clip_images)
                     losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
                                                                                          reduction='diag')
-                    losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
-                                                                                         reduction='diag')
+                    # losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
+                    #                                                                     reduction='diag')
 
-            losses_clip = losses_clip_comp * 0.8 + losses_clip_single * 0.2
+            losses_clip = losses_clip_comp # * 0.8 + losses_clip_single * 0.2
             # loss_dict is only used for logging. So we can pass 
             # the unfiltered detached loss.
             losses_clip_subj_comp, losses_clip_cls_comp = losses_clip_comp.split(losses_clip_comp.shape[0] // 2, dim=0)
@@ -1770,8 +1770,7 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_cls_comp.mean()})
 
             comp_clip_loss_thres, single_clip_loss_thres = 0.28, 0.27
-            are_output_qualified = (losses_clip_comp <= comp_clip_loss_thres) & \
-                                      (losses_clip_single <= single_clip_loss_thres)            
+            are_output_qualified = (losses_clip_comp <= comp_clip_loss_thres) # & (losses_clip_single <= single_clip_loss_thres)            
             if self.clip_loss_weight > 0 and are_output_qualified.sum() > 0:
                 loss_clip = losses_clip[are_output_qualified].mean()
                 loss += (self.clip_loss_weight * loss_clip)
@@ -1780,13 +1779,13 @@ class LatentDiffusion(DDPM):
             # So the teacher instance is always indexed by 1.
             # is_teachable: The teacher instance is only teachable if it's qualified, and the 
             # compositional clip loss is smaller than the student.
-            is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_single[0]
+            is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_comp[0]
 
             np.set_printoptions(precision=4, suppress=True)
-            clip_losses = torch.cat([losses_clip_comp, losses_clip_single], dim=0).data.cpu().numpy()
             self.num_total_clip_iters += 1
             self.num_teachable_iters += int(is_teachable)
             teachable_frac = self.num_teachable_iters / self.num_total_clip_iters
+            # clip_losses = torch.cat([losses_clip_comp, losses_clip_single], dim=0).data.cpu().numpy()
             #print("CLIP losses: {}, teachable frac: {:.1f}%".format( \
             #        clip_losses, teachable_frac*100))
             loss_dict.update({f'{prefix}/teachable_frac': teachable_frac})
