@@ -11,7 +11,10 @@ class CLIPEvaluator(object):
     def __init__(self, device, clip_model='ViT-B/32') -> None:
         self.device = device
         self.model, clip_preprocess = clip.load(clip_model, device='cpu')
-        # Put text encoder on CPU to avoid OOM.
+        # First put both the text encoder and visual encoder on CPU.
+        # Then put the visual encoder on GPU. In effect, 
+        # it puts the text encoder on CPU and the visual encoder on GPU, to avoid OOM.
+        # We assume self.device is a GPU from the beginning, and won't be updated through .cuda().
         self.model.visual.to(device)
 
         self.clip_preprocess = clip_preprocess
@@ -118,6 +121,7 @@ class NoisedCLIPEvaluator(object):
         self.model.image_encoder.load_state_dict(glide_load_checkpoint('clip/image-enc', device))
         # Always put text encoder on CPU to avoid OOM.
         self.model.text_encoder.load_state_dict(glide_load_checkpoint('clip/text-enc', 'cpu'))
+        # We assume self.device is a GPU from the beginning, and won't be updated through .cuda().
 
     # images1 and images2 should be tensors, not PIL images or numpy arrays,
     # as transforms.Normalize() in self.preprocess() expects tensors.
