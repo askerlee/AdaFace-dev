@@ -228,7 +228,7 @@ if __name__ == "__main__":
             prompt_list, class_short_prompt_list, class_long_prompt_list = \
                 get_promt_list(args.placeholder, z_prefix, z_suffix, class_token, class_long_token, 
                                broad_class, args.prompt_set)
-            prompt_filepath = f"{outdir}/{subject_name}-prompts.txt"
+            prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set}.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
             if args.n_samples == -1:
