@@ -92,7 +92,7 @@ class CLIPEvaluator(object):
     # txt_to_img_similarity() assumes images are tensors with mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0].
     def txt_to_img_similarity(self, text, images, reduction='mean'):
         # text_features: [1, 512], gen_img_features: [4, 512]
-        text_features   = self.get_text_features(text).to(images.device)
+        text_features   = self.get_text_features(text).to(self.device)
         img_features    = self.get_image_features(images)
 
         # sim_scores: [1, 4], example: [[0.2788, 0.2612, 0.2561, 0.2800]]
