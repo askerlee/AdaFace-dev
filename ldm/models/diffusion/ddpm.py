@@ -1751,18 +1751,18 @@ class LatentDiffusion(DDPM):
                 # which is consistent with the output transformation in stable_txt2img.py.
                 losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, 
                                                                                      reduction='diag')
-                # losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
-                #                                                                     reduction='diag')
+                losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
+                                                                                     reduction='diag')
             else:
                 with torch.no_grad():
                     clip_images = self.differentiable_decode_first_stage(clip_images_code)
                     self.cache_and_log_generations(clip_images)
                     losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
                                                                                          reduction='diag')
-                    # losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
-                    #                                                                     reduction='diag')
+                    losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
+                                                                                         reduction='diag')
 
-            losses_clip = losses_clip_comp # * 0.8 + losses_clip_single * 0.2
+            losses_clip = losses_clip_comp * 1.1 - losses_clip_single * 0.1
             # loss_dict is only used for logging. So we can pass 
             # the unfiltered detached loss.
             losses_clip_subj_comp, losses_clip_cls_comp = losses_clip_comp.split(losses_clip_comp.shape[0] // 2, dim=0)
@@ -1770,7 +1770,7 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_cls_comp.mean()})
 
             comp_clip_loss_thres, single_clip_loss_thres = 0.28, 0.27
-            are_output_qualified = (losses_clip_comp <= comp_clip_loss_thres) # & (losses_clip_single <= single_clip_loss_thres)            
+            are_output_qualified = (losses_clip_comp <= comp_clip_loss_thres) & (losses_clip_single <= single_clip_loss_thres)            
             if self.clip_loss_weight > 0 and are_output_qualified.sum() > 0:
                 loss_clip = losses_clip[are_output_qualified].mean()
                 loss += (self.clip_loss_weight * loss_clip)
