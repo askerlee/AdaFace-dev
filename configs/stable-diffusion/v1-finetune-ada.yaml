@@ -20,7 +20,7 @@ model:
     # after seeing unfreeze_model = False.
     cond_stage_trainable: true   # Note: different from the one we trained before
     conditioning_key: crossattn
-    monitor: val/loss_simple_ema
+    monitor: val/loss_ema
     scale_factor: 0.18215
     use_ema: False
     embedding_reg_weight: 0.05
