@@ -12,7 +12,9 @@ set -g broad_classes  1                 1                     1                1
 # $are_faces are used only for evaluation, not for training.
 set -g are_faces     1                  1                     1                1            1              1            1            1                 0          1            0            1                    1            1              0                     1            1              1             1               1            1             1              1                   1                     1
 # $use_fp_trick is by default enabled (value 1), but disabled for difficult subjects (dominating compositions).
-set -g use_fp_trick  1                  1                     0                1            1              1            1            0                 1          0            1            1                    1            1              1                     1            1              1             1               1            1             0              0                   1                     1
+# set -g use_fp_trick  1                1                     0                1            1              1            1            0                 1          0            1            1                    1            1              1                     1            1              1             1               1            1             0              0                   1                     1
+# -1: use default range [0.1, 0.3]. 0.6: hard subjects, use [0.2, 0.6].
+set -g prompt_mix_max  -1               -1                    0.6              -1           -1             -1           -1           0.6               -1         0.6          -1           -1                   -1           -1             -1                    0.6          -1             0.6           -1              -1           -1            0.6            0.6                 -1                    -1
 #                     objects    humans/animals    cartoon characters
 set -g lrs            3e-4       8e-4              3e-4
 set -g z_prefixes     ""         "portrait of"     ""
