@@ -32,7 +32,7 @@ from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianD
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
-from evaluation.clip_eval import CLIPEvaluator
+from evaluation.clip_eval import CLIPEvaluator, NoisedCLIPEvaluator
 import copy
 from functools import partial
 import random
@@ -47,7 +47,6 @@ def disabled_train(self, mode=True):
     """Overwrite model.train with this function to make sure train/eval mode
     does not change anymore."""
     return self
-
 
 def uniform_on_device(r1, r2, shape, device):
     return (r1 - r2) * torch.rand(*shape, device=device) + r2
@@ -69,7 +68,7 @@ class DDPM(pl.LightningModule):
                  image_size=256,
                  channels=3,
                  log_every_t=100,
-                 clip_denoised=True,
+                 clip_denoised=True,    # clip the range of denoised variables, not the CLIP model.
                  linear_start=1e-4,
                  linear_end=2e-2,
                  cosine_s=8e-3,
@@ -101,7 +100,7 @@ class DDPM(pl.LightningModule):
                  filter_with_clip_loss=False,
                  prompt_mix_scheme='mix_hijk',       # 'mix_hijk' or 'mix_concat_cls'
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
-                 use_fp_trick=True,                  
+                 use_fp_trick=True,       
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -178,16 +177,6 @@ class DDPM(pl.LightningModule):
         if self.learn_logvar:
             self.logvar = nn.Parameter(self.logvar, requires_grad=True)
 
-        if self.clip_loss_weight > 0 or self.filter_with_clip_loss:
-            self.clip_evaluator = CLIPEvaluator(device=self.device)
-            for param in self.clip_evaluator.model.parameters():
-                param.requires_grad = False
-        else:
-            self.clip_evaluator = None
-
-        self.num_total_clip_iters = 0
-        self.num_teachable_iters = 0
-
     def register_schedule(self, given_betas=None, beta_schedule="linear", timesteps=1000,
                           linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3):
         if exists(given_betas):
@@ -241,6 +230,29 @@ class DDPM(pl.LightningModule):
         lvlb_weights[0] = lvlb_weights[1]
         self.register_buffer('lvlb_weights', lvlb_weights, persistent=False)
         assert not torch.isnan(self.lvlb_weights).all()
+
+    # create_clip_evaluator() is called in main.py, so that we can specify device as cuda device.
+    # We couldn't create clip_evaluator on cpu and then move it to cuda device, because 
+    # NoisedCLIPEvaluator is not properly implemented to support this.
+    def create_clip_evaluator(self, device, use_noised_clip=False):
+        self.use_noised_clip = use_noised_clip
+        
+        if self.clip_loss_weight > 0 or self.filter_with_clip_loss:
+            if self.use_noised_clip:
+                self.clip_evaluator = NoisedCLIPEvaluator(device=device)
+                for param in self.clip_evaluator.model.image_encoder.parameters():
+                    param.requires_grad = False
+                for param in self.clip_evaluator.model.text_encoder.parameters():
+                    param.requires_grad = False
+            else:
+                self.clip_evaluator = CLIPEvaluator(device=device)
+                for param in self.clip_evaluator.model.parameters():
+                    param.requires_grad = False
+        else:
+            self.clip_evaluator = None
+
+        self.num_total_clip_iters = 0
+        self.num_teachable_iters = 0
 
     @contextmanager
     def ema_scope(self, context=None):
@@ -1428,6 +1440,7 @@ class LatentDiffusion(DDPM):
 
                     extra_info['cls_comp_prompts']   = cls_comp_prompts
                     extra_info['cls_single_prompts'] = cls_single_prompts
+
                     # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
                     # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
                     c = (c_static_emb2, c_in2, extra_info)
@@ -1643,6 +1656,7 @@ class LatentDiffusion(DDPM):
                 # The first  cls_comp_prompts is for subj_comps_emb, and 
                 # the second cls_comp_prompts is for subj_comps_emb_mix.                
                 clip_prompts_comp   = cond[2]['cls_comp_prompts']   + cond[2]['cls_comp_prompts']
+
                 # Compositional images are also subject to the single-prompt CLIP loss,
                 # as they must contain the subject. This is to reduce the chance that
                 # the output image only contains elements other than the subject.
@@ -1735,17 +1749,20 @@ class LatentDiffusion(DDPM):
                 # it's just as a way to specify the transformation parameters.)
                 # In effect, it transforms clip_images by (clip_images + 1) / 2,
                 # which is consistent with the output transformation in stable_txt2img.py.
-                losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, reduction='diag')
-                losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, reduction='diag')
+                losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, 
+                                                                                     reduction='diag')
+                losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
+                                                                                     reduction='diag')
             else:
                 with torch.no_grad():
                     clip_images = self.differentiable_decode_first_stage(clip_images_code)
                     self.cache_and_log_generations(clip_images)
-                    losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, reduction='diag')
-                    losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, reduction='diag')
+                    losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
+                                                                                         reduction='diag')
+                    losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
+                                                                                         reduction='diag')
 
             losses_clip = losses_clip_comp * 0.8 + losses_clip_single * 0.2
-            loss_clip_nograd = losses_clip.mean().detach()
             # loss_dict is only used for logging. So we can pass 
             # the unfiltered detached loss.
             losses_clip_subj_comp, losses_clip_cls_comp = losses_clip_comp.split(losses_clip_comp.shape[0] // 2, dim=0)

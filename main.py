@@ -249,6 +249,9 @@ def get_parser(**parser_kwargs):
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     parser.add_argument("--mix_range", nargs=2, type=float, default=argparse.SUPPRESS,
                         help="Range of prompt mixing weights")
+    # if --use_noised_clip not specified, then use_noised_clip=False.
+    parser.add_argument("--use_noised_clip", nargs="?", type=str2bool, const=True, default=False,
+                        help="Whether to use noised CLIP")
     
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
                         help="Disable wandb logging")    
@@ -935,6 +938,7 @@ if __name__ == "__main__":
             print(f"Setting learning rate to {model.learning_rate:.2e}")
         
         model.weight_decay = weight_decay
+        model.create_clip_evaluator(f"cuda:{trainer.root_gpu}", use_noised_clip=opt.use_noised_clip)
 
         # allow checkpointing via USR1
         def melk(*args, **kwargs):
