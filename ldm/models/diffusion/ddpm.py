@@ -1762,7 +1762,7 @@ class LatentDiffusion(DDPM):
                     losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
                                                                                          reduction='diag')
 
-            losses_clip = losses_clip_comp * 1.1 - losses_clip_single * 0.1
+            losses_clip = losses_clip_comp * 1.2 - losses_clip_single * 0.2
             # loss_dict is only used for logging. So we can pass 
             # the unfiltered detached loss.
             losses_clip_subj_comp, losses_clip_cls_comp = losses_clip_comp.split(losses_clip_comp.shape[0] // 2, dim=0)
@@ -1770,11 +1770,11 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_cls_comp.mean()})
 
             if self.use_noised_clip:
-                comp_clip_loss_thres, single_clip_loss_thres = 0.26, 0.25
+                clip_loss_thres = 0.26
             else:
-                comp_clip_loss_thres, single_clip_loss_thres = 0.28, 0.27
+                clip_loss_thres = 0.28
 
-            are_output_qualified = (losses_clip_comp <= comp_clip_loss_thres) & (losses_clip_single <= single_clip_loss_thres)            
+            are_output_qualified = (losses_clip <= clip_loss_thres)
             if self.clip_loss_weight > 0 and are_output_qualified.sum() > 0:
                 loss_clip = losses_clip[are_output_qualified].mean()
                 loss += (self.clip_loss_weight * loss_clip)
