@@ -56,14 +56,16 @@ def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_s
     sample_images = [torch.from_numpy(sample_data_loader[i]["image"]).permute(2, 0, 1) for i in sample_range]
     sample_images = torch.stack(sample_images, axis=0)
 
-    sim_img, sim_text = clip_evator.evaluate(sample_images, gt_images, prompt)
+    with torch.no_grad():
+        sim_img, sim_text = clip_evator.evaluate(sample_images, gt_images, prompt)
 
     # huggingface's ViT pipeline requires a list of PIL images or numpy images as input.
     # "image_unnorm": unnormalized numpy array image in [0, 255]
     gt_np_images     = [ gt_data_loader[i]["image_unnorm"]     for i in range(gt_data_loader.num_images) ]
     sample_np_images = [ sample_data_loader[i]["image_unnorm"] for i in sample_range ]
 
-    sim_dino = dino_evator.image_pairwise_similarity(gt_np_images, sample_np_images)
+    with torch.no_grad():
+        sim_dino = dino_evator.image_pairwise_similarity(gt_np_images, sample_np_images)
 
     print(os.path.basename(gt_dir), "vs", os.path.basename(samples_dir))
     print(f"Image/text/dino sim: {sim_img:.3f} {sim_text:.3f} {sim_dino:.3f}")
@@ -263,8 +265,9 @@ def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples
             if verbose:
                 print("%d/%d: %s vs %s" %(curr_pair_count, total_pair_count, img1_name, img2_name))
             try:
-                result = DeepFace.verify(img1_path = src_img_path, img2_path = dst_img_path, 
-                                         model_name="ArcFace", detector_backend = "retinaface")
+                with torch.no_grad():
+                    result = DeepFace.verify(img1_path = src_img_path, img2_path = dst_img_path, 
+                                             model_name="ArcFace", detector_backend = "retinaface")
             except:
                 except_pair_count += 1
                 continue

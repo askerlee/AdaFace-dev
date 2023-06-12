@@ -19,7 +19,7 @@ from ldm.util import instantiate_from_config, mix_embeddings, save_grid
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders, \
-                                init_evaluators, set_tf_gpu
+                                  init_evaluators, set_tf_gpu
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -271,8 +271,10 @@ def main(opt):
         opt.outdir = "outputs/txt2img-samples-laion400m"
 
     seed_everything(opt.seed)
+    torch.cuda.set_device(opt.gpu)
 
     config = OmegaConf.load(f"{opt.config}")
+
     model  = load_model_from_config(config, f"{opt.ckpt}")
     if opt.embedding_paths is not None:
         model.embedding_manager.load(opt.embedding_paths)
@@ -287,13 +289,13 @@ def main(opt):
     if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
     
-    torch.cuda.set_device(opt.gpu)
     # No GPUs detected. Use CPU instead.
     if not torch.cuda.is_available():
         opt.gpu = -1
 
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
     model  = model.to(device)
+    model.cond_stage_model.device = device
 
     if opt.plms:
         sampler = PLMSSampler(model)
@@ -428,7 +430,10 @@ def main(opt):
                             ref_c = None
 
                         if opt.scale != 1.0:
-                            uc = model.get_learned_conditioning(batch_size * [""])
+                            try:
+                                uc = model.get_learned_conditioning(batch_size * [""])
+                            except:
+                                breakpoint()
 
                             # ref_prompt_mix doubles the number of channels of conditioning embeddings.
                             # So we need to repeat uc by 2.
