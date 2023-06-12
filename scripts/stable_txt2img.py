@@ -376,7 +376,7 @@ def main(opt):
             all_sims_face = []
             all_normal_img_counts = []
             all_except_img_counts = []
-            set_tf_gpu(opt.gpu)
+            set_tf_gpu(-1)
     else:
         clip_evator, dino_evator = None, None
 
