@@ -370,7 +370,7 @@ def main(opt):
             batched_subdirs.append(None)
 
     if opt.compare_with:
-        clip_evator, dino_evator = init_evaluators(opt.gpu)
+        clip_evator, dino_evator = init_evaluators(-1)
         all_sims_img, all_sims_text, all_sims_dino = [], [], []
         if opt.calc_face_sim:
             all_sims_face = []
