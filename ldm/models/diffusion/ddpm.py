@@ -1784,7 +1784,7 @@ class LatentDiffusion(DDPM):
             # So the teacher instance is always indexed by 1.
             # is_teachable: The teacher instance is only teachable if it's qualified, and the 
             # compositional clip loss is smaller than the student.
-            is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_comp[0] - 0.009
+            is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_comp[0] - 0.005
 
             np.set_printoptions(precision=4, suppress=True)
             self.num_total_clip_iters += 1
