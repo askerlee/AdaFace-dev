@@ -1366,9 +1366,9 @@ class LatentDiffusion(DDPM):
                             subj_single_emb_mix_all_layers = grad_scaler(subj_single_emb_mix_all_layers)
 
                         if self.use_layerwise_embedding:
-                            # 4, 5, 6, 7 correspond to original layer indices 7, 8, 12, 16 
+                            # 4, 5, 6, 7, 8, 9 correspond to original layer indices 7, 8, 12, 16, 17, 18
                             # (same as used in computing mixing loss)
-                            sync_layer_indices = [4, 5, 6, 7]
+                            sync_layer_indices = [4, 5, 6, 7, 8, 9]
                             layer_mask = torch.zeros_like(subj_comps_emb_mix_all_layers).reshape(-1, N_LAYERS, *subj_comps_emb_mix_all_layers.shape[1:])
                             layer_mask[:, sync_layer_indices] = 1
                             layer_mask = layer_mask.reshape(-1, *subj_comps_emb_mix_all_layers.shape[1:])
@@ -1623,7 +1623,8 @@ class LatentDiffusion(DDPM):
         if is_comp_iter:
             HALF_BS  = max(x_start.shape[0] // 2, 1)
             # Set t to the last timestep, so that the input is total noise.
-            t.fill_(self.num_timesteps - 1)
+            rand_timestep = np.random.randint(self.num_timesteps - 100, self.num_timesteps)
+            t.fill_(rand_timestep)
             t = t[:HALF_BS].repeat(4)
             x_start.normal_()
             x_start  = x_start[:HALF_BS].repeat(4, 1, 1, 1)
@@ -1751,18 +1752,18 @@ class LatentDiffusion(DDPM):
                 # which is consistent with the output transformation in stable_txt2img.py.
                 losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, 
                                                                                      reduction='diag')
-                losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
-                                                                                     reduction='diag')
+                #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
+                #                                                                     reduction='diag')
             else:
                 with torch.no_grad():
                     clip_images = self.differentiable_decode_first_stage(clip_images_code)
                     self.cache_and_log_generations(clip_images)
                     losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
                                                                                          reduction='diag')
-                    losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
-                                                                                         reduction='diag')
+                    #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
+                    #                                                                     reduction='diag')
 
-            losses_clip = losses_clip_comp * 1.3 - losses_clip_single * 0.3
+            losses_clip = losses_clip_comp #* 1.3 - losses_clip_single * 0.3
             # loss_dict is only used for logging. So we can pass 
             # the unfiltered detached loss.
             losses_clip_subj_comp, losses_clip_cls_comp = losses_clip_comp.split(losses_clip_comp.shape[0] // 2, dim=0)
@@ -1770,9 +1771,9 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_cls_comp.mean()})
 
             if self.use_noised_clip:
-                clip_loss_thres = 0.24
+                clip_loss_thres = 0.27
             else:
-                clip_loss_thres = 0.26
+                clip_loss_thres = 0.29
 
             are_output_qualified = (losses_clip <= clip_loss_thres)
             if self.clip_loss_weight > 0 and are_output_qualified.sum() > 0:
@@ -1783,7 +1784,7 @@ class LatentDiffusion(DDPM):
             # So the teacher instance is always indexed by 1.
             # is_teachable: The teacher instance is only teachable if it's qualified, and the 
             # compositional clip loss is smaller than the student.
-            is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_comp[0]
+            is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_comp[0] - 0.009
 
             np.set_printoptions(precision=4, suppress=True)
             self.num_total_clip_iters += 1
@@ -1824,7 +1825,7 @@ class LatentDiffusion(DDPM):
                                       #9:  0.5, 10: 0.5, 11: 0.5, 
                                       12: 0.5, 
                                       #13: 0.25, 14: 0.25, 15: 0.25, 
-                                      16: 0.25,
+                                      16: 0.25, 17: 0.25, 18: 0.25
                                     }
 
             distill_overall_weight = 1. / np.sum(list(distill_layer_weights.values()))

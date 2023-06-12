@@ -759,7 +759,7 @@ class UNetModel(nn.Module):
                 return None
             emb_idx = layer_idx2emb_idx[layer_idx]
             layer_static_context = context[emb_idx]
-            hijk_layer_indices = [7, 8, 12, 16]
+            hijk_layer_indices = [7, 8, 12, 16, 17, 18]
 
             if use_ada_context:
                 ada_embedder   = extra_info['ada_embedder']
@@ -837,7 +837,7 @@ class UNetModel(nn.Module):
 
         if iter_type.startswith("mix_"):
             # If iter_type == 'mix_hijk', also store attention matrices.
-            save_attn_layer_indices = [7, 8, 12, 16]
+            save_attn_layer_indices = [7, 8, 12, 16, 17, 18]
         else:
             save_attn_layer_indices = []
 

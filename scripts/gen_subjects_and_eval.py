@@ -5,6 +5,16 @@ import numpy as np
 import csv
 from evaluation.eval_utils import parse_subject_file, parse_range_str, get_promt_list, find_first_match
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--guidance_scale", type=float, default=10, help="guidance scale")
@@ -79,8 +89,9 @@ def parse_args():
 
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=argparse.SUPPRESS,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
-    parser.add_argument("--is_face", action="store_true", default=argparse.SUPPRESS,
-                        help="Whether the generated samples are human faces")
+    parser.add_argument("--is_face", type=str2bool, const=True, default=argparse.SUPPRESS, nargs="?",
+                        help="Whether the generated samples are human faces",
+    )    
 
     parser.add_argument("--ref_prompt_mix_weight", type=float, default=0,
                         help="Weight of the reference prompt to be mixed with the subject prompt")  
