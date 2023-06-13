@@ -1792,12 +1792,14 @@ class LatentDiffusion(DDPM):
             # So the teacher instance is always indexed by 1.
             # is_teachable: The teacher instance is only teachable if it's qualified, and the 
             # compositional clip loss is smaller than the student.
-            is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_comp[0] - 0.005
+            self.cls_subj_clip_margin = 0.006
+            is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_comp[0] - self.cls_subj_clip_margin
 
             np.set_printoptions(precision=4, suppress=True)
             self.num_total_clip_iters += 1
             self.num_teachable_iters += int(is_teachable)
             teachable_frac = self.num_teachable_iters / self.num_total_clip_iters
+
             # clip_losses = torch.cat([losses_clip_comp, losses_clip_single], dim=0).data.cpu().numpy()
             #print("CLIP losses: {}, teachable frac: {:.1f}%".format( \
             #        clip_losses, teachable_frac*100))
