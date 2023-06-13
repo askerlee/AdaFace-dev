@@ -1622,8 +1622,9 @@ class LatentDiffusion(DDPM):
 
         if is_comp_iter:
             HALF_BS  = max(x_start.shape[0] // 2, 1)
-            # Set t to the last timestep, so that the input is total noise.
-            rand_timestep = np.random.randint(self.num_timesteps - 100, self.num_timesteps)
+            # Randomly choose t from the second half of the timesteps, 
+            # so as to match the total noise input.
+            rand_timestep = np.random.randint(self.num_timesteps // 2, self.num_timesteps)
             t.fill_(rand_timestep)
             t = t[:HALF_BS].repeat(4)
             x_start.normal_()
