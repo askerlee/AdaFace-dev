@@ -1909,7 +1909,7 @@ class LatentDiffusion(DDPM):
                 if iter_type == 'mix_concat_cls':
                     pool_spatial_size = (1, 1)
                 else:
-                    pool_spatial_size = (2, 2)
+                    pool_spatial_size = (1, 1) #(2, 2)
 
                 pooler = nn.AdaptiveAvgPool2d(pool_spatial_size)
                 # Pool the H, W dimensions to remove spatial information.
