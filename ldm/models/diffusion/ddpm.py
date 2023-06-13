@@ -397,15 +397,15 @@ class DDPM(pl.LightningModule):
 
         log_prefix = 'train' if self.training else 'val'
 
-        loss_dict.update({f'{log_prefix}/loss_simple': loss.mean()})
+        loss_dict.update({f'{log_prefix}/loss_simple': loss.mean().detach()})
         loss_simple = loss.mean() * self.l_simple_weight
 
         loss_vlb = (self.lvlb_weights[t] * loss).mean()
-        loss_dict.update({f'{log_prefix}/loss_vlb': loss_vlb})
+        loss_dict.update({f'{log_prefix}/loss_vlb': loss_vlb.detach()})
 
         loss = loss_simple + self.original_elbo_weight * loss_vlb
 
-        loss_dict.update({f'{log_prefix}/loss': loss})
+        loss_dict.update({f'{log_prefix}/loss': loss.detach()})
 
         return loss, loss_dict
 
@@ -1689,7 +1689,7 @@ class LatentDiffusion(DDPM):
         if iter_type == 'normal_recon':
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
-            loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
+            loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean().detach()})
 
             logvar_t = self.logvar.to(self.device)[t]
             # In theory, the loss can be weighted according to t. However in practice,
@@ -1698,21 +1698,21 @@ class LatentDiffusion(DDPM):
             # loss = loss_simple / torch.exp(self.logvar) + self.logvar
             if self.learn_logvar:
                 loss_dict.update({f'{prefix}/loss_gamma': loss_simple.mean()})
-                loss_dict.update({'logvar': self.logvar.data.mean()})
+                loss_dict.update({'logvar': self.logvar.data.mean().detach()})
 
             # l_simple_weight = 1.
             loss = self.l_simple_weight * loss_simple.mean()
 
             loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
             loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
-            loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
+            loss_dict.update({f'{prefix}/loss_vlb': loss_vlb.detach()})
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
 
         if self.embedding_reg_weight > 0:
             self.embedding_manager.is_comp_iter = is_comp_iter
             loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
-            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg})
+            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg.detach()})
             loss += (self.embedding_reg_weight * loss_embedding_reg)
 
         if self.do_static_prompt_delta_reg:
@@ -1720,9 +1720,9 @@ class LatentDiffusion(DDPM):
             static_delta_loss, ada_delta_loss = self.embedding_manager.calc_prompt_delta_loss( 
                                     self.do_ada_prompt_delta_reg, self.c_static_emb
                                     )
-            loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean()})
+            loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
             if ada_delta_loss != 0:
-                loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean()})
+                loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
             ada_comp_loss_boost_ratio = 2 #self.prompt_delta_reg_iter_gap / 4
             loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
             loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
@@ -1767,8 +1767,8 @@ class LatentDiffusion(DDPM):
             # loss_dict is only used for logging. So we can pass 
             # the unfiltered detached loss.
             losses_clip_subj_comp, losses_clip_cls_comp = losses_clip_comp.split(losses_clip_comp.shape[0] // 2, dim=0)
-            loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean()})
-            loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_cls_comp.mean()})
+            loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_cls_comp.mean().detach()})
 
             if self.use_noised_clip:
                 clip_loss_thres = 0.33
@@ -1957,13 +1957,13 @@ class LatentDiffusion(DDPM):
                 loss_prompt_mix_reg += loss_layer_prompt_mix_reg * distill_layer_weight * distill_overall_weight
 
             # logvar is all zero. So no need to do "loss_prompt_mix_reg / exp(logvar_t) + logvar_t".
-            loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_prompt_mix_reg})
+            loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_prompt_mix_reg.detach()})
             loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.mix_weight_scale
             
             self.embedding_manager.placeholder_indices = None
 
 
-        loss_dict.update({f'{prefix}/loss': loss})
+        loss_dict.update({f'{prefix}/loss': loss.detach()})
 
         return loss, loss_dict
 
