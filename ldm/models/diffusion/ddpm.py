@@ -1732,7 +1732,7 @@ class LatentDiffusion(DDPM):
             #print(clip_prompts_comp)
             if self.clip_loss_weight > 0:
                 clip_images = self.differentiable_decode_first_stage(clip_images_code)
-                self.cache_and_log_generations(clip_images.detach())
+                self.cache_and_log_generations(clip_images)
 
                 # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
                 # to keep the loss positive.
@@ -2170,7 +2170,7 @@ class LatentDiffusion(DDPM):
         return samples, intermediates
 
     def cache_and_log_generations(self, samples, max_cache_size=40):
-        self.generation_cache.append(samples)
+        self.generation_cache.append(samples.detach().cpu())
         self.num_cached_generations += len(samples)
 
         if self.num_cached_generations >= max_cache_size:
