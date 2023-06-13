@@ -1622,9 +1622,8 @@ class LatentDiffusion(DDPM):
 
         if is_comp_iter:
             HALF_BS  = max(x_start.shape[0] // 2, 1)
-            # Randomly choose t from the second half of the timesteps, 
-            # so as to match the total noise input.
-            rand_timestep = np.random.randint(self.num_timesteps // 2, self.num_timesteps)
+            # Randomly choose t from the largest 250 timesteps, so as to match the total noise input.
+            rand_timestep = np.random.randint(int(self.num_timesteps * 0.75), self.num_timesteps)
             t.fill_(rand_timestep)
             t = t[:HALF_BS].repeat(4)
             x_start.normal_()
@@ -1777,8 +1776,9 @@ class LatentDiffusion(DDPM):
                 clip_loss_thres = 0.35
 
             are_output_qualified = (losses_clip <= clip_loss_thres)
-            if self.clip_loss_weight > 0 and are_output_qualified.sum() > 0:
-                loss_clip = losses_clip[are_output_qualified].mean()
+            # clip loss is only applied to the subject composition instance. 
+            if self.clip_loss_weight > 0 and are_output_qualified[:HALF_BS].sum() > 0:
+                loss_clip = losses_clip[are_output_qualified:HALF_BS].mean()
                 loss += (self.clip_loss_weight * loss_clip)
 
             # Hard-code here. Suppose HALF_BS=1, i.e., two instances are in clip_images.
