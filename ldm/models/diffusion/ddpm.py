@@ -1771,9 +1771,9 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_cls_comp.mean()})
 
             if self.use_noised_clip:
-                clip_loss_thres = 0.27
+                clip_loss_thres = 0.33
             else:
-                clip_loss_thres = 0.29
+                clip_loss_thres = 0.35
 
             are_output_qualified = (losses_clip <= clip_loss_thres)
             if self.clip_loss_weight > 0 and are_output_qualified.sum() > 0:
