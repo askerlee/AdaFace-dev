@@ -434,7 +434,7 @@ class GradientScaler(nn.Module):
 # If not do_normalize, samples should be between [0, 1].
 # If do_normalize, samples should be between [-1, 1] (raw output from SD decode_first_stage()).
 def save_grid(samples, grid_filepath, nrow, do_normalize=False):
-    grid = torch.stack(samples, 0)
+    grid = torch.stack([ torch.from_numpy(e) for e in samples ], 0)
     if do_normalize:
         grid = torch.clamp((grid + 1.0) / 2.0, min=0.0, max=1.0)
         
