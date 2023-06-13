@@ -1781,8 +1781,11 @@ class LatentDiffusion(DDPM):
             # clip loss is only applied to the subject composition instance. 
             are_output_qualified_firsthalf = are_output_qualified.clone()
             are_output_qualified_firsthalf[HALF_BS:] = False
-            if self.clip_loss_weight > 0 and are_output_qualified_firsthalf.sum() > 0:
-                loss_clip = losses_clip[are_output_qualified_firsthalf].mean()
+            if self.clip_loss_weight > 0:
+                # Even if no image is qualified, we still compute the loss with zero weight,
+                # to release the computation graph and avoid memory leak.
+                loss_clip = (losses_clip * are_output_qualified_firsthalf).sum() \
+                                / (are_output_qualified_firsthalf.sum() + 0.001)
                 loss += (self.clip_loss_weight * loss_clip)
 
             # Hard-code here. Suppose HALF_BS=1, i.e., two instances are in clip_images.
