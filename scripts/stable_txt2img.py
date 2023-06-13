@@ -272,6 +272,7 @@ def main(opt):
 
     seed_everything(opt.seed)
     torch.cuda.set_device(opt.gpu)
+    torch.backends.cuda.matmul.allow_tf32 = True
 
     config = OmegaConf.load(f"{opt.config}")
 
