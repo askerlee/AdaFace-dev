@@ -1732,7 +1732,7 @@ class LatentDiffusion(DDPM):
             #print(clip_prompts_comp)
             if self.clip_loss_weight > 0:
                 clip_images = self.differentiable_decode_first_stage(clip_images_code)
-
+                clip_images_np = clip_images.detach().cpu().numpy()
                 # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
                 # to keep the loss positive.
                 # txt_to_img_similarity() returns the pairwise similarities between the prompts and the images.
@@ -1756,12 +1756,14 @@ class LatentDiffusion(DDPM):
             else:
                 with torch.no_grad():
                     clip_images = self.differentiable_decode_first_stage(clip_images_code)
+                    clip_images_np = clip_images.detach().cpu().numpy()
+
                     losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
                                                                                          reduction='diag')
                     #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
                     #                                                                     reduction='diag')
 
-            self.cache_and_log_generations(clip_images)
+            self.cache_and_log_generations(clip_images_np)
 
             losses_clip = losses_clip_comp #* 1.3 - losses_clip_single * 0.3
             # loss_dict is only used for logging. So we can pass 
@@ -2170,7 +2172,7 @@ class LatentDiffusion(DDPM):
         return samples, intermediates
 
     def cache_and_log_generations(self, samples, max_cache_size=40):
-        self.generation_cache.append(samples.detach().cpu().numpy())
+        self.generation_cache.append(samples)
         self.num_cached_generations += len(samples)
 
         if self.num_cached_generations >= max_cache_size:
