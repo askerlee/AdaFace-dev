@@ -3,7 +3,7 @@
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'cls_token_as_delta' 'cls_token_as_distill' 'use_z_suffix' 'eval' 'ema' 'v14' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'cls_token_as_delta' 'cls_token_as_distill' 'use_z_suffix' 'eval' 'ema' 'dreamshaper' 'v14' -- $argv
 or begin
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
@@ -39,6 +39,8 @@ if set -q _flag_v14
     set sd_ckpt models/stable-diffusion-v-1-4-original/sd-v1-4.ckpt
 else if set -q _flag_ema
     set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt
+else if set -q _flag_dreamshaper
+    set sd_ckpt models/dreamshaper/dreamshaper_631BakedVae.safetensors   
 else
     set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt
 end
