@@ -40,7 +40,10 @@ if set -q _flag_v14
 else if set -q _flag_ema
     set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt
 else if set -q _flag_dreamshaper
-    set sd_ckpt models/dreamshaper/dreamshaper_631BakedVae.safetensors   
+    set sd_ckpt models/dreamshaper/dreamshaper_631BakedVae.safetensors
+    if not set -q _flag_maxiter
+        set _flag_maxiter 2000
+    end
 else
     set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt
 end
