@@ -52,6 +52,7 @@ end
 set -q _flag_selset; and set indices0 $sel_set; or set indices0 (seq 1 (count $subjects))
 set indices $indices0[(seq $L $H)]
 
+set EXTRA_EVAL_FLAGS  _flag_dreamshaper _flag_v14 _flag_ema
 echo Training on $subjects[$indices]
 
 # $0 0 1 13: alexachung .. masatosakai, on GPU0
@@ -135,7 +136,7 @@ for i in $indices
             else
                 set out_dir_tmpl 'samples'
             end
-            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i
+            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i $EXTRA_EVAL_FLAGS
         end
 
     else
@@ -157,7 +158,7 @@ for i in $indices
             else
                 set out_dir_tmpl 'samples'
             end
-            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i
+            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i $EXTRA_EVAL_FLAGS
         end
     end
 
