@@ -52,7 +52,8 @@ end
 set -q _flag_selset; and set indices0 $sel_set; or set indices0 (seq 1 (count $subjects))
 set indices $indices0[(seq $L $H)]
 
-set EXTRA_EVAL_FLAGS  _flag_dreamshaper _flag_v14 _flag_ema
+set EXTRA_EVAL_FLAGS  $_flag_dreamshaper $_flag_v14 $_flag_ema
+
 echo Training on $subjects[$indices]
 
 # $0 0 1 13: alexachung .. masatosakai, on GPU0
