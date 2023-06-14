@@ -86,6 +86,8 @@ def parse_args():
                         help="Use the EMA model weights")
     parser.add_argument("--v14", dest='v15', action="store_false",
                         help="Whether to use v1.4 model (default: v1.5)")
+    parser.add_argument("--dreamshaper", dest='dreamshaper', action="store_true",
+                        help="Use the dreamshaper model (default: not used)")
 
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=argparse.SUPPRESS,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
@@ -212,6 +214,8 @@ if __name__ == "__main__":
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt"
             elif args.v15:
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned.ckpt"
+            elif args.dreamshaper:
+                ckpt_path   = "models/dreamshaper/dreamshaper_631BakedVae.safetensors"
             else:
                 ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
             
