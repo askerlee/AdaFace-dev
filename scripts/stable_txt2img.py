@@ -10,6 +10,7 @@ from torchvision.utils import make_grid
 import time
 import re
 import csv
+import sys
 
 from pytorch_lightning import seed_everything
 from torch import autocast
@@ -20,6 +21,8 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders, \
                                   init_evaluators, set_tf_gpu
+
+from safetensors.torch import load_file as safetensors_load_file
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -233,10 +236,17 @@ def chunk(it, size):
 
 def load_model_from_config(config, ckpt, verbose=False):
     print(f"Loading model from {ckpt}")
-    pl_sd = torch.load(ckpt, map_location="cpu")
-    if "global_step" in pl_sd:
-        print(f"Global Step: {pl_sd['global_step']}")
-    sd = pl_sd["state_dict"]
+    if ckpt.endswith(".ckpt"):
+        pl_sd = torch.load(ckpt, map_location="cpu")
+        sd = pl_sd["state_dict"]
+        if "global_step" in pl_sd:
+            print(f"Global Step: {pl_sd['global_step']}")
+    elif ckpt.endswith(".safetensors"):
+        sd = safetensors_load_file(ckpt, device="cpu")
+    else:
+        print(f"Unknown checkpoint format: {ckpt}")
+        sys.exit(1)
+
     model = instantiate_from_config(config.model)
     m, u = model.load_state_dict(sd, strict=False)
     if len(m) > 0 and verbose:
