@@ -37,6 +37,8 @@ import copy
 from functools import partial
 import random
 import math
+from safetensors.torch import load_file as safetensors_load_file
+import sys
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -270,9 +272,16 @@ class DDPM(pl.LightningModule):
                     print(f"{context}: Restored training weights")
 
     def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
-        sd = torch.load(path, map_location="cpu")
-        if "state_dict" in list(sd.keys()):
-            sd = sd["state_dict"]
+        if path.endswith(".ckpt"):
+            sd = torch.load(path, map_location="cpu")
+            if "state_dict" in list(sd.keys()):
+                sd = sd["state_dict"]
+        elif path.endswith(".safetensors"):
+            sd = safetensors_load_file(path, device="cpu")
+        else:
+            print(f"Unknown checkpoint format: {path}")
+            sys.exit(1)
+
         keys = list(sd.keys())
         for k in keys:
             for ik in ignore_keys:
@@ -1755,7 +1764,7 @@ class LatentDiffusion(DDPM):
                 #                                                                     reduction='diag')
             else:
                 with torch.no_grad():
-                    clip_images = self.differentiable_decode_first_stage(clip_images_code)
+                    clip_images = self.decode_first_stage(clip_images_code)
                     clip_images_np = clip_images.detach().cpu().numpy()
 
                     losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
@@ -1806,7 +1815,7 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/teachable_frac': teachable_frac})
 
         else:
-            # Just don't care about teachability.
+            # Just don't decide whether it's teachable.
             is_teachable = True
 
         if self.do_comp_prompt_mix_reg and is_teachable:

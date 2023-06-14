@@ -32,3 +32,6 @@ __pycache__/
 scripts/stable_txt2img_db.py
 /regularization_images
 *.zip
+/models/dreamshaper/*
+/models/dreamshaper
+
