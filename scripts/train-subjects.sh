@@ -3,9 +3,9 @@
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'selset' 'skipselset' 'cls_token_as_delta' 'cls_token_as_distill' 'use_z_suffix' 'eval' 'ema' 'dreamshaper' 'v14' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'ckpt_type=' 'selset' 'skipselset' 'cls_token_as_delta' 'cls_token_as_distill' 'use_z_suffix' 'eval'  -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--ckpt_type ckpt_type] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -13,7 +13,7 @@ end
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'static-layerwise' ]; or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--ckpt_type ckpt_type] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -35,24 +35,37 @@ set -q _flag_lr; and set lr $_flag_lr; or set -e lr
 set -q _flag_min_rand_scaling; and set min_rand_scaling $_flag_min_rand_scaling; or set -e min_rand_scaling
 #set fish_trace 1
 
-if set -q _flag_v14
+# default ckpt_type is v15.
+set -q _flag_ckpt_type; or set _flag_ckpt_type 'v15'
+
+if [ "$_flag_ckpt_type" = 'v15' ]
+    set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt
+else if [ "$_flag_ckpt_type" = 'v14' ]
     set sd_ckpt models/stable-diffusion-v-1-4-original/sd-v1-4.ckpt
-else if set -q _flag_ema
+else if [ "$_flag_ckpt_type" = 'v15-ema' ]
     set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt
-else if set -q _flag_dreamshaper
+else if [ "$_flag_ckpt_type" = 'v15-te-replaced' ]
+    set sd_ckpt models/stable-diffusion-v-1-5/v1-5-te-replaced.ckpt
+else if [ "$_flag_ckpt_type" = 'dreamshaper-v5' ]
+    set sd_ckpt models/dreamshaper/dreamshaper_5BakedVae.safetensors
+    if not set -q _flag_maxiter
+        set _flag_maxiter 2000
+    end
+else if [ "$_flag_ckpt_type" = 'dreamshaper-v6' ]
     set sd_ckpt models/dreamshaper/dreamshaper_631BakedVae.safetensors
     if not set -q _flag_maxiter
         set _flag_maxiter 2000
     end
 else
-    set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt
+    echo "Error: --ckpt_type must be one of 'v15', 'v14', 'v15-ema', 'v15-te-replaced', 'dreamshaper-v5', 'dreamshaper-v6'."
+    exit 1
 end
 
 # If --selset is given, then only train on the selected subjects, specified in $subj_file.
 set -q _flag_selset; and set indices0 $sel_set; or set indices0 (seq 1 (count $subjects))
 set indices $indices0[(seq $L $H)]
 
-set EXTRA_EVAL_FLAGS  $_flag_dreamshaper $_flag_v14 $_flag_ema
+set EXTRA_EVAL_FLAGS  --ckpt_type $_flag_ckpt_type
 
 echo Training on $subjects[$indices]
 

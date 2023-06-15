@@ -82,13 +82,9 @@ def parse_args():
     parser.add_argument("--compare_with_pardir", type=str, default=None,
                         help="Parent folder of subject images used for computing similarity with generated samples")
 
-    parser.add_argument("--ema", action="store_true",
-                        help="Use the EMA model weights (default: not used)")
-    parser.add_argument("--v14", dest='v14', action="store_true",
-                        help="Whether to use v1.4 model (default: use sd v1.5)")
-    parser.add_argument("--dreamshaper", dest='dreamshaper', type=str, default='none', 
-                        choices=['none', 'v5', 'v6'],
-                        help="Use which dreamshaper model (default: none, i.e., use sd v1.5)")
+    parser.add_argument("--ckpt_type", type=str, default="v15", 
+                        choices=["v14", "v15", "v15-ema", "v15-te-replaced", "dreamshaper-v5", "dreamshaper-v6"],
+                        help="Type of checkpoints to use (default: v15)")
 
     parser.add_argument("--use_noised_clip", nargs="?", type=str2bool, const=True, default=False,
                         help="Whether to use noised CLIP")
@@ -215,17 +211,22 @@ if __name__ == "__main__":
             ckpt_path   = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/last.ckpt"
         else:
             config_file = "v1-inference-" + args.method + ".yaml"
-            if args.ema:
+            if args.ckpt_type == 'v15-ema':
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt"
-            elif args.dreamshaper == 'v5':
+            elif args.ckpt_type == 'v15-te-replaced':
+                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-te-replaced.ckpt"
+            elif args.ckpt_type == 'dreamshaper-v5':
                 ckpt_path   = "models/dreamshaper/dreamshaper_5BakedVae.safetensors"
-            elif args.dreamshaper == 'v6':
+            elif args.ckpt_type == 'dreamshaper-v6':
                 ckpt_path   = "models/dreamshaper/dreamshaper_631BakedVae.safetensors"
-            elif args.v14:
+            elif args.ckpt_type == 'v14':
                 ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
-            else:
+            elif args.ckpt_type == 'v15':
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned.ckpt"
-
+            else:
+                print(f"ERROR: Unknown ckpt_type: {args.ckpt_type}")
+                exit(0)
+                
             if args.ckpt_iter == -1:
                 ckpt_iter = ckpt_iters[broad_class]
             else:
