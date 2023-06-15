@@ -426,6 +426,7 @@ class EmbeddingManager(nn.Module):
             initializer_weights=None,
             initializer_neg_words=None,
             placeholder_suffix=None,
+            suffix_weight_learnable=False,
             cls_delta_token="person",
             num_vectors_per_token=1,
             progressive_words=False,
@@ -506,8 +507,6 @@ class EmbeddingManager(nn.Module):
             init_neg_embeddings = None
             NEG = 0
 
-        token_key_embeddings = None
-
         for idx, placeholder_string in enumerate(placeholder_strings):
             # get_token_for_string <= get_clip_token_for_string.
             # force_single_token = True, as there should be only one token in placeholder_string.
@@ -569,12 +568,17 @@ class EmbeddingManager(nn.Module):
                 assert len(cls_delta_token_ids) == 1, f"ERROR: cls_delta_token '{cls_delta_token}' must be a single token."
                 
             self.placeholder_suffix = placeholder_suffix
+            self.suffix_weight_learnable = suffix_weight_learnable
+            self.z_suffix_weights = None
+
             if self.placeholder_suffix is not None:
                 # Usually the placeholder word is "z", 
                 # so placeholder_suffix variables are named z_suffix_*.
                 z_suffix_ids = get_tokens_for_string(self.placeholder_suffix)
                 self.z_suffix_ids      = z_suffix_ids
                 self.z_suffix_id_count = len(z_suffix_ids)
+                if self.suffix_weight_learnable:
+                    self.z_suffix_weights = nn.Parameter(torch.ones(num_vectors_per_token, self.z_suffix_id_count, dtype=torch.float32), requires_grad=True)
             else:
                 self.z_suffix_ids      = None
                 self.z_suffix_id_count = 0
@@ -631,12 +635,12 @@ class EmbeddingManager(nn.Module):
         static_embeddings = self.get_static_embedding(tokenized_text, embedded_text.clone(), 
                                                       self.string_to_param_dict,
                                                       B, N, self.num_unet_layers, device, 
-                                                      update_mask=True)
+                                                      update_token_mask_weights=True)
 
         return static_embeddings
     
     def get_static_embedding(self, tokenized_text, embedded_text, embedder_dict, 
-                             B, N, num_unet_layers, device, update_mask=True):
+                             B, N, num_unet_layers, device, update_token_mask_weights=True):
         orig_tokenized_text = tokenized_text
 
         if self.use_layerwise_embedding:
@@ -693,7 +697,7 @@ class EmbeddingManager(nn.Module):
                 embedded_text[placeholder_indices] = placeholder_embedding.repeat(REAL_OCCUR, 1)
                 # Mark where the placeholder token is replaced by the embedding.
                 
-                if update_mask:
+                if update_token_mask_weights:
                     # The placeholder_indices above are on the x16 repeated tokenized_text.
                     # So we find the original placeholder_indices by search placeholder_token
                     # within orig_tokenized_text.
@@ -943,9 +947,14 @@ class EmbeddingManager(nn.Module):
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def optimized_parameters(self):
-        return list(self.string_to_param_dict.parameters()) \
-               + list(self.string_to_ada_embedder_dict.parameters()) 
-    
+        params = list(self.string_to_param_dict.parameters()) \
+               + list(self.string_to_ada_embedder_dict.parameters())
+        
+        if self.suffix_weight_learnable:
+            params = params + [ self.z_suffix_weights ]
+
+        return params
+        
     def embedding_attractor_loss(self):
         loss = 0.
         num_placeholders = len(self.initial_embeddings)

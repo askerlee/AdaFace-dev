@@ -86,11 +86,16 @@ def parse_args():
                         help="Use the EMA model weights (default: not used)")
     parser.add_argument("--v14", dest='v14', action="store_true",
                         help="Whether to use v1.4 model (default: use sd v1.5)")
-    parser.add_argument("--dreamshaper", dest='dreamshaper', action="store_true",
-                        help="Use the dreamshaper model (default: use sd v1.5)")
+    parser.add_argument("--dreamshaper", dest='dreamshaper', type=str, default='none', 
+                        choices=['none', 'v5', 'v6'],
+                        help="Use which dreamshaper model (default: none, i.e., use sd v1.5)")
 
+    parser.add_argument("--use_noised_clip", nargs="?", type=str2bool, const=True, default=False,
+                        help="Whether to use noised CLIP")
+    
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=argparse.SUPPRESS,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
+    
     parser.add_argument("--is_face", type=str2bool, const=True, default=argparse.SUPPRESS, nargs="?",
                         help="Whether the generated samples are human faces",
     )    
@@ -212,7 +217,9 @@ if __name__ == "__main__":
             config_file = "v1-inference-" + args.method + ".yaml"
             if args.ema:
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt"
-            elif args.dreamshaper:
+            elif args.dreamshaper == 'v5':
+                ckpt_path   = "models/dreamshaper/dreamshaper_5BakedVae.safetensors"
+            elif args.dreamshaper == 'v6':
                 ckpt_path   = "models/dreamshaper/dreamshaper_631BakedVae.safetensors"
             elif args.v14:
                 ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
