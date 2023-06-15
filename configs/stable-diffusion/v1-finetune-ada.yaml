@@ -28,7 +28,6 @@ model:
     model_lr: 0.0
     use_layerwise_embedding: True
     use_ada_embedding: True
-    use_sep_key_embs:  False
     # composition_regs includes prompt_delta_reg and composition_prompt_mix_reg.
     composition_regs_iter_gap: 3
     # typical delta reg loss: 0.75, * weight -> 7.5e-5
@@ -43,7 +42,6 @@ model:
     filter_with_clip_loss: True
     # prompt_mix_scheme: 'mix_hijk' or 'mix_concat_cls'
     prompt_mix_scheme:     'mix_hijk'
-    sep_key_embs_scale: 0.15
     use_fp_trick:          True
 
     optimizer_type: AdamW     # sophia
@@ -69,7 +67,6 @@ model:
         num_vectors_per_token: 1
         progressive_words: False
         use_layerwise_embedding: True
-        use_sep_key_embs:  False
         layerwise_lora_rank_token_ratio: 2
         ada_emb_weight: 0.5
         # composition_regs alternates between prompt_delta_reg and composition_prompt_mix_reg.

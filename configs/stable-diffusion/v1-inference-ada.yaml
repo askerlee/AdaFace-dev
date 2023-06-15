@@ -18,7 +18,6 @@ model:
     use_ema: False
     use_layerwise_embedding: True
     use_ada_embedding: True
-    use_sep_key_embs:  False
     
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
@@ -31,8 +30,6 @@ model:
         num_vectors_per_token: 1
         progressive_words: False
         use_layerwise_embedding: True
-        use_sep_key_embs:  False
-        sep_key_embs_scale: 0.2
         ada_emb_weight: 0.5
         
     unet_config:

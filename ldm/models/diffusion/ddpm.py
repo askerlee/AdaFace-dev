@@ -90,9 +90,6 @@ class DDPM(pl.LightningModule):
                  logvar_init=0.,
                  use_layerwise_embedding=False,
                  use_ada_embedding=False,
-                 use_sep_key_embs=False,
-                 sep_key_layer_indices=[4, 5, 6, 7],    # correspond to original layers 7, 8, 12, 16
-                 sep_key_embs_scale=0.15,
                  composition_regs_iter_gap=-1,
                  prompt_delta_reg_weight=0.,
                  composition_prompt_mix_reg_weight=0.,
@@ -118,10 +115,6 @@ class DDPM(pl.LightningModule):
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.use_ada_embedding = use_layerwise_embedding and use_ada_embedding
-        self.use_sep_key_embs  = use_sep_key_embs
-        self.sep_key_layer_indices = sep_key_layer_indices
-        self.num_sep_key_layers    = len(sep_key_layer_indices)
-        self.sep_key_embs_scale    = sep_key_embs_scale
 
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.prompt_delta_reg_weight         = prompt_delta_reg_weight
@@ -782,7 +775,6 @@ class LatentDiffusion(DDPM):
                 
                 extra_info = { 'use_layerwise_context': self.use_layerwise_embedding, 
                                'use_ada_context':       self.use_ada_embedding,
-                               'use_sep_key_embs':      self.use_sep_key_embs,
                              }
                 
                 if self.use_ada_embedding:
@@ -804,34 +796,6 @@ class LatentDiffusion(DDPM):
                     # img_mask is used by the ada embedding generator.
                     self.embedding_manager.set_img_mask(img_mask)
                     extra_info['ada_embedder'] = ada_embedder
-
-                if self.use_sep_key_embs:
-                    # If use_sep_key_embs, context is an extended batch 32*B as (B*context_qv, B*context_key).
-                    # Each 16 vectors of context_qv (corresponding to an image) has to be aligned with 
-                    # the corresponding 16 vectors of context_key (corresponding to the same image).
-                    # So they are concatenated at dim 1 (tokens dim), and then handled 
-                    # in the same way as mixed embeddings.
-                    # [(16+4)*B, 77, 768] => value_embeddings [16*B, 77, 768].                    
-                    #                                                                            concat = [16*B, 154, 768]
-                    #                     => key_embeddings   [4*B,  77, 768] => [16*B, 77, 768] 
-                    B = len(c_in)
-                    assert c.shape[0] == (16 + self.num_sep_key_layers) * B 
-
-                    # num_sep_key_layers: 4.
-                    c_v, c_k = torch.split(c, (16 * B, self.num_sep_key_layers * B), dim=0)
-                    c_k_all_layers = c_v.data.clone().reshape(B, 16, *c_v.shape[1:])
-                    # Fill in the four layers of separate key embeddings 
-                    # in the shape of [B, layer_num, 77, 768].
-                    c_k_all_layers[:, self.sep_key_layer_indices] = \
-                        c_k.reshape(B, self.num_sep_key_layers, *c_v.shape[1:])
-                    c_k_all_layers = c_k_all_layers.reshape(c_v.shape)
-                    # Use most of the layers of embeddings in static_embeddings, but 
-                    # **add** (not replace) sep_key_layer_indices layers with those from key_embeddings.
-                    # So key_embeddings are just residuals, and the resulted 
-                    # key_embeddings_all_layers are not very far from static_embeddings.
-                    # This simulates the "addconcat" embedding mixing scheme used for distillation.
-                    c_k_all_layers = c_k_all_layers * self.sep_key_embs_scale + c_v * (1 - self.sep_key_embs_scale)
-                    c = torch.cat([c_v, c_k_all_layers], dim=1)
 
                 c = (c, c_in, extra_info)
             else:
@@ -1332,21 +1296,12 @@ class LatentDiffusion(DDPM):
                         # Mixed embedding subj_comps_emb_mix = 
                         # concat(subj_comps_emb, cls_comps_emb -| subj_comps_emb)_dim1. 
                         # -| means orthogonal subtraction.
-                        if self.use_sep_key_embs:
-                            subj_comps_emb_v, subj_comps_emb_k   = subj_comps_emb.split(subj_comps_emb.shape[1] // 2, dim=1)
-                            cls_comps_emb_v, cls_comps_emb_k     = cls_comps_emb.split(cls_comps_emb.shape[1] // 2, dim=1)
-                            subj_single_emb_v, subj_single_emb_k = subj_single_emb.split(subj_single_emb.shape[1] // 2, dim=1)
-                            cls_single_emb_v, cls_single_emb_k   = cls_single_emb.split(cls_single_emb.shape[1] // 2, dim=1)
-                            mix_scheme           = 'addconcat'
-                        else:
-                            subj_comps_emb_v  = subj_comps_emb
-                            cls_comps_emb_v   = cls_comps_emb
-                            subj_single_emb_v = subj_single_emb
-                            cls_single_emb_v  = cls_single_emb
-                            mix_scheme        = 'adeltaconcat'
+                        subj_comps_emb_v  = subj_comps_emb
+                        cls_comps_emb_v   = cls_comps_emb
+                        subj_single_emb_v = subj_single_emb
+                        cls_single_emb_v  = cls_single_emb
+                        mix_scheme        = 'adeltaconcat'
 
-                        # If use_sep_key_embs, cls_comps_emb_v == cls_comps_emb_k, 
-                        # cls_single_emb_v == cls_single_emb_k. 
                         subj_comps_emb_mix_all_layers  = mix_embeddings(subj_comps_emb_v, cls_comps_emb_v, 
                                                                         c2_mix_weight=c2_mix_weight,
                                                                         mix_scheme=mix_scheme,
@@ -1382,15 +1337,12 @@ class LatentDiffusion(DDPM):
                             layer_mask[:, sync_layer_indices] = 1
                             layer_mask = layer_mask.reshape(-1, *subj_comps_emb_mix_all_layers.shape[1:])
 
-                            if not self.use_sep_key_embs:
-                                # This copy of subj_single_emb, subj_comps_emb will be simply 
-                                # repeated at the token dimension to match 
-                                # the token number of the mixed (concatenated) 
-                                # subj_single_emb_mix and subj_comps_emb_mix embeddings.
-                                subj_comps_emb  = subj_comps_emb.repeat(1, 2, 1)
-                                subj_single_emb = subj_single_emb.repeat(1, 2, 1)
-                                #subj_comps_emb_mix_all_layers  = subj_comps_emb_mix_all_layers.repeat(1, 2, 1)
-                                #subj_single_emb_mix_all_layers = subj_single_emb_mix_all_layers.repeat(1, 2, 1)
+                            # This copy of subj_single_emb, subj_comps_emb will be simply 
+                            # repeated at the token dimension to match 
+                            # the token number of the mixed (concatenated) 
+                            # subj_single_emb_mix and subj_comps_emb_mix embeddings.
+                            subj_comps_emb  = subj_comps_emb.repeat(1, 2, 1)
+                            subj_single_emb = subj_single_emb.repeat(1, 2, 1)
 
                             # Otherwise, the second halves of subj_comps_emb/cls_comps_emb
                             # are already key embeddings. No need to repeat.
@@ -1456,14 +1408,7 @@ class LatentDiffusion(DDPM):
                     # The full c_static_emb (embeddings of subj_single_prompts, subj_comp_prompts, 
                     # cls_single_prompts, cls_comp_prompts) is backed up to be used 
                     # to compute the static delta loss later.
-                    if self.use_sep_key_embs:
-                        # c_static_emb is used for delta loss regularization, which is 
-                        # only applied on the value embeddings. 
-                        # So discard the key embeddings.
-                        # [128, 154, 768] => [128, 77, 768]
-                        self.c_static_emb, _ = c_static_emb.split(c_static_emb.shape[1] // 2, dim=1)
-                    else:
-                        self.c_static_emb = c_static_emb
+                    self.c_static_emb = c_static_emb
 
                 else:
                     # No delta loss or compositional mix loss. Keep the tuple c unchanged.
