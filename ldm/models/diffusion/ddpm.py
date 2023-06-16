@@ -1746,7 +1746,11 @@ class LatentDiffusion(DDPM):
             # is_teachable: The teacher instance is only teachable if it's qualified, and the 
             # compositional clip loss is smaller than the student.
 
-            self.cls_subj_clip_margin = 0.006
+            if self.prompt_mix_scheme == 'mix_concat_cls':
+                self.cls_subj_clip_margin = 0.004
+            else:
+                self.cls_subj_clip_margin = 0.006
+                
             is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_comp[0] - self.cls_subj_clip_margin
 
             np.set_printoptions(precision=4, suppress=True)
