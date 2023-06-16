@@ -818,7 +818,7 @@ class LatentDiffusion(DDPM):
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, init_ada_embedding_cache() should have been called somewhere.
         self.embedding_manager.cache_ada_embedding(layer_idx, c)
-        return c, self.embedding_manager.get_ada_emb_weight()
+        return c, self.embedding_manager.get_ada_emb_weight() #, self.embedding_manager.token_attn_weights
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)
@@ -1680,7 +1680,7 @@ class LatentDiffusion(DDPM):
             ada_comp_loss_boost_ratio = 2 #self.prompt_delta_reg_iter_gap / 4
             loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
             loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
-            #print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
+            # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
 
         if self.do_clip_eval:
             #print(clip_prompts_comp)
@@ -1789,7 +1789,7 @@ class LatentDiffusion(DDPM):
                                       #9:  0.5, 10: 0.5, 11: 0.5, 
                                       12: 0.5, 
                                       #13: 0.25, 14: 0.25, 15: 0.25, 
-                                      16: 0.25, 17: 0.25, 18: 0.25
+                                      16: 0.25, # 17: 0.25, 18: 0.25
                                     }
 
             distill_overall_weight = 1. / np.sum(list(distill_layer_weights.values()))
@@ -1870,7 +1870,7 @@ class LatentDiffusion(DDPM):
                 if iter_type == 'mix_concat_cls':
                     pool_spatial_size = (1, 1)
                 else:
-                    pool_spatial_size = (1, 1) #(2, 2)
+                    pool_spatial_size = (2, 2) # (1, 1)
 
                 pooler = nn.AdaptiveAvgPool2d(pool_spatial_size)
                 # Pool the H, W dimensions to remove spatial information.
