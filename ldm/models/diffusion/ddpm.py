@@ -1789,7 +1789,7 @@ class LatentDiffusion(DDPM):
                                       #9:  0.5, 10: 0.5, 11: 0.5, 
                                       12: 0.5, 
                                       #13: 0.25, 14: 0.25, 15: 0.25, 
-                                      16: 0.25, 17: 0.25, 18: 0.25
+                                      16: 0.25, # 17: 0.25, 18: 0.25
                                     }
 
             distill_overall_weight = 1. / np.sum(list(distill_layer_weights.values()))
@@ -1870,7 +1870,7 @@ class LatentDiffusion(DDPM):
                 if iter_type == 'mix_concat_cls':
                     pool_spatial_size = (1, 1)
                 else:
-                    pool_spatial_size = (1, 1) #(2, 2)
+                    pool_spatial_size = (2, 2) # (1, 1)
 
                 pooler = nn.AdaptiveAvgPool2d(pool_spatial_size)
                 # Pool the H, W dimensions to remove spatial information.
