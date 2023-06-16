@@ -83,7 +83,7 @@ def parse_args():
                         help="Parent folder of subject images used for computing similarity with generated samples")
 
     parser.add_argument("--ckpt_type", type=str, default="v15", 
-                        choices=["v14", "v15", "v15-ema", "v15-te-replaced", "dreamshaper-v5", "dreamshaper-v6"],
+                        choices=["v14", "v15", "v15-ema", "v15-terep", "dreamshaper-v5", "dreamshaper-v6"],
                         help="Type of checkpoints to use (default: v15)")
 
     parser.add_argument("--use_noised_clip", nargs="?", type=str2bool, const=True, default=False,
@@ -213,8 +213,8 @@ if __name__ == "__main__":
             config_file = "v1-inference-" + args.method + ".yaml"
             if args.ckpt_type == 'v15-ema':
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt"
-            elif args.ckpt_type == 'v15-te-replaced':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-te-replaced.ckpt"
+            elif args.ckpt_type == 'v15-terep':
+                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-terep.ckpt"
             elif args.ckpt_type == 'dreamshaper-v5':
                 ckpt_path   = "models/dreamshaper/dreamshaper_5BakedVae.safetensors"
             elif args.ckpt_type == 'dreamshaper-v6':

@@ -1680,7 +1680,7 @@ class LatentDiffusion(DDPM):
             ada_comp_loss_boost_ratio = 2 #self.prompt_delta_reg_iter_gap / 4
             loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
             loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
-            #print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
+            # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
 
         if self.do_clip_eval:
             #print(clip_prompts_comp)
