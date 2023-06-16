@@ -478,7 +478,7 @@ class DDPM(pl.LightningModule):
                 self.do_comp_prompt_mix_reg   = True
                 self.do_ada_prompt_delta_reg  = True
 
-            self.calc_clip_loss = self.filter_with_clip_loss
+            self.calc_clip_loss = True
 
         # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
         if self.scheduler is not None:
@@ -1768,7 +1768,7 @@ class LatentDiffusion(DDPM):
                 is_teachable = True
         else:
             is_teachable = True
-            
+
         if self.do_comp_prompt_mix_reg and is_teachable:
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
             # Only regularize on intermediate features, i.e., intermediate features generated 
