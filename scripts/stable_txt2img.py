@@ -591,9 +591,11 @@ def main(opt):
                             grid_count += 1
                             grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
 
-                    save_grid(all_samples, grid_filepath, nrow=n_rows)
+                    img = save_grid(all_samples, grid_filepath, nrow=n_rows)
                     
                 toc = time.time()
+            
+
 
     if not opt.skip_grid:
         print(f"Your samples are at: \n{grid_filepath}")
@@ -629,6 +631,8 @@ def main(opt):
 
     if SCORES_CSV is not None:
         SCORES_CSV_FILE.close()
+
+    return img #return img to be shown on webui
 
 if __name__ == "__main__":
     opt = parse_args()

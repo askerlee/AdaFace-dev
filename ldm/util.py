@@ -447,3 +447,6 @@ def save_grid(samples, grid_filepath, nrow, do_normalize=False):
     # to image
     grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
     Image.fromarray(grid.astype(np.uint8)).save(grid_filepath)
+    
+    # return image to be shown on webui
+    return Image.fromarray(grid.astype(np.uint8))
