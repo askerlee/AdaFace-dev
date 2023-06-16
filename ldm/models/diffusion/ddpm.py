@@ -127,7 +127,7 @@ class DDPM(pl.LightningModule):
         self.do_static_prompt_delta_reg     = False
         self.do_ada_prompt_delta_reg        = False
         self.do_comp_prompt_mix_reg         = False
-        self.do_clip_filtering              = False        
+        self.calc_clip_loss                 = False        
         # Is this for DreamBooth training? Will be overwritten in LatentDiffusion ctor.
         self.is_dreambooth                  = False
 
@@ -457,7 +457,7 @@ class DDPM(pl.LightningModule):
         interm_reg_probs = np.array(interm_reg_probs) / np.sum(interm_reg_probs)
         self.do_ada_prompt_delta_reg  = False
         self.do_comp_prompt_mix_reg   = False
-        self.do_clip_filtering        = False
+        self.calc_clip_loss           = False
 
         # If N_INTERM_REGS == 0, then no intermittent regularizations, set the two flags to False.
         if N_INTERM_REGS > 0 and self.composition_regs_iter_gap > 0 \
@@ -478,7 +478,7 @@ class DDPM(pl.LightningModule):
                 self.do_comp_prompt_mix_reg   = True
                 self.do_ada_prompt_delta_reg  = True
 
-            self.do_clip_filtering = self.filter_with_clip_loss
+            self.calc_clip_loss = self.filter_with_clip_loss
 
         # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
         if self.scheduler is not None:
@@ -1598,23 +1598,22 @@ class LatentDiffusion(DDPM):
             # LINK #shared_step
             x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=model_output)
             model_outputs = torch.split(x_recon, model_output.shape[0] // 4, dim=0)
-            if self.do_clip_filtering:
-                # Images generated both under subj_comp_prompts and subj_prompt_mix_comps 
-                # are subject to the CLIP text-image loss.
-                # cls_comp_prompts is still used to compute the CLIP text-image loss on
-                # images guided by the mixed embeddings (as the composition is the same).
-                clip_images_code  = torch.cat([ model_outputs[1] * img_mask, 
-                                                model_outputs[3] * img_mask ], dim=0)
-                # The first  cls_comp_prompts is for subj_comps_emb, and 
-                # the second cls_comp_prompts is for subj_comps_emb_mix.                
-                clip_prompts_comp   = cond[2]['cls_comp_prompts']   + cond[2]['cls_comp_prompts']
+            # Images generated both under subj_comp_prompts and subj_prompt_mix_comps 
+            # are subject to the CLIP text-image loss.
+            # cls_comp_prompts is still used to compute the CLIP text-image loss on
+            # images guided by the mixed embeddings (as the composition is the same).
+            clip_images_code  = torch.cat([ model_outputs[1] * img_mask, 
+                                            model_outputs[3] * img_mask ], dim=0)
+            # The first  cls_comp_prompts is for subj_comps_emb, and 
+            # the second cls_comp_prompts is for subj_comps_emb_mix.                
+            clip_prompts_comp   = cond[2]['cls_comp_prompts']   + cond[2]['cls_comp_prompts']
 
-                # Compositional images are also subject to the single-prompt CLIP loss,
-                # as they must contain the subject. This is to reduce the chance that
-                # the output image only contains elements other than the subject.
-                clip_prompts_single = cond[2]['cls_single_prompts'] + cond[2]['cls_single_prompts']
-                if len(clip_images_code) != len(clip_prompts_comp) or len(clip_images_code) != len(clip_prompts_single):
-                    breakpoint()
+            # Compositional images are also subject to the single-prompt CLIP loss,
+            # as they must contain the subject. This is to reduce the chance that
+            # the output image only contains elements other than the subject.
+            clip_prompts_single = cond[2]['cls_single_prompts'] + cond[2]['cls_single_prompts']
+            if len(clip_images_code) != len(clip_prompts_comp) or len(clip_images_code) != len(clip_prompts_single):
+                breakpoint()
 
         # Otherwise, ordinary image reconstruction loss. No need to split the model output.
 
@@ -1679,34 +1678,34 @@ class LatentDiffusion(DDPM):
             loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
             # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
 
-        if self.do_clip_filtering:
-            #print(clip_prompts_comp)
-            """ 
-            if self.clip_loss_weight > 0:
-                clip_images = self.differentiable_decode_first_stage(clip_images_code)
-                clip_images_np = clip_images.detach().cpu().numpy()
-                # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
-                # to keep the loss positive.
-                # txt_to_img_similarity() returns the pairwise similarities between the prompts and the images.
-                # So if there are N prompts and N images, the returned tensor has shape (N, N).
-                # We should only consider diagonal elements, assuming the prompts are 
-                # matched with the images in order. Therefore, it's buggy to take the mean of the losses.
-                # In our particular setting of batch size = 2 (HALF_BS = 1), clip_prompts_comp consists of 
-                # two identical cls_comp_prompts, which leads to the correct results, but we better 
-                # fix it for larger batch sizes. 
+        #print(clip_prompts_comp)
+        """ 
+        if self.clip_loss_weight > 0:
+            clip_images = self.differentiable_decode_first_stage(clip_images_code)
+            clip_images_np = clip_images.detach().cpu().numpy()
+            # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
+            # to keep the loss positive.
+            # txt_to_img_similarity() returns the pairwise similarities between the prompts and the images.
+            # So if there are N prompts and N images, the returned tensor has shape (N, N).
+            # We should only consider diagonal elements, assuming the prompts are 
+            # matched with the images in order. Therefore, it's buggy to take the mean of the losses.
+            # In our particular setting of batch size = 2 (HALF_BS = 1), clip_prompts_comp consists of 
+            # two identical cls_comp_prompts, which leads to the correct results, but we better 
+            # fix it for larger batch sizes. 
 
-                # txt_to_img_similarity() uses a preprocesser that assumes the input images 
-                # are a tensor with mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0].
-                # (not really assume the images are with this mean and std; 
-                # it's just as a way to specify the transformation parameters.)
-                # In effect, it transforms clip_images by (clip_images + 1) / 2,
-                # which is consistent with the output transformation in stable_txt2img.py.
-                losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, 
-                                                                                     reduction='diag')
-                #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
-                #                                                                     reduction='diag')
-            """
-            
+            # txt_to_img_similarity() uses a preprocesser that assumes the input images 
+            # are a tensor with mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0].
+            # (not really assume the images are with this mean and std; 
+            # it's just as a way to specify the transformation parameters.)
+            # In effect, it transforms clip_images by (clip_images + 1) / 2,
+            # which is consistent with the output transformation in stable_txt2img.py.
+            losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, 
+                                                                                    reduction='diag')
+            #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
+            #                                                                     reduction='diag')
+        """
+        
+        if self.calc_clip_loss:
             with torch.no_grad():
                 clip_images = self.decode_first_stage(clip_images_code)
                 clip_images_np = clip_images.detach().cpu().numpy()
@@ -1763,10 +1762,13 @@ class LatentDiffusion(DDPM):
             #        clip_losses, teachable_frac*100))
             loss_dict.update({f'{prefix}/teachable_frac': teachable_frac})
 
+            if not self.filter_with_clip_loss:
+                # Still compute the loss metrics. 
+                # But no real filtering, instead just teach on all instances.
+                is_teachable = True
         else:
-            # Just don't decide whether it's teachable.
             is_teachable = True
-
+            
         if self.do_comp_prompt_mix_reg and is_teachable:
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
             # Only regularize on intermediate features, i.e., intermediate features generated 
