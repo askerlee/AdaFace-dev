@@ -39,7 +39,7 @@ model:
     cls_prompt_mix_weight_min:  0.1
     # CLIP loss usually hurts the subject authenticity.
     # clip_loss_weight:      0 #1e-5
-    filter_with_clip_loss: True
+    filter_with_clip_loss: False
     # prompt_mix_scheme: 'mix_hijk' or 'mix_concat_cls'
     prompt_mix_scheme:     'mix_hijk'
     use_fp_trick:          True

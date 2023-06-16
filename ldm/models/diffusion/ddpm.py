@@ -127,7 +127,6 @@ class DDPM(pl.LightningModule):
         self.do_static_prompt_delta_reg     = False
         self.do_ada_prompt_delta_reg        = False
         self.do_comp_prompt_mix_reg         = False
-        self.do_clip_eval                   = False
         # Is this for DreamBooth training? Will be overwritten in LatentDiffusion ctor.
         self.is_dreambooth                  = False
 
@@ -457,7 +456,7 @@ class DDPM(pl.LightningModule):
         interm_reg_probs = np.array(interm_reg_probs) / np.sum(interm_reg_probs)
         self.do_ada_prompt_delta_reg  = False
         self.do_comp_prompt_mix_reg   = False
-        self.do_clip_eval             = False
+        self.do_clip_filtering        = False
 
         # If N_INTERM_REGS == 0, then no intermittent regularizations, set the two flags to False.
         if N_INTERM_REGS > 0 and self.composition_regs_iter_gap > 0 \
@@ -478,7 +477,7 @@ class DDPM(pl.LightningModule):
                 self.do_comp_prompt_mix_reg   = True
                 self.do_ada_prompt_delta_reg  = True
 
-            self.do_clip_eval = self.filter_with_clip_loss
+            self.do_clip_filtering = self.filter_with_clip_loss
 
         # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
         if self.scheduler is not None:
@@ -1598,7 +1597,7 @@ class LatentDiffusion(DDPM):
             # LINK #shared_step
             x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=model_output)
             model_outputs = torch.split(x_recon, model_output.shape[0] // 4, dim=0)
-            if self.do_clip_eval:
+            if self.do_clip_filtering:
                 # Images generated both under subj_comp_prompts and subj_prompt_mix_comps 
                 # are subject to the CLIP text-image loss.
                 # cls_comp_prompts is still used to compute the CLIP text-image loss on
@@ -1679,7 +1678,7 @@ class LatentDiffusion(DDPM):
             loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
             # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
 
-        if self.do_clip_eval:
+        if self.do_clip_filtering:
             #print(clip_prompts_comp)
             """ 
             if self.clip_loss_weight > 0:
