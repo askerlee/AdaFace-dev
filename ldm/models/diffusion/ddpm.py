@@ -230,19 +230,16 @@ class DDPM(pl.LightningModule):
     def create_clip_evaluator(self, device, use_noised_clip=False):
         self.use_noised_clip = use_noised_clip
         
-        if self.filter_with_clip_loss:
-            if self.use_noised_clip:
-                self.clip_evaluator = NoisedCLIPEvaluator(device=device)
-                for param in self.clip_evaluator.model.image_encoder.parameters():
-                    param.requires_grad = False
-                for param in self.clip_evaluator.model.text_encoder.parameters():
-                    param.requires_grad = False
-            else:
-                self.clip_evaluator = CLIPEvaluator(device=device)
-                for param in self.clip_evaluator.model.parameters():
-                    param.requires_grad = False
+        if self.use_noised_clip:
+            self.clip_evaluator = NoisedCLIPEvaluator(device=device)
+            for param in self.clip_evaluator.model.image_encoder.parameters():
+                param.requires_grad = False
+            for param in self.clip_evaluator.model.text_encoder.parameters():
+                param.requires_grad = False
         else:
-            self.clip_evaluator = None
+            self.clip_evaluator = CLIPEvaluator(device=device)
+            for param in self.clip_evaluator.model.parameters():
+                param.requires_grad = False
 
         self.num_total_clip_iters = 0
         self.num_teachable_iters = 0
