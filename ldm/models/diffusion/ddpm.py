@@ -95,7 +95,6 @@ class DDPM(pl.LightningModule):
                  composition_prompt_mix_reg_weight=0.,
                  cls_prompt_mix_weight_max=0.3,
                  cls_prompt_mix_weight_min=0.1,
-                 clip_loss_weight=0,
                  filter_with_clip_loss=False,
                  prompt_mix_scheme='mix_hijk',       # 'mix_hijk' or 'mix_concat_cls'
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
@@ -121,7 +120,6 @@ class DDPM(pl.LightningModule):
         self.composition_prompt_mix_reg_weight = composition_prompt_mix_reg_weight
         self.cls_prompt_mix_weight_max      = cls_prompt_mix_weight_max
         self.cls_prompt_mix_weight_min      = cls_prompt_mix_weight_min
-        self.clip_loss_weight               = clip_loss_weight
         self.filter_with_clip_loss          = filter_with_clip_loss
         self.prompt_mix_scheme              = prompt_mix_scheme
         self.use_fp_trick                   = use_fp_trick
@@ -232,7 +230,7 @@ class DDPM(pl.LightningModule):
     def create_clip_evaluator(self, device, use_noised_clip=False):
         self.use_noised_clip = use_noised_clip
         
-        if self.clip_loss_weight > 0 or self.filter_with_clip_loss:
+        if self.filter_with_clip_loss:
             if self.use_noised_clip:
                 self.clip_evaluator = NoisedCLIPEvaluator(device=device)
                 for param in self.clip_evaluator.model.image_encoder.parameters():
@@ -480,8 +478,7 @@ class DDPM(pl.LightningModule):
                 self.do_comp_prompt_mix_reg   = True
                 self.do_ada_prompt_delta_reg  = True
 
-            # In reg iters we always do clip loss.
-            self.do_clip_eval = (self.clip_loss_weight > 0) or self.filter_with_clip_loss
+            self.do_clip_eval = self.filter_with_clip_loss
 
         # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
         if self.scheduler is not None:
@@ -1684,6 +1681,7 @@ class LatentDiffusion(DDPM):
 
         if self.do_clip_eval:
             #print(clip_prompts_comp)
+            """ 
             if self.clip_loss_weight > 0:
                 clip_images = self.differentiable_decode_first_stage(clip_images_code)
                 clip_images_np = clip_images.detach().cpu().numpy()
@@ -1707,15 +1705,16 @@ class LatentDiffusion(DDPM):
                                                                                      reduction='diag')
                 #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
                 #                                                                     reduction='diag')
-            else:
-                with torch.no_grad():
-                    clip_images = self.decode_first_stage(clip_images_code)
-                    clip_images_np = clip_images.detach().cpu().numpy()
+            """
+            
+            with torch.no_grad():
+                clip_images = self.decode_first_stage(clip_images_code)
+                clip_images_np = clip_images.detach().cpu().numpy()
 
-                    losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
-                                                                                         reduction='diag')
-                    #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
-                    #                                                                     reduction='diag')
+                losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
+                                                                                        reduction='diag')
+                #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
+                #                                                                     reduction='diag')
 
             self.cache_and_log_generations(clip_images_np)
 
@@ -1735,17 +1734,22 @@ class LatentDiffusion(DDPM):
             # clip loss is only applied to the subject composition instance. 
             are_output_qualified_firsthalf = are_output_qualified.clone()
             are_output_qualified_firsthalf[HALF_BS:] = False
+            
+            """             
+            # DO NOT use CLIP loss by setting clip_loss_weight > 0. It hurts the performance.
             if self.clip_loss_weight > 0:
                 # Even if no image is qualified, we still compute the loss with zero weight,
                 # to release the computation graph and avoid memory leak.
                 loss_clip = (losses_clip * are_output_qualified_firsthalf).sum() \
                                 / (are_output_qualified_firsthalf.sum() + 0.001)
-                loss += (self.clip_loss_weight * loss_clip)
+                loss += (self.clip_loss_weight * loss_clip) 
+            """
 
             # Hard-code here. Suppose HALF_BS=1, i.e., two instances are in clip_images.
             # So the teacher instance is always indexed by 1.
             # is_teachable: The teacher instance is only teachable if it's qualified, and the 
             # compositional clip loss is smaller than the student.
+
             self.cls_subj_clip_margin = 0.006
             is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_comp[0] - self.cls_subj_clip_margin
 
