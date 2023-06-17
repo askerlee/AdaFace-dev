@@ -217,7 +217,11 @@ def parse_args():
     parser.add_argument("--ref_prompt", type=str, default=None,
                         help="a class-level reference prompt to be mixed with the subject prompt "
                              "(if None, then don't mix with reference prompt)")
-    parser.add_argument("--ref_prompt_mix_weight", type=float, default=0,
+    parser.add_argument("--prompt_mix_scheme", type=str, default=argparse.SUPPRESS, 
+                        choices=['mix_hijk', 'mix_concat_cls'],
+                        help="How to mix the subject prompt with the reference prompt")
+    
+    parser.add_argument("--prompt_mix_weight", type=float, default=0,
                         help="Weight of the reference prompt to be mixed with the subject prompt (0 to disable)")
         
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
@@ -285,7 +289,7 @@ def main(opt):
     torch.backends.cuda.matmul.allow_tf32 = True
 
     config = OmegaConf.load(f"{opt.config}")
-
+    
     model  = load_model_from_config(config, f"{opt.ckpt}")
     if opt.embedding_paths is not None:
         model.embedding_manager.load(opt.embedding_paths)
@@ -409,6 +413,15 @@ def main(opt):
         start_code = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
     use_layerwise_embedding = config.model.params.use_layerwise_embedding
+    if hasattr(opt, 'prompt_mix_scheme'):
+        if opt.prompt_mix_scheme == 'mix_hijk':
+            prompt_mix_weight = 1.0
+        elif opt.prompt_mix_scheme == 'mix_concat_cls':
+            prompt_mix_weight = opt.prompt_mix_weight
+        else:
+            raise NotImplementedError
+    else:
+        prompt_mix_weight = 0
 
     use_ema_model = ('emaonly' in opt.ckpt)
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
@@ -427,9 +440,9 @@ def main(opt):
                         print(f"\n{p_i+1}/{prompt_block_count}", prompts[0])
                         uc = None
 
-                        # It's legal that ref_prompt_mix_weight < 0, in which case 
+                        # It's legal that prompt_mix_weight < 0, in which case 
                         # we enhance the expression of the subject.
-                        if opt.ref_prompt_mix_weight != 0:
+                        if prompt_mix_weight != 0:
                             # If ref_prompt is None (default), then ref_c is None, i.e., no mixing.
                             ref_prompt = batched_ref_prompts[p_i]
                             if ref_prompt is not None:
@@ -457,7 +470,7 @@ def main(opt):
                         c = model.get_learned_conditioning(prompts)
                         if ref_c is not None:
                             # c / ref_c are tuples of (cond, prompts, extra_info).
-                            c0_mix_all_layers = mix_embeddings(c[0], ref_c[0], opt.ref_prompt_mix_weight, 
+                            c0_mix_all_layers = mix_embeddings(c[0], ref_c[0], prompt_mix_weight, 
                                                                mix_scheme='adeltaconcat')
 
                             if use_layerwise_embedding:

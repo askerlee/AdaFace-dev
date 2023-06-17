@@ -96,7 +96,11 @@ def parse_args():
                         help="Whether the generated samples are human faces",
     )    
 
-    parser.add_argument("--ref_prompt_mix_weight", type=float, default=0,
+    parser.add_argument("--prompt_mix_scheme", type=str, default=argparse.SUPPRESS, 
+                        choices=['mix_hijk', 'mix_concat_cls'],
+                        help="How to mix the subject prompt with the reference prompt")
+
+    parser.add_argument("--prompt_mix_weight", type=float, default=0,
                         help="Weight of the reference prompt to be mixed with the subject prompt")  
                                                                         
     args = parser.parse_args()
@@ -309,7 +313,7 @@ if __name__ == "__main__":
             command_line += f" --n_samples {args.n_samples} --indiv_subdir {indiv_subdir}"
             command_line += f" --prompt \"{prompt}\" --class_prompt \"{class_long_prompt}\""
 
-            if args.ref_prompt_mix_weight != 0:
+            if hasattr(args, 'prompt_mix_scheme'):
                 # Use the class_short_prompt as the reference prompt, 
                 # as it's tokenwise aligned with the subject prompt.
                 command_line += f" --ref_prompt \"{class_short_prompt}\""
@@ -317,10 +321,10 @@ if __name__ == "__main__":
         if args.scores_csv is not None:
             command_line += f" --scores_csv {args.scores_csv}"
 
-        # ref_prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
-        if args.ref_prompt_mix_weight != 0:
-            # Only specify the flag here. The actual reference prompt will be read from the prompt file.
-            command_line += f" --ref_prompt_mix_weight {args.ref_prompt_mix_weight}"
+        # prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
+        if hasattr(args, 'prompt_mix_scheme'):
+            # Only specify the flags here. The actual reference prompt will be read from the prompt file.
+            command_line += f" --prompt_mix_scheme {args.prompt_mix_scheme} --prompt_mix_weight {args.prompt_mix_weight}"
             
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"

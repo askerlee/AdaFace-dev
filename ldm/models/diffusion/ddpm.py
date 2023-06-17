@@ -1277,12 +1277,17 @@ class LatentDiffusion(DDPM):
                         c_in2 = subj_single_prompts + subj_comp_prompts + cls_single_prompts + subj_comp_prompts
                         #print(c_in2)
 
-                        # mix_weight_scale borrows the weight scale of the LR scheduler.
-                        # Near the end of training, c2_mix_weight should be 1/4 of cls_prompt_mix_weight_max.
-                        # If cls_prompt_mix_weight_max=0.3, then c2_mix_weight changes as 0 -> 0.3 -> 0.075.
-                        c2_mix_weight = self.cls_prompt_mix_weight_max * self.mix_weight_scale
-                        # the mix weight is at least 0.1.
-                        c2_mix_weight = max(c2_mix_weight, self.cls_prompt_mix_weight_min)
+                        if self.prompt_mix_scheme == 'mix_concat_cls':
+                            # mix_weight_scale borrows the weight scale of the LR scheduler.
+                            # Near the end of training, c2_mix_weight should be 1/4 of cls_prompt_mix_weight_max.
+                            # If cls_prompt_mix_weight_max=0.3, then c2_mix_weight changes as 0 -> 0.3 -> 0.075.
+                            c2_mix_weight = self.cls_prompt_mix_weight_max * self.mix_weight_scale
+                            # the mix weight is at least 0.1.
+                            c2_mix_weight = max(c2_mix_weight, self.cls_prompt_mix_weight_min)
+                        else:
+                            # For 'hijk', changing mix weight has no effect. So fix it as 1.
+                            c2_mix_weight = 1.
+
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed (concatenated),
                         # and the token number will be the double of subj_comps_emb.
