@@ -1711,7 +1711,7 @@ class LatentDiffusion(DDPM):
         if self.calc_clip_loss:
             with torch.no_grad():
                 clip_images = self.decode_first_stage(clip_images_code)
-                clip_images_np = clip_images.detach().cpu().numpy()
+                clip_images_np = clip_images.cpu().numpy()
 
                 losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
                                                                                         reduction='diag')
@@ -1721,11 +1721,10 @@ class LatentDiffusion(DDPM):
             self.cache_and_log_generations(clip_images_np)
 
             losses_clip = losses_clip_comp #* 1.3 - losses_clip_single * 0.3
-            # loss_dict is only used for logging. So we can pass 
-            # the unfiltered detached loss.
+            # loss_dict is only used for logging. So we can pass the unfiltered detached loss.
             losses_clip_subj_comp, losses_clip_cls_comp = losses_clip_comp.split(losses_clip_comp.shape[0] // 2, dim=0)
-            loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean().detach()})
-            loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_cls_comp.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean()})
+            loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_cls_comp.mean()})
 
             if self.use_noised_clip:
                 clip_loss_thres = 0.33
@@ -1799,14 +1798,22 @@ class LatentDiffusion(DDPM):
             # Conditioning layers are 7, 8, 12, 16, 17. All the 4 layers have 1280 channels.
             # But intermediate layers also contribute to distillation. They have small weights.
             # Layer 16 has strong face semantics, so it is given a small weight.
-            distill_layer_weights = { 7:  1., 8: 1.,   
-                                      #9:  0.5, 10: 0.5, 11: 0.5, 
-                                      12: 0.5, 
-                                      16: 0.25, 17: 0.25,
-                                    }
+            feat_distill_layer_weights = { 7:  1., 8: 1.,   
+                                          #9:  0.5, 10: 0.5, 11: 0.5, 
+                                          12: 0.5, 
+                                          # 16: 0.25, 17: 0.25,
+                                         }
 
-            distill_weight_sum = np.sum(list(distill_layer_weights.values()))
-            distill_layer_weights = { k: v / distill_weight_sum for k, v in distill_layer_weights.items() }
+            attn_distill_layer_weights = { 7:  1., 8: 1.,
+                                           #9:  0.5, 10: 0.5, 11: 0.5,
+                                           12: 0.5,
+                                           16: 0.25, 17: 0.25,
+                                         }
+            
+            feat_distill_layer_weight_sum = np.sum(list(feat_distill_layer_weights.values()))
+            feat_distill_layer_weights = { k: v / feat_distill_layer_weight_sum for k, v in feat_distill_layer_weights.items() }
+            attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
+            attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
 
             use_subj_attn_as_spatial_weights = True
             # Set to 0 to disable distillation on attention weights of the subject.
@@ -1846,9 +1853,9 @@ class LatentDiffusion(DDPM):
                 placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
 
             for unet_layer_idx, unet_feat in unet_feats.items():
-                if unet_layer_idx not in distill_layer_weights:
+                if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
                     continue
-                distill_layer_weight = distill_layer_weights[unet_layer_idx]
+
                 # each is [1, 1280, 16, 16]
                 feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
@@ -1868,11 +1875,16 @@ class LatentDiffusion(DDPM):
                     subj_attn_mix_single,  subj_attn_mix_comps \
                         = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)
                     
-                    if distill_subj_attn_weight > 0:
+                    if (unet_layer_idx in attn_distill_layer_weights) and (distill_subj_attn_weight > 0):
+                        attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
                         attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
                         attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
                         loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, first_n_dims_to_flatten=2)
-                        loss_subj_attn_distill += loss_layer_subj_attn_distill * distill_layer_weight
+                        loss_subj_attn_distill += loss_layer_subj_attn_distill * attn_distill_layer_weight
+
+                    if unet_layer_idx not in feat_distill_layer_weights:
+                        continue
+                    feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
 
                     feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                         = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
@@ -1939,7 +1951,7 @@ class LatentDiffusion(DDPM):
                 loss_layer_feat_distill = (self.get_loss(feat_subj_delta, feat_mix_delta, mean=False)).mean()
                 
                 # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
-                loss_feat_distill += loss_layer_feat_distill * distill_layer_weight
+                loss_feat_distill += loss_layer_feat_distill * feat_distill_layer_weight
 
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_distill': loss_subj_attn_distill.detach()})
