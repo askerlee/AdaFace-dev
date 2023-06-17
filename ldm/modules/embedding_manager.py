@@ -1130,10 +1130,14 @@ class EmbeddingManager(nn.Module):
         # should be boosted proportionally to prompt_delta_reg_iter_gap. 
         # Divide it by 4 to reduce the proportion of ada emb loss relative to 
         # static emb loss in the total loss.
+
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_layers
+            # if reg_layer_indices is None, then regularize all layers.
+            reg_layer_indices = [4, 5, 6, 7, 8] 
         else:
             num_embed_layers = 1
+            reg_layer_indices = None
 
         # num_unet_layers = 16. 
         # If do_ada_prompt_delta_reg, then static_embeddings: [64, 77, 768]. 
@@ -1142,7 +1146,10 @@ class EmbeddingManager(nn.Module):
         # subj_single, subj_comp, cls_single, cls_comp.
         BS = static_embeddings.shape[0] // (4 * num_embed_layers)
         # static_embeddings: [64, 77, 768] => [4, 16, 77, 768]
-        static_embeddings = static_embeddings.view(BS * 4, -1, *static_embeddings.shape[1:])
+        static_embeddings = static_embeddings.view(BS * 4, num_embed_layers, *static_embeddings.shape[1:])
+        if reg_layer_indices is not None:
+            static_embeddings = static_embeddings[:, reg_layer_indices]
+
         # Each is [2, 16, 77, 768]
         static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
                 static_embeddings.split(BS, dim=0)
@@ -1184,6 +1191,9 @@ class EmbeddingManager(nn.Module):
 
             # ada_embeddings: [4, 16, 77, 768]
             ada_embeddings = torch.stack(self.ada_embeddings, dim=1)
+            if reg_layer_indices is not None:
+                ada_embeddings = ada_embeddings[:, reg_layer_indices]   
+                         
             # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
             # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
             # the subject token.

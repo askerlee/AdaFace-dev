@@ -758,7 +758,7 @@ class UNetModel(nn.Module):
                 return None
             emb_idx = layer_idx2emb_idx[layer_idx]
             layer_static_context = context[emb_idx]
-            hijk_layer_indices = [7, 8, 12, 16, 17, 18]
+            hijk_layer_indices = [7, 8, 12, 16, 17]
 
             if use_ada_context:
                 ada_embedder   = extra_info['ada_embedder']

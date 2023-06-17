@@ -1329,9 +1329,9 @@ class LatentDiffusion(DDPM):
                             subj_single_emb_mix_all_layers = grad_scaler(subj_single_emb_mix_all_layers)
 
                         if self.use_layerwise_embedding:
-                            # 4, 5, 6, 7, 8, 9 correspond to original layer indices 7, 8, 12, 16, 17, 18
+                            # 4, 5, 6, 7, 8 correspond to original layer indices 7, 8, 12, 16, 17
                             # (same as used in computing mixing loss)
-                            sync_layer_indices = [4, 5, 6, 7, 8, 9]
+                            sync_layer_indices = [4, 5, 6, 7, 8]
                             layer_mask = torch.zeros_like(subj_comps_emb_mix_all_layers).reshape(-1, N_LAYERS, *subj_comps_emb_mix_all_layers.shape[1:])
                             layer_mask[:, sync_layer_indices] = 1
                             layer_mask = layer_mask.reshape(-1, *subj_comps_emb_mix_all_layers.shape[1:])
@@ -1788,20 +1788,19 @@ class LatentDiffusion(DDPM):
             unet_feats = cond[2]['unet_feats']
             # unet_attns is a dict as: layer_idx -> attn_mat. 
             # It contains the 4 specified conditioned layers of UNet attentions, 
-            # i.e., layers 7, 8, 12, 16.
+            # i.e., layers 7, 8, 12, 16, 17.
             unet_attns = cond[2]['unet_attns']
 
             # Discard top layers and the first few bottom layers from distillation.
             # distill_layer_weights: relative weight of each distillation layer. 
             # distill_layer_weights are normalized using distill_overall_weight.
-            # Conditioning layers are 7, 8, 12, 16. All the 4 layers have 1280 channels.
+            # Conditioning layers are 7, 8, 12, 16, 17. All the 4 layers have 1280 channels.
             # But intermediate layers also contribute to distillation. They have small weights.
             # Layer 16 has strong face semantics, so it is given a small weight.
             distill_layer_weights = { 7:  1., 8: 1.,   
                                       #9:  0.5, 10: 0.5, 11: 0.5, 
                                       12: 0.5, 
-                                      #13: 0.25, 14: 0.25, 15: 0.25, 
-                                      16: 0.25, # 17: 0.25, 18: 0.25
+                                      16: 0.25, 17: 0.25,
                                     }
 
             distill_overall_weight = 1. / np.sum(list(distill_layer_weights.values()))

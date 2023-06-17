@@ -474,9 +474,9 @@ def main(opt):
                                                                mix_scheme='adeltaconcat')
 
                             if use_layerwise_embedding:
-                                # 4, 5, 6, 7 correspond to original layer indices 7, 8, 12, 16 
+                                # 4, 5, 6, 7, 8 correspond to original layer indices 7, 8, 12, 16, 17
                                 # (same as used in computing mixing loss)
-                                sync_layer_indices = [4, 5, 6, 7]
+                                sync_layer_indices = [4, 5, 6, 7, 8]
                                 # [64, 154, 768] => [4, 16, 154, 768] => assign 1s => [64, 154, 768]
                                 layer_mask = torch.zeros_like(c0_mix_all_layers).reshape(-1, 16, *c0_mix_all_layers.shape[1:])
                                 layer_mask[:, sync_layer_indices] = 1
