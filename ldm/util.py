@@ -375,7 +375,7 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     # The 8 in dim 2 is the 8 transformer heads.
     # The 256 in dim 3 is the number of image tokens in the current layer.
     # We cannot simply unsqueeze(0) since BS=1 is just a special case for this function.
-    flat_attn = flat_attn.reshape(BS, -1, *flat_attn.shape[1:])
+    flat_attn = flat_attn.detach().reshape(BS, -1, *flat_attn.shape[1:])
     # [1, 2, 8, 256] => max/mean => [1, 256] => [1, 16, 16].
     # Un-flatten the attention map to the spatial dimensions, so as to
     # apply them as weights.

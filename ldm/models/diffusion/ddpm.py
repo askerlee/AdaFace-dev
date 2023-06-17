@@ -24,7 +24,8 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, mix_embeddings, \
                        ortho_subtract, calc_stats, rand_like, GradientScaler, \
-                       calc_chan_locality, convert_attn_to_spatial_weight, save_grid
+                       calc_chan_locality, convert_attn_to_spatial_weight, calc_delta_loss, \
+                       save_grid
 
 from ldm.modules.ema import LitEma
 from ldm.modules.sophia import SophiaG
@@ -1781,7 +1782,8 @@ class LatentDiffusion(DDPM):
             # under subj_comp_prompts should satisfy the delta loss constraint:
             # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
             # F(subj_single_prompts) - F(cls_single_prompts)
-            loss_prompt_mix_reg = 0
+            loss_subj_attn_distill = 0
+            loss_feat_distill      = 0
 
             # unet_feats is a dict as: layer_idx -> unet_feat. 
             # It contains all the intermediate 25 layers of UNet features.
@@ -1803,9 +1805,12 @@ class LatentDiffusion(DDPM):
                                       16: 0.25, 17: 0.25,
                                     }
 
-            distill_overall_weight = 1. / np.sum(list(distill_layer_weights.values()))
+            distill_weight_sum = np.sum(list(distill_layer_weights.values()))
+            distill_layer_weights = { k: v / distill_weight_sum for k, v in distill_layer_weights.items() }
 
             use_subj_attn_as_spatial_weights = True
+            # Set to 0 to disable distillation on attention weights of the subject.
+            distill_subj_attn_weight = 0.1
 
             if use_subj_attn_as_spatial_weights:
                 orig_placeholder_ind_B, orig_placeholder_ind_T = self.embedding_manager.placeholder_indices
@@ -1852,7 +1857,7 @@ class LatentDiffusion(DDPM):
                     # [4, 8, 256, 154] / [4, 8, 64, 154] =>
                     # [4, 154, 8, 256] / [4, 154, 8, 64]
                     # We don't need BP through attention into UNet.
-                    attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2).detach()
+                    attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
                     # subj_attn: [8, 8, 256] / [8, 8, 64]
                     subj_attn = attn_mat[placeholder_indices]
                     # subj_attn_subj_single, ...: [2, 8, 256].
@@ -1863,9 +1868,17 @@ class LatentDiffusion(DDPM):
                     subj_attn_mix_single,  subj_attn_mix_comps \
                         = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)
                     
+                    if distill_subj_attn_weight > 0:
+                        attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
+                        attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
+                        loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, first_n_dims_to_flatten=2)
+                        loss_subj_attn_distill += loss_layer_subj_attn_distill
+
                     feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                         = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                     
+                    # convert_attn_to_spatial_weight() will detach attention weights to 
+                    # avoid BP through attention.
                     spatial_weight_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
                     spatial_weight_subj_comps  = convert_attn_to_spatial_weight(subj_attn_subj_comps,  HALF_BS, feat_subj_comps.shape[2:])
                     spatial_weight_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
@@ -1923,13 +1936,16 @@ class LatentDiffusion(DDPM):
                 # the single embeddings, as the former should be optimized to look good by itself,
                 # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
                 # and 2) the embeddings are amendable to composition.
-                loss_layer_prompt_mix_reg = (self.get_loss(feat_subj_delta, feat_mix_delta, mean=False)).mean()
+                loss_layer_feat_distill = (self.get_loss(feat_subj_delta, feat_mix_delta, mean=False)).mean()
                 
                 # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
-                loss_prompt_mix_reg += loss_layer_prompt_mix_reg * distill_layer_weight * distill_overall_weight
+                loss_feat_distill += loss_layer_feat_distill
 
-            # logvar is all zero. So no need to do "loss_prompt_mix_reg / exp(logvar_t) + logvar_t".
-            loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_prompt_mix_reg.detach()})
+            loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
+            loss_dict.update({f'{prefix}/loss_subj_attn_distill': loss_subj_attn_distill.detach()})
+            loss_prompt_mix_reg = (loss_feat_distill + loss_subj_attn_distill * distill_subj_attn_weight) \
+                                    * distill_layer_weight
+
             loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.mix_weight_scale
             
             self.embedding_manager.placeholder_indices = None
