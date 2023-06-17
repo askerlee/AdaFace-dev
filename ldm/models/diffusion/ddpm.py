@@ -1872,7 +1872,7 @@ class LatentDiffusion(DDPM):
                         attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
                         attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
                         loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, first_n_dims_to_flatten=2)
-                        loss_subj_attn_distill += loss_layer_subj_attn_distill
+                        loss_subj_attn_distill += loss_layer_subj_attn_distill * distill_layer_weight
 
                     feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                         = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
@@ -1939,13 +1939,12 @@ class LatentDiffusion(DDPM):
                 loss_layer_feat_distill = (self.get_loss(feat_subj_delta, feat_mix_delta, mean=False)).mean()
                 
                 # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
-                loss_feat_distill += loss_layer_feat_distill
+                loss_feat_distill += loss_layer_feat_distill * distill_layer_weight
 
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_distill': loss_subj_attn_distill.detach()})
-            loss_prompt_mix_reg = (loss_feat_distill + loss_subj_attn_distill * distill_subj_attn_weight) \
-                                    * distill_layer_weight
-
+            loss_prompt_mix_reg = loss_feat_distill + loss_subj_attn_distill * distill_subj_attn_weight
+                                    
             loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.mix_weight_scale
             
             self.embedding_manager.placeholder_indices = None
