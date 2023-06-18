@@ -255,8 +255,6 @@ def get_parser(**parser_kwargs):
                         help="Whether to use the 'face portrait' trick for the subject")
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
-    parser.add_argument("--mix_range", nargs=2, type=float, default=argparse.SUPPRESS,
-                        help="Range of prompt mixing weights")
     # if --use_noised_clip not specified, then use_noised_clip=False.
     parser.add_argument("--use_noised_clip", nargs="?", type=str2bool, const=True, default=False,
                         help="Whether to use noised CLIP")
@@ -741,10 +739,6 @@ if __name__ == "__main__":
 
         config.data.params.train.params.num_compositions_per_image = opt.num_compositions_per_image
         config.data.params.train.params.rand_scaling_range = (opt.min_rand_scaling, opt.max_rand_scaling)
-
-        if hasattr(opt, 'mix_range'):
-            config.model.params.cls_prompt_mix_weight_max = opt.mix_range[1]
-            config.model.params.cls_prompt_mix_weight_min = opt.mix_range[0]
             
         if opt.layerwise_lora_rank_token_ratio > 0:
             config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \

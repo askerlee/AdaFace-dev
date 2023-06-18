@@ -18,8 +18,6 @@ model:
     use_ema: False
     use_layerwise_embedding: True
     use_ada_embedding: True
-    # prompt_mix_scheme: 'mix_hijk' or 'mix_concat_cls'
-    prompt_mix_scheme:     'mix_hijk'
         
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager

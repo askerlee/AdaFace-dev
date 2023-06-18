@@ -34,14 +34,9 @@ model:
     prompt_delta_reg_weight:       1e-4
     # typical prompt mix reg loss: 0.2, * weight -> 2e-5.
     composition_prompt_mix_reg_weight:  0.0001
-    # cls_prompt_mix_weight_min = cls_prompt_mix_weight_max * 0.25 (lr_min) = 0.075.
-    cls_prompt_mix_weight_max:  0.3
-    cls_prompt_mix_weight_min:  0.1
     # CLIP loss usually hurts the subject authenticity.
     # clip_loss_weight:      0 #1e-5
     filter_with_clip_loss: True
-    # prompt_mix_scheme: 'mix_hijk' or 'mix_concat_cls'
-    prompt_mix_scheme:     'mix_hijk'
     use_fp_trick:          True
 
     optimizer_type: AdamW     # sophia

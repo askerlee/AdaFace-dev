@@ -94,10 +94,7 @@ class DDPM(pl.LightningModule):
                  composition_regs_iter_gap=-1,
                  prompt_delta_reg_weight=0.,
                  composition_prompt_mix_reg_weight=0.,
-                 cls_prompt_mix_weight_max=0.3,
-                 cls_prompt_mix_weight_min=0.1,
                  filter_with_clip_loss=False,
-                 prompt_mix_scheme='mix_hijk',       # 'mix_hijk' or 'mix_concat_cls'
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
                  use_fp_trick=True,       
                  ):
@@ -114,15 +111,13 @@ class DDPM(pl.LightningModule):
         self.use_positional_encodings = use_positional_encodings
 
         self.use_layerwise_embedding = use_layerwise_embedding
-        self.use_ada_embedding = use_layerwise_embedding and use_ada_embedding
+        self.use_ada_embedding = (use_layerwise_embedding and use_ada_embedding)
 
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.prompt_delta_reg_weight         = prompt_delta_reg_weight
         self.composition_prompt_mix_reg_weight = composition_prompt_mix_reg_weight
-        self.cls_prompt_mix_weight_max      = cls_prompt_mix_weight_max
-        self.cls_prompt_mix_weight_min      = cls_prompt_mix_weight_min
         self.filter_with_clip_loss          = filter_with_clip_loss
-        self.prompt_mix_scheme              = prompt_mix_scheme
+        self.prompt_mix_scheme              = 'mix_hijk'
         self.use_fp_trick                   = use_fp_trick
 
         self.do_static_prompt_delta_reg     = False
@@ -481,10 +476,10 @@ class DDPM(pl.LightningModule):
         # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
         if self.scheduler is not None:
             lr_scale = self.scheduler.get_last_lr()[0] / self.scheduler.base_lrs[0]
-            self.mix_weight_scale = lr_scale
+            self.distill_loss_scale = lr_scale
             # print(f'lr_lambda: {lr_lambda}')
         else:
-            self.mix_weight_scale = 1.0
+            self.distill_loss_scale = 1.0
 
         if self.is_dreambooth:
             # DreamBooth uses ConcatDataset to make batch a tuple of train_batch and reg_batch.
@@ -1278,17 +1273,6 @@ class LatentDiffusion(DDPM):
                         c_in2 = subj_single_prompts + subj_comp_prompts + cls_single_prompts + subj_comp_prompts
                         #print(c_in2)
 
-                        if self.prompt_mix_scheme == 'mix_concat_cls':
-                            # mix_weight_scale borrows the weight scale of the LR scheduler.
-                            # Near the end of training, c2_mix_weight should be 1/4 of cls_prompt_mix_weight_max.
-                            # If cls_prompt_mix_weight_max=0.3, then c2_mix_weight changes as 0 -> 0.3 -> 0.075.
-                            c2_mix_weight = self.cls_prompt_mix_weight_max * self.mix_weight_scale
-                            # the mix weight is at least 0.1.
-                            c2_mix_weight = max(c2_mix_weight, self.cls_prompt_mix_weight_min)
-                        else:
-                            # For 'hijk', changing mix weight has no effect. So fix it as 1.
-                            c2_mix_weight = 1.
-
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed (concatenated),
                         # and the token number will be the double of subj_comps_emb.
@@ -1297,11 +1281,11 @@ class LatentDiffusion(DDPM):
                         # concat(subj_comps_emb, cls_comps_emb -| subj_comps_emb)_dim1. 
                         # -| means orthogonal subtraction.
                         subj_comps_emb_mix_all_layers  = mix_embeddings(subj_comps_emb, cls_comps_emb, 
-                                                                        c2_mix_weight=c2_mix_weight,
+                                                                        c2_mix_weight=1,
                                                                         mix_scheme='adeltaconcat',
                                                                         use_ortho_subtract=True)
                         subj_single_emb_mix_all_layers = mix_embeddings(subj_single_emb, cls_single_emb,
-                                                                        c2_mix_weight=c2_mix_weight,
+                                                                        c2_mix_weight=1,
                                                                         mix_scheme='adeltaconcat',
                                                                         use_ortho_subtract=True)
                         
@@ -1745,10 +1729,7 @@ class LatentDiffusion(DDPM):
             # is_teachable: The teacher instance is only teachable if it's qualified, and the 
             # compositional clip loss is smaller than the student.
 
-            if self.prompt_mix_scheme == 'mix_concat_cls':
-                self.cls_subj_clip_margin = 0.003
-            else:
-                self.cls_subj_clip_margin = 0.006
+            self.cls_subj_clip_margin = 0.006
 
             is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_comp[0] - self.cls_subj_clip_margin
 
@@ -1822,12 +1803,7 @@ class LatentDiffusion(DDPM):
                 # cond[0].shape[1]: 154, number of tokens in the mixed prompts.
                 # Right shift the subject token indices by 77, 
                 # to locate the subject token (placeholder) in the concatenated comp prompts.
-                if iter_type == 'mix_concat_cls':
-                    cat_placeholder_ind_T += cond[0].shape[1] // 2
-                    # stack -> flatten, to interlace the two lists.
-                    placeholder_indices_B = torch.stack([orig_placeholder_ind_B, cat_placeholder_ind_B], dim=1).flatten()
-                else:
-                    placeholder_indices_B = orig_placeholder_ind_B
+                placeholder_indices_B = orig_placeholder_ind_B
 
                 # The class prompts are at the latter half of all the prompts.
                 # So we need to add the batch indices of the subject prompts, to locate
@@ -1837,10 +1813,6 @@ class LatentDiffusion(DDPM):
                 placeholder_indices_B = torch.cat([placeholder_indices_B, cls_placeholder_indices_B], dim=0)
                 # stack then flatten() to interlace the two lists.
                 placeholder_indices_T = torch.stack([orig_placeholder_ind_T, cat_placeholder_ind_T], dim=1).flatten()
-                if iter_type == 'mix_concat_cls':
-                    # The token indices in the class prompts are the 
-                    # same as in the subject prompts. No offset is needed. 
-                    placeholder_indices_T = placeholder_indices_T.repeat(2)
                 # placeholder_indices: 
                 # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
                 #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
@@ -1897,10 +1869,7 @@ class LatentDiffusion(DDPM):
                     feat_mix_single  = feat_mix_single  * spatial_weight_mix_single
                     feat_mix_comps   = feat_mix_comps   * spatial_weight_mix_comps
 
-                if iter_type == 'mix_concat_cls':
-                    pool_spatial_size = (1, 1)
-                else:
-                    pool_spatial_size = (2, 2) # (1, 1)
+                pool_spatial_size = (2, 2) # (1, 1)
 
                 pooler = nn.AdaptiveAvgPool2d(pool_spatial_size)
                 # Pool the H, W dimensions to remove spatial information.
@@ -1951,7 +1920,7 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_subj_attn_distill': loss_subj_attn_distill.detach()})
             loss_prompt_mix_reg = loss_feat_distill + loss_subj_attn_distill * distill_subj_attn_weight
                                     
-            loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.mix_weight_scale
+            loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale
             
             self.embedding_manager.placeholder_indices = None
 
