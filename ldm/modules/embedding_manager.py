@@ -1135,7 +1135,7 @@ class EmbeddingManager(nn.Module):
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_layers
             # if the line below is commented, i.e., reg_layer_indices is None, then regularize all layers.
-            reg_layer_indices = [4, 5, 6, 7, 8] 
+            # reg_layer_indices = [4, 5, 6, 7, 8] 
         else:
             num_embed_layers = 1
 

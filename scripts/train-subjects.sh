@@ -122,9 +122,9 @@ for i in $indices
         # set -q use_fp_trick; and set EXTRA_ARGS1 $EXTRA_ARGS1 --use_fp_trick $use_fp_trick[$i]
         # If $prompt_mix_max[$i] is not -1 (default [0.1, 0.3]), then prompt_mix_range is 
         # ($prompt_mix_min = $prompt_mix_max / 3, $prompt_mix_max). Probably it will be [0.2, 0.6].
-        if set -q prompt_mix_max; and test $prompt_mix_max[$i] -ne -1
-            set EXTRA_ARGS1 $EXTRA_ARGS1 --mix_range (math $prompt_mix_max[$i]/3) $prompt_mix_max[$i]
-        end
+        #if set -q prompt_mix_max; and test $prompt_mix_max[$i] -ne -1
+        #    set EXTRA_ARGS1 $EXTRA_ARGS1 --mix_range (math $prompt_mix_max[$i]/3) $prompt_mix_max[$i]
+        #end
 
         # z_suffix: append $cls_token as a suffix to "z" in the prompt. The prompt will be "a z <cls_token> <prompt>".
         # E.g., cls_token="toy", prompt="in a chair", then full prompt="a z toy in a chair".
