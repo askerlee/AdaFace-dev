@@ -1296,19 +1296,13 @@ class LatentDiffusion(DDPM):
                         # Mixed embedding subj_comps_emb_mix = 
                         # concat(subj_comps_emb, cls_comps_emb -| subj_comps_emb)_dim1. 
                         # -| means orthogonal subtraction.
-                        subj_comps_emb_v  = subj_comps_emb
-                        cls_comps_emb_v   = cls_comps_emb
-                        subj_single_emb_v = subj_single_emb
-                        cls_single_emb_v  = cls_single_emb
-                        mix_scheme        = 'adeltaconcat'
-
-                        subj_comps_emb_mix_all_layers  = mix_embeddings(subj_comps_emb_v, cls_comps_emb_v, 
+                        subj_comps_emb_mix_all_layers  = mix_embeddings(subj_comps_emb, cls_comps_emb, 
                                                                         c2_mix_weight=c2_mix_weight,
-                                                                        mix_scheme=mix_scheme,
+                                                                        mix_scheme='adeltaconcat',
                                                                         use_ortho_subtract=True)
-                        subj_single_emb_mix_all_layers = mix_embeddings(subj_single_emb_v, cls_single_emb_v,
+                        subj_single_emb_mix_all_layers = mix_embeddings(subj_single_emb, cls_single_emb,
                                                                         c2_mix_weight=c2_mix_weight,
-                                                                        mix_scheme=mix_scheme,
+                                                                        mix_scheme='adeltaconcat',
                                                                         use_ortho_subtract=True)
                         
                         #subj_comps_emb_mix_all_layers  = cls_comps_emb

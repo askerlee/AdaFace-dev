@@ -1130,14 +1130,14 @@ class EmbeddingManager(nn.Module):
         # should be boosted proportionally to prompt_delta_reg_iter_gap. 
         # Divide it by 4 to reduce the proportion of ada emb loss relative to 
         # static emb loss in the total loss.
+        reg_layer_indices = None
 
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_layers
-            # if reg_layer_indices is None, then regularize all layers.
-            reg_layer_indices = [4, 5, 6, 7, 8] 
+            # if the line below is commented, i.e., reg_layer_indices is None, then regularize all layers.
+            # reg_layer_indices = [4, 5, 6, 7, 8] 
         else:
             num_embed_layers = 1
-            reg_layer_indices = None
 
         # num_unet_layers = 16. 
         # If do_ada_prompt_delta_reg, then static_embeddings: [64, 77, 768]. 
