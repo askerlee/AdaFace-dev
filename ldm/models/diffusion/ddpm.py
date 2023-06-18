@@ -1654,7 +1654,12 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
             if ada_delta_loss != 0:
                 loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
-            ada_comp_loss_boost_ratio = 2 #self.prompt_delta_reg_iter_gap / 4
+            # The prompt delta loss for ada embeddings is only applied 
+            # every self.composition_regs_iter_gap iterations. So the ada loss 
+            # should be boosted proportionally to composition_regs_iter_gap. 
+            # Divide it by 2 to reduce the proportion of ada emb loss relative to 
+            # static emb loss in the total loss.                
+            ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
             loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
             loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
             # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')

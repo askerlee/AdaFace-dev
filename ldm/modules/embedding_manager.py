@@ -1123,21 +1123,19 @@ class EmbeddingManager(nn.Module):
     # Textual inversion is supported, where static_embeddings is only one embedding.
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
-    # cls_prompt_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
     def calc_prompt_delta_loss(self, do_ada_prompt_delta_reg, static_embeddings):
-        # The prompt delta loss for ada embeddings is only applied 
-        # every prompt_delta_reg_iter_gap iterations. So the ada loss 
-        # should be boosted proportionally to prompt_delta_reg_iter_gap. 
-        # Divide it by 4 to reduce the proportion of ada emb loss relative to 
-        # static emb loss in the total loss.
-        reg_layer_indices = None
+        # Apply delta loss on all layers of static embeddings.
+        static_delta_layer_indices = None
 
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_layers
-            # if the line below is commented, i.e., reg_layer_indices is None, then regularize all layers.
-            # reg_layer_indices = [4, 5, 6, 7, 8] 
+            # Apply delta loss on selected layers of ada embeddings.
+            # if the line below is commented, i.e., ada_delta_layer_indices is None, 
+            # then regularize all layers of ada embeddings.
+            ada_delta_layer_indices = [4, 5, 6, 7, 8] 
         else:
             num_embed_layers = 1
+            ada_delta_layer_indices = None
 
         # num_unet_layers = 16. 
         # If do_ada_prompt_delta_reg, then static_embeddings: [64, 77, 768]. 
@@ -1147,9 +1145,8 @@ class EmbeddingManager(nn.Module):
         BS = static_embeddings.shape[0] // (4 * num_embed_layers)
         # static_embeddings: [64, 77, 768] => [4, 16, 77, 768]
         static_embeddings = static_embeddings.view(BS * 4, num_embed_layers, *static_embeddings.shape[1:])
-        if reg_layer_indices is not None:
-            static_embeddings = static_embeddings[:, reg_layer_indices]
 
+        # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
         # Each is [2, 16, 77, 768]
         static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
                 static_embeddings.split(BS, dim=0)
@@ -1179,7 +1176,14 @@ class EmbeddingManager(nn.Module):
             # static_delta: [2, 16, 77, 768]. Different values for each layer along dim=1.
             static_delta = static_subj_comp_emb - static_subj_single_emb
 
-        static_delta_loss   = calc_delta_loss(static_delta, cls_delta, delta_loss_emb_mask)
+        if static_delta_layer_indices is not None:
+            static_sel_delta        = static_delta[:, static_delta_layer_indices]
+            static_sel_cls_delta    = cls_delta[:, static_delta_layer_indices]
+        else:
+            static_sel_delta        = static_delta
+            static_sel_cls_delta    = cls_delta
+
+        static_delta_loss   = calc_delta_loss(static_sel_delta, static_sel_cls_delta, delta_loss_emb_mask)
 
         if do_ada_prompt_delta_reg and self.ada_embeddings is not None:
             # Each emb is of [4, 77, 768]. 
@@ -1191,9 +1195,6 @@ class EmbeddingManager(nn.Module):
 
             # ada_embeddings: [4, 16, 77, 768]
             ada_embeddings = torch.stack(self.ada_embeddings, dim=1)
-            if reg_layer_indices is not None:
-                ada_embeddings = ada_embeddings[:, reg_layer_indices]   
-                         
             # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
             # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
             # the subject token.
@@ -1205,7 +1206,14 @@ class EmbeddingManager(nn.Module):
             else:
                 ada_delta = ada_subj_comp_emb - ada_subj_single_emb
 
-            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, delta_loss_emb_mask)
+            if ada_delta_layer_indices is not None:
+                ada_sel_delta       = ada_delta[:, ada_delta_layer_indices]   
+                ada_sel_cls_delta   = cls_delta[:, ada_delta_layer_indices]
+            else:
+                ada_sel_delta       = ada_delta
+                ada_sel_cls_delta   = cls_delta
+
+            ada_delta_loss = calc_delta_loss(ada_sel_delta, ada_sel_cls_delta, delta_loss_emb_mask)
             # The cached ada embeddings are useless now, release them.
             self.clear_ada_embedding_cache()
         else:
