@@ -495,8 +495,8 @@ def main(opt):
                             # c / ref_c are tuples of (cond, prompts, extra_info).
                             c = (c0_mix, c[1], c[2])
 
-                        else:
-                            c[2]['iter_type'] = 'static_hijk'
+                        #else:
+                        #    c[2]['iter_type'] = 'static_hijk'
 
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                         # During inference, the batch size is *doubled*. 
