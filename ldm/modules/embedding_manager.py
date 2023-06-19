@@ -1133,7 +1133,8 @@ class EmbeddingManager(nn.Module):
             # Apply delta loss on selected layers of ada embeddings.
             # if the line below is commented, i.e., ada_delta_layer_indices is None, 
             # then regularize all layers of ada embeddings.
-            # ada_delta_layer_indices = [4, 5, 6, 7, 8] 
+            static_delta_layer_indices  = [4, 5, 6, 7, 8]
+            ada_delta_layer_indices     = [4, 5, 6, 7, 8]
         else:
             num_embed_layers = 1
 
