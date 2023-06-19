@@ -772,7 +772,7 @@ class UNetModel(nn.Module):
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
                 # 'hijk' in iter_type: could be "mix_hijk" (training or inference) 
                 # or "static_hijk" (inference only).
-                if iter_type.startswith("mix_") or 'hijk' in iter_type:
+                if iter_type.startswith("mix_"):
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
                     if iter_type == 'mix_concat_cls':
                         # Do not BP into the copy of ada embeddings that are added with the mixed embeddings. 
@@ -781,7 +781,10 @@ class UNetModel(nn.Module):
                         # iter_type == 'mix_hijk'. Separate layer_static_context.
                         layer_static_context, layer_static_key_context = \
                             layer_static_context.split(layer_static_context.shape[1] // 2, dim=1)
-
+                elif iter_type == 'static_hijk':
+                    assert layer_ada_context.shape[1] == layer_static_context.shape[1]
+                    layer_static_key_context = layer_static_context.clone()
+                    
                 # layer_static_context, layer_ada_context: [2, 77, 768]
                 # layer_context: layer context fed to the current UNet layer, [2, 77, 768]
                 #breakpoint()
