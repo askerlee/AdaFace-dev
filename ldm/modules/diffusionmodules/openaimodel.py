@@ -789,8 +789,18 @@ class UNetModel(nn.Module):
                 # layer_context: layer context fed to the current UNet layer, [2, 77, 768]
                 #breakpoint()
                 layer_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
-                if ('hijk' in iter_type and layer_idx in hijk_layer_indices):
-                    layer_key_context = layer_static_key_context * static_emb_weight + layer_ada_context * ada_emb_weight
+                if (iter_type == 'mix_hijk' and layer_idx in hijk_layer_indices):
+                    BS = layer_static_key_context.shape[0]
+                    static_key_weights = th.ones(BS, 1, 1, device=layer_static_key_context.device) \
+                                            * static_emb_weight
+                    
+                    if static_emb_weight < 0.4:
+                        # Enhance the static key proportions by 2x for class instances (second half batch), 
+                        # and keep the static key proportions for subject instances (first half batch).
+                        static_key_weights[BS//2:] *= 2
+
+                    layer_key_context = layer_static_key_context * static_key_weights \
+                                          + layer_ada_context * (1 - static_key_weights)
                     # Pass both embeddings for hijacking the key of layer_context by layer_key_context.
                     layer_context = (layer_context, layer_key_context)
                 # Otherwise, iter_type == 'mix_hijk' but layer_idx not in hijk_layer_indices.
