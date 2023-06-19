@@ -794,11 +794,13 @@ class UNetModel(nn.Module):
                     static_key_weights = th.ones(BS, 1, 1, device=layer_static_key_context.device) \
                                             * static_emb_weight
                     
+                    """ 
                     if static_emb_weight < 0.4:
                         # Enhance the static key proportions to 0.5 for class instances (second half batch), 
                         # and keep the static key proportions for subject instances (first half batch).
                         static_key_weights[BS//2:] = 0.5
-
+                    """
+                    
                     layer_key_context = layer_static_key_context * static_key_weights \
                                           + layer_ada_context * (1 - static_key_weights)
                     # Pass both embeddings for hijacking the key of layer_context by layer_key_context.
