@@ -770,7 +770,9 @@ class UNetModel(nn.Module):
 
                 # If static context is expanded by doing prompt mixing,
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
-                if iter_type.startswith("mix_"):
+                # 'hijk' in iter_type: could be "mix_hijk" (training or inference) 
+                # or "static_hijk" (inference only).
+                if iter_type.startswith("mix_") or 'hijk' in iter_type:
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
                     if iter_type == 'mix_concat_cls':
                         # Do not BP into the copy of ada embeddings that are added with the mixed embeddings. 
@@ -784,7 +786,7 @@ class UNetModel(nn.Module):
                 # layer_context: layer context fed to the current UNet layer, [2, 77, 768]
                 #breakpoint()
                 layer_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
-                if (iter_type == 'mix_hijk' and layer_idx in hijk_layer_indices):
+                if ('hijk' in iter_type and layer_idx in hijk_layer_indices):
                     layer_key_context = layer_static_key_context # * static_emb_weight + layer_ada_context * ada_emb_weight
                     # Pass both embeddings for hijacking the key of layer_context by layer_key_context.
                     layer_context = (layer_context, layer_key_context)
