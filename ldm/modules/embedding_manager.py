@@ -1125,17 +1125,17 @@ class EmbeddingManager(nn.Module):
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
     def calc_prompt_delta_loss(self, do_ada_prompt_delta_reg, static_embeddings):
         # Apply delta loss on all layers of static embeddings.
-        static_delta_layer_indices = None
+        static_delta_layer_indices  = None
+        ada_delta_layer_indices     = None
 
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_layers
             # Apply delta loss on selected layers of ada embeddings.
             # if the line below is commented, i.e., ada_delta_layer_indices is None, 
             # then regularize all layers of ada embeddings.
-            ada_delta_layer_indices = [4, 5, 6, 7, 8] 
+            # ada_delta_layer_indices = [4, 5, 6, 7, 8] 
         else:
             num_embed_layers = 1
-            ada_delta_layer_indices = None
 
         # num_unet_layers = 16. 
         # If do_ada_prompt_delta_reg, then static_embeddings: [64, 77, 768]. 
