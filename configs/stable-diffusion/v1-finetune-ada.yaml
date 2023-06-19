@@ -63,7 +63,7 @@ model:
         progressive_words: False
         use_layerwise_embedding: True
         layerwise_lora_rank_token_ratio: 2
-        ada_emb_weight: 0.75
+        ada_emb_weight: 0.65
         # composition_regs alternates between prompt_delta_reg and composition_prompt_mix_reg.
         # So prompt_delta_reg_iter_gap = 2 * composition_regs_iter_gap = 10.
         prompt_delta_reg_iter_gap: 3
