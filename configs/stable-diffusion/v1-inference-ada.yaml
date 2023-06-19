@@ -30,7 +30,7 @@ model:
         num_vectors_per_token: 1
         progressive_words: False
         use_layerwise_embedding: True
-        ada_emb_weight: 0.5
+        ada_emb_weight: 0.75
         
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
