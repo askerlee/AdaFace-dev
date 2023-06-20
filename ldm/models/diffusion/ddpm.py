@@ -775,15 +775,20 @@ class LatentDiffusion(DDPM):
                     # The cache will be used in calc_prompt_delta_loss().
                     self.embedding_manager.init_ada_embedding_cache()
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
-                    # If do_comp_prompt_mix_reg, the image mask is also needed to repeat. 
-                    if img_mask is not None:
-                        HALF_BS  = max(img_mask.shape[0] // 2, 1)
-                        if self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg:
+                    # Do not consider mask on compositional reg iterations.
+                    if img_mask is not None and \
+                        (self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg):
+                            img_mask = None
+                            """                             
+                            # If do_comp_prompt_mix_reg, the image mask is also needed to repeat. 
+                            HALF_BS  = max(img_mask.shape[0] // 2, 1)
                             # The image batch will be repeated 4 times in p_losses(),
                             # so img_mask is also repeated 4 times.
-                            img_mask = img_mask[:HALF_BS].repeat(4, 1, 1, 1)
+                            img_mask = img_mask[:HALF_BS].repeat(4, 1, 1, 1) 
+                            """
 
-                    # img_mask is used by the ada embedding generator.
+                    # img_mask is used by the ada embedding generator. 
+                    # So we pass img_mask to embedding_manager here.
                     self.embedding_manager.set_img_mask(img_mask)
                     extra_info['ada_embedder'] = ada_embedder
 
@@ -1558,18 +1563,20 @@ class LatentDiffusion(DDPM):
             rand_timestep = np.random.randint(int(self.num_timesteps * 0.75), self.num_timesteps)
             t.fill_(rand_timestep)
             t = t[:HALF_BS].repeat(4)
+            # Make x_start random.
             x_start.normal_()
+            # Use the same x_start across the 4 instances.
             x_start  = x_start[:HALF_BS].repeat(4, 1, 1, 1)
-            # Use the same noise.
+            # Use the same noise across the 4 instances.
             noise    = noise[:HALF_BS].repeat(4, 1, 1, 1)
-            if img_mask is not None:
-                img_mask = img_mask[:HALF_BS]
-            else:
-                img_mask = 1
+            # Ignore img_mask.
+            img_mask = None
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        # model_output is predicted noise.
         model_output = self.apply_model(x_noisy, t, cond)
 
+        # compositional reg iterations.
         if is_comp_iter:
             # If we do compositional prompt mixing, we need the final images of the 
             # second half as the reconstruction objective for compositional regularization.
@@ -1577,17 +1584,17 @@ class LatentDiffusion(DDPM):
             # the image recon loss, are actually not reconstructable, 
             # since 75% of the chance, x_start is totally randomized.
             # LINK #shared_step
+            # Note model_output is predicted noise.
             x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=model_output)
             model_outputs = torch.split(x_recon, model_output.shape[0] // 4, dim=0)
             # Images generated both under subj_comp_prompts and subj_prompt_mix_comps 
-            # are subject to the CLIP text-image loss.
-            # cls_comp_prompts is still used to compute the CLIP text-image loss on
-            # images guided by the mixed embeddings (as the composition is the same).
-            clip_images_code  = torch.cat([ model_outputs[1] * img_mask, 
-                                            model_outputs[3] * img_mask ], dim=0)
+            # are subject to the CLIP text-image matching evaluation.
+            # cls_comp_prompts is used to compute the CLIP text-image matching loss on
+            # images guided by the mixed embeddings.
+            clip_images_code  = torch.cat([ model_outputs[1], model_outputs[3] ], dim=0)
             # The first  cls_comp_prompts is for subj_comps_emb, and 
             # the second cls_comp_prompts is for subj_comps_emb_mix.                
-            clip_prompts_comp   = cond[2]['cls_comp_prompts']   + cond[2]['cls_comp_prompts']
+            clip_prompts_comp = cond[2]['cls_comp_prompts'] + cond[2]['cls_comp_prompts']
 
             # Compositional images are also subject to the single-prompt CLIP loss,
             # as they must contain the subject. This is to reduce the chance that

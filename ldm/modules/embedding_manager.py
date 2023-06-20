@@ -440,7 +440,7 @@ class EmbeddingManager(nn.Module):
             layerwise_lora_default_rank=2,
             layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                   17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
-            ada_emb_weight=0.65, 
+            ada_emb_weight=0.5, 
             prompt_delta_reg_iter_gap=-1,       
             subj_scale=1.0,
             **kwargs
