@@ -1851,8 +1851,8 @@ class LatentDiffusion(DDPM):
 
                 if (unet_layer_idx in attn_distill_layer_weights) and (distill_subj_attn_weight > 0):
                     attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
-                    attn_subj_delta = subj_attn_subj_comps #- subj_attn_subj_single
-                    attn_mix_delta  = subj_attn_mix_comps  #- subj_attn_mix_single
+                    attn_subj_delta = ortho_subtract(subj_attn_subj_comps, subj_attn_subj_single)
+                    attn_mix_delta  = ortho_subtract(subj_attn_mix_comps,  subj_attn_mix_single)
                     loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
                                                                    first_n_dims_to_flatten=2, 
                                                                    ref_grad_scale=0.1)
