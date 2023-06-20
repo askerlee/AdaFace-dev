@@ -1741,7 +1741,7 @@ class LatentDiffusion(DDPM):
             # is_teachable: The teacher instance is only teachable if it's qualified, and the 
             # compositional clip loss is smaller than the student.
 
-            self.cls_subj_clip_margin = 0.005
+            self.cls_subj_clip_margin = 0.006
 
             is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_comp[0] - self.cls_subj_clip_margin
 
@@ -1778,6 +1778,8 @@ class LatentDiffusion(DDPM):
             # It contains the 4 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17.
             unet_attns = cond[2]['unet_attns']
+            # Set to 0 to disable distillation on attention weights of the subject.
+            distill_subj_attn_weight = 0.1
 
             # Discard top layers and the first few bottom layers from distillation.
             # distill_layer_weights: relative weight of each distillation layer. 
@@ -1802,33 +1804,28 @@ class LatentDiffusion(DDPM):
             attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
             attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
 
-            use_subj_attn_as_spatial_weights = True
-            # Set to 0 to disable distillation on attention weights of the subject.
-            distill_subj_attn_weight = 0.1
+            orig_placeholder_ind_B, orig_placeholder_ind_T = self.embedding_manager.placeholder_indices
+            # cat_placeholder_ind_B: a list of batch indices that point to individual instances.
+            # cat_placeholder_ind_T: a list of token indices that point to the placeholder token in each instance.
+            cat_placeholder_ind_B  = orig_placeholder_ind_B.clone()
+            cat_placeholder_ind_T  = orig_placeholder_ind_T.clone()
+            # cond[0].shape[1]: 154, number of tokens in the mixed prompts.
+            # Right shift the subject token indices by 77, 
+            # to locate the subject token (placeholder) in the concatenated comp prompts.
+            placeholder_indices_B = orig_placeholder_ind_B
 
-            if use_subj_attn_as_spatial_weights:
-                orig_placeholder_ind_B, orig_placeholder_ind_T = self.embedding_manager.placeholder_indices
-                # cat_placeholder_ind_B: a list of batch indices that point to individual instances.
-                # cat_placeholder_ind_T: a list of token indices that point to the placeholder token in each instance.
-                cat_placeholder_ind_B  = orig_placeholder_ind_B.clone()
-                cat_placeholder_ind_T  = orig_placeholder_ind_T.clone()
-                # cond[0].shape[1]: 154, number of tokens in the mixed prompts.
-                # Right shift the subject token indices by 77, 
-                # to locate the subject token (placeholder) in the concatenated comp prompts.
-                placeholder_indices_B = orig_placeholder_ind_B
-
-                # The class prompts are at the latter half of all the prompts.
-                # So we need to add the batch indices of the subject prompts, to locate
-                # the corresponding class prompts.
-                cls_placeholder_indices_B = placeholder_indices_B + HALF_BS * 2
-                # Concatenate the placeholder indices of the subject prompts and class prompts.
-                placeholder_indices_B = torch.cat([placeholder_indices_B, cls_placeholder_indices_B], dim=0)
-                # stack then flatten() to interlace the two lists.
-                placeholder_indices_T = torch.stack([orig_placeholder_ind_T, cat_placeholder_ind_T], dim=1).flatten()
-                # placeholder_indices: 
-                # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
-                #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
-                placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
+            # The class prompts are at the latter half of the batch.
+            # So we need to add the batch indices of the subject prompts, to locate
+            # the corresponding class prompts.
+            cls_placeholder_indices_B = placeholder_indices_B + HALF_BS * 2
+            # Concatenate the placeholder indices of the subject prompts and class prompts.
+            placeholder_indices_B = torch.cat([placeholder_indices_B, cls_placeholder_indices_B], dim=0)
+            # stack then flatten() to interlace the two lists.
+            placeholder_indices_T = torch.stack([orig_placeholder_ind_T, cat_placeholder_ind_T], dim=1).flatten()
+            # placeholder_indices: 
+            # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
+            #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
+            placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
 
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
@@ -1838,28 +1835,32 @@ class LatentDiffusion(DDPM):
                 feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
-                if use_subj_attn_as_spatial_weights:
-                    # [4, 8, 256, 154] / [4, 8, 64, 154] =>
-                    # [4, 154, 8, 256] / [4, 154, 8, 64]
-                    # We don't need BP through attention into UNet.
-                    attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
-                    # subj_attn: [8, 8, 256] / [8, 8, 64]
-                    subj_attn = attn_mat[placeholder_indices]
-                    # subj_attn_subj_single, ...: [2, 8, 256].
-                    # The first dim 2 is the two occurrences of the subject token 
-                    # in the two sets of prompts. Therefore, HALF_BS is still needed to 
-                    # determine its batch size in convert_attn_to_spatial_weight().
-                    subj_attn_subj_single, subj_attn_subj_comps, \
-                    subj_attn_mix_single,  subj_attn_mix_comps \
-                        = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)
-                    
-                    if (unet_layer_idx in attn_distill_layer_weights) and (distill_subj_attn_weight > 0):
-                        attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
-                        attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
-                        attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
-                        loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, first_n_dims_to_flatten=2)
-                        loss_subj_attn_distill += loss_layer_subj_attn_distill * attn_distill_layer_weight
+                # [4, 8, 256, 154] / [4, 8, 64, 154] =>
+                # [4, 154, 8, 256] / [4, 154, 8, 64]
+                # We don't need BP through attention into UNet.
+                attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
+                # subj_attn: [4, 8, 256] / [4, 8, 64]
+                subj_attn = attn_mat[placeholder_indices]
+                # subj_attn_subj_single, ...: [2, 8, 256].
+                # The first dim 2 is the two occurrences of the subject token 
+                # in the two sets of prompts. Therefore, HALF_BS is still needed to 
+                # determine its batch size in convert_attn_to_spatial_weight().
+                subj_attn_subj_single, subj_attn_subj_comps, \
+                subj_attn_mix_single,  subj_attn_mix_comps \
+                    = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)
 
+                if (unet_layer_idx in attn_distill_layer_weights) and (distill_subj_attn_weight > 0):
+                    attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
+                    attn_subj_delta = subj_attn_subj_comps #- subj_attn_subj_single
+                    attn_mix_delta  = subj_attn_mix_comps  #- subj_attn_mix_single
+                    loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
+                                                                   first_n_dims_to_flatten=2, 
+                                                                   ref_grad_scale=0.1)
+                    
+                    loss_subj_attn_distill += loss_layer_subj_attn_distill * attn_distill_layer_weight
+
+                use_subj_attn_as_spatial_weights = True
+                if use_subj_attn_as_spatial_weights:
                     if unet_layer_idx not in feat_distill_layer_weights:
                         continue
                     feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]

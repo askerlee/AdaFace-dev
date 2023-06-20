@@ -280,7 +280,8 @@ def demean(x):
 # emb_mask: [2, 77, 1]
 def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, 
                     do_demean_first=True, 
-                    first_n_dims_to_flatten=3):
+                    first_n_dims_to_flatten=3,
+                    ref_grad_scale=0):
     B = delta.shape[0]
     loss = 0
 
@@ -325,7 +326,13 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3,
 
         # x * x.abs.pow(exponent - 1) will keep the sign of x after pow(exponent).
         ref_delta_i_pow = ref_delta_i * ref_delta_i.abs().pow(exponent - 1)
-        loss_i = F.cosine_embedding_loss(delta_i, ref_delta_i_pow.detach(), 
+        if ref_grad_scale == 0:
+            ref_delta_i_pow = ref_delta_i_pow.detach()
+        else:
+            grad_scaler = GradientScaler(ref_grad_scale)
+            ref_delta_i_pow = grad_scaler(ref_delta_i_pow)
+
+        loss_i = F.cosine_embedding_loss(delta_i, ref_delta_i_pow, 
                                          torch.ones_like(delta_i[:, 0]), 
                                          reduction='none')
         if emb_mask_i is not None:
