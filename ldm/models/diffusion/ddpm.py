@@ -1553,11 +1553,16 @@ class LatentDiffusion(DDPM):
     # extra_info: a dict that contains 'ada_embedder' and other fields. 
     # ada_embedder: a function to convert c_in to ada embeddings.
     # ANCHOR[id=p_losses]
-    def p_losses(self, x_start, cond, t, noise=None, img_mask=None):
+    def p_losses(self, x_start, cond, t, noise=None, img_mask=None, recur_depth=0):
         is_comp_iter = (self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg)
         noise = default(noise, lambda: torch.randn_like(x_start))
 
         if is_comp_iter:
+            x_start_ = x_start
+            t_       = t
+            noise_   = noise
+            img_mask_ = img_mask
+
             HALF_BS  = max(x_start.shape[0] // 2, 1)
             # Randomly choose t from the largest 250 timesteps, so as to match the total noise input.
             rand_timestep = np.random.randint(int(self.num_timesteps * 0.75), self.num_timesteps)
@@ -1647,57 +1652,6 @@ class LatentDiffusion(DDPM):
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
 
-        if self.embedding_reg_weight > 0:
-            self.embedding_manager.is_comp_iter = is_comp_iter
-            loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
-            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg.detach()})
-            loss += (self.embedding_reg_weight * loss_embedding_reg)
-
-        if self.do_static_prompt_delta_reg:
-            # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
-            static_delta_loss, ada_delta_loss = self.embedding_manager.calc_prompt_delta_loss( 
-                                    self.do_ada_prompt_delta_reg, self.c_static_emb
-                                    )
-            loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
-            if ada_delta_loss != 0:
-                loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
-            # The prompt delta loss for ada embeddings is only applied 
-            # every self.composition_regs_iter_gap iterations. So the ada loss 
-            # should be boosted proportionally to composition_regs_iter_gap. 
-            # Divide it by 2 to reduce the proportion of ada emb loss relative to 
-            # static emb loss in the total loss.                
-            ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
-            loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
-            # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
-
-        #print(clip_prompts_comp)
-        """ 
-        if self.clip_loss_weight > 0:
-            clip_images = self.differentiable_decode_first_stage(clip_images_code)
-            clip_images_np = clip_images.detach().cpu().numpy()
-            # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
-            # to keep the loss positive.
-            # txt_to_img_similarity() returns the pairwise similarities between the prompts and the images.
-            # So if there are N prompts and N images, the returned tensor has shape (N, N).
-            # We should only consider diagonal elements, assuming the prompts are 
-            # matched with the images in order. Therefore, it's buggy to take the mean of the losses.
-            # In our particular setting of batch size = 2 (HALF_BS = 1), clip_prompts_comp consists of 
-            # two identical cls_comp_prompts, which leads to the correct results, but we better 
-            # fix it for larger batch sizes. 
-
-            # txt_to_img_similarity() uses a preprocesser that assumes the input images 
-            # are a tensor with mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0].
-            # (not really assume the images are with this mean and std; 
-            # it's just as a way to specify the transformation parameters.)
-            # In effect, it transforms clip_images by (clip_images + 1) / 2,
-            # which is consistent with the output transformation in stable_txt2img.py.
-            losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, 
-                                                                                    reduction='diag')
-            #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
-            #                                                                     reduction='diag')
-        """
-        
         if self.calc_clip_loss:
             with torch.no_grad():
                 clip_images = self.decode_first_stage(clip_images_code)
@@ -1759,9 +1713,67 @@ class LatentDiffusion(DDPM):
                 # Still compute the loss metrics. 
                 # But no real filtering, instead just teach on all instances.
                 is_teachable = True
+            # Try one more time, to see if the teacher instance is qualified.
+            elif not is_teachable and self.do_comp_prompt_mix_reg and recur_depth == 0:
+                if not is_comp_iter:
+                    breakpoint()
+                # init_ada_embedding_cache() will implicitly clear the cache.
+                self.embedding_manager.init_ada_embedding_cache()
+                return self.p_losses(x_start_, cond, t_, noise_, img_mask_, recur_depth=1)
         else:
             is_teachable = True
+            
+        if self.embedding_reg_weight > 0:
+            self.embedding_manager.is_comp_iter = is_comp_iter
+            loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
+            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg.detach()})
+            loss += (self.embedding_reg_weight * loss_embedding_reg)
 
+        if self.do_static_prompt_delta_reg:
+            # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
+            static_delta_loss, ada_delta_loss = self.embedding_manager.calc_prompt_delta_loss( 
+                                    self.do_ada_prompt_delta_reg, self.c_static_emb
+                                    )
+            loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
+            if ada_delta_loss != 0:
+                loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
+            # The prompt delta loss for ada embeddings is only applied 
+            # every self.composition_regs_iter_gap iterations. So the ada loss 
+            # should be boosted proportionally to composition_regs_iter_gap. 
+            # Divide it by 2 to reduce the proportion of ada emb loss relative to 
+            # static emb loss in the total loss.                
+            ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
+            loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
+            loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
+            # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
+
+        #print(clip_prompts_comp)
+        """ 
+        if self.clip_loss_weight > 0:
+            clip_images = self.differentiable_decode_first_stage(clip_images_code)
+            clip_images_np = clip_images.detach().cpu().numpy()
+            # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
+            # to keep the loss positive.
+            # txt_to_img_similarity() returns the pairwise similarities between the prompts and the images.
+            # So if there are N prompts and N images, the returned tensor has shape (N, N).
+            # We should only consider diagonal elements, assuming the prompts are 
+            # matched with the images in order. Therefore, it's buggy to take the mean of the losses.
+            # In our particular setting of batch size = 2 (HALF_BS = 1), clip_prompts_comp consists of 
+            # two identical cls_comp_prompts, which leads to the correct results, but we better 
+            # fix it for larger batch sizes. 
+
+            # txt_to_img_similarity() uses a preprocesser that assumes the input images 
+            # are a tensor with mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0].
+            # (not really assume the images are with this mean and std; 
+            # it's just as a way to specify the transformation parameters.)
+            # In effect, it transforms clip_images by (clip_images + 1) / 2,
+            # which is consistent with the output transformation in stable_txt2img.py.
+            losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, 
+                                                                                    reduction='diag')
+            #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
+            #                                                                     reduction='diag')
+        """
+        
         if self.do_comp_prompt_mix_reg and is_teachable:
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
             # Only regularize on intermediate features, i.e., intermediate features generated 

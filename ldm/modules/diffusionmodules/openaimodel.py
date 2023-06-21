@@ -774,6 +774,7 @@ class UNetModel(nn.Module):
                 # or "static_hijk" (inference only).
                 if iter_type.startswith("mix_"):
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
+                        
                     if iter_type == 'mix_concat_cls':
                         # Do not BP into the copy of ada embeddings that are added with the mixed embeddings. 
                         layer_ada_context = th.cat([layer_ada_context, layer_ada_context.detach()], dim=1)
