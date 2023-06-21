@@ -850,7 +850,7 @@ class UNetModel(nn.Module):
             hs.append(h)
             if iter_type.startswith("mix_") and layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
-                    distill_feats[layer_idx] = module[1].transformer_blocks[0].feat
+                    distill_feats[layer_idx] = module[1].feat
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
                     module[1].save_feat = False
 
@@ -866,7 +866,7 @@ class UNetModel(nn.Module):
         h = self.middle_block(h, emb, layer_context)
         if iter_type.startswith("mix_") and layer_idx in distill_layer_indices:
                 distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.attn_mat 
-                distill_feats[layer_idx] = self.middle_block[1].transformer_blocks[0].feat
+                distill_feats[layer_idx] = self.middle_block[1].feat
                 self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = False
                 self.middle_block[1].save_feat = False
 
@@ -896,7 +896,7 @@ class UNetModel(nn.Module):
             h = module(h, emb, layer_context)
             if iter_type.startswith("mix_") and layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
-                    distill_feats[layer_idx] = module[1].transformer_blocks[0].feat
+                    distill_feats[layer_idx] = module[1].feat
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
                     module[1].save_feat = False
 
