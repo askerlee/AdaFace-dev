@@ -843,7 +843,6 @@ class UNetModel(nn.Module):
                 # Each transformer_blocks is of length 1, i.e., contains only 1 BasicTransformerBlock 
                 # that does cross-attention with layer_context.
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
-                module[1].save_feat = True
 
             # layer_context: [2, 77, 768], conditioning embedding.
             # emb: [2, 1280], time embedding.
@@ -851,9 +850,8 @@ class UNetModel(nn.Module):
             hs.append(h)
             if iter_type.startswith("mix_") and layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
-                    distill_feats[layer_idx] = module[1].feat
+                    distill_feats[layer_idx] = h
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
-                    module[1].save_feat = False
 
             layer_idx += 1
         
@@ -861,15 +859,13 @@ class UNetModel(nn.Module):
 
         if layer_idx in distill_layer_indices:
             self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = True
-            self.middle_block[1].save_feat = True
  
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, layer_context)
         if iter_type.startswith("mix_") and layer_idx in distill_layer_indices:
                 distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.attn_mat 
-                distill_feats[layer_idx] = self.middle_block[1].feat
+                distill_feats[layer_idx] = h
                 self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = False
-                self.middle_block[1].save_feat = False
 
         layer_idx += 1
 
@@ -891,15 +887,13 @@ class UNetModel(nn.Module):
 
             if layer_idx in distill_layer_indices:
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
-                module[1].save_feat = True
  
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, layer_context)
             if iter_type.startswith("mix_") and layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
-                    distill_feats[layer_idx] = module[1].feat
+                    distill_feats[layer_idx] = h
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
-                    module[1].save_feat = False
 
             layer_idx += 1
 
