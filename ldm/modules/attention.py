@@ -76,7 +76,7 @@ def zero_module(module):
 def Normalize(in_channels):
     return torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
 
-
+# LinearAttention is not used in Stable Diffusion.
 class LinearAttention(nn.Module):
     def __init__(self, dim, heads=4, dim_head=32):
         super().__init__()
@@ -213,6 +213,7 @@ class BasicTransformerBlock(nn.Module):
         self.norm2 = nn.LayerNorm(dim)
         self.norm3 = nn.LayerNorm(dim)
         self.checkpoint = checkpoint
+        self.save_feat = False
 
     def forward(self, x, context=None):
         return checkpoint(self._forward, (x, context), self.parameters(), self.checkpoint)
@@ -221,6 +222,8 @@ class BasicTransformerBlock(nn.Module):
         x = self.attn1(self.norm1(x)) + x
         x = self.attn2(self.norm2(x), context=context) + x
         x = self.ff(self.norm3(x)) + x
+        if self.save_feat:
+            self.feat = x
         return x
 
 

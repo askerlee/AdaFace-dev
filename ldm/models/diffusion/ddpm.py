@@ -1853,12 +1853,12 @@ class LatentDiffusion(DDPM):
                     attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
                     attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
                     attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
-                    #loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
-                    #                                               first_n_dims_to_flatten=2, 
-                    #                                               ref_grad_scale=0)
-                    loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
+                    loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
+                                                                   first_n_dims_to_flatten=2, 
+                                                                   ref_grad_scale=0)
+                    # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
-                    loss_subj_attn_distill += loss_layer_subj_attn_distill * attn_distill_layer_weight * 10
+                    loss_subj_attn_distill += loss_layer_subj_attn_distill * attn_distill_layer_weight #* 10
 
                 use_subj_attn_as_spatial_weights = True
                 if use_subj_attn_as_spatial_weights:

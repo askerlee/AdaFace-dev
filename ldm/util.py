@@ -383,14 +383,15 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     # The 256 in dim 3 is the number of image tokens in the current layer.
     # We cannot simply unsqueeze(0) since BS=1 is just a special case for this function.
     flat_attn = flat_attn.detach().reshape(BS, -1, *flat_attn.shape[1:])
-    # [1, 2, 8, 256] => max/mean => [1, 256] => [1, 16, 16].
+    # [1, 2, 8, 256] => L2 => [1, 256] => [1, 16, 16].
     # Un-flatten the attention map to the spatial dimensions, so as to
     # apply them as weights.
     # Mean among the 8 heads, then sum across the 2 occurrences of the subject tokens.
 
     spatial_scale = np.sqrt(flat_attn.shape[-1] / BS / spatial_shape.numel())
     spatial_shape2 = (int(spatial_shape[0] * spatial_scale), int(spatial_shape[1] * spatial_scale))
-    # Use L2 norm to aggregate the attentions of the 8 heads. It strikes a balance between mean and max.
+    # Use L2 norm to aggregate the attentions of the 8 heads. 
+    # L2 norm strikes a balance between mean and max.
     spatial_attn = torch.norm(flat_attn, dim=2).sum(dim=1).reshape(BS, 1, *spatial_shape2)
     spatial_attn = F.interpolate(spatial_attn, size=spatial_shape, mode='bilinear', align_corners=False)
 
@@ -402,7 +403,7 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     # and mean + x*std = exp(-x), i.e., the higher the attention value, the lower the weight.
     # The lower the attention value, the higher the weight, but no more than 1.
     spatial_weight = torch.exp(-(spatial_attn - attn_mean) / denom).clamp(max=1)
-    # Normalize spatial_weight so that the average weight of each instance is 1.
+    # Normalize spatial_weight so that the average weight across spatial dims of each instance is 1.
     spatial_weight = spatial_weight / spatial_weight.mean(dim=(2,3), keepdim=True)
     
     # flat_attn has been detached before passing to this function. So no need to detach spatial_weight.
