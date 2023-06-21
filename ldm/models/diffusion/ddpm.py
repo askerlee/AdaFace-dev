@@ -1717,6 +1717,8 @@ class LatentDiffusion(DDPM):
             elif not is_teachable and self.do_comp_prompt_mix_reg and recur_depth == 0:
                 if not is_comp_iter:
                     breakpoint()
+                # Release computation graph of this iter.
+                del model_output, x_recon, model_outputs, clip_images_code
                 # init_ada_embedding_cache() will implicitly clear the cache.
                 self.embedding_manager.init_ada_embedding_cache()
                 return self.p_losses(x_start_, cond, t_, noise_, img_mask_, recur_depth=1)
