@@ -1851,12 +1851,12 @@ class LatentDiffusion(DDPM):
 
                 if (unet_layer_idx in attn_distill_layer_weights) and (distill_subj_attn_weight > 0):
                     attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
-                    attn_subj_delta = ortho_subtract(subj_attn_subj_comps, subj_attn_subj_single)
-                    attn_mix_delta  = ortho_subtract(subj_attn_mix_comps,  subj_attn_mix_single)
-                    loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
-                                                                   first_n_dims_to_flatten=2, 
-                                                                   ref_grad_scale=0.1)
-                    
+                    attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
+                    attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
+                    #loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
+                    #                                               first_n_dims_to_flatten=2, 
+                    #                                               ref_grad_scale=0)
+                    loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     loss_subj_attn_distill += loss_layer_subj_attn_distill * attn_distill_layer_weight
 
                 use_subj_attn_as_spatial_weights = True
@@ -1924,7 +1924,7 @@ class LatentDiffusion(DDPM):
                 # the single embeddings, as the former should be optimized to look good by itself,
                 # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
                 # and 2) the embeddings are amendable to composition.
-                loss_layer_feat_distill = (self.get_loss(feat_subj_delta, feat_mix_delta, mean=False)).mean()
+                loss_layer_feat_distill = self.get_loss(feat_subj_delta, feat_mix_delta, mean=True)
                 
                 # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
                 loss_feat_distill += loss_layer_feat_distill * feat_distill_layer_weight
