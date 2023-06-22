@@ -1789,7 +1789,7 @@ class LatentDiffusion(DDPM):
             # It contains all the intermediate 25 layers of UNet features.
             unet_feats = cond[2]['unet_feats']
             # unet_attns is a dict as: layer_idx -> attn_mat. 
-            # It contains the 4 specified conditioned layers of UNet attentions, 
+            # It contains the 5 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17.
             unet_attns = cond[2]['unet_attns']
             # Set to 0 to disable distillation on attention weights of the subject.
@@ -1803,14 +1803,14 @@ class LatentDiffusion(DDPM):
             # Layer 16 has strong face semantics, so it is given a small weight.
             feat_distill_layer_weights = { 7:  1., 8: 1.,   
                                           #9:  0.5, 10: 0.5, 11: 0.5, 
-                                          12: 0.5, 
+                                           12: 0.5, 
                                           # 16: 0.25, 17: 0.25,
                                          }
 
             attn_distill_layer_weights = { 7:  1., 8: 1.,
                                            #9:  0.5, 10: 0.5, 11: 0.5,
-                                           12: 0.5,
-                                           16: 0.25, 17: 0.25,
+                                           12: 1.,
+                                           16: 1., 17: 1.,
                                          }
             
             feat_distill_layer_weight_sum = np.sum(list(feat_distill_layer_weights.values()))
@@ -1873,6 +1873,7 @@ class LatentDiffusion(DDPM):
                     # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
                     loss_subj_attn_distill += loss_layer_subj_attn_distill * attn_distill_layer_weight #* 10
+                    # print(f'{unet_layer_idx} loss_layer_subj_attn_distill: {loss_layer_subj_attn_distill:.3f}')
 
                 use_subj_attn_as_spatial_weights = True
                 if use_subj_attn_as_spatial_weights:

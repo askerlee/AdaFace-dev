@@ -826,8 +826,8 @@ class EmbeddingManager(nn.Module):
 
     def get_ada_emb_weight(self):
         if self.training:
-            # 0.5 -> uniform in [0.4, 0.6]. 0.65 -> uniform in [0.52, 0.78].
-            rand_ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.2)
+            # 0.5 -> uniform in [0.4, 0.7]. 
+            rand_ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)
         else:
             rand_ada_emb_weight = self.ada_emb_weight        
         return rand_ada_emb_weight

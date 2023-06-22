@@ -325,12 +325,13 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3,
             ref_delta_i = demean(ref_delta_i)
 
         # x * x.abs.pow(exponent - 1) will keep the sign of x after pow(exponent).
-        ref_delta_i_pow = ref_delta_i * ref_delta_i.abs().pow(exponent - 1)
         if ref_grad_scale == 0:
-            ref_delta_i_pow = ref_delta_i_pow.detach()
+            ref_delta_i = ref_delta_i.detach()
         else:
             grad_scaler = GradientScaler(ref_grad_scale)
-            ref_delta_i_pow = grad_scaler(ref_delta_i_pow)
+            ref_delta_i = grad_scaler(ref_delta_i)
+
+        ref_delta_i_pow = ref_delta_i * ref_delta_i.abs().pow(exponent - 1)
 
         loss_i = F.cosine_embedding_loss(delta_i, ref_delta_i_pow, 
                                          torch.ones_like(delta_i[:, 0]), 
@@ -392,7 +393,8 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     spatial_shape2 = (int(spatial_shape[0] * spatial_scale), int(spatial_shape[1] * spatial_scale))
     # Use L2 norm to aggregate the attentions of the 8 heads. 
     # L2 norm strikes a balance between mean and max.
-    spatial_attn = torch.norm(flat_attn, dim=2).sum(dim=1).reshape(BS, 1, *spatial_shape2)
+    #spatial_attn = torch.norm(flat_attn, dim=2).sum(dim=1).reshape(BS, 1, *spatial_shape2)
+    spatial_attn = flat_attn.mean(dim=2).sum(dim=1).reshape(BS, 1, *spatial_shape2)
     spatial_attn = F.interpolate(spatial_attn, size=spatial_shape, mode='bilinear', align_corners=False)
 
     attn_mean, attn_std = spatial_attn.mean(dim=(2,3), keepdim=True), \
