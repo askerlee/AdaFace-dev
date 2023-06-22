@@ -29,7 +29,7 @@ model:
     use_layerwise_embedding: True
     use_ada_embedding: True
     # composition_regs includes prompt_delta_reg and composition_prompt_mix_reg.
-    composition_regs_iter_gap: 5
+    composition_regs_iter_gap: 4
     # typical delta reg loss: 0.75, * weight -> 7.5e-5
     prompt_delta_reg_weight:       1e-4
     # typical prompt mix reg loss: 0.2, * weight -> 2e-5.
@@ -66,7 +66,7 @@ model:
         ada_emb_weight: 0.5
         # composition_regs alternates between prompt_delta_reg and composition_prompt_mix_reg.
         # So prompt_delta_reg_iter_gap = 2 * composition_regs_iter_gap = 10.
-        prompt_delta_reg_iter_gap: 5
+        prompt_delta_reg_iter_gap: 4
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
