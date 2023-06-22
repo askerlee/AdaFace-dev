@@ -76,7 +76,7 @@ def zero_module(module):
 def Normalize(in_channels):
     return torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
 
-
+# LinearAttention is not used in Stable Diffusion.
 class LinearAttention(nn.Module):
     def __init__(self, dim, heads=4, dim_head=32):
         super().__init__()
@@ -256,6 +256,8 @@ class SpatialTransformer(nn.Module):
                                               stride=1,
                                               padding=0))
 
+        self.save_feat = False
+
     def forward(self, x, context=None):
         # note: if no context is given, cross-attention defaults to self-attention
         b, c, h, w = x.shape
@@ -266,5 +268,9 @@ class SpatialTransformer(nn.Module):
         for block in self.transformer_blocks:
             x = block(x, context=context)
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
+        
+        if self.save_feat:
+            self.feat = x
+
         x = self.proj_out(x)
         return x + x_in

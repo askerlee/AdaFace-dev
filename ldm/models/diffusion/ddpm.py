@@ -775,15 +775,20 @@ class LatentDiffusion(DDPM):
                     # The cache will be used in calc_prompt_delta_loss().
                     self.embedding_manager.init_ada_embedding_cache()
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
-                    # If do_comp_prompt_mix_reg, the image mask is also needed to repeat. 
-                    if img_mask is not None:
-                        HALF_BS  = max(img_mask.shape[0] // 2, 1)
-                        if self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg:
+                    # Do not consider mask on compositional reg iterations.
+                    if img_mask is not None and \
+                        (self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg):
+                            img_mask = None
+                            """                             
+                            # If do_comp_prompt_mix_reg, the image mask is also needed to repeat. 
+                            HALF_BS  = max(img_mask.shape[0] // 2, 1)
                             # The image batch will be repeated 4 times in p_losses(),
                             # so img_mask is also repeated 4 times.
-                            img_mask = img_mask[:HALF_BS].repeat(4, 1, 1, 1)
+                            img_mask = img_mask[:HALF_BS].repeat(4, 1, 1, 1) 
+                            """
 
-                    # img_mask is used by the ada embedding generator.
+                    # img_mask is used by the ada embedding generator. 
+                    # So we pass img_mask to embedding_manager here.
                     self.embedding_manager.set_img_mask(img_mask)
                     extra_info['ada_embedder'] = ada_embedder
 
@@ -1548,28 +1553,35 @@ class LatentDiffusion(DDPM):
     # extra_info: a dict that contains 'ada_embedder' and other fields. 
     # ada_embedder: a function to convert c_in to ada embeddings.
     # ANCHOR[id=p_losses]
-    def p_losses(self, x_start, cond, t, noise=None, img_mask=None):
+    def p_losses(self, x_start, cond, t, noise=None, img_mask=None, recur_depth=0):
         is_comp_iter = (self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg)
         noise = default(noise, lambda: torch.randn_like(x_start))
 
         if is_comp_iter:
+            x_start_ = x_start
+            t_       = t
+            noise_   = noise
+            img_mask_ = img_mask
+
             HALF_BS  = max(x_start.shape[0] // 2, 1)
             # Randomly choose t from the largest 250 timesteps, so as to match the total noise input.
             rand_timestep = np.random.randint(int(self.num_timesteps * 0.75), self.num_timesteps)
             t.fill_(rand_timestep)
             t = t[:HALF_BS].repeat(4)
+            # Make x_start random.
             x_start.normal_()
+            # Use the same x_start across the 4 instances.
             x_start  = x_start[:HALF_BS].repeat(4, 1, 1, 1)
-            # Use the same noise.
+            # Use the same noise across the 4 instances.
             noise    = noise[:HALF_BS].repeat(4, 1, 1, 1)
-            if img_mask is not None:
-                img_mask = img_mask[:HALF_BS]
-            else:
-                img_mask = 1
+            # Ignore img_mask.
+            img_mask = None
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        # model_output is predicted noise.
         model_output = self.apply_model(x_noisy, t, cond)
 
+        # compositional reg iterations.
         if is_comp_iter:
             # If we do compositional prompt mixing, we need the final images of the 
             # second half as the reconstruction objective for compositional regularization.
@@ -1577,17 +1589,17 @@ class LatentDiffusion(DDPM):
             # the image recon loss, are actually not reconstructable, 
             # since 75% of the chance, x_start is totally randomized.
             # LINK #shared_step
+            # Note model_output is predicted noise.
             x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=model_output)
             model_outputs = torch.split(x_recon, model_output.shape[0] // 4, dim=0)
             # Images generated both under subj_comp_prompts and subj_prompt_mix_comps 
-            # are subject to the CLIP text-image loss.
-            # cls_comp_prompts is still used to compute the CLIP text-image loss on
-            # images guided by the mixed embeddings (as the composition is the same).
-            clip_images_code  = torch.cat([ model_outputs[1] * img_mask, 
-                                            model_outputs[3] * img_mask ], dim=0)
+            # are subject to the CLIP text-image matching evaluation.
+            # cls_comp_prompts is used to compute the CLIP text-image matching loss on
+            # images guided by the mixed embeddings.
+            clip_images_code  = torch.cat([ model_outputs[1], model_outputs[3] ], dim=0)
             # The first  cls_comp_prompts is for subj_comps_emb, and 
             # the second cls_comp_prompts is for subj_comps_emb_mix.                
-            clip_prompts_comp   = cond[2]['cls_comp_prompts']   + cond[2]['cls_comp_prompts']
+            clip_prompts_comp = cond[2]['cls_comp_prompts'] + cond[2]['cls_comp_prompts']
 
             # Compositional images are also subject to the single-prompt CLIP loss,
             # as they must contain the subject. This is to reduce the chance that
@@ -1640,57 +1652,6 @@ class LatentDiffusion(DDPM):
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
 
-        if self.embedding_reg_weight > 0:
-            self.embedding_manager.is_comp_iter = is_comp_iter
-            loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
-            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg.detach()})
-            loss += (self.embedding_reg_weight * loss_embedding_reg)
-
-        if self.do_static_prompt_delta_reg:
-            # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
-            static_delta_loss, ada_delta_loss = self.embedding_manager.calc_prompt_delta_loss( 
-                                    self.do_ada_prompt_delta_reg, self.c_static_emb
-                                    )
-            loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
-            if ada_delta_loss != 0:
-                loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
-            # The prompt delta loss for ada embeddings is only applied 
-            # every self.composition_regs_iter_gap iterations. So the ada loss 
-            # should be boosted proportionally to composition_regs_iter_gap. 
-            # Divide it by 2 to reduce the proportion of ada emb loss relative to 
-            # static emb loss in the total loss.                
-            ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
-            loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
-            # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
-
-        #print(clip_prompts_comp)
-        """ 
-        if self.clip_loss_weight > 0:
-            clip_images = self.differentiable_decode_first_stage(clip_images_code)
-            clip_images_np = clip_images.detach().cpu().numpy()
-            # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
-            # to keep the loss positive.
-            # txt_to_img_similarity() returns the pairwise similarities between the prompts and the images.
-            # So if there are N prompts and N images, the returned tensor has shape (N, N).
-            # We should only consider diagonal elements, assuming the prompts are 
-            # matched with the images in order. Therefore, it's buggy to take the mean of the losses.
-            # In our particular setting of batch size = 2 (HALF_BS = 1), clip_prompts_comp consists of 
-            # two identical cls_comp_prompts, which leads to the correct results, but we better 
-            # fix it for larger batch sizes. 
-
-            # txt_to_img_similarity() uses a preprocesser that assumes the input images 
-            # are a tensor with mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0].
-            # (not really assume the images are with this mean and std; 
-            # it's just as a way to specify the transformation parameters.)
-            # In effect, it transforms clip_images by (clip_images + 1) / 2,
-            # which is consistent with the output transformation in stable_txt2img.py.
-            losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, 
-                                                                                    reduction='diag')
-            #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
-            #                                                                     reduction='diag')
-        """
-        
         if self.calc_clip_loss:
             with torch.no_grad():
                 clip_images = self.decode_first_stage(clip_images_code)
@@ -1752,9 +1713,69 @@ class LatentDiffusion(DDPM):
                 # Still compute the loss metrics. 
                 # But no real filtering, instead just teach on all instances.
                 is_teachable = True
+            # Try one more time, to see if the teacher instance is qualified.
+            elif not is_teachable and self.do_comp_prompt_mix_reg and recur_depth == 0:
+                if not is_comp_iter:
+                    breakpoint()
+                # Release computation graph of this iter.
+                del model_output, x_recon, model_outputs, clip_images_code
+                # init_ada_embedding_cache() will implicitly clear the cache.
+                self.embedding_manager.init_ada_embedding_cache()
+                return self.p_losses(x_start_, cond, t_, noise_, img_mask_, recur_depth=1)
         else:
             is_teachable = True
+            
+        if self.embedding_reg_weight > 0:
+            self.embedding_manager.is_comp_iter = is_comp_iter
+            loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
+            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg.detach()})
+            loss += (self.embedding_reg_weight * loss_embedding_reg)
 
+        if self.do_static_prompt_delta_reg:
+            # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
+            static_delta_loss, ada_delta_loss = self.embedding_manager.calc_prompt_delta_loss( 
+                                    self.do_ada_prompt_delta_reg, self.c_static_emb
+                                    )
+            loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
+            if ada_delta_loss != 0:
+                loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
+            # The prompt delta loss for ada embeddings is only applied 
+            # every self.composition_regs_iter_gap iterations. So the ada loss 
+            # should be boosted proportionally to composition_regs_iter_gap. 
+            # Divide it by 2 to reduce the proportion of ada emb loss relative to 
+            # static emb loss in the total loss.                
+            ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
+            loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
+            loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
+            # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
+
+        #print(clip_prompts_comp)
+        """ 
+        if self.clip_loss_weight > 0:
+            clip_images = self.differentiable_decode_first_stage(clip_images_code)
+            clip_images_np = clip_images.detach().cpu().numpy()
+            # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
+            # to keep the loss positive.
+            # txt_to_img_similarity() returns the pairwise similarities between the prompts and the images.
+            # So if there are N prompts and N images, the returned tensor has shape (N, N).
+            # We should only consider diagonal elements, assuming the prompts are 
+            # matched with the images in order. Therefore, it's buggy to take the mean of the losses.
+            # In our particular setting of batch size = 2 (HALF_BS = 1), clip_prompts_comp consists of 
+            # two identical cls_comp_prompts, which leads to the correct results, but we better 
+            # fix it for larger batch sizes. 
+
+            # txt_to_img_similarity() uses a preprocesser that assumes the input images 
+            # are a tensor with mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0].
+            # (not really assume the images are with this mean and std; 
+            # it's just as a way to specify the transformation parameters.)
+            # In effect, it transforms clip_images by (clip_images + 1) / 2,
+            # which is consistent with the output transformation in stable_txt2img.py.
+            losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, 
+                                                                                    reduction='diag')
+            #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
+            #                                                                     reduction='diag')
+        """
+        
         if self.do_comp_prompt_mix_reg and is_teachable:
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
             # Only regularize on intermediate features, i.e., intermediate features generated 
@@ -1768,9 +1789,11 @@ class LatentDiffusion(DDPM):
             # It contains all the intermediate 25 layers of UNet features.
             unet_feats = cond[2]['unet_feats']
             # unet_attns is a dict as: layer_idx -> attn_mat. 
-            # It contains the 4 specified conditioned layers of UNet attentions, 
+            # It contains the 5 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17.
             unet_attns = cond[2]['unet_attns']
+            # Set to 0 to disable distillation on attention weights of the subject.
+            distill_subj_attn_weight = 0.1
 
             # Discard top layers and the first few bottom layers from distillation.
             # distill_layer_weights: relative weight of each distillation layer. 
@@ -1780,14 +1803,14 @@ class LatentDiffusion(DDPM):
             # Layer 16 has strong face semantics, so it is given a small weight.
             feat_distill_layer_weights = { 7:  1., 8: 1.,   
                                           #9:  0.5, 10: 0.5, 11: 0.5, 
-                                          12: 0.5, 
+                                           12: 0.5, 
                                           # 16: 0.25, 17: 0.25,
                                          }
 
             attn_distill_layer_weights = { 7:  1., 8: 1.,
                                            #9:  0.5, 10: 0.5, 11: 0.5,
-                                           12: 0.5,
-                                           16: 0.25, 17: 0.25,
+                                           12: 1.,
+                                           16: 1., 17: 1.,
                                          }
             
             feat_distill_layer_weight_sum = np.sum(list(feat_distill_layer_weights.values()))
@@ -1795,33 +1818,28 @@ class LatentDiffusion(DDPM):
             attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
             attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
 
-            use_subj_attn_as_spatial_weights = True
-            # Set to 0 to disable distillation on attention weights of the subject.
-            distill_subj_attn_weight = 0.1
+            orig_placeholder_ind_B, orig_placeholder_ind_T = self.embedding_manager.placeholder_indices
+            # cat_placeholder_ind_B: a list of batch indices that point to individual instances.
+            # cat_placeholder_ind_T: a list of token indices that point to the placeholder token in each instance.
+            cat_placeholder_ind_B  = orig_placeholder_ind_B.clone()
+            cat_placeholder_ind_T  = orig_placeholder_ind_T.clone()
+            # cond[0].shape[1]: 154, number of tokens in the mixed prompts.
+            # Right shift the subject token indices by 77, 
+            # to locate the subject token (placeholder) in the concatenated comp prompts.
+            placeholder_indices_B = orig_placeholder_ind_B
 
-            if use_subj_attn_as_spatial_weights:
-                orig_placeholder_ind_B, orig_placeholder_ind_T = self.embedding_manager.placeholder_indices
-                # cat_placeholder_ind_B: a list of batch indices that point to individual instances.
-                # cat_placeholder_ind_T: a list of token indices that point to the placeholder token in each instance.
-                cat_placeholder_ind_B  = orig_placeholder_ind_B.clone()
-                cat_placeholder_ind_T  = orig_placeholder_ind_T.clone()
-                # cond[0].shape[1]: 154, number of tokens in the mixed prompts.
-                # Right shift the subject token indices by 77, 
-                # to locate the subject token (placeholder) in the concatenated comp prompts.
-                placeholder_indices_B = orig_placeholder_ind_B
-
-                # The class prompts are at the latter half of all the prompts.
-                # So we need to add the batch indices of the subject prompts, to locate
-                # the corresponding class prompts.
-                cls_placeholder_indices_B = placeholder_indices_B + HALF_BS * 2
-                # Concatenate the placeholder indices of the subject prompts and class prompts.
-                placeholder_indices_B = torch.cat([placeholder_indices_B, cls_placeholder_indices_B], dim=0)
-                # stack then flatten() to interlace the two lists.
-                placeholder_indices_T = torch.stack([orig_placeholder_ind_T, cat_placeholder_ind_T], dim=1).flatten()
-                # placeholder_indices: 
-                # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
-                #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
-                placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
+            # The class prompts are at the latter half of the batch.
+            # So we need to add the batch indices of the subject prompts, to locate
+            # the corresponding class prompts.
+            cls_placeholder_indices_B = placeholder_indices_B + HALF_BS * 2
+            # Concatenate the placeholder indices of the subject prompts and class prompts.
+            placeholder_indices_B = torch.cat([placeholder_indices_B, cls_placeholder_indices_B], dim=0)
+            # stack then flatten() to interlace the two lists.
+            placeholder_indices_T = torch.stack([orig_placeholder_ind_T, cat_placeholder_ind_T], dim=1).flatten()
+            # placeholder_indices: 
+            # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
+            #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
+            placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
 
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
@@ -1831,28 +1849,34 @@ class LatentDiffusion(DDPM):
                 feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
-                if use_subj_attn_as_spatial_weights:
-                    # [4, 8, 256, 154] / [4, 8, 64, 154] =>
-                    # [4, 154, 8, 256] / [4, 154, 8, 64]
-                    # We don't need BP through attention into UNet.
-                    attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
-                    # subj_attn: [8, 8, 256] / [8, 8, 64]
-                    subj_attn = attn_mat[placeholder_indices]
-                    # subj_attn_subj_single, ...: [2, 8, 256].
-                    # The first dim 2 is the two occurrences of the subject token 
-                    # in the two sets of prompts. Therefore, HALF_BS is still needed to 
-                    # determine its batch size in convert_attn_to_spatial_weight().
-                    subj_attn_subj_single, subj_attn_subj_comps, \
-                    subj_attn_mix_single,  subj_attn_mix_comps \
-                        = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)
-                    
-                    if (unet_layer_idx in attn_distill_layer_weights) and (distill_subj_attn_weight > 0):
-                        attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
-                        attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
-                        attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
-                        loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, first_n_dims_to_flatten=2)
-                        loss_subj_attn_distill += loss_layer_subj_attn_distill * attn_distill_layer_weight
+                # [4, 8, 256, 154] / [4, 8, 64, 154] =>
+                # [4, 154, 8, 256] / [4, 154, 8, 64]
+                # We don't need BP through attention into UNet.
+                attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
+                # subj_attn: [4, 8, 256] / [4, 8, 64]
+                subj_attn = attn_mat[placeholder_indices]
+                # subj_attn_subj_single, ...: [2, 8, 256].
+                # The first dim 2 is the two occurrences of the subject token 
+                # in the two sets of prompts. Therefore, HALF_BS is still needed to 
+                # determine its batch size in convert_attn_to_spatial_weight().
+                subj_attn_subj_single, subj_attn_subj_comps, \
+                subj_attn_mix_single,  subj_attn_mix_comps \
+                    = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)
 
+                if (unet_layer_idx in attn_distill_layer_weights) and (distill_subj_attn_weight > 0):
+                    attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
+                    attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
+                    attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
+                    loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
+                                                                   first_n_dims_to_flatten=2, 
+                                                                   ref_grad_scale=0)
+                    # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
+                    # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
+                    loss_subj_attn_distill += loss_layer_subj_attn_distill * attn_distill_layer_weight #* 10
+                    # print(f'{unet_layer_idx} loss_layer_subj_attn_distill: {loss_layer_subj_attn_distill:.3f}')
+
+                use_subj_attn_as_spatial_weights = True
+                if use_subj_attn_as_spatial_weights:
                     if unet_layer_idx not in feat_distill_layer_weights:
                         continue
                     feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
@@ -1916,7 +1940,7 @@ class LatentDiffusion(DDPM):
                 # the single embeddings, as the former should be optimized to look good by itself,
                 # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
                 # and 2) the embeddings are amendable to composition.
-                loss_layer_feat_distill = (self.get_loss(feat_subj_delta, feat_mix_delta, mean=False)).mean()
+                loss_layer_feat_distill = self.get_loss(feat_subj_delta, feat_mix_delta, mean=True)
                 
                 # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
                 loss_feat_distill += loss_layer_feat_distill * feat_distill_layer_weight
