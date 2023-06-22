@@ -25,7 +25,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        count_params, instantiate_from_config, mix_embeddings, \
                        ortho_subtract, calc_stats, rand_like, GradientScaler, \
                        calc_chan_locality, convert_attn_to_spatial_weight, calc_delta_loss, \
-                       save_grid
+                       save_grid, divide_chunks
 
 from ldm.modules.ema import LitEma
 from ldm.modules.sophia import SophiaG
@@ -1275,7 +1275,7 @@ class LatentDiffusion(DDPM):
                         # This subj_comp_prompts is used to generate the ada embedding for
                         # the subj_comp_prompts, used for the mixed embeddings of 
                         # (subj_comp_prompts, cls_comp_prompts).
-                        c_in2 = subj_single_prompts + subj_comp_prompts + cls_single_prompts + subj_comp_prompts
+                        c_in2 = subj_single_prompts + subj_comp_prompts + subj_single_prompts + subj_comp_prompts
                         #print(c_in2)
 
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
@@ -1577,12 +1577,25 @@ class LatentDiffusion(DDPM):
             # Ignore img_mask.
             img_mask = None
 
+            if self.do_comp_prompt_mix_reg:
+                c_static_emb, c_in = cond[0], cond[1]
+                cond_ = cond
+                subj_single_emb, subj_comps_emb, subj_single_emb_mix, subj_comps_emb_mix = \
+                    torch.split(c_static_emb, c_static_emb.shape[0] // 4, dim=0)
+                c_static_emb2 = torch.cat([ subj_comps_emb, subj_comps_emb, 
+                                            subj_comps_emb_mix, subj_comps_emb_mix ], dim=0)
+                
+                subj_single_prompts, subj_comp_prompts, subj_single_prompts, subj_comp_prompts = \
+                    divide_chunks(c_in, len(c_in) // 4)
+                c_in2 = subj_comp_prompts + subj_comp_prompts + subj_comp_prompts + subj_comp_prompts
+                # cond = (c_static_emb2, c_in2, cond_[2])
+
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
         # model_output is predicted noise.
         model_output = self.apply_model(x_noisy, t, cond)
 
         # compositional reg iterations.
-        if is_comp_iter:
+        if is_comp_iter and self.calc_clip_loss:
             # If we do compositional prompt mixing, we need the final images of the 
             # second half as the reconstruction objective for compositional regularization.
             # The subj_single and cls_single images, although seemingly subject to

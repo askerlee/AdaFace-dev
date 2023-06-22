@@ -461,3 +461,8 @@ def save_grid(samples, grid_filepath, nrow, do_normalize=False):
     
     # return image to be shown on webui
     return Image.fromarray(grid.astype(np.uint8))
+
+def divide_chunks(lst, chunk_size):
+    # looping till length lst
+    for i in range(0, len(lst), chunk_size): 
+        yield lst[i:i + chunk_size]
