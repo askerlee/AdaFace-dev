@@ -37,7 +37,6 @@ from evaluation.clip_eval import CLIPEvaluator, NoisedCLIPEvaluator
 import copy
 from functools import partial
 import random
-import math
 from safetensors.torch import load_file as safetensors_load_file
 import sys
 
@@ -1275,12 +1274,15 @@ class LatentDiffusion(DDPM):
                         # despite the fact that subj_single_emb, cls_single_emb are mixed into 
                         # the corresponding static embeddings.
                         # Tried to use subj_single_prompts here, and it's worse.
-                        # The last set is another subj_comp_prompts, which is NOT A BUG.
-                        # This subj_comp_prompts is used to generate the ada embedding for
-                        # the subj_comp_prompts, used for the mixed embeddings of 
-                        # (subj_comp_prompts, cls_comp_prompts).
-                        c_in2 = subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
-                        #print(c_in2)
+                        # The last set corresponds the mixed embeddings of (subj_comp_prompts, cls_comp_prompts). 
+                        # Using subj_comp_prompts here will enhance authenticity but hurt compositionality.
+                        # Using cls_comp_prompts  here will enhance compositionality but hurt authenticity.
+                        # Therefore, at 50% of the chance, the last set is another subj_comp_prompts.
+                        # And at the other 50% of the chance, the last set is cls_comp_prompts. 
+                        if random.random() < 0.5:
+                            c_in2 = subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
+                        else:
+                            c_in2 = subj_single_prompts + subj_comp_prompts + cls_single_prompts + subj_comp_prompts
 
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed (concatenated),
