@@ -1276,10 +1276,10 @@ class LatentDiffusion(DDPM):
                         # Using cls_comp_prompts  as mix_comp_prompts will enhance compositionality but hurt authenticity.
                         # To get the best of both worlds, mix_comp_prompts is randomly chosen 
                         # between subj_comp_prompts and cls_comp_prompts.
-                        if random.random() < 0.5:
-                            mix_comp_prompts = subj_comp_prompts
-                        else:
-                            mix_comp_prompts = cls_comp_prompts
+                        #if random.random() < 0.5:
+                        mix_comp_prompts = subj_comp_prompts
+                        #else:
+                        #    mix_comp_prompts = cls_comp_prompts
 
                         c_in2 = subj_single_prompts + subj_comp_prompts + mix_single_prompts + mix_comp_prompts
 
@@ -1715,8 +1715,8 @@ class LatentDiffusion(DDPM):
 
                 # Discard instances that seem to be too far from the text 
                 # (it may be a bit premature to make this decision now, as the images are only denoised once).
-                clip_loss_thres      = 0.35
-                cls_subj_clip_margin = 0.006
+                clip_loss_thres      = 0.33
+                cls_subj_clip_margin = 0.008
                 # are_teachable: The teacher instances are only teachable if both 
                 # the teacher and student are qualified (<= clip_loss_thres), 
                 # and the compositional clip loss is smaller than the student.
