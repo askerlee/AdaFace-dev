@@ -1793,8 +1793,6 @@ class LatentDiffusion(DDPM):
             static_delta_loss, ada_delta_loss = self.embedding_manager.calc_prompt_delta_loss( 
                                     self.do_ada_prompt_delta_reg, self.c_static_emb
                                     )
-            if ada_delta_loss > 0.95:
-                breakpoint()
             loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
             if ada_delta_loss != 0:
                 loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
