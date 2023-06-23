@@ -1565,21 +1565,19 @@ class LatentDiffusion(DDPM):
             # If bs=2, then HALF_BS=1.
             if recur_depth == 0:
                 HALF_BS  = max(x_start.shape[0] // 2, 1)
+                # Randomly initialize x_start and t. Note the batch size is still 2 here.
+                x_start.normal_()
+                # Randomly choose t from the largest 250 timesteps, so as to match the completely noisy x_start.
+                t = torch.randint(int(self.num_timesteps * 0.75), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
             else:
                 # If recur_depth == 1, BS is already doubled in the first iteration. So divide by 4.
                 HALF_BS  = max(x_start.shape[0] // 4, 1)
 
-            # Randomly initialize x_start and t. Note the batch size is still 2 here.
-            x_start.normal_()
-            # Randomly choose t from the largest 250 timesteps, so as to match the completely noisy x_start.
-            t = torch.randint(int(self.num_timesteps * 0.75), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
             # Ignore img_mask.
             img_mask = None
 
             # Only do delta loss reg. This happens if composition_prompt_mix_reg_weight = 0.
             if not self.do_comp_prompt_mix_reg:
-                if recur_depth > 0:
-                    breakpoint()
                 # Generate a batch of 4 instances with the same initial x_start, noise and t.
                 # This doubles the batch size to 4, if bs=2.
                 x_start = x_start[:HALF_BS].repeat(4, 1, 1, 1)
@@ -1599,9 +1597,9 @@ class LatentDiffusion(DDPM):
                     noise   = noise.repeat(2, 1, 1, 1)
                     t       = t.repeat(2)
 
-                    c_static_emb, c_in = cond[0], cond[1]
                     # Back up the original cond to be used in the recursive iteration.
                     cond_ = cond
+                    c_static_emb, c_in = cond[0], cond[1]
 
                     # Make two identical sets of c_static_emb2 and c_in2.
                     subj_single_emb, subj_comps_emb, mix_single_emb, mix_comps_emb = \
@@ -1617,6 +1615,7 @@ class LatentDiffusion(DDPM):
                     # Replace cond to prepare for two sets of instances.
                     cond = (c_static_emb2, c_in2, cond_[2])
 
+                # Should never happen.
                 if recur_depth > 1:
                     breakpoint()
                 # Otherwise, recur_depth == 1. We use the passed-in cond, x_start, noise and t.
@@ -1643,8 +1642,7 @@ class LatentDiffusion(DDPM):
             # So cls_comp_prompts is used to compute the CLIP text-image matching loss on
             # images guided by the subject or mixed embeddings.
             clip_images_code  = x_recon
-            # The first  cls_comp_prompts is for subj_comps_emb, and 
-            # the second cls_comp_prompts is for mix_comps_emb.                
+            # 4 sets of cls_comp_prompts for (subj comp 1, subj comp 2, mix comp 1, mix comp 2).                
             clip_prompts_comp = cond[2]['cls_comp_prompts'] * 4
             if len(clip_images_code) != len(clip_prompts_comp):
                 breakpoint()
