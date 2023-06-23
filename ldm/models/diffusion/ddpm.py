@@ -1267,15 +1267,19 @@ class LatentDiffusion(DDPM):
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
                     if self.do_comp_prompt_mix_reg:
+                        # c_in2 is used to generate ada embeddings.
                         # Arrange c_in2 in the same layout as the static embeddings.
                         # The cls_single_prompts within c_in2 will only be used to generate ordinary 
                         # prompt embeddings, i.e., 
                         # it doesn't contain subject token, and no ada embedding will be injected.
+                        # despite the fact that subj_single_emb, cls_single_emb are mixed into 
+                        # the corresponding static embeddings.
+                        # Tried to use subj_single_prompts here, and it's worse.
                         # The last set is another subj_comp_prompts, which is NOT A BUG.
                         # This subj_comp_prompts is used to generate the ada embedding for
                         # the subj_comp_prompts, used for the mixed embeddings of 
                         # (subj_comp_prompts, cls_comp_prompts).
-                        c_in2 = subj_single_prompts + subj_comp_prompts + subj_single_prompts + subj_comp_prompts
+                        c_in2 = subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
                         #print(c_in2)
 
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
