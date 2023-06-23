@@ -1747,7 +1747,7 @@ class LatentDiffusion(DDPM):
                         breakpoint()
 
                     better_set_idx = torch.argmax(loss_diffs_subj_mix)
-                    # Keep the x_start, noise, and t of the better set. 
+                    # Choose the x_start, noise, and t of the better set. 
                     # Repeat 4 times and pass them as the condition in the recursive iteration.
                     x_start = x_start[better_set_idx].repeat(4, 1, 1, 1)
                     noise   = noise[better_set_idx].repeat(4, 1, 1, 1)
@@ -1763,6 +1763,14 @@ class LatentDiffusion(DDPM):
                     self.embedding_manager.init_ada_embedding_cache()
                     # Use the backed-up cond_ here, instead of cond which has been modified.
                     return self.p_losses(x_start, cond_, t, noise, img_mask=None, recur_depth=1)
+                # Otherwise, only compute loss_embedding_reg and static delta loss.
+                # Skip prompt mix loss and especially, ada delta losses. 
+                # The ada delta loss requires a (subj single, subj comp, mix single, mix comp) batch,
+                # but the current batch is not.
+                # static delta loss is computed based on self.c_static_emb, which still consists of
+                # the above four types of prompt embeddings.
+                else:
+                    self.do_ada_prompt_delta_reg = False
             else:
                 # In the recursive iteration now. The teacher instance is always teachable 
                 # as we have filtered the instances.
@@ -1785,6 +1793,8 @@ class LatentDiffusion(DDPM):
             static_delta_loss, ada_delta_loss = self.embedding_manager.calc_prompt_delta_loss( 
                                     self.do_ada_prompt_delta_reg, self.c_static_emb
                                     )
+            if ada_delta_loss > 0.95:
+                breakpoint()
             loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
             if ada_delta_loss != 0:
                 loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
