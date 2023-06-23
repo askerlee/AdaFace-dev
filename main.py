@@ -255,9 +255,6 @@ def get_parser(**parser_kwargs):
                         help="Whether to use the 'face portrait' trick for the subject")
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
-    # if --use_noised_clip not specified, then use_noised_clip=False.
-    parser.add_argument("--use_noised_clip", nargs="?", type=str2bool, const=True, default=False,
-                        help="Whether to use noised CLIP")
     
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
                         help="Disable wandb logging")    
@@ -941,7 +938,7 @@ if __name__ == "__main__":
             print(f"Setting learning rate to {model.learning_rate:.2e}")
         
         model.weight_decay = weight_decay
-        model.create_clip_evaluator(f"cuda:{trainer.root_gpu}", use_noised_clip=opt.use_noised_clip)
+        model.create_clip_evaluator(f"cuda:{trainer.root_gpu}")
 
         # allow checkpointing via USR1
         def melk(*args, **kwargs):

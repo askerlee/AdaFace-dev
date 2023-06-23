@@ -86,9 +86,6 @@ def parse_args():
                         choices=["v14", "v15", "v15-ema", "v15-terep", "dreamshaper-v5", "dreamshaper-v6"],
                         help="Type of checkpoints to use (default: v15)")
 
-    parser.add_argument("--use_noised_clip", nargs="?", type=str2bool, const=True, default=False,
-                        help="Whether to use noised CLIP")
-    
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=argparse.SUPPRESS,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     

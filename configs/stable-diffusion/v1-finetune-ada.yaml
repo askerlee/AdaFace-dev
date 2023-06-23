@@ -34,8 +34,6 @@ model:
     prompt_delta_reg_weight:       1e-4
     # typical prompt mix reg loss: 0.2, * weight -> 2e-5.
     composition_prompt_mix_reg_weight:  1e-4
-    # CLIP loss usually hurts the subject authenticity.
-    # clip_loss_weight:      0 #1e-5
     filter_with_clip_loss: True
     use_fp_trick:          True
 
