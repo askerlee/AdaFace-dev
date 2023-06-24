@@ -1123,7 +1123,7 @@ class EmbeddingManager(nn.Module):
     # Textual inversion is supported, where static_embeddings is only one embedding.
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
-    def calc_prompt_delta_loss(self, do_ada_prompt_delta_reg, static_embeddings):
+    def calc_prompt_delta_loss(self, static_embeddings, do_ada_prompt_delta_reg, twin_ada_embeddings=None):
         # Apply delta loss on all layers of static embeddings.
         static_delta_layer_indices  = None
         ada_delta_layer_indices     = None
@@ -1199,9 +1199,17 @@ class EmbeddingManager(nn.Module):
             # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
             # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
             # the subject token.
-            ada_subj_single_emb, ada_subj_comp_emb, ada_cls_single_emb, ada_cls_comp_emb \
-                = ada_embeddings.split(BS, dim=0)
-            
+            if twin_ada_embeddings is None:
+                ada_subj_single_emb, ada_subj_comp_emb, ada_cls_single_emb, ada_cls_comp_emb \
+                    = ada_embeddings.split(BS, dim=0)
+            else:
+                ada_subj_comp_emb, ada_cls_comp_emb \
+                    = twin_ada_embeddings.split(BS * 2, dim=0)
+                ada_subj_single_emb = ada_embeddings
+                # Repeat cls_delta at the batch dim to match the twin ada embeddings.
+                cls_delta = cls_delta.repeat(2, 1, 1, 1)
+                delta_loss_emb_mask = delta_loss_emb_mask.repeat(2, 1, 1, 1)
+
             if use_ortho_subtract:
                 ada_delta = ortho_subtract(ada_subj_comp_emb, ada_subj_single_emb)
             else:

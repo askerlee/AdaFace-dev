@@ -1593,6 +1593,11 @@ class LatentDiffusion(DDPM):
                 # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
                 # This doubles the batch size to 4, if bs=2.
                 if recur_depth == 0:
+                    # Back up the "seed" x_start, noise and t.
+                    x_start_ = x_start
+                    noise_   = noise
+                    t_       = t
+
                     x_start = x_start.repeat(2, 1, 1, 1)
                     noise   = noise.repeat(2, 1, 1, 1)
                     t       = t.repeat(2)
@@ -1667,6 +1672,7 @@ class LatentDiffusion(DDPM):
         
         iter_type = cond[2]['iter_type']
         loss = 0
+        twin_ada_embeddings = None
 
         if iter_type == 'normal_recon':
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
@@ -1715,8 +1721,13 @@ class LatentDiffusion(DDPM):
 
                 # Discard instances that seem to be too far from the text 
                 # (it may be a bit premature to make this decision now, as the images are only denoised once).
-                clip_loss_thres      = 0.33
-                cls_subj_clip_margin = 0.008
+                # 0.35/0.006: 30%-40% instances will meet these thresholds.
+                # 0.33/0.008: 15% instances will meet these thresholds.
+                clip_loss_thres      = 0.35
+                cls_subj_clip_margin = 0.006
+                clip_loss_thres_base = 0.33
+                cls_subj_clip_margin_base = 0.008
+
                 # are_teachable: The teacher instances are only teachable if both 
                 # the teacher and student are qualified (<= clip_loss_thres), 
                 # and the compositional clip loss is smaller than the student.
@@ -1747,13 +1758,20 @@ class LatentDiffusion(DDPM):
                         breakpoint()
 
                     better_set_idx = torch.argmax(loss_diffs_subj_mix)
+                    loss_clip_subj_comp = losses_clip_subj_comp[better_set_idx]
+                    loss_diff_subj_mix  = loss_diffs_subj_mix[better_set_idx]
+                    # If loss_clip_subj_comp <= clip_loss_thres, then distill_loss_clip_discount = exp(0) = 1.
+                    # If loss_clip_subj_comp = 0.35, distill_loss_clip_discount = exp(-1) = 0.37.
+                    #                          0.34                          exp(-0.5) = 0.61.
+                    self.distill_loss_clip_discount = 1 / np.exp( max(loss_clip_subj_comp.cpu().item() - clip_loss_thres_base, 0) / 0.02 
+                                                                  +
+                                                                  max(cls_subj_clip_margin_base - loss_diff_subj_mix.cpu().item(), 0) / 0.002 )
                     # Choose the x_start, noise, and t of the better set. 
                     # Repeat 4 times and pass them as the condition in the recursive iteration.
                     x_start = x_start[better_set_idx].repeat(4, 1, 1, 1)
                     noise   = noise[better_set_idx].repeat(4, 1, 1, 1)
                     t       = t[better_set_idx].repeat(4)
 
-                    # Release computation graph of this iteration.
                     del model_output, x_recon, clip_images_code
                     if 'unet_feats' in cond[2]:
                         del cond[2]['unet_feats']
@@ -1763,20 +1781,37 @@ class LatentDiffusion(DDPM):
                     self.embedding_manager.init_ada_embedding_cache()
                     # Use the backed-up cond_ here, instead of cond which has been modified.
                     return self.p_losses(x_start, cond_, t, noise, img_mask=None, recur_depth=1)
-                # Otherwise, only compute loss_embedding_reg and static delta loss.
-                # Skip prompt mix loss and especially, ada delta losses. 
-                # The ada delta loss requires a (subj single, subj comp, mix single, mix comp) batch,
-                # but the current batch is not.
-                # static delta loss is computed based on self.c_static_emb, which still consists of
-                # the above four types of prompt embeddings.
+                # Otherwise, only compute loss_embedding_reg and static/ada delta loss.
+                # ada delta loss requires a bit of processing of the ada embeddings.
                 else:
-                    self.do_ada_prompt_delta_reg = False
+                    # Release part of the computation graph of this iteration. 
+                    # But do not delete model_output, which is part of the computation graph 
+                    # of the ada delta loss.
+                    del model_output, x_recon, clip_images_code
+                    if 'unet_feats' in cond[2]:
+                        del cond[2]['unet_feats']
+                    if 'unet_attns' in cond[2]:
+                        del cond[2]['unet_attns']
+
+                    # Prepare for subject-single condition.
+                    # BS = 2. Corresponds to the twin instances (subj comp 1, subj comp 2).
+                    c_static_emb3 = subj_single_emb.repeat(2, 1, 1, 1)
+                    c_in3 = subj_single_prompts + subj_single_prompts
+                    # Replace cond to prepare for two sets of instances.
+                    cond_single = (c_static_emb3, c_in3, cond_[2])
+                    # twin_ada_embeddings: [4, 16, 77, 768]
+                    twin_ada_embeddings = torch.stack(self.embedding_manager.ada_embeddings, dim=1)
+                    self.embedding_manager.init_ada_embedding_cache()
+                    x_noisy_ = self.q_sample(x_start=x_start_, t=t_, noise=noise_)
+                    model_output_single = self.apply_model(x_noisy_, t_, cond_single)
+                    del model_output_single
             else:
                 # In the recursive iteration now. The teacher instance is always teachable 
                 # as we have filtered the instances.
                 # We also skip updating the losses to wandb in this iteration, 
                 # as we've updated them in the first iteration.
                 is_teachable = True
+                self.distill_loss_clip_discount = 1
         else:
             # Either not self.is_comp_iter or not self.calc_clip_loss. 
             # Distillation won't be done in this iter, so set is_teachable to False.
@@ -1791,7 +1826,8 @@ class LatentDiffusion(DDPM):
         if self.do_static_prompt_delta_reg:
             # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
             static_delta_loss, ada_delta_loss = self.embedding_manager.calc_prompt_delta_loss( 
-                                    self.do_ada_prompt_delta_reg, self.c_static_emb
+                                    self.c_static_emb, self.do_ada_prompt_delta_reg, 
+                                    twin_ada_embeddings=twin_ada_embeddings
                                     )
             loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
             if ada_delta_loss != 0:
@@ -1980,7 +2016,7 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_subj_attn_distill': loss_subj_attn_distill.detach()})
             loss_prompt_mix_reg = loss_feat_distill + loss_subj_attn_distill * distill_subj_attn_weight
                                     
-            loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale
+            loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
             
             self.embedding_manager.placeholder_indices = None
 
