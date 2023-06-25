@@ -29,7 +29,7 @@ dynamic_composition_regexs = \
   "wearing a (tshirt|stormtrooper costume|superman costume|ironman armor|ski outfit|astronaut outfit|medal|suit|tie|baseball cap)",
   "drinking (a bottle of water|a cup of wine|a can of beer|a glass of juice|a cup of tea|a bottle of milk)",
   "eating (a sandwich|an ice cream|barbecue|a pizza|a burger|a bowl of pasta|a piece of cake|a sushi roll|a bowl of soup|a plate of tacos)",
-  "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt|aikido training clothes)",
+  "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt|aikido training clothes|green robe)",
   # This is kind of static but only for humans/animals. So we put it here.
   "in a (chef outfit|firefighter outfit|police outfit|a purple wizard outfit|dress|suit|tshirt|stormtrooper costume|superman costume)",
 ]
@@ -81,10 +81,11 @@ all_modifiers = [ "concept art", "realistic painting", "character design", "anim
                   "trending in artstation", "hyper realistic", "vivid colors", "clear face", 
                   "detailed face", "semirealism", "hyperrealistic", "highly detailed", "octane render",
                   "unreal 5", "photorealistic", "sharp focus", "digital painting", "illustration",
-                  "volumetric lighting", "dreamy", 
+                  "volumetric lighting", "dreamy", "illustration", "cinematic"
                 ]
 
-all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve" ]
+all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve",
+               "mark ryden", "hayao miyazaki" ]
 
 def sample_compositions(N, is_animal):
     compositions = []
