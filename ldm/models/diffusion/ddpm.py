@@ -1950,11 +1950,13 @@ class LatentDiffusion(DDPM):
                                                                  first_n_dims_to_flatten=2, 
                                                                  ref_grad_scale=0)
                     subj_attn_mix_comps_gs  = mix_grad_scaler(subj_attn_mix_comps)
-                    loss_layer_subj_comps_attn  = self.get_loss(subj_attn_subj_comps, subj_attn_mix_comps_gs,
-                                                                mean=True)
+                    loss_layer_subj_comps_attn  = calc_delta_loss(subj_attn_subj_comps, subj_attn_mix_comps_gs,
+                                                                  first_n_dims_to_flatten=2, 
+                                                                  ref_grad_scale=mix_grad_scale)
                     subj_attn_mix_single_gs = mix_grad_scaler(subj_attn_mix_single)
-                    loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs,
-                                                                mean=True)
+                    loss_layer_subj_single_attn = calc_delta_loss(subj_attn_subj_single, subj_attn_mix_single_gs,
+                                                                  first_n_dims_to_flatten=2, 
+                                                                  ref_grad_scale=mix_grad_scale)
                     # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
                     loss_subj_attn_distill += ( loss_layer_subj_delta_attn 
