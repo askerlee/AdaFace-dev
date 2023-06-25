@@ -1906,8 +1906,9 @@ class LatentDiffusion(DDPM):
             # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
             #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
             placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
+            mix_grad_scale = 0.1
+            mix_grad_scaler = GradientScaler(mix_grad_scale)
 
-           
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
                     continue
@@ -1916,12 +1917,22 @@ class LatentDiffusion(DDPM):
                 feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
                     = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
                 
-                # [4, 8, 256, 154] / [4, 8, 64, 154] =>
-                # [4, 154, 8, 256] / [4, 154, 8, 64]
+                # [4, 8, 256, 77] / [4, 8, 64, 77] =>
+                # [4, 77, 8, 256] / [4, 77, 8, 64]
                 # We don't need BP through attention into UNet.
                 attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
                 # subj_attn: [4, 8, 256] / [4, 8, 64]
                 subj_attn = attn_mat[placeholder_indices]
+                
+                """                 
+                # attn_mask: [4, 1, 77, 1] => [4, 77, 1, 1]
+                attn_mask = self.embedding_manager.delta_loss_emb_mask.permute(0, 2, 1, 3)
+                # Mask out the attentions of the padding tokens. Only keep meaningful attentions.
+                masked_attn = attn_mat * attn_mask
+                # avg_token_attn: [4, 8, 256] / [4, 8, 64]
+                avg_token_attn  = masked_attn.sum(dim=1) / attn_mask.sum(dim=1) 
+                """
+
                 # subj_attn_subj_single, ...: [2, 8, 256].
                 # The first dim 2 is the two occurrences of the subject token 
                 # in the two sets of prompts. Therefore, HALF_BS is still needed to 
@@ -1934,12 +1945,16 @@ class LatentDiffusion(DDPM):
                     attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
                     attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
                     attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
-                    loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
-                                                                   first_n_dims_to_flatten=2, 
-                                                                   ref_grad_scale=0)
+                    loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
+                                                                 first_n_dims_to_flatten=2, 
+                                                                 ref_grad_scale=0)
+                    subj_attn_mix_comps_gs  = mix_grad_scaler(subj_attn_mix_comps)
+                    loss_layer_subj_attn    = self.get_loss(subj_attn_subj_comps, subj_attn_mix_comps_gs,
+                                                            mean=True)
+                    
                     # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
-                    loss_subj_attn_distill += loss_layer_subj_attn_distill * attn_distill_layer_weight #* 10
+                    loss_subj_attn_distill += (loss_layer_subj_delta_attn + loss_layer_subj_attn * 0.1) * attn_distill_layer_weight #* 10
                     # print(f'{unet_layer_idx} loss_layer_subj_attn_distill: {loss_layer_subj_attn_distill:.3f}')
 
                 use_subj_attn_as_spatial_weights = True
@@ -1976,17 +1991,8 @@ class LatentDiffusion(DDPM):
                 feat_mix_single  = pooler(feat_mix_single).reshape(feat_mix_single.shape[0], -1)
                 feat_mix_comps   = pooler(feat_mix_comps).reshape(feat_mix_comps.shape[0], -1)
 
-                stop_feat_mix_grad  = False
-                feat_mix_grad_scale = 0.1
-                if stop_feat_mix_grad:
-                    # feat_subj_single = feat_subj_single.detach()
-                    feat_mix_single  = feat_mix_single.detach()
-                    feat_mix_comps   = feat_mix_comps.detach()
-                elif feat_mix_grad_scale != 1:
-                    grad_scaler = GradientScaler(feat_mix_grad_scale)
-                    # feat_subj_single = grad_scaler(feat_subj_single)
-                    feat_mix_single  = grad_scaler(feat_mix_single)
-                    feat_mix_comps   = grad_scaler(feat_mix_comps)
+                feat_mix_single  = mix_grad_scaler(feat_mix_single)
+                feat_mix_comps   = mix_grad_scaler(feat_mix_comps)
 
                 distill_on_delta = True
                 if distill_on_delta:

@@ -1228,7 +1228,7 @@ class EmbeddingManager(nn.Module):
         else:
             ada_delta_loss = 0
         
-        self.clear_delta_loss_emb_mask()
+        # self.clear_delta_loss_emb_mask()
         # delta_loss = static_delta_loss + ada_delta_loss * ada_comp_loss_boost_ratio
         return static_delta_loss, ada_delta_loss
     
