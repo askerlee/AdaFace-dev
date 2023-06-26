@@ -1761,11 +1761,11 @@ class LatentDiffusion(DDPM):
                     loss_clip_subj_comp = losses_clip_subj_comp[better_set_idx]
                     loss_diff_subj_mix  = loss_diffs_subj_mix[better_set_idx]
                     # If loss_clip_subj_comp <= clip_loss_thres, then distill_loss_clip_discount = exp(0) = 1.
-                    # If loss_clip_subj_comp = 0.35, distill_loss_clip_discount = exp(-1) = 0.37.
-                    #                          0.34                          exp(-0.5) = 0.61.
-                    self.distill_loss_clip_discount = 1 / np.exp( max(loss_clip_subj_comp.cpu().item() - clip_loss_thres_base, 0) / 0.02 
+                    # If loss_clip_subj_comp = 0.35, distill_loss_clip_discount = exp(-2)   = 0.14.
+                    #                          0.34                               exp(-0.1) = 0.37.
+                    self.distill_loss_clip_discount = 1 / np.exp( max(loss_clip_subj_comp.cpu().item() - clip_loss_thres_base, 0) / 0.01 
                                                                   +
-                                                                  max(cls_subj_clip_margin_base - loss_diff_subj_mix.cpu().item(), 0) / 0.002 )
+                                                                  max(cls_subj_clip_margin_base - loss_diff_subj_mix.cpu().item(), 0) / 0.001 )
                     # Choose the x_start, noise, and t of the better set. 
                     # Repeat 4 times and pass them as the condition in the recursive iteration.
                     x_start = x_start[better_set_idx].repeat(4, 1, 1, 1)
@@ -1860,7 +1860,11 @@ class LatentDiffusion(DDPM):
             unet_attns = cond[2]['unet_attns']
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.1
-            direct_attn_loss_scale   = 0.1
+            direct_attn_distill_scheme = "l2"
+            if direct_attn_distill_scheme == "l2":
+                direct_attn_loss_scale = 1
+            else:
+                direct_attn_loss_scale = 0.1
 
             # Discard top layers and the first few bottom layers from distillation.
             # distill_layer_weights: relative weight of each distillation layer. 
@@ -1949,14 +1953,19 @@ class LatentDiffusion(DDPM):
                     loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
                                                                  first_n_dims_to_flatten=2, 
                                                                  ref_grad_scale=0)
-                    subj_attn_mix_comps_gs  = mix_grad_scaler(subj_attn_mix_comps)
-                    loss_layer_subj_comps_attn  = calc_delta_loss(subj_attn_subj_comps, subj_attn_mix_comps_gs,
-                                                                  first_n_dims_to_flatten=2, 
-                                                                  ref_grad_scale=mix_grad_scale)
-                    subj_attn_mix_single_gs = mix_grad_scaler(subj_attn_mix_single)
-                    loss_layer_subj_single_attn = calc_delta_loss(subj_attn_subj_single, subj_attn_mix_single_gs,
-                                                                  first_n_dims_to_flatten=2, 
-                                                                  ref_grad_scale=mix_grad_scale)
+                    if direct_attn_distill_scheme == "l2":
+                        subj_attn_mix_comps_gs  = mix_grad_scaler(subj_attn_mix_comps)
+                        subj_attn_mix_single_gs = mix_grad_scaler(subj_attn_mix_single)
+                        loss_layer_subj_comps_attn  = self.get_loss(subj_attn_subj_comps,  subj_attn_mix_comps_gs,  mean=True)
+                        loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
+                    else:
+                        loss_layer_subj_comps_attn  = calc_delta_loss(subj_attn_subj_comps,  subj_attn_mix_comps,
+                                                                      first_n_dims_to_flatten=2, 
+                                                                      ref_grad_scale=mix_grad_scale)
+                        loss_layer_subj_single_attn = calc_delta_loss(subj_attn_subj_single, subj_attn_mix_single,
+                                                                      first_n_dims_to_flatten=2, 
+                                                                      ref_grad_scale=mix_grad_scale)
+                        
                     # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
                     loss_subj_attn_distill += ( loss_layer_subj_delta_attn 
