@@ -1862,9 +1862,12 @@ class LatentDiffusion(DDPM):
             distill_subj_attn_weight = 0.1
             direct_attn_distill_scheme = "l2"
             if direct_attn_distill_scheme == "l2":
-                direct_attn_loss_scale = 1
+                direct_single_attn_loss_scale = 2
+                direct_comps_attn_loss_scale  = 4
             else:
-                direct_attn_loss_scale = 0.1
+                # Delta loss. Not recommended.
+                direct_single_attn_loss_scale = 0.1
+                direct_comps_attn_loss_scale  = 0.2
 
             # Discard top layers and the first few bottom layers from distillation.
             # distill_layer_weights: relative weight of each distillation layer. 
@@ -1969,8 +1972,8 @@ class LatentDiffusion(DDPM):
                     # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
                     loss_subj_attn_distill += ( loss_layer_subj_delta_attn 
-                                                 + loss_layer_subj_comps_attn  * direct_attn_loss_scale
-                                                 + loss_layer_subj_single_attn * direct_attn_loss_scale \
+                                                 + loss_layer_subj_comps_attn  * direct_comps_attn_loss_scale
+                                                 + loss_layer_subj_single_attn * direct_single_attn_loss_scale \
                                                ) * attn_distill_layer_weight
 
                 use_subj_attn_as_spatial_weights = True
