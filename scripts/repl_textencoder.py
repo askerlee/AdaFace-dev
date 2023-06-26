@@ -31,8 +31,8 @@ for k in sd_state_dict:
         print(f"'{k}' not in TE checkpoint")
         continue
     if sd_state_dict[k].shape != te_state_dict[k].shape:
-        print(f"'{k}' shape mismatch: {sd_state_dict[k].shape} vs {te_state_dict[k].shape}")
-        breakpoint()
+        print(f"!!!! '{k}' shape mismatch: {sd_state_dict[k].shape} vs {te_state_dict[k].shape} !!!!")
+        continue
     if k.startswith("cond_stage_model."):
         sd_state_dict[k] = te_state_dict[k]
         repl_count += 1
