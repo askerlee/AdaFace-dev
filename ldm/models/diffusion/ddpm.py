@@ -1862,8 +1862,8 @@ class LatentDiffusion(DDPM):
             distill_subj_attn_weight = 0.1
             direct_attn_distill_scheme = "l2"
             if direct_attn_distill_scheme == "l2":
-                direct_single_attn_loss_scale = 2
-                direct_comps_attn_loss_scale  = 4
+                direct_single_attn_loss_scale = 1
+                direct_comps_attn_loss_scale  = 2
             else:
                 # Delta loss. Not recommended.
                 direct_single_attn_loss_scale = 0.1
