@@ -36,6 +36,8 @@ scripts/stable_txt2img_db.py
 /models/dreamshaper
 /models/stable-diffusion/*
 /models/stable-diffusion
+/models/reco/*
+/models/reco
 /._*
 *._*
 /outputs/*
@@ -44,4 +46,3 @@ scripts/stable_txt2img_db.py
 /latent_diffusion.egg-info/*
 /latent_diffusion.egg-info
 /latent_diffusion*
-
