@@ -23,7 +23,8 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, mix_embeddings, \
-                       ortho_subtract, calc_stats, rand_like, GradientScaler, \
+                       ortho_subtract, calc_stats, rand_like, \
+                       GradientScaler, gen_gradient_scaler, \
                        calc_chan_locality, convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, divide_list_into_chunks
 
@@ -1914,8 +1915,10 @@ class LatentDiffusion(DDPM):
             # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
             #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
             placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
-            mix_grad_scale = 0.1
-            mix_grad_scaler = GradientScaler(mix_grad_scale)
+            mix_feat_grad_scale = 0.1
+            mx_attn_grad_scale  = 0     # if scale = 0, do tensor.detach() instead.
+            mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
+            mix_attn_grad_scaler = gen_gradient_scaler(mx_attn_grad_scale)
 
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
@@ -1957,17 +1960,19 @@ class LatentDiffusion(DDPM):
                                                                  first_n_dims_to_flatten=2, 
                                                                  ref_grad_scale=0)
                     if direct_attn_distill_scheme == "l2":
-                        subj_attn_mix_comps_gs  = mix_grad_scaler(subj_attn_mix_comps)
-                        subj_attn_mix_single_gs = mix_grad_scaler(subj_attn_mix_single)
+                        subj_attn_mix_comps_gs  = mix_attn_grad_scaler(subj_attn_mix_comps)
+                        subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
                         loss_layer_subj_comps_attn  = self.get_loss(subj_attn_subj_comps,  subj_attn_mix_comps_gs,  mean=True)
                         loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
                     else:
+                        # We use the same grad scale as the mix features for the attn delta loss, 
+                        # as it's observed that small grad to mix attn delta is better than no grad. 
                         loss_layer_subj_comps_attn  = calc_delta_loss(subj_attn_subj_comps,  subj_attn_mix_comps,
                                                                       first_n_dims_to_flatten=2, 
-                                                                      ref_grad_scale=mix_grad_scale)
+                                                                      ref_grad_scale=mix_feat_grad_scale)
                         loss_layer_subj_single_attn = calc_delta_loss(subj_attn_subj_single, subj_attn_mix_single,
                                                                       first_n_dims_to_flatten=2, 
-                                                                      ref_grad_scale=mix_grad_scale)
+                                                                      ref_grad_scale=mix_feat_grad_scale)
                         
                     # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
@@ -2010,8 +2015,8 @@ class LatentDiffusion(DDPM):
                 feat_mix_single  = pooler(feat_mix_single).reshape(feat_mix_single.shape[0], -1)
                 feat_mix_comps   = pooler(feat_mix_comps).reshape(feat_mix_comps.shape[0], -1)
 
-                feat_mix_single  = mix_grad_scaler(feat_mix_single)
-                feat_mix_comps   = mix_grad_scaler(feat_mix_comps)
+                feat_mix_single  = mix_feat_grad_scaler(feat_mix_single)
+                feat_mix_comps   = mix_feat_grad_scaler(feat_mix_comps)
 
                 distill_on_delta = True
                 if distill_on_delta:

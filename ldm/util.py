@@ -441,6 +441,12 @@ class GradientScaler(nn.Module):
     def forward(self, input_):
         return ScaleGrad.apply(input_, self._alpha)
 
+def gen_gradient_scaler(alpha):
+    if alpha > 0:
+        return GradientScaler(alpha)
+    else:
+        return lambda x: x.detach()
+    
 # samples: a list of (B, C, H, W) tensors.
 # If not do_normalize, samples should be between [0, 1].
 # If do_normalize, samples should be between [-1, 1] (raw output from SD decode_first_stage()).
