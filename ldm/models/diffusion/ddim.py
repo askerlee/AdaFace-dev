@@ -140,16 +140,24 @@ class DDIMSampler(object):
             timesteps = self.ddim_timesteps[:subset_end]
 
         intermediates = {'x_inter': [img], 'pred_x0': [img]}
+        # time_range:
+        # [981, 961, 941, 921, 901, 881, 861, 841, 821, 801, 781, 761, 741,
+        #  721, 701, 681, 661, 641, 621, 601, 581, 561, 541, 521, 501, 481,
+        #  461, 441, 421, 401, 381, 361, 341, 321, 301, 281, 261, 241, 221,
+        #  201, 181, 161, 141, 121, 101,  81,  61,  41,  21,   1]
         time_range = reversed(range(0,timesteps)) if ddim_use_original_steps else np.flip(timesteps)
+        # total_steps: 50, provided in the command line.
         total_steps = timesteps if ddim_use_original_steps else timesteps.shape[0]
         print(f"Running DDIM Sampling with {total_steps} timesteps")
-
+        # breakpoint()
         iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
 
         for i, step in enumerate(iterator):
+            # index points to the correct elements in alphas, sigmas, sqrt_one_minus_alphas, etc.
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
-
+            # print(step)
+            
             if mask is not None:
                 assert x0 is not None
                 img_orig = self.model.q_sample(x0, ts)  # TODO: deterministic forward pass?

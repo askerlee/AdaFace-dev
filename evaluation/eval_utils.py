@@ -371,7 +371,7 @@ def parse_range_str(range_str, fix_1_offset=True):
 
 # subset: 'all' or 'hard'. 
 # 'hard' means the subset of prompts based on which it's hard to generate images.
-def get_promt_list(placeholder, z_prefix, z_suffix, class_token, 
+def get_prompt_list(placeholder, z_prefix, z_suffix, class_token, 
                    class_long_token, broad_class, subset='all'):
     object_prompt_list = [
     # The space between "{0} {1}" is removed, so that prompts 
