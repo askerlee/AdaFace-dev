@@ -1916,7 +1916,9 @@ class LatentDiffusion(DDPM):
             #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
             placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
             mix_feat_grad_scale = 0.1
-            mx_attn_grad_scale  = 0     # if scale = 0, do tensor.detach() instead.
+            # almost zero, effectively no grad to teacher attn. 
+            # Setting to 0 may cause graph not unreleased and OOM.
+            mx_attn_grad_scale  = 0.01  
             mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
             mix_attn_grad_scaler = gen_gradient_scaler(mx_attn_grad_scale)
 
