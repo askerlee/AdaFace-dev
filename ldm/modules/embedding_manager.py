@@ -1150,11 +1150,11 @@ class EmbeddingManager(nn.Module):
         # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
         # Each is [2, 16, 77, 768]
         static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
-                static_embeddings.split(BS, dim=0)
+                static_embeddings.chunk(4)
 
         if self.delta_loss_emb_mask is not None:
             subj_single_mask, subj_comp_mask, cls_single_mask, cls_comp_mask = \
-                    self.delta_loss_emb_mask.split(BS, dim=0)
+                    self.delta_loss_emb_mask.chunk(4)
             
             # cls_single_mask == subj_single_mask, cls_comp_mask == subj_comp_mask
             # So only compute using subj_single_mask and subj_comp_mask.
@@ -1201,10 +1201,10 @@ class EmbeddingManager(nn.Module):
             # the subject token.
             if twin_ada_embeddings is None:
                 ada_subj_single_emb, ada_subj_comp_emb, ada_cls_single_emb, ada_cls_comp_emb \
-                    = ada_embeddings.split(BS, dim=0)
+                    = ada_embeddings.chunk(4)
             else:
                 ada_subj_comp_emb, ada_cls_comp_emb \
-                    = twin_ada_embeddings.split(BS * 2, dim=0)
+                    = twin_ada_embeddings.chunk(2)
                 ada_subj_single_emb = ada_embeddings
                 # Repeat cls_delta at the batch dim to match the twin ada embeddings.
                 cls_delta = cls_delta.repeat(2, 1, 1, 1)

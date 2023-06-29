@@ -507,6 +507,7 @@ def main(opt):
                         # unconditional and conditional embeddings within UNetModel.forward(). 
                         # But since unconditional prompt doesn't contain the placeholder token,
                         # ada_embedder won't change the unconditional embedding uc.
+                        # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
                         samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                                          conditioning=c,
                                                          batch_size=batch_size,

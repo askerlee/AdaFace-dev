@@ -780,7 +780,7 @@ class UNetModel(nn.Module):
                     else:
                         # iter_type == 'mix_hijk'. Separate layer_static_context.
                         layer_static_context, layer_static_key_context = \
-                            layer_static_context.split(layer_static_context.shape[1] // 2, dim=1)
+                            layer_static_context.chunk(2, dim=1)
                 elif iter_type == 'static_hijk':
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1]
                     layer_static_key_context = layer_static_context.clone()

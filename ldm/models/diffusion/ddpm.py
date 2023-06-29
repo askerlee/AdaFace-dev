@@ -661,6 +661,11 @@ class LatentDiffusion(DDPM):
     @rank_zero_only
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
+        if self.global_step == 0:
+            self.create_clip_evaluator(next(self.parameters()).device)
+            with torch.no_grad():
+                self.uncond = self.get_learned_conditioning([""] * 2)
+
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
             assert self.scale_factor == 1., 'rather not use custom rescaling and std-rescaling simultaneously'
@@ -1258,7 +1263,7 @@ class LatentDiffusion(DDPM):
                     # extra_info: a dict that contains extra info.
                     c_static_emb, c_in, extra_info = self.get_learned_conditioning(prompts_delta, img_mask=img_mask)
                     subj_single_emb, subj_comps_emb, cls_single_emb, cls_comps_emb = \
-                        torch.split(c_static_emb, PROMPT_N_EMBEDS, dim=0)
+                        c_static_emb.chunk(4)
                     
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
@@ -1609,7 +1614,7 @@ class LatentDiffusion(DDPM):
 
                     # Make two identical sets of c_static_emb2 and c_in2.
                     subj_single_emb, subj_comps_emb, mix_single_emb, mix_comps_emb = \
-                        torch.split(c_static_emb, c_static_emb.shape[0] // 4, dim=0)
+                        c_static_emb.chunk(4)
                     c_static_emb2 = torch.cat([ subj_comps_emb, subj_comps_emb, 
                                                 mix_comps_emb,  mix_comps_emb ], dim=0)
                     
@@ -1621,6 +1626,12 @@ class LatentDiffusion(DDPM):
                     # Replace cond to prepare for two sets of instances.
                     cond = (c_static_emb2, c_in2, cond_[2])
 
+                    with torch.no_grad():
+                        x_noisy_ = self.q_sample(x_start=x_start_, t=t_, noise=noise_)
+                        # model_output_uncond: [2, 4, 64, 64] -> [4, 4, 64, 64]
+                        model_output_uncond = self.apply_model(x_noisy_, t_, self.uncond)
+                        model_output_uncond = model_output_uncond.repeat(2, 1, 1, 1)
+                        
                 # Should never happen.
                 if recur_depth > 1:
                     breakpoint()
@@ -1641,7 +1652,9 @@ class LatentDiffusion(DDPM):
             # since 75% of the chance, x_start is totally randomized.
             # LINK #shared_step
             # Note model_output is predicted noise.
-            x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=model_output)
+            guide_scale = 5
+            pred_noise = model_output * guide_scale - model_output_uncond * (guide_scale - 1)
+            x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=pred_noise)
             # Images generated both under subj_comp_prompts and subj_prompt_mix_comps 
             # are subject to the CLIP text-image matching evaluation.
             # The whole batch of 4 instances are all using subj_comp_prompts or mix_comp_prompts.
@@ -1708,14 +1721,14 @@ class LatentDiffusion(DDPM):
                     clip_images_np = clip_images.cpu().numpy()
 
                     losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
-                                                                                            reduction='diag')
+                                                                                         reduction='diag')
 
                 self.cache_and_log_generations(clip_images_np)
 
                 # Instances are arranged as: 
                 # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
                 losses_clip_subj_comp, losses_clip_mix_comp \
-                    = losses_clip_comp.split(losses_clip_comp.shape[0] // 2, dim=0)
+                    = losses_clip_comp.chunk(2)
                 
                 loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean()})
                 loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_mix_comp.mean()})
@@ -1724,10 +1737,10 @@ class LatentDiffusion(DDPM):
                 # (it may be a bit premature to make this decision now, as the images are only denoised once).
                 # 0.35/0.006: 30%-40% instances will meet these thresholds.
                 # 0.33/0.008: 15% instances will meet these thresholds.
-                clip_loss_thres      = 0.35
-                cls_subj_clip_margin = 0.006
-                clip_loss_thres_base = 0.33
-                cls_subj_clip_margin_base = 0.008
+                clip_loss_thres      = 0.28
+                cls_subj_clip_margin = 0.004
+                clip_loss_thres_base = 0.26
+                cls_subj_clip_margin_base = 0.006
 
                 # are_teachable: The teacher instances are only teachable if both 
                 # the teacher and student are qualified (<= clip_loss_thres), 
@@ -1738,6 +1751,7 @@ class LatentDiffusion(DDPM):
                 # So only need to check losses_clip_subj_comp against clip_loss_thres.
                 loss_diffs_subj_mix = losses_clip_subj_comp - losses_clip_mix_comp
                 are_teachable = (losses_clip_subj_comp <= clip_loss_thres) & (loss_diffs_subj_mix > cls_subj_clip_margin)
+                print(losses_clip_subj_comp, losses_clip_mix_comp)
 
                 if not self.filter_with_clip_loss:
                     # Still compute the loss metrics. 
@@ -1867,7 +1881,7 @@ class LatentDiffusion(DDPM):
                 direct_comps_attn_loss_scale  = 2
             else:
                 # Delta loss. Not recommended.
-                direct_single_attn_loss_scale = 0.1
+                direct_single_attn_loss_scale = 0.2
                 direct_comps_attn_loss_scale  = 0.2
 
             # Discard top layers and the first few bottom layers from distillation.
@@ -1928,7 +1942,7 @@ class LatentDiffusion(DDPM):
 
                 # each is [1, 1280, 16, 16]
                 feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
-                    = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
+                    = unet_feat.chunk(4)
                 
                 # [4, 8, 256, 77] / [4, 8, 64, 77] =>
                 # [4, 77, 8, 256] / [4, 77, 8, 64]
@@ -1950,9 +1964,8 @@ class LatentDiffusion(DDPM):
                 # The first dim 2 is the two occurrences of the subject token 
                 # in the two sets of prompts. Therefore, HALF_BS is still needed to 
                 # determine its batch size in convert_attn_to_spatial_weight().
-                subj_attn_subj_single, subj_attn_subj_comps, \
-                subj_attn_mix_single,  subj_attn_mix_comps \
-                    = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)
+                subj_attn_subj_single, subj_attn_subj_comps, subj_attn_mix_single,  subj_attn_mix_comps \
+                    = subj_attn.chunk(4)
 
                 if (unet_layer_idx in attn_distill_layer_weights) and (distill_subj_attn_weight > 0):
                     attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
@@ -1990,7 +2003,7 @@ class LatentDiffusion(DDPM):
                     feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
 
                     feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
-                        = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
+                        = unet_feat.chunk(4)
                     
                     # convert_attn_to_spatial_weight() will detach attention weights to 
                     # avoid BP through attention.

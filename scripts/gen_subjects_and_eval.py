@@ -17,7 +17,6 @@ def str2bool(v):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--guidance_scale", type=float, default=10, help="guidance scale")
     parser.add_argument("--gpu", type=int, default=0, help="gpu id")
     parser.add_argument("--method", default='ada', choices=["ada", "static-layerwise", "ti", "db"], type=str, 
                         help="method to use for generating samples")

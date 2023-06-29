@@ -163,6 +163,9 @@ class DDIMSampler(object):
                 img_orig = self.model.q_sample(x0, ts)  # TODO: deterministic forward pass?
                 img = img_orig * mask + (1. - mask) * img
 
+            # use_original_steps=False, quantize_denoised=False, temperature=1.0,
+            # noise_dropout=0.0, score_corrector=None, corrector_kwargs=None,
+            # unconditional_guidance_scale=10.0, 
             outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
                                       quantize_denoised=quantize_denoised, temperature=temperature,
                                       noise_dropout=noise_dropout, score_corrector=score_corrector,
@@ -179,7 +182,6 @@ class DDIMSampler(object):
 
         return img, intermediates
 
-    @torch.no_grad()
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None):
@@ -204,8 +206,10 @@ class DDIMSampler(object):
 
             # model.apply_model() -> DiffusionWrapper.forward() -> UNetModel.forward().
             e_t_uncond, e_t = self.model.apply_model(x_in, t_in, c2).chunk(2)
+            # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
             e_t = e_t_uncond + unconditional_guidance_scale * (e_t - e_t_uncond)
 
+        # score_corrector is None.
         if score_corrector is not None:
             assert self.model.parameterization == "eps"
             e_t = score_corrector.modify_score(self.model, e_t, x, t, c, **corrector_kwargs)
