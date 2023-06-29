@@ -476,7 +476,7 @@ def save_grid(samples, are_teachable, grid_filepath, nrow, do_normalize=False):
     for i, is_teachable in enumerate(are_teachable):
         if is_teachable:
             # Draw a 4-pixel wide green bounding box around the image.
-            grid[i] = draw_bounding_boxes(grid[i], img_box, colors="green", width=4)
+            grid[i] = draw_bounding_boxes(grid[i], img_box, colors="green", width=12)
 
     # grid is a 3D np array: (C, H2, W2)
     grid = make_grid(grid, nrow=nrow).cpu().numpy()
