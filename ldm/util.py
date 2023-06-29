@@ -457,12 +457,12 @@ def save_grid(samples, are_teachable, grid_filepath, nrow, do_normalize=False):
 
     # grid is a 4D tensor: (B, C, H, W)
     if not isinstance(samples, torch.Tensor):
-        grid = torch.stack(samples, 0)
+        grid = torch.cat(samples, 0)
     else:
         grid = samples
     # are_teachable is a 1D tensor: (B,)
     if not isinstance(are_teachable, torch.Tensor):
-        are_teachable = torch.stack(are_teachable, 0)
+        are_teachable = torch.cat(are_teachable, 0)
 
     if grid.dtype != torch.uint8:
         if do_normalize:
