@@ -774,14 +774,13 @@ class UNetModel(nn.Module):
                 # or "static_hijk" (inference only).
                 if iter_type.startswith("mix_"):
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
-                        
                     if iter_type == 'mix_concat_cls':
                         # Do not BP into the copy of ada embeddings that are added with the mixed embeddings. 
                         layer_ada_context = th.cat([layer_ada_context, layer_ada_context.detach()], dim=1)
                     else:
                         # iter_type == 'mix_hijk'. Separate layer_static_context.
                         layer_static_context, layer_static_key_context = \
-                            layer_static_context.split(layer_static_context.shape[1] // 2, dim=1)
+                            layer_static_context.chunk(2, dim=1)
                 elif iter_type == 'static_hijk':
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1]
                     layer_static_key_context = layer_static_context.clone()
@@ -791,19 +790,8 @@ class UNetModel(nn.Module):
                 layer_hyb_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
 
                 if (iter_type == 'mix_hijk' and layer_idx in hijk_layer_indices):
-                    BS = layer_static_key_context.shape[0]
-                    static_key_weights = th.ones(BS, 1, 1, device=layer_static_key_context.device) \
-                                            * static_emb_weight
-                    
-                    """ 
-                    if static_emb_weight < 0.4:
-                        # Enhance the static key proportions to 0.5 for class instances (second half batch), 
-                        # and keep the static key proportions for subject instances (first half batch).
-                        static_key_weights[BS//2:] = 0.5
-                    """
-                    
-                    layer_key_context = layer_static_key_context * static_key_weights \
-                                          + layer_ada_context * (1 - static_key_weights)
+                    # Replace layer_static_context with layer_static_key_context.
+                    layer_key_context = layer_static_key_context * static_emb_weight + layer_ada_context * ada_emb_weight
                     # Pass both embeddings for hijacking the key of layer_hyb_context by layer_key_context.
                     layer_context = (layer_hyb_context, layer_key_context)
                 else:

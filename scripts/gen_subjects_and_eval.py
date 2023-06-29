@@ -3,7 +3,7 @@ import os
 import re
 import numpy as np
 import csv
-from evaluation.eval_utils import parse_subject_file, parse_range_str, get_promt_list, find_first_match
+from evaluation.eval_utils import parse_subject_file, parse_range_str, get_prompt_list, find_first_match
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -17,7 +17,6 @@ def str2bool(v):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--guidance_scale", type=float, default=10, help="guidance scale")
     parser.add_argument("--gpu", type=int, default=0, help="gpu id")
     parser.add_argument("--method", default='ada', choices=["ada", "static-layerwise", "ti", "db"], type=str, 
                         help="method to use for generating samples")
@@ -86,9 +85,6 @@ def parse_args():
                         choices=["v14", "v15", "v15-ema", "v15-terep", "dreamshaper-v5", "dreamshaper-v6"],
                         help="Type of checkpoints to use (default: v15)")
 
-    parser.add_argument("--use_noised_clip", nargs="?", type=str2bool, const=True, default=False,
-                        help="Whether to use noised CLIP")
-    
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=argparse.SUPPRESS,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     
@@ -242,10 +238,12 @@ if __name__ == "__main__":
 
             emb_path    = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/embeddings_gs-{ckpt_iter}.pt"
             if not os.path.exists(emb_path):
-                emb_path = f"{args.ckpt_dir}/{ckpt_name}/embeddings_gs-{ckpt_iter}.pt"
-                if not os.path.exists(emb_path):
-                    print(f"ERROR: Subject embedding not found: '{emb_path}'")
+                emb_path2 = f"{args.ckpt_dir}/{ckpt_name}/embeddings_gs-{ckpt_iter}.pt"
+                if not os.path.exists(emb_path2):
+                    print(f"ERROR: Subject embedding not found: '{emb_path}' or '{emb_path2}'")
                     continue
+
+                emb_path = emb_path2
 
         outdir = args.out_dir_tmpl + "-" + args.method
         os.makedirs(outdir, exist_ok=True)
@@ -255,9 +253,9 @@ if __name__ == "__main__":
                 args.n_samples = 4
             if args.bs == -1:
                 args.bs = 4
-            # E.g., get_promt_list(placeholder="z", z_suffix="cat", class_long_token="tabby cat", broad_class=1)
+            # E.g., get_prompt_list(placeholder="z", z_suffix="cat", class_long_token="tabby cat", broad_class=1)
             prompt_list, class_short_prompt_list, class_long_prompt_list = \
-                get_promt_list(args.placeholder, z_prefix, z_suffix, class_token, class_long_token, 
+                get_prompt_list(args.placeholder, z_prefix, z_suffix, class_token, class_long_token, 
                                broad_class, args.prompt_set)
             prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set}.txt"
             PROMPTS = open(prompt_filepath, "w")

@@ -507,6 +507,7 @@ def main(opt):
                         # unconditional and conditional embeddings within UNetModel.forward(). 
                         # But since unconditional prompt doesn't contain the placeholder token,
                         # ada_embedder won't change the unconditional embedding uc.
+                        # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
                         samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                                          conditioning=c,
                                                          batch_size=batch_size,
@@ -607,7 +608,7 @@ def main(opt):
                             grid_count += 1
                             grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
 
-                    img = save_grid(all_samples, grid_filepath, nrow=n_rows)
+                    img = save_grid(all_samples, None, grid_filepath, nrow=n_rows)
                     
                 toc = time.time()
             

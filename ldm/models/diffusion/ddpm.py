@@ -23,9 +23,10 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, mix_embeddings, \
-                       ortho_subtract, calc_stats, rand_like, GradientScaler, \
-                       calc_chan_locality, convert_attn_to_spatial_weight, calc_delta_loss, \
-                       save_grid
+                       ortho_subtract, calc_stats, \
+                       GradientScaler, gen_gradient_scaler, \
+                       convert_attn_to_spatial_weight, calc_delta_loss, \
+                       save_grid, divide_list_into_chunks
 
 from ldm.modules.ema import LitEma
 from ldm.modules.sophia import SophiaG
@@ -37,7 +38,6 @@ from evaluation.clip_eval import CLIPEvaluator, NoisedCLIPEvaluator
 import copy
 from functools import partial
 import random
-import math
 from safetensors.torch import load_file as safetensors_load_file
 import sys
 
@@ -123,7 +123,8 @@ class DDPM(pl.LightningModule):
         self.do_static_prompt_delta_reg     = False
         self.do_ada_prompt_delta_reg        = False
         self.do_comp_prompt_mix_reg         = False
-        self.calc_clip_loss                 = False        
+        self.calc_clip_loss                 = False     
+        self.is_comp_iter                   = False   
         # Is this for DreamBooth training? Will be overwritten in LatentDiffusion ctor.
         self.is_dreambooth                  = False
 
@@ -223,19 +224,10 @@ class DDPM(pl.LightningModule):
     # create_clip_evaluator() is called in main.py, so that we can specify device as cuda device.
     # We couldn't create clip_evaluator on cpu and then move it to cuda device, because 
     # NoisedCLIPEvaluator is not properly implemented to support this.
-    def create_clip_evaluator(self, device, use_noised_clip=False):
-        self.use_noised_clip = use_noised_clip
-        
-        if self.use_noised_clip:
-            self.clip_evaluator = NoisedCLIPEvaluator(device=device)
-            for param in self.clip_evaluator.model.image_encoder.parameters():
-                param.requires_grad = False
-            for param in self.clip_evaluator.model.text_encoder.parameters():
-                param.requires_grad = False
-        else:
-            self.clip_evaluator = CLIPEvaluator(device=device)
-            for param in self.clip_evaluator.model.parameters():
-                param.requires_grad = False
+    def create_clip_evaluator(self, device):        
+        self.clip_evaluator = CLIPEvaluator(device=device)
+        for param in self.clip_evaluator.model.parameters():
+            param.requires_grad = False
 
         self.num_total_clip_iters = 0
         self.num_teachable_iters = 0
@@ -450,6 +442,7 @@ class DDPM(pl.LightningModule):
         interm_reg_probs = np.array(interm_reg_probs) / np.sum(interm_reg_probs)
         self.do_ada_prompt_delta_reg  = False
         self.do_comp_prompt_mix_reg   = False
+        self.is_comp_iter             = False
         self.calc_clip_loss           = False
 
         # If N_INTERM_REGS == 0, then no intermittent regularizations, set the two flags to False.
@@ -471,6 +464,9 @@ class DDPM(pl.LightningModule):
                 self.do_comp_prompt_mix_reg   = True
                 self.do_ada_prompt_delta_reg  = True
 
+            self.is_comp_iter   = True
+            # Always calculate clip loss during comp reg iterations, even if filter_with_clip_loss is False.
+            # This is to monitor how well the model performs on compositionality.
             self.calc_clip_loss = True
 
         # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
@@ -654,6 +650,7 @@ class LatentDiffusion(DDPM):
             self.embedding_manager = None
 
         self.generation_cache = []
+        self.generation_cache_teachable = []
         self.cache_start_iter = 0
         self.num_cached_generations = 0
         
@@ -665,6 +662,11 @@ class LatentDiffusion(DDPM):
     @rank_zero_only
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
+        if self.global_step == 0:
+            self.create_clip_evaluator(next(self.parameters()).device)
+            with torch.no_grad():
+                self.uncond = self.get_learned_conditioning([""] * 2)
+
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
             assert self.scale_factor == 1., 'rather not use custom rescaling and std-rescaling simultaneously'
@@ -1262,68 +1264,78 @@ class LatentDiffusion(DDPM):
                     # extra_info: a dict that contains extra info.
                     c_static_emb, c_in, extra_info = self.get_learned_conditioning(prompts_delta, img_mask=img_mask)
                     subj_single_emb, subj_comps_emb, cls_single_emb, cls_comps_emb = \
-                        torch.split(c_static_emb, PROMPT_N_EMBEDS, dim=0)
+                        c_static_emb.chunk(4)
                     
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
                     if self.do_comp_prompt_mix_reg:
+                        # c_in2 is used to generate ada embeddings.
                         # Arrange c_in2 in the same layout as the static embeddings.
-                        # The cls_single_prompts within c_in2 will only be used to generate ordinary 
+                        # The mix_single_prompts within c_in2 will only be used to generate ordinary 
                         # prompt embeddings, i.e., 
                         # it doesn't contain subject token, and no ada embedding will be injected.
-                        # The last set is another subj_comp_prompts, which is NOT A BUG.
-                        # This subj_comp_prompts is used to generate the ada embedding for
-                        # the subj_comp_prompts, used for the mixed embeddings of 
-                        # (subj_comp_prompts, cls_comp_prompts).
-                        c_in2 = subj_single_prompts + subj_comp_prompts + cls_single_prompts + subj_comp_prompts
-                        #print(c_in2)
+                        # despite the fact that subj_single_emb, cls_single_emb are mixed into 
+                        # the corresponding static embeddings.
+                        # Tried to use subj_single_prompts as mix_single_prompts, leading to worse performance.
+                        mix_single_prompts = cls_single_prompts
+                        # The last set corresponds the mixed embeddings of (subj_comp_prompts, cls_comp_prompts). 
+                        # Using subj_comp_prompts as mix_comp_prompts will enhance authenticity but hurt compositionality.
+                        # Using cls_comp_prompts  as mix_comp_prompts will enhance compositionality but hurt authenticity.
+                        # To get the best of both worlds, mix_comp_prompts is randomly chosen 
+                        # between subj_comp_prompts and cls_comp_prompts.
+                        #if random.random() < 0.5:
+                        mix_comp_prompts = subj_comp_prompts
+                        #else:
+                        #    mix_comp_prompts = cls_comp_prompts
+
+                        c_in2 = subj_single_prompts + subj_comp_prompts + mix_single_prompts + mix_comp_prompts
 
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed (concatenated),
                         # and the token number will be the double of subj_comps_emb.
                         # Ada embeddings won't be mixed.
-                        # Mixed embedding subj_comps_emb_mix = 
+                        # Mixed embedding mix_comps_emb = 
                         # concat(subj_comps_emb, cls_comps_emb -| subj_comps_emb)_dim1. 
                         # -| means orthogonal subtraction.
-                        subj_comps_emb_mix_all_layers  = mix_embeddings(subj_comps_emb, cls_comps_emb, 
+                        mix_comps_emb_all_layers  = mix_embeddings(subj_comps_emb, cls_comps_emb, 
                                                                         c2_mix_weight=1,
                                                                         mix_scheme='adeltaconcat',
                                                                         use_ortho_subtract=True)
-                        subj_single_emb_mix_all_layers = mix_embeddings(subj_single_emb, cls_single_emb,
+                        mix_single_emb_all_layers = mix_embeddings(subj_single_emb, cls_single_emb,
                                                                         c2_mix_weight=1,
                                                                         mix_scheme='adeltaconcat',
                                                                         use_ortho_subtract=True)
                         
-                        #subj_comps_emb_mix_all_layers  = cls_comps_emb
-                        #subj_single_emb_mix_all_layers = cls_single_emb
-                        # If stop_prompt_mix_grad, stop gradient on subj_comps_emb_mix, 
+                        #mix_comps_emb_all_layers  = cls_comps_emb
+                        #mix_single_emb_all_layers = cls_single_emb
+                        # If stop_prompt_mix_grad, stop gradient on mix_comps_emb, 
                         # since it serves as the reference.
-                        # If we don't stop gradient on subj_comps_emb_mix, 
-                        # then chance is that subj_comps_emb_mix might be dominated by subj_comps_emb,
-                        # so that subj_comps_emb_mix will produce images similar as subj_comps_emb does.
+                        # If we don't stop gradient on mix_comps_emb, 
+                        # then chance is that mix_comps_emb might be dominated by subj_comps_emb,
+                        # so that mix_comps_emb will produce images similar as subj_comps_emb does.
                         # stop_prompt_mix_grad will improve compositionality but reduce face similarity.
                         stop_prompt_mix_grad = False
                         prompt_mix_grad_scale = 0.1
                         if stop_prompt_mix_grad:
-                            subj_comps_emb_mix_all_layers  = subj_comps_emb_mix_all_layers.detach()
-                            subj_single_emb_mix_all_layers = subj_single_emb_mix_all_layers.detach()
+                            mix_comps_emb_all_layers  = mix_comps_emb_all_layers.detach()
+                            mix_single_emb_all_layers = mix_single_emb_all_layers.detach()
                         elif prompt_mix_grad_scale != 1:
                             grad_scaler = GradientScaler(prompt_mix_grad_scale)
-                            subj_comps_emb_mix_all_layers  = grad_scaler(subj_comps_emb_mix_all_layers)
-                            subj_single_emb_mix_all_layers = grad_scaler(subj_single_emb_mix_all_layers)
+                            mix_comps_emb_all_layers  = grad_scaler(mix_comps_emb_all_layers)
+                            mix_single_emb_all_layers = grad_scaler(mix_single_emb_all_layers)
 
                         if self.use_layerwise_embedding:
                             # 4, 5, 6, 7, 8 correspond to original layer indices 7, 8, 12, 16, 17
                             # (same as used in computing mixing loss)
                             sync_layer_indices = [4, 5, 6, 7, 8]
-                            layer_mask = torch.zeros_like(subj_comps_emb_mix_all_layers).reshape(-1, N_LAYERS, *subj_comps_emb_mix_all_layers.shape[1:])
+                            layer_mask = torch.zeros_like(mix_comps_emb_all_layers).reshape(-1, N_LAYERS, *mix_comps_emb_all_layers.shape[1:])
                             layer_mask[:, sync_layer_indices] = 1
-                            layer_mask = layer_mask.reshape(-1, *subj_comps_emb_mix_all_layers.shape[1:])
+                            layer_mask = layer_mask.reshape(-1, *mix_comps_emb_all_layers.shape[1:])
 
                             # This copy of subj_single_emb, subj_comps_emb will be simply 
                             # repeated at the token dimension to match 
                             # the token number of the mixed (concatenated) 
-                            # subj_single_emb_mix and subj_comps_emb_mix embeddings.
+                            # mix_single_emb and mix_comps_emb embeddings.
                             subj_comps_emb  = subj_comps_emb.repeat(1, 2, 1)
                             subj_single_emb = subj_single_emb.repeat(1, 2, 1)
 
@@ -1331,26 +1343,24 @@ class LatentDiffusion(DDPM):
                             # are already key embeddings. No need to repeat.
 
                             # Use most of the layers of embeddings in subj_comps_emb, but 
-                            # replace sync_layer_indices layers with those from subj_comps_emb_mix_all_layers.
+                            # replace sync_layer_indices layers with those from mix_comps_emb_all_layers.
                             # Do not assign with sync_layers as indices, which destroys the computation graph.
-                            subj_comps_emb_mix  = subj_comps_emb * (1 - layer_mask) \
-                                                  + subj_comps_emb_mix_all_layers * layer_mask
+                            mix_comps_emb  = subj_comps_emb * (1 - layer_mask) \
+                                             + mix_comps_emb_all_layers * layer_mask
 
-                            subj_single_emb_mix = subj_single_emb * (1 - layer_mask) \
-                                                  + subj_single_emb_mix_all_layers * layer_mask
+                            mix_single_emb = subj_single_emb * (1 - layer_mask) \
+                                             + mix_single_emb_all_layers * layer_mask
                         else:
                             # There is only one layer of embeddings.
-                            subj_comps_emb_mix  = subj_comps_emb_mix_all_layers
-                            subj_single_emb_mix = subj_single_emb_mix_all_layers
+                            mix_comps_emb  = mix_comps_emb_all_layers
+                            mix_single_emb = mix_single_emb_all_layers
 
                         # c_static_emb2 will be added with the ada embeddings to form the 
                         # conditioning embeddings in the U-Net.
                         # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
                         # image generation and computing compositional mix loss.
-                        c_static_emb2 = torch.cat([ subj_single_emb, 
-                                                    subj_comps_emb, 
-                                                    subj_single_emb_mix, 
-                                                    subj_comps_emb_mix ], dim=0)
+                        c_static_emb2 = torch.cat([ subj_single_emb, subj_comps_emb, 
+                                                    mix_single_emb, mix_comps_emb ], dim=0)
                         
                         extra_info['iter_type']      = self.prompt_mix_scheme
                         # Set ada_bp_to_unet to False will reduce performance.
@@ -1554,35 +1564,89 @@ class LatentDiffusion(DDPM):
     # ada_embedder: a function to convert c_in to ada embeddings.
     # ANCHOR[id=p_losses]
     def p_losses(self, x_start, cond, t, noise=None, img_mask=None, recur_depth=0):
-        is_comp_iter = (self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg)
+        # If noise is not None, then use the provided noise.
+        # Otherwise, generate noise randomly.
         noise = default(noise, lambda: torch.randn_like(x_start))
 
-        if is_comp_iter:
-            x_start_ = x_start
-            t_       = t
-            noise_   = noise
-            img_mask_ = img_mask
+        if self.is_comp_iter:
+            # If bs=2, then HALF_BS=1.
+            if recur_depth == 0:
+                HALF_BS  = max(x_start.shape[0] // 2, 1)
+                # Randomly initialize x_start and t. Note the batch size is still 2 here.
+                x_start.normal_()
+                # Randomly choose t from the largest 250 timesteps, so as to match the completely noisy x_start.
+                t = torch.randint(int(self.num_timesteps * 0.75), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
+            else:
+                # If recur_depth == 1, BS is already doubled in the first iteration. So divide by 4.
+                HALF_BS  = max(x_start.shape[0] // 4, 1)
 
-            HALF_BS  = max(x_start.shape[0] // 2, 1)
-            # Randomly choose t from the largest 250 timesteps, so as to match the total noise input.
-            rand_timestep = np.random.randint(int(self.num_timesteps * 0.75), self.num_timesteps)
-            t.fill_(rand_timestep)
-            t = t[:HALF_BS].repeat(4)
-            # Make x_start random.
-            x_start.normal_()
-            # Use the same x_start across the 4 instances.
-            x_start  = x_start[:HALF_BS].repeat(4, 1, 1, 1)
-            # Use the same noise across the 4 instances.
-            noise    = noise[:HALF_BS].repeat(4, 1, 1, 1)
             # Ignore img_mask.
             img_mask = None
 
+            # Only do delta loss reg. This happens if composition_prompt_mix_reg_weight = 0.
+            if not self.do_comp_prompt_mix_reg:
+                # Generate a batch of 4 instances with the same initial x_start, noise and t.
+                # This doubles the batch size to 4, if bs=2.
+                x_start = x_start[:HALF_BS].repeat(4, 1, 1, 1)
+                noise   = noise[:HALF_BS].repeat(4, 1, 1, 1)
+                t       = t[:HALF_BS].repeat(4)
+            else:
+                # First iteration of a two-iteration do_comp_prompt_mix_reg.
+                # Generate a batch of 4 instances in two sets, each set with the same initial x_start, noise and t.
+                # Then filter, find the best teachable set (if any) and pass to the recursive iteration.
+                # If no teachable set is found, skip recursion and the prompt mix reg.
+                # Note x_start[0] = x_start[2] != x_start[1] = x_start[3].
+                # That means, instances are arranged as: 
+                # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
+                # This doubles the batch size to 4, if bs=2.
+                if recur_depth == 0:
+                    # Back up the "seed" x_start, noise and t.
+                    x_start_ = x_start
+                    noise_   = noise
+                    t_       = t
+
+                    x_start = x_start.repeat(2, 1, 1, 1)
+                    noise   = noise.repeat(2, 1, 1, 1)
+                    t       = t.repeat(2)
+
+                    # Back up the original cond to be used in the recursive iteration.
+                    cond_ = cond
+                    c_static_emb, c_in = cond[0], cond[1]
+
+                    # Make two identical sets of c_static_emb2 and c_in2.
+                    subj_single_emb, subj_comps_emb, mix_single_emb, mix_comps_emb = \
+                        c_static_emb.chunk(4)
+                    c_static_emb2 = torch.cat([ subj_comps_emb, subj_comps_emb, 
+                                                mix_comps_emb,  mix_comps_emb ], dim=0)
+                    
+                    # mix_comp_prompts is randomly chosen between subj_comp_prompts and cls_comp_prompts in forward().
+                    subj_single_prompts, subj_comp_prompts, mix_single_prompts, mix_comp_prompts = \
+                        divide_list_into_chunks(c_in, len(c_in) // 4)
+                    c_in2 = subj_comp_prompts + subj_comp_prompts + mix_comp_prompts + mix_comp_prompts
+
+                    # Replace cond to prepare for two sets of instances.
+                    cond = (c_static_emb2, c_in2, cond_[2])
+
+                    with torch.no_grad():
+                        x_noisy_ = self.q_sample(x_start=x_start_, t=t_, noise=noise_)
+                        # self.uncond: precomputed unconditional embeddings.
+                        # model_output_uncond: [2, 4, 64, 64] -> [4, 4, 64, 64]
+                        model_output_uncond = self.apply_model(x_noisy_, t_, self.uncond)
+                        model_output_uncond = model_output_uncond.repeat(2, 1, 1, 1)
+                        
+                # Should never happen.
+                if recur_depth > 1:
+                    breakpoint()
+                # Otherwise, recur_depth == 1. We use the passed-in cond, x_start, noise and t.
+
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        # model_output is predicted noise.
+        # model_output is the predicted noise.
         model_output = self.apply_model(x_noisy, t, cond)
 
-        # compositional reg iterations.
-        if is_comp_iter:
+        # compositional reg iterations. The first iteration before recursion.
+        # In the recursive iteration, we don't have to prepare the input images 
+        # and prompts to compute CLIP losses.
+        if self.is_comp_iter and self.calc_clip_loss and recur_depth == 0:
             # If we do compositional prompt mixing, we need the final images of the 
             # second half as the reconstruction objective for compositional regularization.
             # The subj_single and cls_single images, although seemingly subject to
@@ -1590,22 +1654,20 @@ class LatentDiffusion(DDPM):
             # since 75% of the chance, x_start is totally randomized.
             # LINK #shared_step
             # Note model_output is predicted noise.
-            x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=model_output)
-            model_outputs = torch.split(x_recon, model_output.shape[0] // 4, dim=0)
+            guide_scale = 5
+            # Classifier-free guidance but only done for one iteration, to make the contents in the 
+            # generated images more pronounced => smaller CLIP loss.
+            pred_noise = model_output * guide_scale - model_output_uncond * (guide_scale - 1)
+            x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=pred_noise)
             # Images generated both under subj_comp_prompts and subj_prompt_mix_comps 
             # are subject to the CLIP text-image matching evaluation.
-            # cls_comp_prompts is used to compute the CLIP text-image matching loss on
-            # images guided by the mixed embeddings.
-            clip_images_code  = torch.cat([ model_outputs[1], model_outputs[3] ], dim=0)
-            # The first  cls_comp_prompts is for subj_comps_emb, and 
-            # the second cls_comp_prompts is for subj_comps_emb_mix.                
-            clip_prompts_comp = cond[2]['cls_comp_prompts'] + cond[2]['cls_comp_prompts']
-
-            # Compositional images are also subject to the single-prompt CLIP loss,
-            # as they must contain the subject. This is to reduce the chance that
-            # the output image only contains elements other than the subject.
-            clip_prompts_single = cond[2]['cls_single_prompts'] + cond[2]['cls_single_prompts']
-            if len(clip_images_code) != len(clip_prompts_comp) or len(clip_images_code) != len(clip_prompts_single):
+            # The whole batch of 4 instances are all using subj_comp_prompts or mix_comp_prompts.
+            # So cls_comp_prompts is used to compute the CLIP text-image matching loss on
+            # images guided by the subject or mixed embeddings.
+            clip_images_code  = x_recon
+            # 4 sets of cls_comp_prompts for (subj comp 1, subj comp 2, mix comp 1, mix comp 2).                
+            clip_prompts_comp = cond[2]['cls_comp_prompts'] * 4
+            if len(clip_images_code) != len(clip_prompts_comp):
                 breakpoint()
 
         # Otherwise, ordinary image reconstruction loss. No need to split the model output.
@@ -1628,6 +1690,7 @@ class LatentDiffusion(DDPM):
         
         iter_type = cond[2]['iter_type']
         loss = 0
+        twin_ada_embeddings = None
 
         if iter_type == 'normal_recon':
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
@@ -1652,81 +1715,128 @@ class LatentDiffusion(DDPM):
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
 
-        if self.calc_clip_loss:
-            with torch.no_grad():
-                clip_images = self.decode_first_stage(clip_images_code)
-                clip_images_np = clip_images.cpu().numpy()
+        if self.is_comp_iter and self.calc_clip_loss:
+            if recur_depth == 0:
+                # Use CLIP loss as a metric to evaluate the compositionality of the generated images 
+                # and do distillation selectively.
+                # DO NOT use CLIP loss to optimize the model. It will hurt the performance.
+                with torch.no_grad():
+                    clip_images = self.decode_first_stage(clip_images_code)
 
-                losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
-                                                                                        reduction='diag')
-                #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
-                #                                                                     reduction='diag')
+                    losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
+                                                                                         reduction='diag')
 
-            self.cache_and_log_generations(clip_images_np)
+                # Instances are arranged as: 
+                # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
+                losses_clip_subj_comp, losses_clip_mix_comp \
+                    = losses_clip_comp.chunk(2)
+                
+                loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean()})
+                loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_mix_comp.mean()})
 
-            losses_clip = losses_clip_comp #* 1.3 - losses_clip_single * 0.3
-            # loss_dict is only used for logging. So we can pass the unfiltered detached loss.
-            losses_clip_subj_comp, losses_clip_cls_comp = losses_clip_comp.split(losses_clip_comp.shape[0] // 2, dim=0)
-            loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean()})
-            loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_cls_comp.mean()})
+                # Discard instances that seem to be too far from the text 
+                # (it may be a bit premature to make this decision now, as the images are only denoised once).
+                # 0.35/0.006: 30%-40% instances will meet these thresholds.
+                # 0.33/0.008: 15% instances will meet these thresholds.
+                clip_loss_thres      = 0.28
+                cls_subj_clip_margin = 0.004
+                clip_loss_thres_base = 0.26
+                cls_subj_clip_margin_base = 0.006
 
-            if self.use_noised_clip:
-                clip_loss_thres = 0.33
+                # are_teachable: The teacher instances are only teachable if both 
+                # the teacher and student are qualified (<= clip_loss_thres), 
+                # and the compositional clip loss is smaller than the student.
+                # If the student is qualified (<= clip_loss_thres), and the 
+                # teacher is teachable, then the teacher is also qualified, 
+                # as it has to have a smaller loss to be teachable. 
+                # So only need to check losses_clip_subj_comp against clip_loss_thres.
+                loss_diffs_subj_mix = losses_clip_subj_comp - losses_clip_mix_comp
+                are_teachable = (losses_clip_subj_comp <= clip_loss_thres) & (loss_diffs_subj_mix > cls_subj_clip_margin)
+                # print(losses_clip_subj_comp, losses_clip_mix_comp)
+
+                self.cache_and_log_generations(clip_images, are_teachable.repeat(2))
+
+                if not self.filter_with_clip_loss:
+                    # Still compute the loss metrics. 
+                    # But no real filtering, instead just teach on all instances.
+                    is_teachable = True
+                else:
+                    # If any of the two instances is teachable, we consider it as a teachable iteration,
+                    # and select the better one (with larger loss diff) to teach.
+                    is_teachable = are_teachable.sum() > 0
+
+                self.num_total_clip_iters += 1
+                self.num_teachable_iters += int(is_teachable)
+                teachable_frac = self.num_teachable_iters / self.num_total_clip_iters
+                loss_dict.update({f'{prefix}/teachable_frac': teachable_frac})
+
+                # Only do recursion if the teacher instance is teachable.
+                if is_teachable and self.do_comp_prompt_mix_reg:
+                    if not self.is_comp_iter:
+                        breakpoint()
+
+                    better_set_idx = torch.argmax(loss_diffs_subj_mix)
+                    loss_clip_subj_comp = losses_clip_subj_comp[better_set_idx]
+                    loss_diff_subj_mix  = loss_diffs_subj_mix[better_set_idx]
+                    # If loss_clip_subj_comp <= clip_loss_thres, then distill_loss_clip_discount = exp(0) = 1.
+                    # If loss_clip_subj_comp = 0.35, distill_loss_clip_discount = exp(-2)   = 0.14.
+                    #                          0.34                               exp(-0.1) = 0.37.
+                    self.distill_loss_clip_discount = 1 / np.exp( max(loss_clip_subj_comp.cpu().item() - clip_loss_thres_base, 0) / 0.01 
+                                                                  +
+                                                                  max(cls_subj_clip_margin_base - loss_diff_subj_mix.cpu().item(), 0) / 0.001 )
+                    # Choose the x_start, noise, and t of the better set. 
+                    # Repeat 4 times and pass them as the condition in the recursive iteration.
+                    x_start = x_start[better_set_idx].repeat(4, 1, 1, 1)
+                    noise   = noise[better_set_idx].repeat(4, 1, 1, 1)
+                    t       = t[better_set_idx].repeat(4)
+
+                    del model_output, x_recon, clip_images_code
+                    if 'unet_feats' in cond[2]:
+                        del cond[2]['unet_feats']
+                    if 'unet_attns' in cond[2]:
+                        del cond[2]['unet_attns']
+                    # init_ada_embedding_cache() will implicitly clear the cache.
+                    self.embedding_manager.init_ada_embedding_cache()
+                    # Use the backed-up cond_ here, instead of cond which has been modified.
+                    return self.p_losses(x_start, cond_, t, noise, img_mask=None, recur_depth=1)
+                # Otherwise, only compute loss_embedding_reg and static/ada delta loss.
+                # ada delta loss requires a bit of processing of the ada embeddings.
+                else:
+                    # Release part of the computation graph of this iteration. 
+                    # But do not delete model_output, which is part of the computation graph 
+                    # of the ada delta loss.
+                    del model_output, x_recon, clip_images_code
+                    if 'unet_feats' in cond[2]:
+                        del cond[2]['unet_feats']
+                    if 'unet_attns' in cond[2]:
+                        del cond[2]['unet_attns']
+
+                    # Prepare for subject-single condition.
+                    # BS = 2. Corresponds to the twin instances (subj comp 1, subj comp 2).
+                    c_static_emb3 = subj_single_emb.repeat(2, 1, 1, 1)
+                    c_in3 = subj_single_prompts + subj_single_prompts
+                    # Replace cond to prepare for two sets of instances.
+                    cond_single = (c_static_emb3, c_in3, cond_[2])
+                    # twin_ada_embeddings: [4, 16, 77, 768]
+                    twin_ada_embeddings = torch.stack(self.embedding_manager.ada_embeddings, dim=1)
+                    self.embedding_manager.init_ada_embedding_cache()
+                    x_noisy_ = self.q_sample(x_start=x_start_, t=t_, noise=noise_)
+                    model_output_single = self.apply_model(x_noisy_, t_, cond_single)
+                    del model_output_single
             else:
-                clip_loss_thres = 0.35
-
-            are_output_qualified = (losses_clip <= clip_loss_thres)
-            # clip loss is only applied to the subject composition instance. 
-            are_output_qualified_firsthalf = are_output_qualified.clone()
-            are_output_qualified_firsthalf[HALF_BS:] = False
-            
-            """             
-            # DO NOT use CLIP loss by setting clip_loss_weight > 0. It hurts the performance.
-            if self.clip_loss_weight > 0:
-                # Even if no image is qualified, we still compute the loss with zero weight,
-                # to release the computation graph and avoid memory leak.
-                loss_clip = (losses_clip * are_output_qualified_firsthalf).sum() \
-                                / (are_output_qualified_firsthalf.sum() + 0.001)
-                loss += (self.clip_loss_weight * loss_clip) 
-            """
-
-            # Hard-code here. Suppose HALF_BS=1, i.e., two instances are in clip_images.
-            # So the teacher instance is always indexed by 1.
-            # is_teachable: The teacher instance is only teachable if it's qualified, and the 
-            # compositional clip loss is smaller than the student.
-
-            self.cls_subj_clip_margin = 0.006
-
-            is_teachable = are_output_qualified[1] and losses_clip_comp[1] < losses_clip_comp[0] - self.cls_subj_clip_margin
-
-            np.set_printoptions(precision=4, suppress=True)
-            self.num_total_clip_iters += 1
-            self.num_teachable_iters += int(is_teachable)
-            teachable_frac = self.num_teachable_iters / self.num_total_clip_iters
-
-            # clip_losses = torch.cat([losses_clip_comp, losses_clip_single], dim=0).data.cpu().numpy()
-            #print("CLIP losses: {}, teachable frac: {:.1f}%".format( \
-            #        clip_losses, teachable_frac*100))
-            loss_dict.update({f'{prefix}/teachable_frac': teachable_frac})
-
-            if not self.filter_with_clip_loss:
-                # Still compute the loss metrics. 
-                # But no real filtering, instead just teach on all instances.
+                # In the recursive iteration now. The teacher instance is always teachable 
+                # as we have filtered the instances.
+                # We also skip updating the losses to wandb in this iteration, 
+                # as we've updated them in the first iteration.
                 is_teachable = True
-            # Try one more time, to see if the teacher instance is qualified.
-            elif not is_teachable and self.do_comp_prompt_mix_reg and recur_depth == 0:
-                if not is_comp_iter:
-                    breakpoint()
-                # Release computation graph of this iter.
-                del model_output, x_recon, model_outputs, clip_images_code
-                # init_ada_embedding_cache() will implicitly clear the cache.
-                self.embedding_manager.init_ada_embedding_cache()
-                return self.p_losses(x_start_, cond, t_, noise_, img_mask_, recur_depth=1)
+                self.distill_loss_clip_discount = 1
         else:
-            is_teachable = True
+            # Either not self.is_comp_iter or not self.calc_clip_loss. 
+            # Distillation won't be done in this iter, so set is_teachable to False.
+            is_teachable = False
             
         if self.embedding_reg_weight > 0:
-            self.embedding_manager.is_comp_iter = is_comp_iter
+            self.embedding_manager.is_comp_iter = self.is_comp_iter
             loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
             loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg.detach()})
             loss += (self.embedding_reg_weight * loss_embedding_reg)
@@ -1734,7 +1844,8 @@ class LatentDiffusion(DDPM):
         if self.do_static_prompt_delta_reg:
             # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
             static_delta_loss, ada_delta_loss = self.embedding_manager.calc_prompt_delta_loss( 
-                                    self.do_ada_prompt_delta_reg, self.c_static_emb
+                                    self.c_static_emb, self.do_ada_prompt_delta_reg, 
+                                    twin_ada_embeddings=twin_ada_embeddings
                                     )
             loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
             if ada_delta_loss != 0:
@@ -1749,33 +1860,6 @@ class LatentDiffusion(DDPM):
             loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
             # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
 
-        #print(clip_prompts_comp)
-        """ 
-        if self.clip_loss_weight > 0:
-            clip_images = self.differentiable_decode_first_stage(clip_images_code)
-            clip_images_np = clip_images.detach().cpu().numpy()
-            # clip text-image similarity usually < 0.4. So using 0.5 - similarity is sufficient 
-            # to keep the loss positive.
-            # txt_to_img_similarity() returns the pairwise similarities between the prompts and the images.
-            # So if there are N prompts and N images, the returned tensor has shape (N, N).
-            # We should only consider diagonal elements, assuming the prompts are 
-            # matched with the images in order. Therefore, it's buggy to take the mean of the losses.
-            # In our particular setting of batch size = 2 (HALF_BS = 1), clip_prompts_comp consists of 
-            # two identical cls_comp_prompts, which leads to the correct results, but we better 
-            # fix it for larger batch sizes. 
-
-            # txt_to_img_similarity() uses a preprocesser that assumes the input images 
-            # are a tensor with mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0].
-            # (not really assume the images are with this mean and std; 
-            # it's just as a way to specify the transformation parameters.)
-            # In effect, it transforms clip_images by (clip_images + 1) / 2,
-            # which is consistent with the output transformation in stable_txt2img.py.
-            losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images, 
-                                                                                    reduction='diag')
-            #losses_clip_single = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_single, clip_images, 
-            #                                                                     reduction='diag')
-        """
-        
         if self.do_comp_prompt_mix_reg and is_teachable:
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
             # Only regularize on intermediate features, i.e., intermediate features generated 
@@ -1794,6 +1878,14 @@ class LatentDiffusion(DDPM):
             unet_attns = cond[2]['unet_attns']
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.1
+            direct_attn_distill_scheme = "l2"
+            if direct_attn_distill_scheme == "l2":
+                direct_single_attn_loss_scale = 2
+                direct_comps_attn_loss_scale  = 2
+            else:
+                # Delta loss. Not recommended.
+                direct_single_attn_loss_scale = 0.2
+                direct_comps_attn_loss_scale  = 0.2
 
             # Discard top layers and the first few bottom layers from distillation.
             # distill_layer_weights: relative weight of each distillation layer. 
@@ -1840,6 +1932,12 @@ class LatentDiffusion(DDPM):
             # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
             #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
             placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
+            mix_feat_grad_scale = 0.1
+            # almost zero, effectively no grad to teacher attn. 
+            # Setting to 0 may cause graph not unreleased and OOM.
+            mx_attn_grad_scale  = 0.01  
+            mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
+            mix_attn_grad_scaler = gen_gradient_scaler(mx_attn_grad_scale)
 
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
@@ -1847,33 +1945,59 @@ class LatentDiffusion(DDPM):
 
                 # each is [1, 1280, 16, 16]
                 feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
-                    = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
+                    = unet_feat.chunk(4)
                 
-                # [4, 8, 256, 154] / [4, 8, 64, 154] =>
-                # [4, 154, 8, 256] / [4, 154, 8, 64]
+                # [4, 8, 256, 77] / [4, 8, 64, 77] =>
+                # [4, 77, 8, 256] / [4, 77, 8, 64]
                 # We don't need BP through attention into UNet.
                 attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
                 # subj_attn: [4, 8, 256] / [4, 8, 64]
                 subj_attn = attn_mat[placeholder_indices]
+                
+                """                 
+                # attn_mask: [4, 1, 77, 1] => [4, 77, 1, 1]
+                attn_mask = self.embedding_manager.delta_loss_emb_mask.permute(0, 2, 1, 3)
+                # Mask out the attentions of the padding tokens. Only keep meaningful attentions.
+                masked_attn = attn_mat * attn_mask
+                # avg_token_attn: [4, 8, 256] / [4, 8, 64]
+                avg_token_attn  = masked_attn.sum(dim=1) / attn_mask.sum(dim=1) 
+                """
+
                 # subj_attn_subj_single, ...: [2, 8, 256].
                 # The first dim 2 is the two occurrences of the subject token 
                 # in the two sets of prompts. Therefore, HALF_BS is still needed to 
                 # determine its batch size in convert_attn_to_spatial_weight().
-                subj_attn_subj_single, subj_attn_subj_comps, \
-                subj_attn_mix_single,  subj_attn_mix_comps \
-                    = torch.split(subj_attn, subj_attn.shape[0] // 4, dim=0)
+                subj_attn_subj_single, subj_attn_subj_comps, subj_attn_mix_single,  subj_attn_mix_comps \
+                    = subj_attn.chunk(4)
 
                 if (unet_layer_idx in attn_distill_layer_weights) and (distill_subj_attn_weight > 0):
                     attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
                     attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
                     attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
-                    loss_layer_subj_attn_distill = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
-                                                                   first_n_dims_to_flatten=2, 
-                                                                   ref_grad_scale=0)
+                    loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
+                                                                 first_n_dims_to_flatten=2, 
+                                                                 ref_grad_scale=0)
+                    if direct_attn_distill_scheme == "l2":
+                        subj_attn_mix_comps_gs  = mix_attn_grad_scaler(subj_attn_mix_comps)
+                        subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
+                        loss_layer_subj_comps_attn  = self.get_loss(subj_attn_subj_comps,  subj_attn_mix_comps_gs,  mean=True)
+                        loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
+                    else:
+                        # We use the same grad scale as the mix features for the attn delta loss, 
+                        # as it's observed that small grad to mix attn delta is better than no grad. 
+                        loss_layer_subj_comps_attn  = calc_delta_loss(subj_attn_subj_comps,  subj_attn_mix_comps,
+                                                                      first_n_dims_to_flatten=2, 
+                                                                      ref_grad_scale=mix_feat_grad_scale)
+                        loss_layer_subj_single_attn = calc_delta_loss(subj_attn_subj_single, subj_attn_mix_single,
+                                                                      first_n_dims_to_flatten=2, 
+                                                                      ref_grad_scale=mix_feat_grad_scale)
+                        
                     # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
-                    loss_subj_attn_distill += loss_layer_subj_attn_distill * attn_distill_layer_weight #* 10
-                    # print(f'{unet_layer_idx} loss_layer_subj_attn_distill: {loss_layer_subj_attn_distill:.3f}')
+                    loss_subj_attn_distill += ( loss_layer_subj_delta_attn 
+                                                 + loss_layer_subj_comps_attn  * direct_comps_attn_loss_scale
+                                                 + loss_layer_subj_single_attn * direct_single_attn_loss_scale \
+                                               ) * attn_distill_layer_weight
 
                 use_subj_attn_as_spatial_weights = True
                 if use_subj_attn_as_spatial_weights:
@@ -1882,7 +2006,7 @@ class LatentDiffusion(DDPM):
                     feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
 
                     feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
-                        = torch.split(unet_feat, unet_feat.shape[0] // 4, dim=0)
+                        = unet_feat.chunk(4)
                     
                     # convert_attn_to_spatial_weight() will detach attention weights to 
                     # avoid BP through attention.
@@ -1909,17 +2033,8 @@ class LatentDiffusion(DDPM):
                 feat_mix_single  = pooler(feat_mix_single).reshape(feat_mix_single.shape[0], -1)
                 feat_mix_comps   = pooler(feat_mix_comps).reshape(feat_mix_comps.shape[0], -1)
 
-                stop_feat_mix_grad  = False
-                feat_mix_grad_scale = 0.1
-                if stop_feat_mix_grad:
-                    # feat_subj_single = feat_subj_single.detach()
-                    feat_mix_single  = feat_mix_single.detach()
-                    feat_mix_comps   = feat_mix_comps.detach()
-                elif feat_mix_grad_scale != 1:
-                    grad_scaler = GradientScaler(feat_mix_grad_scale)
-                    # feat_subj_single = grad_scaler(feat_subj_single)
-                    feat_mix_single  = grad_scaler(feat_mix_single)
-                    feat_mix_comps   = grad_scaler(feat_mix_comps)
+                feat_mix_single  = mix_feat_grad_scaler(feat_mix_single)
+                feat_mix_comps   = mix_feat_grad_scaler(feat_mix_comps)
 
                 distill_on_delta = True
                 if distill_on_delta:
@@ -1949,7 +2064,7 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_subj_attn_distill': loss_subj_attn_distill.detach()})
             loss_prompt_mix_reg = loss_feat_distill + loss_subj_attn_distill * distill_subj_attn_weight
                                     
-            loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale
+            loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
             
             self.embedding_manager.placeholder_indices = None
 
@@ -2160,18 +2275,21 @@ class LatentDiffusion(DDPM):
 
         return samples, intermediates
 
-    def cache_and_log_generations(self, samples, max_cache_size=40):
+    def cache_and_log_generations(self, samples, are_teachable, max_cache_size=48):
         self.generation_cache.append(samples)
+        self.generation_cache_teachable.append(are_teachable)
         self.num_cached_generations += len(samples)
 
         if self.num_cached_generations >= max_cache_size:
             grid_folder = self.logger._save_dir + f'/samples'
             os.makedirs(grid_folder, exist_ok=True)
             grid_filename = grid_folder + f'/{self.cache_start_iter}-{self.global_step}.png'
-            save_grid(self.generation_cache, grid_filename, 10, do_normalize=True)
+            save_grid(self.generation_cache, self.generation_cache_teachable, 
+                      grid_filename, 12, do_normalize=True)
             print(f"{self.num_cached_generations} generations saved to {grid_filename}")
             
             self.generation_cache = []
+            self.generation_cache_teachable = []
             self.num_cached_generations = 0
             self.cache_start_iter = self.global_step + 1
 
