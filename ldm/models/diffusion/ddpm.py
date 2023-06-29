@@ -1751,7 +1751,7 @@ class LatentDiffusion(DDPM):
                 # So only need to check losses_clip_subj_comp against clip_loss_thres.
                 loss_diffs_subj_mix = losses_clip_subj_comp - losses_clip_mix_comp
                 are_teachable = (losses_clip_subj_comp <= clip_loss_thres) & (loss_diffs_subj_mix > cls_subj_clip_margin)
-                print(losses_clip_subj_comp, losses_clip_mix_comp)
+                # print(losses_clip_subj_comp, losses_clip_mix_comp)
 
                 if not self.filter_with_clip_loss:
                     # Still compute the loss metrics. 
