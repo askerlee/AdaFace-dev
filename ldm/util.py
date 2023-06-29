@@ -14,7 +14,7 @@ from queue import Queue
 
 from inspect import isfunction
 from PIL import Image, ImageDraw, ImageFont
-from torchvision.utils import make_grid
+from torchvision.utils import make_grid, draw_bounding_boxes
 
 def log_txt_as_img(wh, xc, size=10):
     # wh a tuple of (width, height)
@@ -448,25 +448,45 @@ def gen_gradient_scaler(alpha):
         return lambda x: x.detach()
     
 # samples: a list of (B, C, H, W) tensors.
-# If not do_normalize, samples should be between [0, 1].
+# are_teachable: a list of (B,) booleans.
+# If not do_normalize, samples should be between [0, 1] (float types) or [0, 255] (uint8).
 # If do_normalize, samples should be between [-1, 1] (raw output from SD decode_first_stage()).
-def save_grid(samples, grid_filepath, nrow, do_normalize=False):
+def save_grid(samples, are_teachable, grid_filepath, nrow, do_normalize=False):
     if isinstance(samples[0], np.ndarray):
         samples = [ torch.from_numpy(e) for e in samples ]
 
-    grid = torch.stack(samples, 0)
-    if do_normalize:
-        grid = torch.clamp((grid + 1.0) / 2.0, min=0.0, max=1.0)
-        
-    grid = rearrange(grid, 'n b c h w -> (n b) c h w')
-    grid = make_grid(grid, nrow=nrow)
+    # grid is a 4D tensor: (B, C, H, W)
+    if not isinstance(samples, torch.Tensor):
+        grid = torch.stack(samples, 0)
+    else:
+        grid = samples
+    # are_teachable is a 1D tensor: (B,)
+    if not isinstance(are_teachable, torch.Tensor):
+        are_teachable = torch.stack(are_teachable, 0)
 
-    # to image
-    grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
-    Image.fromarray(grid.astype(np.uint8)).save(grid_filepath)
+    if grid.dtype != torch.uint8:
+        if do_normalize:
+            grid = torch.clamp((grid + 1.0) / 2.0, min=0.0, max=1.0)
+        grid = (255. * grid).to(torch.uint8)
+
+    # img_box indicates the whole image region.
+    img_box = torch.tensor([0, 0, grid.shape[2], grid.shape[3]]).unsqueeze(0)
+
+    # Highlight the teachable samples.
+    for i, is_teachable in enumerate(are_teachable):
+        if is_teachable:
+            # Draw a 4-pixel wide green bounding box around the image.
+            grid[i] = draw_bounding_boxes(grid[i], img_box, colors="green", width=4)
+
+    # grid is a 3D np array: (C, H2, W2)
+    grid = make_grid(grid, nrow=nrow).cpu().numpy()
+    # grid is transposed to: (H2, W2, C)
+    grid_img = Image.fromarray(grid.transpose([1, 2, 0]))
+    if grid_filepath is not None:
+        grid_img.save(grid_filepath)
     
     # return image to be shown on webui
-    return Image.fromarray(grid.astype(np.uint8))
+    return grid_img
 
 def divide_list_into_chunks(lst, chunk_size):
     # looping till length lst

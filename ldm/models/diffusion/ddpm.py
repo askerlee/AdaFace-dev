@@ -23,9 +23,9 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, mix_embeddings, \
-                       ortho_subtract, calc_stats, rand_like, \
+                       ortho_subtract, calc_stats, \
                        GradientScaler, gen_gradient_scaler, \
-                       calc_chan_locality, convert_attn_to_spatial_weight, calc_delta_loss, \
+                       convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, divide_list_into_chunks
 
 from ldm.modules.ema import LitEma
@@ -650,6 +650,7 @@ class LatentDiffusion(DDPM):
             self.embedding_manager = None
 
         self.generation_cache = []
+        self.generation_cache_teachable = []
         self.cache_start_iter = 0
         self.num_cached_generations = 0
         
@@ -1628,6 +1629,7 @@ class LatentDiffusion(DDPM):
 
                     with torch.no_grad():
                         x_noisy_ = self.q_sample(x_start=x_start_, t=t_, noise=noise_)
+                        # self.uncond: precomputed unconditional embeddings.
                         # model_output_uncond: [2, 4, 64, 64] -> [4, 4, 64, 64]
                         model_output_uncond = self.apply_model(x_noisy_, t_, self.uncond)
                         model_output_uncond = model_output_uncond.repeat(2, 1, 1, 1)
@@ -1653,6 +1655,8 @@ class LatentDiffusion(DDPM):
             # LINK #shared_step
             # Note model_output is predicted noise.
             guide_scale = 5
+            # Classifier-free guidance but only done for one iteration, to make the contents in the 
+            # generated images more pronounced => smaller CLIP loss.
             pred_noise = model_output * guide_scale - model_output_uncond * (guide_scale - 1)
             x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=pred_noise)
             # Images generated both under subj_comp_prompts and subj_prompt_mix_comps 
@@ -1718,12 +1722,9 @@ class LatentDiffusion(DDPM):
                 # DO NOT use CLIP loss to optimize the model. It will hurt the performance.
                 with torch.no_grad():
                     clip_images = self.decode_first_stage(clip_images_code)
-                    clip_images_np = clip_images.cpu().numpy()
 
                     losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
                                                                                          reduction='diag')
-
-                self.cache_and_log_generations(clip_images_np)
 
                 # Instances are arranged as: 
                 # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
@@ -1752,6 +1753,8 @@ class LatentDiffusion(DDPM):
                 loss_diffs_subj_mix = losses_clip_subj_comp - losses_clip_mix_comp
                 are_teachable = (losses_clip_subj_comp <= clip_loss_thres) & (loss_diffs_subj_mix > cls_subj_clip_margin)
                 # print(losses_clip_subj_comp, losses_clip_mix_comp)
+
+                self.cache_and_log_generations(clip_images, are_teachable.repeat(2))
 
                 if not self.filter_with_clip_loss:
                     # Still compute the loss metrics. 
@@ -2272,18 +2275,21 @@ class LatentDiffusion(DDPM):
 
         return samples, intermediates
 
-    def cache_and_log_generations(self, samples, max_cache_size=40):
+    def cache_and_log_generations(self, samples, are_teachable, max_cache_size=48):
         self.generation_cache.append(samples)
+        self.generation_cache_teachable.append(are_teachable)
         self.num_cached_generations += len(samples)
 
         if self.num_cached_generations >= max_cache_size:
             grid_folder = self.logger._save_dir + f'/samples'
             os.makedirs(grid_folder, exist_ok=True)
             grid_filename = grid_folder + f'/{self.cache_start_iter}-{self.global_step}.png'
-            save_grid(self.generation_cache, grid_filename, 10, do_normalize=True)
+            save_grid(self.generation_cache, self.generation_cache_teachable, 
+                      grid_filename, 12, do_normalize=True)
             print(f"{self.num_cached_generations} generations saved to {grid_filename}")
             
             self.generation_cache = []
+            self.generation_cache_teachable = []
             self.num_cached_generations = 0
             self.cache_start_iter = self.global_step + 1
 
