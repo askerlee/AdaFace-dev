@@ -461,7 +461,7 @@ def save_grid(samples, are_teachable, grid_filepath, nrow, do_normalize=False):
     else:
         grid = samples
     # are_teachable is a 1D tensor: (B,)
-    if not isinstance(are_teachable, torch.Tensor):
+    if are_teachable is not None and not isinstance(are_teachable, torch.Tensor):
         are_teachable = torch.cat(are_teachable, 0)
 
     if grid.dtype != torch.uint8:
@@ -472,11 +472,12 @@ def save_grid(samples, are_teachable, grid_filepath, nrow, do_normalize=False):
     # img_box indicates the whole image region.
     img_box = torch.tensor([0, 0, grid.shape[2], grid.shape[3]]).unsqueeze(0)
 
-    # Highlight the teachable samples.
-    for i, is_teachable in enumerate(are_teachable):
-        if is_teachable:
-            # Draw a 4-pixel wide green bounding box around the image.
-            grid[i] = draw_bounding_boxes(grid[i], img_box, colors="green", width=12)
+    if are_teachable is not None:
+        # Highlight the teachable samples.
+        for i, is_teachable in enumerate(are_teachable):
+            if is_teachable:
+                # Draw a 4-pixel wide green bounding box around the image.
+                grid[i] = draw_bounding_boxes(grid[i], img_box, colors="green", width=12)
 
     # grid is a 3D np array: (C, H2, W2)
     grid = make_grid(grid, nrow=nrow).cpu().numpy()
