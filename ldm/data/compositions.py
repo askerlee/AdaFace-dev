@@ -98,8 +98,13 @@ def sample_compositions(N, is_animal):
     for i in range(N):
         idx = np.random.choice(K)
         composition = exrex.getone(composition_regexs[idx])
-        has_location = np.random.choice([0, 1])
-        if has_location:
+        # Disable another object in the image for non-animal subjects.
+        if is_animal:
+            has_another_obj = np.random.choice([0, 1])
+        else:
+            has_another_obj = False
+
+        if has_another_obj:
             loc1, loc2 = np.random.choice(all_locations, 2, replace=False)
             location1 = loc1 + " "
             object2   = np.random.choice(coexist_objects)
