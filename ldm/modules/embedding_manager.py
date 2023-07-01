@@ -102,7 +102,7 @@ class MaskedAvgPool2d(nn.Module):
         return x
 
 class AttentionalPooler(nn.Module):
-    def __init__(self, feat_dim, n_heads=4, dim_head=32, n_queries=1):
+    def __init__(self, feat_dim, n_heads=1, dim_head=64, n_queries=1):
         super().__init__()
         inner_dim = dim_head * n_heads    # 128
 
@@ -110,8 +110,8 @@ class AttentionalPooler(nn.Module):
         self.n_heads = n_heads
         self.n_queries = n_queries
 
-        # to_q, to_k param count: 768*128*2 = 196608 ~ 200k. 
-        # 16 layers: 200k*16 = 3.2M.
+        # to_q, to_k param count: 768*64 = 49152 ~ 50k. 
+        # 16 layers: 50k*16 = 0.8M.
         self.to_q = nn.Linear(feat_dim, inner_dim, bias=False)
         self.to_k = nn.Linear(feat_dim, inner_dim, bias=False)
         # Remove v projection to reduce parameters.
