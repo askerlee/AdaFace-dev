@@ -106,9 +106,10 @@ class AttentionalPooler(nn.Module):
         super().__init__()
         inner_dim = dim_head * n_heads    # 128
 
-        self.scale = dim_head ** -0.5
-        self.n_heads = n_heads
-        self.n_queries = n_queries
+        self.attn_score_scale = dim_head ** -0.5
+        self.q_scale    = 1
+        self.n_heads    = n_heads
+        self.n_queries  = n_queries
 
         # to_q, to_k param count: 768*64 = 49152 ~ 50k. 
         # 16 layers: 50k*16 = 0.8M.
@@ -116,7 +117,7 @@ class AttentionalPooler(nn.Module):
         self.to_k = nn.Linear(feat_dim, inner_dim, bias=False)
         # Remove v projection to reduce parameters.
         # query param count: 128*1 = 128.
-        self.query = nn.Parameter(torch.randn(n_queries, feat_dim))
+        self.query = nn.Parameter(torch.randn(n_queries, feat_dim, requires_grad=True))
         self.ln_q = nn.LayerNorm(feat_dim, elementwise_affine=True)
         self.ln_k = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
@@ -136,7 +137,9 @@ class AttentionalPooler(nn.Module):
         x = x.flatten(2).permute(0, 2, 1)
         x = self.ln_k(x)
 
-        q = self.to_q(self.ln_q(self.query))
+        # Reduce q std by scaling down q, so that the attentions are more uniform across pixels.
+        # If q_scale = 0 (thus q = 0), this falls back to MaskedAvgPool2d.
+        q = self.to_q(self.ln_q(self.query)) * self.q_scale
         # q: [1, 128] -> [N, 1, 128]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
         k = self.to_k(x)
@@ -149,7 +152,7 @@ class AttentionalPooler(nn.Module):
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
 
         # sim: [8, 1, 256].
-        sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+        sim = einsum('b i d, b j d -> b i j', q, k) * self.attn_score_scale
 
         if mask is not None:
             mask = mask.bool()
@@ -555,6 +558,7 @@ class EmbeddingManager(nn.Module):
         # When the passed argument num_vectors_per_token > 1, it means multi-token embedding, 
         # instead of layer-wise embedding.
         self.max_vectors_per_layer_per_token = num_vectors_per_token
+        self.ada_use_attn_pooler = ada_use_attn_pooler
 
         # multi-token and multi-layer embedding are not supported at the same time.
         if self.use_layerwise_embedding:
@@ -1122,6 +1126,7 @@ class EmbeddingManager(nn.Module):
         # If ada_maps_bias_reg_weight = 0.001, map biases are still very small. 
         # So this weight doesn't matter much.
         ada_maps_bias_reg_weight    = 0.001   # 0.02 -> 0.001
+        ada_poolers_reg_weight      = 0.1
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
@@ -1161,11 +1166,16 @@ class EmbeddingManager(nn.Module):
 
                 loss_ada_maps_weight = 0.
                 loss_ada_maps_bias   = 0.
+                loss_ada_pooler      = 0.
+
                 if isinstance(embobj, AdaEmbedding):
                     for i, map in enumerate(embobj.layer_maps):
                         loss_ada_maps_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
                         loss_ada_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
-
+                    if self.ada_use_attn_pooler:
+                        for i, pooler in enumerate(embobj.poolers):
+                            loss_ada_pooler  += selective_reg_loss(pooler.to_k.weight, loss_type=euc_loss_type)
+                            loss_ada_pooler  += selective_reg_loss(pooler.to_q.weight, loss_type=euc_loss_type)
                 if type(loss_bias) == int:
                     breakpoint()
 
@@ -1174,7 +1184,8 @@ class EmbeddingManager(nn.Module):
                             + loss_pre_vecs         * pre_vecs_reg_weight \
                             + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
                             + loss_ada_maps_bias    * ada_maps_bias_reg_weight \
-
+                            + loss_ada_pooler       * ada_poolers_reg_weight
+                
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
                     print_str = f'reg_bias={loss_bias.item():.4f}, ' \
