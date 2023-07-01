@@ -135,14 +135,13 @@ class AttentionalPooler(nn.Module):
 
         # x: N, D, H, W -> N, D, S -> N, S, D
         x = x.flatten(2).permute(0, 2, 1)
-        x = self.ln_k(x)
 
         # Reduce q std by scaling down q, so that the attentions are more uniform across pixels.
         # If q_scale = 0 (thus q = 0), this falls back to MaskedAvgPool2d.
         q = self.to_q(self.ln_q(self.query)) * self.q_scale
         # q: [1, 128] -> [N, 1, 128]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
-        k = self.to_k(x)
+        k = self.to_k(self.ln_k(x))
         v = x
 
         # q: [8, 1, 32], k: [8, 256, 32], v: [8, 256, 192]. 8: B*Head = 2*4.
