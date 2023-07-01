@@ -102,7 +102,7 @@ class MaskedAvgPool2d(nn.Module):
         return x
 
 class AttentionalPooler(nn.Module):
-    def __init__(self, feat_dim=768, n_heads=4, dim_head=32, n_queries=1):
+    def __init__(self, feat_dim, n_heads=4, dim_head=32, n_queries=1):
         super().__init__()
         inner_dim = dim_head * n_heads    # 128
 
@@ -153,7 +153,7 @@ class AttentionalPooler(nn.Module):
 
         if mask is not None:
             mask = mask.bool()
-            max_neg_value = -torch.finfo(x.dtype).max
+            max_neg_value = -torch.finfo(sim.dtype).max
             sim.masked_fill_(~mask, max_neg_value)
 
         attn = sim.softmax(dim=-1)
@@ -171,7 +171,7 @@ class AttentionalPooler(nn.Module):
             return out
 
 class StaticLayerwiseEmbedding(nn.Module):
-    # dim1: 16 (9 layers out of 25 of UNet are skipped), dim2: 768, 
+    # num_layers: 16 (9 layers out of 25 of UNet are skipped), dim2: 768, 
     # r: rank of basis vectors. Usually set as (num of init words * ratio), ratio=2 or 3.
     # num of init words is usually 2. So r is usually 4~6.
     # If using init_vecs, init_noise_stds are applied to basis_rand_weights. 
@@ -184,17 +184,17 @@ class StaticLayerwiseEmbedding(nn.Module):
     # Extra copies of init_vecs are added with random noises to avoid the non-identifiability issue.
     # init_up_noise_stds[1] << init_up_noise_stds[0].
     # has_bias: if enabled, the output vectors will be dominated by self.bias.
-    def __init__(self, dim1=16, dim2=768, r=6, init_noise_stds=(0.1, 0.04), init_vecs=None, 
+    def __init__(self, num_layers=16, dim2=768, r=6, init_noise_stds=(0.1, 0.04), init_vecs=None, 
                  init_vec_weights=None, init_neg_vecs=None, has_bias=True, device_type="cuda"):
         super().__init__()
 
-        self.dim1 = dim1
+        self.num_layers = num_layers
         self.dim2 = dim2
         self.r = r
 
-        if r > min(dim1, dim2):
+        if r > min(num_layers, dim2):
             raise ValueError(
-                f"StaticLayerwiseEmbedding LoRA rank {r} must be less or equal than {min(dim1, dim2)}"
+                f"StaticLayerwiseEmbedding LoRA rank {r} must be less or equal than {min(num_layers, dim2)}"
             )
 
         if init_vecs is not None:
@@ -202,9 +202,9 @@ class StaticLayerwiseEmbedding(nn.Module):
             if init_vecs.ndim == 1:
                 init_vecs = init_vecs.unsqueeze(0)
 
-            if init_vecs.shape[1] != dim2 or init_vecs.shape[0] > dim1:
+            if init_vecs.shape[1] != dim2 or init_vecs.shape[0] > num_layers:
                 raise ValueError(
-                    f"StaticLayerwiseEmbedding init vectors shape {init_vecs.shape} must be (<={dim1}, {dim2})"
+                    f"StaticLayerwiseEmbedding init vectors shape {init_vecs.shape} must be (<={num_layers}, {dim2})"
                 )
 
             N = self.N = init_vecs.shape[0]
@@ -218,7 +218,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             self.pre_vecs = None
 
         # basis_rand_weights: 16 * r, basis_vecs: r * 768. basis_rand_weights * basis_vecs: 16 * 768.
-        self.basis_rand_weights    = nn.Parameter(torch.randn(dim1, r))
+        self.basis_rand_weights    = nn.Parameter(torch.randn(num_layers, r))
         # basis_vecs consists of r basis vectors. Will be updated through BP.
         self.basis_vecs = nn.Parameter(torch.randn(r - N, dim2), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
@@ -261,7 +261,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             # As a result, the component from basis_vecs has less randomness, 
             # and is more constant across rows.
             self.basis_rand_weights.data[:, :N]    *= init_noise_stds[1]
-            # The last dim1-N block are coefficients of the extra learned vectors.
+            # The last num_layers-N block are coefficients of the extra learned vectors.
             # We don't want the result embeddings to be confined 
             # in the subspace of basis_vecs. So we let the extra learned vectors play a bigger role,
             # by making the noises larger (init_noise_stds[0]=0.1).
@@ -274,7 +274,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             NEG = init_neg_vecs.shape[0]
             self.NEG = NEG
             # The no. N~N+NEG vectors in basis_vecs are init_neg_vecs (no noise added).
-            # The remaining dim1-(N+NEG) vectors are gaussian noises on the unit ball.
+            # The remaining num_layers-(N+NEG) vectors are gaussian noises on the unit ball.
             self.basis_vecs.data[:NEG] = -init_neg_vecs.clone()
             # self.basis_comm_weights.data[N:N+NEG] = 1. / NEG
             # Do not tinker with the columns corresponding to negative vectors in basis_rand_weights.
@@ -283,12 +283,12 @@ class StaticLayerwiseEmbedding(nn.Module):
 
         if self.has_bias:
             # bias: 16 * 768.
-            self.bias        = nn.Parameter(torch.zeros(dim1, dim2))
+            self.bias        = nn.Parameter(torch.zeros(num_layers, dim2))
         else:
             self.bias = 0
 
         layer_lns  = []
-        for i in range(dim1):
+        for i in range(num_layers):
             layer_lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
 
         self.layer_lns  = nn.ModuleList(layer_lns)
@@ -312,7 +312,7 @@ class StaticLayerwiseEmbedding(nn.Module):
 
             out_vecs = torch.matmul(basis_weights, basis_vecs)
             # Apply layer-wise layer normalization.
-            out_vecs_ln = [ self.layer_lns[i](out_vecs[i]) for i in range(self.dim1) ]
+            out_vecs_ln = [ self.layer_lns[i](out_vecs[i]) for i in range(self.num_layers) ]
             out_vecs_ln = torch.stack(out_vecs_ln, dim=0) / np.sqrt(self.dim2)
 
             # Different layers have different biases.
@@ -320,13 +320,13 @@ class StaticLayerwiseEmbedding(nn.Module):
             return out_vecs_ln
 
 class AdaEmbedding(nn.Module):
-    # dim1: 16 (9 layers out of 25 of UNet are skipped).
+    # num_layers: 16 (9 layers out of 25 of UNet are skipped).
     # dim2: 768, r: 12.
     # infeat_dims: a list of 25 integers, each is the dimension of 
     # the input feature from the respective layer. 9 of them are skipped.
     # infeat_dims are (almost) reflective around the middle layer, except for the first and last layers.
     # Layer indices absent in layer_idx2emb_idx are skipped layers.
-    def __init__(self, dim1=16, dim2=768, r=12, init_vecs=None, 
+    def __init__(self, num_layers=16, dim2=768, r=12, init_vecs=None, 
                  infeat_dims = [ 4,    320,  320,  320,  320,  640,  640,  640, 1280, 1280, 1280, 1280, 
                                  1280,
                                  1280, 1280, 1280, 1280, 1280, 1280, 1280, 640, 640,  640,  320,  320 ],
@@ -337,8 +337,8 @@ class AdaEmbedding(nn.Module):
                  device_type="cuda"):
         super().__init__()
 
-        assert dim1 == len(layer_idx2emb_idx), f"dim1={dim1} != len(layer_idx2emb_idx)={len(layer_idx2emb_idx)}"
-        self.dim1 = dim1
+        assert num_layers == len(layer_idx2emb_idx), f"num_layers={num_layers} != len(layer_idx2emb_idx)={len(layer_idx2emb_idx)}"
+        self.num_layers = num_layers
         self.dim2 = dim2
         self.r = r
         self.device_type = device_type
@@ -351,9 +351,9 @@ class AdaEmbedding(nn.Module):
             if init_vecs.ndim == 1:
                 init_vecs = init_vecs.unsqueeze(0)
 
-            if init_vecs.shape[1] != dim2 or init_vecs.shape[0] > dim1:
+            if init_vecs.shape[1] != dim2 or init_vecs.shape[0] > num_layers:
                 raise ValueError(
-                    f"AdaEmbedding LoRA init vectors shape {init_vecs.shape} must be (<={dim1}, {dim2})"
+                    f"AdaEmbedding LoRA init vectors shape {init_vecs.shape} must be (<={num_layers}, {dim2})"
                 )
 
             N = self.N = init_vecs.shape[0]
@@ -374,10 +374,22 @@ class AdaEmbedding(nn.Module):
         self.infeat_dims = list(infeat_dims)
 
         self.use_attn_pooler = use_attn_pooler
-        if self.use_attn_pooler:
-            self.pooler = AttentionalPooler()
-        else:
-            self.pooler = MaskedAvgPool2d() # nn.AdaptiveAvgPool2d((1, 1))
+        poolers = []
+        for i in range(num_layers):
+            i2 = self.emb_idx2layer_idx[i]
+            infeat_dim = infeat_dims[i2]
+
+            if self.use_attn_pooler:
+                # The first layer has dim 4. Too small to use attentional pooler.
+                if infeat_dim < 128:
+                    pooler = MaskedAvgPool2d()
+                else:
+                    pooler = AttentionalPooler(infeat_dim)
+            else:
+                pooler = MaskedAvgPool2d()
+            poolers.append(pooler)
+
+        self.poolers = nn.ModuleList(poolers)
 
         # The dimension of the time embeddings used will be 
         # the first TD_frac dimensions of image features.
@@ -391,7 +403,7 @@ class AdaEmbedding(nn.Module):
         layer_lncat2s = []
         self.TDs = []
 
-        for i in range(dim1):
+        for i in range(num_layers):
             i2 = self.emb_idx2layer_idx[i]
             TD = int(self.TD_frac * infeat_dims[i2])
             self.TDs.append(TD)
@@ -408,7 +420,7 @@ class AdaEmbedding(nn.Module):
         self.has_bias = has_bias
         if has_bias:
             # bias: 25 * 768.
-            self.bias        = nn.Parameter(torch.zeros(dim1, dim2))
+            self.bias        = nn.Parameter(torch.zeros(num_layers, dim2))
         else:
             self.bias        = 0
 
@@ -420,12 +432,13 @@ class AdaEmbedding(nn.Module):
     # time_emb: [B, 1280].
     def forward(self, layer_idx, layer_infeat, time_emb, img_mask=None, bp_to_unet=False):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
-        
+        pooler  = self.poolers[emb_idx]
+
         with torch.autocast(device_type=self.device_type, enabled=True):
             # basis_dyn_weight: [B, r] = [2, 12].
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
             # infeat_pooled: [B, C_layer]
-            infeat_pooled    = self.pooler(layer_infeat, img_mask)
+            infeat_pooled    = pooler(layer_infeat, img_mask)
             # When not bp_to_unet, completely cut off the gradient flow into the UNet.
             # bp_to_unet is enabled when doing composition regularization iterations. 
             if bp_to_unet:
