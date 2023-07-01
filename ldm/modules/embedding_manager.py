@@ -1,11 +1,15 @@
 import torch
-from torch import nn
+from torch import nn, einsum
+from einops import rearrange, repeat
+from inspect import isfunction
+
 import torch.nn.functional as F
 import numpy as np
 import copy
 
 from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler
 from functools import partial
+from typing import Callable, Optional, Sequence, Tuple
 
 PROGRESSIVE_SCALE = 2000
 
@@ -85,7 +89,7 @@ class MaskedAvgPool2d(nn.Module):
         super().__init__()
         self.avgpool = nn.AdaptiveAvgPool2d(1)
 
-    # x: [N, C, H, W], mask: [N, 1, H0, W0]. 
+    # x: [N, C, H, W], mask: [N, 1, H0, W0] of 1s (keep) or 0s (discard).
     # H, W: feature map size, H0, W0: original image size.
     # Return: [N, C]
     def forward(self, x, mask=None):
@@ -96,6 +100,75 @@ class MaskedAvgPool2d(nn.Module):
         x = x * mask
         x = x.sum(dim=(2,3)) / mask.sum(dim=(2,3))
         return x
+
+class AttentionalPooler(nn.Module):
+    def __init__(self, feat_dim=768, n_heads=4, dim_head=32, n_queries=1):
+        super().__init__()
+        inner_dim = dim_head * n_heads    # 128
+
+        self.scale = dim_head ** -0.5
+        self.n_heads = n_heads
+        self.n_queries = n_queries
+
+        # to_q, to_k param count: 768*128*2 = 196608 ~ 200k. 
+        # 16 layers: 200k*16 = 3.2M.
+        self.to_q = nn.Linear(feat_dim, inner_dim, bias=False)
+        self.to_k = nn.Linear(feat_dim, inner_dim, bias=False)
+        # Remove v projection to reduce parameters.
+        # query param count: 128*1 = 128.
+        self.query = nn.Parameter(torch.randn(n_queries, feat_dim))
+        self.ln_q = nn.LayerNorm(feat_dim, elementwise_affine=True)
+        self.ln_k = nn.LayerNorm(feat_dim, elementwise_affine=True)
+
+    def forward(self, x, mask=None):
+        h = self.n_heads
+
+        if mask is not None:
+            mask = F.interpolate(mask, size=x.shape[2:], mode='nearest')
+            # float_tensor.bool() converts to 0.1/0.2... to True.
+            # N, 1, H, W -> N, 1, L=H*W
+            mask = rearrange(mask, 'b ... -> b (...)')
+            # N, 1, L -> N*Head, 1, L, i.e., [8, 1, 256].
+            # einops.repeat() is more convenient than unsqueeze().repeat().squeeze().
+            mask = repeat(mask, 'b j -> (b h) () j', h=h)
+
+        # x: N, D, H, W -> N, D, S -> N, S, D
+        x = x.flatten(2).permute(0, 2, 1)
+        x = self.ln_k(x)
+
+        q = self.to_q(self.ln_q(self.query))
+        # q: [1, 128] -> [N, 1, 128]
+        q = repeat(q, 'n d -> b n d', b=x.shape[0])
+        k = self.to_k(x)
+        v = x
+
+        # q: [8, 1, 32], k: [8, 256, 32], v: [8, 256, 192]. 8: B*Head = 2*4.
+        # The 768 dims of v are split into 4 heads, each head has 192 dims.
+        # This is kind of arbitrary, as there's no v projection that makes each head have congruent channels.
+        # But introducing a v projection would greatly increase parameters.
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
+
+        # sim: [8, 1, 256].
+        sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+
+        if mask is not None:
+            mask = mask.bool()
+            max_neg_value = -torch.finfo(x.dtype).max
+            sim.masked_fill_(~mask, max_neg_value)
+
+        attn = sim.softmax(dim=-1)
+
+        # out: [8, 1, 192].
+        out = einsum('b i j, b j d -> b i d', attn, v)
+        # out: [8, 1, 192] -> [2, 1, 4*192] = [2, 1, 768].
+        out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+
+        if self.n_queries == 1:
+            # out: N, 1, D -> N, D, i.e., [2, 768]
+            # Make the output shape consistent with MaskedAvgPool2d.
+            return out.squeeze(1)
+        else:
+            return out
 
 class StaticLayerwiseEmbedding(nn.Module):
     # dim1: 16 (9 layers out of 25 of UNet are skipped), dim2: 768, 
@@ -260,7 +333,8 @@ class AdaEmbedding(nn.Module):
                  # skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15],
                  layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },
-                 has_bias=True, device_type="cuda"):
+                 has_bias=True, use_attn_pooler=False,
+                 device_type="cuda"):
         super().__init__()
 
         assert dim1 == len(layer_idx2emb_idx), f"dim1={dim1} != len(layer_idx2emb_idx)={len(layer_idx2emb_idx)}"
@@ -298,7 +372,12 @@ class AdaEmbedding(nn.Module):
         self.basis_vecs.data[-1] = 0
 
         self.infeat_dims = list(infeat_dims)
-        self.avgpool = MaskedAvgPool2d() # nn.AdaptiveAvgPool2d((1, 1))
+
+        self.use_attn_pooler = use_attn_pooler
+        if self.use_attn_pooler:
+            self.pooler = AttentionalPooler()
+        else:
+            self.pooler = MaskedAvgPool2d() # nn.AdaptiveAvgPool2d((1, 1))
 
         # The dimension of the time embeddings used will be 
         # the first TD_frac dimensions of image features.
@@ -341,13 +420,12 @@ class AdaEmbedding(nn.Module):
     # time_emb: [B, 1280].
     def forward(self, layer_idx, layer_infeat, time_emb, img_mask=None, bp_to_unet=False):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
-        self.avgpool = MaskedAvgPool2d()
         
         with torch.autocast(device_type=self.device_type, enabled=True):
             # basis_dyn_weight: [B, r] = [2, 12].
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
             # infeat_pooled: [B, C_layer]
-            infeat_pooled    = self.avgpool(layer_infeat, img_mask)
+            infeat_pooled    = self.pooler(layer_infeat, img_mask)
             # When not bp_to_unet, completely cut off the gradient flow into the UNet.
             # bp_to_unet is enabled when doing composition regularization iterations. 
             if bp_to_unet:
@@ -441,7 +519,7 @@ class EmbeddingManager(nn.Module):
             layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                   17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             ada_emb_weight=0.5, 
-            prompt_delta_reg_iter_gap=-1,       
+            ada_use_attn_pooler=False,
             subj_scale=1.0,
             **kwargs
     ):
@@ -456,7 +534,6 @@ class EmbeddingManager(nn.Module):
         self.progressive_counter = 0
         self.subj_scale = subj_scale
         self.set_ada_emb_weight(ada_emb_weight, init=True)
-        self.prompt_delta_reg_iter_gap = prompt_delta_reg_iter_gap
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
@@ -536,7 +613,8 @@ class EmbeddingManager(nn.Module):
                                                                    init_neg_vecs=init_neg_embeddings)
 
                     token_ada_embedder  = AdaEmbedding(num_vectors_per_token, self.token_dim, 
-                                                       layerwise_lora_rank, init_word_embeddings)                                                        
+                                                       layerwise_lora_rank, init_word_embeddings,
+                                                       use_attn_pooler=ada_use_attn_pooler)                                                        
                 else:
                     # ANCHOR[id=init_embed] : num_vectors_per_token vectors are initialized with the same embedding.
                     token_params = torch.nn.Parameter(avg_init_word_embedding.repeat(num_vectors_per_token, 1), requires_grad=True)
@@ -550,7 +628,8 @@ class EmbeddingManager(nn.Module):
                                                                    None, None, init_neg_embeddings=init_neg_embeddings)
                                                   
                     token_ada_embedder  = AdaEmbedding(num_vectors_per_token, self.token_dim, 
-                                                        layerwise_lora_default_rank, init_word_embeddings)   
+                                                       layerwise_lora_default_rank, init_word_embeddings,
+                                                       use_attn_pooler=ada_use_attn_pooler)   
                     
                 else:
                     token_params = torch.nn.Parameter(torch.rand(size=(num_vectors_per_token, self.token_dim), requires_grad=True))
@@ -1232,3 +1311,10 @@ class EmbeddingManager(nn.Module):
         # delta_loss = static_delta_loss + ada_delta_loss * ada_comp_loss_boost_ratio
         return static_delta_loss, ada_delta_loss
     
+# if this script is run from the command-line, do the following
+if __name__ == '__main__':
+    attnpool = AttentionalPooler()
+    x = torch.randn(2, 768, 16, 16)
+    mask = torch.randint(2, size=(2, 1, 16, 16)).float()
+    y = attnpool(x, mask)
+    print(y.shape)

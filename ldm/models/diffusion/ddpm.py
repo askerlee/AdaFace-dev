@@ -1612,6 +1612,7 @@ class LatentDiffusion(DDPM):
                     # Back up the original cond to be used in the recursive iteration.
                     cond_ = cond
                     c_static_emb, c_in = cond[0], cond[1]
+                    # print(c_in)
 
                     # Make two identical sets of c_static_emb2 and c_in2.
                     subj_single_emb, subj_comps_emb, mix_single_emb, mix_comps_emb = \
@@ -1619,7 +1620,6 @@ class LatentDiffusion(DDPM):
                     c_static_emb2 = torch.cat([ subj_comps_emb, subj_comps_emb, 
                                                 mix_comps_emb,  mix_comps_emb ], dim=0)
                     
-                    # mix_comp_prompts is randomly chosen between subj_comp_prompts and cls_comp_prompts in forward().
                     subj_single_prompts, subj_comp_prompts, mix_single_prompts, mix_comp_prompts = \
                         divide_list_into_chunks(c_in, len(c_in) // 4)
                     c_in2 = subj_comp_prompts + subj_comp_prompts + mix_comp_prompts + mix_comp_prompts
