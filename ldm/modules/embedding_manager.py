@@ -111,13 +111,15 @@ class AttentionalPooler(nn.Module):
         self.n_heads    = n_heads
         self.n_queries  = n_queries
 
+        self.query_scale = 0.1
         # to_q, to_k param count: 768*64 = 49152 ~ 50k. 
         # 16 layers: 50k*16 = 0.8M.
         self.to_k = nn.Linear(feat_dim, inner_dim, bias=False)
         # Remove v projection to reduce parameters.
         # query param count: 128*1 = 128. 
-        # No need to carefully initialize self.query, as it will be LNed before use.
         self.query = nn.Parameter(torch.randn(n_queries, inner_dim, requires_grad=True))
+        # Still need to carefully initialize self.query, although it will be LNed before use.
+        # Otherwise self.query will have a large magnitude and incur a huge reg loss.
         xavier_uniform_(self.query)
         self.ln_q = nn.LayerNorm(inner_dim, elementwise_affine=True)
         self.ln_k = nn.LayerNorm(feat_dim, elementwise_affine=True)
@@ -137,7 +139,8 @@ class AttentionalPooler(nn.Module):
         # x: N, D, H, W -> N, D, S -> N, S, D
         x = x.flatten(2).permute(0, 2, 1)
 
-        q = self.ln_q(self.query)
+        # ln(query) has a large magnitude (~5). So scale it down.
+        q = self.ln_q(self.query) * self.query_scale
         # q: [1, 128] -> [N, 1, 128]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
 
