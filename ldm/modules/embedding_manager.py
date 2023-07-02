@@ -107,7 +107,7 @@ class AttentionalPooler(nn.Module):
         inner_dim = dim_head * n_heads    # 128
 
         self.attn_score_scale = dim_head ** -0.5
-        self.q_scale    = 0.5
+        self.q_scale    = 1 #0.5
         self.n_heads    = n_heads
         self.n_queries  = n_queries
 
@@ -426,6 +426,11 @@ class AdaEmbedding(nn.Module):
         else:
             self.bias        = 0
 
+        # Set to < 1 to reduce the gradient flow into the UNet.
+        self.infeat_grad_scale = 0.2
+        if self.infeat_grad_scale < 1:
+            self.infeat_grad_scaler = GradientScaler(self.infeat_grad_scale)
+
         print(f"AdaEmbedding initialized with {self.N} init vectors, {self.r} basis vectors")
         self.call_count = 0
 
@@ -444,16 +449,14 @@ class AdaEmbedding(nn.Module):
             # When not bp_to_unet, completely cut off the gradient flow into the UNet.
             # bp_to_unet is enabled when doing composition regularization iterations. 
             if bp_to_unet:
-                # Set to < 1 to reduce the gradient flow into the UNet.
-                infeat_grad_scale = 0.5
-                if infeat_grad_scale < 1:
-                    grad_scaler = GradientScaler(infeat_grad_scale)
+                if self.infeat_grad_scale < 1:
                     #grad_scaler = grad_scaler.cuda()
-                    infeat_pooled_gradscaled = grad_scaler(infeat_pooled)
+                    infeat_pooled_gradscaled = self.infeat_grad_scaler(infeat_pooled)
                 else:
                     infeat_pooled_gradscaled = infeat_pooled
             else:
                 # Ordinary image reconstruction iterations. No BP into the UNet.
+                # But if attentional pooler is used, it will also not be BPed into and not updated.
                 infeat_pooled_gradscaled = infeat_pooled.detach()
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
