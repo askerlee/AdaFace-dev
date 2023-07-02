@@ -427,7 +427,7 @@ class AdaEmbedding(nn.Module):
             self.bias        = 0
 
         # Set to < 1 to reduce the gradient flow into the UNet.
-        self.infeat_grad_scale = 0.2
+        self.infeat_grad_scale = 0.5
         if self.infeat_grad_scale < 1:
             self.infeat_grad_scaler = GradientScaler(self.infeat_grad_scale)
 
@@ -445,19 +445,22 @@ class AdaEmbedding(nn.Module):
             # basis_dyn_weight: [B, r] = [2, 12].
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
             # infeat_pooled: [B, C_layer]
-            infeat_pooled    = pooler(layer_infeat, img_mask)
-            # When not bp_to_unet, completely cut off the gradient flow into the UNet.
-            # bp_to_unet is enabled when doing composition regularization iterations. 
             if bp_to_unet:
                 if self.infeat_grad_scale < 1:
                     #grad_scaler = grad_scaler.cuda()
-                    infeat_pooled_gradscaled = self.infeat_grad_scaler(infeat_pooled)
+                    layer_infeat_gradscaled = self.infeat_grad_scaler(layer_infeat)
                 else:
-                    infeat_pooled_gradscaled = infeat_pooled
+                    layer_infeat_gradscaled = layer_infeat
             else:
                 # Ordinary image reconstruction iterations. No BP into the UNet.
                 # But if attentional pooler is used, it will also not be BPed into and not updated.
-                infeat_pooled_gradscaled = infeat_pooled.detach()
+                # When not bp_to_unet, completely cut off the gradient flow into the UNet.
+                # bp_to_unet is enabled when doing composition regularization iterations. 
+                layer_infeat_gradscaled = layer_infeat.detach()
+
+            # Even if layer_infeat is grad-scaled, the pooler still receives the full gradient.
+            # But the grad is scaled when it's further passed to the UNet.
+            infeat_pooled    = pooler(layer_infeat_gradscaled, img_mask)
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
@@ -476,7 +479,7 @@ class AdaEmbedding(nn.Module):
                 time_feat = time_emb[:, :TD]
 
             # cat(ln(infeat_pooled), ln(time_emb)) as the input features.
-            infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled_gradscaled, time_feat)
+            infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled, time_feat)
             basis_dyn_weight = self.layer_maps[emb_idx](infeat_time)
             # bias: [1, 768]
             bias = self.bias[emb_idx].unsqueeze(0)

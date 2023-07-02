@@ -1381,7 +1381,7 @@ class LatentDiffusion(DDPM):
                         # c_in2 consists of four types of prompts: 
                         # subj_single, subj_comp, cls_single, cls_comp.
                         extra_info['iter_type']      = 'do_ada_prompt_delta_reg'
-                        extra_info['ada_bp_to_unet'] = True
+                        extra_info['ada_bp_to_unet'] = False
                         
                     else:
                         # The original scheme. Use the original subj_single_prompts embeddings and prompts.
@@ -1390,7 +1390,7 @@ class LatentDiffusion(DDPM):
                         c_static_emb2 = subj_single_emb[:N_EMBEDS]
                         c_in2         = subj_single_prompts[:ORIG_BS]
                         extra_info['iter_type']      = 'normal_recon'
-                        extra_info['ada_bp_to_unet'] = True
+                        extra_info['ada_bp_to_unet'] = False
 
                     extra_info['cls_comp_prompts']   = cls_comp_prompts
                     extra_info['cls_single_prompts'] = cls_single_prompts
