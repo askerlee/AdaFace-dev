@@ -1183,7 +1183,6 @@ class EmbeddingManager(nn.Module):
                     if self.ada_use_attn_pooler:
                         for i, pooler in enumerate(embobj.poolers):
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.to_k.weight, loss_type=euc_loss_type)
-                            loss_ada_attn_pooler  += selective_reg_loss(pooler.to_q.weight, loss_type=euc_loss_type)
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.query, loss_type=euc_loss_type) \
                                                         * ada_attn_query_reg_scale
                 if type(loss_bias) == int:
