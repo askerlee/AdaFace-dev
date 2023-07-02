@@ -141,7 +141,9 @@ class AttentionalPooler(nn.Module):
         q = self.to_q(self.ln_q(self.query)) * self.q_scale
         # q: [1, 128] -> [N, 1, 128]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
-        k = self.to_k(self.ln_k(x))
+
+        x = self.ln_k(x)
+        k = self.to_k(x)
         v = x
 
         # q: [8, 1, 32], k: [8, 256, 32], v: [8, 256, 192]. 8: B*Head = 2*4.
