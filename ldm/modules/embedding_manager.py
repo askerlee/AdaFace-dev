@@ -1137,7 +1137,9 @@ class EmbeddingManager(nn.Module):
         # If ada_maps_bias_reg_weight = 0.001, map biases are still very small. 
         # So this weight doesn't matter much.
         ada_maps_bias_reg_weight    = 0.001   # 0.02 -> 0.001
-        ada_attn_poolers_reg_weight = 0.4
+        ada_attn_poolers_reg_weight = 0.2
+        # Actual query reg weight: 0.1 * ada_attn_poolers_reg_weight = 0.02
+        ada_attn_query_reg_scale    = 0.1
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
@@ -1187,6 +1189,8 @@ class EmbeddingManager(nn.Module):
                         for i, pooler in enumerate(embobj.poolers):
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.to_k.weight, loss_type=euc_loss_type)
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.to_q.weight, loss_type=euc_loss_type)
+                            loss_ada_attn_pooler  += selective_reg_loss(pooler.query, loss_type=euc_loss_type) \
+                                                        * ada_attn_query_reg_scale
                 if type(loss_bias) == int:
                     breakpoint()
 
