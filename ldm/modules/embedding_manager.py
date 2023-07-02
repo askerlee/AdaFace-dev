@@ -1,5 +1,6 @@
 import torch
 from torch import nn, einsum
+from torch.nn.init import xavier_uniform_
 from einops import rearrange, repeat
 from inspect import isfunction
 
@@ -116,8 +117,11 @@ class AttentionalPooler(nn.Module):
         self.to_q = nn.Linear(feat_dim, inner_dim, bias=False)
         self.to_k = nn.Linear(feat_dim, inner_dim, bias=False)
         # Remove v projection to reduce parameters.
-        # query param count: 128*1 = 128.
+        # query param count: 128*1 = 128. 
         self.query = nn.Parameter(torch.randn(n_queries, feat_dim, requires_grad=True))
+        # *** important *** xavier_uniform_ reduces the magnitude of self.query, and reduces overfitting.
+        xavier_uniform_(self.query)
+
         self.ln_q = nn.LayerNorm(feat_dim, elementwise_affine=True)
         self.ln_k = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
