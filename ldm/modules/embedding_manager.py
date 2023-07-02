@@ -108,21 +108,18 @@ class AttentionalPooler(nn.Module):
         inner_dim = dim_head * n_heads    # 128
 
         self.attn_score_scale = dim_head ** -0.5
-        self.q_scale    = 1 #0.5
         self.n_heads    = n_heads
         self.n_queries  = n_queries
 
         # to_q, to_k param count: 768*64 = 49152 ~ 50k. 
         # 16 layers: 50k*16 = 0.8M.
-        self.to_q = nn.Linear(feat_dim, inner_dim, bias=False)
         self.to_k = nn.Linear(feat_dim, inner_dim, bias=False)
         # Remove v projection to reduce parameters.
         # query param count: 128*1 = 128. 
-        self.query = nn.Parameter(torch.randn(n_queries, feat_dim, requires_grad=True))
-        # *** important *** xavier_uniform_ reduces the magnitude of self.query, and reduces overfitting.
-        xavier_uniform_(self.query)
+        # No need to carefully initialize self.query, as it will be LNed before use.
+        self.query = nn.Parameter(torch.randn(n_queries, inner_dim, requires_grad=True))
 
-        self.ln_q = nn.LayerNorm(feat_dim, elementwise_affine=True)
+        self.ln_q = nn.LayerNorm(inner_dim, elementwise_affine=True)
         self.ln_k = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
     def forward(self, x, mask=None):
@@ -140,9 +137,7 @@ class AttentionalPooler(nn.Module):
         # x: N, D, H, W -> N, D, S -> N, S, D
         x = x.flatten(2).permute(0, 2, 1)
 
-        # Reduce q std by scaling down q, so that the attentions are more uniform across pixels.
-        # If q_scale = 0 (thus q = 0), this falls back to MaskedAvgPool2d.
-        q = self.to_q(self.ln_q(self.query)) * self.q_scale
+        q = self.ln_q(self.query)
         # q: [1, 128] -> [N, 1, 128]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
 
