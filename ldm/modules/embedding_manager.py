@@ -107,7 +107,7 @@ class AttentionalPooler(nn.Module):
         inner_dim = dim_head * n_heads    # 128
 
         self.attn_score_scale = dim_head ** -0.5
-        self.q_scale    = 1
+        self.q_scale    = 0.5
         self.n_heads    = n_heads
         self.n_queries  = n_queries
 
