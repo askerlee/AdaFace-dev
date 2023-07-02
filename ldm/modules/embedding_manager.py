@@ -118,7 +118,7 @@ class AttentionalPooler(nn.Module):
         # query param count: 128*1 = 128. 
         # No need to carefully initialize self.query, as it will be LNed before use.
         self.query = nn.Parameter(torch.randn(n_queries, inner_dim, requires_grad=True))
-
+        xavier_uniform_(self.query)
         self.ln_q = nn.LayerNorm(inner_dim, elementwise_affine=True)
         self.ln_k = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
