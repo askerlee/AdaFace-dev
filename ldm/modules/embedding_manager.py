@@ -1131,7 +1131,7 @@ class EmbeddingManager(nn.Module):
         # If ada_maps_bias_reg_weight = 0.001, map biases are still very small. 
         # So this weight doesn't matter much.
         ada_maps_bias_reg_weight    = 0.001   # 0.02 -> 0.001
-        ada_poolers_reg_weight      = 0.1
+        ada_attn_poolers_reg_weight = 0.4
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
@@ -1171,7 +1171,7 @@ class EmbeddingManager(nn.Module):
 
                 loss_ada_maps_weight = 0.
                 loss_ada_maps_bias   = 0.
-                loss_ada_pooler      = 0.
+                loss_ada_attn_pooler = 0.
 
                 if isinstance(embobj, AdaEmbedding):
                     for i, map in enumerate(embobj.layer_maps):
@@ -1179,8 +1179,8 @@ class EmbeddingManager(nn.Module):
                         loss_ada_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
                     if self.ada_use_attn_pooler:
                         for i, pooler in enumerate(embobj.poolers):
-                            loss_ada_pooler  += selective_reg_loss(pooler.to_k.weight, loss_type=euc_loss_type)
-                            loss_ada_pooler  += selective_reg_loss(pooler.to_q.weight, loss_type=euc_loss_type)
+                            loss_ada_attn_pooler  += selective_reg_loss(pooler.to_k.weight, loss_type=euc_loss_type)
+                            loss_ada_attn_pooler  += selective_reg_loss(pooler.to_q.weight, loss_type=euc_loss_type)
                 if type(loss_bias) == int:
                     breakpoint()
 
@@ -1189,7 +1189,7 @@ class EmbeddingManager(nn.Module):
                             + loss_pre_vecs         * pre_vecs_reg_weight \
                             + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
                             + loss_ada_maps_bias    * ada_maps_bias_reg_weight \
-                            + loss_ada_pooler       * ada_poolers_reg_weight
+                            + loss_ada_attn_pooler  * ada_attn_poolers_reg_weight
                 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
