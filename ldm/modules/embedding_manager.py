@@ -115,13 +115,14 @@ class AttentionalPooler(nn.Module):
         # to_q, to_k param count: 768*64 = 49152 ~ 50k. 
         # 16 layers: 50k*16 = 0.8M.
         self.to_k = nn.Linear(feat_dim, inner_dim, bias=False)
+        self.to_q = nn.Linear(feat_dim, inner_dim, bias=False)
         # Remove v projection to reduce parameters.
         # query param count: 128*1 = 128. 
-        self.query = nn.Parameter(torch.randn(n_queries, inner_dim, requires_grad=True))
+        self.query = nn.Parameter(torch.randn(n_queries, feat_dim, requires_grad=True))
         # Still need to carefully initialize self.query, although it will be LNed before use.
         # Otherwise self.query will have a large magnitude and incur a huge reg loss.
         xavier_uniform_(self.query)
-        self.ln_q = nn.LayerNorm(inner_dim, elementwise_affine=True)
+        self.ln_q = nn.LayerNorm(feat_dim, elementwise_affine=True)
         self.ln_k = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
     def forward(self, x, mask=None):
@@ -1136,8 +1137,8 @@ class EmbeddingManager(nn.Module):
         # So this weight doesn't matter much.
         ada_maps_bias_reg_weight    = 0.001   # 0.02 -> 0.001
         ada_attn_poolers_reg_weight = 0.2
-        ## Actual query reg weight: 0.1 * ada_attn_poolers_reg_weight = 0.02
-        ada_attn_query_reg_scale    = 0
+        ## Actual query reg weight: 0.01 * ada_attn_poolers_reg_weight = 0.002
+        ada_attn_query_reg_scale    = 0.01
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
@@ -1186,6 +1187,7 @@ class EmbeddingManager(nn.Module):
                     if self.ada_use_attn_pooler:
                         for i, pooler in enumerate(embobj.poolers):
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.to_k.weight, loss_type=euc_loss_type)
+                            loss_ada_attn_pooler  += selective_reg_loss(pooler.to_q.weight, loss_type=euc_loss_type)
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.query, loss_type=euc_loss_type) \
                                                         * ada_attn_query_reg_scale
                 if type(loss_bias) == int:
