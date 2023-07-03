@@ -102,6 +102,21 @@ class MaskedAvgPool2d(nn.Module):
         x = x.sum(dim=(2,3)) / mask.sum(dim=(2,3))
         return x
 
+class AvgPool1d(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    # x: [N, C, L], mask: [N, 1, L0] of 1s (keep) or 0s (discard).
+    # L: feature map size, L0: original sequence length.
+    # Return: [N, C]
+    def forward(self, x, mask=None):
+        #if mask is None:
+        return x.mean(dim=1)
+        
+        x = x * mask
+        x = x.sum(dim=2) / mask.sum(dim=2)
+        return x
+    
 class AttentionalPooler(nn.Module):
     def __init__(self, feat_dim, n_heads=1, dim_head=64, n_queries=1):
         super().__init__()
@@ -392,13 +407,9 @@ class AdaEmbedding(nn.Module):
             infeat_dim = self.infeat_dims[i2]
 
             if self.use_attn_pooler:
-                # The first layer has dim 4. Too small to use attentional pooler.
-                if infeat_dim < 128:
-                    pooler = MaskedAvgPool2d()
-                else:
-                    pooler = AttentionalPooler(infeat_dim)
+                pooler = AttentionalPooler(infeat_dim)
             else:
-                pooler = MaskedAvgPool2d()
+                pooler = AvgPool1d() #MaskedAvgPool2d()
             poolers.append(pooler)
 
         self.poolers = nn.ModuleList(poolers)
@@ -450,7 +461,7 @@ class AdaEmbedding(nn.Module):
     def forward(self, layer_idx, layer_infeat, time_emb, img_mask=None, bp_to_unet=False):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
         pooler  = self.poolers[emb_idx]
-        
+
         with torch.autocast(device_type=self.device_type, enabled=True):
             # basis_dyn_weight: [B, r] = [2, 12].
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
