@@ -128,17 +128,21 @@ class AttentionalPooler(nn.Module):
     def forward(self, x, mask=None):
         h = self.n_heads
 
-        if mask is not None:
-            mask = F.interpolate(mask, size=x.shape[2:], mode='nearest')
-            # float_tensor.bool() converts to 0.1/0.2... to True.
-            # N, 1, H, W -> N, 1, L=H*W
-            mask = rearrange(mask, 'b ... -> b (...)')
-            # N, 1, L -> N*Head, 1, L, i.e., [8, 1, 256].
-            # einops.repeat() is more convenient than unsqueeze().repeat().squeeze().
-            mask = repeat(mask, 'b j -> (b h) () j', h=h)
+        if x.ndim == 4:
+            if mask is not None:
+                mask = F.interpolate(mask, size=x.shape[2:], mode='nearest')
+                # float_tensor.bool() converts to 0.1/0.2... to True.
+                # N, 1, H, W -> N, 1, L=H*W
+                mask = rearrange(mask, 'b ... -> b (...)')
+                # N, 1, L -> N*Head, 1, L, i.e., [8, 1, 256].
+                # einops.repeat() is more convenient than unsqueeze().repeat().squeeze().
+                mask = repeat(mask, 'b j -> (b h) () j', h=h)
 
-        # x: N, D, H, W -> N, D, S -> N, S, D
-        x = x.flatten(2).permute(0, 2, 1)
+            # x: N, D, H, W -> N, D, S -> N, S, D
+            x = x.flatten(2).permute(0, 2, 1)
+        else:
+            mask = None
+            # x is already 3D.
 
         # ln(query) has a large magnitude (~5). So scale it down.
         q = self.to_q(self.ln_q(self.query)) * self.query_scale
@@ -334,9 +338,9 @@ class AdaEmbedding(nn.Module):
     # infeat_dims are (almost) reflective around the middle layer, except for the first and last layers.
     # Layer indices absent in layer_idx2emb_idx are skipped layers.
     def __init__(self, num_layers=16, dim2=768, r=12, init_vecs=None, 
-                 infeat_dims = [ 4,    320,  320,  320,  320,  640,  640,  640, 1280, 1280, 1280, 1280, 
+                 infeat_dims = [ 4,    320,  320,  320,  640,  640,  640,  1280, 1280, 1280, 1280, 1280, 
                                  1280,
-                                 1280, 1280, 1280, 1280, 1280, 1280, 1280, 640, 640,  640,  320,  320 ],
+                                 1280, 1280, 1280, 1280, 1280, 1280, 640, 640, 640,  320,  320,  320 ],
                  # skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15],
                  layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },
@@ -379,12 +383,13 @@ class AdaEmbedding(nn.Module):
         self.basis_vecs.data[-1] = 0
 
         self.infeat_dims = list(infeat_dims)
+        # self.infeat_dims = [ 320 for i in range(25) ]
 
         self.use_attn_pooler = use_attn_pooler
         poolers = []
         for i in range(num_layers):
             i2 = self.emb_idx2layer_idx[i]
-            infeat_dim = infeat_dims[i2]
+            infeat_dim = self.infeat_dims[i2]
 
             if self.use_attn_pooler:
                 # The first layer has dim 4. Too small to use attentional pooler.
@@ -412,10 +417,10 @@ class AdaEmbedding(nn.Module):
 
         for i in range(num_layers):
             i2 = self.emb_idx2layer_idx[i]
-            TD = int(self.TD_frac * infeat_dims[i2])
+            TD = int(self.TD_frac * self.infeat_dims[i2])
             self.TDs.append(TD)
 
-            # infeat_dims[i2] + TD because we also include time embeddings (first TD dims) as the input features.
+            # self.infeat_dims[i2] + TD because we also include time embeddings (first TD dims) as the input features.
             layer_maps.append( nn.Linear(infeat_dims[i2] + TD, r, bias=True) )
             layer_lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
             layer_lncat2s.append(LNCat2(infeat_dims[i2], TD))
@@ -439,13 +444,13 @@ class AdaEmbedding(nn.Module):
         print(f"AdaEmbedding initialized with {self.N} init vectors, {self.r} basis vectors")
         self.call_count = 0
 
-    # layer_infeat: 4D image feature tensor [B, C, H, W].
+    # layer_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
     # time_emb: [B, 1280].
     def forward(self, layer_idx, layer_infeat, time_emb, img_mask=None, bp_to_unet=False):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
         pooler  = self.poolers[emb_idx]
-
+        
         with torch.autocast(device_type=self.device_type, enabled=True):
             # basis_dyn_weight: [B, r] = [2, 12].
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
