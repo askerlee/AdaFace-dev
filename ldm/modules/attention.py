@@ -172,7 +172,7 @@ class CrossAttention(nn.Module):
         h = self.heads
 
         q = self.to_q(x)
-        context = default(context, q)
+        context = default(context, x)
         if callable(context):
             # Pass x to context() to get the real context
             context = context(q)
