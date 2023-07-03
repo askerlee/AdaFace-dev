@@ -111,7 +111,7 @@ class AttentionalPooler(nn.Module):
         self.n_heads    = n_heads
         self.n_queries  = n_queries
 
-        self.query_scale = 0.1
+        self.query_scale = 1 #0.1
         # to_q, to_k param count: 768*64 = 49152 ~ 50k. 
         # 16 layers: 50k*16 = 0.8M.
         self.to_k = nn.Linear(feat_dim, inner_dim, bias=False)
@@ -141,7 +141,7 @@ class AttentionalPooler(nn.Module):
         x = x.flatten(2).permute(0, 2, 1)
 
         # ln(query) has a large magnitude (~5). So scale it down.
-        q = self.ln_q(self.query) * self.query_scale
+        q = self.to_q(self.ln_q(self.query)) * self.query_scale
         # q: [1, 128] -> [N, 1, 128]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
 
