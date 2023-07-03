@@ -1136,8 +1136,8 @@ class EmbeddingManager(nn.Module):
         # So this weight doesn't matter much.
         ada_maps_bias_reg_weight    = 0.001   # 0.02 -> 0.001
         ada_attn_poolers_reg_weight = 0.2
-        # Actual query reg weight: 0.1 * ada_attn_poolers_reg_weight = 0.02
-        ada_attn_query_reg_scale    = 0.1
+        ## Actual query reg weight: 0.1 * ada_attn_poolers_reg_weight = 0.02
+        ada_attn_query_reg_scale    = 0
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
