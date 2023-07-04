@@ -46,3 +46,6 @@ scripts/stable_txt2img_db.py
 /latent_diffusion.egg-info/*
 /latent_diffusion.egg-info
 /latent_diffusion*
+models/absolutereality/*
+models/absolutereality
+

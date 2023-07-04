@@ -448,7 +448,7 @@ class UNetModel(nn.Module):
         in_channels,
         model_channels,
         out_channels,
-        num_res_blocks,
+        num_res_blocks,     # 2
         attention_resolutions,
         dropout=0,
         channel_mult=(1, 2, 4, 8),
@@ -744,7 +744,7 @@ class UNetModel(nn.Module):
 
         h = x.type(self.dtype)
 
-        def get_layer_context(layer_idx, h):
+        def get_layer_context(layer_idx, infeat, inquery):
             # print(h.shape)
             if not use_layerwise_context:
                 return context
@@ -765,7 +765,7 @@ class UNetModel(nn.Module):
                 ada_bp_to_unet = extra_info.get('ada_bp_to_unet', False)
                 # emb: time embedding. h: features from the previous layer.
                 layer_ada_context, ada_emb_weight \
-                    = ada_embedder(context_in, layer_idx, h, emb, ada_bp_to_unet)
+                    = ada_embedder(context_in, layer_idx, infeat, inquery, emb, ada_bp_to_unet)
                 static_emb_weight = 1 - ada_emb_weight
 
                 # If static context is expanded by doing prompt mixing,
@@ -827,16 +827,18 @@ class UNetModel(nn.Module):
             distill_layer_indices = []
 
         for module in self.input_blocks:
-            layer_context = get_layer_context(layer_idx, h)
+            get_layer_idx_context = partial(get_layer_context, layer_idx)
+            # layer_context = get_layer_context(layer_idx, h)
 
             if layer_idx in distill_layer_indices:
-                # Each transformer_blocks is of length 1, i.e., contains only 1 BasicTransformerBlock 
-                # that does cross-attention with layer_context.
+                # module: SpatialTransformer.
+                # module.transformer_blocks: contains only 1 BasicTransformerBlock 
+                # that does cross-attention with layer_context in attn2 only.
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
 
             # layer_context: [2, 77, 768], conditioning embedding.
             # emb: [2, 1280], time embedding.
-            h = module(h, emb, layer_context)
+            h = module(h, emb, get_layer_idx_context)
             hs.append(h)
             if iter_type.startswith("mix_") and layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
@@ -845,13 +847,14 @@ class UNetModel(nn.Module):
 
             layer_idx += 1
         
-        layer_context = get_layer_context(layer_idx, h)
+        # layer_context = get_layer_context(layer_idx, h)
+        get_layer_idx_context = partial(get_layer_context, layer_idx)
 
         if layer_idx in distill_layer_indices:
             self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = True
  
         # 13 [2, 1280, 8, 8]
-        h = self.middle_block(h, emb, layer_context)
+        h = self.middle_block(h, emb, get_layer_idx_context)
         if iter_type.startswith("mix_") and layer_idx in distill_layer_indices:
                 distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.attn_mat 
                 distill_feats[layer_idx] = h
@@ -872,14 +875,16 @@ class UNetModel(nn.Module):
         # 24 [2, 320,  64, 64]
         
         for module in self.output_blocks:
-            layer_context = get_layer_context(layer_idx, h)
+            # layer_context = get_layer_context(layer_idx, h)
+            get_layer_idx_context = partial(get_layer_context, layer_idx)
+
             h = th.cat([h, hs.pop()], dim=1)
 
             if layer_idx in distill_layer_indices:
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
  
             # layer_context: [2, 77, 768], emb: [2, 1280].
-            h = module(h, emb, layer_context)
+            h = module(h, emb, get_layer_idx_context)
             if iter_type.startswith("mix_") and layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
                     distill_feats[layer_idx] = h

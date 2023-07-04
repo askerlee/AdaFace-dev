@@ -158,7 +158,7 @@ class CrossAttention(nn.Module):
         self.scale = dim_head ** -0.5
         self.heads = heads
 
-        self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
+        self.to_q = nn.Linear(query_dim,   inner_dim, bias=False)
         self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
         self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
 
@@ -173,6 +173,9 @@ class CrossAttention(nn.Module):
 
         q = self.to_q(x)
         context = default(context, x)
+        if callable(context):
+            # Pass x to context() to get the real context
+            context = context(x, q)
         if type(context) == tuple:
             context, hijk_context = context
             k = self.to_k(hijk_context)

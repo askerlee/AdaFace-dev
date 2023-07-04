@@ -806,11 +806,11 @@ class LatentDiffusion(DDPM):
     # get_ada_conditioning() is a callback function called iteratively by each layer in UNet
     # It returns the conditioning embedding (ada embedding & other token embeddings -> clip encoder) 
     # for the current layer to UNet.
-    def get_ada_conditioning(self, c_in, layer_idx, layer_infeat, time_emb, ada_bp_to_unet):
+    def get_ada_conditioning(self, c_in, layer_idx, layer_infeat, layer_inquery, time_emb, ada_bp_to_unet):
         # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
         # when embedding_manager is called within cond_stage_model.encode().
-        self.embedding_manager.set_ada_layer_temp_info(layer_idx, layer_infeat, time_emb, ada_bp_to_unet)
+        self.embedding_manager.set_ada_layer_temp_info(layer_idx, layer_infeat, layer_inquery, time_emb, ada_bp_to_unet)
         c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, init_ada_embedding_cache() should have been called somewhere.
@@ -1612,6 +1612,7 @@ class LatentDiffusion(DDPM):
                     # Back up the original cond to be used in the recursive iteration.
                     cond_ = cond
                     c_static_emb, c_in = cond[0], cond[1]
+                    # print(c_in)
 
                     # Make two identical sets of c_static_emb2 and c_in2.
                     subj_single_emb, subj_comps_emb, mix_single_emb, mix_comps_emb = \
@@ -1619,7 +1620,6 @@ class LatentDiffusion(DDPM):
                     c_static_emb2 = torch.cat([ subj_comps_emb, subj_comps_emb, 
                                                 mix_comps_emb,  mix_comps_emb ], dim=0)
                     
-                    # mix_comp_prompts is randomly chosen between subj_comp_prompts and cls_comp_prompts in forward().
                     subj_single_prompts, subj_comp_prompts, mix_single_prompts, mix_comp_prompts = \
                         divide_list_into_chunks(c_in, len(c_in) // 4)
                     c_in2 = subj_comp_prompts + subj_comp_prompts + mix_comp_prompts + mix_comp_prompts
