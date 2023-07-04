@@ -93,7 +93,7 @@ class MaskedAvgPool2d(nn.Module):
     # x: [N, C, H, W], mask: [N, 1, H0, W0] of 1s (keep) or 0s (discard).
     # H, W: feature map size, H0, W0: original image size.
     # Return: [N, C]
-    def forward(self, x, mask=None):
+    def forward(self, x, inq=None, mask=None):
         if mask is None:
             return self.avgpool(x).view(x.shape[0], -1)
         
@@ -109,7 +109,7 @@ class AvgPool1d(nn.Module):
     # x: [N, C, L], mask: [N, 1, L0] of 1s (keep) or 0s (discard).
     # L: feature map size, L0: original sequence length.
     # Return: [N, C]
-    def forward(self, x, mask=None):
+    def forward(self, x, inq=None, mask=None):
         #if mask is None:
         return x.mean(dim=1)
         
@@ -137,10 +137,13 @@ class AttentionalPooler(nn.Module):
         # Still need to carefully initialize self.query, although it will be LNed before use.
         # Otherwise self.query will have a large magnitude and incur a huge reg loss.
         xavier_uniform_(self.query)
+        self.ln_x = nn.LayerNorm(feat_dim, elementwise_affine=True)
         self.ln_q = nn.LayerNorm(feat_dim, elementwise_affine=True)
         self.ln_k = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
-    def forward(self, x, mask=None):
+    # inq: query from the UNet attention layer. Used as key here.
+    # Use UNet feature query to compute the attention, which aggregates the original features x.
+    def forward(self, x, inq, mask=None):
         h = self.n_heads
 
         if x.ndim == 4:
@@ -164,9 +167,9 @@ class AttentionalPooler(nn.Module):
         # q: [1, 128] -> [N, 1, 128]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
 
-        x = self.ln_k(x)
-        k = self.to_k(x)
-        v = x
+        # inq: query from the UNet attention layer. Used as key here.
+        k = self.to_k(self.ln_k(inq))
+        v = self.ln_x(x)
 
         # q: [8, 1, 32], k: [8, 256, 32], v: [8, 256, 192]. 8: B*Head = 2*4.
         # The 768 dims of v are split into 4 heads, each head has 192 dims.
@@ -458,10 +461,10 @@ class AdaEmbedding(nn.Module):
     # layer_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
     # time_emb: [B, 1280].
-    def forward(self, layer_idx, layer_infeat, time_emb, img_mask=None, bp_to_unet=False):
+    def forward(self, layer_idx, layer_infeat, layer_inquery, time_emb, img_mask=None, bp_to_unet=False):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
         pooler  = self.poolers[emb_idx]
-
+        
         with torch.autocast(device_type=self.device_type, enabled=True):
             # basis_dyn_weight: [B, r] = [2, 12].
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
@@ -469,19 +472,22 @@ class AdaEmbedding(nn.Module):
             if bp_to_unet:
                 if self.infeat_grad_scale < 1:
                     #grad_scaler = grad_scaler.cuda()
-                    layer_infeat_gradscaled = self.infeat_grad_scaler(layer_infeat)
+                    layer_infeat_gradscaled  = self.infeat_grad_scaler(layer_infeat)
+                    layer_inquery_gradscaled = self.infeat_grad_scaler(layer_inquery)
                 else:
-                    layer_infeat_gradscaled = layer_infeat
+                    layer_infeat_gradscaled  = layer_infeat
+                    layer_inquery_gradscaled = layer_inquery
             else:
                 # Ordinary image reconstruction iterations. No BP into the UNet.
                 # But if attentional pooler is used, it will also not be BPed into and not updated.
                 # When not bp_to_unet, completely cut off the gradient flow into the UNet.
                 # bp_to_unet is enabled when doing composition regularization iterations. 
-                layer_infeat_gradscaled = layer_infeat.detach()
+                layer_infeat_gradscaled  = layer_infeat.detach()
+                layer_inquery_gradscaled = layer_inquery.detach()
 
             # Even if layer_infeat is grad-scaled, the pooler still receives the full gradient.
             # But the grad is scaled when it's further passed to the UNet.
-            infeat_pooled    = pooler(layer_infeat_gradscaled, img_mask)
+            infeat_pooled    = pooler(layer_infeat_gradscaled, layer_inquery_gradscaled, img_mask)
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
@@ -740,7 +746,7 @@ class EmbeddingManager(nn.Module):
             # self.layer_idx, self.layer_infeat, self.time_emb were cached by 
             # a previous call of  set_ada_layer_temp_info() from UNet.
             ada_embedded_text = \
-                self.get_ada_embedding(self.layer_idx, self.layer_infeat, self.time_emb,
+                self.get_ada_embedding(self.layer_idx, self.layer_infeat, self.layer_inquery, self.time_emb,
                                        tokenized_text, embedded_text, self.ada_bp_to_unet)
             # Remove ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
@@ -901,6 +907,7 @@ class EmbeddingManager(nn.Module):
             self,
             layer_idx,              # the index of the current layer in the UNet.
             layer_infeat,           # layer_infeat: intermediate features of the UNet on the noise image.
+            layer_inquery,          # layer_inquery: intermediate query features of the UNet on the noise image.   
             time_emb,               # time embedding of the current iteration.
             tokenized_text,         # [B, N]. Identical B copies along the batch dimension.
             embedded_text,          # [B, N, 768]. Identical B copies along the batch dimension.
@@ -933,7 +940,7 @@ class EmbeddingManager(nn.Module):
 
             # Generate the actual placeholder_embedding on the fly.
             # [B=2, 768]
-            placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat, time_emb, 
+            placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat, layer_inquery, time_emb, 
                                                          self.img_mask, ada_bp_to_unet)
             # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
             # embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [2, 768].
@@ -962,10 +969,11 @@ class EmbeddingManager(nn.Module):
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
 
-    def set_ada_layer_temp_info(self, layer_idx, layer_infeat, time_emb, ada_bp_to_unet):
+    def set_ada_layer_temp_info(self, layer_idx, layer_infeat, layer_inquery, time_emb, ada_bp_to_unet):
         self.gen_ada_embedding = True
         self.layer_idx      = layer_idx
         self.layer_infeat   = layer_infeat
+        self.layer_inquery  = layer_inquery
         self.time_emb       = time_emb
         self.ada_bp_to_unet = ada_bp_to_unet
         # Initialize the ada_embeddings cache list.
@@ -985,6 +993,7 @@ class EmbeddingManager(nn.Module):
         self.gen_ada_embedding = False
         self.layer_idx      = -1
         self.layer_infeat   = None
+        self.layer_inquery  = None
         self.time_emb       = None
         
     def clear_ada_embedding_cache(self):
@@ -1370,5 +1379,5 @@ if __name__ == '__main__':
     attnpool = AttentionalPooler()
     x = torch.randn(2, 768, 16, 16)
     mask = torch.randint(2, size=(2, 1, 16, 16)).float()
-    y = attnpool(x, mask)
+    y = attnpool(x, x, mask)
     print(y.shape)
