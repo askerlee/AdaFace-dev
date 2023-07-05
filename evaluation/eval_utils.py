@@ -137,9 +137,9 @@ def deepface_embed_folder(img_paths, model_name='ArcFace', detector_backend='ret
 # return a similarity matrix of N1 * N2.
 def np_cosine_similarity(src_embeds, dst_embeds):
     a = np.matmul(src_embeds, np.transpose(dst_embeds))
-    b = np.sum(np.multiply(src_embeds, src_embeds))
-    c = np.sum(np.multiply(dst_embeds, dst_embeds))
-    return (a / (np.sqrt(b) * np.sqrt(c)))
+    b = np.sum(np.multiply(src_embeds, src_embeds), axis=1, keepdims=True)
+    c = np.sum(np.multiply(dst_embeds, dst_embeds), axis=1, keepdims=True)
+    return (a / (np.sqrt(b) * np.sqrt(c).T))
     
 def calc_faces_mean_similarity(src_list_embeds, dst_list_embeds):
     """

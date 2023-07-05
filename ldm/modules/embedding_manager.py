@@ -119,7 +119,8 @@ class AvgPool1d(nn.Module):
         x = x * mask
         x = x.sum(dim=2) / mask.sum(dim=2)
         return x
-    
+
+# There's almost no learnable parameters in AttentionalPooler, except elementwise affines in 3 LayerNorms.
 class AttentionalPooler(nn.Module):
     def __init__(self, layer_idx, feat_dim, token_emb_dim, 
                  n_heads=1, add_mean=True, infeat_grad_scale=0.5):
@@ -167,7 +168,8 @@ class AttentionalPooler(nn.Module):
 
         x = layer_infeat_gradscaled
         k = layer_inquery_gradscaled
-        # Use to_k of the UNet layer as to_q here, as the subject embedding is used as the key in UNet.
+        # Use to_k of the UNet attention layer as to_q here, 
+        # as the subject embedding is used as the key in UNet.
         to_q = layer_to_k
 
         if x.ndim == 4:
@@ -187,6 +189,9 @@ class AttentionalPooler(nn.Module):
             # x is already 3D.
 
         token_q_emb = token_q_emb.unsqueeze(0)
+
+        # to_q is actually to_k in the UNet attention layer, 
+        # as the subject embedding is used as the key in UNet.
         q = to_q(self.ln_q(token_q_emb))
         # q: [1, 128] -> [N, 1, 128]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
@@ -219,6 +224,9 @@ class AttentionalPooler(nn.Module):
         # out: [8, 1, 192] -> [2, 1, 4*192] = [2, 1, 768].
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
 
+        # add_mean is similar to a skip connection in spirit. 
+        # The mean always keeps the low-frequency components. 
+        # Hopefully the attention part of out can capture some high-frequency components.
         if self.add_mean:
             out = out * 0.5 + v.mean(dim=1, keepdim=True) * 0.5
 
