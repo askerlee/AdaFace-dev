@@ -19,7 +19,7 @@ from contextlib import nullcontext
 from ldm.util import instantiate_from_config, mix_embeddings, save_grid
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
-from evaluation.eval_utils import compare_folders, compare_face_folders, \
+from evaluation.eval_utils import compare_folders, compare_face_folders, compare_face_folders_fast, \
                                   init_evaluators, set_tf_gpu
 
 from safetensors.torch import load_file as safetensors_load_file
@@ -561,7 +561,7 @@ def main(opt):
 
                                     if opt.calc_face_sim:
                                         sim_face, normal_img_count, except_img_count = \
-                                            compare_face_folders(opt.compare_with, sample_dir, dst_num_samples=len(prompts))
+                                            compare_face_folders_fast(opt.compare_with, sample_dir, dst_num_samples=len(prompts))
                                         # sim_face is a float, so no need to detach().cpu().numpy().
                                         all_sims_face.append(sim_face)
                                         all_normal_img_counts.append(normal_img_count)

@@ -744,7 +744,7 @@ class UNetModel(nn.Module):
 
         h = x.type(self.dtype)
 
-        def get_layer_context(layer_idx, infeat, inquery):
+        def get_layer_context(layer_idx, layer_attn_components):
             # print(h.shape)
             if not use_layerwise_context:
                 return context
@@ -765,7 +765,7 @@ class UNetModel(nn.Module):
                 ada_bp_to_unet = extra_info.get('ada_bp_to_unet', False)
                 # emb: time embedding. h: features from the previous layer.
                 layer_ada_context, ada_emb_weight \
-                    = ada_embedder(context_in, layer_idx, infeat, inquery, emb, ada_bp_to_unet)
+                    = ada_embedder(context_in, layer_idx, layer_attn_components, emb, ada_bp_to_unet)
                 static_emb_weight = 1 - ada_emb_weight
 
                 # If static context is expanded by doing prompt mixing,

@@ -48,4 +48,5 @@ scripts/stable_txt2img_db.py
 /latent_diffusion*
 models/absolutereality/*
 models/absolutereality
-
+models/realisticvision/*
+models/realisticvision
