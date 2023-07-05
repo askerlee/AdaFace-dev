@@ -12,6 +12,9 @@ from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler
 from functools import partial
 from typing import Callable, Optional, Sequence, Tuple
 
+torch.set_printoptions(precision=4, sci_mode=False)
+np.set_printoptions(precision=4, suppress=True)
+
 PROGRESSIVE_SCALE = 2000
 
 def get_clip_tokens_for_string(tokenizer, string, force_single_token=False):
@@ -93,7 +96,7 @@ class MaskedAvgPool2d(nn.Module):
     # x: [N, C, H, W], mask: [N, 1, H0, W0] of 1s (keep) or 0s (discard).
     # H, W: feature map size, H0, W0: original image size.
     # Return: [N, C]
-    def forward(self, x, inq=None, mask=None):
+    def forward(self, x, k=None, mask=None):
         if mask is None:
             return self.avgpool(x).view(x.shape[0], -1)
         
@@ -109,7 +112,7 @@ class AvgPool1d(nn.Module):
     # x: [N, C, L], mask: [N, 1, L0] of 1s (keep) or 0s (discard).
     # L: feature map size, L0: original sequence length.
     # Return: [N, C]
-    def forward(self, x, inq=None, mask=None):
+    def forward(self, x, k=None, mask=None):
         #if mask is None:
         return x.mean(dim=1)
         
@@ -118,7 +121,7 @@ class AvgPool1d(nn.Module):
         return x
     
 class AttentionalPooler(nn.Module):
-    def __init__(self, feat_dim, n_heads=1, dim_head=64, n_queries=1):
+    def __init__(self, layer_idx, feat_dim, token_emb_dim, n_heads=1, dim_head=64, n_queries=1):
         super().__init__()
         inner_dim = dim_head * n_heads    # 128
 
@@ -130,20 +133,19 @@ class AttentionalPooler(nn.Module):
         # to_q, to_k param count: 768*64 = 49152 ~ 50k. 
         # 16 layers: 50k*16 = 0.8M.
         self.to_k = nn.Linear(feat_dim, inner_dim, bias=False)
-        self.to_q = nn.Linear(feat_dim, inner_dim, bias=False)
-        # Remove v projection to reduce parameters.
-        # query param count: 128*1 = 128. 
-        self.query = nn.Parameter(torch.randn(n_queries, feat_dim, requires_grad=True))
-        # Still need to carefully initialize self.query, although it will be LNed before use.
-        # Otherwise self.query will have a large magnitude and incur a huge reg loss.
-        xavier_uniform_(self.query)
         self.ln_x = nn.LayerNorm(feat_dim, elementwise_affine=True)
-        self.ln_q = nn.LayerNorm(feat_dim, elementwise_affine=True)
         self.ln_k = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
-    # inq: query from the UNet attention layer. Used as key here.
-    # Use UNet feature query to compute the attention, which aggregates the original features x.
-    def forward(self, x, inq, mask=None):
+        self.to_q = nn.Linear(token_emb_dim, inner_dim, bias=False)
+        self.ln_q = nn.LayerNorm(token_emb_dim, elementwise_affine=True)
+
+        self.layer_idx = layer_idx
+
+    # k: query in the UNet attention layer. Used as key here.
+    # token_q_emb: [768,] static subject embedding of this layer. Used as query here.
+    # Use UNet feature query as k, and subject token as q, to compute the attention, 
+    # which aggregates the original UNet layer input features x.
+    def forward(self, x, k, token_q_emb, mask=None):
         h = self.n_heads
 
         if x.ndim == 4:
@@ -162,13 +164,16 @@ class AttentionalPooler(nn.Module):
             mask = None
             # x is already 3D.
 
+        token_q_emb = token_q_emb.unsqueeze(0)
         # ln(query) has a large magnitude (~5). So scale it down.
-        q = self.to_q(self.ln_q(self.query)) * self.query_scale
+        q = self.to_q(self.ln_q(token_q_emb)) * self.query_scale
         # q: [1, 128] -> [N, 1, 128]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
 
-        # inq: query from the UNet attention layer. Used as key here.
-        k = self.to_k(self.ln_k(inq))
+        if k == None:
+            k = x
+        # k: query from the UNet attention layer. Used as key here.
+        k = self.to_k(self.ln_k(k))
         v = self.ln_x(x)
 
         # q: [8, 1, 32], k: [8, 256, 32], v: [8, 256, 192]. 8: B*Head = 2*4.
@@ -186,7 +191,7 @@ class AttentionalPooler(nn.Module):
             sim.masked_fill_(~mask, max_neg_value)
 
         attn = sim.softmax(dim=-1)
-
+        
         # out: [8, 1, 192].
         out = einsum('b i j, b j d -> b i d', attn, v)
         # out: [8, 1, 192] -> [2, 1, 4*192] = [2, 1, 768].
@@ -200,7 +205,7 @@ class AttentionalPooler(nn.Module):
             return out
 
 class StaticLayerwiseEmbedding(nn.Module):
-    # num_layers: 16 (9 layers out of 25 of UNet are skipped), dim2: 768, 
+    # num_layers: 16 (9 layers out of 25 of UNet are skipped), emb_dim: 768, 
     # r: rank of basis vectors. Usually set as (num of init words * ratio), ratio=2 or 3.
     # num of init words is usually 2. So r is usually 4~6.
     # If using init_vecs, init_noise_stds are applied to basis_rand_weights. 
@@ -213,17 +218,17 @@ class StaticLayerwiseEmbedding(nn.Module):
     # Extra copies of init_vecs are added with random noises to avoid the non-identifiability issue.
     # init_up_noise_stds[1] << init_up_noise_stds[0].
     # has_bias: if enabled, the output vectors will be dominated by self.bias.
-    def __init__(self, num_layers=16, dim2=768, r=6, init_noise_stds=(0.1, 0.04), init_vecs=None, 
+    def __init__(self, num_layers=16, emb_dim=768, r=6, init_noise_stds=(0.1, 0.04), init_vecs=None, 
                  init_vec_weights=None, init_neg_vecs=None, has_bias=True, device_type="cuda"):
         super().__init__()
 
         self.num_layers = num_layers
-        self.dim2 = dim2
+        self.emb_dim = emb_dim
         self.r = r
 
-        if r > min(num_layers, dim2):
+        if r > min(num_layers, emb_dim):
             raise ValueError(
-                f"StaticLayerwiseEmbedding LoRA rank {r} must be less or equal than {min(num_layers, dim2)}"
+                f"StaticLayerwiseEmbedding LoRA rank {r} must be less or equal than {min(num_layers, emb_dim)}"
             )
 
         if init_vecs is not None:
@@ -231,9 +236,9 @@ class StaticLayerwiseEmbedding(nn.Module):
             if init_vecs.ndim == 1:
                 init_vecs = init_vecs.unsqueeze(0)
 
-            if init_vecs.shape[1] != dim2 or init_vecs.shape[0] > num_layers:
+            if init_vecs.shape[1] != emb_dim or init_vecs.shape[0] > num_layers:
                 raise ValueError(
-                    f"StaticLayerwiseEmbedding init vectors shape {init_vecs.shape} must be (<={num_layers}, {dim2})"
+                    f"StaticLayerwiseEmbedding init vectors shape {init_vecs.shape} must be (<={num_layers}, {emb_dim})"
                 )
 
             N = self.N = init_vecs.shape[0]
@@ -249,7 +254,7 @@ class StaticLayerwiseEmbedding(nn.Module):
         # basis_rand_weights: 16 * r, basis_vecs: r * 768. basis_rand_weights * basis_vecs: 16 * 768.
         self.basis_rand_weights    = nn.Parameter(torch.randn(num_layers, r))
         # basis_vecs consists of r basis vectors. Will be updated through BP.
-        self.basis_vecs = nn.Parameter(torch.randn(r - N, dim2), requires_grad=True)
+        self.basis_vecs = nn.Parameter(torch.randn(r - N, emb_dim), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
         self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1) / 4.
         # Always set the last basis vector to 0.
@@ -312,13 +317,13 @@ class StaticLayerwiseEmbedding(nn.Module):
 
         if self.has_bias:
             # bias: 16 * 768.
-            self.bias        = nn.Parameter(torch.zeros(num_layers, dim2))
+            self.bias        = nn.Parameter(torch.zeros(num_layers, emb_dim))
         else:
             self.bias = 0
 
         layer_lns  = []
         for i in range(num_layers):
-            layer_lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
+            layer_lns.append( nn.LayerNorm(emb_dim, elementwise_affine=True) )
 
         self.layer_lns  = nn.ModuleList(layer_lns)
 
@@ -342,7 +347,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             out_vecs = torch.matmul(basis_weights, basis_vecs)
             # Apply layer-wise layer normalization.
             out_vecs_ln = [ self.layer_lns[i](out_vecs[i]) for i in range(self.num_layers) ]
-            out_vecs_ln = torch.stack(out_vecs_ln, dim=0) / np.sqrt(self.dim2)
+            out_vecs_ln = torch.stack(out_vecs_ln, dim=0) / np.sqrt(self.emb_dim)
 
             # Different layers have different biases.
             out_vecs_ln = out_vecs_ln + self.bias
@@ -350,12 +355,12 @@ class StaticLayerwiseEmbedding(nn.Module):
 
 class AdaEmbedding(nn.Module):
     # num_layers: 16 (9 layers out of 25 of UNet are skipped).
-    # dim2: 768, r: 12.
+    # emb_dim: 768, r: 12.
     # infeat_dims: a list of 25 integers, each is the dimension of 
     # the input feature from the respective layer. 9 of them are skipped.
     # infeat_dims are (almost) reflective around the middle layer, except for the first and last layers.
     # Layer indices absent in layer_idx2emb_idx are skipped layers.
-    def __init__(self, num_layers=16, dim2=768, r=12, init_vecs=None, 
+    def __init__(self, num_layers=16, emb_dim=768, r=12, init_vecs=None, 
                  infeat_dims = [ 4,    320,  320,  320,  640,  640,  640,  1280, 1280, 1280, 1280, 1280, 
                                  1280,
                                  1280, 1280, 1280, 1280, 1280, 1280, 640, 640, 640,  320,  320,  320 ],
@@ -368,7 +373,7 @@ class AdaEmbedding(nn.Module):
 
         assert num_layers == len(layer_idx2emb_idx), f"num_layers={num_layers} != len(layer_idx2emb_idx)={len(layer_idx2emb_idx)}"
         self.num_layers = num_layers
-        self.dim2 = dim2
+        self.emb_dim = emb_dim
         self.r = r
         self.device_type = device_type
         self.unet_midlayer_idx = 13
@@ -380,9 +385,9 @@ class AdaEmbedding(nn.Module):
             if init_vecs.ndim == 1:
                 init_vecs = init_vecs.unsqueeze(0)
 
-            if init_vecs.shape[1] != dim2 or init_vecs.shape[0] > num_layers:
+            if init_vecs.shape[1] != emb_dim or init_vecs.shape[0] > num_layers:
                 raise ValueError(
-                    f"AdaEmbedding LoRA init vectors shape {init_vecs.shape} must be (<={num_layers}, {dim2})"
+                    f"AdaEmbedding LoRA init vectors shape {init_vecs.shape} must be (<={num_layers}, {emb_dim})"
                 )
 
             N = self.N = init_vecs.shape[0]
@@ -394,7 +399,7 @@ class AdaEmbedding(nn.Module):
             self.pre_vecs = None
 
         # basis_vecs: [12, 768], consists of r-N basis vectors. Will be updated through BP.
-        self.basis_vecs = nn.Parameter(torch.randn(r - N, dim2), requires_grad=True)
+        self.basis_vecs = nn.Parameter(torch.randn(r - N, emb_dim), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
         self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1) / 4.
         # Always set the last basis vector to 0.
@@ -410,7 +415,7 @@ class AdaEmbedding(nn.Module):
             infeat_dim = self.infeat_dims[i2]
 
             if self.use_attn_pooler:
-                pooler = AttentionalPooler(infeat_dim)
+                pooler = AttentionalPooler(i, infeat_dim, emb_dim)
             else:
                 pooler = AvgPool1d() #MaskedAvgPool2d()
             poolers.append(pooler)
@@ -436,7 +441,7 @@ class AdaEmbedding(nn.Module):
 
             # self.infeat_dims[i2] + TD because we also include time embeddings (first TD dims) as the input features.
             layer_maps.append( nn.Linear(infeat_dims[i2] + TD, r, bias=True) )
-            layer_lns.append( nn.LayerNorm(dim2, elementwise_affine=True) )
+            layer_lns.append( nn.LayerNorm(emb_dim, elementwise_affine=True) )
             layer_lncat2s.append(LNCat2(infeat_dims[i2], TD))
 
         self.layer_maps    = nn.ModuleList(layer_maps)
@@ -446,7 +451,7 @@ class AdaEmbedding(nn.Module):
         self.has_bias = has_bias
         if has_bias:
             # bias: 25 * 768.
-            self.bias        = nn.Parameter(torch.zeros(num_layers, dim2))
+            self.bias        = nn.Parameter(torch.zeros(num_layers, emb_dim))
         else:
             self.bias        = 0
 
@@ -461,7 +466,7 @@ class AdaEmbedding(nn.Module):
     # layer_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
     # time_emb: [B, 1280].
-    def forward(self, layer_idx, layer_infeat, layer_inquery, time_emb, img_mask=None, bp_to_unet=False):
+    def forward(self, layer_idx, layer_infeat, layer_inquery, time_emb, static_subj_embs, img_mask=None, bp_to_unet=False):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
         pooler  = self.poolers[emb_idx]
         
@@ -485,9 +490,11 @@ class AdaEmbedding(nn.Module):
                 layer_infeat_gradscaled  = layer_infeat.detach()
                 layer_inquery_gradscaled = layer_inquery.detach()
 
+            static_subj_layer_emb   = static_subj_embs[emb_idx]
             # Even if layer_infeat is grad-scaled, the pooler still receives the full gradient.
             # But the grad is scaled when it's further passed to the UNet.
-            infeat_pooled    = pooler(layer_infeat_gradscaled, layer_inquery_gradscaled, img_mask)
+            infeat_pooled    = pooler(layer_infeat_gradscaled, layer_inquery_gradscaled, 
+                                      static_subj_layer_emb, img_mask)
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
@@ -518,8 +525,8 @@ class AdaEmbedding(nn.Module):
 
             ln = self.layer_lns[emb_idx]
             # [2, 12] x [12, 768] = [2, 768], + [1, 768] = [2, 768].
-            # dim2: 768.
-            out_vec0 = ln(torch.matmul(basis_dyn_weight, basis_vecs)) / np.sqrt(self.dim2)
+            # emb_dim: 768.
+            out_vec0 = ln(torch.matmul(basis_dyn_weight, basis_vecs)) / np.sqrt(self.emb_dim)
             out_vec  = out_vec0 + bias
 
             self.debug = False
@@ -541,12 +548,12 @@ class AdaEmbedding(nn.Module):
 # Make it compatible with older checkpoints.
 LASREmbedding = AdaEmbedding
 
-# embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
+# text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
 class EmbeddingManager(nn.Module):
     def __init__(
             self,
-            embedder,
+            text_embedder,              
             placeholder_strings=None,
             initializer_words=None,
             initializer_weights=None,
@@ -600,16 +607,16 @@ class EmbeddingManager(nn.Module):
             # There's an embedding for each layer.
             num_vectors_per_token = num_unet_layers
 
-        # hasattr(embedder, 'tokenizer') -> True
-        if hasattr(embedder, 'tokenizer'): # using Stable Diffusion's CLIP encoder
+        # hasattr(text_embedder, 'tokenizer') -> True
+        if hasattr(text_embedder, 'tokenizer'): # using Stable Diffusion's CLIP encoder
             self.is_clip = True
-            get_tokens_for_string = partial(get_clip_tokens_for_string, embedder.tokenizer)
-            get_embeddings_for_tokens = partial(get_embeddings_for_clip_tokens, embedder.transformer.text_model.embeddings)
+            get_tokens_for_string = partial(get_clip_tokens_for_string, text_embedder.tokenizer)
+            get_embeddings_for_tokens = partial(get_embeddings_for_clip_tokens, text_embedder.transformer.text_model.embeddings)
             self.token_dim = 768
         else: # using LDM's BERT encoder
             self.is_clip = False
-            get_tokens_for_string = partial(get_bert_tokens_for_string, embedder.tknz_fn)
-            get_embeddings_for_tokens = embedder.transformer.token_emb
+            get_tokens_for_string = partial(get_bert_tokens_for_string, text_embedder.tknz_fn)
+            get_embeddings_for_tokens = text_embedder.transformer.token_emb
             self.token_dim = 1280
 
         # Save this function to be used in load() when doing placeholder substitution.
@@ -711,13 +718,14 @@ class EmbeddingManager(nn.Module):
                 self.z_suffix_ids      = None
                 self.z_suffix_id_count = 0
 
+        self.static_subj_embs = None
         self.clear_ada_layer_temp_info()
         self.clear_delta_loss_emb_mask()
         self.img_mask = None
         self.layer_idx2emb_idx = layer_idx2emb_idx
         self.loss_call_count = 0
-        # Store the embedder to compute the delta loss.
-        self.embedder = embedder
+        # Store the text_embedder to compute the delta loss.
+        self.text_embedder = text_embedder
         self.ada_embeddings = None
         self.ada_bp_to_unet = False
         self.is_comp_iter   = False
@@ -760,10 +768,13 @@ class EmbeddingManager(nn.Module):
 
         # We need to clone embedded_text, as sometimes (when it's not layerwise such as TI) 
         # the modification in get_static_embedding() is in-place. 
-        static_embeddings = self.get_static_embedding(tokenized_text, embedded_text.clone(), 
-                                                      self.string_to_param_dict,
-                                                      B, N, self.num_unet_layers, device, 
-                                                      update_token_mask_weights=True)
+        static_embeddings, static_subj_embs = \
+                        self.get_static_embedding(tokenized_text, embedded_text.clone(), 
+                                                  self.string_to_param_dict,
+                                                  B, N, self.num_unet_layers, device, 
+                                                  update_token_mask_weights=True)
+        # Cache the static embeddings to be used in ada embedding computation.
+        self.static_subj_embs = static_subj_embs
 
         return static_embeddings
     
@@ -898,7 +909,7 @@ class EmbeddingManager(nn.Module):
                     embedded_text[row]  = new_embed_row
                     tokenized_text[row] = new_token_row
 
-        return embedded_text
+        return embedded_text, placeholder_embedding
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # As the output embedding is only generated for a particular layer, 
@@ -940,7 +951,12 @@ class EmbeddingManager(nn.Module):
 
             # Generate the actual placeholder_embedding on the fly.
             # [B=2, 768]
-            placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat, layer_inquery, time_emb, 
+            # Before this call, we assume static_subj_embs has been generated by 
+            # a previous call to get_static_embedding(). 
+            # The pipeline is to generate static embeddings first, then generate the ada embeddings. 
+            # So this assumption should always hold.
+            placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat, layer_inquery, time_emb,
+                                                         self.static_subj_embs,
                                                          self.img_mask, ada_bp_to_unet)
             # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
             # embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [2, 768].
@@ -1162,8 +1178,6 @@ class EmbeddingManager(nn.Module):
         # So this weight doesn't matter much.
         ada_maps_bias_reg_weight    = 0.001   # 0.02 -> 0.001
         ada_attn_poolers_reg_weight = 0.2
-        ## Actual query reg weight: 0.01 * ada_attn_poolers_reg_weight = 0.002
-        ada_attn_query_reg_scale    = 0.01
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
@@ -1213,8 +1227,7 @@ class EmbeddingManager(nn.Module):
                         for i, pooler in enumerate(embobj.poolers):
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.to_k.weight, loss_type=euc_loss_type)
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.to_q.weight, loss_type=euc_loss_type)
-                            loss_ada_attn_pooler  += selective_reg_loss(pooler.query, loss_type=euc_loss_type) \
-                                                        * ada_attn_query_reg_scale
+
                 if type(loss_bias) == int:
                     breakpoint()
 
