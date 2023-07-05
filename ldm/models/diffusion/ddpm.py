@@ -806,11 +806,11 @@ class LatentDiffusion(DDPM):
     # get_ada_conditioning() is a callback function called iteratively by each layer in UNet
     # It returns the conditioning embedding (ada embedding & other token embeddings -> clip encoder) 
     # for the current layer to UNet.
-    def get_ada_conditioning(self, c_in, layer_idx, layer_infeat, layer_inquery, time_emb, ada_bp_to_unet):
+    def get_ada_conditioning(self, c_in, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
         # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
         # when embedding_manager is called within cond_stage_model.encode().
-        self.embedding_manager.set_ada_layer_temp_info(layer_idx, layer_infeat, layer_inquery, time_emb, ada_bp_to_unet)
+        self.embedding_manager.set_ada_layer_temp_info(layer_idx, layer_attn_components, time_emb, ada_bp_to_unet)
         c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, init_ada_embedding_cache() should have been called somewhere.

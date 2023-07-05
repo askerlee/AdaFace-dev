@@ -121,32 +121,54 @@ class AvgPool1d(nn.Module):
         return x
     
 class AttentionalPooler(nn.Module):
-    def __init__(self, layer_idx, feat_dim, token_emb_dim, n_heads=1, dim_head=64, n_queries=1):
+    def __init__(self, layer_idx, feat_dim, token_emb_dim, 
+                 n_heads=1, add_mean=True, infeat_grad_scale=0.5):
         super().__init__()
-        inner_dim = dim_head * n_heads    # 128
 
-        self.attn_score_scale = dim_head ** -0.5
         self.n_heads    = n_heads
-        self.n_queries  = n_queries
 
-        self.query_scale = 1 #0.1
-        # to_q, to_k param count: 768*64 = 49152 ~ 50k. 
-        # 16 layers: 50k*16 = 0.8M.
-        self.to_k = nn.Linear(feat_dim, inner_dim, bias=False)
         self.ln_x = nn.LayerNorm(feat_dim, elementwise_affine=True)
         self.ln_k = nn.LayerNorm(feat_dim, elementwise_affine=True)
-
-        self.to_q = nn.Linear(token_emb_dim, inner_dim, bias=False)
         self.ln_q = nn.LayerNorm(token_emb_dim, elementwise_affine=True)
 
         self.layer_idx = layer_idx
+        self.add_mean  = add_mean
+
+        # Set to < 1 to reduce the gradient flow into the UNet.
+        self.infeat_grad_scale = infeat_grad_scale
+        if self.infeat_grad_scale < 1:
+            self.infeat_grad_scaler = GradientScaler(self.infeat_grad_scale)
+        else:
+            self.infeat_grad_scaler = None
 
     # k: query in the UNet attention layer. Used as key here.
     # token_q_emb: [768,] static subject embedding of this layer. Used as query here.
     # Use UNet feature query as k, and subject token as q, to compute the attention, 
     # which aggregates the original UNet layer input features x.
-    def forward(self, x, k, token_q_emb, mask=None):
+    def forward(self, layer_attn_components, token_q_emb, mask=None, bp_to_unet=False):
         h = self.n_heads
+        layer_infeat, layer_inquery, layer_to_k, attn_score_scale = layer_attn_components
+
+        if bp_to_unet:
+            if self.infeat_grad_scale < 1:
+                #grad_scaler = grad_scaler.cuda()
+                layer_infeat_gradscaled  = self.infeat_grad_scaler(layer_infeat)
+                layer_inquery_gradscaled = self.infeat_grad_scaler(layer_inquery)
+            else:
+                layer_infeat_gradscaled  = layer_infeat
+                layer_inquery_gradscaled = layer_inquery
+        else:
+            # Ordinary image reconstruction iterations. No BP into the UNet.
+            # But if attentional pooler is used, it will also not be BPed into and not updated.
+            # When not bp_to_unet, completely cut off the gradient flow into the UNet.
+            # bp_to_unet is enabled when doing composition regularization iterations. 
+            layer_infeat_gradscaled  = layer_infeat.detach()
+            layer_inquery_gradscaled = layer_inquery.detach()
+
+        x = layer_infeat_gradscaled
+        k = layer_inquery_gradscaled
+        # Use to_k of the UNet layer as to_q here, as the subject embedding is used as the key in UNet.
+        to_q = layer_to_k
 
         if x.ndim == 4:
             if mask is not None:
@@ -165,15 +187,15 @@ class AttentionalPooler(nn.Module):
             # x is already 3D.
 
         token_q_emb = token_q_emb.unsqueeze(0)
-        # ln(query) has a large magnitude (~5). So scale it down.
-        q = self.to_q(self.ln_q(token_q_emb)) * self.query_scale
+        q = to_q(self.ln_q(token_q_emb))
         # q: [1, 128] -> [N, 1, 128]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
 
         if k == None:
             k = x
         # k: query from the UNet attention layer. Used as key here.
-        k = self.to_k(self.ln_k(k))
+        # No need to go through to_k() here, as it's already the query from the UNet attention layer.
+        k = self.ln_k(k)
         v = self.ln_x(x)
 
         # q: [8, 1, 32], k: [8, 256, 32], v: [8, 256, 192]. 8: B*Head = 2*4.
@@ -183,7 +205,7 @@ class AttentionalPooler(nn.Module):
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
 
         # sim: [8, 1, 256].
-        sim = einsum('b i d, b j d -> b i j', q, k) * self.attn_score_scale
+        sim = einsum('b i d, b j d -> b i j', q, k) * attn_score_scale
 
         if mask is not None:
             mask = mask.bool()
@@ -191,18 +213,19 @@ class AttentionalPooler(nn.Module):
             sim.masked_fill_(~mask, max_neg_value)
 
         attn = sim.softmax(dim=-1)
-        
+
         # out: [8, 1, 192].
         out = einsum('b i j, b j d -> b i d', attn, v)
         # out: [8, 1, 192] -> [2, 1, 4*192] = [2, 1, 768].
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
 
-        if self.n_queries == 1:
-            # out: N, 1, D -> N, D, i.e., [2, 768]
-            # Make the output shape consistent with MaskedAvgPool2d.
-            return out.squeeze(1)
-        else:
-            return out
+        if self.add_mean:
+            out = out * 0.5 + v.mean(dim=1, keepdim=True) * 0.5
+
+        # out: N, 1, D -> N, D, i.e., [2, 768]
+        # Make the output shape consistent with MaskedAvgPool2d.
+        return out.squeeze(1)
+
 
 class StaticLayerwiseEmbedding(nn.Module):
     # num_layers: 16 (9 layers out of 25 of UNet are skipped), emb_dim: 768, 
@@ -415,7 +438,7 @@ class AdaEmbedding(nn.Module):
             infeat_dim = self.infeat_dims[i2]
 
             if self.use_attn_pooler:
-                pooler = AttentionalPooler(i, infeat_dim, emb_dim)
+                pooler = AttentionalPooler(i, infeat_dim, emb_dim, add_mean=True, infeat_grad_scale=0.5)
             else:
                 pooler = AvgPool1d() #MaskedAvgPool2d()
             poolers.append(pooler)
@@ -455,46 +478,25 @@ class AdaEmbedding(nn.Module):
         else:
             self.bias        = 0
 
-        # Set to < 1 to reduce the gradient flow into the UNet.
-        self.infeat_grad_scale = 0.5
-        if self.infeat_grad_scale < 1:
-            self.infeat_grad_scaler = GradientScaler(self.infeat_grad_scale)
-
         print(f"AdaEmbedding initialized with {self.N} init vectors, {self.r} basis vectors")
         self.call_count = 0
 
     # layer_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
     # time_emb: [B, 1280].
-    def forward(self, layer_idx, layer_infeat, layer_inquery, time_emb, static_subj_embs, img_mask=None, bp_to_unet=False):
+    def forward(self, layer_idx, layer_attn_components, time_emb, static_subj_embs, img_mask=None, bp_to_unet=False):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
         pooler  = self.poolers[emb_idx]
-        
+
         with torch.autocast(device_type=self.device_type, enabled=True):
             # basis_dyn_weight: [B, r] = [2, 12].
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
             # infeat_pooled: [B, C_layer]
-            if bp_to_unet:
-                if self.infeat_grad_scale < 1:
-                    #grad_scaler = grad_scaler.cuda()
-                    layer_infeat_gradscaled  = self.infeat_grad_scaler(layer_infeat)
-                    layer_inquery_gradscaled = self.infeat_grad_scaler(layer_inquery)
-                else:
-                    layer_infeat_gradscaled  = layer_infeat
-                    layer_inquery_gradscaled = layer_inquery
-            else:
-                # Ordinary image reconstruction iterations. No BP into the UNet.
-                # But if attentional pooler is used, it will also not be BPed into and not updated.
-                # When not bp_to_unet, completely cut off the gradient flow into the UNet.
-                # bp_to_unet is enabled when doing composition regularization iterations. 
-                layer_infeat_gradscaled  = layer_infeat.detach()
-                layer_inquery_gradscaled = layer_inquery.detach()
 
             static_subj_layer_emb   = static_subj_embs[emb_idx]
             # Even if layer_infeat is grad-scaled, the pooler still receives the full gradient.
             # But the grad is scaled when it's further passed to the UNet.
-            infeat_pooled    = pooler(layer_infeat_gradscaled, layer_inquery_gradscaled, 
-                                      static_subj_layer_emb, img_mask)
+            infeat_pooled    = pooler(layer_attn_components, static_subj_layer_emb, img_mask, bp_to_unet)
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
@@ -718,7 +720,7 @@ class EmbeddingManager(nn.Module):
                 self.z_suffix_ids      = None
                 self.z_suffix_id_count = 0
 
-        self.static_subj_embs = None
+        self.static_subj_embs_dict = None
         self.clear_ada_layer_temp_info()
         self.clear_delta_loss_emb_mask()
         self.img_mask = None
@@ -754,7 +756,7 @@ class EmbeddingManager(nn.Module):
             # self.layer_idx, self.layer_infeat, self.time_emb were cached by 
             # a previous call of  set_ada_layer_temp_info() from UNet.
             ada_embedded_text = \
-                self.get_ada_embedding(self.layer_idx, self.layer_infeat, self.layer_inquery, self.time_emb,
+                self.get_ada_embedding(self.layer_idx, self.layer_attn_components, self.time_emb,
                                        tokenized_text, embedded_text, self.ada_bp_to_unet)
             # Remove ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
@@ -768,19 +770,19 @@ class EmbeddingManager(nn.Module):
 
         # We need to clone embedded_text, as sometimes (when it's not layerwise such as TI) 
         # the modification in get_static_embedding() is in-place. 
-        static_embeddings, static_subj_embs = \
+        static_embeddings, static_subj_embs_dict = \
                         self.get_static_embedding(tokenized_text, embedded_text.clone(), 
                                                   self.string_to_param_dict,
                                                   B, N, self.num_unet_layers, device, 
                                                   update_token_mask_weights=True)
         # Cache the static embeddings to be used in ada embedding computation.
-        self.static_subj_embs = static_subj_embs
-
+        self.static_subj_embs_dict = static_subj_embs_dict
         return static_embeddings
     
     def get_static_embedding(self, tokenized_text, embedded_text, embedder_dict, 
                              B, N, num_unet_layers, device, update_token_mask_weights=True):
         orig_tokenized_text = tokenized_text
+        static_subj_embs_dict = {}
 
         if self.use_layerwise_embedding:
             # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
@@ -803,6 +805,7 @@ class EmbeddingManager(nn.Module):
                 # The 16 Static LoRA embeddings are formed by linearly combining the basis vectors.
                 # The matrix operations are done on the fly.
                 placeholder_embedding = placeholder_embedding()
+                static_subj_embs_dict[placeholder_token] = placeholder_embedding
 
             # max_vectors_per_layer_per_token == 1: original num_vectors_per_token == 1, but 
             # self.use_layerwise_embedding could still be True.
@@ -909,7 +912,7 @@ class EmbeddingManager(nn.Module):
                     embedded_text[row]  = new_embed_row
                     tokenized_text[row] = new_token_row
 
-        return embedded_text, placeholder_embedding
+        return embedded_text, static_subj_embs_dict
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # As the output embedding is only generated for a particular layer, 
@@ -917,8 +920,7 @@ class EmbeddingManager(nn.Module):
     def get_ada_embedding(
             self,
             layer_idx,              # the index of the current layer in the UNet.
-            layer_infeat,           # layer_infeat: intermediate features of the UNet on the noise image.
-            layer_inquery,          # layer_inquery: intermediate query features of the UNet on the noise image.   
+            layer_attn_components,  # intermediate features and projections of the UNet attention layer.
             time_emb,               # time embedding of the current iteration.
             tokenized_text,         # [B, N]. Identical B copies along the batch dimension.
             embedded_text,          # [B, N, 768]. Identical B copies along the batch dimension.
@@ -955,8 +957,8 @@ class EmbeddingManager(nn.Module):
             # a previous call to get_static_embedding(). 
             # The pipeline is to generate static embeddings first, then generate the ada embeddings. 
             # So this assumption should always hold.
-            placeholder_embedding = placeholder_embedder(layer_idx, layer_infeat, layer_inquery, time_emb,
-                                                         self.static_subj_embs,
+            placeholder_embedding = placeholder_embedder(layer_idx, layer_attn_components, time_emb,
+                                                         self.static_subj_embs_dict[placeholder_token],
                                                          self.img_mask, ada_bp_to_unet)
             # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
             # embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [2, 768].
@@ -985,13 +987,12 @@ class EmbeddingManager(nn.Module):
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
 
-    def set_ada_layer_temp_info(self, layer_idx, layer_infeat, layer_inquery, time_emb, ada_bp_to_unet):
+    def set_ada_layer_temp_info(self, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
         self.gen_ada_embedding = True
         self.layer_idx      = layer_idx
-        self.layer_infeat   = layer_infeat
-        self.layer_inquery  = layer_inquery
         self.time_emb       = time_emb
         self.ada_bp_to_unet = ada_bp_to_unet
+        self.layer_attn_components = layer_attn_components
         # Initialize the ada_embeddings cache list.
 
     # ada_embeddings is used to cache the embeddings of all layers, 
@@ -1008,8 +1009,7 @@ class EmbeddingManager(nn.Module):
     def clear_ada_layer_temp_info(self):
         self.gen_ada_embedding = False
         self.layer_idx      = -1
-        self.layer_infeat   = None
-        self.layer_inquery  = None
+        self.layer_attn_components  = None
         self.time_emb       = None
         
     def clear_ada_embedding_cache(self):
@@ -1177,7 +1177,6 @@ class EmbeddingManager(nn.Module):
         # If ada_maps_bias_reg_weight = 0.001, map biases are still very small. 
         # So this weight doesn't matter much.
         ada_maps_bias_reg_weight    = 0.001   # 0.02 -> 0.001
-        ada_attn_poolers_reg_weight = 0.2
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
@@ -1217,16 +1216,11 @@ class EmbeddingManager(nn.Module):
 
                 loss_ada_maps_weight = 0.
                 loss_ada_maps_bias   = 0.
-                loss_ada_attn_pooler = 0.
 
                 if isinstance(embobj, AdaEmbedding):
                     for i, map in enumerate(embobj.layer_maps):
                         loss_ada_maps_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
                         loss_ada_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
-                    if self.ada_use_attn_pooler:
-                        for i, pooler in enumerate(embobj.poolers):
-                            loss_ada_attn_pooler  += selective_reg_loss(pooler.to_k.weight, loss_type=euc_loss_type)
-                            loss_ada_attn_pooler  += selective_reg_loss(pooler.to_q.weight, loss_type=euc_loss_type)
 
                 if type(loss_bias) == int:
                     breakpoint()
@@ -1235,8 +1229,7 @@ class EmbeddingManager(nn.Module):
                             + loss_basis            * basis_reg_weight \
                             + loss_pre_vecs         * pre_vecs_reg_weight \
                             + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
-                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight \
-                            + loss_ada_attn_pooler  * ada_attn_poolers_reg_weight
+                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight
                 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:

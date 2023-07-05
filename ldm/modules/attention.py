@@ -174,8 +174,8 @@ class CrossAttention(nn.Module):
         q = self.to_q(x)
         context = default(context, x)
         if callable(context):
-            # Pass x to context() to get the real context
-            context = context(x, q)
+            # Pass x, ... to context() to get the real context
+            context = context((x, q, self.to_k, self.scale))
         if type(context) == tuple:
             context, hijk_context = context
             k = self.to_k(hijk_context)
