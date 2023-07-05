@@ -48,6 +48,8 @@ else if [ "$_flag_ckpt_type" = 'v15-dste' ]
     set sd_ckpt models/stable-diffusion-v-1-5/v1-5-dste.ckpt
 else if [ "$_flag_ckpt_type" = 'v15-arte' ]
     set sd_ckpt models/stable-diffusion-v-1-5/v1-5-arte.ckpt
+else if [ "$_flag_ckpt_type" = 'v15-rvte' ]
+    set sd_ckpt models/stable-diffusion-v-1-5/v1-5-rvte.ckpt
 else if [ "$_flag_ckpt_type" = 'dreamshaper-v5' ]
     set sd_ckpt models/dreamshaper/dreamshaper_5BakedVae.safetensors
     if not set -q _flag_maxiter
@@ -59,7 +61,7 @@ else if [ "$_flag_ckpt_type" = 'dreamshaper-v6' ]
         set _flag_maxiter 2000
     end
 else
-    echo "Error: --ckpt_type must be one of 'v15', 'v14', 'v15-ema', 'v15-dste', 'v15-arte', 'dreamshaper-v5', 'dreamshaper-v6'."
+    echo "Error: --ckpt_type must be one of 'v15', 'v14', 'v15-ema', 'v15-dste', 'v15-arte', 'v15-rvte', 'dreamshaper-v5', 'dreamshaper-v6'."
     exit 1
 end
 
