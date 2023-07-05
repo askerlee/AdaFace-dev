@@ -118,7 +118,7 @@ class AvgPool1d(nn.Module):
         return x
     
 class AttentionalPooler(nn.Module):
-    def __init__(self, feat_dim, n_heads=1, dim_head=64, n_queries=1):
+    def __init__(self, feat_dim, n_heads=1, dim_head=32, n_queries=1):
         super().__init__()
         inner_dim = dim_head * n_heads    # 128
 
@@ -132,11 +132,10 @@ class AttentionalPooler(nn.Module):
         # self.to_q = nn.Linear(feat_dim, inner_dim, bias=False)
         # Remove v projection to reduce parameters.
         # query param count: 128*1 = 128. 
-        self.query = nn.Parameter(torch.randn(n_queries, inner_dim, requires_grad=True))
+        self.query = nn.Parameter(torch.randn(n_queries, inner_dim, requires_grad=True) * 0.1)
         # Still need to carefully initialize self.query, although it will be LNed before use.
         # Otherwise self.query will have a large magnitude and incur a huge reg loss.
-        xavier_uniform_(self.query)
-        self.query.data *= 0.1
+        # xavier_uniform_(self.query)
         self.ln_x = nn.LayerNorm(feat_dim, elementwise_affine=True)
         self.ln_q = nn.LayerNorm(inner_dim, elementwise_affine=True)
         self.ln_k = nn.LayerNorm(feat_dim, elementwise_affine=True)
@@ -1167,8 +1166,8 @@ class EmbeddingManager(nn.Module):
         ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
 
         ada_attn_poolers_reg_weight = 0.1
-        ## Actual query reg weight: 0.1 * ada_attn_poolers_reg_weight = 0.01
-        ada_attn_query_reg_scale    = 0.1
+        ## Actual query reg weight: 0.01 * ada_attn_poolers_reg_weight = 0.001
+        ada_attn_query_reg_scale    = 0.01
 
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.
