@@ -803,7 +803,7 @@ class LatentDiffusion(DDPM):
 
         return c
 
-    # get_ada_conditioning() is a callback function called iteratively by each layer in UNet
+    # get_ada_conditioning() is a callback function called iteratively by each layer in UNet.
     # It returns the conditioning embedding (ada embedding & other token embeddings -> clip encoder) 
     # for the current layer to UNet.
     def get_ada_conditioning(self, c_in, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):

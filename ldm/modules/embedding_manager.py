@@ -122,14 +122,23 @@ class AvgPool1d(nn.Module):
 
 # There's almost no learnable parameters in AttentionalPooler, except elementwise affines in 3 LayerNorms.
 class AttentionalPooler(nn.Module):
-    def __init__(self, layer_idx, feat_dim, token_emb_dim, 
-                 n_heads=1, add_mean=True, infeat_grad_scale=0.5):
+    def __init__(self, layer_idx, feat_dim, token_emb_dim, lora_dim=64,
+                 add_mean=True, infeat_grad_scale=0.5):
         super().__init__()
+        self.n_heads = 1
 
-        self.n_heads    = n_heads
+        if lora_dim > 0:
+            self.use_lora = True
+            self.lora_attn_score_scale = lora_dim ** -0.5
+            self.lora_query = nn.Parameter(torch.randn(1, token_emb_dim))
+            xavier_uniform_(self.lora_query)
+            self.lora_to_k  = nn.Linear(feat_dim,      lora_dim, bias=False)
+            self.lora_to_q  = nn.Linear(token_emb_dim, lora_dim, bias=False)
+        else:
+            self.use_lora = False
 
-        self.ln_x = nn.LayerNorm(feat_dim, elementwise_affine=True)
-        self.ln_k = nn.LayerNorm(feat_dim, elementwise_affine=True)
+        self.ln_x = nn.LayerNorm(feat_dim,      elementwise_affine=True)
+        self.ln_k = nn.LayerNorm(feat_dim,      elementwise_affine=True)
         self.ln_q = nn.LayerNorm(token_emb_dim, elementwise_affine=True)
 
         self.layer_idx = layer_idx
@@ -193,7 +202,7 @@ class AttentionalPooler(nn.Module):
         # to_q is actually to_k in the UNet attention layer, 
         # as the subject embedding is used as the key in UNet.
         q = to_q(self.ln_q(token_q_emb))
-        # q: [1, 128] -> [N, 1, 128]
+        # q: [1, 320] -> [N, 1, 320]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
 
         if k == None:
@@ -209,15 +218,24 @@ class AttentionalPooler(nn.Module):
         # But introducing a v projection would greatly increase parameters.
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
 
-        # sim: [8, 1, 256].
-        sim = einsum('b i d, b j d -> b i j', q, k) * attn_score_scale
+        # sim_scores: [8, 1, 256].
+        sim_scores = einsum('b i d, b j d -> b i j', q, k) * attn_score_scale
+
+        if False: #self.use_lora:
+            # lora_q: [1, 64] repeat -> [N, 1, 64]
+            lora_q = self.lora_to_q(self.ln_q(self.lora_query))
+            lora_q = repeat(lora_q, 'n d -> b n d', b=x.shape[0])
+            # lora_k: [N, L, 64]
+            lora_k = self.lora_to_k(k)
+            lora_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) * self.lora_attn_score_scale
+            sim_scores  = sim_scores + lora_scores
 
         if mask is not None:
             mask = mask.bool()
-            max_neg_value = -torch.finfo(sim.dtype).max
-            sim.masked_fill_(~mask, max_neg_value)
+            max_neg_value = -torch.finfo(sim_scores.dtype).max
+            sim_scores.masked_fill_(~mask, max_neg_value)
 
-        attn = sim.softmax(dim=-1)
+        attn = sim_scores.softmax(dim=-1)
 
         # out: [8, 1, 192].
         out = einsum('b i j, b j d -> b i d', attn, v)
@@ -1190,6 +1208,10 @@ class EmbeddingManager(nn.Module):
         ada_static_loss_boost_ratio = 2
         ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
 
+        ada_attn_poolers_reg_weight = 0.2
+        ## Actual query reg weight: 0.01 * ada_attn_poolers_reg_weight = 0.002
+        ada_attn_query_reg_scale    = 0.01
+
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.
         T = 1.5
@@ -1224,12 +1246,19 @@ class EmbeddingManager(nn.Module):
 
                 loss_ada_maps_weight = 0.
                 loss_ada_maps_bias   = 0.
-
+                loss_ada_attn_pooler = 0.
+                
                 if isinstance(embobj, AdaEmbedding):
                     for i, map in enumerate(embobj.layer_maps):
                         loss_ada_maps_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
                         loss_ada_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
-
+                    if self.ada_use_attn_pooler:
+                        for i, pooler in enumerate(embobj.poolers):
+                            loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_k.weight, loss_type=euc_loss_type)
+                            loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_q.weight, loss_type=euc_loss_type)
+                            loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_query, loss_type=euc_loss_type) \
+                                                        * ada_attn_query_reg_scale
+                            
                 if type(loss_bias) == int:
                     breakpoint()
 
