@@ -1265,7 +1265,8 @@ class EmbeddingManager(nn.Module):
                             + loss_basis            * basis_reg_weight \
                             + loss_pre_vecs         * pre_vecs_reg_weight \
                             + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
-                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight
+                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight \
+                            + loss_ada_attn_pooler  * ada_attn_poolers_reg_weight
                 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
