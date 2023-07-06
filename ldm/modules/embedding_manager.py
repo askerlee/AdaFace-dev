@@ -221,7 +221,7 @@ class AttentionalPooler(nn.Module):
         # sim_scores: [8, 1, 256].
         sim_scores = einsum('b i d, b j d -> b i j', q, k) * attn_score_scale
 
-        if False: #self.use_lora:
+        if self.use_lora:
             # lora_q: [1, 64] repeat -> [N, 1, 64]
             lora_q = self.lora_to_q(self.ln_q(self.lora_query))
             lora_q = repeat(lora_q, 'n d -> b n d', b=x.shape[0])
