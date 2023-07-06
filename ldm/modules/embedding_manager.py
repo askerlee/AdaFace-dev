@@ -126,7 +126,8 @@ class AttentionalPooler(nn.Module):
                  add_mean=True, infeat_grad_scale=0.5):
         super().__init__()
         self.n_heads = 1
-
+        self.layer_inner_dim = feat_dim
+        
         if lora_dim > 0:
             self.use_lora = True
             self.lora_attn_score_scale = lora_dim ** -0.5
@@ -410,9 +411,8 @@ class AdaEmbedding(nn.Module):
     # infeat_dims are (almost) reflective around the middle layer, except for the first and last layers.
     # Layer indices absent in layer_idx2emb_idx are skipped layers.
     def __init__(self, num_layers=16, emb_dim=768, r=12, init_vecs=None, 
-                 infeat_dims = [ 4,    320,  320,  320,  640,  640,  640,  1280, 1280, 1280, 1280, 1280, 
-                                 1280,
-                                 1280, 1280, 1280, 1280, 1280, 1280, 640, 640, 640,  320,  320,  320 ],
+                 attn_infeat_dims = [ 320, 320, 640, 640, 1280, 1280, 1280, 1280, 
+                                      1280, 1280, 640, 640, 640, 320, 320, 320 ],
                  # skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15],
                  layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },
@@ -427,6 +427,7 @@ class AdaEmbedding(nn.Module):
         self.device_type = device_type
         self.unet_midlayer_idx = 13
         self.layer_idx2emb_idx = layer_idx2emb_idx
+        # emb_idx2layer_idx: Reverse mapping of layer_idx2emb_idx.
         self.emb_idx2layer_idx = { v: k for k, v in layer_idx2emb_idx.items() }
 
         if init_vecs is not None:
@@ -454,14 +455,13 @@ class AdaEmbedding(nn.Module):
         # Always set the last basis vector to 0.
         self.basis_vecs.data[-1] = 0
 
-        self.infeat_dims = list(infeat_dims)
+        self.attn_infeat_dims = list(attn_infeat_dims)
         # self.infeat_dims = [ 320 for i in range(25) ]
 
         self.use_attn_pooler = use_attn_pooler
         poolers = []
         for i in range(num_layers):
-            i2 = self.emb_idx2layer_idx[i]
-            infeat_dim = self.infeat_dims[i2]
+            infeat_dim = self.attn_infeat_dims[i]
 
             if self.use_attn_pooler:
                 pooler = AttentionalPooler(i, infeat_dim, emb_dim, add_mean=True, infeat_grad_scale=0.5)
@@ -484,14 +484,13 @@ class AdaEmbedding(nn.Module):
         self.TDs = []
 
         for i in range(num_layers):
-            i2 = self.emb_idx2layer_idx[i]
-            TD = int(self.TD_frac * self.infeat_dims[i2])
+            TD = int(self.TD_frac * self.attn_infeat_dims[i])
             self.TDs.append(TD)
 
-            # self.infeat_dims[i2] + TD because we also include time embeddings (first TD dims) as the input features.
-            layer_maps.append( nn.Linear(infeat_dims[i2] + TD, r, bias=True) )
+            # self.attn_infeat_dims[i] + TD because we also include time embeddings (first TD dims) as the input features.
+            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] + TD, r, bias=True) )
             layer_lns.append( nn.LayerNorm(emb_dim, elementwise_affine=True) )
-            layer_lncat2s.append(LNCat2(infeat_dims[i2], TD))
+            layer_lncat2s.append(LNCat2(self.attn_infeat_dims[i], TD))
 
         self.layer_maps    = nn.ModuleList(layer_maps)
         self.layer_lns     = nn.ModuleList(layer_lns)
