@@ -131,10 +131,10 @@ class AttentionalPooler(nn.Module):
         if lora_dim > 0:
             self.use_lora = True
             self.lora_attn_score_scale = lora_dim ** -0.5
-            self.lora_query = nn.Parameter(torch.randn(1, token_emb_dim))
-            xavier_uniform_(self.lora_query)
-            self.lora_to_k  = nn.Linear(feat_dim,      lora_dim, bias=False)
-            self.lora_to_q  = nn.Linear(token_emb_dim, lora_dim, bias=False)
+            self.lora_ln_q  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
+            self.lora_ln_k  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
+            self.lora_to_k  = nn.Linear(self.layer_inner_dim, lora_dim, bias=False)
+            self.lora_to_q  = nn.Linear(self.layer_inner_dim, lora_dim, bias=False)
         else:
             self.use_lora = False
 
@@ -206,8 +206,6 @@ class AttentionalPooler(nn.Module):
         # q: [1, 320] -> [N, 1, 320]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
 
-        if k == None:
-            k = x
         # k: query from the UNet attention layer. Used as key here.
         # No need to go through to_k() here, as it's already the query from the UNet attention layer.
         k = self.ln_k(k)
@@ -219,17 +217,18 @@ class AttentionalPooler(nn.Module):
         # But introducing a v projection would greatly increase parameters.
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
 
-        # sim_scores: [8, 1, 256].
-        sim_scores = einsum('b i d, b j d -> b i j', q, k) * attn_score_scale
-
         if self.use_lora:
-            # lora_q: [1, 64] repeat -> [N, 1, 64]
-            lora_q = self.lora_to_q(self.ln_q(self.lora_query))
-            lora_q = repeat(lora_q, 'n d -> b n d', b=x.shape[0])
+            # lora_q: [N, 1, 320] -> [N, 1, 64]
+            lora_q = self.lora_to_q(self.lora_ln_q(q))
             # lora_k: [N, L, 64]
-            lora_k = self.lora_to_k(k)
+            lora_k = self.lora_to_k(self.lora_ln_k(k))
+            # lora_scores: [8, 1, 256].
             lora_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) * self.lora_attn_score_scale
-            sim_scores  = sim_scores + lora_scores
+            sim_scores  = lora_scores
+
+        else:
+            # sim_scores: [8, 1, 256].
+            sim_scores = einsum('b i d, b j d -> b i j', q, k) * attn_score_scale
 
         if mask is not None:
             mask = mask.bool()
@@ -1208,8 +1207,6 @@ class EmbeddingManager(nn.Module):
         ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
 
         ada_attn_poolers_reg_weight = 0.2
-        ## Actual query reg weight: 0.01 * ada_attn_poolers_reg_weight = 0.002
-        ada_attn_query_reg_scale    = 0.01
 
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.
@@ -1255,8 +1252,6 @@ class EmbeddingManager(nn.Module):
                         for i, pooler in enumerate(embobj.poolers):
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_k.weight, loss_type=euc_loss_type)
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_q.weight, loss_type=euc_loss_type)
-                            loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_query, loss_type=euc_loss_type) \
-                                                        * ada_attn_query_reg_scale
                             
                 if type(loss_bias) == int:
                     breakpoint()
@@ -1265,7 +1260,8 @@ class EmbeddingManager(nn.Module):
                             + loss_basis            * basis_reg_weight \
                             + loss_pre_vecs         * pre_vecs_reg_weight \
                             + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
-                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight
+                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight \
+                            + loss_ada_attn_pooler  * ada_attn_poolers_reg_weight
                 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
