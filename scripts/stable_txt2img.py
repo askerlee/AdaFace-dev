@@ -229,7 +229,10 @@ def parse_args():
 
     parser.add_argument("--scores_csv", type=str, default=None,
                         help="CSV file to save the evaluation scores")
-       
+    # --debug
+    parser.add_argument("--debug", action="store_true",
+                        help="debug mode")
+    
     args = parser.parse_args()
     return args
 
@@ -261,6 +264,9 @@ def load_model_from_config(config, ckpt, verbose=False):
         print(u)
 
     model.eval()
+    # Release some RAM. Not sure if it really works.
+    del sd, pl_sd
+
     return model
 
 # copied from img2img.py
@@ -494,6 +500,9 @@ def main(opt):
                             c[2]['iter_type'] = 'mix_hijk'
                             # c / ref_c are tuples of (cond, prompts, extra_info).
                             c = (c0_mix, c[1], c[2])
+
+                        if opt.debug and ref_c is None:
+                            c[2]['iter_type'] = 'debug_attn'
 
                         #else:
                         #    c[2]['iter_type'] = 'static_hijk'

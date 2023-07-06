@@ -820,7 +820,7 @@ class UNetModel(nn.Module):
         # 12            [2, 1280, 8,  8]
         layer_idx = 0
 
-        if iter_type.startswith("mix_"):
+        if iter_type.startswith("mix_") or iter_type == 'debug_attn':
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
             distill_layer_indices = [7, 8, 12, 16, 17, 18]
         else:
@@ -840,7 +840,7 @@ class UNetModel(nn.Module):
             # emb: [2, 1280], time embedding.
             h = module(h, emb, get_layer_idx_context)
             hs.append(h)
-            if iter_type.startswith("mix_") and layer_idx in distill_layer_indices:
+            if layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
                     distill_feats[layer_idx] = h
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
@@ -855,7 +855,7 @@ class UNetModel(nn.Module):
  
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, get_layer_idx_context)
-        if iter_type.startswith("mix_") and layer_idx in distill_layer_indices:
+        if layer_idx in distill_layer_indices:
                 distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.attn_mat 
                 distill_feats[layer_idx] = h
                 self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = False
@@ -885,7 +885,7 @@ class UNetModel(nn.Module):
  
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, get_layer_idx_context)
-            if iter_type.startswith("mix_") and layer_idx in distill_layer_indices:
+            if layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
                     distill_feats[layer_idx] = h
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
@@ -895,6 +895,9 @@ class UNetModel(nn.Module):
         extra_info['unet_feats'] = distill_feats
         extra_info['unet_attns'] = distill_attns
 
+        if iter_type == 'debug_attn':
+            breakpoint()
+            
         # [2, 320, 64, 64]
         h = h.type(x.dtype)
         if self.predict_codebook_ids:
