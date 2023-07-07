@@ -235,18 +235,17 @@ class AttentionalPooler(nn.Module):
             sim_scores.masked_fill_(~mask, max_neg_value)
 
         attn = sim_scores.softmax(dim=-1)
-        bg_attn = 1 - attn
 
         # out: [8, 1, 192].
         out = einsum('b i j, b j d -> b i d', attn, v)
         # out: [8, 1, 192] -> [2, 1, 4*192] = [2, 1, 768].
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
 
-        bg_out = einsum('b i j, b j d -> b i d', bg_attn, v)
-        bg_out = rearrange(bg_out, '(b h) n d -> b n (h d)', h=h)
+        # The residual of out from the mean of v.
+        bg_out = v.mean(dim=1, keepdim=True) - out
 
-        out    = F.gelu(out)
-        bg_out = F.gelu(bg_out)
+        #out    = F.leaky_relu(out,    negative_slope=0.2)
+        #bg_out = F.leaky_relu(bg_out, negative_slope=0.2)
         # out: [2, 1, 768] => [2, 1, 1536] => [2, 1536].
         out = torch.cat([out, bg_out], dim=-1)
         # out: N, 1, D -> N, D, i.e., [2, 768]
