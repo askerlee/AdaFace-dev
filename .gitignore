@@ -14,12 +14,8 @@ __pycache__/
 /generations/*
 /samples*
 /samples*/*
-/models/stable-diffusion-v-1-4-original
-/models/stable-diffusion-v-1-5
-/models/ffqh_pretrained/*
-/models/ffqh_pretrained/
-/models/noised-clip/*
-/models/noised-clip
+/models/*
+/models
 /*.txt
 /*.csv
 !requirements.txt
@@ -32,12 +28,6 @@ __pycache__/
 scripts/stable_txt2img_db.py
 /regularization_images
 *.zip
-/models/dreamshaper/*
-/models/dreamshaper
-/models/stable-diffusion/*
-/models/stable-diffusion
-/models/reco/*
-/models/reco
 /._*
 *._*
 /outputs/*
@@ -46,4 +36,3 @@ scripts/stable_txt2img_db.py
 /latent_diffusion.egg-info/*
 /latent_diffusion.egg-info
 /latent_diffusion*
-models/*
