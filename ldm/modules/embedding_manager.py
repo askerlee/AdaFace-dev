@@ -245,6 +245,8 @@ class AttentionalPooler(nn.Module):
         bg_out = einsum('b i j, b j d -> b i d', bg_attn, v)
         bg_out = rearrange(bg_out, '(b h) n d -> b n (h d)', h=h)
 
+        out    = F.gelu(out)
+        bg_out = F.gelu(bg_out)
         # out: [2, 1, 768] => [2, 1, 1536] => [2, 1536].
         out = torch.cat([out, bg_out], dim=-1)
         # out: N, 1, D -> N, D, i.e., [2, 768]
