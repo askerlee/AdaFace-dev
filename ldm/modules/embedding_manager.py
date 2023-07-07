@@ -138,7 +138,6 @@ class AttentionalPooler(nn.Module):
         else:
             self.use_lora = False
 
-        self.relu = nn.LeakyReLU(0.2)
         self.ln_x = nn.LayerNorm(feat_dim,      elementwise_affine=True)
         self.ln_k = nn.LayerNorm(feat_dim,      elementwise_affine=True)
         self.ln_q = nn.LayerNorm(token_emb_dim, elementwise_affine=True)
@@ -246,8 +245,8 @@ class AttentionalPooler(nn.Module):
         bg_out = einsum('b i j, b j d -> b i d', bg_attn, v)
         bg_out = rearrange(bg_out, '(b h) n d -> b n (h d)', h=h)
 
-        out = self.relu(out)
-        bg_out = self.relu(bg_out)
+        out    = F.gelu(out)
+        bg_out = F.gelu(bg_out)
         # out: [2, 1, 768] => [2, 1, 1536] => [2, 1536].
         out = torch.cat([out, bg_out], dim=-1)
         # out: N, 1, D -> N, D, i.e., [2, 768]
