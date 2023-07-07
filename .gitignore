@@ -23,8 +23,8 @@ __pycache__/
 /*.txt
 /*.csv
 !requirements.txt
-/src/taming-transformers
-/src/glide-text2im
+/src/*
+/src
 /glide_model_cache/*
 /glide_model_cache
 /.vscode/*
@@ -46,7 +46,4 @@ scripts/stable_txt2img_db.py
 /latent_diffusion.egg-info/*
 /latent_diffusion.egg-info
 /latent_diffusion*
-models/absolutereality/*
-models/absolutereality
-models/realisticvision/*
-models/realisticvision
+models/*
