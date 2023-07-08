@@ -1859,7 +1859,7 @@ class LatentDiffusion(DDPM):
             loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
             loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
             # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
-
+        
         if self.do_comp_prompt_mix_reg and is_teachable:
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
             # Only regularize on intermediate features, i.e., intermediate features generated 
@@ -1931,7 +1931,7 @@ class LatentDiffusion(DDPM):
             # placeholder_indices: 
             # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
             #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
-            placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
+            placeholder_indices = (placeholder_indices_B, placeholder_indices_T)
             mix_feat_grad_scale = 0.1
             # almost zero, effectively no grad to teacher attn. 
             # Setting to 0 may cause graph not unreleased and OOM.
@@ -2010,10 +2010,10 @@ class LatentDiffusion(DDPM):
                     
                     # convert_attn_to_spatial_weight() will detach attention weights to 
                     # avoid BP through attention.
-                    spatial_weight_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
-                    spatial_weight_subj_comps  = convert_attn_to_spatial_weight(subj_attn_subj_comps,  HALF_BS, feat_subj_comps.shape[2:])
-                    spatial_weight_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
-                    spatial_weight_mix_comps   = convert_attn_to_spatial_weight(subj_attn_mix_comps,   HALF_BS, feat_mix_comps.shape[2:])
+                    spatial_weight_subj_single, spatial_attn_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
+                    spatial_weight_subj_comps,  spatial_attn_subj_comps  = convert_attn_to_spatial_weight(subj_attn_subj_comps,  HALF_BS, feat_subj_comps.shape[2:])
+                    spatial_weight_mix_single,  spatial_attn_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
+                    spatial_weight_mix_comps,   spatial_attn_mix_comps   = convert_attn_to_spatial_weight(subj_attn_mix_comps,   HALF_BS, feat_mix_comps.shape[2:])
 
                     # Use mix single/comps weights on both subject-only and mix features, 
                     # to reduce misalignment and facilitate distillation.
