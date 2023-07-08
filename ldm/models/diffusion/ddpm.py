@@ -1896,7 +1896,7 @@ class LatentDiffusion(DDPM):
             feat_distill_layer_weights = { 7:  1., 8: 1.,   
                                           #9:  0.5, 10: 0.5, 11: 0.5, 
                                            12: 0.5, 
-                                          # 16: 0.25, 17: 0.25,
+                                           16: 0.5, 17: 0.5,
                                          }
 
             attn_distill_layer_weights = { 7:  1., 8: 1.,
@@ -2012,17 +2012,19 @@ class LatentDiffusion(DDPM):
                     # avoid BP through attention.
                     #spatial_weight_subj_single, spatial_attn_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
                     #spatial_weight_subj_comps,  spatial_attn_subj_comps  = convert_attn_to_spatial_weight(subj_attn_subj_comps,  HALF_BS, feat_subj_comps.shape[2:])
-                    #spatial_weight_mix_single,  spatial_attn_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
+                    # spatial_weight_mix_single,  spatial_attn_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
                     spatial_weight_mix_comps,   spatial_attn_mix_comps   = convert_attn_to_spatial_weight(subj_attn_mix_comps,   HALF_BS, feat_mix_comps.shape[2:])
+
+                    # del spatial_attn_mix_single, spatial_attn_mix_comps
 
                     # Use mix single/comps weights on both subject-only and mix features, 
                     # to reduce misalignment and facilitate distillation.
-                    feat_subj_single = feat_subj_single * spatial_weight_mix_comps #spatial_weight_mix_single
+                    feat_subj_single = feat_subj_single * spatial_weight_mix_comps # spatial_weight_mix_single
                     feat_subj_comps  = feat_subj_comps  * spatial_weight_mix_comps
-                    feat_mix_single  = feat_mix_single  * spatial_weight_mix_comps #spatial_weight_mix_single
+                    feat_mix_single  = feat_mix_single  * spatial_weight_mix_comps # spatial_weight_mix_single
                     feat_mix_comps   = feat_mix_comps   * spatial_weight_mix_comps
 
-                pool_spatial_size = (2, 2) # (1, 1)
+                pool_spatial_size = (4, 4) # (1, 1)
 
                 pooler = nn.AdaptiveAvgPool2d(pool_spatial_size)
                 # Pool the H, W dimensions to remove spatial information.
