@@ -397,7 +397,6 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     spatial_attn = flat_attn.mean(dim=2).sum(dim=1).reshape(BS, 1, *spatial_shape2)
     spatial_attn = F.interpolate(spatial_attn, size=spatial_shape, mode='bilinear', align_corners=False)
 
-    """     
     attn_mean, attn_std = spatial_attn.mean(dim=(2,3), keepdim=True), \
                             spatial_attn.std(dim=(2,3), keepdim=True)
     # Lower bound of denom is attn_mean / 2, in case attentions are too uniform and attn_std is too small.
@@ -408,13 +407,9 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     spatial_weight = torch.exp(-(spatial_attn - attn_mean) / denom).clamp(max=1)
     # Normalize spatial_weight so that the average weight across spatial dims of each instance is 1.
     spatial_weight = spatial_weight / spatial_weight.mean(dim=(2,3), keepdim=True)
-    """    
 
     # spatial_attn is the subject attention on pixels. 
     # spatial_weight is for the background objects (other elements in the prompt), 
-    # so it is 1 - spatial_attn.
-    spatial_weight = 1 - spatial_attn
-
     # flat_attn has been detached before passing to this function. So no need to detach spatial_weight.
     return spatial_weight, spatial_attn
 
