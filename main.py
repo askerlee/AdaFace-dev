@@ -44,6 +44,8 @@ def load_model_from_config(config, ckpt, verbose=False):
         print("unexpected keys:")
         print(u)
 
+    # Release some RAM. Not sure if it really works.
+    del sd, pl_sd
     return model
 
 def get_parser(**parser_kwargs):

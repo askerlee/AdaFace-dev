@@ -123,17 +123,18 @@ class AvgPool1d(nn.Module):
 # There's almost no learnable parameters in AttentionalPooler, except elementwise affines in 3 LayerNorms.
 class AttentionalPooler(nn.Module):
     def __init__(self, layer_idx, feat_dim, token_emb_dim, lora_dim=64,
-                 add_mean=True, infeat_grad_scale=0.5):
+                 infeat_grad_scale=0.5):
         super().__init__()
         self.n_heads = 1
-
+        self.layer_inner_dim = feat_dim
+        
         if lora_dim > 0:
             self.use_lora = True
             self.lora_attn_score_scale = lora_dim ** -0.5
-            self.lora_query = nn.Parameter(torch.randn(1, token_emb_dim))
-            xavier_uniform_(self.lora_query)
-            self.lora_to_k  = nn.Linear(feat_dim,      lora_dim, bias=False)
-            self.lora_to_q  = nn.Linear(token_emb_dim, lora_dim, bias=False)
+            self.lora_ln_q  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
+            self.lora_ln_k  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
+            self.lora_to_k  = nn.Linear(self.layer_inner_dim, lora_dim, bias=False)
+            self.lora_to_q  = nn.Linear(self.layer_inner_dim, lora_dim, bias=False)
         else:
             self.use_lora = False
 
@@ -142,7 +143,6 @@ class AttentionalPooler(nn.Module):
         self.ln_q = nn.LayerNorm(token_emb_dim, elementwise_affine=True)
 
         self.layer_idx = layer_idx
-        self.add_mean  = add_mean
 
         # Set to < 1 to reduce the gradient flow into the UNet.
         self.infeat_grad_scale = infeat_grad_scale
@@ -205,8 +205,6 @@ class AttentionalPooler(nn.Module):
         # q: [1, 320] -> [N, 1, 320]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
 
-        if k == None:
-            k = x
         # k: query from the UNet attention layer. Used as key here.
         # No need to go through to_k() here, as it's already the query from the UNet attention layer.
         k = self.ln_k(k)
@@ -218,17 +216,18 @@ class AttentionalPooler(nn.Module):
         # But introducing a v projection would greatly increase parameters.
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
 
-        # sim_scores: [8, 1, 256].
-        sim_scores = einsum('b i d, b j d -> b i j', q, k) * attn_score_scale
-
-        if False: #self.use_lora:
-            # lora_q: [1, 64] repeat -> [N, 1, 64]
-            lora_q = self.lora_to_q(self.ln_q(self.lora_query))
-            lora_q = repeat(lora_q, 'n d -> b n d', b=x.shape[0])
+        if self.use_lora:
+            # lora_q: [N, 1, 320] -> [N, 1, 64]
+            lora_q = self.lora_to_q(self.lora_ln_q(q))
             # lora_k: [N, L, 64]
-            lora_k = self.lora_to_k(k)
+            lora_k = self.lora_to_k(self.lora_ln_k(k))
+            # lora_scores: [8, 1, 256].
             lora_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) * self.lora_attn_score_scale
-            sim_scores  = sim_scores + lora_scores
+            sim_scores  = lora_scores
+
+        else:
+            # sim_scores: [8, 1, 256].
+            sim_scores = einsum('b i d, b j d -> b i j', q, k) * attn_score_scale
 
         if mask is not None:
             mask = mask.bool()
@@ -237,17 +236,16 @@ class AttentionalPooler(nn.Module):
 
         attn = sim_scores.softmax(dim=-1)
 
-        # out: [8, 1, 192].
-        out = einsum('b i j, b j d -> b i d', attn, v)
-        # out: [8, 1, 192] -> [2, 1, 4*192] = [2, 1, 768].
-        out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+        # fg_out: [8, 1, 192].
+        fg_out = einsum('b i j, b j d -> b i d', attn, v)
+        # fg_out: [8, 1, 192] -> [2, 1, 4*192] = [2, 1, 768].
+        fg_out = rearrange(fg_out, '(b h) n d -> b n (h d)', h=h)
 
-        # add_mean is similar to a skip connection in spirit. 
-        # The mean always keeps the low-frequency components. 
-        # Hopefully the attention part of out can capture some high-frequency components.
-        if self.add_mean:
-            out = out * 0.5 + v.mean(dim=1, keepdim=True) * 0.5
+        # The residual of the mean input features subtracted by fg_out.
+        bg_out = v.mean(dim=1, keepdim=True) - fg_out
 
+        # out: [2, 1, 768], [2, 1, 768] => [2, 1, 1536] => [2, 1536].
+        out = torch.cat([fg_out, bg_out], dim=-1)
         # out: N, 1, D -> N, D, i.e., [2, 768]
         # Make the output shape consistent with MaskedAvgPool2d.
         return out.squeeze(1)
@@ -410,9 +408,8 @@ class AdaEmbedding(nn.Module):
     # infeat_dims are (almost) reflective around the middle layer, except for the first and last layers.
     # Layer indices absent in layer_idx2emb_idx are skipped layers.
     def __init__(self, num_layers=16, emb_dim=768, r=12, init_vecs=None, 
-                 infeat_dims = [ 4,    320,  320,  320,  640,  640,  640,  1280, 1280, 1280, 1280, 1280, 
-                                 1280,
-                                 1280, 1280, 1280, 1280, 1280, 1280, 640, 640, 640,  320,  320,  320 ],
+                 attn_infeat_dims = [ 320, 320, 640, 640, 1280, 1280, 1280, 1280, 
+                                      1280, 1280, 640, 640, 640, 320, 320, 320 ],
                  # skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15],
                  layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },
@@ -427,6 +424,7 @@ class AdaEmbedding(nn.Module):
         self.device_type = device_type
         self.unet_midlayer_idx = 13
         self.layer_idx2emb_idx = layer_idx2emb_idx
+        # emb_idx2layer_idx: Reverse mapping of layer_idx2emb_idx.
         self.emb_idx2layer_idx = { v: k for k, v in layer_idx2emb_idx.items() }
 
         if init_vecs is not None:
@@ -454,17 +452,16 @@ class AdaEmbedding(nn.Module):
         # Always set the last basis vector to 0.
         self.basis_vecs.data[-1] = 0
 
-        self.infeat_dims = list(infeat_dims)
+        self.attn_infeat_dims = list(attn_infeat_dims)
         # self.infeat_dims = [ 320 for i in range(25) ]
 
         self.use_attn_pooler = use_attn_pooler
         poolers = []
         for i in range(num_layers):
-            i2 = self.emb_idx2layer_idx[i]
-            infeat_dim = self.infeat_dims[i2]
+            infeat_dim = self.attn_infeat_dims[i]
 
             if self.use_attn_pooler:
-                pooler = AttentionalPooler(i, infeat_dim, emb_dim, add_mean=True, infeat_grad_scale=0.5)
+                pooler = AttentionalPooler(i, infeat_dim, emb_dim, infeat_grad_scale=0.5)
             else:
                 pooler = AvgPool1d() #MaskedAvgPool2d()
             poolers.append(pooler)
@@ -473,25 +470,27 @@ class AdaEmbedding(nn.Module):
 
         # The dimension of the time embeddings used will be 
         # the first TD_frac dimensions of image features.
-        # Most infeat_dims: 1280, *0.25 = 320. 
+        # Most infeat_dims: 1280, *0.5 = 640. 
         # 320 dim should contain enough info, and avoid
         # overweighing the image features.
-        self.TD_frac = 0.25
+        self.TD_frac = 0.5
 
         layer_maps = []
         layer_lns  = []
         layer_lncat2s = []
         self.TDs = []
 
+        # attn_pooler doubles the input feature dimension at the output.
+        H = 2 if self.use_attn_pooler else 1
+
         for i in range(num_layers):
-            i2 = self.emb_idx2layer_idx[i]
-            TD = int(self.TD_frac * self.infeat_dims[i2])
+            TD = int(self.TD_frac * self.attn_infeat_dims[i])
             self.TDs.append(TD)
 
-            # self.infeat_dims[i2] + TD because we also include time embeddings (first TD dims) as the input features.
-            layer_maps.append( nn.Linear(infeat_dims[i2] + TD, r, bias=True) )
+            # self.attn_infeat_dims[i] + TD because we also include time embeddings (first TD dims) as the input features.
+            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD, r, bias=True) )
             layer_lns.append( nn.LayerNorm(emb_dim, elementwise_affine=True) )
-            layer_lncat2s.append(LNCat2(infeat_dims[i2], TD))
+            layer_lncat2s.append(LNCat2(self.attn_infeat_dims[i] * H, TD))
 
         self.layer_maps    = nn.ModuleList(layer_maps)
         self.layer_lns     = nn.ModuleList(layer_lns)
@@ -1209,8 +1208,6 @@ class EmbeddingManager(nn.Module):
         ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
 
         ada_attn_poolers_reg_weight = 0.2
-        ## Actual query reg weight: 0.01 * ada_attn_poolers_reg_weight = 0.002
-        ada_attn_query_reg_scale    = 0.01
 
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.
@@ -1256,8 +1253,6 @@ class EmbeddingManager(nn.Module):
                         for i, pooler in enumerate(embobj.poolers):
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_k.weight, loss_type=euc_loss_type)
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_q.weight, loss_type=euc_loss_type)
-                            loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_query, loss_type=euc_loss_type) \
-                                                        * ada_attn_query_reg_scale
                             
                 if type(loss_bias) == int:
                     breakpoint()
@@ -1266,7 +1261,8 @@ class EmbeddingManager(nn.Module):
                             + loss_basis            * basis_reg_weight \
                             + loss_pre_vecs         * pre_vecs_reg_weight \
                             + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
-                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight
+                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight \
+                            + loss_ada_attn_pooler  * ada_attn_poolers_reg_weight
                 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
