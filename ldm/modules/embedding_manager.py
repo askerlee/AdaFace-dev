@@ -236,18 +236,16 @@ class AttentionalPooler(nn.Module):
 
         attn = sim_scores.softmax(dim=-1)
 
-        # out: [8, 1, 192].
-        out = einsum('b i j, b j d -> b i d', attn, v)
-        # out: [8, 1, 192] -> [2, 1, 4*192] = [2, 1, 768].
-        out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+        # fg_out: [8, 1, 192].
+        fg_out = einsum('b i j, b j d -> b i d', attn, v)
+        # fg_out: [8, 1, 192] -> [2, 1, 4*192] = [2, 1, 768].
+        fg_out = rearrange(fg_out, '(b h) n d -> b n (h d)', h=h)
 
-        # The residual of out from the mean of v.
-        bg_out = v.mean(dim=1, keepdim=True) - out
+        # The residual of the mean input features subtracted by fg_out.
+        bg_out = v.mean(dim=1, keepdim=True) - fg_out
 
-        #out    = F.leaky_relu(out,    negative_slope=0.2)
-        #bg_out = F.leaky_relu(bg_out, negative_slope=0.2)
-        # out: [2, 1, 768] => [2, 1, 1536] => [2, 1536].
-        out = torch.cat([out, bg_out], dim=-1)
+        # out: [2, 1, 768], [2, 1, 768] => [2, 1, 1536] => [2, 1536].
+        out = torch.cat([fg_out, bg_out], dim=-1)
         # out: N, 1, D -> N, D, i.e., [2, 768]
         # Make the output shape consistent with MaskedAvgPool2d.
         return out.squeeze(1)
@@ -482,14 +480,17 @@ class AdaEmbedding(nn.Module):
         layer_lncat2s = []
         self.TDs = []
 
+        # attn_pooler doubles the input feature dimension at the output.
+        H = 2 if self.use_attn_pooler else 1
+
         for i in range(num_layers):
             TD = int(self.TD_frac * self.attn_infeat_dims[i])
             self.TDs.append(TD)
 
             # self.attn_infeat_dims[i] + TD because we also include time embeddings (first TD dims) as the input features.
-            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * 2 + TD, r, bias=True) )
+            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD, r, bias=True) )
             layer_lns.append( nn.LayerNorm(emb_dim, elementwise_affine=True) )
-            layer_lncat2s.append(LNCat2(self.attn_infeat_dims[i] * 2, TD))
+            layer_lncat2s.append(LNCat2(self.attn_infeat_dims[i] * H, TD))
 
         self.layer_maps    = nn.ModuleList(layer_maps)
         self.layer_lns     = nn.ModuleList(layer_lns)

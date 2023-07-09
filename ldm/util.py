@@ -407,9 +407,11 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     spatial_weight = torch.exp(-(spatial_attn - attn_mean) / denom).clamp(max=1)
     # Normalize spatial_weight so that the average weight across spatial dims of each instance is 1.
     spatial_weight = spatial_weight / spatial_weight.mean(dim=(2,3), keepdim=True)
-    
+
+    # spatial_attn is the subject attention on pixels. 
+    # spatial_weight is for the background objects (other elements in the prompt), 
     # flat_attn has been detached before passing to this function. So no need to detach spatial_weight.
-    return spatial_weight
+    return spatial_weight, spatial_attn
 
 # Revised from RevGrad, by removing the grad negation.
 class ScaleGrad(torch.autograd.Function):

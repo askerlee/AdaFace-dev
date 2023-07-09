@@ -1859,7 +1859,7 @@ class LatentDiffusion(DDPM):
             loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
             loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
             # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
-
+        
         if self.do_comp_prompt_mix_reg and is_teachable:
             # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
             # Only regularize on intermediate features, i.e., intermediate features generated 
@@ -1878,14 +1878,8 @@ class LatentDiffusion(DDPM):
             unet_attns = cond[2]['unet_attns']
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.1
-            direct_attn_distill_scheme = "l2"
-            if direct_attn_distill_scheme == "l2":
-                direct_single_attn_loss_scale = 2
-                direct_comps_attn_loss_scale  = 2
-            else:
-                # Delta loss. Not recommended.
-                direct_single_attn_loss_scale = 0.2
-                direct_comps_attn_loss_scale  = 0.2
+            direct_single_attn_loss_scale = 2
+            direct_comps_attn_loss_scale  = 2
 
             # Discard top layers and the first few bottom layers from distillation.
             # distill_layer_weights: relative weight of each distillation layer. 
@@ -1896,7 +1890,7 @@ class LatentDiffusion(DDPM):
             feat_distill_layer_weights = { 7:  1., 8: 1.,   
                                           #9:  0.5, 10: 0.5, 11: 0.5, 
                                            12: 0.5, 
-                                          # 16: 0.25, 17: 0.25,
+                                           16: 0.5, 17: 0.5,
                                          }
 
             attn_distill_layer_weights = { 7:  1., 8: 1.,
@@ -1931,13 +1925,13 @@ class LatentDiffusion(DDPM):
             # placeholder_indices: 
             # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
             #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
-            placeholder_indices   = (placeholder_indices_B, placeholder_indices_T)
+            placeholder_indices = (placeholder_indices_B, placeholder_indices_T)
             mix_feat_grad_scale = 0.1
-            # almost zero, effectively no grad to teacher attn. 
-            # Setting to 0 may cause graph not unreleased and OOM.
-            mx_attn_grad_scale  = 0.01  
+            # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to teacher attn. 
+            # Setting to 0 may prevent the graph from being released and OOM.
+            mix_attn_grad_scale  = 0.01  
             mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
-            mix_attn_grad_scaler = gen_gradient_scaler(mx_attn_grad_scale)
+            mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
 
             for unet_layer_idx, unet_feat in unet_feats.items():
                 if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
@@ -1953,15 +1947,6 @@ class LatentDiffusion(DDPM):
                 attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
                 # subj_attn: [4, 8, 256] / [4, 8, 64]
                 subj_attn = attn_mat[placeholder_indices]
-                
-                """                 
-                # attn_mask: [4, 1, 77, 1] => [4, 77, 1, 1]
-                attn_mask = self.embedding_manager.delta_loss_emb_mask.permute(0, 2, 1, 3)
-                # Mask out the attentions of the padding tokens. Only keep meaningful attentions.
-                masked_attn = attn_mat * attn_mask
-                # avg_token_attn: [4, 8, 256] / [4, 8, 64]
-                avg_token_attn  = masked_attn.sum(dim=1) / attn_mask.sum(dim=1) 
-                """
 
                 # subj_attn_subj_single, ...: [2, 8, 256].
                 # The first dim 2 is the two occurrences of the subject token 
@@ -1977,21 +1962,14 @@ class LatentDiffusion(DDPM):
                     loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
                                                                  first_n_dims_to_flatten=2, 
                                                                  ref_grad_scale=0)
-                    if direct_attn_distill_scheme == "l2":
-                        subj_attn_mix_comps_gs  = mix_attn_grad_scaler(subj_attn_mix_comps)
-                        subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
-                        loss_layer_subj_comps_attn  = self.get_loss(subj_attn_subj_comps,  subj_attn_mix_comps_gs,  mean=True)
-                        loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
-                    else:
-                        # We use the same grad scale as the mix features for the attn delta loss, 
-                        # as it's observed that small grad to mix attn delta is better than no grad. 
-                        loss_layer_subj_comps_attn  = calc_delta_loss(subj_attn_subj_comps,  subj_attn_mix_comps,
-                                                                      first_n_dims_to_flatten=2, 
-                                                                      ref_grad_scale=mix_feat_grad_scale)
-                        loss_layer_subj_single_attn = calc_delta_loss(subj_attn_subj_single, subj_attn_mix_single,
-                                                                      first_n_dims_to_flatten=2, 
-                                                                      ref_grad_scale=mix_feat_grad_scale)
-                        
+                    
+                    # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comps/subj_attn_mix_single. 
+                    # Use this scaler to release the graph and avoid OOM.
+                    subj_attn_mix_comps_gs  = mix_attn_grad_scaler(subj_attn_mix_comps)
+                    subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
+                    loss_layer_subj_comps_attn  = self.get_loss(subj_attn_subj_comps,  subj_attn_mix_comps_gs,  mean=True)
+                    loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
+
                     # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
                     loss_subj_attn_distill += ( loss_layer_subj_delta_attn 
@@ -2010,21 +1988,30 @@ class LatentDiffusion(DDPM):
                     
                     # convert_attn_to_spatial_weight() will detach attention weights to 
                     # avoid BP through attention.
-                    spatial_weight_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
-                    spatial_weight_subj_comps  = convert_attn_to_spatial_weight(subj_attn_subj_comps,  HALF_BS, feat_subj_comps.shape[2:])
-                    spatial_weight_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
-                    spatial_weight_mix_comps   = convert_attn_to_spatial_weight(subj_attn_mix_comps,   HALF_BS, feat_mix_comps.shape[2:])
+                    #spatial_weight_subj_single, spatial_attn_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
+                    #spatial_weight_subj_comps,  spatial_attn_subj_comps  = convert_attn_to_spatial_weight(subj_attn_subj_comps,  HALF_BS, feat_subj_comps.shape[2:])
+                    # spatial_weight_mix_single,  spatial_attn_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
+                    spatial_weight_mix_comps,   spatial_attn_mix_comps   = convert_attn_to_spatial_weight(subj_attn_mix_comps,   HALF_BS, feat_mix_comps.shape[2:])
+
+                    # spatial_attn_mix_comps is returned for debugging purposes. Delete to release RAM.
+                    del spatial_attn_mix_comps
 
                     # Use mix single/comps weights on both subject-only and mix features, 
                     # to reduce misalignment and facilitate distillation.
-                    feat_subj_single = feat_subj_single * spatial_weight_mix_single
+                    feat_subj_single = feat_subj_single * spatial_weight_mix_comps
                     feat_subj_comps  = feat_subj_comps  * spatial_weight_mix_comps
-                    feat_mix_single  = feat_mix_single  * spatial_weight_mix_single
+                    feat_mix_single  = feat_mix_single  * spatial_weight_mix_comps
                     feat_mix_comps   = feat_mix_comps   * spatial_weight_mix_comps
 
-                pool_spatial_size = (2, 2) # (1, 1)
+                do_feat_pooling = True
+                feat_pool_kernel_size = 4
+                feat_pool_stride      = 2
+                # feature pooling: allow small perturbations of the locations of pixels.
+                if do_feat_pooling:
+                    pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
+                else:
+                    pooler = nn.Identity()
 
-                pooler = nn.AdaptiveAvgPool2d(pool_spatial_size)
                 # Pool the H, W dimensions to remove spatial information.
                 # After pooling, feat_subj_single, feat_subj_comps, 
                 # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...
