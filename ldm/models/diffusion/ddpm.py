@@ -2003,12 +2003,15 @@ class LatentDiffusion(DDPM):
                     feat_mix_single  = feat_mix_single  * spatial_weight_mix_comps
                     feat_mix_comps   = feat_mix_comps   * spatial_weight_mix_comps
 
-                pool_spatial_size = None #(4, 4) # (1, 1)
-                if pool_spatial_size is not None:
-                    pooler = nn.AdaptiveAvgPool2d(pool_spatial_size)
+                do_feat_pooling = True
+                feat_pool_kernel_size = 4
+                feat_pool_stride      = 2
+                # feature pooling: allow small perturbations of the locations of pixels.
+                if do_feat_pooling:
+                    pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
                 else:
                     pooler = nn.Identity()
-                    
+
                 # Pool the H, W dimensions to remove spatial information.
                 # After pooling, feat_subj_single, feat_subj_comps, 
                 # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...
