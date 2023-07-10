@@ -43,10 +43,7 @@ def parse_args():
                         help="suffix to append to the end of each prompt")
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
-    # subj_scale: sometimes it improves the similarity, somtimes it reduces it.
-    parser.add_argument("--subj_scale", type=float, default=1,
-                        help="the subject embedding scale")
-    
+
     parser.add_argument("--n_samples", type=int, default=-1, 
                         help="number of samples to generate for each test case")
     parser.add_argument("--bs", type=int, default=-1, 
@@ -308,7 +305,7 @@ if __name__ == "__main__":
             else:
                 indiv_subdir = subject_name
 
-        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --scale {args.scale} --subj_scale {args.subj_scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
+        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --scale {args.scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
 
         if args.prompt is None:
             PROMPTS.close()

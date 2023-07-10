@@ -18,7 +18,7 @@ __pycache__/
 /models
 /*.txt
 /*.csv
-!requirements.txt
+!requirements*.txt
 /src/*
 /src
 /glide_model_cache/*
@@ -36,3 +36,5 @@ scripts/stable_txt2img_db.py
 /latent_diffusion.egg-info/*
 /latent_diffusion.egg-info
 /latent_diffusion*
+/releases/*
+/releases
