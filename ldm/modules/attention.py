@@ -177,6 +177,7 @@ class CrossAttention(nn.Module):
         if callable(context):
             # Pass x, ... to context() to get the real context
             context = context((x, q, self.to_k, self.scale))
+
         if type(context) == tuple:
             context, hijk_context = context
             k = self.to_k(hijk_context)
@@ -188,7 +189,7 @@ class CrossAttention(nn.Module):
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
 
         sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
-
+                
         if exists(mask):
             mask = rearrange(mask, 'b ... -> b (...)')
             max_neg_value = -torch.finfo(sim.dtype).max
@@ -200,6 +201,8 @@ class CrossAttention(nn.Module):
 
         if self.save_attn_mat:
             self.attn_mat = rearrange(attn, '(b h) i j -> b h i j', h=h)
+            #attn_mat = self.attn_mat.detach().cpu().numpy()
+            #breakpoint()
 
         out = einsum('b i j, b j d -> b i d', attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
