@@ -11,6 +11,6 @@ laion400m: false
 ref_prompt: None
 ref_prompt_mix_weight: 0.0
 scores_csv: None
-seed: 19505
+seed: 30051
 skip_grid: false
 skip_save: false

@@ -96,8 +96,8 @@ with gr.Blocks() as demo:
             with gr.Column(scale=2) as col1:
                 prompt = gr.Textbox(lines=2, label="Prompt", placeholder="Enter a prompt...")
                 class_prompt = gr.Textbox(lines=2, label="Class Prompt", placeholder="Enter a class prompt...")
-                embedding_path_entries = os.listdir('subject-models/ada-0629')
-                embedding_path_entries = ['subject-models/ada-0629/' + path + '/embeddings_gs-4500.pt' for path in embedding_path_entries]
+                embedding_path_entries = os.listdir('subject-models/ada-0709')
+                embedding_path_entries = ['subject-models/ada-0709/' + path + '/embeddings_gs-4500.pt' for path in embedding_path_entries]
                 embedding_paths = gr.Dropdown (list(embedding_path_entries), label='Embedding Path', info='will add more later', multiselect=True)
                 with gr.Row() as row00:
                     with gr.Column():

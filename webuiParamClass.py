@@ -39,6 +39,7 @@ class DictI(dict):
         self.compare_with=None
         self.class_prompt=None
         self.clip_last_layer_skip_weight=0.5
+        self.debug = False
 
     def __getattr__(self, key):
         try:
