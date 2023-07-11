@@ -1973,7 +1973,7 @@ class LatentDiffusion(DDPM):
 
                     loss_layer_subj_comps_attn_norm  = (subj_attn_subj_comps.mean()  - subj_attn_mix_comps_gs.mean()).abs().mean()
                     loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean() - subj_attn_mix_single_gs.mean()).abs().mean()
-                    print(loss_layer_subj_comps_attn_norm, loss_layer_subj_single_attn_norm)
+                    # print(loss_layer_subj_comps_attn_norm, loss_layer_subj_single_attn_norm)
 
                     # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
