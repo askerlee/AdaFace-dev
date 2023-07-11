@@ -1327,7 +1327,7 @@ class LatentDiffusion(DDPM):
                         if self.use_layerwise_embedding:
                             # 4, 5, 6, 7, 8 correspond to original layer indices 7, 8, 12, 16, 17
                             # (same as used in computing mixing loss)
-                            sync_layer_indices = [4, 5, 6, 7, 8]
+                            sync_layer_indices = [4, 5, 6, 7, 8, 9]
                             layer_mask = torch.zeros_like(mix_comps_emb_all_layers).reshape(-1, N_LAYERS, *mix_comps_emb_all_layers.shape[1:])
                             layer_mask[:, sync_layer_indices] = 1
                             layer_mask = layer_mask.reshape(-1, *mix_comps_emb_all_layers.shape[1:])
@@ -1877,9 +1877,9 @@ class LatentDiffusion(DDPM):
             # i.e., layers 7, 8, 12, 16, 17.
             unet_attns = cond[2]['unet_attns']
             # Set to 0 to disable distillation on attention weights of the subject.
-            distill_subj_attn_weight = 0.1
-            direct_single_attn_loss_scale = 2
-            direct_comps_attn_loss_scale  = 2
+            distill_subj_attn_weight = 0.4
+            direct_single_attn_loss_scale = 4
+            direct_comps_attn_loss_scale  = 4
 
             # Discard top layers and the first few bottom layers from distillation.
             # distill_layer_weights: relative weight of each distillation layer. 

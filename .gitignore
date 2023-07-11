@@ -18,7 +18,7 @@ __pycache__/
 /models
 /*.txt
 /*.csv
-!requirements.txt
+!requirements*.txt
 /src/*
 /src
 /glide_model_cache/*
