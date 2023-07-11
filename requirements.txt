@@ -20,6 +20,7 @@ deepface>=0.0.79
 nvidia-tensorrt
 captionizer
 safetensors
+wandb
 -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
 -e git+https://github.com/openai/CLIP.git@main#egg=clip
 -e git+https://github.com/openai/glide-text2im#egg=glide-text2im
