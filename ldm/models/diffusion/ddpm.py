@@ -1877,9 +1877,10 @@ class LatentDiffusion(DDPM):
             # i.e., layers 7, 8, 12, 16, 17.
             unet_attns = cond[2]['unet_attns']
             # Set to 0 to disable distillation on attention weights of the subject.
-            distill_subj_attn_weight = 0.4
-            direct_single_attn_loss_scale = 4
-            direct_comps_attn_loss_scale  = 4
+            distill_subj_attn_weight = 0.2
+            direct_attn_loss_scale = 2
+            # The norm is actually the abs().mean(), so it has small magnitudes and should be scaled up.
+            direct_attn_norm_loss_scale = 10
 
             # Discard top layers and the first few bottom layers from distillation.
             # distill_layer_weights: relative weight of each distillation layer. 
@@ -1970,12 +1971,16 @@ class LatentDiffusion(DDPM):
                     loss_layer_subj_comps_attn  = self.get_loss(subj_attn_subj_comps,  subj_attn_mix_comps_gs,  mean=True)
                     loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
 
+                    loss_layer_subj_comps_attn_norm  = (subj_attn_subj_comps.mean()  - subj_attn_mix_comps_gs.mean()).abs().mean()
+                    loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean() - subj_attn_mix_single_gs.mean()).abs().mean()
+                    print(loss_layer_subj_comps_attn_norm, loss_layer_subj_single_attn_norm)
+
                     # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
                     loss_subj_attn_distill += ( loss_layer_subj_delta_attn 
-                                                 + loss_layer_subj_comps_attn  * direct_comps_attn_loss_scale
-                                                 + loss_layer_subj_single_attn * direct_single_attn_loss_scale \
-                                               ) * attn_distill_layer_weight
+                                                 + (loss_layer_subj_comps_attn + loss_layer_subj_single_attn) * direct_attn_loss_scale \
+                                                 + (loss_layer_subj_comps_attn_norm + loss_layer_subj_single_attn_norm) * direct_attn_norm_loss_scale \
+                                              ) * attn_distill_layer_weight
 
                 use_subj_attn_as_spatial_weights = True
                 if use_subj_attn_as_spatial_weights:
