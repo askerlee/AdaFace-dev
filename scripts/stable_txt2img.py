@@ -250,6 +250,7 @@ def load_model_from_config(config, ckpt, verbose=False):
             print(f"Global Step: {pl_sd['global_step']}")
     elif ckpt.endswith(".safetensors"):
         sd = safetensors_load_file(ckpt, device="cpu")
+        pl_sd = None
     else:
         print(f"Unknown checkpoint format: {ckpt}")
         sys.exit(1)
