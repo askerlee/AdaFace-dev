@@ -30,6 +30,7 @@ def load_model_from_config(config, ckpt, verbose=False):
         sd = pl_sd["state_dict"]
     elif ckpt.endswith(".safetensors"):
         sd = safetensors_load_file(ckpt, device="cpu")
+        pl_sd = None
     else:
         print(f"Unknown checkpoint format: {ckpt}")
         sys.exit(1)
