@@ -1876,7 +1876,7 @@ class LatentDiffusion(DDPM):
             # It contains the 5 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17.
             unet_attns = cond[2]['unet_attns']
-            distill_feat_weight      = 0.5
+            distill_feat_weight      = 1
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.2
             delta_attn_loss_scale    = 1
