@@ -1876,13 +1876,11 @@ class LatentDiffusion(DDPM):
             # It contains the 5 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17.
             unet_attns = cond[2]['unet_attns']
-            distill_feat_weight      = 0.5
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.2
-            delta_attn_loss_scale    = 1
-            direct_attn_loss_scale   = 2
+            direct_attn_loss_scale = 2
             # The norm is actually the abs().mean(), so it has small magnitudes and should be scaled up.
-            direct_attn_norm_loss_scale = 5
+            direct_attn_norm_loss_scale = 10
 
             # Discard top layers and the first few bottom layers from distillation.
             # distill_layer_weights: relative weight of each distillation layer. 
@@ -1979,7 +1977,7 @@ class LatentDiffusion(DDPM):
 
                     # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                     # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
-                    loss_subj_attn_distill += ( loss_layer_subj_delta_attn * delta_attn_loss_scale \
+                    loss_subj_attn_distill += ( loss_layer_subj_delta_attn 
                                                  + (loss_layer_subj_comps_attn + loss_layer_subj_single_attn) * direct_attn_loss_scale \
                                                  + (loss_layer_subj_comps_attn_norm + loss_layer_subj_single_attn_norm) * direct_attn_norm_loss_scale \
                                               ) * attn_distill_layer_weight
@@ -2056,8 +2054,7 @@ class LatentDiffusion(DDPM):
 
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_distill': loss_subj_attn_distill.detach()})
-            loss_prompt_mix_reg =   loss_feat_distill      * distill_feat_weight \
-                                  + loss_subj_attn_distill * distill_subj_attn_weight
+            loss_prompt_mix_reg = loss_feat_distill + loss_subj_attn_distill * distill_subj_attn_weight
                                     
             loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
             
