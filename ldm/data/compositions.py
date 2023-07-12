@@ -128,26 +128,22 @@ def sample_compositions(N, is_animal, is_training=False):
     for i in range(N):
         idx = np.random.choice(K)
         composition = exrex.getone(composition_regexs[idx])
-        # Disable another object in the image for non-animal subjects.
+        # Disable another object in the image for non-animal subjects,
+        # to avoid the spotlight of the non-animal subject being stolen by the other object.
         if is_animal:
-
-            has_another_obj = np.random.choice([0, 1],p=option_probs)
+            has_another_obj = np.random.choice([0, 1], p=option_probs)
         else:
             has_another_obj = False
 
         if has_another_obj:
-            loc1, loc2 = np.random.choice(all_locations, 2, replace=False)
-            location1 = loc1 + " "
             object2   = np.random.choice(coexist_objects)
-            obj_loc2  = ", a " + object2 + " " + loc2
+            location2 = np.random.choice(all_locations)
+            obj_loc2  = ", a " + object2 + " " + location2
         else:
-            location1 = ""
             obj_loc2  = ""
 
-
-        # choose style category, then choose number of style 
-        # choose common exist style 
-        has_styles = np.random.choice([0, 1],p=option_probs)
+        # Choose a few common styles
+        has_styles = np.random.choice([0, 1], p=option_probs)
         if has_styles:
             num_styles = np.random.choice([1, 2])
             styles = np.random.choice(all_styles, size=num_styles, replace=False)
@@ -156,16 +152,15 @@ def sample_compositions(N, is_animal, is_training=False):
         else:
             style = ""
 
-        has_modifiers = np.random.choice([0, 1],p=option_probs)
-        # has_modifiers = 1
+        has_modifiers = np.random.choice([0, 1], p=option_probs)
         if has_modifiers:
             num_modifiers = np.random.choice([1, 2, 3])
             modifiers = np.random.choice(all_modifiers, size=num_modifiers, replace=False)
-            modifier =  ", " + ", ".join(modifiers)
+            modifier = ", " + ", ".join(modifiers)          
         else:
             modifier = ""
 
-        has_art_by = np.random.choice([0, 1],p=option_probs)
+        has_art_by = np.random.choice([0, 1], p=option_probs)
     
         if has_art_by:
             num_art_by = np.random.choice([1, 2, 3])
@@ -174,23 +169,21 @@ def sample_compositions(N, is_animal, is_training=False):
         else:
             art_by = ""
 
-        # has_background = 1
-        has_background = np.random.choice([0, 1],p=option_probs)
+        has_background = np.random.choice([0, 1], p=option_probs)
         if has_background:
             background = np.random.choice(all_backgrounds)
             background = ", with " + background + " as background"
         else:
             background = ""
 
-        has_time = np.random.choice([0, 1],p=option_probs)
-        # has_time = 1
-        if has_time:
+        has_time_theme = np.random.choice([0, 1], p=option_probs)
+        if has_time_theme:
             time = np.random.choice(all_time) 
             time = ", " + time
         else:
             time = ""
         
-        has_light = np.random.choice([0, 1],p=option_probs)
+        has_light = np.random.choice([0, 1], p=option_probs)
         has_light =1
         if has_light:
             light = np.random.choice(all_light)
@@ -198,20 +191,21 @@ def sample_compositions(N, is_animal, is_training=False):
         else:
             light = ""
 
-        image = ", " + np.random.choice(['photo','drawing','illustration','picture'])
-
         if is_training:
-            compositions.append(f"{composition}{modifier}{time}{style}{background}{art_by}{light}{obj_loc2}")
+            composition = f"{composition}{modifier}{time}{style}{background}{art_by}{light}{obj_loc2}"
         else:
-            compositions.append(f"{modifier}{time}{style}{image} of z {composition}{background}{art_by}{light}{obj_loc2}")
+            image = ", " + np.random.choice(['photo', 'drawing', 'illustration', 'picture'])
+            composition = f"{modifier}{time}{style}{image} of z {composition}{background}{art_by}{light}{obj_loc2}"
+            if composition.startswith(", "):
+                composition = composition[2:]
+        
+        compositions.append(composition)
 
     return compositions
 
 if __name__ == "__main__":
     print("Test:")
-    print("\n".join(sample_compositions(10, True)))
+    print("\n".join(sample_compositions(20, True)))
     print()
     print("Training:")
-    print("\n".join(sample_compositions(30, True, is_training=True)))
-
-
+    print("\n".join(sample_compositions(20, True, is_training=True)))
