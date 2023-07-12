@@ -7,8 +7,10 @@ file_format_grid: ''
 from_file: ''
 image_file_pattern: ''
 init_img: ''
+laion400m: false
+ref_prompt: None
+ref_prompt_mix_weight: 0.0
+scores_csv: None
+seed: 30051
 skip_grid: false
 skip_save: false
-scores_csv: None
-ref_prompt: None 
-ref_prompt_mix_weight: 0.0

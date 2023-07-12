@@ -38,3 +38,5 @@ scripts/stable_txt2img_db.py
 /latent_diffusion*
 /releases/*
 /releases
+*.DS_Store*
+*subject-models*
