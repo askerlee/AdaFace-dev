@@ -23,7 +23,7 @@ model:
     monitor: val/loss_ema
     scale_factor: 0.18215
     use_ema: False
-    embedding_reg_weight: 0.05
+    embedding_reg_weight: 0.01
     unfreeze_model: False
     model_lr: 0.0
     use_layerwise_embedding: True
