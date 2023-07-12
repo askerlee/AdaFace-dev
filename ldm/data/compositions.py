@@ -47,7 +47,6 @@ static_composition_regexs = \
   # Prompts below are from DreamBooth evaluation dataset
   #LINK - https://github.com/google/dreambooth/blob/main/dataset/prompts_and_classes.txt
   "(in the jungle|in the snow|on a cobblestone street|floating on top of water|floating in an ocean of milk)",
-  "with a (city|mountain|blue house|wheat field|a tree and autumn leaves|Eiffel Tower) in the background",
   "on top of (pink fabric|a wooden floor|green grass with sunflowers around it|a mirror|the sidewalk in a crowded street|a dirt road|a white rug|a purple rug in a forest)",
   # To avoid misalignment issues, we don't use "a red/purple z" as prompts.
   "that is (red|purple|shiny|cube|wet)",
@@ -59,7 +58,7 @@ all_composition_regexs = static_composition_regexs + dynamic_composition_regexs
 # E.g. "a z at the left, a dog in the center"
 all_locations = [ "at the left", "at the right", "at the top", "at the bottom", 
                   "in the center", "in the middle", "at the upper left", "at the upper right",
-                  "at the lower left", "at the lower right", "in the background", "in the foreground"
+                  "at the lower left", "at the lower right", "in the background", 
                   ]
 
 coexist_objects = [ "person", "man",  "woman",   "girl",    "boy",   "baby",       "crowd", "villager", 
@@ -111,7 +110,7 @@ all_backgrounds = ["a beach", "a table", "a park", "a concert", "a gym", "a libr
                    ]
 
 
-def sample_compositions(N, is_animal):
+def sample_compositions(N, is_animal, is_training=False):
     compositions = []
     if is_animal:
         composition_regexs = all_composition_regexs
@@ -119,12 +118,20 @@ def sample_compositions(N, is_animal):
         composition_regexs = static_composition_regexs
         
     K = len(composition_regexs)
+
+    if is_training:
+        # Lower variations during training, to make things easier to learn.
+        option_probs = [0.5, 0.5]
+    else:
+        option_probs = [0.3, 0.7]
+
     for i in range(N):
         idx = np.random.choice(K)
         composition = exrex.getone(composition_regexs[idx])
         # Disable another object in the image for non-animal subjects.
         if is_animal:
-            has_another_obj = np.random.choice([0, 1],p=[0.3,0.7])
+
+            has_another_obj = np.random.choice([0, 1],p=option_probs)
         else:
             has_another_obj = False
 
@@ -140,50 +147,50 @@ def sample_compositions(N, is_animal):
 
         # choose style category, then choose number of style 
         # choose common exist style 
-        has_styles = np.random.choice([0, 1],p=[0.3,0.7])
+        has_styles = np.random.choice([0, 1],p=option_probs)
         if has_styles:
             num_styles = np.random.choice([1, 2])
-            styles = [ np.random.choice(all_styles) for i in range(num_styles) ]
+            styles = np.random.choice(all_styles, size=num_styles, replace=False)
             # style = np.random.choice(all_styles) + ' '
             style = ", in " + " and ".join(styles) + " style"
         else:
             style = ""
 
-        has_modifiers = np.random.choice([0, 1],p=[0.3,0.7])
+        has_modifiers = np.random.choice([0, 1],p=option_probs)
         # has_modifiers = 1
         if has_modifiers:
             num_modifiers = np.random.choice([1, 2, 3])
-            modifiers = [ np.random.choice(all_modifiers) for i in range(num_modifiers) ]
-            modifier =  ", ".join(modifiers) + " "
+            modifiers = np.random.choice(all_modifiers, size=num_modifiers, replace=False)
+            modifier =  ", " + ", ".join(modifiers)
         else:
             modifier = ""
 
-        has_art_by = np.random.choice([0, 1],p=[0.3,0.7])
+        has_art_by = np.random.choice([0, 1],p=option_probs)
     
         if has_art_by:
             num_art_by = np.random.choice([1, 2, 3])
-            art_bys = [ np.random.choice(all_art_by) for i in range(num_art_by) ]
+            art_bys = np.random.choice(all_art_by, size=num_art_by, replace=False)
             art_by = ", art by " + " and ".join(art_bys)
         else:
             art_by = ""
 
         # has_background = 1
-        has_background = np.random.choice([0, 1],p=[0.3,0.7])
+        has_background = np.random.choice([0, 1],p=option_probs)
         if has_background:
             background = np.random.choice(all_backgrounds)
             background = ", with " + background + " as background"
         else:
             background = ""
 
-        has_time = np.random.choice([0, 1],p=[0.3,0.7])
+        has_time = np.random.choice([0, 1],p=option_probs)
         # has_time = 1
         if has_time:
             time = np.random.choice(all_time) 
-            # time = ", in " + time + " time"
+            time = ", " + time
         else:
             time = ""
         
-        has_light = np.random.choice([0, 1],p=[0.3,0.7])
+        has_light = np.random.choice([0, 1],p=option_probs)
         has_light =1
         if has_light:
             light = np.random.choice(all_light)
@@ -193,12 +200,18 @@ def sample_compositions(N, is_animal):
 
         image = ", " + np.random.choice(['photo','drawing','illustration','picture'])
 
-        # compositions.append(f"{location1}{composition}{style}{modifier}{art_by}{obj_loc2}")
-        compositions.append(f"{modifier}{time}{style}{image} of < z > {composition}{background}{art_by}{light}{obj_loc2}")
+        if is_training:
+            compositions.append(f"{composition}{modifier}{time}{style}{background}{art_by}{light}{obj_loc2}")
+        else:
+            compositions.append(f"{modifier}{time}{style}{image} of z {composition}{background}{art_by}{light}{obj_loc2}")
 
     return compositions
 
 if __name__ == "__main__":
-    print("\n".join(sample_compositions(5, True)))
+    print("Test:")
+    print("\n".join(sample_compositions(10, True)))
+    print()
+    print("Training:")
+    print("\n".join(sample_compositions(30, True, is_training=True)))
 
 
