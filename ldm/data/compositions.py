@@ -47,7 +47,6 @@ static_composition_regexs = \
   # Prompts below are from DreamBooth evaluation dataset
   #LINK - https://github.com/google/dreambooth/blob/main/dataset/prompts_and_classes.txt
   "(in the jungle|in the snow|on a cobblestone street|floating on top of water|floating in an ocean of milk)",
-  "with a (city|mountain|blue house|wheat field|a tree and autumn leaves|Eiffel Tower) in the background",
   "on top of (pink fabric|a wooden floor|green grass with sunflowers around it|a mirror|the sidewalk in a crowded street|a dirt road|a white rug|a purple rug in a forest)",
   # To avoid misalignment issues, we don't use "a red/purple z" as prompts.
   "that is (red|purple|shiny|cube|wet)",
@@ -59,35 +58,59 @@ all_composition_regexs = static_composition_regexs + dynamic_composition_regexs
 # E.g. "a z at the left, a dog in the center"
 all_locations = [ "at the left", "at the right", "at the top", "at the bottom", 
                   "in the center", "in the middle", "at the upper left", "at the upper right",
-                  "at the lower left", "at the lower right", "in the background", "in the foreground",
+                  "at the lower left", "at the lower right", "in the background", 
                   ]
 
 coexist_objects = [ "person", "man",  "woman",   "girl",    "boy",   "baby",       "crowd", "villager", 
                      "cat",   "dog",  "bird",    "panda",  "monkey", "chimpanzee", "gorilla", "bear",  
-                     "horse", "sheep", "elephant", "lion",
+                     "horse", "sheep", "elephant", "lion"
                      # No need to include non-animals below. They tend not to mix features with subjects.
                      # "stone", "tree",  "flower", "rock", "mountain", "grass",     "cloud", "sun",
                      # "moon",  "stars", "fire",   "lake", "ocean",    "river",     "beach", "village",
                      # "house", "car",   "bus",    "train", "boat",    "bike",      "building", "tower" 
                   ] 
 
-all_styles = [ "cartoon", "animation", "anime", "comic book", "steampunk", "oil on canvas", "oil painting",
-               "sci-fi movie", "scuplture", "bronze sculpture", "abyss art", "blade runner", "cyberpunk",
-               "synthwave", "pencil sketch", "pastel colors", "illustration for childrens book", "pixar movie",
-               "as a crochet figure", "as a 3d model", "closeup shot", "close view" 
+# added "style/art" behind some prompt
+all_styles = [ "cartoon style", "animation", "anime art", "comic book art", "steampunk art", "oil on canvas", "oil painting",
+               "sci-fi movie", "sculpture", "bronze sculpture", "abyss art", "blade runner style", "cyberpunk art",
+               "synthwave", "pencil sketch", "pastel colors", "childrens book's illustration", "pixar movie",
+               "as a crochet figure", "as a 3d model", "closeup shot", "close view", "D&D sci-fi",
+               # add style 
+               'pop art', "portrait art", "watercolour painting", "chalk art", "concepture art", "bauhaus style", "cubism style",
+               "photorealistic painting", "surrealism painting", "impressionism", "expressionism", "abstract art", "minimalism"
              ]
 # concept art|realistic painting|character design|anime sketch|trending in artstation|hyper realistic|vivid colors|clear face|detailed face
 all_modifiers = [ "concept art", "realistic painting", "character design", "anime sketch", 
                   "trending in artstation", "hyper realistic", "vivid colors", "clear face", 
                   "detailed face", "semirealism", "hyperrealistic", "highly detailed", "octane render",
                   "unreal 5", "photorealistic", "sharp focus", "digital painting", "illustration",
-                  "volumetric lighting", "dreamy", "illustration", "cinematic"
+                  "volumetric lighting", "dreamy", "illustration", "cinematic", ''
+                  ##new
+                    "surreal", "hd", "4k", "8k", "3d", "4d", "pixelate", "blur", 
+                    "beautiful", "very beautiful", "symmetrical", "macabre", "at night" 
                 ]
 
-all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve",
-               "mark ryden", "hayao miyazaki" ]
+#add time prompts
+all_time = ["futuristic", "modern", "ancient", "antique","retro","old-fashioned", "youthful"]
 
-def sample_compositions(N, is_animal):
+#add light prompts
+all_light = ['daylight', 'moonlight', "natural light", "front light", "backlight", "soft light", "hard light", "moody light", "dramatic light", "dynamic light" ]
+
+
+all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve",
+               "mark ryden", "hayao miyazaki", 
+               #add artist 
+               "agnes Lawrence","disney animation studio"]
+
+#add background prompts
+all_backgrounds = ["a beach", "a table", "a park", "a concert", "a gym", "a library", "a mall", "a movie theater", "a hotel room", "a theme park",
+                   "a city", "a mountain", "a blue house", "a wheat field", "a tree and autumn leaves", "the Eiffel Tower", "a jungle", "the snow",
+                   "a cobblestone street", "underwater", "an ocean of milk", "pink fabric", "a wooden floor", "green grass with sunflowers around it",
+                   "a mirror", "the sidewalk in a crowded street", "a dirt road", "a white rug", "a purple rug in a forest", "a red cube", "a purple cube"
+                   ]
+
+
+def sample_compositions(N, is_animal, is_training=False):
     compositions = []
     if is_animal:
         composition_regexs = all_composition_regexs
@@ -95,51 +118,94 @@ def sample_compositions(N, is_animal):
         composition_regexs = static_composition_regexs
         
     K = len(composition_regexs)
+
+    if is_training:
+        # Lower variations during training, to make things easier to learn.
+        option_probs = [0.5, 0.5]
+    else:
+        option_probs = [0.3, 0.7]
+
     for i in range(N):
         idx = np.random.choice(K)
         composition = exrex.getone(composition_regexs[idx])
-        # Disable another object in the image for non-animal subjects.
+        # Disable another object in the image for non-animal subjects,
+        # to avoid the spotlight of the non-animal subject being stolen by the other object.
         if is_animal:
-            has_another_obj = np.random.choice([0, 1])
+            has_another_obj = np.random.choice([0, 1], p=option_probs)
         else:
             has_another_obj = False
 
         if has_another_obj:
-            loc1, loc2 = np.random.choice(all_locations, 2, replace=False)
-            location1 = loc1 + " "
             object2   = np.random.choice(coexist_objects)
-            obj_loc2  = ", a " + object2 + " " + loc2
+            location2 = np.random.choice(all_locations)
+            obj_loc2  = ", a " + object2 + " " + location2
         else:
-            location1 = ""
             obj_loc2  = ""
 
-        has_styles = np.random.choice([0, 1])
+        # Choose a few common styles
+        has_styles = np.random.choice([0, 1], p=option_probs)
         if has_styles:
-            num_styles = np.random.choice([1, 2, 3])
-            styles = [ np.random.choice(all_styles) for i in range(num_styles) ]
+            num_styles = np.random.choice([1, 2])
+            styles = np.random.choice(all_styles, size=num_styles, replace=False)
+            # style = np.random.choice(all_styles) + ' '
             style = ", in " + " and ".join(styles) + " style"
         else:
             style = ""
 
-        has_modifiers = np.random.choice([0, 1])
+        has_modifiers = np.random.choice([0, 1], p=option_probs)
         if has_modifiers:
             num_modifiers = np.random.choice([1, 2, 3])
-            modifiers = [ np.random.choice(all_modifiers) for i in range(num_modifiers) ]
-            modifier = ", " + ", ".join(modifiers)
+            modifiers = np.random.choice(all_modifiers, size=num_modifiers, replace=False)
+            modifier = ", " + ", ".join(modifiers)          
         else:
             modifier = ""
 
-        has_art_by = np.random.choice([0, 1])
+        has_art_by = np.random.choice([0, 1], p=option_probs)
+    
         if has_art_by:
-            num_art_by = np.random.choice([1, 2])
-            art_bys = [ np.random.choice(all_art_by) for i in range(num_art_by) ]
+            num_art_by = np.random.choice([1, 2, 3])
+            art_bys = np.random.choice(all_art_by, size=num_art_by, replace=False)
             art_by = ", art by " + " and ".join(art_bys)
         else:
             art_by = ""
 
-        compositions.append(f"{location1}{composition}{style}{modifier}{art_by}{obj_loc2}")
+        has_background = np.random.choice([0, 1], p=option_probs)
+        if has_background:
+            background = np.random.choice(all_backgrounds)
+            background = ", with " + background + " as background"
+        else:
+            background = ""
+
+        has_time_theme = np.random.choice([0, 1], p=option_probs)
+        if has_time_theme:
+            time = np.random.choice(all_time) 
+            time = ", " + time
+        else:
+            time = ""
+        
+        has_light = np.random.choice([0, 1], p=option_probs)
+        has_light =1
+        if has_light:
+            light = np.random.choice(all_light)
+            light = ", with " + light 
+        else:
+            light = ""
+
+        if is_training:
+            composition = f"{composition}{modifier}{time}{style}{background}{art_by}{light}{obj_loc2}"
+        else:
+            image = ", " + np.random.choice(['photo', 'drawing', 'illustration', 'picture'])
+            composition = f"{modifier}{time}{style}{image} of z {composition}{background}{art_by}{light}{obj_loc2}"
+            if composition.startswith(", "):
+                composition = composition[2:]
+        
+        compositions.append(composition)
 
     return compositions
 
 if __name__ == "__main__":
-    print("\n".join(sample_compositions(100, True)))
+    print("Test:")
+    print("\n".join(sample_compositions(20, True)))
+    print()
+    print("Training:")
+    print("\n".join(sample_compositions(20, True, is_training=True)))

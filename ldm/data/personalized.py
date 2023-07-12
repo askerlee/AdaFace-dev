@@ -289,7 +289,7 @@ class PersonalizedBase(Dataset):
         cls_prompt_comps  = []
 
         for _ in range(self.num_compositions_per_image):
-            composition_partial = sample_compositions(1, self.is_animal)[0]
+            composition_partial = sample_compositions(1, self.is_animal, is_training=True)[0]
             subj_prompt_comp    = subj_prompt_single + " " + composition_partial
             cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
             subj_prompt_comps.append(subj_prompt_comp)
