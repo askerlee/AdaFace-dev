@@ -23,8 +23,8 @@ model:
     monitor: val/loss_ema
     scale_factor: 0.18215
     use_ema: False
-    # typical loss_embedding_reg is ~0.02, * weight -> 2e-4.
-    embedding_reg_weight: 0.02
+    # typical loss_embedding_reg is ~0.04, * weight -> 4e-4.
+    embedding_reg_weight: 0.04
     unfreeze_model: False
     model_lr: 0.0
     use_layerwise_embedding: True
