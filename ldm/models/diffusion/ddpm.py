@@ -1878,7 +1878,7 @@ class LatentDiffusion(DDPM):
             unet_attns = cond[2]['unet_attns']
             distill_feat_weight      = 0.5
             # Set to 0 to disable distillation on attention weights of the subject.
-            distill_subj_attn_weight = 0.2
+            distill_subj_attn_weight = 0.4
             delta_attn_loss_scale    = 1
             direct_attn_loss_scale   = 2
             # The norm is actually the abs().mean(), so it has small magnitudes and should be scaled up.
