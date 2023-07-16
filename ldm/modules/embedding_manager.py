@@ -1304,8 +1304,8 @@ class EmbeddingManager(nn.Module):
     # Textual inversion is supported, where static_embeddings is only one embedding.
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
-    def calc_prompt_delta_loss(self, static_embeddings, do_ada_prompt_delta_reg, twin_ada_embeddings=None):
-        # Apply delta loss on all layers of static embeddings.
+    def calc_prompt_delta_loss(self, static_embeddings, ada_embeddings, do_ada_prompt_delta_reg):
+        # None: Apply delta loss on all layers of static embeddings.
         static_delta_layer_indices  = None
         ada_delta_layer_indices     = None
 
@@ -1329,7 +1329,7 @@ class EmbeddingManager(nn.Module):
         static_embeddings = static_embeddings.view(BS * 4, num_embed_layers, *static_embeddings.shape[1:])
 
         # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
-        # Each is [2, 16, 77, 768]
+        # Each is [1, 16, 77, 768]
         static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
                 static_embeddings.chunk(4)
 
@@ -1367,29 +1367,31 @@ class EmbeddingManager(nn.Module):
 
         static_delta_loss   = calc_delta_loss(static_sel_delta, static_sel_cls_delta, delta_loss_emb_mask)
 
-        if do_ada_prompt_delta_reg and self.ada_embeddings is not None:
-            # Each emb is of [4, 77, 768]. 
-            for i, emb in enumerate(self.ada_embeddings):
-                # ada embeddings of all layers should have been stored in self.ada_embeddings
-                # before calling calc_prompt_delta_loss().
-                if emb is None:
-                    breakpoint()
-
+        if do_ada_prompt_delta_reg and ada_embeddings is not None:
             # ada_embeddings: [4, 16, 77, 768]
-            ada_embeddings = torch.stack(self.ada_embeddings, dim=1)
-            # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
-            # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
-            # the subject token.
-            if twin_ada_embeddings is None:
-                ada_subj_single_emb, ada_subj_comp_emb, ada_cls_single_emb, ada_cls_comp_emb \
-                    = ada_embeddings.chunk(4)
-            else:
+            if isinstance(ada_embeddings, (list, tuple)):
+                # twin_single_ada_embeddings: [2, 16, 77, 768]
+                # twin_comp_ada_embeddings:   [4, 16, 77, 768]
+                # twin_single_ada_embeddings correspond to 2 subj single instances,
+                # twin_comp_ada_embeddings correspond to 2 subj comp, 2 mix comp instances.
+                # mix comp ada embeddings are generated with the same comp prompts as subj comp.
+                # But some layers of the static embeddings are different, so the ada embeddings
+                # are different from layer 5.
+                twin_single_ada_embeddings, twin_comp_ada_embeddings = ada_embeddings
+                # ada_subj_comp_emb: [2, 16, 77, 768]
                 ada_subj_comp_emb, ada_cls_comp_emb \
-                    = twin_ada_embeddings.chunk(2)
-                ada_subj_single_emb = ada_embeddings
+                    = twin_comp_ada_embeddings.chunk(2)
+                # ada_subj_single_emb: [2, 16, 77, 768].
+                ada_subj_single_emb = twin_single_ada_embeddings
                 # Repeat cls_delta at the batch dim to match the twin ada embeddings.
                 cls_delta = cls_delta.repeat(2, 1, 1, 1)
                 delta_loss_emb_mask = delta_loss_emb_mask.repeat(2, 1, 1, 1)
+            else:
+                # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
+                # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
+                # the subject token.
+                ada_subj_single_emb, ada_subj_comp_emb, ada_cls_single_emb, ada_cls_comp_emb \
+                    = ada_embeddings.chunk(4)
 
             if use_ortho_subtract:
                 ada_delta = ortho_subtract(ada_subj_comp_emb, ada_subj_single_emb)
