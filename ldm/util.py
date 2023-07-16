@@ -449,11 +449,11 @@ def gen_gradient_scaler(alpha):
     else:
         return lambda x: x.detach()
     
-# samples: a list of (B, C, H, W) tensors.
-# are_teachable: a list of (B,) booleans.
+# samples:   a list of (B, C, H, W) tensors.
+# img_flags: a list of (B,) ints.
 # If not do_normalize, samples should be between [0, 1] (float types) or [0, 255] (uint8).
 # If do_normalize, samples should be between [-1, 1] (raw output from SD decode_first_stage()).
-def save_grid(samples, are_teachable, grid_filepath, nrow, do_normalize=False):
+def save_grid(samples, img_flags, grid_filepath, nrow, do_normalize=False):
     if isinstance(samples[0], np.ndarray):
         samples = [ torch.from_numpy(e) for e in samples ]
 
@@ -462,9 +462,9 @@ def save_grid(samples, are_teachable, grid_filepath, nrow, do_normalize=False):
         grid = torch.cat(samples, 0)
     else:
         grid = samples
-    # are_teachable is a 1D tensor: (B,)
-    if are_teachable is not None and not isinstance(are_teachable, torch.Tensor):
-        are_teachable = torch.cat(are_teachable, 0)
+    # img_flags is a 1D tensor: (B,)
+    if img_flags is not None and not isinstance(img_flags, torch.Tensor):
+        img_flags = torch.cat(img_flags, 0)
 
     if grid.dtype != torch.uint8:
         if do_normalize:
@@ -474,12 +474,13 @@ def save_grid(samples, are_teachable, grid_filepath, nrow, do_normalize=False):
     # img_box indicates the whole image region.
     img_box = torch.tensor([0, 0, grid.shape[2], grid.shape[3]]).unsqueeze(0)
 
-    if are_teachable is not None:
+    colors = [ None, 'green', 'red', 'purple' ]
+    if img_flags is not None:
         # Highlight the teachable samples.
-        for i, is_teachable in enumerate(are_teachable):
-            if is_teachable:
+        for i, img_flag in enumerate(img_flags):
+            if img_flag > 0:
                 # Draw a 4-pixel wide green bounding box around the image.
-                grid[i] = draw_bounding_boxes(grid[i], img_box, colors="green", width=12)
+                grid[i] = draw_bounding_boxes(grid[i], img_box, colors=colors[img_flag], width=12)
 
     # grid is a 3D np array: (C, H2, W2)
     grid = make_grid(grid, nrow=nrow).cpu().numpy()
@@ -491,7 +492,8 @@ def save_grid(samples, are_teachable, grid_filepath, nrow, do_normalize=False):
     # return image to be shown on webui
     return grid_img
 
-def divide_list_into_chunks(lst, chunk_size):
+def chunk_list(lst, num_chunks):
+    chunk_size = int(np.ceil(len(lst) / num_chunks))
     # looping till length lst
     for i in range(0, len(lst), chunk_size): 
         yield lst[i:i + chunk_size]
