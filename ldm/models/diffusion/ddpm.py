@@ -1670,6 +1670,11 @@ class LatentDiffusion(DDPM):
                 # This is to make the code consistent with the non-comp case and avoid unnecessary confusion.
                 t = torch.randint(int(self.num_timesteps * 0.3), int(self.num_timesteps * 0.6), 
                                   (x_start.shape[0],), device=x_start.device)
+                # t_upperbound: previous t - 250
+                t_upperbound = self.cached_inits['t'] - int(self.num_timesteps * 0.25)
+                # t should be at least 250 steps away from the previous, 
+                # so that the noise level is sufficiently different.
+                t = torch.minimum(t, t_upperbound)
 
             # Ignore img_mask.
             img_mask = None
@@ -1891,7 +1896,9 @@ class LatentDiffusion(DDPM):
                     # since this x_recon was denoised under this cond.
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but mix comp = subj comp.
-                    self.cached_inits = { 'x_start': x_recon.detach(), 'delta_prompts': cond_orig[2]['delta_prompts'] }
+                    self.cached_inits = { 'x_start':        x_recon.detach(), 
+                                          'delta_prompts':  cond_orig[2]['delta_prompts'],
+                                          't':              t }
                     self.cached_inits_available = True
 
                 elif not is_iter_teachable:
