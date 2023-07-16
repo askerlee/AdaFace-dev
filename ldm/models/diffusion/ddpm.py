@@ -1933,7 +1933,7 @@ class LatentDiffusion(DDPM):
                         ada_embeddings = (twin_single_ada_embeddings, twin_comp_ada_embeddings)
 
                         self.release_plosses_intermediates(locals())
-                        
+
                     # Otherwise, it's an is_reuse_init_iter, and no teachable instances are found.
                     # We've computed the ada embeddings for the 4-type instances, 
                     # so just use the existing ada_embeddings (but avoid distillation).
@@ -2000,7 +2000,9 @@ class LatentDiffusion(DDPM):
             # It contains the 5 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17.
             unet_attns = cond[2]['unet_attns']
-            distill_feat_weight      = 0.5
+            # In a reused init iter, the denoise image may not look so authentic, so
+            # it receives a smaller weight.
+            distill_feat_weight      = 0.5 if (not is_reuse_init_iter) else 0.3
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.4
             delta_attn_loss_scale    = 1
