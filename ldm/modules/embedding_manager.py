@@ -505,6 +505,8 @@ class AdaEmbedding(nn.Module):
 
         print(f"AdaEmbedding initialized with {self.N} init vectors, {self.r} basis vectors")
         self.call_count = 0
+        self.debug = False
+        self.verbose = False
 
     # layer_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
@@ -513,6 +515,9 @@ class AdaEmbedding(nn.Module):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
         pooler  = self.poolers[emb_idx]
 
+        if self.debug:
+            breakpoint()
+            
         with torch.autocast(device_type=self.device_type, enabled=True):
             # basis_dyn_weight: [B, r] = [2, 12].
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
@@ -556,11 +561,10 @@ class AdaEmbedding(nn.Module):
             out_vec0 = ln(torch.matmul(basis_dyn_weight, basis_vecs)) / np.sqrt(self.emb_dim)
             out_vec  = out_vec0 + bias
 
-            self.debug = False
             if 'call_count' not in self.__dict__:
                 self.call_count = 0
 
-            if self.debug and self.call_count % 10 == 0:
+            if self.verbose and self.call_count % 10 == 0:
                 calc_stats(f'{emb_idx} time_emb', time_emb[:, :TD])
                 calc_stats(f'{emb_idx} infeat_pooled', infeat_pooled)
                 calc_stats(f'{emb_idx} basis_dyn_weight', basis_dyn_weight)

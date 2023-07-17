@@ -1659,8 +1659,9 @@ class LatentDiffusion(DDPM):
                 HALF_BS  = max(x_start.shape[0] // 2, 1)
                 # Randomly initialize x_start and t. Note the batch size is still 2 here.
                 x_start.normal_()
-                # Randomly choose t from the largest 250 timesteps, so as to match the completely noisy x_start.
-                t = torch.randint(int(self.num_timesteps * 0.75), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
+                # Randomly choose t from the largest 150 timesteps, so as to match the completely noisy x_start.
+                t_tail = torch.randint(int(self.num_timesteps * 0.85), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
+                t = t_tail
             else:
                 # If is_reuse_init_iter, BS is already doubled in the previous compositional iteration. So divide by 4.
                 HALF_BS  = max(x_start.shape[0] // 4, 1)
@@ -1668,13 +1669,13 @@ class LatentDiffusion(DDPM):
                 # so as to match the once-denoised x_start.
                 # generate the full batch size of t, but actually only use the first HALF_BS.
                 # This is to make the code consistent with the non-comp case and avoid unnecessary confusion.
-                t = torch.randint(int(self.num_timesteps * 0.3), int(self.num_timesteps * 0.6), 
-                                  (x_start.shape[0],), device=x_start.device)
+                t_mid = torch.randint(int(self.num_timesteps * 0.4), int(self.num_timesteps * 0.7), 
+                                      (x_start.shape[0],), device=x_start.device)
                 # t_upperbound: previous t - 250
                 t_upperbound = self.cached_inits['t'] - int(self.num_timesteps * 0.25)
                 # t should be at least 250 steps away from the previous, 
                 # so that the noise level is sufficiently different.
-                t = torch.minimum(t, t_upperbound)
+                t = torch.minimum(t_mid, t_upperbound)
 
             # Ignore img_mask.
             img_mask = None
@@ -1722,7 +1723,6 @@ class LatentDiffusion(DDPM):
                     noise   = noise[:HALF_BS].repeat(4, 1, 1, 1)
                     t       = t[:HALF_BS].repeat(4)
                     # use cached x_start and cond. Already has the 4-type structure. No change here.
-
 
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
