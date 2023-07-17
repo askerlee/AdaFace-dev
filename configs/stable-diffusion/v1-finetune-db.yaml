@@ -129,3 +129,4 @@ lightning:
   trainer:
     benchmark: True
     max_steps: 800
+    limit_val_batches: 0.0
