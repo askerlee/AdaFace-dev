@@ -1656,6 +1656,12 @@ class LatentDiffusion(DDPM):
             x_start = self.cached_inits['x_start']
             # Avoid the next mix iter to still use the cached inits.
             self.cached_inits_available = False
+            # reuse init iter takes a smaller cfg scale, as in the second denoising step, 
+            # a particular scale tend to make the cfg-denoised mixed images more dissimilar 
+            # to the subject images than in the first denoising step. 
+            cfg_scale_for_clip_loss = 2
+        else:
+            cfg_scale_for_clip_loss = 4
 
         if self.is_comp_iter:
             # If bs=2, then HALF_BS=1.
@@ -1728,7 +1734,6 @@ class LatentDiffusion(DDPM):
                     t       = t[:HALF_BS].repeat(4)
                     # use cached x_start and cond. Already has the 4-type structure. No change here.
 
-        cfg_scale_for_clip_loss = 3
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
                                 has_grad=not is_teacher_filter_iter, 
