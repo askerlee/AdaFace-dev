@@ -1570,14 +1570,15 @@ class LatentDiffusion(DDPM):
         kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
         return mean_flat(kl_prior) / np.log(2.0)
 
-    # apply_cfg: do classifier-free guidance. 
-    # no_grad: use x_recon to select the better instance (smaller clip loss). 
-    # No BP on these instances, so no_grad=True.
-    def guided_denoise(self, x_start, noise, t, cond, no_grad=False, apply_cfg=False, guide_scale=5):
+    # do_recon: return denoised images. 
+    # if do_recon and cfg_scale > 1, apply classifier-free guidance. 
+    # has_grad: when returning do_recon (e.g. to select the better instance by smaller clip loss), 
+    # to speed up, no BP is done on these instances, so has_grad=False.
+    def guided_denoise(self, x_start, noise, t, cond, has_grad=True, do_recon=False, cfg_scale=3):
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
         # model_output is the predicted noise.
-        if no_grad:
+        if not has_grad:
             with torch.no_grad():
                 model_output = self.apply_model(x_noisy, t, cond)
         else:
@@ -1592,7 +1593,7 @@ class LatentDiffusion(DDPM):
             ada_embeddings = None
 
         # Unconditional noises are never optimized.
-        if apply_cfg:
+        if do_recon:
             with torch.no_grad():
                 x_start_ = x_start.chunk(2)[0]
                 noise_   = noise.chunk(2)[0]
@@ -1609,7 +1610,10 @@ class LatentDiffusion(DDPM):
                 
             # Classifier-free guidance to make the contents in the 
             # generated images more pronounced => smaller CLIP loss.
-            pred_noise = model_output * guide_scale - model_output_uncond * (guide_scale - 1)
+            if cfg_scale >= 1:
+                pred_noise = model_output * cfg_scale - model_output_uncond * (cfg_scale - 1)
+            else:
+                pred_noise = model_output
             x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=pred_noise)
         else:
             x_recon = None
@@ -1724,10 +1728,12 @@ class LatentDiffusion(DDPM):
                     t       = t[:HALF_BS].repeat(4)
                     # use cached x_start and cond. Already has the 4-type structure. No change here.
 
+        cfg_scale_for_clip_loss = 3
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
-                                no_grad=is_teacher_filter_iter, 
-                                apply_cfg=self.calc_clip_loss)
+                                has_grad=not is_teacher_filter_iter, 
+                                do_recon=self.calc_clip_loss,
+                                cfg_scale=cfg_scale_for_clip_loss)
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
@@ -1887,10 +1893,11 @@ class LatentDiffusion(DDPM):
                     # Use the original cond, which is organized as 
                     # (subj single, subj comp, mix single, mix comp).
 
-                    # apply_cfg=True: do classifier-free guidance, so that x_recon are better instances
+                    # do_recon=True: return denoised images x_recon. If cfg_scale > 1, 
+                    # do classifier-free guidance, so that x_recon are better instances
                     # to be used to initialize the next reuse_init comp iteration.
                     model_output, x_recon, ada_embeddings = \
-                        self.guided_denoise(x_start, noise, t, cond_orig, no_grad=False, apply_cfg=True)
+                        self.guided_denoise(x_start, noise, t, cond_orig, has_grad=True, do_recon=True)
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
                     # since this x_recon was denoised under this cond.
@@ -1911,6 +1918,10 @@ class LatentDiffusion(DDPM):
                     # guided_denoise() above is done on twin comp instances, 
                     # and we've computed twin_comp_ada_embeddings.
                     if is_teacher_filter_iter:
+                        # twin_comp_ada_embeddings is within no_grad(), so it won't receive gradients.
+                        # Nonetheless, the delta loss takes both twin_single_ada_embeddings 
+                        # and twin_comp_ada_embeddings as input,  the ada embeddings 
+                        # can still be optimized through twin_single_ada_embeddings.
                         twin_comp_ada_embeddings = ada_embeddings
                         # Ada delta loss requires twin subj-single embeddings that match the 
                         # previously cached twin comp embeddings.
@@ -1933,6 +1944,7 @@ class LatentDiffusion(DDPM):
                         # as it's only the twin subj-single instances. 
                         # (cls-single ada embeddings are the same as cls-single static embeddings, 
                         # so no need to generate them)
+                        # twin_single_ada_embeddings has gradients, as has_grad=True by default.
                         model_output, x_recon, twin_single_ada_embeddings = \
                             self.guided_denoise(x_start_, noise_, t_, cond_single)
                         
