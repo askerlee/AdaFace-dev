@@ -1574,7 +1574,7 @@ class LatentDiffusion(DDPM):
     # if do_recon and cfg_scale > 1, apply classifier-free guidance. 
     # has_grad: when returning do_recon (e.g. to select the better instance by smaller clip loss), 
     # to speed up, no BP is done on these instances, so has_grad=False.
-    def guided_denoise(self, x_start, noise, t, cond, has_grad=True, do_recon=False, cfg_scale=3):
+    def guided_denoise(self, x_start, noise, t, cond, has_grad=True, do_recon=False, cfg_scales=None):
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
         # model_output is the predicted noise.
@@ -1610,8 +1610,9 @@ class LatentDiffusion(DDPM):
                 
             # Classifier-free guidance to make the contents in the 
             # generated images more pronounced => smaller CLIP loss.
-            if cfg_scale >= 1:
-                pred_noise = model_output * cfg_scale - model_output_uncond * (cfg_scale - 1)
+            if cfg_scales is not None:
+                cfg_scales = cfg_scales.view(-1, 1, 1, 1)
+                pred_noise = model_output * cfg_scales - model_output_uncond * (cfg_scales - 1)
             else:
                 pred_noise = model_output
             x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=pred_noise)
@@ -1659,9 +1660,8 @@ class LatentDiffusion(DDPM):
             # reuse init iter takes a smaller cfg scale, as in the second denoising step, 
             # a particular scale tend to make the cfg-denoised mixed images more dissimilar 
             # to the subject images than in the first denoising step. 
-            cfg_scale_for_clip_loss = 3.5
-        else:
-            cfg_scale_for_clip_loss = 5
+
+        cfg_scales_for_clip_loss = None
 
         if self.is_comp_iter:
             # If bs=2, then HALF_BS=1.
@@ -1697,7 +1697,14 @@ class LatentDiffusion(DDPM):
                 x_start = x_start[:HALF_BS].repeat(4, 1, 1, 1)
                 noise   = noise[:HALF_BS].repeat(4, 1, 1, 1)
                 t       = t[:HALF_BS].repeat(4)
+                cfg_scales_for_clip_loss = torch.ones_like(t) * 4
             else:
+                cfg_scale_for_teacher  = 5
+                cfg_scale_for_student  = 3.5
+                cfg_scales_for_teacher  = torch.ones(HALF_BS*2, device=x_start.device) * cfg_scale_for_teacher
+                cfg_scales_for_student  = torch.ones(HALF_BS*2, device=x_start.device) * cfg_scale_for_student
+                cfg_scales_for_clip_loss = torch.cat([cfg_scales_for_student, cfg_scales_for_teacher], dim=0)
+
                 # First iteration of a two-iteration do_comp_prompt_mix_reg.
                 # Generate a batch of 4 instances in two sets, each set with the same initial x_start, noise and t.
                 # Then filter, find the best teachable set (if any) and pass to the recursive iteration.
@@ -1738,7 +1745,7 @@ class LatentDiffusion(DDPM):
             self.guided_denoise(x_start, noise, t, cond, 
                                 has_grad=not is_teacher_filter_iter, 
                                 do_recon=self.calc_clip_loss,
-                                cfg_scale=cfg_scale_for_clip_loss)
+                                cfg_scales=cfg_scales_for_clip_loss)
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
