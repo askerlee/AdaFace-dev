@@ -1659,9 +1659,9 @@ class LatentDiffusion(DDPM):
             # reuse init iter takes a smaller cfg scale, as in the second denoising step, 
             # a particular scale tend to make the cfg-denoised mixed images more dissimilar 
             # to the subject images than in the first denoising step. 
-            cfg_scale_for_clip_loss = 2
+            cfg_scale_for_clip_loss = 3.5
         else:
-            cfg_scale_for_clip_loss = 4
+            cfg_scale_for_clip_loss = 5
 
         if self.is_comp_iter:
             # If bs=2, then HALF_BS=1.
