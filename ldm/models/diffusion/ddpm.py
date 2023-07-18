@@ -1669,10 +1669,10 @@ class LatentDiffusion(DDPM):
                 # so as to match the once-denoised x_start.
                 # generate the full batch size of t, but actually only use the first HALF_BS.
                 # This is to make the code consistent with the non-comp case and avoid unnecessary confusion.
-                t_mid = torch.randint(int(self.num_timesteps * 0.4), int(self.num_timesteps * 0.7), 
+                t_mid = torch.randint(int(self.num_timesteps * 0.6), int(self.num_timesteps * 0.75), 
                                       (x_start.shape[0],), device=x_start.device)
-                # t_upperbound: previous t - 250
-                t_upperbound = self.cached_inits['t'] - int(self.num_timesteps * 0.25)
+                # t_upperbound: previous t - 150
+                t_upperbound = self.cached_inits['t'] - int(self.num_timesteps * 0.15)
                 # t should be at least 250 steps away from the previous, 
                 # so that the noise level is sufficiently different.
                 t = torch.minimum(t_mid, t_upperbound)
