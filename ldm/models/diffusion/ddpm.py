@@ -1697,12 +1697,13 @@ class LatentDiffusion(DDPM):
                 x_start = x_start[:HALF_BS].repeat(4, 1, 1, 1)
                 noise   = noise[:HALF_BS].repeat(4, 1, 1, 1)
                 t       = t[:HALF_BS].repeat(4)
-                cfg_scales_for_clip_loss = torch.ones_like(t) * 4
+                # Calculate CLIP score only for image quality evaluation
+                cfg_scales_for_clip_loss = torch.ones_like(t) * 5
             else:
-                cfg_scale_for_teacher  = 5
-                cfg_scale_for_student  = 3.5
-                cfg_scales_for_teacher  = torch.ones(HALF_BS*2, device=x_start.device) * cfg_scale_for_teacher
-                cfg_scales_for_student  = torch.ones(HALF_BS*2, device=x_start.device) * cfg_scale_for_student
+                cfg_scale_for_teacher  = 6
+                cfg_scale_for_student  = 5
+                cfg_scales_for_teacher   = torch.ones(HALF_BS*2, device=x_start.device) * cfg_scale_for_teacher
+                cfg_scales_for_student   = torch.ones(HALF_BS*2, device=x_start.device) * cfg_scale_for_student
                 cfg_scales_for_clip_loss = torch.cat([cfg_scales_for_student, cfg_scales_for_teacher], dim=0)
 
                 # First iteration of a two-iteration do_comp_prompt_mix_reg.

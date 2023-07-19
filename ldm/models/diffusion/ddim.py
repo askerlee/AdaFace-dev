@@ -264,11 +264,17 @@ class DDIMSampler(object):
         print(f"Running DDIM Sampling with {total_steps} timesteps")
 
         iterator = tqdm(time_range, desc='Decoding image', total=total_steps)
+        max_guide_scale = unconditional_guidance_scale
+        min_guide_scale = max(1.0, max_guide_scale / 2)
+        # guide_scale_step: set to 0 to disable the guidance annealing.
+        guide_scale_step = (max_guide_scale - min_guide_scale) / total_steps
+
         x_dec = x_latent
         for i, step in enumerate(iterator):
             index = total_steps - i - 1
             ts = torch.full((x_latent.shape[0],), step, device=x_latent.device, dtype=torch.long)
+            guide_scale = max_guide_scale - guide_scale_step * i
             x_dec, _ = self.p_sample_ddim(x_dec, cond, ts, index=index, use_original_steps=use_original_steps,
-                                          unconditional_guidance_scale=unconditional_guidance_scale,
+                                          unconditional_guidance_scale=guide_scale,
                                           unconditional_conditioning=unconditional_conditioning)
         return x_dec
