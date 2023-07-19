@@ -227,6 +227,10 @@ def parse_args():
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
 
+    # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
+    # The backbone checkpoint is specified by --ckpt.
+    parser.add_argument("--bb_type", type=str, default="")
+
     parser.add_argument("--scores_csv", type=str, default=None,
                         help="CSV file to save the evaluation scores")
     # --debug
@@ -430,7 +434,6 @@ def main(opt):
     else:
         prompt_mix_weight = 0
 
-    use_ema_model = ('emaonly' in opt.ckpt)
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     with torch.no_grad():
         with precision_scope("cuda"):
@@ -602,8 +605,8 @@ def main(opt):
                         iter_sig = "unknown"
 
                     experiment_sig = "-".join([date_sig, iter_sig, f"scale{opt.scale:.1f}"])
-                    if use_ema_model:
-                        experiment_sig += "-ema"
+                    if opt.bb_type:
+                        experiment_sig += "-" + opt.bb_type
 
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                     if opt.from_file:
@@ -646,7 +649,7 @@ def main(opt):
 
         print(f"All samples mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
         if SCORES_CSV is not None:
-            subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.subj_model_path)
+            subjfolder_mat = re.search(r"([a-zA-Z0-9_]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.subj_model_path)
             if subjfolder_mat:
                 emb_sig  = subjfolder_mat.group(1) + subjfolder_mat.group(2)
             else:
