@@ -279,5 +279,7 @@ class DDIMSampler(object):
                                           unconditional_conditioning=unconditional_conditioning)
             if i <= (total_steps - 1) / 2:
                 guide_scale = guide_scale * guide_scale_step
-
+            else:
+                guide_scale = 1
+                
         return x_dec
