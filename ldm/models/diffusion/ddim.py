@@ -152,6 +152,14 @@ class DDIMSampler(object):
         # breakpoint()
         iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
 
+        max_guide_scale = unconditional_guidance_scale
+        # At least one guidance annealing step (i.e., two uncond guidance steps)
+        max_guide_anneal_steps = total_steps - 1
+        # guide_scale_delta: set to 0 to disable the guidance annealing.
+        # Normally, after max_guide_anneal_steps annealing, the guidance scale becomes 1.
+        guide_scale_delta = (max_guide_scale - 1) / max_guide_anneal_steps
+        guide_scale = max_guide_scale
+
         for i, step in enumerate(iterator):
             # index points to the correct elements in alphas, sigmas, sqrt_one_minus_alphas, etc.
             index = total_steps - i - 1
@@ -170,7 +178,7 @@ class DDIMSampler(object):
                                       quantize_denoised=quantize_denoised, temperature=temperature,
                                       noise_dropout=noise_dropout, score_corrector=score_corrector,
                                       corrector_kwargs=corrector_kwargs,
-                                      unconditional_guidance_scale=unconditional_guidance_scale,
+                                      unconditional_guidance_scale=guide_scale,
                                       unconditional_conditioning=unconditional_conditioning)
             img, pred_x0 = outs
             if callback: callback(i)
@@ -180,6 +188,11 @@ class DDIMSampler(object):
                 intermediates['x_inter'].append(img)
                 intermediates['pred_x0'].append(pred_x0)
 
+            if i <= max_guide_anneal_steps:
+                guide_scale = guide_scale - guide_scale_delta
+            else:
+                guide_scale = 1
+                
         return img, intermediates
 
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
@@ -266,7 +279,7 @@ class DDIMSampler(object):
         iterator = tqdm(time_range, desc='Decoding image', total=total_steps)
         max_guide_scale = unconditional_guidance_scale
         # At least one guidance annealing step (i.e., two uncond guidance steps)
-        max_guide_anneal_steps = max(min(10, (total_steps - 1) // 2), 1)
+        max_guide_anneal_steps = total_steps - 1
         # guide_scale_delta: set to 0 to disable the guidance annealing.
         # Normally, after max_guide_anneal_steps annealing, the guidance scale becomes 1.
         guide_scale_delta = (max_guide_scale - 1) / max_guide_anneal_steps
