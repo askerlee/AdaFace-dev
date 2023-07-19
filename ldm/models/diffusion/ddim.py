@@ -152,12 +152,15 @@ class DDIMSampler(object):
         # breakpoint()
         iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
 
+        # Guidance annealing
         max_guide_scale = unconditional_guidance_scale
+        # If max_guide_scale < 2, then no annealing.
+        min_guide_scale = min(2.0, max_guide_scale)
         # At least one guidance annealing step (i.e., two uncond guidance steps)
         max_guide_anneal_steps = total_steps - 1
         # guide_scale_delta: set to 0 to disable the guidance annealing.
         # Normally, after max_guide_anneal_steps annealing, the guidance scale becomes 1.
-        guide_scale_delta = (max_guide_scale - 1) / max_guide_anneal_steps
+        guide_scale_delta = (max_guide_scale - min_guide_scale) / max_guide_anneal_steps
         guide_scale = max_guide_scale
 
         for i, step in enumerate(iterator):
@@ -277,12 +280,16 @@ class DDIMSampler(object):
         print(f"Running DDIM Sampling with {total_steps} timesteps")
 
         iterator = tqdm(time_range, desc='Decoding image', total=total_steps)
+
+        # Guidance annealing
         max_guide_scale = unconditional_guidance_scale
+        # If max_guide_scale < 2, then no annealing.
+        min_guide_scale = min(2.0, max_guide_scale)
         # At least one guidance annealing step (i.e., two uncond guidance steps)
         max_guide_anneal_steps = total_steps - 1
         # guide_scale_delta: set to 0 to disable the guidance annealing.
         # Normally, after max_guide_anneal_steps annealing, the guidance scale becomes 1.
-        guide_scale_delta = (max_guide_scale - 1) / max_guide_anneal_steps
+        guide_scale_delta = (max_guide_scale - min_guide_scale) / max_guide_anneal_steps
         guide_scale = max_guide_scale
 
         x_dec = x_latent
