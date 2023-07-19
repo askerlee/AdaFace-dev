@@ -267,7 +267,7 @@ class DDIMSampler(object):
         max_guide_scale = unconditional_guidance_scale
         min_guide_scale = max(1.0, max_guide_scale / 10)
         # guide_scale_step: set to 0 to disable the guidance annealing.
-        guide_scale_step = np.power(min_guide_scale / max_guide_scale, 1 / (total_steps - 1))
+        guide_scale_step = np.power(min_guide_scale / max_guide_scale, 2 / (total_steps - 1))
         guide_scale = max_guide_scale
 
         x_dec = x_latent
@@ -277,6 +277,7 @@ class DDIMSampler(object):
             x_dec, _ = self.p_sample_ddim(x_dec, cond, ts, index=index, use_original_steps=use_original_steps,
                                           unconditional_guidance_scale=guide_scale,
                                           unconditional_conditioning=unconditional_conditioning)
-            guide_scale = guide_scale * guide_scale_step
+            if i <= (total_steps - 1) / 2:
+                guide_scale = guide_scale * guide_scale_step
 
         return x_dec
