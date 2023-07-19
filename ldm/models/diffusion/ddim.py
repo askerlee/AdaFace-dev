@@ -152,6 +152,17 @@ class DDIMSampler(object):
         # breakpoint()
         iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
 
+        # Guidance annealing. First proposed in CLIP-Sculptor, CVPR 2023. Independently discovered here.
+        max_guide_scale = unconditional_guidance_scale
+        # If max_guide_scale < 2, then guide_scale_step_delta = 0 and no annealing.
+        min_guide_scale = min(2.0, max_guide_scale)
+        # At least one guidance annealing step (i.e., two uncond guidance steps)
+        max_guide_anneal_steps = total_steps - 1
+        # guide_scale_step_delta: set to 0 to disable the guidance annealing.
+        # Normally, after max_guide_anneal_steps annealing, the guidance scale becomes 1.
+        guide_scale_step_delta = (max_guide_scale - min_guide_scale) / max_guide_anneal_steps
+        guide_scale = max_guide_scale
+
         for i, step in enumerate(iterator):
             # index points to the correct elements in alphas, sigmas, sqrt_one_minus_alphas, etc.
             index = total_steps - i - 1
@@ -170,7 +181,7 @@ class DDIMSampler(object):
                                       quantize_denoised=quantize_denoised, temperature=temperature,
                                       noise_dropout=noise_dropout, score_corrector=score_corrector,
                                       corrector_kwargs=corrector_kwargs,
-                                      unconditional_guidance_scale=unconditional_guidance_scale,
+                                      unconditional_guidance_scale=guide_scale,
                                       unconditional_conditioning=unconditional_conditioning)
             img, pred_x0 = outs
             if callback: callback(i)
@@ -180,6 +191,11 @@ class DDIMSampler(object):
                 intermediates['x_inter'].append(img)
                 intermediates['pred_x0'].append(pred_x0)
 
+            if i <= max_guide_anneal_steps:
+                guide_scale = guide_scale - guide_scale_step_delta
+            else:
+                guide_scale = 1
+                
         return img, intermediates
 
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
@@ -264,11 +280,28 @@ class DDIMSampler(object):
         print(f"Running DDIM Sampling with {total_steps} timesteps")
 
         iterator = tqdm(time_range, desc='Decoding image', total=total_steps)
+
+        # Guidance annealing. First proposed in CLIP-Sculptor, CVPR 2023. Independently discovered here.
+        max_guide_scale = unconditional_guidance_scale
+        # If max_guide_scale < 2, then guide_scale_step_delta = 0 and no annealing.
+        min_guide_scale = min(2.0, max_guide_scale)
+        # At least one guidance annealing step (i.e., two uncond guidance steps)
+        max_guide_anneal_steps = total_steps - 1
+        # guide_scale_step_delta: set to 0 to disable the guidance annealing.
+        # Normally, after max_guide_anneal_steps annealing, the guidance scale becomes 1.
+        guide_scale_step_delta = (max_guide_scale - min_guide_scale) / max_guide_anneal_steps
+        guide_scale = max_guide_scale
+
         x_dec = x_latent
         for i, step in enumerate(iterator):
             index = total_steps - i - 1
             ts = torch.full((x_latent.shape[0],), step, device=x_latent.device, dtype=torch.long)
             x_dec, _ = self.p_sample_ddim(x_dec, cond, ts, index=index, use_original_steps=use_original_steps,
-                                          unconditional_guidance_scale=unconditional_guidance_scale,
+                                          unconditional_guidance_scale=guide_scale,
                                           unconditional_conditioning=unconditional_conditioning)
+            if i <= max_guide_anneal_steps:
+                guide_scale = guide_scale - guide_scale_step_delta
+            else:
+                guide_scale = 1
+                
         return x_dec
