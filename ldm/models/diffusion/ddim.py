@@ -265,7 +265,7 @@ class DDIMSampler(object):
 
         iterator = tqdm(time_range, desc='Decoding image', total=total_steps)
         max_guide_scale = unconditional_guidance_scale
-        min_guide_scale = max(1.0, max_guide_scale / 2)
+        min_guide_scale = max(1.0, max_guide_scale / 4)
         # guide_scale_step: set to 0 to disable the guidance annealing.
         guide_scale_step = np.power(min_guide_scale / max_guide_scale, 1 / (total_steps - 1))
         guide_scale = max_guide_scale
