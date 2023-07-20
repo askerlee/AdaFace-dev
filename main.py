@@ -889,7 +889,9 @@ if __name__ == "__main__":
 
         trainer_kwargs["callbacks"] = [instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg]
         trainer_kwargs["max_steps"] = trainer_opt.max_steps
-
+        if hasattr(trainer_opt, 'grad_clip'):
+            trainer_kwargs["gradient_clip_val"] = trainer_opt.grad_clip
+        
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         trainer.logdir = logdir  ###
 
