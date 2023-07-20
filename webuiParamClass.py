@@ -24,7 +24,7 @@ class DictI(dict):
         self.scale=10
         self.from_file=''
         self.config='configs/stable-diffusion/v1-inference-ada.yaml'
-        self.ckpt ='models/stable-diffusion/v1-5-pruned.ckpt'
+        self.ckpt ='models/stable-diffusion/v1-5-dste.ckpt'
         self.seed=42
         self.precision='autocast'
         self.embedding_paths=None
@@ -79,7 +79,6 @@ class DictT(dict):
          self.actural_resume = ""
          self.embedding_manager_ckpt = ""
          self.placeholder_string = ""
-         self.placeholder_suffix = ""
          self.init_word = ""
          self.init_word_weights = 0.5
          self.init_neg_words = None

@@ -28,7 +28,6 @@ model:
         # including the wrongly initialized LoraEmbedding object(s).
         initializer_words: ["sculpture"]
         num_vectors_per_token: 1
-        progressive_words: False
         use_layerwise_embedding: False      
           
     unet_config:
