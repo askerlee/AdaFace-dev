@@ -148,3 +148,5 @@ lightning:
     benchmark: True
     max_steps: 4500
     limit_val_batches: 0.0
+    grad_clip: 0.1
+    
