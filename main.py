@@ -191,10 +191,6 @@ def get_parser(**parser_kwargs):
         type=str, 
         help="Placeholder string which will be used to denote the concept in future prompts. Overwrites the config options.")
 
-    parser.add_argument("--placeholder_suffix", 
-        type=str, default=None,
-        help="Suffix to append to the placeholder string")
-    
     parser.add_argument("--init_word", 
         type=str, 
         help="Words used to initialize token embedding")
@@ -729,11 +725,6 @@ if __name__ == "__main__":
         # which will cause misalignment when calculating the delta loss)
         config.model.params.personalization_config.params.cls_delta_token   = opt.cls_delta_token
             
-        if opt.placeholder_suffix is not None:
-            config.data.params.train.params.placeholder_suffix              = opt.placeholder_suffix
-            config.data.params.validation.params.placeholder_suffix         = opt.placeholder_suffix
-            config.model.params.personalization_config.params.placeholder_suffix = opt.placeholder_suffix
-
         if hasattr(opt, 'composition_regs_iter_gap'):
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
 

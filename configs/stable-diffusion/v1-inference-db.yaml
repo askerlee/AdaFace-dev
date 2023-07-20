@@ -28,9 +28,7 @@ model:
         initializer_words: ["sculpture"]
         initializer_weights: [ None ]
         num_vectors_per_token: 1
-        progressive_words: False
         use_layerwise_embedding: False
-        prompt_delta_reg_iter_gap: 0
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
