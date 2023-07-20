@@ -78,7 +78,7 @@ def parse_args():
     parser.add_argument("--compare_with_pardir", type=str, default=None,
                         help="Parent folder of subject images used for computing similarity with generated samples")
 
-    parser.add_argument("--ckpt_type", type=str, default="v15", 
+    parser.add_argument("--bb_type", type=str, default="v15-dste", 
                         choices=["v14", "v15", "v15-ema", "v15-dste", "v15-arte", "v15-rvte",
                                  "dreamshaper-v5", "dreamshaper-v6"],
                         help="Type of checkpoints to use (default: v15)")
@@ -102,11 +102,11 @@ def parse_args():
                         help="Weight of ada embeddings (in contrast to static embeddings)")
 
     args = parser.parse_args()
-    return args
+    return args, parser
 
 if __name__ == "__main__":
     
-    args = parse_args()
+    args, argparser = parse_args()
     vars = parse_subject_file(args.subjfile, args.method)
     subjects, class_tokens, broad_classes, sel_set, ckpt_iters = \
             vars['subjects'], vars['class_tokens'], vars['broad_classes'], vars['sel_set'], vars['maxiters']
@@ -211,28 +211,36 @@ if __name__ == "__main__":
         if args.method == 'db':
             config_file = "v1-inference-db.yaml"
             ckpt_path   = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/last.ckpt"
+            bb_type = ""
         else:
             config_file = "v1-inference-" + args.method + ".yaml"
-            if args.ckpt_type == 'v15-ema':
+            if args.bb_type == 'v15-ema':
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt"
-            elif args.ckpt_type == 'v15-dste':
+            elif args.bb_type == 'v15-dste':
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste.ckpt"
-            elif args.ckpt_type == 'v15-arte':
+            elif args.bb_type == 'v15-arte':
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-arte.ckpt"
-            elif args.ckpt_type == 'v15-rvte':
+            elif args.bb_type == 'v15-rvte':
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-rvte.ckpt"
-            elif args.ckpt_type == 'dreamshaper-v5':
+            elif args.bb_type == 'dreamshaper-v5':
                 ckpt_path   = "models/dreamshaper/dreamshaper_5BakedVae.safetensors"
-            elif args.ckpt_type == 'dreamshaper-v6':
+            elif args.bb_type == 'dreamshaper-v6':
                 ckpt_path   = "models/dreamshaper/dreamshaper_631BakedVae.safetensors"
-            elif args.ckpt_type == 'v14':
+            elif args.bb_type == 'v14':
                 ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
-            elif args.ckpt_type == 'v15':
+            elif args.bb_type == 'v15':
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned.ckpt"
             else:
-                print(f"ERROR: Unknown ckpt_type: {args.ckpt_type}")
+                print(f"ERROR: Unknown bb_type: {args.bb_type}")
                 exit(0)
-                
+
+            # bb_type is used to tell stable_txt2img.py what suffix to put in the output image name.
+            # If bb_type is the default value, then no suffix is appended. So specify as "" here.
+            if args.bb_type == argparser.get_default('bb_type'):
+                bb_type = ""
+            else:
+                bb_type = args.bb_type
+
             if args.ckpt_iter == -1:
                 ckpt_iter = ckpt_iters[broad_class]
             else:
@@ -305,7 +313,7 @@ if __name__ == "__main__":
             else:
                 indiv_subdir = subject_name
 
-        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --scale {args.scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
+        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --bb_type {bb_type} --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --scale {args.scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
 
         if args.prompt is None:
             PROMPTS.close()
