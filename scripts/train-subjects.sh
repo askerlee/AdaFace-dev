@@ -3,9 +3,9 @@
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'selset' 'skipselset' 'cls_token_as_delta' 'cls_token_as_distill' 'eval'  -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'selset' 'skipselset' 'cls_token_as_delta' 'eval'  -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--cls_token_as_delta] [--cls_token_as_distill] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--cls_token_as_delta] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -13,7 +13,7 @@ end
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'static-layerwise' ]; or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--cls_token_as_delta] [--cls_token_as_distill] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--cls_token_as_delta] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -122,7 +122,6 @@ for i in $indices
         # If --cls_token_as_delta, and cls_tokens is provided in the subjfile, then use cls_token. 
         # Otherwise use the default cls_token "person".
         set -q _flag_cls_token_as_delta; and set EXTRA_ARGS1 $EXTRA_ARGS1 --cls_delta_token $cls_token
-        set -q _flag_cls_token_as_distill; and set EXTRA_ARGS1 $EXTRA_ARGS1 --cls_distill_token $cls_token
         # set -q use_fp_trick; and set EXTRA_ARGS1 $EXTRA_ARGS1 --use_fp_trick $use_fp_trick[$i]
         # If $prompt_mix_max[$i] is not -1 (default [0.1, 0.3]), then prompt_mix_range is 
         # ($prompt_mix_min = $prompt_mix_max / 3, $prompt_mix_max). Probably it will be [0.2, 0.6].

@@ -153,7 +153,6 @@ class PersonalizedBase(Dataset):
                  placeholder_token="z",
                  # cls token used to compute the delta loss.
                  cls_delta_token=None,  
-                 cls_distill_token=None,
                  center_crop=False,
                  num_compositions_per_image=1,
                  broad_class=1,
@@ -173,8 +172,6 @@ class PersonalizedBase(Dataset):
         else:
             self.cls_delta_token = cls_delta_token
             self.use_default_cls_delta_token = False
-
-        self.cls_distill_token = cls_distill_token
 
         self.center_crop = center_crop
 
@@ -227,14 +224,9 @@ class PersonalizedBase(Dataset):
         else:
             cls_delta_token = self.cls_delta_token
 
-        if self.cls_distill_token is None:
-            cls_distill_token = cls_delta_token
-        else:
-            cls_distill_token = self.cls_distill_token
-
         template = random.choice(imagenet_templates_small)
         subj_prompt_single  = template.format(placeholder_string)
-        cls_prompt_single   = template.format(cls_distill_token)
+        cls_prompt_single   = template.format(cls_delta_token)
 
         # "face portrait" trick for humans/animals.
         if self.broad_class == 1:
@@ -248,7 +240,7 @@ class PersonalizedBase(Dataset):
             else:
                 subj_prompt_fp_template = faceportrait_template
             subj_prompt_single_fp = subj_prompt_fp_template.format(placeholder_string)
-            cls_prompt_single_fp  = faceportrait_template.format(cls_distill_token)
+            cls_prompt_single_fp  = faceportrait_template.format(cls_delta_token)
             subj_prompt_comps_fp  = []
             cls_prompt_comps_fp   = []
 
