@@ -720,10 +720,6 @@ if __name__ == "__main__":
         config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
         config.data.params.train.params.cls_distill_token      = opt.cls_distill_token
         config.data.params.validation.params.cls_distill_token = opt.cls_distill_token
-        # cls_delta_token is passed to the embedding manager, to check if the token consists of only
-        # one token in the CLIP vocabulary. (if it's a rare word, it may be split to multiple tokens,
-        # which will cause misalignment when calculating the delta loss)
-        config.model.params.personalization_config.params.cls_delta_token   = opt.cls_delta_token
             
         if hasattr(opt, 'composition_regs_iter_gap'):
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
