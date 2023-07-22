@@ -1127,7 +1127,9 @@ class EmbeddingManager(nn.Module):
             else:
                 # Compatibility with old checkpoints.
                 self.use_sep_fg_bg_embedders = False
-
+                for k in self.string_to_ada_embedder_dict.keys():
+                    self.string_to_ada_embedder_dict[k].infeat_type = 'fg_bg'
+                    
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def optimized_parameters(self):
