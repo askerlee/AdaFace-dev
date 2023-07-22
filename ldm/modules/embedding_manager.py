@@ -1066,6 +1066,7 @@ class EmbeddingManager(nn.Module):
                      "string_to_ada_embedder":  self.string_to_ada_embedder_dict,
                      "ada_emb_weight":          self.ada_emb_weight,  
                      "num_vectors_per_token":   self.num_vectors_per_token,
+                     "use_sep_fg_bg_embedders": self.use_sep_fg_bg_embedders,
                    }, 
                     ckpt_path)
 
@@ -1121,6 +1122,11 @@ class EmbeddingManager(nn.Module):
                 self.set_ada_emb_weight(ckpt["ada_emb_weight"])
             if "num_vectors_per_token" in ckpt:
                 self.set_num_vectors_per_token(ckpt["num_vectors_per_token"])
+            if "use_sep_fg_bg_embedders" in ckpt:
+                self.use_sep_fg_bg_embedders = ckpt["use_sep_fg_bg_embedders"]
+            else:
+                # Compatibility with old checkpoints.
+                self.use_sep_fg_bg_embedders = False
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
