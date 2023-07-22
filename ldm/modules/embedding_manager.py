@@ -1303,10 +1303,10 @@ class EmbeddingManager(nn.Module):
 
         use_ortho_subtract = True
         # cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
-        # Embedding delta between class single and comp embeddings.
+        # Delta embedding between class single and comp embeddings.
         # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
         # static_delta: [1, 16, 77, 768]. Different values for each layer along dim=1.
-        # Embedding delta between subject single and comp embeddings.
+        # Delta embedding between subject single and comp embeddings.
         # static_delta / ada_delta should be aligned with cls_delta.
         if use_ortho_subtract:
             cls_delta    = ortho_subtract(static_cls_comp_emb,  static_cls_single_emb)
@@ -1321,11 +1321,14 @@ class EmbeddingManager(nn.Module):
             # (for comp prompts, but the placeholder location is identical as in single prompts)
             placeholder_indices_B = placeholder_indices_B.chunk(2)[0]
             placeholder_indices_N = placeholder_indices_N.chunk(2)[0]
+            # Location of the first embedding in a multi-embedding token.
             placeholder_indices_B0, placeholder_indices_Bm = placeholder_indices_B[:1], placeholder_indices_B[1:]
+            # Locations of the remaining embeddings in a multi-embedding token.
             placeholder_indices_N0, placeholder_indices_Nm = placeholder_indices_N[:1], placeholder_indices_N[1:]
             placeholder_indices_0 = (placeholder_indices_B0, placeholder_indices_N0)
             placeholder_indices_m = (placeholder_indices_Bm, placeholder_indices_Nm)
-            # Repeat (m - 1) times the embedding at placeholder_indices_0 and fill in as the pseudo-token embedding deltas.
+            # Repeat (m - 1) times the class delta embedding (corresponding to the subject delta embedding 
+            # "z" at placeholder_indices_0); use it to align the remaining embeddings in the multi-embedding token.
             cls_delta[placeholder_indices_m] = cls_delta[placeholder_indices_0].repeat(1, self.num_vectors_per_token - 1, 1)
 
         static_delta_loss   = calc_delta_loss(static_delta, cls_delta, delta_loss_emb_mask)
