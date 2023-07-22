@@ -628,7 +628,7 @@ class EmbeddingManager(nn.Module):
 
         # num_vectors_per_token: how many vectors in each layer are allocated to model 
         # the subject (represented as the subject token).        
-        # num_vectors_per_layer_per_token > 1:
+        # num_vectors_per_token > 1:
         # *multi-vector subject embeddings*. In this space, S* is embedded into multiple 
         # learned embeddings, an approach that is equivalent to describing
         # the concept through multiple learned pseudo-words. 
@@ -701,10 +701,10 @@ class EmbeddingManager(nn.Module):
             # initial_embeddings are only used to compute the regularization loss.
             # Wrap with Parameter so that they will be saved to checkpoints.
 
-            # In most cases, num_vectors_per_layer_per_token = 1. 
+            # In most cases, num_vectors_per_token = 1. 
             # This falls back to the original behavior: one static/ada embedder are responsible for each token.
             # Otherwise, multiple static/ada embedders are responsible for token z and pseudo-tokens z1, z2, ...
-            for seq_offset in range(self.num_vectors_per_layer_per_token):
+            for seq_offset in range(self.num_vectors_per_token):
                 # layerwise_lora_rank > 0 implies use_layerwise_embedding.
                 if layerwise_lora_rank > 0:
                     # num_vectors_per_embedder = num_unet_layers
@@ -838,7 +838,7 @@ class EmbeddingManager(nn.Module):
             # not repetitively counting the occurrences in the embedded_text repeated for M layers.
             REAL_OCCURS = placeholder_indices[0].numel() // self.num_vectors_per_embedder
 
-            for seq_offset in range(self.num_vectors_per_layer_per_token):
+            for seq_offset in range(self.num_vectors_per_token):
                 # First placeholder string at seq_offset = 0 is still z.
                 # The following placeholder strings for a multi-embedding token are: z1, z2, ...
                 placeholder_string_i = placeholder_string if seq_offset == 0 else f"{placeholder_string}{seq_offset}"
@@ -858,15 +858,14 @@ class EmbeddingManager(nn.Module):
                 embedded_text[placeholder_indices_i] = placeholder_embedding.repeat(REAL_OCCURS, 1)
                 # Mark where the placeholder token is replaced by the embedding.
                 
-                # Cache the placeholder indices for mix prompt distillation.
-                # Note placeholder_indices are recomputed in update_placeholder_indices(), 
-                # we don't simply cache placeholder_indices here as they are repeated 16 times 
-                # to replace in 16 layers. 
-                # But we need them without repetitions for mix prompt distillation.
-                # If num_vectors_per_layer_per_token > 1, then pool all the placeholder_indices_i together.
-                if do_update_placeholder_indices:
-                    self.update_placeholder_indices(orig_tokenized_text, placeholder_token, seq_offset)
-
+            # Cache the placeholder indices for mix prompt distillation.
+            # Note placeholder_indices are recomputed in update_placeholder_indices(), 
+            # we don't simply cache placeholder_indices here as they are repeated 16 times 
+            # to replace in 16 layers. 
+            # But we need them without repetitions for mix prompt distillation.
+            # If num_vectors_per_token > 1, then repeat the indices and add to offsets.
+            if do_update_placeholder_indices:
+                self.update_placeholder_indices(orig_tokenized_text, placeholder_token, self.num_vectors_per_token)
 
         return embedded_text, static_subj_embs_dict
 
@@ -896,7 +895,7 @@ class EmbeddingManager(nn.Module):
             if placeholder_indices[0].numel() == 0:
                 continue
 
-            for seq_offset in range(self.num_vectors_per_layer_per_token):
+            for seq_offset in range(self.num_vectors_per_token):
                 placeholder_string_i = placeholder_string if seq_offset == 0 else f"{placeholder_string}{seq_offset}"
 
                 placeholder_embedder = self.string_to_ada_embedder_dict[placeholder_string_i].to(device)
@@ -934,16 +933,17 @@ class EmbeddingManager(nn.Module):
 
         self.set_delta_loss_emb_mask(delta_loss_emb_mask)
 
-    # Update placeholder_indices. seq_offset: the actual placeholder is at the found location + seq_offset.
-    # seq_offset > 0 is used for the second to last embeddings of a multi-embedding token.
-    def update_placeholder_indices(self, tokenized_text, placeholder_token, seq_offset=0):
-        placeholder_indices = torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
-        if self.placeholder_indices is not None:
-            placeholder_indices_B    = torch.cat([self.placeholder_indices[0], placeholder_indices[0]])
-            placeholder_indices_N    = torch.cat([self.placeholder_indices[1], placeholder_indices[1] + seq_offset])
-            self.placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
-        else:
-            self.placeholder_indices = (placeholder_indices[0], placeholder_indices[1] + seq_offset)
+    def update_placeholder_indices(self, tokenized_text, placeholder_token, num_vectors_per_token):
+        placeholder_indices_B, placeholder_indices_N = \
+            torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
+        if num_vectors_per_token > 1:
+            BS = placeholder_indices_B.shape[0]
+            placeholder_indices_B = placeholder_indices_B.unsqueeze(1).repeat(1, num_vectors_per_token).view(-1)
+            placeholder_indices_N = placeholder_indices_N.unsqueeze(1).repeat(1, num_vectors_per_token).view(-1)
+            # Add offsets to the indices of the pseudo-tokens.
+            placeholder_indices_N += torch.arange(num_vectors_per_token, device=tokenized_text.device).repeat(BS)
+        
+        self.placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
 
     def get_ada_emb_weight(self):
         if self.training:
@@ -979,8 +979,8 @@ class EmbeddingManager(nn.Module):
         self.ada_embeddings[emb_idx] = embedding
 
     def set_num_vectors_per_token(self, num_vectors_per_token):
-        self.num_vectors_per_layer_per_token = num_vectors_per_token
-        print(f"Set num_vectors_per_layer_per_token = {num_vectors_per_token}")
+        self.num_vectors_per_token = num_vectors_per_token
+        print(f"Set num_vectors_per_token = {num_vectors_per_token}")
 
     # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
     # which will be enabled again through set_ada_layer_temp_info() in ddpm.py.
@@ -1020,7 +1020,7 @@ class EmbeddingManager(nn.Module):
                      "string_to_param":         self.string_to_param_dict,
                      "string_to_ada_embedder":  self.string_to_ada_embedder_dict,
                      "ada_emb_weight":          self.ada_emb_weight,  
-                     "num_vectors_per_token":   self.num_vectors_per_layer_per_token,
+                     "num_vectors_per_token":   self.num_vectors_per_token,
                    }, 
                     ckpt_path)
 
@@ -1076,7 +1076,7 @@ class EmbeddingManager(nn.Module):
                 self.set_ada_emb_weight(ckpt["ada_emb_weight"])
             if "num_vectors_per_token" in ckpt:
                 self.set_num_vectors_per_token(ckpt["num_vectors_per_token"])
-                
+
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def optimized_parameters(self):
