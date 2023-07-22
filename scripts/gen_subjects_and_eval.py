@@ -101,6 +101,10 @@ def parse_args():
                         type=float, default=-1,
                         help="Weight of ada embeddings (in contrast to static embeddings)")
 
+    parser.add_argument("--num_vectors_per_token",
+                        type=int, default=argparse.SUPPRESS,
+                        help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
+                    
     args = parser.parse_args()
     return args, parser
 
@@ -347,6 +351,9 @@ if __name__ == "__main__":
         if hasattr(args, 'clip_last_layer_skip_weight'):
             command_line += f" --clip_last_layer_skip_weight {args.clip_last_layer_skip_weight}"
 
+        if hasattr(args, 'num_vectors_per_token'):
+            command_line += f" --num_vectors_per_token {args.num_vectors_per_token}"
+            
         if args.compare_with_pardir:
             # Do evaluation on authenticity/composition.
             subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)
