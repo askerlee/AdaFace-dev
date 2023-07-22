@@ -1701,6 +1701,7 @@ class LatentDiffusion(DDPM):
                 # Calculate CLIP score only for image quality evaluation
                 cfg_scales_for_clip_loss = torch.ones_like(t) * 5
             else:
+                # Teachers are slightly more aggressive, to increase the teachable fraction.                
                 cfg_scale_for_teacher  = 6
                 cfg_scale_for_student  = 5
                 cfg_scales_for_teacher   = torch.ones(HALF_BS*2, device=x_start.device) * cfg_scale_for_teacher
