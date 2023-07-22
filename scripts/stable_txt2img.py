@@ -309,7 +309,8 @@ def main(opt):
     # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
     model.cond_stage_model.set_last_layer_skip_weight(opt.clip_last_layer_skip_weight)
     
-    model.embedding_manager.num_vectors_per_token  = opt.num_vectors_per_token
+    if hasattr(opt, 'num_vectors_per_token'):
+        model.embedding_manager.set_num_vectors_per_token(opt.num_vectors_per_token)
     if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
     

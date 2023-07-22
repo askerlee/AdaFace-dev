@@ -634,7 +634,7 @@ class EmbeddingManager(nn.Module):
         # the concept through multiple learned pseudo-words. 
         # This setting was proposed in the TI paper,
         # and AdaPrompt also supports it for more expressive modeling.
-        self.num_vectors_per_layer_per_token = num_vectors_per_token
+        self.set_num_vectors_per_token(num_vectors_per_token)
 
         # hasattr(text_embedder, 'tokenizer') -> True
         if hasattr(text_embedder, 'tokenizer'): # using Stable Diffusion's CLIP encoder
@@ -977,6 +977,10 @@ class EmbeddingManager(nn.Module):
     def cache_ada_embedding(self, i, embedding):
         emb_idx = self.layer_idx2emb_idx[i]
         self.ada_embeddings[emb_idx] = embedding
+
+    def set_num_vectors_per_token(self, num_vectors_per_token):
+        self.num_vectors_per_layer_per_token = num_vectors_per_token
+        print(f"Set num_vectors_per_layer_per_token = {num_vectors_per_token}")
 
     # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
     # which will be enabled again through set_ada_layer_temp_info() in ddpm.py.
