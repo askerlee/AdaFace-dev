@@ -29,7 +29,7 @@ set -q _flag_gpu; and set GPU $_flag_gpu; or set GPU 0
 # BUGGY: if L, H are not specified, then $argv[2], $argv[3] may contain unrecognized arguments.
 set -q argv[2]; and set L $argv[2]; or set L 1
 set -q argv[3]; and set H $argv[3]; or set H (count $subjects)
-set EXTRA_ARGS0 $argv[4..-1]
+set EXTRA_TRAIN_ARGS0 $argv[4..-1]
 
 set -q _flag_lr; and set lr $_flag_lr; or set -e lr
 set -q _flag_min_rand_scaling; and set min_rand_scaling $_flag_min_rand_scaling; or set -e min_rand_scaling
@@ -69,8 +69,8 @@ end
 set -q _flag_selset; and set indices0 $sel_set; or set indices0 (seq 1 (count $subjects))
 set indices $indices0[(seq $L $H)]
 
-set -q _flag_num_vectors_per_token; and set EXTRA_ARGS0 $EXTRA_ARGS0 --num_vectors_per_token $_flag_num_vectors_per_token
-set EXTRA_EVAL_FLAGS  --bb_type $_flag_bb_type --num_vectors_per_token $_flag_num_vectors_per_token
+set -q _flag_num_vectors_per_token; and set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --num_vectors_per_token $_flag_num_vectors_per_token
+set EXTRA_EVAL_ARGS0  --bb_type $_flag_bb_type --num_vectors_per_token $_flag_num_vectors_per_token
 
 echo Training on $subjects[$indices]
 
@@ -116,29 +116,29 @@ for i in $indices
             set max_iters $_flag_maxiter
         end
 
-        # Reset EXTRA_ARGS1 to EXTRA_ARGS0 each time. 
-        set EXTRA_ARGS1 $EXTRA_ARGS0
+        # Reset EXTRA_TRAIN_ARGS1 to EXTRA_TRAIN_ARGS0 each time. 
+        set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS0
 
         # cls_token: the class token used in delta loss computation.
         # If --cls_token_as_delta, and cls_tokens is provided in the subjfile, then use cls_token. 
         # Otherwise use the default cls_token "person".
-        set -q _flag_cls_token_as_delta; and set EXTRA_ARGS1 $EXTRA_ARGS1 --cls_delta_token $cls_token
-        # set -q use_fp_trick; and set EXTRA_ARGS1 $EXTRA_ARGS1 --use_fp_trick $use_fp_trick[$i]
+        set -q _flag_cls_token_as_delta; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --cls_delta_token $cls_token
+        # set -q use_fp_trick; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --use_fp_trick $use_fp_trick[$i]
         # If $prompt_mix_max[$i] is not -1 (default [0.1, 0.3]), then prompt_mix_range is 
         # ($prompt_mix_min = $prompt_mix_max / 3, $prompt_mix_max). Probably it will be [0.2, 0.6].
         #if set -q prompt_mix_max; and test $prompt_mix_max[$i] -ne -1
-        #    set EXTRA_ARGS1 $EXTRA_ARGS1 --mix_range (math $prompt_mix_max[$i]/3) $prompt_mix_max[$i]
+        #    set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --mix_range (math $prompt_mix_max[$i]/3) $prompt_mix_max[$i]
         #end
 
         if not set -q _flag_lr
             set -q lrs; and set lr $lrs[(math $broad_class+1)]
         end
-        set -q lr; and set EXTRA_ARGS1 $EXTRA_ARGS1 --lr $lr
-        set -q min_rand_scaling; and set EXTRA_ARGS1 $EXTRA_ARGS1 --min_rand_scaling $min_rand_scaling
+        set -q lr; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --lr $lr
+        set -q min_rand_scaling; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --min_rand_scaling $min_rand_scaling
 
-        echo $subject: --init_word $initword $EXTRA_ARGS1
+        echo $subject: --init_word $initword $EXTRA_TRAIN_ARGS1
         set fish_trace 1
-        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_ARGS1
+        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_TRAIN_ARGS1
 
         if set -q _flag_eval
             if [ "$data_folder"  = 'dbeval-dataset' ]
@@ -149,8 +149,8 @@ for i in $indices
                 set out_dir_tmpl 'samples'
             end
             # if $max_iters == -1, then gen_subjects_and_eval.py will use the default max_iters of the broad_class.
-            set EXTRA_EVAL_FLAGS $EXTRA_EVAL_FLAGS --ckpt_iter $max_iters
-            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i $EXTRA_EVAL_FLAGS
+            set EXTRA_EVAL_ARGS $EXTRA_EVAL_ARGS0 --ckpt_iter $max_iters
+            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i $EXTRA_EVAL_ARGS
         end
 
     else
@@ -158,7 +158,7 @@ for i in $indices
 
         # -1: use the default max_iters.
         set fish_trace 1
-        # $EXTRA_ARGS is not for DreamBooth. It is for AdaPrompt/TI only.
+        # $EXTRA_TRAIN_ARGS is not for DreamBooth. It is for AdaPrompt/TI only.
         # --lr and --max_steps are absent in DreamBooth. 
         # It always uses the default lr and max_steps specified in the config file.
         python3 main_db.py --base configs/stable-diffusion/v1-finetune-db.yaml -t --actual_resume $sd_ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-db --no-test --token "z" --class_word $db_prompt
@@ -171,7 +171,7 @@ for i in $indices
             else
                 set out_dir_tmpl 'samples'
             end
-            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i $EXTRA_EVAL_FLAGS
+            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i $EXTRA_EVAL_ARGS
         end
     end
 
