@@ -2108,11 +2108,10 @@ class LatentDiffusion(DDPM):
                 # [4, 77, 8, 256] / [4, 77, 8, 64]
                 # We don't need BP through attention into UNet.
                 attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
-                # subj_attn: [4, 8, 256] / [4, 8, 64]
+                # subj_attn: [4, 8, 256 / 64] (by default) or [8, 8, 256 / 64] (if two embeddings each token)
                 subj_attn = attn_mat[placeholder_indices]
-
                 # subj_attn_subj_single, ...: [2, 8, 256].
-                # The first dim 2 is the two occurrences of the subject token 
+                # 2 at the first dim is the two occurrences of the subject token 
                 # in the two sets of prompts. Therefore, HALF_BS is still needed to 
                 # determine its batch size in convert_attn_to_spatial_weight().
                 subj_attn_subj_single, subj_attn_subj_comps, subj_attn_mix_single,  subj_attn_mix_comps \
