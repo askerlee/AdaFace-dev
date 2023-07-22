@@ -1639,6 +1639,7 @@ class LatentDiffusion(DDPM):
         # If noise is not None, then use the provided noise.
         # Otherwise, generate noise randomly.
         noise = default(noise, lambda: torch.randn_like(x_start))
+        #print(cond[1])
 
         # If cached_inits_available, cached_inits are only used if do_comp_prompt_mix_reg = True.
         # In this case, do_teacher_filtering = True, and we choose the better instance 

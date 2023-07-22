@@ -746,8 +746,8 @@ class EmbeddingManager(nn.Module):
         self.ada_embeddings = None
         self.ada_bp_to_unet = False
         self.is_comp_iter   = False
-        print("EmbeddingManager on {} init with layerwise_lora_rank={}, ada_emb_weight={}".format(
-                placeholder_strings, layerwise_lora_rank, ada_emb_weight))
+        print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
+                placeholder_strings, num_vectors_per_token, layerwise_lora_rank, ada_emb_weight))
             
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_layers = 16 
@@ -849,9 +849,7 @@ class EmbeddingManager(nn.Module):
                     # The 16 static subject embeddings are formed by linearly combining the basis vectors.
                     # The matrix operations are done on the fly.
                     placeholder_embedding = placeholder_embedder()
-                    # TODO: cache all the subject embeddings of a multi-embedding token.
-                    if seq_offset == 0:
-                        static_subj_embs_dict[placeholder_string_i] = placeholder_embedding
+                    static_subj_embs_dict[placeholder_string_i] = placeholder_embedding
                 else:
                     # placeholder_embedder is already the embedding.
                     placeholder_embedding = placeholder_embedder
@@ -941,8 +939,9 @@ class EmbeddingManager(nn.Module):
     def update_placeholder_indices(self, tokenized_text, placeholder_token, seq_offset=0):
         placeholder_indices = torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
         if self.placeholder_indices is not None:
-            self.placeholder_indices[0] = torch.cat([self.placeholder_indices[0], placeholder_indices[0]])
-            self.placeholder_indices[1] = torch.cat([self.placeholder_indices[1], placeholder_indices[1] + seq_offset])
+            placeholder_indices_B    = torch.cat([self.placeholder_indices[0], placeholder_indices[0]])
+            placeholder_indices_N    = torch.cat([self.placeholder_indices[1], placeholder_indices[1] + seq_offset])
+            self.placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
         else:
             self.placeholder_indices = (placeholder_indices[0], placeholder_indices[1] + seq_offset)
 
