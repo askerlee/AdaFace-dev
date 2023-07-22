@@ -3,9 +3,9 @@
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'selset' 'skipselset' 'cls_token_as_delta' 'cls_token_as_distill' 'use_z_suffix' 'eval'  -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'selset' 'skipselset' 'cls_token_as_delta' 'eval'  -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--cls_token_as_delta] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -13,7 +13,7 @@ end
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'static-layerwise' ]; or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--cls_token_as_delta] [--cls_token_as_distill] [--use_z_suffix] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--cls_token_as_delta] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -36,7 +36,7 @@ set -q _flag_min_rand_scaling; and set min_rand_scaling $_flag_min_rand_scaling;
 #set fish_trace 1
 
 # default bb_type is v15.
-set -q _flag_bb_type; or set _flag_bb_type 'v15'
+set -q _flag_bb_type; or set _flag_bb_type 'v15-dste'
 
 if [ "$_flag_bb_type" = 'v15' ]
     set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt
@@ -69,7 +69,8 @@ end
 set -q _flag_selset; and set indices0 $sel_set; or set indices0 (seq 1 (count $subjects))
 set indices $indices0[(seq $L $H)]
 
-set EXTRA_EVAL_FLAGS  --bb_type $_flag_bb_type
+set -q _flag_num_vectors_per_token; and set EXTRA_ARGS0 $EXTRA_ARGS0 --num_vectors_per_token $_flag_num_vectors_per_token
+set EXTRA_EVAL_FLAGS  --bb_type $_flag_bb_type --num_vectors_per_token $_flag_num_vectors_per_token
 
 echo Training on $subjects[$indices]
 
@@ -122,19 +123,12 @@ for i in $indices
         # If --cls_token_as_delta, and cls_tokens is provided in the subjfile, then use cls_token. 
         # Otherwise use the default cls_token "person".
         set -q _flag_cls_token_as_delta; and set EXTRA_ARGS1 $EXTRA_ARGS1 --cls_delta_token $cls_token
-        set -q _flag_cls_token_as_distill; and set EXTRA_ARGS1 $EXTRA_ARGS1 --cls_distill_token $cls_token
         # set -q use_fp_trick; and set EXTRA_ARGS1 $EXTRA_ARGS1 --use_fp_trick $use_fp_trick[$i]
         # If $prompt_mix_max[$i] is not -1 (default [0.1, 0.3]), then prompt_mix_range is 
         # ($prompt_mix_min = $prompt_mix_max / 3, $prompt_mix_max). Probably it will be [0.2, 0.6].
         #if set -q prompt_mix_max; and test $prompt_mix_max[$i] -ne -1
         #    set EXTRA_ARGS1 $EXTRA_ARGS1 --mix_range (math $prompt_mix_max[$i]/3) $prompt_mix_max[$i]
         #end
-
-        # z_suffix: append $cls_token as a suffix to "z" in the prompt. The prompt will be "a z <cls_token> <prompt>".
-        # E.g., cls_token="toy", prompt="in a chair", then full prompt="a z toy in a chair".
-        # If not specified, then no suffix is appended. The prompt will be "a z <prompt>". E.g. "a z in a chair".
-        set -q _flag_use_z_suffix;  and set z_suffix $cls_token; or set -e z_suffix
-        set -q z_suffix; and set EXTRA_ARGS1 $EXTRA_ARGS1 --placeholder_suffix $z_suffix
 
         if not set -q _flag_lr
             set -q lrs; and set lr $lrs[(math $broad_class+1)]

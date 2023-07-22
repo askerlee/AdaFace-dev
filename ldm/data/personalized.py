@@ -153,13 +153,10 @@ class PersonalizedBase(Dataset):
                  placeholder_token="z",
                  # cls token used to compute the delta loss.
                  cls_delta_token=None,  
-                 cls_distill_token=None,
-                 # suffix to append to the placeholder token, e.g., "toy". 
-                 # Used mainly for objects/animals.
-                 # cls_delta_token can only contain one token, but placeholder_suffix could be multiple. 
-                 # If both are specified, in most of the times, placeholder_suffix = cls_delta_token,
-                 # but sometimes different, such as "stuffed animal" vs. "toy".
-                 placeholder_suffix=None,     
+                # num_vectors_per_token: how many vectors in each layer are allocated to model 
+                # the subject. If num_vectors_per_token > 1, pad with "," in the prompts to leave
+                # room for those extra vectors.
+                 num_vectors_per_token=1,
                  center_crop=False,
                  num_compositions_per_image=1,
                  broad_class=1,
@@ -180,9 +177,7 @@ class PersonalizedBase(Dataset):
             self.cls_delta_token = cls_delta_token
             self.use_default_cls_delta_token = False
 
-        self.cls_distill_token = cls_distill_token
-        self.placeholder_suffix = placeholder_suffix
-
+        self.num_vectors_per_token = num_vectors_per_token
         self.center_crop = center_crop
 
         if set == "train":
@@ -229,45 +224,23 @@ class PersonalizedBase(Dataset):
             image = image.convert("RGB")
 
         placeholder_string = self.placeholder_token
+
         if self.use_default_cls_delta_token:
             cls_delta_token = random.choice(default_cls_delta_tokens[self.broad_class])
         else:
             cls_delta_token = self.cls_delta_token
 
-        # Appending the suffix to the placeholder token randomly (sometimes append, sometimes not) 
-        # only leads to worse performance. So set p_add_suffix to 1 to always append the suffix.
-        if self.placeholder_suffix is not None:
-            # If placeholder_suffix = 'cat', then placeholder_string = "z cat".
-            placeholder_string = f"{placeholder_string} {self.placeholder_suffix}"
-            if self.use_default_cls_delta_token:
-                # It may be inappropriate to append the suffix to cls_delta_token,
-                # e.g., "bike" -> "bike sneaker". 
-                suffix_num_tokens = len(re.findall(r'\w+', self.placeholder_suffix))
-                assert suffix_num_tokens >= 1 and suffix_num_tokens <= 2
-                # Just append some meaningless words to cls_delta_token, 
-                # without altering the meaning of the whole prompt.
-                stuffing_suffices = [ "just", "that is" ]
-                # if suffix contains one token,  cls_delta_token = "bike just (in/on ...)"
-                # if suffix contains two tokens, cls_delta_token = "bike that is (in/on ...)"
-                # placeholder_string = "z sneaker (in/on ...)" or "z stuffed animal (in/on ...)"
-                # There will be misalignment between cls_delta_token and placeholder_string,
-                # but we will mask suffix_num_tokens tokens after "z" when computing delta loss, 
-                # so it should be fine.
-                stuffing_suffix = stuffing_suffices[suffix_num_tokens - 1]
-                cls_delta_token = f"{cls_delta_token} {stuffing_suffix}"
-            else:
-                # Append the suffix to cls_delta_token as well, 
-                # so that cls_prompt_comp is token-wise aligned with subj_prompt_comp.
-                cls_delta_token    = f"{cls_delta_token} {self.placeholder_suffix}"
-
-        if self.cls_distill_token is None:
-            cls_distill_token = cls_delta_token
-        else:
-            cls_distill_token = self.cls_distill_token
+        # If num_vectors_per_token == 3:
+        # "z"    => "z, , "
+        # "girl" => "girl, , "
+        # Need to leave a space between multiple ",,", otherwise they are treated as one token.
+        if self.num_vectors_per_token > 1:
+            placeholder_string += ", " * (self.num_vectors_per_token - 1)
+            cls_delta_token    += ", " * (self.num_vectors_per_token - 1)
 
         template = random.choice(imagenet_templates_small)
         subj_prompt_single  = template.format(placeholder_string)
-        cls_prompt_single   = template.format(cls_distill_token)
+        cls_prompt_single   = template.format(cls_delta_token)
 
         # "face portrait" trick for humans/animals.
         if self.broad_class == 1:
@@ -281,7 +254,7 @@ class PersonalizedBase(Dataset):
             else:
                 subj_prompt_fp_template = faceportrait_template
             subj_prompt_single_fp = subj_prompt_fp_template.format(placeholder_string)
-            cls_prompt_single_fp  = faceportrait_template.format(cls_distill_token)
+            cls_prompt_single_fp  = faceportrait_template.format(cls_delta_token)
             subj_prompt_comps_fp  = []
             cls_prompt_comps_fp   = []
 

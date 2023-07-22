@@ -191,10 +191,6 @@ def get_parser(**parser_kwargs):
         type=str, 
         help="Placeholder string which will be used to denote the concept in future prompts. Overwrites the config options.")
 
-    parser.add_argument("--placeholder_suffix", 
-        type=str, default=None,
-        help="Suffix to append to the placeholder string")
-    
     parser.add_argument("--init_word", 
         type=str, 
         help="Words used to initialize token embedding")
@@ -211,10 +207,10 @@ def get_parser(**parser_kwargs):
         type=str, default=None,
         help="A single word to use in class-level prompts for delta loss")
 
-    parser.add_argument("--cls_distill_token",
-        type=str, default=None,
-        help="A single word to use in class-level prompts for prompt distillation")
-
+    parser.add_argument("--num_vectors_per_token",
+        type=int, default=1,
+        help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
+    
     # layerwise_lora_rank_token_ratio. When there are two tokens, 
     # it seems that increasing the rank to 3 doesn't help.
     parser.add_argument("--layerwise_lora_rank_token_ratio", 
@@ -722,18 +718,11 @@ if __name__ == "__main__":
 
         config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
         config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
-        config.data.params.train.params.cls_distill_token      = opt.cls_distill_token
-        config.data.params.validation.params.cls_distill_token = opt.cls_distill_token
-        # cls_delta_token is passed to the embedding manager, to check if the token consists of only
-        # one token in the CLIP vocabulary. (if it's a rare word, it may be split to multiple tokens,
-        # which will cause misalignment when calculating the delta loss)
-        config.model.params.personalization_config.params.cls_delta_token   = opt.cls_delta_token
-            
-        if opt.placeholder_suffix is not None:
-            config.data.params.train.params.placeholder_suffix              = opt.placeholder_suffix
-            config.data.params.validation.params.placeholder_suffix         = opt.placeholder_suffix
-            config.model.params.personalization_config.params.placeholder_suffix = opt.placeholder_suffix
 
+        config.data.params.train.params.num_vectors_per_token     = opt.num_vectors_per_token
+        config.data.params.validation.params.num_vectors_per_token = opt.num_vectors_per_token
+        config.model.params.personalization_config.params.num_vectors_per_token = opt.num_vectors_per_token
+        
         if hasattr(opt, 'composition_regs_iter_gap'):
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
 
