@@ -22,6 +22,10 @@ def parse_args():
                         help="method to use for generating samples")
     parser.add_argument("--placeholder", type=str, default="z", 
                         help="placeholder token for the subject")
+    parser.add_argument("--num_vectors_per_token",
+                        type=int, default=argparse.SUPPRESS,
+                        help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
+                        
     parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
     
@@ -101,10 +105,7 @@ def parse_args():
                         type=float, default=-1,
                         help="Weight of ada embeddings (in contrast to static embeddings)")
 
-    parser.add_argument("--num_vectors_per_token",
-                        type=int, default=argparse.SUPPRESS,
-                        help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
-                    
+
     args = parser.parse_args()
     return args, parser
 
@@ -114,6 +115,12 @@ if __name__ == "__main__":
     vars = parse_subject_file(args.subjfile, args.method)
     subjects, class_tokens, broad_classes, sel_set, ckpt_iters = \
             vars['subjects'], vars['class_tokens'], vars['broad_classes'], vars['sel_set'], vars['maxiters']
+
+    # If num_vectors_per_token == 3:
+    # "z"    => "z, , "
+    # Need to leave a space between multiple ",,", otherwise they are treated as one token.
+    if hasattr(args, 'num_vectors_per_token') and args.num_vectors_per_token > 1:
+        args.placeholder += ", " * (args.num_vectors_per_token - 1)
 
     if hasattr(args, 'z_prefix'):
         # * 3 for 3 broad classes, i.e., all classes use the same args.z_prefix.
