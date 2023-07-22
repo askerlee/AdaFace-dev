@@ -1639,6 +1639,7 @@ class LatentDiffusion(DDPM):
         # If noise is not None, then use the provided noise.
         # Otherwise, generate noise randomly.
         noise = default(noise, lambda: torch.randn_like(x_start))
+        #print(cond[1])
 
         # If cached_inits_available, cached_inits are only used if do_comp_prompt_mix_reg = True.
         # In this case, do_teacher_filtering = True, and we choose the better instance 
@@ -1700,6 +1701,7 @@ class LatentDiffusion(DDPM):
                 # Calculate CLIP score only for image quality evaluation
                 cfg_scales_for_clip_loss = torch.ones_like(t) * 5
             else:
+                # Teachers are slightly more aggressive, to increase the teachable fraction.                
                 cfg_scale_for_teacher  = 6
                 cfg_scale_for_student  = 5
                 cfg_scales_for_teacher   = torch.ones(HALF_BS*2, device=x_start.device) * cfg_scale_for_teacher

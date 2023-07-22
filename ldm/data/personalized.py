@@ -153,6 +153,10 @@ class PersonalizedBase(Dataset):
                  placeholder_token="z",
                  # cls token used to compute the delta loss.
                  cls_delta_token=None,  
+                # num_vectors_per_token: how many vectors in each layer are allocated to model 
+                # the subject. If num_vectors_per_token > 1, pad with "," in the prompts to leave
+                # room for those extra vectors.
+                 num_vectors_per_token=1,
                  center_crop=False,
                  num_compositions_per_image=1,
                  broad_class=1,
@@ -173,6 +177,7 @@ class PersonalizedBase(Dataset):
             self.cls_delta_token = cls_delta_token
             self.use_default_cls_delta_token = False
 
+        self.num_vectors_per_token = num_vectors_per_token
         self.center_crop = center_crop
 
         if set == "train":
@@ -219,10 +224,19 @@ class PersonalizedBase(Dataset):
             image = image.convert("RGB")
 
         placeholder_string = self.placeholder_token
+
         if self.use_default_cls_delta_token:
             cls_delta_token = random.choice(default_cls_delta_tokens[self.broad_class])
         else:
             cls_delta_token = self.cls_delta_token
+
+        # If num_vectors_per_token == 3:
+        # "z"    => "z, , "
+        # "girl" => "girl, , "
+        # Need to leave a space between multiple ",,", otherwise they are treated as one token.
+        if self.num_vectors_per_token > 1:
+            placeholder_string += ", " * (self.num_vectors_per_token - 1)
+            cls_delta_token    += ", " * (self.num_vectors_per_token - 1)
 
         template = random.choice(imagenet_templates_small)
         subj_prompt_single  = template.format(placeholder_string)

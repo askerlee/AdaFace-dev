@@ -207,6 +207,10 @@ def get_parser(**parser_kwargs):
         type=str, default=None,
         help="A single word to use in class-level prompts for delta loss")
 
+    parser.add_argument("--num_vectors_per_token",
+        type=int, default=1,
+        help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
+    
     # layerwise_lora_rank_token_ratio. When there are two tokens, 
     # it seems that increasing the rank to 3 doesn't help.
     parser.add_argument("--layerwise_lora_rank_token_ratio", 
@@ -715,6 +719,10 @@ if __name__ == "__main__":
         config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
         config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
 
+        config.data.params.train.params.num_vectors_per_token     = opt.num_vectors_per_token
+        config.data.params.validation.params.num_vectors_per_token = opt.num_vectors_per_token
+        config.model.params.personalization_config.params.num_vectors_per_token = opt.num_vectors_per_token
+        
         if hasattr(opt, 'composition_regs_iter_gap'):
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
 
