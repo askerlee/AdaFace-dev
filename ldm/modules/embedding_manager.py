@@ -1020,6 +1020,7 @@ class EmbeddingManager(nn.Module):
                      "string_to_param":         self.string_to_param_dict,
                      "string_to_ada_embedder":  self.string_to_ada_embedder_dict,
                      "ada_emb_weight":          self.ada_emb_weight,  
+                     "num_vectors_per_token":   self.num_vectors_per_layer_per_token,
                    }, 
                     ckpt_path)
 
@@ -1073,7 +1074,9 @@ class EmbeddingManager(nn.Module):
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
             if "ada_emb_weight" in ckpt:
                 self.set_ada_emb_weight(ckpt["ada_emb_weight"])
-
+            if "num_vectors_per_token" in ckpt:
+                self.set_num_vectors_per_token(ckpt["num_vectors_per_token"])
+                
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def optimized_parameters(self):
