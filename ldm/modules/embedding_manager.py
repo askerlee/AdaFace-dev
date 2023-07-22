@@ -1056,13 +1056,10 @@ class EmbeddingManager(nn.Module):
                 # The mapping in string_to_token_dict is determined by the tokenizer. 
                 # Shouldn't do the k->k2 mapping on string_to_token_dict.
                 self.string_to_token_dict[k2]        = k2_token
-                # Mapped from k in ckpt to k2 in the current session.
-                self.string_to_param_dict[k2]        = ckpt["string_to_param"][k]
-                self.string_to_ada_embedder_dict[k2] = ckpt["string_to_ada_embedder"][k]
-                print(f"Loaded {k}->{k2} from {ckpt_path}")
 
-                # Load pseudo-tokens within multi-embedding tokens.
+                # Mapped from k in ckpt to k2 in the current session.
                 for km in ckpt["string_to_param"].keys():
+                    # If there are pseudo-tokens within multi-embedding tokens, load them as well.
                     if km.startswith(k):
                         km2 = km.replace(k, k2)
                         self.string_to_param_dict[km2] = ckpt["string_to_param"][km]
