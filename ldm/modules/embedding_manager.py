@@ -1056,10 +1056,18 @@ class EmbeddingManager(nn.Module):
                 # The mapping in string_to_token_dict is determined by the tokenizer. 
                 # Shouldn't do the k->k2 mapping on string_to_token_dict.
                 self.string_to_token_dict[k2]        = k2_token
+                # Mapped from k in ckpt to k2 in the current session.
                 self.string_to_param_dict[k2]        = ckpt["string_to_param"][k]
                 self.string_to_ada_embedder_dict[k2] = ckpt["string_to_ada_embedder"][k]
-
                 print(f"Loaded {k}->{k2} from {ckpt_path}")
+
+                # Load pseudo-tokens within multi-embedding tokens.
+                for km in ckpt["string_to_param"].keys():
+                    if km.startswith(k):
+                        km2 = km.replace(k, k2)
+                        self.string_to_param_dict[km2] = ckpt["string_to_param"][km]
+                        self.string_to_ada_embedder_dict[km2] = ckpt["string_to_ada_embedder"][km]
+                        print(f"Loaded {km}->{km2} from {ckpt_path}")
 
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
             if "ada_emb_weight" in ckpt:
