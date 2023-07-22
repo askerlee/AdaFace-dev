@@ -3,9 +3,9 @@
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'selset' 'skipselset' 'cls_token_as_delta' 'eval'  -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'selset' 'skipselset' 'cls_token_as_delta' 'eval'  -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--cls_token_as_delta] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--cls_token_as_delta] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -13,7 +13,7 @@ end
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'static-layerwise' ]; or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--cls_token_as_delta] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--cls_token_as_delta] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -69,7 +69,8 @@ end
 set -q _flag_selset; and set indices0 $sel_set; or set indices0 (seq 1 (count $subjects))
 set indices $indices0[(seq $L $H)]
 
-set EXTRA_EVAL_FLAGS  --bb_type $_flag_bb_type
+set -q _flag_num_vectors_per_token; and set EXTRA_ARGS0 $EXTRA_ARGS0 --num_vectors_per_token $_flag_num_vectors_per_token
+set EXTRA_EVAL_FLAGS  --bb_type $_flag_bb_type --num_vectors_per_token $_flag_num_vectors_per_token
 
 echo Training on $subjects[$indices]
 
