@@ -374,7 +374,8 @@ def calc_chan_locality(feat):
     return chan_weights.detach()
 
 # flat_attn: [2, 8, 256] => [1, 2, 8, 256] => max/mean => [1, 256] => spatial_attn: [1, 16, 16].
-# spatial_attn [1, 16, 16] => spatial_weight [1, 16, 16]
+# spatial_attn [1, 16, 16] => spatial_weight [1, 16, 16].
+# BS: usually 1 (actually HALF_BS).
 def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     # flat_attn: [2, 8, 256] => [1, 2, 8, 256].
     # The 1 in dim 0 is BS, the batch size of each group of prompts.
@@ -391,9 +392,6 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
 
     spatial_scale = np.sqrt(flat_attn.shape[-1] / BS / spatial_shape.numel())
     spatial_shape2 = (int(spatial_shape[0] * spatial_scale), int(spatial_shape[1] * spatial_scale))
-    # Use L2 norm to aggregate the attentions of the 8 heads. 
-    # L2 norm strikes a balance between mean and max.
-    #spatial_attn = torch.norm(flat_attn, dim=2).sum(dim=1).reshape(BS, 1, *spatial_shape2)
     spatial_attn = flat_attn.mean(dim=2).sum(dim=1).reshape(BS, 1, *spatial_shape2)
     spatial_attn = F.interpolate(spatial_attn, size=spatial_shape, mode='bilinear', align_corners=False)
 

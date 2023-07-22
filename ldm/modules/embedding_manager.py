@@ -1266,17 +1266,8 @@ class EmbeddingManager(nn.Module):
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
     def calc_prompt_delta_loss(self, static_embeddings, ada_embeddings, do_ada_prompt_delta_reg):
-        # None: Apply delta loss on all layers of static embeddings.
-        static_delta_layer_indices  = None
-        ada_delta_layer_indices     = None
-
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_layers
-            # Apply delta loss on selected layers of ada embeddings.
-            # if the line below is commented, i.e., ada_delta_layer_indices is None, 
-            # then regularize all layers of ada embeddings.
-            #static_delta_layer_indices  = [4, 5, 6, 7, 8]
-            #ada_delta_layer_indices     = [4, 5, 6, 7, 8]
         else:
             num_embed_layers = 1
 
@@ -1311,24 +1302,33 @@ class EmbeddingManager(nn.Module):
             delta_loss_emb_mask = None
 
         use_ortho_subtract = True
+        # cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
+        # Embedding delta between class single and comp embeddings.
+        # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
+        # static_delta: [1, 16, 77, 768]. Different values for each layer along dim=1.
+        # Embedding delta between subject single and comp embeddings.
+        # static_delta / ada_delta should be aligned with cls_delta.
         if use_ortho_subtract:
             cls_delta    = ortho_subtract(static_cls_comp_emb,  static_cls_single_emb)
             static_delta = ortho_subtract(static_subj_comp_emb, static_subj_single_emb)
         else:
-            # cls_delta: [2, 16, 77, 768]. Should be a repeat of a tensor [2, 1, 77, 768] 
-            # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
             cls_delta    = static_cls_comp_emb - static_cls_single_emb
-            # static_delta: [2, 16, 77, 768]. Different values for each layer along dim=1.
             static_delta = static_subj_comp_emb - static_subj_single_emb
 
-        if static_delta_layer_indices is not None:
-            static_sel_delta        = static_delta[:, static_delta_layer_indices]
-            static_sel_cls_delta    = cls_delta[:, static_delta_layer_indices]
-        else:
-            static_sel_delta        = static_delta
-            static_sel_cls_delta    = cls_delta
+        if self.num_vectors_per_token > 1:
+            placeholder_indices_B, placeholder_indices_N = self.placeholder_indices
+            # Only keep the first half (for single prompts), as the second half is the same 
+            # (for comp prompts, but the placeholder location is identical as in single prompts)
+            placeholder_indices_B = placeholder_indices_B.chunk(2)[0]
+            placeholder_indices_N = placeholder_indices_N.chunk(2)[0]
+            placeholder_indices_B0, placeholder_indices_Bm = placeholder_indices_B[:1], placeholder_indices_B[1:]
+            placeholder_indices_N0, placeholder_indices_Nm = placeholder_indices_N[:1], placeholder_indices_N[1:]
+            placeholder_indices_0 = (placeholder_indices_B0, placeholder_indices_N0)
+            placeholder_indices_m = (placeholder_indices_Bm, placeholder_indices_Nm)
+            # Repeat (m - 1) times the embedding at placeholder_indices_0 and fill in as the pseudo-token embedding deltas.
+            cls_delta[placeholder_indices_m] = cls_delta[placeholder_indices_0].repeat(1, self.num_vectors_per_token - 1, 1)
 
-        static_delta_loss   = calc_delta_loss(static_sel_delta, static_sel_cls_delta, delta_loss_emb_mask)
+        static_delta_loss   = calc_delta_loss(static_delta, cls_delta, delta_loss_emb_mask)
 
         if do_ada_prompt_delta_reg and ada_embeddings is not None:
             # ada_embeddings: [4, 16, 77, 768]
@@ -1346,7 +1346,9 @@ class EmbeddingManager(nn.Module):
                     = twin_comp_ada_embeddings.chunk(2)
                 # ada_subj_single_emb: [2, 16, 77, 768].
                 ada_subj_single_emb = twin_single_ada_embeddings
-                # Repeat cls_delta at the batch dim to match the twin ada embeddings.
+                # static embeddings for the twins in the batch are the same, as the prompts are the same.
+                # They only differ on initial noises.
+                # So simply repeat cls_delta at the batch dim to match the twin ada embeddings.
                 cls_delta = cls_delta.repeat(2, 1, 1, 1)
                 delta_loss_emb_mask = delta_loss_emb_mask.repeat(2, 1, 1, 1)
             else:
@@ -1361,14 +1363,7 @@ class EmbeddingManager(nn.Module):
             else:
                 ada_delta = ada_subj_comp_emb - ada_subj_single_emb
 
-            if ada_delta_layer_indices is not None:
-                ada_sel_delta       = ada_delta[:, ada_delta_layer_indices]   
-                ada_sel_cls_delta   = cls_delta[:, ada_delta_layer_indices]
-            else:
-                ada_sel_delta       = ada_delta
-                ada_sel_cls_delta   = cls_delta
-
-            ada_delta_loss = calc_delta_loss(ada_sel_delta, ada_sel_cls_delta, delta_loss_emb_mask)
+            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, delta_loss_emb_mask)
             # The cached ada embeddings are useless now, release them.
             self.clear_ada_embedding_cache()
         else:

@@ -1305,10 +1305,10 @@ class LatentDiffusion(DDPM):
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed (concatenated),
                         # and the token number will be the double of subj_comps_emb.
-                        # Ada embeddings won't be mixed.
                         # Mixed embedding mix_comps_emb = 
                         # concat(subj_comps_emb, cls_comps_emb -| subj_comps_emb)_dim1. 
                         # -| means orthogonal subtraction.
+                        # Ada embeddings won't be mixed, but simply repeated.
                         mix_comps_emb_all_layers  = mix_embeddings(subj_comps_emb, cls_comps_emb, 
                                                                         c2_mix_weight=1,
                                                                         mix_scheme='adeltaconcat',
@@ -2108,12 +2108,11 @@ class LatentDiffusion(DDPM):
                 # [4, 77, 8, 256] / [4, 77, 8, 64]
                 # We don't need BP through attention into UNet.
                 attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
-                # subj_attn: [4, 8, 256 / 64] (by default) or [8, 8, 256 / 64] (if two embeddings each token)
+                # subj_attn: [4, 8, 256 / 64] (1 embedding  for 1 token) 
+                # or         [8, 8, 256 / 64] (2 embeddings for 1 token)
                 subj_attn = attn_mat[placeholder_indices]
-                # subj_attn_subj_single, ...: [2, 8, 256].
-                # 2 at the first dim is the two occurrences of the subject token 
-                # in the two sets of prompts. Therefore, HALF_BS is still needed to 
-                # determine its batch size in convert_attn_to_spatial_weight().
+                # subj_attn_subj_single, ...: [1, 8, 256] (1 embedding  for 1 token) 
+                # or                          [2, 8, 256] (2 embeddings for 1 token)
                 subj_attn_subj_single, subj_attn_subj_comps, subj_attn_mix_single,  subj_attn_mix_comps \
                     = subj_attn.chunk(4)
 
