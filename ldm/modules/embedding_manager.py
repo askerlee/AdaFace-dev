@@ -245,11 +245,10 @@ class AttentionalPooler(nn.Module):
         bg_out = v.mean(dim=1, keepdim=True) - fg_out
 
         # out: [2, 1, 768], [2, 1, 768] => [2, 1, 1536] => [2, 1536].
-        out = torch.cat([fg_out, bg_out], dim=-1)
-        # out: N, 1, D -> N, D, i.e., [2, 768]
+        # out = torch.cat([fg_out, bg_out], dim=-1)
+        # out: N, 1, D -> N, D, i.e., ([2, 768], [2, 768]).
         # Make the output shape consistent with MaskedAvgPool2d.
-        return out.squeeze(1)
-
+        return fg_out.squeeze(1), bg_out.squeeze(1)
 
 class StaticLayerwiseEmbedding(nn.Module):
     # num_layers: 16 (9 layers out of 25 of UNet are skipped), emb_dim: 768, 
@@ -295,7 +294,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             # Normalize pre_vecs, to roughly equalize the contributions of different predefined vectors.
             # self.pre_vecs.data = F.normalize(self.pre_vecs.data, dim=1)
         else:
-            self.N = 0
+            self.N = N = 0
             self.pre_vecs = None
 
         # basis_rand_weights: 16 * r, basis_vecs: r * 768. basis_rand_weights * basis_vecs: 16 * 768.
@@ -413,7 +412,7 @@ class AdaEmbedding(nn.Module):
                  # skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15],
                  layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },
-                 has_bias=True, use_attn_pooler=False,
+                 has_bias=True, use_attn_pooler=True, infeat_type='fg_bg',
                  device_type="cuda"):
         super().__init__()
 
@@ -421,6 +420,7 @@ class AdaEmbedding(nn.Module):
         self.num_layers = num_layers
         self.emb_dim = emb_dim
         self.r = r
+        self.infeat_type = infeat_type
         self.device_type = device_type
         self.unet_midlayer_idx = 13
         self.layer_idx2emb_idx = layer_idx2emb_idx
@@ -468,20 +468,21 @@ class AdaEmbedding(nn.Module):
 
         self.poolers = nn.ModuleList(poolers)
 
+        # attn_pooler doubles the input feature dimension at the output.
+        H = 2 if (self.use_attn_pooler and self.infeat_type == 'fg_bg') else 1
+
         # The dimension of the time embeddings used will be 
         # the first TD_frac dimensions of image features.
         # Most infeat_dims: 1280, *0.5 = 640. 
         # 320 dim should contain enough info, and avoid
         # overweighing the image features.
-        self.TD_frac = 0.5
+        self.TD_frac = 0.25 * H
 
         layer_maps = []
         layer_lns  = []
         layer_lncat2s = []
         self.TDs = []
 
-        # attn_pooler doubles the input feature dimension at the output.
-        H = 2 if self.use_attn_pooler else 1
 
         for i in range(num_layers):
             TD = int(self.TD_frac * self.attn_infeat_dims[i])
@@ -503,14 +504,15 @@ class AdaEmbedding(nn.Module):
         else:
             self.bias        = 0
 
-        print(f"AdaEmbedding initialized with {self.N} init vectors, {self.r} basis vectors")
+        print(f"AdaEmbedding initialized with {self.infeat_type} infeat, {self.N} init vectors, {self.r} basis vectors")
         self.call_count = 0
         self.debug = False
 
     # layer_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
     # time_emb: [B, 1280].
-    def forward(self, layer_idx, layer_attn_components, time_emb, static_subj_embs, img_mask=None, bp_to_unet=False):
+    def forward(self, layer_idx, layer_attn_components, time_emb, static_subj_embs, 
+                img_mask=None, bp_to_unet=False, cached_infeat_bg=None):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
         pooler  = self.poolers[emb_idx]
 
@@ -523,9 +525,26 @@ class AdaEmbedding(nn.Module):
             # infeat_pooled: [B, C_layer]
 
             static_subj_layer_emb   = static_subj_embs[emb_idx]
+            
             # Even if layer_infeat is grad-scaled, the pooler still receives the full gradient.
             # But the grad is scaled when it's further passed to the UNet.
-            infeat_pooled    = pooler(layer_attn_components, static_subj_layer_emb, img_mask, bp_to_unet)
+            if self.use_attn_pooler and self.infeat_type == 'bg' and cached_infeat_bg is not None:
+                infeat_pooled = cached_infeat_bg
+                infeat_bg = None
+            else:
+                infeat_pooled    = pooler(layer_attn_components, static_subj_layer_emb, img_mask, bp_to_unet)
+                if self.use_attn_pooler:
+                    infeat_fg, infeat_bg = infeat_pooled
+                    if self.infeat_type == 'fg_bg':
+                        infeat_pooled = torch.cat([infeat_fg, infeat_bg], dim=-1)
+                    elif self.infeat_type == 'fg':
+                        infeat_pooled = infeat_fg
+                    elif self.infeat_type == 'bg':
+                        infeat_pooled = infeat_bg
+                    else:
+                        raise ValueError(f"Unknown infeat_type {self.infeat_type}")
+                else:
+                    infeat_bg = None
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
@@ -574,10 +593,8 @@ class AdaEmbedding(nn.Module):
             if emb_idx == 24:
                 self.call_count += 1
 
-        return out_vec
-
-# Make it compatible with older checkpoints.
-LASREmbedding = AdaEmbedding
+        # Return infeat_bg to be used by another ada_embedder that specializes on the background.
+        return out_vec, infeat_bg
 
 # text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -670,6 +687,10 @@ class EmbeddingManager(nn.Module):
             init_neg_embeddings = None
             NEG = 0
 
+        # Only separate fg and bg embedders when multiple embeddings for a subject token are used.
+        self.use_sep_fg_bg_embedders = (self.num_vectors_per_token > 1)
+        self.no_init_vecs_for_extra_static_embedders = True
+
         for idx, placeholder_string in enumerate(placeholder_strings):
             # get_token_for_string <= get_clip_token_for_string.
             # force_single_token = True, as there should be only one token in placeholder_string.
@@ -707,15 +728,40 @@ class EmbeddingManager(nn.Module):
             for seq_offset in range(self.num_vectors_per_token):
                 # layerwise_lora_rank > 0 implies use_layerwise_embedding.
                 if layerwise_lora_rank > 0:
+                    # If no_init_vecs_for_extra_static_embedders, then only the first static embedder 
+                    # uses the init vectors. The remaining static embedders use random vectors 
+                    # to encourage diversity. In particular they may focusing more on the background.
+                    if self.no_init_vecs_for_extra_static_embedders and seq_offset > 0:
+                        init_word_embeddings_ = None
+                        init_word_weights_    = None
+                    else:
+                        init_word_embeddings_ = init_word_embeddings
+                        init_word_weights_    = init_word_weights
+
                     # num_vectors_per_embedder = num_unet_layers
                     token_params        = StaticLayerwiseEmbedding(self.num_vectors_per_embedder, self.token_dim, layerwise_lora_rank, 
                                                                    (0.1, 0.02), 
-                                                                   init_word_embeddings, init_word_weights, 
+                                                                   init_word_embeddings_, init_word_weights_, 
                                                                    init_neg_vecs=init_neg_embeddings)
+
+                    if self.use_sep_fg_bg_embedders:
+                        if seq_offset == 0:
+                            # The first ada embedder uses only fg features.
+                            infeat_type = 'fg'
+                        elif seq_offset == 1:
+                            # The second ada embedder uses only bg features.
+                            infeat_type = 'bg'
+                        else:
+                            # If num_vectors_per_token > 2, then the extra ada embedders 
+                            # use both fg and bg features.
+                            infeat_type = 'fg_bg'
+                    else:
+                        infeat_type = 'fg_bg'
 
                     token_ada_embedder  = AdaEmbedding(self.num_vectors_per_embedder, self.token_dim, layerwise_lora_rank, 
                                                        init_word_embeddings,
-                                                       use_attn_pooler=ada_use_attn_pooler)
+                                                       use_attn_pooler=ada_use_attn_pooler,
+                                                       infeat_type=infeat_type)
                 else:
                     # ANCHOR[id=init_embed] : self.num_vectors_per_embedder vectors are initialized with the same embedding.
                     token_params = torch.nn.Parameter(avg_init_word_embedding.repeat(self.num_vectors_per_embedder, 1), requires_grad=True)
@@ -895,6 +941,8 @@ class EmbeddingManager(nn.Module):
             if placeholder_indices[0].numel() == 0:
                 continue
 
+            cached_infeat_bg = None
+
             for seq_offset in range(self.num_vectors_per_token):
                 placeholder_string_i = placeholder_string if seq_offset == 0 else f"{placeholder_string}{seq_offset}"
 
@@ -907,9 +955,17 @@ class EmbeddingManager(nn.Module):
                 # a call to get_static_embedding(). 
                 # The pipeline is generate static embeddings first, then generate the ada embeddings. 
                 # So this assumption should always hold.
-                placeholder_embedding = placeholder_embedder(layer_idx, layer_attn_components, time_emb,
-                                                             static_subj_embs_dict[placeholder_string_i],
-                                                             self.img_mask, ada_bp_to_unet)
+                placeholder_embedding, infeat_bg = \
+                            placeholder_embedder(layer_idx, layer_attn_components, time_emb,
+                                                 static_subj_embs_dict[placeholder_string_i],
+                                                 self.img_mask, ada_bp_to_unet, cached_infeat_bg)
+                if seq_offset == 0:
+                    # Cache the bg infeat computed by the first (fg) ada embedder, 
+                    # to be used by the second (bg) ada embedder.
+                    cached_infeat_bg = infeat_bg
+                else:
+                    cached_infeat_bg = None
+
                 # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
                 # embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [2, 768].
                 # Sometimes (e.g. during inference, some instances contain the placeholder token but
@@ -1021,6 +1077,7 @@ class EmbeddingManager(nn.Module):
                      "string_to_ada_embedder":  self.string_to_ada_embedder_dict,
                      "ada_emb_weight":          self.ada_emb_weight,  
                      "num_vectors_per_token":   self.num_vectors_per_token,
+                     "use_sep_fg_bg_embedders": self.use_sep_fg_bg_embedders,
                    }, 
                     ckpt_path)
 
@@ -1076,6 +1133,13 @@ class EmbeddingManager(nn.Module):
                 self.set_ada_emb_weight(ckpt["ada_emb_weight"])
             if "num_vectors_per_token" in ckpt:
                 self.set_num_vectors_per_token(ckpt["num_vectors_per_token"])
+            if "use_sep_fg_bg_embedders" in ckpt:
+                self.use_sep_fg_bg_embedders = ckpt["use_sep_fg_bg_embedders"]
+            else:
+                # Compatibility with old checkpoints which were trained with only fg_bg type of ada embedders.
+                self.use_sep_fg_bg_embedders = False
+                for k in self.string_to_ada_embedder_dict.keys():
+                    self.string_to_ada_embedder_dict[k].infeat_type = 'fg_bg'
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
@@ -1228,8 +1292,9 @@ class EmbeddingManager(nn.Module):
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
                     print_str = f'reg_bias={loss_bias.item():.4f}, ' \
-                                f'reg_basis={loss_basis.item():.4f}, ' \
-                                f'reg_pre_vecs={loss_pre_vecs.item():.4f}, '
+                                f'reg_basis={loss_basis.item():.4f}, '
+                    if embobj.N > 0:
+                        print_str += f'reg_pre_vecs={loss_pre_vecs.item():.4f}, '
 
                     if isinstance(embobj, AdaEmbedding):
                         print_str += f'loss_ada_maps_weight={loss_ada_maps_weight.item():.4f}, ' \
@@ -1266,17 +1331,8 @@ class EmbeddingManager(nn.Module):
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
     def calc_prompt_delta_loss(self, static_embeddings, ada_embeddings, do_ada_prompt_delta_reg):
-        # None: Apply delta loss on all layers of static embeddings.
-        static_delta_layer_indices  = None
-        ada_delta_layer_indices     = None
-
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_layers
-            # Apply delta loss on selected layers of ada embeddings.
-            # if the line below is commented, i.e., ada_delta_layer_indices is None, 
-            # then regularize all layers of ada embeddings.
-            #static_delta_layer_indices  = [4, 5, 6, 7, 8]
-            #ada_delta_layer_indices     = [4, 5, 6, 7, 8]
         else:
             num_embed_layers = 1
 
@@ -1311,24 +1367,36 @@ class EmbeddingManager(nn.Module):
             delta_loss_emb_mask = None
 
         use_ortho_subtract = True
+        # cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
+        # Delta embedding between class single and comp embeddings.
+        # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
+        # static_delta: [1, 16, 77, 768]. Different values for each layer along dim=1.
+        # Delta embedding between subject single and comp embeddings.
+        # static_delta / ada_delta should be aligned with cls_delta.
         if use_ortho_subtract:
             cls_delta    = ortho_subtract(static_cls_comp_emb,  static_cls_single_emb)
             static_delta = ortho_subtract(static_subj_comp_emb, static_subj_single_emb)
         else:
-            # cls_delta: [2, 16, 77, 768]. Should be a repeat of a tensor [2, 1, 77, 768] 
-            # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
             cls_delta    = static_cls_comp_emb - static_cls_single_emb
-            # static_delta: [2, 16, 77, 768]. Different values for each layer along dim=1.
             static_delta = static_subj_comp_emb - static_subj_single_emb
 
-        if static_delta_layer_indices is not None:
-            static_sel_delta        = static_delta[:, static_delta_layer_indices]
-            static_sel_cls_delta    = cls_delta[:, static_delta_layer_indices]
-        else:
-            static_sel_delta        = static_delta
-            static_sel_cls_delta    = cls_delta
+        if self.num_vectors_per_token > 1:
+            placeholder_indices_B, placeholder_indices_N = self.placeholder_indices
+            # Only keep the first half (for single prompts), as the second half is the same 
+            # (for comp prompts, but the placeholder location is identical as in single prompts)
+            placeholder_indices_B = placeholder_indices_B.chunk(2)[0]
+            placeholder_indices_N = placeholder_indices_N.chunk(2)[0]
+            # Location of the first embedding in a multi-embedding token.
+            placeholder_indices_B0, placeholder_indices_Bm = placeholder_indices_B[:1], placeholder_indices_B[1:]
+            # Locations of the remaining embeddings in a multi-embedding token.
+            placeholder_indices_N0, placeholder_indices_Nm = placeholder_indices_N[:1], placeholder_indices_N[1:]
+            placeholder_indices_0 = (placeholder_indices_B0, placeholder_indices_N0)
+            placeholder_indices_m = (placeholder_indices_Bm, placeholder_indices_Nm)
+            # Repeat (m - 1) times the class delta embedding (corresponding to the subject delta embedding 
+            # "z" at placeholder_indices_0); use it to align the remaining embeddings in the multi-embedding token.
+            cls_delta[placeholder_indices_m] = cls_delta[placeholder_indices_0].repeat(1, self.num_vectors_per_token - 1, 1)
 
-        static_delta_loss   = calc_delta_loss(static_sel_delta, static_sel_cls_delta, delta_loss_emb_mask)
+        static_delta_loss   = calc_delta_loss(static_delta, cls_delta, delta_loss_emb_mask)
 
         if do_ada_prompt_delta_reg and ada_embeddings is not None:
             # ada_embeddings: [4, 16, 77, 768]
@@ -1346,7 +1414,9 @@ class EmbeddingManager(nn.Module):
                     = twin_comp_ada_embeddings.chunk(2)
                 # ada_subj_single_emb: [2, 16, 77, 768].
                 ada_subj_single_emb = twin_single_ada_embeddings
-                # Repeat cls_delta at the batch dim to match the twin ada embeddings.
+                # static embeddings for the twins in the batch are the same, as the prompts are the same.
+                # They only differ on initial noises.
+                # So simply repeat cls_delta at the batch dim to match the twin ada embeddings.
                 cls_delta = cls_delta.repeat(2, 1, 1, 1)
                 delta_loss_emb_mask = delta_loss_emb_mask.repeat(2, 1, 1, 1)
             else:
@@ -1361,14 +1431,7 @@ class EmbeddingManager(nn.Module):
             else:
                 ada_delta = ada_subj_comp_emb - ada_subj_single_emb
 
-            if ada_delta_layer_indices is not None:
-                ada_sel_delta       = ada_delta[:, ada_delta_layer_indices]   
-                ada_sel_cls_delta   = cls_delta[:, ada_delta_layer_indices]
-            else:
-                ada_sel_delta       = ada_delta
-                ada_sel_cls_delta   = cls_delta
-
-            ada_delta_loss = calc_delta_loss(ada_sel_delta, ada_sel_cls_delta, delta_loss_emb_mask)
+            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, delta_loss_emb_mask)
             # The cached ada embeddings are useless now, release them.
             self.clear_ada_embedding_cache()
         else:
