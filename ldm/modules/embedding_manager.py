@@ -1292,8 +1292,9 @@ class EmbeddingManager(nn.Module):
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
                     print_str = f'reg_bias={loss_bias.item():.4f}, ' \
-                                f'reg_basis={loss_basis.item():.4f}, ' \
-                                f'reg_pre_vecs={loss_pre_vecs.item():.4f}, '
+                                f'reg_basis={loss_basis.item():.4f}, '
+                    if embobj.N > 0:
+                        print_str += f'reg_pre_vecs={loss_pre_vecs.item():.4f}, '
 
                     if isinstance(embobj, AdaEmbedding):
                         print_str += f'loss_ada_maps_weight={loss_ada_maps_weight.item():.4f}, ' \
