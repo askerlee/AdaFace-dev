@@ -992,6 +992,10 @@ class EmbeddingManager(nn.Module):
     def update_placeholder_indices(self, tokenized_text, placeholder_token, num_vectors_per_token):
         placeholder_indices_B, placeholder_indices_N = \
             torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
+        
+        # placeholder_indices0 only contains the indices of the first placeholder embedding.
+        self.placeholder_indices0 = (placeholder_indices_B, placeholder_indices_N)
+
         if num_vectors_per_token > 1:
             BS = placeholder_indices_B.shape[0]
             placeholder_indices_B = placeholder_indices_B.unsqueeze(1).repeat(1, num_vectors_per_token).view(-1)
@@ -999,6 +1003,7 @@ class EmbeddingManager(nn.Module):
             # Add offsets to the indices of the pseudo-tokens.
             placeholder_indices_N += torch.arange(num_vectors_per_token, device=tokenized_text.device).repeat(BS)
         
+        # placeholder_indices contains the indices of all placeholder embeddings.
         self.placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
 
     def get_ada_emb_weight(self):
