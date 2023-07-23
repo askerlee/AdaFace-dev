@@ -2019,14 +2019,6 @@ class LatentDiffusion(DDPM):
             # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
         
         if self.do_comp_prompt_mix_reg and is_iter_teachable:
-            # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
-            # Only regularize on intermediate features, i.e., intermediate features generated 
-            # under subj_comp_prompts should satisfy the delta loss constraint:
-            # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
-            # F(subj_single_prompts) - F(cls_single_prompts)
-            loss_subj_attn_distill = 0
-            loss_feat_distill      = 0
-
             # unet_feats is a dict as: layer_idx -> unet_feat. 
             # It contains all the intermediate 25 layers of UNet features.
             unet_feats = cond[2]['unet_feats']
@@ -2034,199 +2026,208 @@ class LatentDiffusion(DDPM):
             # It contains the 5 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17.
             unet_attns = cond[2]['unet_attns']
-            # In a reused init iter, the denoise image may not look so authentic, so
-            # it receives a smaller weight.
+            
+            loss_subj_attn_distill, loss_feat_distill = \
+                                self.calc_prompt_mix_loss(unet_feats, unet_attns, 
+                                                          self.embedding_manager.placeholder_indices,
+                                                          HALF_BS)
+            
+            loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
+            loss_dict.update({f'{prefix}/loss_subj_attn_distill': loss_subj_attn_distill.detach()})
+
             distill_feat_weight      = 0.5 if (not is_reuse_init_iter) else 0.3
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.4
-            delta_attn_loss_scale    = 1
-            direct_attn_loss_scale   = 2
-            # The norm is actually the abs().mean(), so it has small magnitudes and should be scaled up.
-            direct_attn_norm_loss_scale = 5
 
-            # Discard top layers and the first few bottom layers from distillation.
-            # distill_layer_weights: relative weight of each distillation layer. 
-            # distill_layer_weights are normalized using distill_overall_weight.
-            # Conditioning layers are 7, 8, 12, 16, 17. All the 4 layers have 1280 channels.
-            # But intermediate layers also contribute to distillation. They have small weights.
-            # Layer 16 has strong face semantics, so it is given a small weight.
-            feat_distill_layer_weights = { 7:  1., 8: 1.,   
-                                          #9:  0.5, 10: 0.5, 11: 0.5, 
-                                           12: 0.5, 
-                                           16: 0.5, 17: 0.5,
-                                         }
-
-            attn_distill_layer_weights = { 7:  1., 8: 1.,
-                                           #9:  0.5, 10: 0.5, 11: 0.5,
-                                           12: 1.,
-                                           16: 1., 17: 1.,
-                                         }
-            
-            feat_distill_layer_weight_sum = np.sum(list(feat_distill_layer_weights.values()))
-            feat_distill_layer_weights = { k: v / feat_distill_layer_weight_sum for k, v in feat_distill_layer_weights.items() }
-            attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
-            attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
-
-            orig_placeholder_ind_B, orig_placeholder_ind_T = self.embedding_manager.placeholder_indices
-            # cat_placeholder_ind_B: a list of batch indices that point to individual instances.
-            # cat_placeholder_ind_T: a list of token indices that point to the placeholder token in each instance.
-            cat_placeholder_ind_B  = orig_placeholder_ind_B.clone()
-            cat_placeholder_ind_T  = orig_placeholder_ind_T.clone()
-            # cond[0].shape[1]: 154, number of tokens in the mixed prompts.
-            # Right shift the subject token indices by 77, 
-            # to locate the subject token (placeholder) in the concatenated comp prompts.
-            placeholder_indices_B = orig_placeholder_ind_B
-
-            # The class prompts are at the latter half of the batch.
-            # So we need to add the batch indices of the subject prompts, to locate
-            # the corresponding class prompts.
-            cls_placeholder_indices_B = placeholder_indices_B + HALF_BS * 2
-            # Concatenate the placeholder indices of the subject prompts and class prompts.
-            placeholder_indices_B = torch.cat([placeholder_indices_B, cls_placeholder_indices_B], dim=0)
-            # stack then flatten() to interlace the two lists.
-            placeholder_indices_T = torch.stack([orig_placeholder_ind_T, cat_placeholder_ind_T], dim=1).flatten()
-            # placeholder_indices: 
-            # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
-            #   tensor([6,  83,  6, 83,  6, 83,  6, 83]) )
-            placeholder_indices = (placeholder_indices_B, placeholder_indices_T)
-            mix_feat_grad_scale = 0.1
-            # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to teacher attn. 
-            # Setting to 0 may prevent the graph from being released and OOM.
-            mix_attn_grad_scale  = 0.01  
-            mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
-            mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
-
-            for unet_layer_idx, unet_feat in unet_feats.items():
-                if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
-                    continue
-
-                # each is [1, 1280, 16, 16]
-                feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
-                    = unet_feat.chunk(4)
+            loss_prompt_mix_reg =   loss_subj_attn_distill * distill_subj_attn_weight + \
+                                    loss_feat_distill      * distill_feat_weight 
                 
-                # [4, 8, 256, 77] / [4, 8, 64, 77] =>
-                # [4, 77, 8, 256] / [4, 77, 8, 64]
-                # We don't need BP through attention into UNet.
-                attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
-                # subj_attn: [4, 8, 256 / 64] (1 embedding  for 1 token) 
-                # or         [8, 8, 256 / 64] (2 embeddings for 1 token)
-                subj_attn = attn_mat[placeholder_indices]
-                # subj_attn_subj_single, ...: [1, 8, 256] (1 embedding  for 1 token) 
-                # or                          [2, 8, 256] (2 embeddings for 1 token)
-                subj_attn_subj_single, subj_attn_subj_comps, subj_attn_mix_single,  subj_attn_mix_comps \
-                    = subj_attn.chunk(4)
-
-                if (unet_layer_idx in attn_distill_layer_weights) and (distill_subj_attn_weight > 0):
-                    attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
-                    attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
-                    attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
-                    loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
-                                                                 first_n_dims_to_flatten=2, 
-                                                                 ref_grad_scale=0)
-                    
-                    # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comps/subj_attn_mix_single. 
-                    # Use this scaler to release the graph and avoid OOM.
-                    subj_attn_mix_comps_gs  = mix_attn_grad_scaler(subj_attn_mix_comps)
-                    subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
-                    loss_layer_subj_comps_attn  = self.get_loss(subj_attn_subj_comps,  subj_attn_mix_comps_gs,  mean=True)
-                    loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
-
-                    loss_layer_subj_comps_attn_norm  = (subj_attn_subj_comps.mean()  - subj_attn_mix_comps_gs.mean()).abs().mean()
-                    loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean() - subj_attn_mix_single_gs.mean()).abs().mean()
-                    # print(loss_layer_subj_comps_attn_norm, loss_layer_subj_single_attn_norm)
-
-                    # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
-                    # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
-                    loss_subj_attn_distill += ( loss_layer_subj_delta_attn * delta_attn_loss_scale \
-                                                 + (loss_layer_subj_comps_attn + loss_layer_subj_single_attn) * direct_attn_loss_scale \
-                                                 + (loss_layer_subj_comps_attn_norm + loss_layer_subj_single_attn_norm) * direct_attn_norm_loss_scale \
-                                              ) * attn_distill_layer_weight
-
-                use_subj_attn_as_spatial_weights = True
-                if use_subj_attn_as_spatial_weights:
-                    if unet_layer_idx not in feat_distill_layer_weights:
-                        continue
-                    feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
-
-                    feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
-                        = unet_feat.chunk(4)
-                    
-                    # convert_attn_to_spatial_weight() will detach attention weights to 
-                    # avoid BP through attention.
-                    #spatial_weight_subj_single, spatial_attn_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
-                    #spatial_weight_subj_comps,  spatial_attn_subj_comps  = convert_attn_to_spatial_weight(subj_attn_subj_comps,  HALF_BS, feat_subj_comps.shape[2:])
-                    # spatial_weight_mix_single,  spatial_attn_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
-                    spatial_weight_mix_comps,   spatial_attn_mix_comps   = convert_attn_to_spatial_weight(subj_attn_mix_comps,   HALF_BS, feat_mix_comps.shape[2:])
-
-                    # spatial_attn_mix_comps is returned for debugging purposes. Delete to release RAM.
-                    del spatial_attn_mix_comps
-
-                    # Use mix single/comps weights on both subject-only and mix features, 
-                    # to reduce misalignment and facilitate distillation.
-                    feat_subj_single = feat_subj_single * spatial_weight_mix_comps
-                    feat_subj_comps  = feat_subj_comps  * spatial_weight_mix_comps
-                    feat_mix_single  = feat_mix_single  * spatial_weight_mix_comps
-                    feat_mix_comps   = feat_mix_comps   * spatial_weight_mix_comps
-
-                do_feat_pooling = True
-                feat_pool_kernel_size = 4
-                feat_pool_stride      = 2
-                # feature pooling: allow small perturbations of the locations of pixels.
-                if do_feat_pooling:
-                    pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
-                else:
-                    pooler = nn.Identity()
-
-                # Pool the H, W dimensions to remove spatial information.
-                # After pooling, feat_subj_single, feat_subj_comps, 
-                # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...
-                feat_subj_single = pooler(feat_subj_single).reshape(feat_subj_single.shape[0], -1)
-                feat_subj_comps  = pooler(feat_subj_comps).reshape(feat_subj_comps.shape[0], -1)
-                feat_mix_single  = pooler(feat_mix_single).reshape(feat_mix_single.shape[0], -1)
-                feat_mix_comps   = pooler(feat_mix_comps).reshape(feat_mix_comps.shape[0], -1)
-
-                feat_mix_single  = mix_feat_grad_scaler(feat_mix_single)
-                feat_mix_comps   = mix_feat_grad_scaler(feat_mix_comps)
-
-                distill_on_delta = True
-                if distill_on_delta:
-                    # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
-                    feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_mix_single)
-                    feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
-                else:
-                    feat_mix_delta  = feat_mix_comps
-                    feat_subj_delta = feat_subj_comps
-                    
-                # feat_subj_delta, feat_mix_delta: [1, 1280], ...
-                # Pool the spatial dimensions H, W to remove spatial information.
-                # The gradient goes back to feat_subj_delta -> feat_subj_comps,
-                # as well as feat_mix_delta -> feat_mix_comps.
-                # If stop_single_grad, the gradients to feat_subj_single and feat_mix_single are stopped, 
-                # as these two images should look good by themselves (since they only contain the subject).
-                # Note the learning strategy to the single image features should be different from 
-                # the single embeddings, as the former should be optimized to look good by itself,
-                # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
-                # and 2) the embeddings are amendable to composition.
-                loss_layer_feat_distill = self.get_loss(feat_subj_delta, feat_mix_delta, mean=True)
-                
-                # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
-                loss_feat_distill += loss_layer_feat_distill * feat_distill_layer_weight
-
-            self.release_plosses_intermediates(locals())
-
-            loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
-            loss_dict.update({f'{prefix}/loss_subj_attn_distill': loss_subj_attn_distill.detach()})
-            loss_prompt_mix_reg =   loss_feat_distill      * distill_feat_weight \
-                                  + loss_subj_attn_distill * distill_subj_attn_weight
-                                    
             loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
-            
+            self.release_plosses_intermediates(locals())
             self.embedding_manager.placeholder_indices = None
 
 
         loss_dict.update({f'{prefix}/loss': loss.detach()})
 
         return loss, loss_dict
+
+    def calc_prompt_mix_loss(self, unet_feats, unet_attns, placeholder_indices, HALF_BS):
+        # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
+        # Only regularize on intermediate features, i.e., intermediate features generated 
+        # under subj_comp_prompts should satisfy the delta loss constraint:
+        # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
+        # F(subj_single_prompts) - F(cls_single_prompts)
+        loss_subj_attn_distill = 0
+        loss_feat_distill      = 0
+
+        # In a reused init iter, the denoise image may not look so authentic, so
+        # it receives a smaller weight.
+        delta_attn_loss_scale    = 1
+        direct_attn_loss_scale   = 2
+        # The norm is actually the abs().mean(), so it has small magnitudes and should be scaled up.
+        direct_attn_norm_loss_scale = 5
+
+        # Discard top layers and the first few bottom layers from distillation.
+        # distill_layer_weights: relative weight of each distillation layer. 
+        # distill_layer_weights are normalized using distill_overall_weight.
+        # Conditioning layers are 7, 8, 12, 16, 17. All the 4 layers have 1280 channels.
+        # But intermediate layers also contribute to distillation. They have small weights.
+        # Layer 16 has strong face semantics, so it is given a small weight.
+        feat_distill_layer_weights = { 7:  1., 8: 1.,   
+                                       #9:  0.5, 10: 0.5, 11: 0.5, 
+                                       12: 0.5, 
+                                       16: 0.5, 17: 0.5,
+                                     }
+
+        attn_distill_layer_weights = { 7:  1., 8: 1.,
+                                       #9:  0.5, 10: 0.5, 11: 0.5,
+                                       12: 1.,
+                                       16: 1., 17: 1.,
+                                     }
+        
+        # Normalize the weights above so that each set sum to 1.
+        feat_distill_layer_weight_sum = np.sum(list(feat_distill_layer_weights.values()))
+        feat_distill_layer_weights = { k: v / feat_distill_layer_weight_sum for k, v in feat_distill_layer_weights.items() }
+        attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
+        attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
+
+        orig_placeholder_ind_B, orig_placeholder_ind_T = placeholder_indices
+        # The class prompts are at the latter half of the batch.
+        # So we need to add the batch indices of the subject prompts, to locate
+        # the corresponding class prompts.
+        cls_placeholder_indices_B = placeholder_indices_B + HALF_BS * 2
+        # Concatenate the placeholder indices of the subject prompts and class prompts.
+        placeholder_indices_B = torch.cat([orig_placeholder_ind_B, cls_placeholder_indices_B], dim=0)
+        placeholder_indices_T = torch.cat([orig_placeholder_ind_T, orig_placeholder_ind_T], dim=0)
+        # placeholder_indices: 
+        # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
+        #   tensor([6,  7,   6, 7,   6, 7,   6, 7]) )
+        placeholder_indices = (placeholder_indices_B, placeholder_indices_T)
+        mix_feat_grad_scale = 0.1
+        # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to teacher attn. 
+        # Setting to 0 may prevent the graph from being released and OOM.
+        mix_attn_grad_scale  = 0.01  
+        mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
+        mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
+
+        for unet_layer_idx, unet_feat in unet_feats.items():
+            if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
+                continue
+
+            # each is [1, 1280, 16, 16]
+            feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
+                = unet_feat.chunk(4)
+            
+            # [4, 8, 256, 77] / [4, 8, 64, 77] =>
+            # [4, 77, 8, 256] / [4, 77, 8, 64]
+            # We don't need BP through attention into UNet.
+            attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
+            # subj_attn: [4, 8, 256 / 64] (1 embedding  for 1 token) 
+            # or         [8, 8, 256 / 64] (2 embeddings for 1 token)
+            subj_attn = attn_mat[placeholder_indices]
+            # subj_attn_subj_single, ...: [1, 8, 256] (1 embedding  for 1 token) 
+            # or                          [2, 8, 256] (2 embeddings for 1 token)
+            subj_attn_subj_single, subj_attn_subj_comps, subj_attn_mix_single,  subj_attn_mix_comps \
+                = subj_attn.chunk(4)
+
+            if (unet_layer_idx in attn_distill_layer_weights):
+                attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
+                attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
+                attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
+                loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
+                                                                first_n_dims_to_flatten=2, 
+                                                                ref_grad_scale=0)
+                
+                # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comps/subj_attn_mix_single. 
+                # Use this scaler to release the graph and avoid OOM.
+                subj_attn_mix_comps_gs  = mix_attn_grad_scaler(subj_attn_mix_comps)
+                subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
+                loss_layer_subj_comps_attn  = self.get_loss(subj_attn_subj_comps,  subj_attn_mix_comps_gs,  mean=True)
+                loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
+
+                breakpoint()
+                loss_layer_subj_comps_attn_norm  = (subj_attn_subj_comps.mean()  - subj_attn_mix_comps_gs.mean()).abs().mean()
+                loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean() - subj_attn_mix_single_gs.mean()).abs().mean()
+                # print(loss_layer_subj_comps_attn_norm, loss_layer_subj_single_attn_norm)
+
+                # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
+                # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
+                loss_subj_attn_distill += ( loss_layer_subj_delta_attn * delta_attn_loss_scale \
+                                                + (loss_layer_subj_comps_attn + loss_layer_subj_single_attn) * direct_attn_loss_scale \
+                                                + (loss_layer_subj_comps_attn_norm + loss_layer_subj_single_attn_norm) * direct_attn_norm_loss_scale \
+                                            ) * attn_distill_layer_weight
+
+            use_subj_attn_as_spatial_weights = True
+            if use_subj_attn_as_spatial_weights:
+                if unet_layer_idx not in feat_distill_layer_weights:
+                    continue
+                feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
+
+                feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
+                    = unet_feat.chunk(4)
+                
+                # convert_attn_to_spatial_weight() will detach attention weights to 
+                # avoid BP through attention.
+                #spatial_weight_subj_single, spatial_attn_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
+                #spatial_weight_subj_comps,  spatial_attn_subj_comps  = convert_attn_to_spatial_weight(subj_attn_subj_comps,  HALF_BS, feat_subj_comps.shape[2:])
+                # spatial_weight_mix_single,  spatial_attn_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
+                spatial_weight_mix_comps,   spatial_attn_mix_comps   = convert_attn_to_spatial_weight(subj_attn_mix_comps,   HALF_BS, feat_mix_comps.shape[2:])
+
+                # spatial_attn_mix_comps is returned for debugging purposes. Delete to release RAM.
+                del spatial_attn_mix_comps
+
+                # Use mix single/comps weights on both subject-only and mix features, 
+                # to reduce misalignment and facilitate distillation.
+                feat_subj_single = feat_subj_single * spatial_weight_mix_comps
+                feat_subj_comps  = feat_subj_comps  * spatial_weight_mix_comps
+                feat_mix_single  = feat_mix_single  * spatial_weight_mix_comps
+                feat_mix_comps   = feat_mix_comps   * spatial_weight_mix_comps
+
+            do_feat_pooling = True
+            feat_pool_kernel_size = 4
+            feat_pool_stride      = 2
+            # feature pooling: allow small perturbations of the locations of pixels.
+            if do_feat_pooling:
+                pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
+            else:
+                pooler = nn.Identity()
+
+            # Pool the H, W dimensions to remove spatial information.
+            # After pooling, feat_subj_single, feat_subj_comps, 
+            # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...
+            feat_subj_single = pooler(feat_subj_single).reshape(feat_subj_single.shape[0], -1)
+            feat_subj_comps  = pooler(feat_subj_comps).reshape(feat_subj_comps.shape[0], -1)
+            feat_mix_single  = pooler(feat_mix_single).reshape(feat_mix_single.shape[0], -1)
+            feat_mix_comps   = pooler(feat_mix_comps).reshape(feat_mix_comps.shape[0], -1)
+
+            feat_mix_single  = mix_feat_grad_scaler(feat_mix_single)
+            feat_mix_comps   = mix_feat_grad_scaler(feat_mix_comps)
+
+            distill_on_delta = True
+            if distill_on_delta:
+                # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
+                feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_mix_single)
+                feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
+            else:
+                feat_mix_delta  = feat_mix_comps
+                feat_subj_delta = feat_subj_comps
+                
+            # feat_subj_delta, feat_mix_delta: [1, 1280], ...
+            # Pool the spatial dimensions H, W to remove spatial information.
+            # The gradient goes back to feat_subj_delta -> feat_subj_comps,
+            # as well as feat_mix_delta -> feat_mix_comps.
+            # If stop_single_grad, the gradients to feat_subj_single and feat_mix_single are stopped, 
+            # as these two images should look good by themselves (since they only contain the subject).
+            # Note the learning strategy to the single image features should be different from 
+            # the single embeddings, as the former should be optimized to look good by itself,
+            # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
+            # and 2) the embeddings are amendable to composition.
+            loss_layer_feat_distill = self.get_loss(feat_subj_delta, feat_mix_delta, mean=True)
+            
+            # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
+            loss_feat_distill += loss_layer_feat_distill * feat_distill_layer_weight
+
+        return loss_subj_attn_distill, loss_feat_distill
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):
