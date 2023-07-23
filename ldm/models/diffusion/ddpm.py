@@ -2095,7 +2095,7 @@ class LatentDiffusion(DDPM):
         # The class prompts are at the latter half of the batch.
         # So we need to add the batch indices of the subject prompts, to locate
         # the corresponding class prompts.
-        cls_placeholder_indices_B = placeholder_indices_B + HALF_BS * 2
+        cls_placeholder_indices_B = orig_placeholder_ind_B + HALF_BS * 2
         # Concatenate the placeholder indices of the subject prompts and class prompts.
         placeholder_indices_B = torch.cat([orig_placeholder_ind_B, cls_placeholder_indices_B], dim=0)
         placeholder_indices_T = torch.cat([orig_placeholder_ind_T, orig_placeholder_ind_T], dim=0)
@@ -2145,7 +2145,6 @@ class LatentDiffusion(DDPM):
                 loss_layer_subj_comps_attn  = self.get_loss(subj_attn_subj_comps,  subj_attn_mix_comps_gs,  mean=True)
                 loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
 
-                breakpoint()
                 loss_layer_subj_comps_attn_norm  = (subj_attn_subj_comps.mean()  - subj_attn_mix_comps_gs.mean()).abs().mean()
                 loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean() - subj_attn_mix_single_gs.mean()).abs().mean()
                 # print(loss_layer_subj_comps_attn_norm, loss_layer_subj_single_attn_norm)
