@@ -689,6 +689,7 @@ class EmbeddingManager(nn.Module):
 
         # Only separate fg and bg embedders when multiple embeddings for a subject token are used.
         self.use_sep_fg_bg_embedders = (self.num_vectors_per_token > 1)
+        self.no_init_vecs_for_extra_static_embedders = True
 
         for idx, placeholder_string in enumerate(placeholder_strings):
             # get_token_for_string <= get_clip_token_for_string.
@@ -727,10 +728,20 @@ class EmbeddingManager(nn.Module):
             for seq_offset in range(self.num_vectors_per_token):
                 # layerwise_lora_rank > 0 implies use_layerwise_embedding.
                 if layerwise_lora_rank > 0:
+                    # If no_init_vecs_for_extra_static_embedders, then only the first static embedder 
+                    # uses the init vectors. The remaining static embedders use random vectors 
+                    # to encourage diversity. In particular they may focusing more on the background.
+                    if self.no_init_vecs_for_extra_static_embedders and seq_offset > 0:
+                        init_word_embeddings_ = None
+                        init_word_weights_    = None
+                    else:
+                        init_word_embeddings_ = init_word_embeddings
+                        init_word_weights_    = init_word_weights
+
                     # num_vectors_per_embedder = num_unet_layers
                     token_params        = StaticLayerwiseEmbedding(self.num_vectors_per_embedder, self.token_dim, layerwise_lora_rank, 
                                                                    (0.1, 0.02), 
-                                                                   init_word_embeddings, init_word_weights, 
+                                                                   init_word_embeddings_, init_word_weights_, 
                                                                    init_neg_vecs=init_neg_embeddings)
 
                     if self.use_sep_fg_bg_embedders:
@@ -1125,11 +1136,11 @@ class EmbeddingManager(nn.Module):
             if "use_sep_fg_bg_embedders" in ckpt:
                 self.use_sep_fg_bg_embedders = ckpt["use_sep_fg_bg_embedders"]
             else:
-                # Compatibility with old checkpoints.
+                # Compatibility with old checkpoints which were trained with only fg_bg type of ada embedders.
                 self.use_sep_fg_bg_embedders = False
                 for k in self.string_to_ada_embedder_dict.keys():
                     self.string_to_ada_embedder_dict[k].infeat_type = 'fg_bg'
-                    
+
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def optimized_parameters(self):
