@@ -294,7 +294,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             # Normalize pre_vecs, to roughly equalize the contributions of different predefined vectors.
             # self.pre_vecs.data = F.normalize(self.pre_vecs.data, dim=1)
         else:
-            self.N = 0
+            self.N = N = 0
             self.pre_vecs = None
 
         # basis_rand_weights: 16 * r, basis_vecs: r * 768. basis_rand_weights * basis_vecs: 16 * 768.
