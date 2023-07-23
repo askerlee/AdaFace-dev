@@ -1815,6 +1815,8 @@ class LatentDiffusion(DDPM):
                 clip_images_code = torch.cat([x_recon_subj_comp, x_recon_mix_comp], dim=0)
                 clip_prompts_comp = cond[2]['cls_comp_prompts'] * 2
 
+            # Remove the prefix 'a face portrait of ' from the prompts.
+            clip_prompts_comp = [ p.replace('a face portrait of ', '') for p in clip_prompts_comp ]
             if len(clip_images_code) != len(clip_prompts_comp):
                 breakpoint()
 
@@ -1823,9 +1825,9 @@ class LatentDiffusion(DDPM):
             # DO NOT use CLIP loss to optimize the model. It will hurt the performance.
             with torch.no_grad():
                 clip_images = self.decode_first_stage(clip_images_code)
-
                 losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
                                                                                      reduction='diag')
+                #print(clip_prompts_comp)
 
             # Instances are arranged as: 
             # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
@@ -2029,12 +2031,14 @@ class LatentDiffusion(DDPM):
             
             loss_subj_attn_distill, loss_feat_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
-                                                          self.embedding_manager.placeholder_indices,
+                                                          self.embedding_manager.placeholder_indices0,
                                                           HALF_BS)
             
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_distill': loss_subj_attn_distill.detach()})
 
+            # In a reused init iter, the denoise image may not look so authentic, so
+            # it receives a smaller weight.
             distill_feat_weight      = 0.5 if (not is_reuse_init_iter) else 0.3
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.4
@@ -2044,7 +2048,6 @@ class LatentDiffusion(DDPM):
                 
             loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
             self.release_plosses_intermediates(locals())
-            self.embedding_manager.placeholder_indices = None
 
 
         loss_dict.update({f'{prefix}/loss': loss.detach()})
@@ -2060,12 +2063,10 @@ class LatentDiffusion(DDPM):
         loss_subj_attn_distill = 0
         loss_feat_distill      = 0
 
-        # In a reused init iter, the denoise image may not look so authentic, so
-        # it receives a smaller weight.
         delta_attn_loss_scale    = 1
         direct_attn_loss_scale   = 2
         # The norm is actually the abs().mean(), so it has small magnitudes and should be scaled up.
-        direct_attn_norm_loss_scale = 5
+        direct_attn_norm_loss_scale = 10
 
         # Discard top layers and the first few bottom layers from distillation.
         # distill_layer_weights: relative weight of each distillation layer. 
@@ -2135,8 +2136,8 @@ class LatentDiffusion(DDPM):
                 attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
                 attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
                 loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
-                                                                first_n_dims_to_flatten=2, 
-                                                                ref_grad_scale=0)
+                                                             first_n_dims_to_flatten=2, 
+                                                             ref_grad_scale=0)
                 
                 # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comps/subj_attn_mix_single. 
                 # Use this scaler to release the graph and avoid OOM.
@@ -2154,7 +2155,7 @@ class LatentDiffusion(DDPM):
                 loss_subj_attn_distill += ( loss_layer_subj_delta_attn * delta_attn_loss_scale \
                                                 + (loss_layer_subj_comps_attn + loss_layer_subj_single_attn) * direct_attn_loss_scale \
                                                 + (loss_layer_subj_comps_attn_norm + loss_layer_subj_single_attn_norm) * direct_attn_norm_loss_scale \
-                                            ) * attn_distill_layer_weight
+                                          ) * attn_distill_layer_weight
 
             use_subj_attn_as_spatial_weights = True
             if use_subj_attn_as_spatial_weights:
