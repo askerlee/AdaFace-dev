@@ -1944,9 +1944,11 @@ class LatentDiffusion(DDPM):
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
                     # since this x_recon was denoised under this cond.
+                    # Use the mix half of the batch (chunk(2)[1]) instead of the subject half, as 
+                    # the mix half is better at composition (it's worse on subject authenticity, but that's fine).
+                    x_start_reuse = x_recon.detach().chunk(2)[1].repeat(2, 1, 1, 1)
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but mix comp = subj comp.
-                    x_start_reuse = x_recon.detach().chunk(2)[1].repeat(2, 1, 1, 1)
                     self.cached_inits = { 'x_start':        x_start_reuse, 
                                           'delta_prompts':  cond_orig[2]['delta_prompts'],
                                           't':              t }
