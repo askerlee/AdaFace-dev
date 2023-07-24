@@ -1303,14 +1303,15 @@ class LatentDiffusion(DDPM):
                         c_in2 = subj_single_prompts + subj_comp_prompts + mix_single_prompts + mix_comp_prompts
 
                         if self.embedding_manager.num_vectors_per_token > 1:
+                            M = self.embedding_manager.num_vectors_per_token
                             placeholder_indices = self.embedding_manager.placeholder_indices
                             # Only keep the first half (for single prompts), as the second half is the same 
                             # (for comp prompts, differs at the batch index, but the token index is identical)
                             placeholder_indices_N = placeholder_indices[1].chunk(2)[0]
                             # Location of the first embedding in a multi-embedding token.
                             placeholder_indices_N0 = placeholder_indices_N[:1]
-                            M = self.embedding_manager.num_vectors_per_token
-                            # cls_single_emb, cls_single_repl_emb: [64, 77, 768]
+                            # cls_single_emb, cls_single_repl_emb: [16, 77, 768].
+                            # Use (:, placeholder_indices_N) as index, so that we can index all 16 embeddings at the same time.
                             repl_mask = torch.zeros_like(cls_single_emb)
                             # Almost 0 everywhere, except those corresponding to the multi-embedding token.
                             repl_mask[:, placeholder_indices_N] = 1
@@ -1938,13 +1939,15 @@ class LatentDiffusion(DDPM):
                     # do classifier-free guidance, so that x_recon are better instances
                     # to be used to initialize the next reuse_init comp iteration.
                     model_output, x_recon, ada_embeddings = \
-                        self.guided_denoise(x_start, noise, t, cond_orig, has_grad=True, do_recon=True)
+                        self.guided_denoise(x_start, noise, t, cond_orig, has_grad=True, 
+                                            do_recon=True, cfg_scales=cfg_scales_for_clip_loss)
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
                     # since this x_recon was denoised under this cond.
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but mix comp = subj comp.
-                    self.cached_inits = { 'x_start':        x_recon.detach(), 
+                    x_start_reuse = x_recon.detach().chunk(2)[1].repeat(2, 1, 1, 1)
+                    self.cached_inits = { 'x_start':        x_start_reuse, 
                                           'delta_prompts':  cond_orig[2]['delta_prompts'],
                                           't':              t }
                     self.cached_inits_available = True
@@ -1971,7 +1974,7 @@ class LatentDiffusion(DDPM):
                         c_static_emb3 = subj_single_emb.repeat(2, 1, 1, 1)
                         c_in3 = subj_single_prompts * 2
                         cond_single = (c_static_emb3, c_in3, extra_info)
-                        # Previously returend ada_embeddings from guided_denoise() is twin_comp_ada_embeddings. 
+                        # Previously retured ada_embeddings from guided_denoise() is twin_comp_ada_embeddings. 
                         # twin_comp_ada_embeddings: [4, 16, 77, 768], 
                         # the two sets of ada embeddings with compositional prompts.
                         self.embedding_manager.init_ada_embedding_cache()
