@@ -1253,20 +1253,19 @@ class LatentDiffusion(DDPM):
                     N_EMBEDS = ORIG_BS * N_LAYERS
                     # HALF_BS is at least 1. So if ORIG_BS == 1, then HALF_BS = 1.
                     HALF_BS  = max(ORIG_BS // 2, 1)
-
+                    
                     if self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg:
                         # Only keep the first half of batched prompts to save RAM.
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
                             cls_single_prompts[:HALF_BS],  cls_comp_prompts[:HALF_BS]
                                             
-                    # PROMPT_BS = ORIG_BS * num_compositions_per_image.
-                    # So when num_compositions_per_image > 1, subj_single_prompts/cls_single_prompts contains repeated prompts,
-                    # subj_comp_prompts/cls_comp_prompts contains varying compositional prompts 
-                    # that make PROMPT_BS > ORIG_BS.
-                    PROMPT_BS = len(subj_single_prompts)
+                    # If not do_ada_prompt_delta_reg, we still compute the static embeddings 
+                    # of the 4 types of prompts, to compute static delta loss. But now there are 8 prompts (4*BS=8).
                     delta_prompts = subj_single_prompts + subj_comp_prompts \
                                     + cls_single_prompts + cls_comp_prompts
+                    # print(delta_prompts)
+                    # breakpoint()
                     # c_static_emb: the static embeddings [4 * N_EMBEDS, 77, 768], 
                     # 4 * N_EMBEDS = 4 * ORIG_BS * N_LAYERS,
                     # whose layer dimension (N_LAYERS) is tucked into the batch dimension. 
@@ -1316,6 +1315,8 @@ class LatentDiffusion(DDPM):
                         # concat(subj_comps_emb, cls_comps_emb -| subj_comps_emb)_dim1. 
                         # -| means orthogonal subtraction.
                         # Ada embeddings won't be mixed, but simply repeated.
+                        # The first half of the embeddings will be used as the q/v in cross attention layers.
+                        # The second half of the embeddings will be used as the k in cross attention layers.
                         mix_comps_emb_all_layers  = mix_embeddings(subj_comps_emb, cls_comps_emb, 
                                                                    c2_mix_weight=1,
                                                                    mix_scheme='adeltaconcat',
@@ -1352,8 +1353,7 @@ class LatentDiffusion(DDPM):
                             layer_mask = layer_mask.reshape(-1, *mix_comps_emb_all_layers.shape[1:])
 
                             # This copy of subj_single_emb, subj_comps_emb will be simply 
-                            # repeated at the token dimension to match 
-                            # the token number of the mixed (concatenated) 
+                            # repeated at the token dimension to match the token number of the mixed (concatenated) 
                             # mix_single_emb and mix_comps_emb embeddings.
                             subj_comps_emb  = subj_comps_emb.repeat(1, 2, 1)
                             subj_single_emb = subj_single_emb.repeat(1, 2, 1)
@@ -1414,12 +1414,14 @@ class LatentDiffusion(DDPM):
                     extra_info['cls_single_prompts'] = cls_single_prompts
                     extra_info['delta_prompts']      = c_in
 
+                    # c_static_emb2 is the static embeddings of the prompts used in losses other than 
+                    # the static delta loss, e.g., used to estimate the ada embeddings.
                     # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
                     # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
                     c = (c_static_emb2, c_in2, extra_info)
-                    # The full c_static_emb (embeddings of subj_single_prompts, subj_comp_prompts, 
-                    # cls_single_prompts, cls_comp_prompts) is backed up to be used 
-                    # to compute the static delta loss later.
+                    # c_static_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
+                    # cls_single_prompts, cls_comp_prompts. 
+                    # c_static_emb is backed up to be used to compute the static delta loss.
                     self.c_static_emb = c_static_emb
 
                 else:
@@ -2139,6 +2141,12 @@ class LatentDiffusion(DDPM):
             subj_attn = attn_mat[placeholder_indices]
             # subj_attn_subj_single, ...: [1, 8, 256] (1 embedding  for 1 token) 
             # or                          [2, 8, 256] (2 embeddings for 1 token)
+            multi_emb_weights = torch.ones(subj_attn.shape[0], 1, 1, device=subj_attn.device)
+            # The extra embeddings have smaller weights than the main embedding at subj_attn[0].
+            # Such that they receive less restrictions than the main embedding, and can be "freer" to 
+            # learn to attend to the background.
+            multi_emb_weights[1:] = 0.5
+            subj_attn = subj_attn * multi_emb_weights
             subj_attn_subj_single, subj_attn_subj_comps, subj_attn_mix_single,  subj_attn_mix_comps \
                 = subj_attn.chunk(4)
 
@@ -2157,8 +2165,9 @@ class LatentDiffusion(DDPM):
                 loss_layer_subj_comps_attn  = self.get_loss(subj_attn_subj_comps,  subj_attn_mix_comps_gs,  mean=True)
                 loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
 
-                loss_layer_subj_comps_attn_norm  = (subj_attn_subj_comps.mean()  - subj_attn_mix_comps_gs.mean()).abs().mean()
-                loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean() - subj_attn_mix_single_gs.mean()).abs().mean()
+                # Align the attention corresponding to each embedding individually.
+                loss_layer_subj_comps_attn_norm  = (subj_attn_subj_comps.mean(dim=(1,2))  - subj_attn_mix_comps_gs.mean(dim=(1,2))).abs().mean()
+                loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean(dim=(1,2)) - subj_attn_mix_single_gs.mean(dim=(1,2))).abs().mean()
                 # print(loss_layer_subj_comps_attn_norm, loss_layer_subj_single_attn_norm)
 
                 # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
