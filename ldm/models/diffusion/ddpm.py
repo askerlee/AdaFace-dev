@@ -26,7 +26,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, calc_stats, \
                        GradientScaler, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
-                       save_grid, chunk_list
+                       save_grid, chunk_list, patch_multi_embeddings
 
 from ldm.modules.ema import LitEma
 from ldm.modules.sophia import SophiaG
@@ -1267,7 +1267,6 @@ class LatentDiffusion(DDPM):
                     PROMPT_BS = len(subj_single_prompts)
                     delta_prompts = subj_single_prompts + subj_comp_prompts \
                                     + cls_single_prompts + cls_comp_prompts
-                    PROMPT_N_EMBEDS = PROMPT_BS * N_LAYERS
                     # c_static_emb: the static embeddings [4 * N_EMBEDS, 77, 768], 
                     # 4 * N_EMBEDS = 4 * ORIG_BS * N_LAYERS,
                     # whose layer dimension (N_LAYERS) is tucked into the batch dimension. 
@@ -1293,40 +1292,23 @@ class LatentDiffusion(DDPM):
                         # The last set corresponds the mixed embeddings of (subj_comp_prompts, cls_comp_prompts). 
                         # Using subj_comp_prompts as mix_comp_prompts will enhance authenticity but hurt compositionality.
                         # Using cls_comp_prompts  as mix_comp_prompts will enhance compositionality but hurt authenticity.
-                        # To get the best of both worlds, mix_comp_prompts is randomly chosen 
-                        # between subj_comp_prompts and cls_comp_prompts.
-                        #if random.random() < 0.5:
-                        mix_comp_prompts = subj_comp_prompts
-                        #else:
-                        #    mix_comp_prompts = cls_comp_prompts
+                        #mix_comp_prompts = subj_comp_prompts
+                        mix_comp_prompts = cls_comp_prompts
 
                         c_in2 = subj_single_prompts + subj_comp_prompts + mix_single_prompts + mix_comp_prompts
 
                         if self.embedding_manager.num_vectors_per_token > 1:
-                            M = self.embedding_manager.num_vectors_per_token
-                            placeholder_indices = self.embedding_manager.placeholder_indices
                             # Only keep the first half (for single prompts), as the second half is the same 
                             # (for comp prompts, differs at the batch index, but the token index is identical)
-                            placeholder_indices_N = placeholder_indices[1].chunk(2)[0]
-                            # Location of the first embedding in a multi-embedding token.
-                            placeholder_indices_N0 = placeholder_indices_N[:1]
-                            # cls_single_emb, cls_single_repl_emb: [16, 77, 768].
-                            # Use (:, placeholder_indices_N) as index, so that we can index all 16 embeddings at the same time.
-                            repl_mask = torch.zeros_like(cls_single_emb)
-                            # Almost 0 everywhere, except those corresponding to the multi-embedding token.
-                            repl_mask[:, placeholder_indices_N] = 1
-                            cls_single_repl_emb = torch.zeros_like(cls_single_emb)
-                            cls_comps_repl_emb  = torch.zeros_like(cls_comps_emb)
-                            # Almost 0 everywhere, except being the class embedding at locations of the multi-embedding token.
-                            # Repeat m times the class embedding (corresponding to the subject embedding 
-                            # "z" at placeholder_indices_N0); but divide it by m to avoid changing the output after cross-attention.
-                            cls_single_repl_emb[:, placeholder_indices_N] = cls_single_emb[:, placeholder_indices_N0].repeat(1, M, 1) / M
-                            cls_comps_repl_emb[:, placeholder_indices_N]  = cls_comps_emb[:, placeholder_indices_N0].repeat(1, M, 1) / M
-                            # Keep the embeddings at almost everywhere, but only replace the embeddings at placeholder_indices_N.
-                            # Directly replacing by slicing with placeholder_indices_N will cause errors.
-                            cls_single_emb = cls_single_emb * (1 - repl_mask) + cls_single_repl_emb * repl_mask
-                            cls_comps_emb  = cls_comps_emb  * (1 - repl_mask) + cls_comps_repl_emb  * repl_mask
+                            placeholder_indices_N = self.embedding_manager.placeholder_indices[1].chunk(2)[0]
+
+                            cls_single_emb = patch_multi_embeddings(cls_single_emb, placeholder_indices_N)
+                            cls_comps_emb  = patch_multi_embeddings(cls_comps_emb,  placeholder_indices_N)
                             
+                            # Store placeholder_indices_N to be used to 
+                            # patch the ada embeddings of the mix half in the U-Net.
+                            extra_info['placeholder_indices_N'] = placeholder_indices_N
+
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed (concatenated),
                         # and the token number will be the double of subj_comps_emb.
@@ -1944,7 +1926,7 @@ class LatentDiffusion(DDPM):
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
                     # since this x_recon was denoised under this cond.
-                    # Use the mix half of the batch (chunk(2)[1]) instead of the subject half, as 
+                    # Use the mix half of the batch, chunk(2)[1], instead of the subject half, chunk(2)[0], as 
                     # the mix half is better at composition (it's worse on subject authenticity, but that's fine).
                     x_start_reuse = x_recon.detach().chunk(2)[1].repeat(2, 1, 1, 1)
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).

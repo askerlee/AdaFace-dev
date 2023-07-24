@@ -2,6 +2,7 @@ from abc import abstractmethod
 from functools import partial
 import math
 from typing import Iterable
+from ldm.util import patch_multi_embeddings
 
 import numpy as np
 import torch as th
@@ -770,21 +771,27 @@ class UNetModel(nn.Module):
 
                 # If static context is expanded by doing prompt mixing,
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
-                # 'hijk' in iter_type: could be "mix_hijk" (training or inference) 
-                # or "static_hijk" (inference only).
+                # 'mix_' in iter_type: could be "mix_hijk" (training or inference) 
+                # or "mix_concat_cls" (inference only).
                 if iter_type.startswith("mix_"):
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
+                    # "mix_concat_cls" is inference only.
                     if iter_type == 'mix_concat_cls':
                         # Do not BP into the copy of ada embeddings that are added with the mixed embeddings. 
                         layer_ada_context = th.cat([layer_ada_context, layer_ada_context.detach()], dim=1)
                     else:
-                        # iter_type == 'mix_hijk'. Separate layer_static_context.
+                        # iter_type == 'mix_hijk'. Separate layer_static_context into q and k.
                         layer_static_context, layer_static_key_context = \
                             layer_static_context.chunk(2, dim=1)
-                elif iter_type == 'static_hijk':
-                    assert layer_ada_context.shape[1] == layer_static_context.shape[1]
-                    layer_static_key_context = layer_static_context.clone()
-                    
+                        subj_layer_ada_context, mix_layer_ada_context = layer_ada_context.chunk(2)
+                        # In ddpm, patch_multi_embeddings() is applied on a text embedding whose 1st dim is the 16 layers.
+                        # Here, the 1st dim of mix_layer_ada_context is the batch.
+                        # But we can still use patch_multi_embeddings() without specially processing, since patch_multi_embeddings
+                        # in both cases, the 2nd dim is the token dim, so patch_multi_embeddings() works in both cases.
+                        mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
+                                                                       extra_info['placeholder_indices_N']) 
+                        layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
+                        
                 # layer_static_context, layer_ada_context: [2, 77, 768]
                 # layer_hyb_context: layer context fed to the current UNet layer, [2, 77, 768]
                 layer_hyb_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
