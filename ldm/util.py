@@ -411,6 +411,29 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     # flat_attn has been detached before passing to this function. So no need to detach spatial_weight.
     return spatial_weight, spatial_attn
 
+def patch_multi_embeddings(text_embedding, placeholder_indices_N):
+    M = len(placeholder_indices_N)
+    # num_vectors_per_token = 1. No patching is needed.
+    if M == 1:
+        return text_embedding
+    
+    # Location of the first embedding in a multi-embedding token.
+    placeholder_indices_N0 = placeholder_indices_N[:1]
+    # text_embedding, repl_text_embedding: [16, 77, 768].
+    # Use (:, placeholder_indices_N) as index, so that we can index all 16 embeddings at the same time.
+    repl_mask = torch.zeros_like(text_embedding)
+    # Almost 0 everywhere, except those corresponding to the multi-embedding token.
+    repl_mask[:, placeholder_indices_N] = 1
+    repl_text_embedding = torch.zeros_like(text_embedding)
+    # Almost 0 everywhere, except being the class embedding at locations of the multi-embedding token.
+    # Repeat m times the class embedding (corresponding to the subject embedding 
+    # "z" at placeholder_indices_N0); but divide it by m to avoid changing the output after cross-attention.
+    repl_text_embedding[:, placeholder_indices_N] = text_embedding[:, placeholder_indices_N0].repeat(1, M, 1) / M
+    # Keep the embeddings at almost everywhere, but only replace the embeddings at placeholder_indices_N.
+    # Directly replacing by slicing with placeholder_indices_N will cause errors.
+    patched_text_embedding = text_embedding * (1 - repl_mask) + repl_text_embedding * repl_mask
+    return patched_text_embedding
+
 # Revised from RevGrad, by removing the grad negation.
 class ScaleGrad(torch.autograd.Function):
     @staticmethod
