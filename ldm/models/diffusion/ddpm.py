@@ -1593,7 +1593,7 @@ class LatentDiffusion(DDPM):
         else:
             model_output = self.apply_model(x_noisy, t, cond)
 
-        # Save ada embeddings for guided instance. 
+        # Save ada embeddings generated during apply_model(), to be used in delta loss. 
         # Otherwise it will be overwritten by uncond denoising.
         if self.embedding_manager.ada_embeddings is not None:
             # ada_embeddings: [4, 16, 77, 768]

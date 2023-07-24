@@ -783,6 +783,8 @@ class UNetModel(nn.Module):
                         # iter_type == 'mix_hijk'. Separate layer_static_context into q and k.
                         layer_static_context, layer_static_key_context = \
                             layer_static_context.chunk(2, dim=1)
+                        # The second half of a mix_hijk batch is always the mix instances,
+                        # even for twin comp sets.                        
                         subj_layer_ada_context, mix_layer_ada_context = layer_ada_context.chunk(2)
                         # In ddpm, patch_multi_embeddings() is applied on a text embedding whose 1st dim is the 16 layers.
                         # Here, the 1st dim of mix_layer_ada_context is the batch.
