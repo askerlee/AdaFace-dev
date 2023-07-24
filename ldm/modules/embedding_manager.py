@@ -993,18 +993,16 @@ class EmbeddingManager(nn.Module):
         placeholder_indices_B, placeholder_indices_N = \
             torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
         
-        # placeholder_indices0 only contains the indices of the first placeholder embedding.
-        self.placeholder_indices0 = (placeholder_indices_B, placeholder_indices_N)
-
         if num_vectors_per_token > 1:
             BS = placeholder_indices_B.shape[0]
             placeholder_indices_B = placeholder_indices_B.unsqueeze(1).repeat(1, num_vectors_per_token).view(-1)
             placeholder_indices_N = placeholder_indices_N.unsqueeze(1).repeat(1, num_vectors_per_token).view(-1)
             # Add offsets to the indices of the pseudo-tokens.
-            placeholder_indices_N += torch.arange(num_vectors_per_token, device=tokenized_text.device).repeat(BS)
-        
-        # placeholder_indices contains the indices of all placeholder embeddings.
-        self.placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
+            placeholder_indices_N_off = placeholder_indices_N + torch.arange(num_vectors_per_token, device=tokenized_text.device).repeat(BS)
+            self.placeholder_indices = (placeholder_indices_B, placeholder_indices_N_off)
+        else:
+            # placeholder_indices contains the indices of all placeholder embeddings.
+            self.placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
 
     def get_ada_emb_weight(self):
         if self.training:
@@ -1384,22 +1382,6 @@ class EmbeddingManager(nn.Module):
         else:
             cls_delta    = static_cls_comp_emb - static_cls_single_emb
             static_delta = static_subj_comp_emb - static_subj_single_emb
-
-        if self.num_vectors_per_token > 1:
-            placeholder_indices_B, placeholder_indices_N = self.placeholder_indices
-            # Only keep the first half (for single prompts), as the second half is the same 
-            # (for comp prompts, but the placeholder location is identical as in single prompts)
-            placeholder_indices_B = placeholder_indices_B.chunk(2)[0]
-            placeholder_indices_N = placeholder_indices_N.chunk(2)[0]
-            # Location of the first embedding in a multi-embedding token.
-            placeholder_indices_B0, placeholder_indices_Bm = placeholder_indices_B[:1], placeholder_indices_B[1:]
-            # Locations of the remaining embeddings in a multi-embedding token.
-            placeholder_indices_N0, placeholder_indices_Nm = placeholder_indices_N[:1], placeholder_indices_N[1:]
-            placeholder_indices_0 = (placeholder_indices_B0, placeholder_indices_N0)
-            placeholder_indices_m = (placeholder_indices_Bm, placeholder_indices_Nm)
-            # Repeat (m - 1) times the class delta embedding (corresponding to the subject delta embedding 
-            # "z" at placeholder_indices_0); use it to align the remaining embeddings in the multi-embedding token.
-            cls_delta[placeholder_indices_m] = cls_delta[placeholder_indices_0].repeat(1, self.num_vectors_per_token - 1, 1)
 
         static_delta_loss   = calc_delta_loss(static_delta, cls_delta, delta_loss_emb_mask)
 

@@ -1302,6 +1302,30 @@ class LatentDiffusion(DDPM):
 
                         c_in2 = subj_single_prompts + subj_comp_prompts + mix_single_prompts + mix_comp_prompts
 
+                        if self.embedding_manager.num_vectors_per_token > 1:
+                            placeholder_indices = self.embedding_manager.placeholder_indices
+                            # Only keep the first half (for single prompts), as the second half is the same 
+                            # (for comp prompts, differs at the batch index, but the token index is identical)
+                            placeholder_indices_N = placeholder_indices[1].chunk(2)[0]
+                            # Location of the first embedding in a multi-embedding token.
+                            placeholder_indices_N0 = placeholder_indices_N[:1]
+                            M = self.embedding_manager.num_vectors_per_token
+                            # cls_single_emb, cls_single_repl_emb: [64, 77, 768]
+                            repl_mask = torch.zeros_like(cls_single_emb)
+                            # Almost 0 everywhere, except those corresponding to the multi-embedding token.
+                            repl_mask[:, placeholder_indices_N] = 1
+                            cls_single_repl_emb = torch.zeros_like(cls_single_emb)
+                            cls_comps_repl_emb  = torch.zeros_like(cls_comps_emb)
+                            # Almost 0 everywhere, except being the class embedding at locations of the multi-embedding token.
+                            # Repeat m times the class embedding (corresponding to the subject embedding 
+                            # "z" at placeholder_indices_N0); but divide it by m to avoid changing the output after cross-attention.
+                            cls_single_repl_emb[:, placeholder_indices_N] = cls_single_emb[:, placeholder_indices_N0].repeat(1, M, 1) / M
+                            cls_comps_repl_emb[:, placeholder_indices_N]  = cls_comps_emb[:, placeholder_indices_N0].repeat(1, M, 1) / M
+                            # Keep the embeddings at almost everywhere, but only replace the embeddings at placeholder_indices_N.
+                            # Directly replacing by slicing with placeholder_indices_N will cause errors.
+                            cls_single_emb = cls_single_emb * (1 - repl_mask) + cls_single_repl_emb * repl_mask
+                            cls_comps_emb  = cls_comps_emb  * (1 - repl_mask) + cls_comps_repl_emb  * repl_mask
+                            
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comps_emb and cls_comps_emb will be mixed (concatenated),
                         # and the token number will be the double of subj_comps_emb.
@@ -1310,13 +1334,13 @@ class LatentDiffusion(DDPM):
                         # -| means orthogonal subtraction.
                         # Ada embeddings won't be mixed, but simply repeated.
                         mix_comps_emb_all_layers  = mix_embeddings(subj_comps_emb, cls_comps_emb, 
-                                                                        c2_mix_weight=1,
-                                                                        mix_scheme='adeltaconcat',
-                                                                        use_ortho_subtract=True)
+                                                                   c2_mix_weight=1,
+                                                                   mix_scheme='adeltaconcat',
+                                                                   use_ortho_subtract=True)
                         mix_single_emb_all_layers = mix_embeddings(subj_single_emb, cls_single_emb,
-                                                                        c2_mix_weight=1,
-                                                                        mix_scheme='adeltaconcat',
-                                                                        use_ortho_subtract=True)
+                                                                   c2_mix_weight=1,
+                                                                   mix_scheme='adeltaconcat',
+                                                                   use_ortho_subtract=True)
                         
                         #mix_comps_emb_all_layers  = cls_comps_emb
                         #mix_single_emb_all_layers = cls_single_emb
@@ -2031,7 +2055,7 @@ class LatentDiffusion(DDPM):
             
             loss_subj_attn_distill, loss_feat_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
-                                                          self.embedding_manager.placeholder_indices0,
+                                                          self.embedding_manager.placeholder_indices,
                                                           HALF_BS)
             
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
