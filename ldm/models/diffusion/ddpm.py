@@ -1308,22 +1308,25 @@ class LatentDiffusion(DDPM):
                             # patch the ada embeddings of the mix half in the U-Net.
                             extra_info['placeholder_indices_N'] = placeholder_indices_N
 
+                        # mix_scheme = 'adeltaconcat'
+                        mix_scheme = 'concat'
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comp_emb and cls_comp_emb will be mixed (concatenated),
                         # and the token number will be the double of subj_comp_emb.
-                        # Mixed embedding mix_comp_emb = 
+                        # If mix_scheme = 'adeltaconcat': mixed embedding mix_comp_emb = 
                         # concat(subj_comp_emb, cls_comp_emb -| subj_comp_emb)_dim1. 
                         # -| means orthogonal subtraction.
-                        # Ada embeddings won't be mixed, but simply repeated.
                         # The first half of the embeddings will be used as the q/v in cross attention layers.
                         # The second half of the embeddings will be used as the k in cross attention layers.
-                        mix_comp_emb_all_layers  = mix_embeddings(subj_comp_emb, cls_comp_emb, 
+                        # This is only for static embeddings. The dynamically generated ada embeddings 
+                        # won't be mixed, but simply repeated.
+                        mix_comp_emb_all_layers   = mix_embeddings(subj_comp_emb, cls_comp_emb, 
                                                                    c2_mix_weight=1,
-                                                                   mix_scheme='adeltaconcat',
+                                                                   mix_scheme=mix_scheme,
                                                                    use_ortho_subtract=True)
                         mix_single_emb_all_layers = mix_embeddings(subj_single_emb, cls_single_emb,
                                                                    c2_mix_weight=1,
-                                                                   mix_scheme='adeltaconcat',
+                                                                   mix_scheme=mix_scheme,
                                                                    use_ortho_subtract=True)
                         
                         #mix_comp_emb_all_layers  = cls_comp_emb
@@ -1684,7 +1687,7 @@ class LatentDiffusion(DDPM):
                 if random.random() < 0.8:
                     x_start.normal_()
                 else:
-                    x_start = torch.randn_like(x_start) * 0.8 + x_start * 0.2
+                    x_start = torch.randn_like(x_start) * 0.9 + x_start * 0.1
                 # Randomly choose t from the largest 150 timesteps, so as to match the completely noisy x_start.
                 t_tail = torch.randint(int(self.num_timesteps * 0.85), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
                 t = t_tail
