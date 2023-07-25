@@ -120,8 +120,8 @@ def sample_compositions(N, is_animal, is_training=False):
     K = len(composition_regexs)
 
     if is_training:
-        # Lower variations during training, to make things easier to learn.
-        option_probs = [0.5, 0.5]
+        # Lower variations during training, to focus on the main semantics.
+        option_probs = [0.75, 0.25]
     else:
         option_probs = [0.3, 0.7]
 
