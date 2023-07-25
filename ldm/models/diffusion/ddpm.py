@@ -1677,8 +1677,12 @@ class LatentDiffusion(DDPM):
             # If bs=2, then HALF_BS=1.
             if not is_reuse_init_iter:
                 HALF_BS  = max(x_start.shape[0] // 2, 1)
-                # Randomly initialize x_start and t. Note the batch size is still 2 here.
-                x_start.normal_()
+                # At 80% of the chance, randomly initialize x_start and t. Note the batch size is still 2 here.
+                # At 20% of the chance, use the x_start based on the training images. This is expected to help the model
+                # ignore the background in the training images given prompts, 
+                # i.e., give prompts higher priority over the background.
+                if random.random() < 0.8:
+                    x_start.normal_()
                 # Randomly choose t from the largest 150 timesteps, so as to match the completely noisy x_start.
                 t_tail = torch.randint(int(self.num_timesteps * 0.85), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
                 t = t_tail
