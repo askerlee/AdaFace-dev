@@ -120,10 +120,12 @@ def sample_compositions(N, is_animal, is_training=False):
     K = len(composition_regexs)
 
     if is_training:
-        # Lower variations during training, to make things easier to learn.
-        option_probs = [0.5, 0.5]
+        # Lower variations during training, to focus on the main semantics.
+        option_probs     = [0.75, 0.25]
+        background_probs = [0.4,  0.6]
     else:
         option_probs = [0.3, 0.7]
+        background_probs = option_probs
 
     for i in range(N):
         idx = np.random.choice(K)
@@ -169,7 +171,7 @@ def sample_compositions(N, is_animal, is_training=False):
         else:
             art_by = ""
 
-        has_background = np.random.choice([0, 1], p=option_probs)
+        has_background = np.random.choice([0, 1], p=background_probs)
         if has_background:
             background = np.random.choice(all_backgrounds)
             background = ", with " + background + " as background"
