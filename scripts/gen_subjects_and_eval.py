@@ -84,7 +84,7 @@ def parse_args():
 
     parser.add_argument("--bb_type", type=str, default="v15-dste", 
                         choices=["v14", "v15", "v15-ema", "v15-dste", "v15-arte", "v15-rvte",
-                                 "dreamshaper-v5", "dreamshaper-v6", "ar-v16"],
+                                 "dreamshaper-v5", "dreamshaper-v6", "ar-v16", "rv-v4"],
                         help="Type of checkpoints to use (default: v15)")
 
     parser.add_argument("--clip_last_layer_skip_weight", type=float, default=argparse.SUPPRESS,
@@ -239,6 +239,8 @@ if __name__ == "__main__":
                 ckpt_path   = "models/dreamshaper/dreamshaper_631BakedVae.safetensors"
             elif args.bb_type == 'ar-v16':
                 ckpt_path   = "models/absolutereality/ar-v1-6.safetensors"
+            elif args.bb_type == 'rv-v4':
+                ckpt_path   = "models/realisticvision/realisticVisionV40Fp16.cTYR.safetensors"
             elif args.bb_type == 'v14':
                 ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
             elif args.bb_type == 'v15':
