@@ -121,8 +121,8 @@ def sample_compositions(N, is_animal, is_training=False):
 
     if is_training:
         # Lower variations during training, to focus on the main semantics.
-        option_probs = [0.75, 0.25]
-        background_probs = [0.5, 0.5]
+        option_probs     = [0.75, 0.25]
+        background_probs = [0.4,  0.6]
     else:
         option_probs = [0.3, 0.7]
         background_probs = option_probs
