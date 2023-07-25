@@ -781,7 +781,7 @@ class LatentDiffusion(DDPM):
                     # EmbeddingManager.get_ada_embedding() will store the ada embedding 
                     # for each layer into the cache. 
                     # The cache will be used in calc_prompt_delta_loss().
-                    self.embedding_manager.init_ada_embedding_cache()
+                    self.embedding_manager.reset_ada_embedding_cache()
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
                     # Do not consider mask on compositional reg iterations.
                     if img_mask is not None and \
@@ -819,7 +819,7 @@ class LatentDiffusion(DDPM):
         self.embedding_manager.set_ada_layer_temp_info(layer_idx, layer_attn_components, time_emb, ada_bp_to_unet)
         c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         # Cache the computed ada embedding of the current layer for delta loss computation.
-        # Before this call, init_ada_embedding_cache() should have been called somewhere.
+        # Before this call, reset_ada_embedding_cache() should have been called somewhere.
         self.embedding_manager.cache_ada_embedding(layer_idx, c)
         return c, self.embedding_manager.get_ada_emb_weight() #, self.embedding_manager.token_attn_weights
 
@@ -1175,13 +1175,13 @@ class LatentDiffusion(DDPM):
                 CLS_PROMPT_COMP   = 'cls_prompt_comp'
                 CLS_PROMPT_SINGLE = 'cls_prompt_single'
 
-            # Each prompt_comps consists of multiple prompts separated by "|".
+            # Each prompt_comp consists of multiple prompts separated by "|".
             # Split them into a list of subj_comp_prompts/cls_comp_prompts.
-            for prompt_comps in batch[SUBJ_PROMPT_COMP]:
-                subj_comp_prompts.append(prompt_comps.split("|"))
+            for prompt_comp in batch[SUBJ_PROMPT_COMP]:
+                subj_comp_prompts.append(prompt_comp.split("|"))
             cls_comp_prompts = []
-            for prompt_comps in batch[CLS_PROMPT_COMP]:
-                cls_comp_prompts.append(prompt_comps.split("|"))
+            for prompt_comp in batch[CLS_PROMPT_COMP]:
+                cls_comp_prompts.append(prompt_comp.split("|"))
             cls_single_prompts = batch[CLS_PROMPT_SINGLE]
             # REPEATS: how many prompts correspond to each image.
             REPEATS = len(subj_comp_prompts[0])
@@ -1273,7 +1273,7 @@ class LatentDiffusion(DDPM):
                     # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
                     # extra_info: a dict that contains extra info.
                     c_static_emb, c_in, extra_info = self.get_learned_conditioning(delta_prompts, img_mask=img_mask)
-                    subj_single_emb, subj_comps_emb, cls_single_emb, cls_comps_emb = \
+                    subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
                     
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
@@ -1302,22 +1302,22 @@ class LatentDiffusion(DDPM):
                             placeholder_indices_N = self.embedding_manager.placeholder_indices[1].chunk(2)[0]
 
                             cls_single_emb = patch_multi_embeddings(cls_single_emb, placeholder_indices_N)
-                            cls_comps_emb  = patch_multi_embeddings(cls_comps_emb,  placeholder_indices_N)
+                            cls_comp_emb  = patch_multi_embeddings(cls_comp_emb,  placeholder_indices_N)
                             
                             # Store placeholder_indices_N to be used to 
                             # patch the ada embeddings of the mix half in the U-Net.
                             extra_info['placeholder_indices_N'] = placeholder_indices_N
 
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
-                        # i.e., subj_comps_emb and cls_comps_emb will be mixed (concatenated),
-                        # and the token number will be the double of subj_comps_emb.
-                        # Mixed embedding mix_comps_emb = 
-                        # concat(subj_comps_emb, cls_comps_emb -| subj_comps_emb)_dim1. 
+                        # i.e., subj_comp_emb and cls_comp_emb will be mixed (concatenated),
+                        # and the token number will be the double of subj_comp_emb.
+                        # Mixed embedding mix_comp_emb = 
+                        # concat(subj_comp_emb, cls_comp_emb -| subj_comp_emb)_dim1. 
                         # -| means orthogonal subtraction.
                         # Ada embeddings won't be mixed, but simply repeated.
                         # The first half of the embeddings will be used as the q/v in cross attention layers.
                         # The second half of the embeddings will be used as the k in cross attention layers.
-                        mix_comps_emb_all_layers  = mix_embeddings(subj_comps_emb, cls_comps_emb, 
+                        mix_comp_emb_all_layers  = mix_embeddings(subj_comp_emb, cls_comp_emb, 
                                                                    c2_mix_weight=1,
                                                                    mix_scheme='adeltaconcat',
                                                                    use_ortho_subtract=True)
@@ -1326,60 +1326,60 @@ class LatentDiffusion(DDPM):
                                                                    mix_scheme='adeltaconcat',
                                                                    use_ortho_subtract=True)
                         
-                        #mix_comps_emb_all_layers  = cls_comps_emb
+                        #mix_comp_emb_all_layers  = cls_comp_emb
                         #mix_single_emb_all_layers = cls_single_emb
-                        # If stop_prompt_mix_grad, stop gradient on mix_comps_emb, 
+                        # If stop_prompt_mix_grad, stop gradient on mix_comp_emb, 
                         # since it serves as the reference.
-                        # If we don't stop gradient on mix_comps_emb, 
-                        # then chance is that mix_comps_emb might be dominated by subj_comps_emb,
-                        # so that mix_comps_emb will produce images similar as subj_comps_emb does.
+                        # If we don't stop gradient on mix_comp_emb, 
+                        # then chance is that mix_comp_emb might be dominated by subj_comp_emb,
+                        # so that mix_comp_emb will produce images similar as subj_comp_emb does.
                         # stop_prompt_mix_grad will improve compositionality but reduce face similarity.
                         stop_prompt_mix_grad = False
                         prompt_mix_grad_scale = 0.1
                         if stop_prompt_mix_grad:
-                            mix_comps_emb_all_layers  = mix_comps_emb_all_layers.detach()
+                            mix_comp_emb_all_layers  = mix_comp_emb_all_layers.detach()
                             mix_single_emb_all_layers = mix_single_emb_all_layers.detach()
                         elif prompt_mix_grad_scale != 1:
                             grad_scaler = GradientScaler(prompt_mix_grad_scale)
-                            mix_comps_emb_all_layers  = grad_scaler(mix_comps_emb_all_layers)
+                            mix_comp_emb_all_layers  = grad_scaler(mix_comp_emb_all_layers)
                             mix_single_emb_all_layers = grad_scaler(mix_single_emb_all_layers)
 
                         if self.use_layerwise_embedding:
                             # 4, 5, 6, 7, 8 correspond to original layer indices 7, 8, 12, 16, 17
                             # (same as used in computing mixing loss)
                             sync_layer_indices = [4, 5, 6, 7, 8, 9]
-                            layer_mask = torch.zeros_like(mix_comps_emb_all_layers).reshape(-1, N_LAYERS, *mix_comps_emb_all_layers.shape[1:])
+                            layer_mask = torch.zeros_like(mix_comp_emb_all_layers).reshape(-1, N_LAYERS, *mix_comp_emb_all_layers.shape[1:])
                             layer_mask[:, sync_layer_indices] = 1
-                            layer_mask = layer_mask.reshape(-1, *mix_comps_emb_all_layers.shape[1:])
+                            layer_mask = layer_mask.reshape(-1, *mix_comp_emb_all_layers.shape[1:])
 
-                            # This copy of subj_single_emb, subj_comps_emb will be simply 
+                            # This copy of subj_single_emb, subj_comp_emb will be simply 
                             # repeated at the token dimension to match the token number of the mixed (concatenated) 
-                            # mix_single_emb and mix_comps_emb embeddings.
-                            subj_comps_emb  = subj_comps_emb.repeat(1, 2, 1)
+                            # mix_single_emb and mix_comp_emb embeddings.
+                            subj_comp_emb   = subj_comp_emb.repeat(1, 2, 1)
                             subj_single_emb = subj_single_emb.repeat(1, 2, 1)
 
-                            # Otherwise, the second halves of subj_comps_emb/cls_comps_emb
+                            # Otherwise, the second halves of subj_comp_emb/cls_comp_emb
                             # are already key embeddings. No need to repeat.
 
-                            # Use most of the layers of embeddings in subj_comps_emb, but 
-                            # replace sync_layer_indices layers with those from mix_comps_emb_all_layers.
+                            # Use most of the layers of embeddings in subj_comp_emb, but 
+                            # replace sync_layer_indices layers with those from mix_comp_emb_all_layers.
                             # Do not assign with sync_layers as indices, which destroys the computation graph.
-                            mix_comps_emb  = subj_comps_emb * (1 - layer_mask) \
-                                             + mix_comps_emb_all_layers * layer_mask
+                            mix_comp_emb   = subj_comp_emb * (1 - layer_mask) \
+                                             + mix_comp_emb_all_layers * layer_mask
 
                             mix_single_emb = subj_single_emb * (1 - layer_mask) \
                                              + mix_single_emb_all_layers * layer_mask
                         else:
                             # There is only one layer of embeddings.
-                            mix_comps_emb  = mix_comps_emb_all_layers
+                            mix_comp_emb   = mix_comp_emb_all_layers
                             mix_single_emb = mix_single_emb_all_layers
 
                         # c_static_emb2 will be added with the ada embeddings to form the 
                         # conditioning embeddings in the U-Net.
                         # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
                         # image generation and computing compositional mix loss.
-                        c_static_emb2 = torch.cat([ subj_single_emb, subj_comps_emb, 
-                                                    mix_single_emb, mix_comps_emb ], dim=0)
+                        c_static_emb2 = torch.cat([ subj_single_emb, subj_comp_emb, 
+                                                    mix_single_emb, mix_comp_emb ], dim=0)
                         
                         extra_info['iter_type']      = self.prompt_mix_scheme
                         # Set ada_bp_to_unet to False will reduce performance.
@@ -1677,11 +1677,11 @@ class LatentDiffusion(DDPM):
             # If bs=2, then HALF_BS=1.
             if not is_reuse_init_iter:
                 HALF_BS  = max(x_start.shape[0] // 2, 1)
-                # At 80% of the chance, randomly initialize x_start and t. Note the batch size is still 2 here.
-                # At 20% of the chance, use the x_start based on the training images. This is expected to help the model
+                # At 90% of the chance, randomly initialize x_start and t. Note the batch size is still 2 here.
+                # At 10% of the chance, use the x_start based on the training images. This may help the model
                 # ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
-                if random.random() < 0.8:
+                if random.random() < 0.9:
                     x_start.normal_()
                 # Randomly choose t from the largest 150 timesteps, so as to match the completely noisy x_start.
                 t_tail = torch.randint(int(self.num_timesteps * 0.85), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
@@ -1738,11 +1738,11 @@ class LatentDiffusion(DDPM):
                     # print(c_in)
 
                     # Make two identical sets of c_static_emb2 and c_in2.
-                    subj_single_emb, subj_comps_emb, mix_single_emb, mix_comps_emb = \
+                    subj_single_emb, subj_comp_emb, mix_single_emb, mix_comp_emb = \
                         c_static_emb.chunk(4)
-                    # Only keep comps_emb, but repeat them to form twin comp sets.
-                    c_static_emb2 = torch.cat([ subj_comps_emb, subj_comps_emb, 
-                                                mix_comps_emb,  mix_comps_emb ], dim=0)
+                    # Only keep *comp_emb, but repeat them to form twin comp sets.
+                    c_static_emb2 = torch.cat([ subj_comp_emb, subj_comp_emb, 
+                                                mix_comp_emb,  mix_comp_emb ], dim=0)
                     
                     subj_single_prompts, subj_comp_prompts, mix_single_prompts, mix_comp_prompts = \
                         chunk_list(c_in, 4)
@@ -1811,7 +1811,7 @@ class LatentDiffusion(DDPM):
             # Images generated both under subj_comp_prompts and mix_comp_prompts 
             # are subject to the CLIP text-image matching evaluation.
             # If is_teacher_filter_iter (implying do_comp_prompt_mix_reg), 
-            # the batch is (subj_comps_emb, subj_comps_emb, mix_comps_emb,  mix_comps_emb).
+            # the batch is (subj_comp_emb, subj_comp_emb, mix_comp_emb,  mix_comp_emb).
             # So cls_comp_prompts is used to compute the CLIP text-image matching loss on
             # images guided by the subject or mixed embeddings.
             if is_teacher_filter_iter:
@@ -1902,8 +1902,8 @@ class LatentDiffusion(DDPM):
                 if is_teacher_filter_iter and is_iter_teachable:
                     # No need the intermediates of the twin-comp instances. Release them to save RAM.
                     self.release_plosses_intermediates(locals())
-                    # init_ada_embedding_cache() will implicitly clear the cache.
-                    self.embedding_manager.init_ada_embedding_cache()
+                    # reset_ada_embedding_cache() will implicitly clear the cache.
+                    self.embedding_manager.reset_ada_embedding_cache()
 
                     better_cand_idx = torch.argmax(loss_diffs_subj_mix)
                     loss_clip_subj_comp = losses_clip_subj_comp[better_cand_idx]
@@ -1967,9 +1967,10 @@ class LatentDiffusion(DDPM):
                         # Previously retured ada_embeddings from guided_denoise() is twin_comp_ada_embeddings. 
                         # twin_comp_ada_embeddings: [4, 16, 77, 768], 
                         # the two sets of ada embeddings with compositional prompts.
-                        self.embedding_manager.init_ada_embedding_cache()
+                        self.embedding_manager.reset_ada_embedding_cache()
 
-                        # Only take the first half of the batch, as the second half is a repeat of the first half.
+                        # Only take the first half of the batch, as the init conditions 
+                        # of the second half is a repeat of the first half.
                         x_start_ = x_start.chunk(2)[0]
                         noise_   = noise.chunk(2)[0]
                         t_       = t.chunk(2)[0]
@@ -2133,7 +2134,7 @@ class LatentDiffusion(DDPM):
                 continue
 
             # each is [1, 1280, 16, 16]
-            feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
+            feat_subj_single, feat_subj_comp, feat_mix_single, feat_mix_comp \
                 = unet_feat.chunk(4)
             
             # [4, 8, 256, 77] / [4, 8, 64, 77] =>
@@ -2151,34 +2152,34 @@ class LatentDiffusion(DDPM):
             # learn to attend to the background.
             multi_emb_weights[1:] = 0.5
             subj_attn = subj_attn * multi_emb_weights
-            subj_attn_subj_single, subj_attn_subj_comps, subj_attn_mix_single,  subj_attn_mix_comps \
+            subj_attn_subj_single, subj_attn_subj_comp, subj_attn_mix_single,  subj_attn_mix_comp \
                 = subj_attn.chunk(4)
 
             if (unet_layer_idx in attn_distill_layer_weights):
                 attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
-                attn_subj_delta = subj_attn_subj_comps - subj_attn_subj_single
-                attn_mix_delta  = subj_attn_mix_comps  - subj_attn_mix_single
+                attn_subj_delta = subj_attn_subj_comp - subj_attn_subj_single
+                attn_mix_delta  = subj_attn_mix_comp  - subj_attn_mix_single
                 loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
                                                              first_n_dims_to_flatten=2, 
                                                              ref_grad_scale=0)
                 
-                # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comps/subj_attn_mix_single. 
+                # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comp/subj_attn_mix_single. 
                 # Use this scaler to release the graph and avoid OOM.
-                subj_attn_mix_comps_gs  = mix_attn_grad_scaler(subj_attn_mix_comps)
+                subj_attn_mix_comp_gs  = mix_attn_grad_scaler(subj_attn_mix_comp)
                 subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
-                loss_layer_subj_comps_attn  = self.get_loss(subj_attn_subj_comps,  subj_attn_mix_comps_gs,  mean=True)
+                loss_layer_subj_comp_attn   = self.get_loss(subj_attn_subj_comp,   subj_attn_mix_comp_gs,  mean=True)
                 loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
 
                 # Align the attention corresponding to each embedding individually.
-                loss_layer_subj_comps_attn_norm  = (subj_attn_subj_comps.mean(dim=(1,2))  - subj_attn_mix_comps_gs.mean(dim=(1,2))).abs().mean()
+                loss_layer_subj_comp_attn_norm   = (subj_attn_subj_comp.mean(dim=(1,2))  - subj_attn_mix_comp_gs.mean(dim=(1,2))).abs().mean()
                 loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean(dim=(1,2)) - subj_attn_mix_single_gs.mean(dim=(1,2))).abs().mean()
-                # print(loss_layer_subj_comps_attn_norm, loss_layer_subj_single_attn_norm)
+                # print(loss_layer_subj_comp_attn_norm, loss_layer_subj_single_attn_norm)
 
                 # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                 # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
                 loss_subj_attn_distill += ( loss_layer_subj_delta_attn * delta_attn_loss_scale \
-                                                + (loss_layer_subj_comps_attn + loss_layer_subj_single_attn) * direct_attn_loss_scale \
-                                                + (loss_layer_subj_comps_attn_norm + loss_layer_subj_single_attn_norm) * direct_attn_norm_loss_scale \
+                                                + (loss_layer_subj_comp_attn + loss_layer_subj_single_attn) * direct_attn_loss_scale \
+                                                + (loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm) * direct_attn_norm_loss_scale \
                                           ) * attn_distill_layer_weight
 
             use_subj_attn_as_spatial_weights = True
@@ -2187,25 +2188,25 @@ class LatentDiffusion(DDPM):
                     continue
                 feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
 
-                feat_subj_single, feat_subj_comps, feat_mix_single, feat_mix_comps \
+                feat_subj_single, feat_subj_comp, feat_mix_single, feat_mix_comp \
                     = unet_feat.chunk(4)
                 
                 # convert_attn_to_spatial_weight() will detach attention weights to 
                 # avoid BP through attention.
                 #spatial_weight_subj_single, spatial_attn_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
-                #spatial_weight_subj_comps,  spatial_attn_subj_comps  = convert_attn_to_spatial_weight(subj_attn_subj_comps,  HALF_BS, feat_subj_comps.shape[2:])
-                # spatial_weight_mix_single,  spatial_attn_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
-                spatial_weight_mix_comps,   spatial_attn_mix_comps   = convert_attn_to_spatial_weight(subj_attn_mix_comps,   HALF_BS, feat_mix_comps.shape[2:])
+                #spatial_weight_subj_comp,   spatial_attn_subj_comp   = convert_attn_to_spatial_weight(subj_attn_subj_comp,  HALF_BS, feat_subj_comp.shape[2:])
+                # spatial_weight_mix_single,  spatial_attn_mix_single = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
+                spatial_weight_mix_comp, spatial_attn_mix_comp = convert_attn_to_spatial_weight(subj_attn_mix_comp,   HALF_BS, feat_mix_comp.shape[2:])
 
-                # spatial_attn_mix_comps is returned for debugging purposes. Delete to release RAM.
-                del spatial_attn_mix_comps
+                # spatial_attn_mix_comp is returned for debugging purposes. Delete to release RAM.
+                del spatial_attn_mix_comp
 
-                # Use mix single/comps weights on both subject-only and mix features, 
+                # Use mix single/comp weights on both subject-only and mix features, 
                 # to reduce misalignment and facilitate distillation.
-                feat_subj_single = feat_subj_single * spatial_weight_mix_comps
-                feat_subj_comps  = feat_subj_comps  * spatial_weight_mix_comps
-                feat_mix_single  = feat_mix_single  * spatial_weight_mix_comps
-                feat_mix_comps   = feat_mix_comps   * spatial_weight_mix_comps
+                feat_subj_single = feat_subj_single * spatial_weight_mix_comp
+                feat_subj_comp   = feat_subj_comp   * spatial_weight_mix_comp
+                feat_mix_single  = feat_mix_single  * spatial_weight_mix_comp
+                feat_mix_comp    = feat_mix_comp    * spatial_weight_mix_comp
 
             do_feat_pooling = True
             feat_pool_kernel_size = 4
@@ -2217,29 +2218,29 @@ class LatentDiffusion(DDPM):
                 pooler = nn.Identity()
 
             # Pool the H, W dimensions to remove spatial information.
-            # After pooling, feat_subj_single, feat_subj_comps, 
-            # feat_mix_single, feat_mix_comps: [1, 1280] or [1, 640], ...
+            # After pooling, feat_subj_single, feat_subj_comp, 
+            # feat_mix_single, feat_mix_comp: [1, 1280] or [1, 640], ...
             feat_subj_single = pooler(feat_subj_single).reshape(feat_subj_single.shape[0], -1)
-            feat_subj_comps  = pooler(feat_subj_comps).reshape(feat_subj_comps.shape[0], -1)
+            feat_subj_comp   = pooler(feat_subj_comp).reshape(feat_subj_comp.shape[0], -1)
             feat_mix_single  = pooler(feat_mix_single).reshape(feat_mix_single.shape[0], -1)
-            feat_mix_comps   = pooler(feat_mix_comps).reshape(feat_mix_comps.shape[0], -1)
+            feat_mix_comp    = pooler(feat_mix_comp).reshape(feat_mix_comp.shape[0], -1)
 
             feat_mix_single  = mix_feat_grad_scaler(feat_mix_single)
-            feat_mix_comps   = mix_feat_grad_scaler(feat_mix_comps)
+            feat_mix_comp    = mix_feat_grad_scaler(feat_mix_comp)
 
             distill_on_delta = True
             if distill_on_delta:
                 # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
-                feat_mix_delta  = ortho_subtract(feat_mix_comps,  feat_mix_single)
-                feat_subj_delta = ortho_subtract(feat_subj_comps, feat_subj_single)
+                feat_mix_delta  = ortho_subtract(feat_mix_comp,  feat_mix_single)
+                feat_subj_delta = ortho_subtract(feat_subj_comp, feat_subj_single)
             else:
-                feat_mix_delta  = feat_mix_comps
-                feat_subj_delta = feat_subj_comps
+                feat_mix_delta  = feat_mix_comp
+                feat_subj_delta = feat_subj_comp
                 
             # feat_subj_delta, feat_mix_delta: [1, 1280], ...
             # Pool the spatial dimensions H, W to remove spatial information.
-            # The gradient goes back to feat_subj_delta -> feat_subj_comps,
-            # as well as feat_mix_delta -> feat_mix_comps.
+            # The gradient goes back to feat_subj_delta -> feat_subj_comp,
+            # as well as feat_mix_delta -> feat_mix_comp.
             # If stop_single_grad, the gradients to feat_subj_single and feat_mix_single are stopped, 
             # as these two images should look good by themselves (since they only contain the subject).
             # Note the learning strategy to the single image features should be different from 
