@@ -434,6 +434,15 @@ def patch_multi_embeddings(text_embedding, placeholder_indices_N):
     patched_text_embedding = text_embedding * (1 - repl_mask) + repl_text_embedding * repl_mask
     return patched_text_embedding
 
+def scale_emb_in_embs(text_embedding, placeholder_indices_N, scale, scale_first_only=True):
+    scale_mask = torch.ones_like(text_embedding)
+    if scale_first_only:
+        # Only scale the first embedding in a multi-embedding token.
+        placeholder_indices_N = placeholder_indices_N[:1]
+    scale_mask[:, placeholder_indices_N] = scale
+    scaled_text_embedding = text_embedding * scale_mask
+    return scaled_text_embedding
+
 # Revised from RevGrad, by removing the grad negation.
 class ScaleGrad(torch.autograd.Function):
     @staticmethod

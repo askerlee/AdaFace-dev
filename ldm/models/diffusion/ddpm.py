@@ -22,7 +22,7 @@ from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
-                       count_params, instantiate_from_config, mix_embeddings, \
+                       count_params, instantiate_from_config, scale_emb_in_embs, \
                        ortho_subtract, calc_stats, \
                        GradientScaler, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
@@ -1302,14 +1302,12 @@ class LatentDiffusion(DDPM):
                             placeholder_indices_N = self.embedding_manager.placeholder_indices[1].chunk(2)[0]
 
                             cls_single_emb = patch_multi_embeddings(cls_single_emb, placeholder_indices_N)
-                            cls_comp_emb  = patch_multi_embeddings(cls_comp_emb,  placeholder_indices_N)
+                            cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   placeholder_indices_N)
                             
                             # Store placeholder_indices_N to be used to 
                             # patch the ada embeddings of the mix half in the U-Net.
                             extra_info['placeholder_indices_N'] = placeholder_indices_N
 
-                        # mix_scheme = 'adeltaconcat'
-                        mix_scheme = 'concat'
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comp_emb and cls_comp_emb will be mixed (concatenated),
                         # and the token number will be the double of subj_comp_emb.
@@ -1320,6 +1318,9 @@ class LatentDiffusion(DDPM):
                         # The second half of the embeddings will be used as the k in cross attention layers.
                         # This is only for static embeddings. The dynamically generated ada embeddings 
                         # won't be mixed, but simply repeated.
+                        """                         
+                        # mix_scheme = 'adeltaconcat'
+                        mix_scheme = 'concat'
                         mix_comp_emb_all_layers   = mix_embeddings(subj_comp_emb, cls_comp_emb, 
                                                                    c2_mix_weight=1,
                                                                    mix_scheme=mix_scheme,
@@ -1327,24 +1328,35 @@ class LatentDiffusion(DDPM):
                         mix_single_emb_all_layers = mix_embeddings(subj_single_emb, cls_single_emb,
                                                                    c2_mix_weight=1,
                                                                    mix_scheme=mix_scheme,
-                                                                   use_ortho_subtract=True)
+                                                                   use_ortho_subtract=True) 
+                        """
                         
+                        # In subj_comp_emb2, subj_single_emb2, the first subject embedding is scaled down by 0.5, 
+                        # so that other components will express more when doing the guidance.
+                        subj_emb_scale = 0.5
+                        subj_comp_emb_scaled   = scale_emb_in_embs(subj_comp_emb,   placeholder_indices_N, 
+                                                                   scale=subj_emb_scale, scale_first_only=True)
+                        subj_single_emb_scaled = scale_emb_in_embs(subj_single_emb, placeholder_indices_N, 
+                                                                   scale=subj_emb_scale, scale_first_only=True)
+                        
+                        mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_scaled,   cls_comp_emb],   dim=1)
+                        mix_single_emb_all_layers = torch.cat([subj_single_emb_scaled, cls_single_emb], dim=1)
+
                         #mix_comp_emb_all_layers  = cls_comp_emb
                         #mix_single_emb_all_layers = cls_single_emb
-                        # If stop_prompt_mix_grad, stop gradient on mix_comp_emb, 
+                        # If prompt_mix_grad_scale == 0, stop gradient on mix_comp_emb, 
                         # since it serves as the reference.
                         # If we don't stop gradient on mix_comp_emb, 
-                        # then chance is that mix_comp_emb might be dominated by subj_comp_emb,
-                        # so that mix_comp_emb will produce images similar as subj_comp_emb does.
-                        # stop_prompt_mix_grad will improve compositionality but reduce face similarity.
-                        stop_prompt_mix_grad = False
+                        # then chance is that mix_comp_emb might be dominated by subj_comp_emb2,
+                        # so that mix_comp_emb will produce images similar as subj_comp_emb2 does.
+                        # Stopping the gradient will improve compositionality but reduce face similarity.
                         prompt_mix_grad_scale = 0.1
-                        if stop_prompt_mix_grad:
-                            mix_comp_emb_all_layers  = mix_comp_emb_all_layers.detach()
+                        if prompt_mix_grad_scale == 0:
+                            mix_comp_emb_all_layers   = mix_comp_emb_all_layers.detach()
                             mix_single_emb_all_layers = mix_single_emb_all_layers.detach()
                         elif prompt_mix_grad_scale != 1:
                             grad_scaler = GradientScaler(prompt_mix_grad_scale)
-                            mix_comp_emb_all_layers  = grad_scaler(mix_comp_emb_all_layers)
+                            mix_comp_emb_all_layers   = grad_scaler(mix_comp_emb_all_layers)
                             mix_single_emb_all_layers = grad_scaler(mix_single_emb_all_layers)
 
                         if self.use_layerwise_embedding:
@@ -1355,22 +1367,22 @@ class LatentDiffusion(DDPM):
                             layer_mask[:, sync_layer_indices] = 1
                             layer_mask = layer_mask.reshape(-1, *mix_comp_emb_all_layers.shape[1:])
 
-                            # This copy of subj_single_emb, subj_comp_emb will be simply 
+                            # This copy of subj_single_emb, subj_comp_emb2 will be simply 
                             # repeated at the token dimension to match the token number of the mixed (concatenated) 
                             # mix_single_emb and mix_comp_emb embeddings.
-                            subj_comp_emb   = subj_comp_emb.repeat(1, 2, 1)
-                            subj_single_emb = subj_single_emb.repeat(1, 2, 1)
+                            subj_comp_emb2   = subj_comp_emb.repeat(1, 2, 1)
+                            subj_single_emb2 = subj_single_emb.repeat(1, 2, 1)
 
-                            # Otherwise, the second halves of subj_comp_emb/cls_comp_emb
+                            # Otherwise, the second halves of subj_comp_emb2/cls_comp_emb
                             # are already key embeddings. No need to repeat.
 
-                            # Use most of the layers of embeddings in subj_comp_emb, but 
+                            # Use most of the layers of embeddings in subj_comp_emb2, but 
                             # replace sync_layer_indices layers with those from mix_comp_emb_all_layers.
                             # Do not assign with sync_layers as indices, which destroys the computation graph.
-                            mix_comp_emb   = subj_comp_emb * (1 - layer_mask) \
+                            mix_comp_emb   = subj_comp_emb2 * (1 - layer_mask) \
                                              + mix_comp_emb_all_layers * layer_mask
 
-                            mix_single_emb = subj_single_emb * (1 - layer_mask) \
+                            mix_single_emb = subj_single_emb2 * (1 - layer_mask) \
                                              + mix_single_emb_all_layers * layer_mask
                         else:
                             # There is only one layer of embeddings.
@@ -1381,8 +1393,8 @@ class LatentDiffusion(DDPM):
                         # conditioning embeddings in the U-Net.
                         # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
                         # image generation and computing compositional mix loss.
-                        c_static_emb2 = torch.cat([ subj_single_emb, subj_comp_emb, 
-                                                    mix_single_emb, mix_comp_emb ], dim=0)
+                        c_static_emb2 = torch.cat([ subj_single_emb2, subj_comp_emb2, 
+                                                    mix_single_emb,   mix_comp_emb ], dim=0)
                         
                         extra_info['iter_type']      = self.prompt_mix_scheme
                         # Set ada_bp_to_unet to False will reduce performance.
@@ -2152,7 +2164,8 @@ class LatentDiffusion(DDPM):
             # subj_attn_subj_single, ...: [1, 8, 256] (1 embedding  for 1 token) 
             # or                          [2, 8, 256] (2 embeddings for 1 token)
             multi_emb_weights = torch.ones(subj_attn.shape[0], 1, 1, device=subj_attn.device)
-            # The extra embeddings have smaller weights than the main embedding at subj_attn[0].
+            # multi_emb_weights: The extra embeddings have smaller weights (0.5) than the main embedding (1.0) 
+            # at subj_attn[0].
             # Such that they receive less restrictions than the main embedding, and can be "freer" to 
             # learn to attend to the background.
             multi_emb_weights[1:] = 0.5
@@ -2170,13 +2183,13 @@ class LatentDiffusion(DDPM):
                 
                 # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comp/subj_attn_mix_single. 
                 # Use this scaler to release the graph and avoid OOM.
-                subj_attn_mix_comp_gs  = mix_attn_grad_scaler(subj_attn_mix_comp)
+                subj_attn_mix_comp_gs   = mix_attn_grad_scaler(subj_attn_mix_comp)
                 subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
                 loss_layer_subj_comp_attn   = self.get_loss(subj_attn_subj_comp,   subj_attn_mix_comp_gs,  mean=True)
                 loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
 
                 # Align the attention corresponding to each embedding individually.
-                loss_layer_subj_comp_attn_norm   = (subj_attn_subj_comp.mean(dim=(1,2))  - subj_attn_mix_comp_gs.mean(dim=(1,2))).abs().mean()
+                loss_layer_subj_comp_attn_norm   = (subj_attn_subj_comp.mean(dim=(1,2))   - subj_attn_mix_comp_gs.mean(dim=(1,2))).abs().mean()
                 loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean(dim=(1,2)) - subj_attn_mix_single_gs.mean(dim=(1,2))).abs().mean()
                 # print(loss_layer_subj_comp_attn_norm, loss_layer_subj_single_attn_norm)
 
@@ -2200,7 +2213,7 @@ class LatentDiffusion(DDPM):
                 # avoid BP through attention.
                 #spatial_weight_subj_single, spatial_attn_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
                 #spatial_weight_subj_comp,   spatial_attn_subj_comp   = convert_attn_to_spatial_weight(subj_attn_subj_comp,  HALF_BS, feat_subj_comp.shape[2:])
-                # spatial_weight_mix_single,  spatial_attn_mix_single = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
+                #spatial_weight_mix_single,  spatial_attn_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
                 spatial_weight_mix_comp, spatial_attn_mix_comp = convert_attn_to_spatial_weight(subj_attn_mix_comp,   HALF_BS, feat_mix_comp.shape[2:])
 
                 # spatial_attn_mix_comp is returned for debugging purposes. Delete to release RAM.
