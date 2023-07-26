@@ -87,7 +87,7 @@ def parse_args():
                                  "dreamshaper-v5", "dreamshaper-v6", "ar-v16", "rv-v4"],
                         help="Type of checkpoints to use (default: v15)")
 
-    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=argparse.SUPPRESS,
+    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5],
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
     
     parser.add_argument("--is_face", type=str2bool, const=True, default=argparse.SUPPRESS, nargs="?",
@@ -359,8 +359,7 @@ if __name__ == "__main__":
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
-        if hasattr(args, 'clip_last_layer_skip_weight'):
-            command_line += f" --clip_last_layer_skip_weight {args.clip_last_layer_skip_weight}"
+        command_line += f" --clip_last_layers_skip_weights {args.clip_last_layers_skip_weights}"
 
         if hasattr(args, 'num_vectors_per_token'):
             command_line += f" --num_vectors_per_token {args.num_vectors_per_token}"

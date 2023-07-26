@@ -192,8 +192,8 @@ def get_parser(**parser_kwargs):
         required=False,
         help="Match class_word to the category of images you want to train. Example: 'man', 'woman', or 'dog'.")
 
-    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
-                        help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
+    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5],
+                        help="Weights of the the last 2-3 layers of the CLIP text embedder")
 
     parser.add_argument("--min_rand_scaling",
                         type=float, default=0.8, 
@@ -660,7 +660,7 @@ if __name__ == "__main__":
         # model
         # No embedding manager needed for DreamBooth.
         config.model.params.personalization_config = None
-        config.model.params.cond_stage_config.params.last_layer_skip_weight   = opt.clip_last_layer_skip_weight
+        config.model.params.cond_stage_config.params.last_layes_skip_weights   = opt.clip_last_layers_skip_weight
 
         # Setup the token and class word to get passed to personalized.py
         if not opt.reg_data_root:

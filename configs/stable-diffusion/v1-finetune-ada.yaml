@@ -107,7 +107,7 @@ model:
     cond_stage_config:
       target: ldm.modules.encoders.modules.FrozenCLIPEmbedder
       params:
-        last_layer_skip_weight: 0.5
+        last_layers_skip_weights: [0.5]
 
 data:
   target: main.DataModuleFromConfig

@@ -218,7 +218,7 @@ def parse_args():
     parser.add_argument("--prompt_mix_weight", type=float, default=0,
                         help="Weight of the reference prompt to be mixed with the subject prompt (0 to disable)")
         
-    parser.add_argument("--clip_last_layer_skip_weight", type=float, default=0.5,
+    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5],
                         help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
 
     parser.add_argument("--num_vectors_per_token",
@@ -307,7 +307,7 @@ def main(opt):
         opt.subj_model_path = opt.ckpt
 
     # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
-    model.cond_stage_model.set_last_layer_skip_weight(opt.clip_last_layer_skip_weight)
+    model.cond_stage_model.set_last_layers_skip_weights(opt.clip_last_layers_skip_weights)
     
     if hasattr(opt, 'num_vectors_per_token'):
         model.embedding_manager.set_num_vectors_per_token(opt.num_vectors_per_token)
