@@ -2466,7 +2466,7 @@ class LatentDiffusion(DDPM):
         if self.num_cached_generations >= max_cache_size:
             grid_folder = self.logger._save_dir + f'/samples'
             os.makedirs(grid_folder, exist_ok=True)
-            grid_filename = grid_folder + f'/{self.cache_start_iter}-{self.global_step}.png'
+            grid_filename = grid_folder + f'/{self.cache_start_iter:04d}-{self.global_step:04d}.png'
             save_grid(self.generation_cache, self.generation_cache_img_flags, 
                       grid_filename, 12, do_normalize=True)
             print(f"{self.num_cached_generations} generations saved to {grid_filename}")
