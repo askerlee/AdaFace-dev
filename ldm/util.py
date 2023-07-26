@@ -216,22 +216,27 @@ def ortho_subtract(a, b):
 # c1, c2: [32, 77, 768].
 # mix_scheme: 'add', 'concat', 'sdeltaconcat', 'adeltaconcat'.
 # The masked tokens will have the same embeddings after mixing.
-def mix_embeddings(c1_, c2_, c2_mix_weight, mix_scheme='adeltaconcat', placeholder_indices=None,
-                   use_ortho_subtract=True, token_mask=None):
+def mix_embeddings(mix_scheme, c1, c2, placeholder_indices_N=None, 
+                   c1_subj_scale=1., c2_mix_weight=None,
+                   use_ortho_subtract=True):
 
-    assert c1_ is not None
-    if c2_ is None:
-        return c1_
+    assert c1 is not None
+    if c2 is None:
+        return c1
+    assert c1.shape == c2.shape
 
-    if token_mask is not None:
-        c1 = c1_ * token_mask
-        c2 = c2_ * token_mask
-    else:
-        c1 = c1_
-        c2 = c2_
-
+    if c2_mix_weight is None:
+        c2_mix_weight = 1.
+        
     if mix_scheme == 'add':
-        c_mix = c1 + c2 * c2_mix_weight
+        if placeholder_indices_N is not None:
+            scale_mask = torch.ones_like(c1)
+            scale_mask[:, placeholder_indices_N] = c1_subj_scale
+            c1 = c1 * scale_mask
+            c_mix = c1 + c2 * (1 - scale_mask)
+        else:
+            c_mix = c1 + c2
+
     elif mix_scheme == 'concat':
         c_mix = torch.cat([ c1, c2 * c2_mix_weight ], dim=1)
     elif mix_scheme == 'addconcat':
@@ -239,19 +244,19 @@ def mix_embeddings(c1_, c2_, c2_mix_weight, mix_scheme='adeltaconcat', placehold
 
     # sdeltaconcat: subject-delta concat. Requires placeholder_indices.
     elif mix_scheme == 'sdeltaconcat':
-        assert placeholder_indices is not None
+        assert placeholder_indices_N is not None
         # delta_embedding is the difference between the subject embedding and the class embedding.
         if use_ortho_subtract:
             delta_embedding = ortho_subtract(c2, c1)
         else:
             delta_embedding = c2 - c1
             
-        delta_embedding = delta_embedding[placeholder_indices]
+        delta_embedding = delta_embedding[:, placeholder_indices_N]
         assert delta_embedding.shape[0] == c1.shape[0]
 
         c2_delta = c1.clone()
         # c2_mix_weight only boosts the delta embedding, and other tokens in c2 always have weight 1.
-        c2_delta[placeholder_indices] = delta_embedding
+        c2_delta[:, placeholder_indices_N] = delta_embedding
         c_mix = torch.cat([ c1, c2_delta * c2_mix_weight ], dim=1)
 
     # adeltaconcat: all-delta concat.
@@ -264,11 +269,6 @@ def mix_embeddings(c1_, c2_, c2_mix_weight, mix_scheme='adeltaconcat', placehold
             
         # c2_mix_weight scales all tokens in delta_embedding.
         c_mix = torch.cat([ c1, delta_embedding * c2_mix_weight ], dim=1)
-
-    # Fill in the masked token embeddings. 
-    # Therefore, the masked tokens will have the same embeddings after mixing.
-    if (token_mask is not None) and 'concat' in mix_scheme:
-        c_mix = c_mix + torch.cat([ c1_ * (1 - token_mask), c2_ * (1 - token_mask) ], dim=1)
 
     return c_mix
 
