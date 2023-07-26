@@ -22,8 +22,8 @@ from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
-                       count_params, instantiate_from_config, scale_emb_in_embs, \
-                       ortho_subtract, calc_stats, \
+                       count_params, instantiate_from_config, mix_embeddings, \
+                       scale_emb_in_embs, ortho_subtract, calc_stats, \
                        GradientScaler, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings
@@ -1309,38 +1309,22 @@ class LatentDiffusion(DDPM):
                             extra_info['placeholder_indices_N'] = placeholder_indices_N
 
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
-                        # i.e., subj_comp_emb and cls_comp_emb will be mixed (concatenated),
+                        # i.e., subj_comp_emb and cls_comp_emb will be mixed.
+                        # In subj_comp_emb_qv_mix, subj_single_emb_qv_mix, the M subject embeddings are scaled down by 0.5,
+                        # and added with 0.5 * class embeddings, so that other components will express more during guidance. 
                         # and the token number will be the double of subj_comp_emb.
-                        # If mix_scheme = 'adeltaconcat': mixed embedding mix_comp_emb = 
-                        # concat(subj_comp_emb, cls_comp_emb -| subj_comp_emb)_dim1. 
-                        # -| means orthogonal subtraction.
                         # The first half of the embeddings will be used as the q/v in cross attention layers.
                         # The second half of the embeddings will be used as the k in cross attention layers.
                         # This is only for static embeddings. The dynamically generated ada embeddings 
                         # won't be mixed, but simply repeated.
-                        """                         
-                        # mix_scheme = 'adeltaconcat'
-                        mix_scheme = 'concat'
-                        mix_comp_emb_all_layers   = mix_embeddings(subj_comp_emb, cls_comp_emb, 
-                                                                   c2_mix_weight=1,
-                                                                   mix_scheme=mix_scheme,
-                                                                   use_ortho_subtract=True)
-                        mix_single_emb_all_layers = mix_embeddings(subj_single_emb, cls_single_emb,
-                                                                   c2_mix_weight=1,
-                                                                   mix_scheme=mix_scheme,
-                                                                   use_ortho_subtract=True) 
-                        """
-                        
-                        # In subj_comp_emb2, subj_single_emb2, the first subject embedding is scaled down by 0.5, 
-                        # so that other components will express more when doing the guidance.
                         subj_emb_scale = 0.5
-                        subj_comp_emb_scaled   = scale_emb_in_embs(subj_comp_emb,   placeholder_indices_N, 
-                                                                   scale=subj_emb_scale, scale_first_only=True)
-                        subj_single_emb_scaled = scale_emb_in_embs(subj_single_emb, placeholder_indices_N, 
-                                                                   scale=subj_emb_scale, scale_first_only=True)
+                        subj_comp_emb_qv_mix   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
+                                                                placeholder_indices_N, c1_subj_scale=subj_emb_scale)
+                        subj_single_emb_qv_mix = mix_embeddings('add', subj_single_emb, cls_single_emb,
+                                                                placeholder_indices_N, c1_subj_scale=subj_emb_scale)
                         
-                        mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_scaled,   cls_comp_emb],   dim=1)
-                        mix_single_emb_all_layers = torch.cat([subj_single_emb_scaled, cls_single_emb], dim=1)
+                        mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_qv_mix,   cls_comp_emb],   dim=1)
+                        mix_single_emb_all_layers = torch.cat([subj_single_emb_qv_mix, cls_single_emb], dim=1)
 
                         #mix_comp_emb_all_layers  = cls_comp_emb
                         #mix_single_emb_all_layers = cls_single_emb
@@ -1350,7 +1334,7 @@ class LatentDiffusion(DDPM):
                         # then chance is that mix_comp_emb might be dominated by subj_comp_emb2,
                         # so that mix_comp_emb will produce images similar as subj_comp_emb2 does.
                         # Stopping the gradient will improve compositionality but reduce face similarity.
-                        prompt_mix_grad_scale = 0.1
+                        prompt_mix_grad_scale = 0.01
                         if prompt_mix_grad_scale == 0:
                             mix_comp_emb_all_layers   = mix_comp_emb_all_layers.detach()
                             mix_single_emb_all_layers = mix_single_emb_all_layers.detach()
