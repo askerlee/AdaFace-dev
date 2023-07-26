@@ -1861,9 +1861,9 @@ class LatentDiffusion(DDPM):
                 # 0.35/0.006: 30%-40% instances will meet these thresholds.
                 # 0.33/0.008: 15% instances will meet these thresholds.
                 clip_loss_thres             = 0.28
-                cls_subj_clip_margin        = 0.003
+                cls_subj_clip_margin        = 0.002
                 clip_loss_thres_base        = 0.26
-                cls_subj_clip_margin_base   = 0.004
+                cls_subj_clip_margin_base   = 0.003
 
                 # are_insts_teachable: The teacher instances are only teachable if both 
                 # the teacher and student are qualified (<= clip_loss_thres), 
