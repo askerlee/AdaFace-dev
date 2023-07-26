@@ -42,7 +42,7 @@ def generate(*args):
     opt.ada_emb_weight = args[21]
     opt.mask_weight = args[22]
     opt.broad_class = args[23]
-    opt.clip_last_layer_skip_weight = args[24]
+    opt.clip_last_layers_skip_weights = args[24]
     opt.plms = args[25]
     opt.fixed_code = args[26]
     opt.no_preview = args[27]
@@ -146,8 +146,10 @@ with gr.Blocks() as demo:
                     ada_emb_weight = gr.Slider(minimum=-1, maximum=10, value=-1.0, label="Ada Emb Weight", step=0.1)
                     mask_weight = gr.Slider(minimum=0, maximum=10, value=0.0, label="Mask Weight", step=0.1)
                     broad_class = gr.Slider(minimum=0, maximum=10, value=0, label="Broad Class", step=1)
-                    clip_last_layer_skip_weight = gr.Slider(minimum=0, maximum=10, value=0.5, label="Clip Last Layer Skip Weight", step=0.1)
-                
+                    clip_last_layer_skip_weight1 = gr.Slider(minimum=0, maximum=1, value=0.5, label="Clip Last Layer Skip Weight", step=0.1)
+                    clip_last_layer_skip_weight2 = gr.Slider(minimum=0, maximum=1, value=0.5, label="Clip Second Last Layer Skip Weight", step=0.1)
+                    clip_last_layers_skip_weights = [clip_last_layer_skip_weight1, clip_last_layer_skip_weight2]
+                    
                 with gr.Row() as row7:
                     # skip_grid = gr.Checkbox(label="Skip Grid", info="Skip Grid")
                     plmse = gr.Checkbox(label="PLMSE")
@@ -165,7 +167,11 @@ with gr.Blocks() as demo:
                 # button2 = gr.Button(value="Close")
                 with gr.Row():
                     output = gr.Image(label="Output")
-                button1.click(generate, outputs=output, inputs=[prompt, class_prompt, config, model, scale, n_iters, ddim_eta, n_samples, dim_step, gpu, embedding_paths, H, W, C, f, bs, n_repeat, n_rows, seed, precision, subj_scale, ada_emb_weight, mask_weight, broad_class, clip_last_layer_skip_weight, plmse, fixed_code, no_preview])
+                button1.click(generate, outputs=output, inputs=[ \
+                    prompt, class_prompt, config, model, scale, n_iters, ddim_eta, n_samples, dim_step, gpu, \
+                    embedding_paths, H, W, C, f, bs, n_repeat, n_rows, seed, precision, \
+                    subj_scale, ada_emb_weight, mask_weight, broad_class, clip_last_layers_skip_weights, plmse, fixed_code, no_preview])
+                
                 # button2.click(close)
     with gr.Tab(label="Training") as tab0:
         gr.Markdown('work in progress')

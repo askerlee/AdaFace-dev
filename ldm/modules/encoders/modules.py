@@ -157,13 +157,13 @@ class SpatialRescaler(nn.Module):
 class FrozenCLIPEmbedder(AbstractEncoder):
     """Uses the CLIP transformer encoder for text (from Hugging Face)"""
     def __init__(self, version="openai/clip-vit-large-patch14", device="cuda", max_length=77,
-                 last_layer_skip_weight=0.0):
+                 last_layers_skip_weights=[0.5]):
         super().__init__()
         self.tokenizer = CLIPTokenizer.from_pretrained(version)
         self.transformer = CLIPTextModel.from_pretrained(version)
         self.device = device
         self.max_length = max_length
-        self.set_last_layer_skip_weight(last_layer_skip_weight)
+        self.set_last_layers_skip_weights(last_layers_skip_weights)
 
         def embedding_forward(
                 self,
@@ -207,22 +207,27 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             output_attentions = None,       # default: None
             output_hidden_states = None,    # default: None
             return_dict = None,
-            last_layer_skip_weight = 0.0,
+            last_layers_skip_weights = [0.5],
         ):
             output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-            output_hidden_states = (
-                output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-            )
+
+            # NovalAI modification: skip the last 1-2 layers to make the 
+            # text embeddings more accurate, at the cost of slight performance reduction.
+            if last_layers_skip_weights is not None:
+                do_output_hidden_states = True
+            else:
+                do_output_hidden_states = (output_hidden_states is not None)
+
             return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-            encoder_states = () if output_hidden_states else None
+            encoder_states = () if do_output_hidden_states else None
             all_attentions = () if output_attentions else None
 
             hidden_states = inputs_embeds
             penultimate_hidden_states = None
 
             for idx, encoder_layer in enumerate(self.layers):
-                if output_hidden_states:
+                if do_output_hidden_states:
                     encoder_states = encoder_states + (hidden_states,)
 
                 layer_outputs = encoder_layer(
@@ -239,17 +244,12 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 if output_attentions:
                     all_attentions = all_attentions + (layer_outputs[1],)
 
-                # NovalAI modification: skip the last layer to make the 
-                # text embeddings more accurate, at the cost of slight performance reduction.
-                if last_layer_skip_weight > 0 and idx == len(self.layers) - 2:
-                    penultimate_hidden_states = hidden_states
-
             # output_hidden_states: None
-            if output_hidden_states:
+            if do_output_hidden_states:
                 encoder_states = encoder_states + (hidden_states,)
 
             # Only return the last layer's and the second last layer's hidden states
-            return (penultimate_hidden_states, hidden_states)
+            return (encoder_states, hidden_states)
 
 
         # encoder: CLIPEncoder
@@ -307,24 +307,21 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
-                last_layer_skip_weight=self.last_layer_skip_weight,
+                last_layers_skip_weights=self.last_layers_skip_weights,
             )
 
-            # encoder() returns a tuple of (penultimate_hidden_states, last_hidden_states).
-            # If self.last_layer_skip_weight is 0, then penultimate_hidden_states = None.
-            penultimate_hidden_states, last_hidden_states = last_hidden_states
+            # encoder() returns a tuple of (encoder_states, last_hidden_states).
+            # If self.last_layers_skip_weights is None, then encoder_states is None.
+            encoder_states, last_hidden_states = last_hidden_states
             # Note that the original implementation in huggingface transformers
             # returns a tuple of (last_hidden_state, encoder_states, all_attentions).
             # However, the overloading text_encoder_forward() above only returns
             # hidden_states. So it's passed to the final_layer_norm() directly.
-            if self.last_layer_skip_weight > 0:
-                # According to NovelAI's practice, the penultimate_hidden_states is layernormed
-                # with the same parameters as the last_hidden_states.
-                # penultimate_hidden_states = self.final_layer_norm(penultimate_hidden_states)
-                # penultimate_hidden_states: [32, 77, 768], last_hidden_states: [32, 77, 768]
-                last_hidden_states = self.last_layer_skip_weight * penultimate_hidden_states + \
-                                    (1 - self.last_layer_skip_weight) * last_hidden_states
-
+            if self.last_layers_skip_weights is not None:
+                used_encoder_states = encoder_states[-len(self.last_layers_skip_weights):]
+                all_encoder_states = torch.stack(used_encoder_states, dim=0)
+                last_layers_skip_weights = torch.tensor(self.last_layers_skip_weights).to(all_encoder_states.device)
+                last_hidden_states = (last_layers_skip_weights.view(-1, 1, 1, 1) * all_encoder_states).sum(dim=0)
 
             last_hidden_states = self.final_layer_norm(last_hidden_states)
             return last_hidden_states
@@ -364,9 +361,13 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         # Therefore, the method is intercepted without modifying the implicit object "transformer".
         self.transformer.forward = transformer_forward.__get__(self.transformer)
 
-    def set_last_layer_skip_weight(self, weight):
-        self.transformer.text_model.last_layer_skip_weight = weight
-        print(f"CLIP last_layer_skip_weight = {weight}")
+    def set_last_layers_skip_weights(self, weights):
+        assert sum(weights) <= 1.0, f"The sum of last_layers_skip_weights {weights} should be <= 1.0."
+        last_layer_weight = 1.0 - sum(weights)
+        weights = ([last_layer_weight] + weights)[::-1]
+        # Reverse weights, so that the last element is the weight of the last layer.
+        self.transformer.text_model.last_layers_skip_weights = weights
+        print(f"CLIP last_layers_skip_weights = {weights}")
               
     def freeze(self):
         self.transformer = self.transformer.eval()

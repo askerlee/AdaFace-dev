@@ -1311,20 +1311,29 @@ class LatentDiffusion(DDPM):
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comp_emb and cls_comp_emb will be mixed.
                         # In subj_comp_emb_qv_mix, subj_single_emb_qv_mix, the M subject embeddings are scaled down by 0.5,
-                        # and added with 0.5 * class embeddings, so that other components will express more during guidance. 
+                        # /* and added with 0.5 * class embeddings */, 
+                        # so that other components will express more during guidance. 
                         # and the token number will be the double of subj_comp_emb.
                         # The first half of the embeddings will be used as the q/v in cross attention layers.
                         # The second half of the embeddings will be used as the k in cross attention layers.
                         # This is only for static embeddings. The dynamically generated ada embeddings 
                         # won't be mixed, but simply repeated.
                         subj_emb_scale = 0.5
-                        subj_comp_emb_qv_mix   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
-                                                                placeholder_indices_N, c1_subj_scale=subj_emb_scale)
-                        subj_single_emb_qv_mix = mix_embeddings('add', subj_single_emb, cls_single_emb,
-                                                                placeholder_indices_N, c1_subj_scale=subj_emb_scale)
+
+                        subj_comp_emb_qv   = scale_emb_in_embs(subj_comp_emb,   placeholder_indices_N, 
+                                                                   scale=subj_emb_scale, scale_first_only=False)
+                        subj_single_emb_qv = scale_emb_in_embs(subj_single_emb, placeholder_indices_N, 
+                                                                   scale=subj_emb_scale, scale_first_only=False)
                         
-                        mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_qv_mix,   cls_comp_emb],   dim=1)
-                        mix_single_emb_all_layers = torch.cat([subj_single_emb_qv_mix, cls_single_emb], dim=1)
+                        """                         
+                        subj_comp_emb_qv   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
+                                                                placeholder_indices_N, c1_subj_scale=subj_emb_scale)
+                        subj_single_emb_qv = mix_embeddings('add', subj_single_emb, cls_single_emb,
+                                                                placeholder_indices_N, c1_subj_scale=subj_emb_scale)
+                        """
+
+                        mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_qv,   cls_comp_emb],   dim=1)
+                        mix_single_emb_all_layers = torch.cat([subj_single_emb_qv, cls_single_emb], dim=1)
 
                         #mix_comp_emb_all_layers  = cls_comp_emb
                         #mix_single_emb_all_layers = cls_single_emb
@@ -1344,7 +1353,7 @@ class LatentDiffusion(DDPM):
                             mix_single_emb_all_layers = grad_scaler(mix_single_emb_all_layers)
 
                         if self.use_layerwise_embedding:
-                            # 4, 5, 6, 7, 8 correspond to original layer indices 7, 8, 12, 16, 17
+                            # 4, 5, 6, 7, 8, 9 correspond to original layer indices 7, 8, 12, 16, 17, 18.
                             # (same as used in computing mixing loss)
                             sync_layer_indices = [4, 5, 6, 7, 8, 9]
                             layer_mask = torch.zeros_like(mix_comp_emb_all_layers).reshape(-1, N_LAYERS, *mix_comp_emb_all_layers.shape[1:])

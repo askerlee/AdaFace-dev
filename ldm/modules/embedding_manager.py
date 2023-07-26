@@ -524,6 +524,8 @@ class AdaEmbedding(nn.Module):
             # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
             # infeat_pooled: [B, C_layer]
 
+            # static_subj_layer_emb should be quite similar to the ada embedding at this layer.
+            # Use static_subj_layer_emb as the query to do the attention-based pooling.
             static_subj_layer_emb   = static_subj_embs[emb_idx]
             
             # Even if layer_infeat is grad-scaled, the pooler still receives the full gradient.
@@ -889,16 +891,16 @@ class EmbeddingManager(nn.Module):
                 # The following placeholder strings for a multi-embedding token are: z1, z2, ...
                 placeholder_string_i = placeholder_string if seq_offset == 0 else f"{placeholder_string}{seq_offset}"
 
-                placeholder_embedder = embedder_dict[placeholder_string_i].to(device)
-                if isinstance(placeholder_embedder, StaticLayerwiseEmbedding):
+                static_embedder = embedder_dict[placeholder_string_i].to(device)
+                if isinstance(static_embedder, StaticLayerwiseEmbedding):
                     # Generate the actual placeholder_embedding on the fly.
                     # The 16 static subject embeddings are formed by linearly combining the basis vectors.
                     # The matrix operations are done on the fly.
-                    placeholder_embedding = placeholder_embedder()
+                    placeholder_embedding = static_embedder()
                     static_subj_embs_dict[placeholder_string_i] = placeholder_embedding
                 else:
-                    # placeholder_embedder is already the embedding.
-                    placeholder_embedding = placeholder_embedder
+                    # static_embedder is already the embedding.
+                    placeholder_embedding = static_embedder
 
                 placeholder_indices_i = (placeholder_indices[0], placeholder_indices[1] + seq_offset)
                 embedded_text[placeholder_indices_i] = placeholder_embedding.repeat(REAL_OCCURS, 1)
@@ -946,8 +948,8 @@ class EmbeddingManager(nn.Module):
             for seq_offset in range(self.num_vectors_per_token):
                 placeholder_string_i = placeholder_string if seq_offset == 0 else f"{placeholder_string}{seq_offset}"
 
-                placeholder_embedder = self.string_to_ada_embedder_dict[placeholder_string_i].to(device)
-                assert isinstance(placeholder_embedder, AdaEmbedding)
+                ada_embedder = self.string_to_ada_embedder_dict[placeholder_string_i].to(device)
+                assert isinstance(ada_embedder, AdaEmbedding)
 
                 # Generate the actual placeholder_embedding on the fly.
                 # placeholder_embedding: [B, 768]. B: 2 or 4 (regularization batches).
@@ -956,9 +958,9 @@ class EmbeddingManager(nn.Module):
                 # The pipeline is generate static embeddings first, then generate the ada embeddings. 
                 # So this assumption should always hold.
                 placeholder_embedding, infeat_bg = \
-                            placeholder_embedder(layer_idx, layer_attn_components, time_emb,
-                                                 static_subj_embs_dict[placeholder_string_i],
-                                                 self.img_mask, ada_bp_to_unet, cached_infeat_bg)
+                            ada_embedder(layer_idx, layer_attn_components, time_emb,
+                                         static_subj_embs_dict[placeholder_string_i],
+                                         self.img_mask, ada_bp_to_unet, cached_infeat_bg)
                 if seq_offset == 0:
                     # Cache the bg infeat computed by the first (fg) ada embedder, 
                     # to be used by the second (bg) ada embedder.
