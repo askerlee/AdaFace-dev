@@ -359,6 +359,8 @@ if __name__ == "__main__":
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
+        # Convert the list of weights to a string to be accepted by the command line.
+        args.clip_last_layers_skip_weights = " ".join([ str(w) for w in args.clip_last_layers_skip_weights ])
         command_line += f" --clip_last_layers_skip_weights {args.clip_last_layers_skip_weights}"
 
         if hasattr(args, 'num_vectors_per_token'):
