@@ -232,8 +232,9 @@ def mix_embeddings(mix_scheme, c1, c2, placeholder_indices_N=None,
         if placeholder_indices_N is not None:
             scale_mask = torch.ones_like(c1)
             scale_mask[:, placeholder_indices_N] = c1_subj_scale
-            c1 = c1 * scale_mask
-            c_mix = c1 + c2 * (1 - scale_mask)
+            # 1 - scale_mask: almost 0 everywhere, except those corresponding to the placeholder tokens 
+            # being 1 - c1_subj_scale.
+            c_mix = c1 * scale_mask + c2 * (1 - scale_mask)
         else:
             c_mix = c1 + c2
 

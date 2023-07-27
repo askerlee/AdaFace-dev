@@ -479,7 +479,7 @@ class DDPM(pl.LightningModule):
         # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
         if self.scheduler is not None:
             lr_scale = self.scheduler.get_last_lr()[0] / self.scheduler.base_lrs[0]
-            # distill_loss_scale only increases. If it reaches 1 after LR warm-up, then it stays at 1.
+            # distill_loss_scale only increases. Once it reaches 1 after LR warm-up, it stays at 1.
             self.distill_loss_scale = max(self.distill_loss_scale, lr_scale)
             # print(f'lr_lambda: {lr_lambda}')
         else:
@@ -1329,20 +1329,25 @@ class LatentDiffusion(DDPM):
                         # The second half of the embeddings will be used as the k in cross attention layers.
                         # This is only for static embeddings. The dynamically generated ada embeddings 
                         # won't be mixed, but simply repeated.
-                        subj_emb_scale = 0.5
 
+                        """                         
                         subj_comp_emb_qv   = scale_emb_in_embs(subj_comp_emb,   placeholder_indices_N, 
                                                                scale=subj_emb_scale, scale_first_only=False)
                         subj_single_emb_qv = scale_emb_in_embs(subj_single_emb, placeholder_indices_N, 
                                                                scale=subj_emb_scale, scale_first_only=False)
-                        
-                        """                         
-                        subj_comp_emb_qv   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
-                                                                placeholder_indices_N, c1_subj_scale=subj_emb_scale)
-                        subj_single_emb_qv = mix_embeddings('add', subj_single_emb, cls_single_emb,
-                                                                placeholder_indices_N, c1_subj_scale=subj_emb_scale)
                         """
+                        
+                        subj_comp_emb_qv   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
+                                                            placeholder_indices_N, c1_subj_scale=subj_emb_scale)
+                        subj_single_emb_qv = mix_embeddings('add', subj_single_emb, cls_single_emb,
+                                                            placeholder_indices_N, c1_subj_scale=subj_emb_scale)
 
+                        total_training_steps = self.trainer.max_steps
+                        # Linearly decrease the scale of the subject embeddings from 1 to 0.5, i.e., 
+                        # increase the scale of the class embeddings from 0 to 0.5, so that 
+                        # the distillation keeps being effective. Otherwise the teacher 
+                        # will become very similar to the student.
+                        subj_emb_scale = 1 - 0.5 * self.global_step / total_training_steps
                         mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_qv,   cls_comp_emb],   dim=1)
                         mix_single_emb_all_layers = torch.cat([subj_single_emb_qv, cls_single_emb], dim=1)
 
@@ -2087,7 +2092,6 @@ class LatentDiffusion(DDPM):
             
             loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
             self.release_plosses_intermediates(locals())
-
 
         loss_dict.update({f'{prefix}/loss': loss.detach()})
 
