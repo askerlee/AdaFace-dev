@@ -152,6 +152,9 @@ if __name__ == "__main__":
     if range_indices is not None:
         subject_indices = [ subject_indices[i] for i in range_indices ]
 
+    # Convert the list of weights to a string to be accepted by the command line.
+    args.clip_last_layers_skip_weights = " ".join([ str(w) for w in args.clip_last_layers_skip_weights ])
+
     if args.method == 'db':
         # For DreamBooth, use_z_suffix is the default.
         args.z_suffix_type = 'db_prompt'
@@ -359,8 +362,6 @@ if __name__ == "__main__":
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
-        # Convert the list of weights to a string to be accepted by the command line.
-        args.clip_last_layers_skip_weights = " ".join([ str(w) for w in args.clip_last_layers_skip_weights ])
         command_line += f" --clip_last_layers_skip_weights {args.clip_last_layers_skip_weights}"
 
         if hasattr(args, 'num_vectors_per_token'):
