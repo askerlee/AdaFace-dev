@@ -320,7 +320,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             if self.last_layers_skip_weights is not None:
                 used_encoder_states = encoder_states[-len(self.last_layers_skip_weights):]
                 all_encoder_states = torch.stack(used_encoder_states, dim=0)
-                last_layers_skip_weights = torch.tensor(self.last_layers_skip_weights).to(all_encoder_states.device)
+                last_layers_skip_weights = torch.tensor(self.last_layers_skip_weights, dtype=all_encoder_states.dtype).to(all_encoder_states.device)
                 last_hidden_states = (last_layers_skip_weights.view(-1, 1, 1, 1) * all_encoder_states).sum(dim=0)
 
             last_hidden_states = self.final_layer_norm(last_hidden_states)
