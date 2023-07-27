@@ -375,9 +375,10 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             np.set_printoptions(**print_opts)
         else:
             self.dir_sampler = torch.distributions.dirichlet.Dirichlet(torch.tensor(weights, dtype=float))
-            self.sample_last_layers_skip_weights()
+            # Print the first set of sampled weights
+            self.sample_last_layers_skip_weights(verbose=True)
     
-    def sample_last_layers_skip_weights(self):
+    def sample_last_layers_skip_weights(self, verbose=False):
         if self.dir_sampler is None:
             # Do nothing.
             print("WARN: sample_last_layers_skip_weights() is called while randomize_clip_skip_weights is False.")
@@ -386,10 +387,11 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         weights = self.dir_sampler.sample().numpy()
         self.transformer.text_model.last_layers_skip_weights = weights
 
-        print_opts = np.get_printoptions()
-        np.set_printoptions(precision=2, suppress=True)
-        print(f"CLIP last_layers_skip_weights = {weights}")        
-        np.set_printoptions(**print_opts)
+        if verbose:
+            print_opts = np.get_printoptions()
+            np.set_printoptions(precision=2, suppress=True)
+            print(f"CLIP last_layers_skip_weights = {weights}")        
+            np.set_printoptions(**print_opts)
 
     def freeze(self):
         self.transformer = self.transformer.eval()
