@@ -149,6 +149,7 @@ class DDPM(pl.LightningModule):
         self.original_elbo_weight = original_elbo_weight
         self.l_simple_weight = l_simple_weight
         self.embedding_reg_weight = embedding_reg_weight
+        self.distill_loss_scale = 0
 
         self.unfreeze_model = unfreeze_model
         self.model_lr = model_lr
@@ -478,7 +479,8 @@ class DDPM(pl.LightningModule):
         # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
         if self.scheduler is not None:
             lr_scale = self.scheduler.get_last_lr()[0] / self.scheduler.base_lrs[0]
-            self.distill_loss_scale = lr_scale
+            # distill_loss_scale only increases. If it reaches 1 after LR warm-up, then it stays at 1.
+            self.distill_loss_scale = max(self.distill_loss_scale, lr_scale)
             # print(f'lr_lambda: {lr_lambda}')
         else:
             self.distill_loss_scale = 1.0
@@ -2083,8 +2085,6 @@ class LatentDiffusion(DDPM):
             loss_prompt_mix_reg =   loss_subj_attn_distill * distill_subj_attn_weight + \
                                     loss_feat_distill      * distill_feat_weight 
             
-            # Disable distill_loss_scale which was coupled with the LR scheduler.
-            self.distill_loss_scale = 1
             loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
             self.release_plosses_intermediates(locals())
 
