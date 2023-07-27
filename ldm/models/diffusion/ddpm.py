@@ -2082,7 +2082,9 @@ class LatentDiffusion(DDPM):
 
             loss_prompt_mix_reg =   loss_subj_attn_distill * distill_subj_attn_weight + \
                                     loss_feat_distill      * distill_feat_weight 
-                
+            
+            # Disable distill_loss_scale which was coupled with the LR scheduler.
+            self.distill_loss_scale = 1
             loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
             self.release_plosses_intermediates(locals())
 
