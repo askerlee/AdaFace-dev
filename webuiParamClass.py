@@ -38,7 +38,7 @@ class DictI(dict):
         self.gpu=0
         self.compare_with=None
         self.class_prompt=None
-        self.clip_last_layers_skip_weights=[0.5]
+        self.clip_last_layers_skip_weights=[0.5, 0.5]
         self.debug = False
 
     def __getattr__(self, key):
@@ -91,7 +91,7 @@ class DictT(dict):
          self.max_rand_scaling = 1.05
          self.num_compositions_per_image = 1
          self.broad_class = 1
-         self.clip_last_layers_skip_weights = [0.5]
+         self.clip_last_layers_skip_weights = [0.5, 0.5]
          self.no_wandb = True
 
     def __getattr__(self, key):

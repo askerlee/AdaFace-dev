@@ -87,8 +87,9 @@ def parse_args():
                                  "dreamshaper-v5", "dreamshaper-v6", "ar-v16", "rv-v4"],
                         help="Type of checkpoints to use (default: v15)")
 
-    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5],
-                        help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
+    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5, 0.5],
+                        help="Weight of the skip connections of the last few layers of CLIP text embedder. " 
+                             "NOTE: the last element is the weight of the last layer.")
     
     parser.add_argument("--is_face", type=str2bool, const=True, default=argparse.SUPPRESS, nargs="?",
                         help="Whether the generated samples are human faces",

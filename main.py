@@ -252,8 +252,12 @@ def get_parser(**parser_kwargs):
     # are all equavalent.
     parser.add_argument("--use_fp_trick", nargs="?", type=str2bool, const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
-    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5],
-                        help="Weight of the skip connection between the last layer and second last layer of CLIP text embedder")
+    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5, 0.5],
+                        help="Weight of the skip connections of the last few layers of CLIP text embedder. " 
+                             "NOTE: the last element is the weight of the last layer.")
+
+    parser.add_argument("--randomize_clip_skip_weights", nargs="?", type=str2bool, const=True, default=False,
+                        help="Whether to randomize the skip weights of CLIP text embedder")
     
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
                         help="Disable wandb logging")    
@@ -690,7 +694,8 @@ if __name__ == "__main__":
         lightning_config.trainer = trainer_config
 
         # model
-        config.model.params.cond_stage_config.params.last_layers_skip_weights   = opt.clip_last_layers_skip_weights
+        config.model.params.cond_stage_config.params.last_layers_skip_weights    = opt.clip_last_layers_skip_weights
+        config.model.params.cond_stage_config.params.randomize_clip_skip_weights = opt.randomize_clip_skip_weights
         config.model.params.use_fp_trick = opt.use_fp_trick
 
         if len(opt.init_word_weights) > 0:
