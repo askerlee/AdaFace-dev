@@ -78,7 +78,10 @@ end
 set -q _flag_clip_last_layers_skip_weights; and set -l clip_last_layers_skip_weights (string split "," $_flag_clip_last_layers_skip_weights);
 if set -q clip_last_layers_skip_weights
     set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --clip_last_layers_skip_weights $clip_last_layers_skip_weights
-    set EXTRA_EVAL_ARGS0  $EXTRA_EVAL_ARGS0  --clip_last_layers_skip_weights $clip_last_layers_skip_weights
+    # Only use clip_last_layers_skip_weights for training, and not for inference.
+    # Seems that using [0.3, 0.4, 0.3] as clip_last_layers_skip_weights for inference leads to worse 
+    # compositionality than using the default [0.5, 0.5].
+    # set EXTRA_EVAL_ARGS0  $EXTRA_EVAL_ARGS0  --clip_last_layers_skip_weights $clip_last_layers_skip_weights
 end
 
 echo Training on $subjects[$indices]
