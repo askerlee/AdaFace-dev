@@ -373,6 +373,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             np.set_printoptions(precision=2, suppress=True)
             print(f"CLIP last_layers_skip_weights = {weights}")
             np.set_printoptions(**print_opts)
+            self.dir_sampler = None
         else:
             self.dir_sampler = torch.distributions.dirichlet.Dirichlet(torch.tensor(weights, dtype=float))
             # Print the first set of sampled weights
