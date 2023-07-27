@@ -1296,11 +1296,17 @@ class LatentDiffusion(DDPM):
 
                         c_in2 = subj_single_prompts + subj_comp_prompts + mix_single_prompts + mix_comp_prompts
 
+                        placeholder_indices_N = self.embedding_manager.placeholder_indices[1].chunk(2)[0]
+                        
                         if self.embedding_manager.num_vectors_per_token > 1:
                             # Only keep the first half (for single prompts), as the second half is the same 
-                            # (for comp prompts, differs at the batch index, but the token index is identical)
-                            placeholder_indices_N = self.embedding_manager.placeholder_indices[1].chunk(2)[0]
-
+                            # (for comp prompts, differs at the batch index, but the token index is identical).
+                            # placeholder_indices is only for (subj_single_prompts, subj_comp_prompts), since
+                            # the placeholder token doesn't appear in the class prompts. 
+                            # Now we take the first half of placeholder_indices_N, so that 
+                            # they only account for the subject single prompt, but they are also 
+                            # applicable to the other 3 types of prompts as they are all aligned 
+                            # at the beginning part of the prompts.
                             cls_single_emb = patch_multi_embeddings(cls_single_emb, placeholder_indices_N)
                             cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   placeholder_indices_N)
                             
@@ -1321,9 +1327,9 @@ class LatentDiffusion(DDPM):
                         subj_emb_scale = 0.5
 
                         subj_comp_emb_qv   = scale_emb_in_embs(subj_comp_emb,   placeholder_indices_N, 
-                                                                   scale=subj_emb_scale, scale_first_only=False)
+                                                               scale=subj_emb_scale, scale_first_only=False)
                         subj_single_emb_qv = scale_emb_in_embs(subj_single_emb, placeholder_indices_N, 
-                                                                   scale=subj_emb_scale, scale_first_only=False)
+                                                               scale=subj_emb_scale, scale_first_only=False)
                         
                         """                         
                         subj_comp_emb_qv   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
