@@ -767,6 +767,7 @@ class LatentDiffusion(DDPM):
                 # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
                 c_in = copy.copy(cond_in)
                 # c: [128, 77, 768]
+                self.cond_stage_model.sample_last_layers_skip_weights()
                 c = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
@@ -817,6 +818,8 @@ class LatentDiffusion(DDPM):
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
         # when embedding_manager is called within cond_stage_model.encode().
         self.embedding_manager.set_ada_layer_temp_info(layer_idx, layer_attn_components, time_emb, ada_bp_to_unet)
+        # DO NOT call sample_last_layers_skip_weights() here, to make the ada embeddings are generated with 
+        # CLIP skip weights consistent with the static embeddings.
         c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, reset_ada_embedding_cache() should have been called somewhere.

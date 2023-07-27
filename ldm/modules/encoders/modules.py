@@ -157,13 +157,16 @@ class SpatialRescaler(nn.Module):
 class FrozenCLIPEmbedder(AbstractEncoder):
     """Uses the CLIP transformer encoder for text (from Hugging Face)"""
     def __init__(self, version="openai/clip-vit-large-patch14", device="cuda", max_length=77,
-                 last_layers_skip_weights=[0.5]):
+                 last_layers_skip_weights=[0.5, 0.5], randomize_clip_skip_weights=False):
         super().__init__()
         self.tokenizer = CLIPTokenizer.from_pretrained(version)
         self.transformer = CLIPTextModel.from_pretrained(version)
         self.device = device
         self.max_length = max_length
-        self.set_last_layers_skip_weights(last_layers_skip_weights)
+        # If randomize_clip_skip_weights, then use last_layers_skip_weights as Dirichlet weights
+        # and dynamically sample the actual last_layers_skip_weights from the Dirichlet distribution.
+        self.set_last_layers_skip_weights(last_layers_skip_weights, 
+                                          use_as_dirichlet_weights=randomize_clip_skip_weights)
 
         def embedding_forward(
                 self,
@@ -207,7 +210,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             output_attentions = None,       # default: None
             output_hidden_states = None,    # default: None
             return_dict = None,
-            last_layers_skip_weights = [0.5],
+            last_layers_skip_weights = [0.5, 0.5],
         ):
             output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
 
@@ -361,18 +364,33 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         # Therefore, the method is intercepted without modifying the implicit object "transformer".
         self.transformer.forward = transformer_forward.__get__(self.transformer)
 
-    def set_last_layers_skip_weights(self, weights):
-        if np.sum(weights) > 1.0:
-            weights /= np.sum(weights)
-            last_layer_weight = 0.0
+    # NOTE: the last element is the weight of the last layer.
+    def set_last_layers_skip_weights(self, weights, use_as_dirichlet_weights=False):
+        if not use_as_dirichlet_weights:
+            weights = np.array(weights) / np.sum(weights)
+            self.transformer.text_model.last_layers_skip_weights = weights
+            print_opts = np.get_printoptions()
+            np.set_printoptions(precision=2, suppress=True)
+            print(f"CLIP last_layers_skip_weights = {weights}")
+            np.set_printoptions(**print_opts)
         else:
-            last_layer_weight = 1.0 - np.sum(weights)
-
-        # Reverse weights, so that the last element is the weight of the last layer.
-        weights = weights[::-1] + [last_layer_weight]
+            self.dir_sampler = torch.distributions.dirichlet.Dirichlet(torch.tensor(weights, dtype=float))
+            self.sample_last_layers_skip_weights()
+    
+    def sample_last_layers_skip_weights(self):
+        if self.dir_sampler is None:
+            # Do nothing.
+            print("WARN: sample_last_layers_skip_weights() is called while randomize_clip_skip_weights is False.")
+            return 
+        
+        weights = self.dir_sampler.sample().numpy()
         self.transformer.text_model.last_layers_skip_weights = weights
-        print(f"CLIP last_layers_skip_weights = {np.array(weights)}")
-              
+
+        print_opts = np.get_printoptions()
+        np.set_printoptions(precision=2, suppress=True)
+        print(f"CLIP last_layers_skip_weights = {weights}")        
+        np.set_printoptions(**print_opts)
+
     def freeze(self):
         self.transformer = self.transformer.eval()
         for param in self.parameters():

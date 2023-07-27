@@ -192,8 +192,9 @@ def get_parser(**parser_kwargs):
         required=False,
         help="Match class_word to the category of images you want to train. Example: 'man', 'woman', or 'dog'.")
 
-    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5],
-                        help="Weights of the the last 2-3 layers of the CLIP text embedder")
+    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5, 0.5],
+                        help="Weight of the skip connections of the last few layers of CLIP text embedder. " 
+                             "NOTE: the last element is the weight of the last layer.")
 
     parser.add_argument("--min_rand_scaling",
                         type=float, default=0.8, 
