@@ -5,7 +5,7 @@ import clip
 from einops import rearrange, repeat
 from transformers import CLIPTokenizer, CLIPTextModel
 import kornia
-
+import numpy as np
 from ldm.modules.x_transformer import Encoder, TransformerWrapper  # TODO: can we directly rely on lucidrains code and simply add this as a reuirement? --> test
 
 def _expand_mask(mask, dtype, tgt_len = None):
@@ -362,12 +362,16 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         self.transformer.forward = transformer_forward.__get__(self.transformer)
 
     def set_last_layers_skip_weights(self, weights):
-        assert sum(weights) <= 1.0, f"The sum of last_layers_skip_weights {weights} should be <= 1.0."
-        last_layer_weight = 1.0 - sum(weights)
-        weights = ([last_layer_weight] + weights)[::-1]
+        if np.sum(weights) > 1.0:
+            weights /= np.sum(weights)
+            last_layer_weight = 0.0
+        else:
+            last_layer_weight = 1.0 - np.sum(weights)
+
         # Reverse weights, so that the last element is the weight of the last layer.
+        weights = weights[::-1] + [last_layer_weight]
         self.transformer.text_model.last_layers_skip_weights = weights
-        print(f"CLIP last_layers_skip_weights = {weights}")
+        print(f"CLIP last_layers_skip_weights = {np.array(weights)}")
               
     def freeze(self):
         self.transformer = self.transformer.eval()
