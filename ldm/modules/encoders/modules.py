@@ -382,7 +382,8 @@ class FrozenCLIPEmbedder(AbstractEncoder):
     def sample_last_layers_skip_weights(self, verbose=False):
         if self.dir_sampler is None:
             # Do nothing.
-            print("WARN: sample_last_layers_skip_weights() is called while randomize_clip_skip_weights is False.")
+            if verbose:
+                print("WARN: sample_last_layers_skip_weights() is called while randomize_clip_skip_weights is False.")
             return 
         
         weights = self.dir_sampler.sample().numpy()
