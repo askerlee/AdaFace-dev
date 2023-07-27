@@ -3,9 +3,9 @@
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'selset' 'skipselset' 'cls_token_as_delta' 'eval'  -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'eval'  -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--cls_token_as_delta] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] (ada|ti|db) [low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -13,7 +13,7 @@ end
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'static-layerwise' ]; or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--cls_token_as_delta] [--eval] (ada|ti|db) [--selset|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] (ada|ti|db) [|low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -34,6 +34,9 @@ set EXTRA_TRAIN_ARGS0 $argv[4..-1]
 set -q _flag_lr; and set lr $_flag_lr; or set -e lr
 set -q _flag_min_rand_scaling; and set min_rand_scaling $_flag_min_rand_scaling; or set -e min_rand_scaling
 #set fish_trace 1
+
+set indices0 (seq 1 (count $subjects))
+set indices $indices0[(seq $L $H)]
 
 # default bb_type is v15.
 set -q _flag_bb_type; or set _flag_bb_type 'v15-dste'
@@ -65,23 +68,24 @@ else
     exit 1
 end
 
-# If --selset is given, then only train on the selected subjects, specified in $subj_file.
-set -q _flag_selset; and set indices0 $sel_set; or set indices0 (seq 1 (count $subjects))
-set indices $indices0[(seq $L $H)]
+set EXTRA_EVAL_ARGS0  --bb_type $_flag_bb_type
 
-set -q _flag_num_vectors_per_token; and set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --num_vectors_per_token $_flag_num_vectors_per_token
-set EXTRA_EVAL_ARGS0  --bb_type $_flag_bb_type --num_vectors_per_token $_flag_num_vectors_per_token
+if set -q _flag_num_vectors_per_token
+    set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --num_vectors_per_token $_flag_num_vectors_per_token
+    set EXTRA_EVAL_ARGS0 $EXTRA_EVAL_ARGS0   --num_vectors_per_token $_flag_num_vectors_per_token
+end
+
+set -q _flag_clip_last_layers_skip_weights; and set -l clip_last_layers_skip_weights (string split "," $_flag_clip_last_layers_skip_weights);
+if set -q clip_last_layers_skip_weights
+    set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --clip_last_layers_skip_weights $clip_last_layers_skip_weights
+    set EXTRA_EVAL_ARGS0  $EXTRA_EVAL_ARGS0  --clip_last_layers_skip_weights $clip_last_layers_skip_weights
+end
 
 echo Training on $subjects[$indices]
 
 # $0 0 1 13: alexachung .. masatosakai, on GPU0
 # $0 1 14 25: michelleyeoh .. zendaya,  on GPU1
 for i in $indices
-    if set -q _flag_skipselset; and contains $i $sel_set
-        echo "Skipping $i: $subjects[$i]"
-        continue
-    end
-
     set subject     $subjects[$i]
     set ada_prompt  $ada_prompts[$i]
     set ada_weight  (string split " " $ada_weights[$i])
