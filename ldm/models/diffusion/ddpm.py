@@ -1447,7 +1447,7 @@ class LatentDiffusion(DDPM):
 
                         extra_info['iter_type']      = 'normal_recon'
                         extra_info['ada_bp_to_unet'] = False
-                        # extra_info['do_attn_recon_loss'] = self.do_attn_recon_loss
+                        extra_info['do_attn_recon_loss'] = self.do_attn_recon_loss
 
                     extra_info['cls_comp_prompts']   = cls_comp_prompts
                     extra_info['cls_single_prompts'] = cls_single_prompts
@@ -1828,8 +1828,6 @@ class LatentDiffusion(DDPM):
 
         if iter_type == 'normal_recon':
             if self.do_attn_recon_loss:
-                cond_cls = extra_info['cond_cls']
-                cond_cls[2]['do_attn_recon_loss'] = True
 
                 placeholder_indices = self.embedding_manager.placeholder_indices0
                 # For 'normal_recon' but do_attn_recon_loss=True, same to mix reg iters or ada reg iters, 
@@ -1837,15 +1835,22 @@ class LatentDiffusion(DDPM):
                 # placeholder_indices0 has a BS of 4, for the 2 types of subject prompts, each type 2 prompts.
                 # So we only keep the first half, which correspond to the 2 subject-single prompts.
                 placeholder_indices = (placeholder_indices[0].chunk(2)[0], placeholder_indices[1].chunk(2)[0])
+                """                 
+                cond_cls = extra_info['cond_cls']
+                cond_cls[2]['do_attn_recon_loss'] = True
+
                 self.guided_denoise(x_start, noise, t, cond_cls, 
                                     has_grad=False, 
                                     do_recon=False,
                                     cfg_scales=None)
+                unet_attns_cls_single = cond_cls[2]['unet_attns']
+
+                """
 
                 # unet_attns is a dict as: layer_idx -> attn_mat. 
                 # It contains the 6 specified conditioned layers of UNet attentions, 
                 # i.e., layers 7, 8, 12, 16, 17, 18.
-                unet_attns_cls_single = cond_cls[2]['unet_attns']
+                unet_attns_cls_single = cond[2]['unet_attns']
                 # Use the top-most captured attn layer to get the subject attention.
                 attn_layer_idx = 17
                 # [4, 8, 256, 77] / [4, 8, 64, 77] =>
