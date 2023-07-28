@@ -994,7 +994,9 @@ class EmbeddingManager(nn.Module):
     def update_placeholder_indices(self, tokenized_text, placeholder_token, num_vectors_per_token):
         placeholder_indices_B, placeholder_indices_N = \
             torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
-        
+        # placeholder_indices0: only indices the first embedding of each multi-embedding token.
+        self.placeholder_indices0 = (placeholder_indices_B, placeholder_indices_N)
+
         if num_vectors_per_token > 1:
             BS = placeholder_indices_B.shape[0]
             placeholder_indices_B = placeholder_indices_B.unsqueeze(1).repeat(1, num_vectors_per_token).view(-1)
@@ -1005,7 +1007,7 @@ class EmbeddingManager(nn.Module):
         else:
             # placeholder_indices contains the indices of all placeholder embeddings.
             self.placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
-
+        
     def get_ada_emb_weight(self):
         if self.training:
             # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.

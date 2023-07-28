@@ -29,6 +29,7 @@ model:
     use_ada_embedding: True
     do_clip_teacher_filtering: True
     use_fp_trick:              True
+    do_attn_recon_loss:        True
     # typical loss_embedding_reg is ~0.04, * weight -> 6e-4.
     embedding_reg_weight:               0.015
     # composition_regs does composition_prompt_mix_reg, which always comes with prompt_delta_reg.
