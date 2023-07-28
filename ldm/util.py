@@ -377,7 +377,7 @@ def calc_chan_locality(feat):
 # flat_attn: [2, 8, 256] => [1, 2, 8, 256] => max/mean => [1, 256] => spatial_attn: [1, 16, 16].
 # spatial_attn [1, 16, 16] => spatial_weight [1, 16, 16].
 # BS: usually 1 (actually HALF_BS).
-def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
+def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=True):
     # flat_attn: [2, 8, 256] => [1, 2, 8, 256].
     # The 1 in dim 0 is BS, the batch size of each group of prompts.
     # The 2 in dim 1 is the two occurrences of the subject tokens in the comp mix prompts 
@@ -391,19 +391,20 @@ def convert_attn_to_spatial_weight(flat_attn, BS, spatial_shape):
     # apply them as weights.
     # Mean among the 8 heads, then sum across the 2 occurrences of the subject tokens.
 
-    spatial_scale = np.sqrt(flat_attn.shape[-1] / BS / spatial_shape.numel())
-    spatial_shape2 = (int(spatial_shape[0] * spatial_scale), int(spatial_shape[1] * spatial_scale))
+    spatial_scale = np.sqrt(flat_attn.shape[-1] / out_spatial_shape.numel())
+    spatial_shape2 = (int(out_spatial_shape[0] * spatial_scale), int(out_spatial_shape[1] * spatial_scale))
     spatial_attn = flat_attn.mean(dim=2).sum(dim=1).reshape(BS, 1, *spatial_shape2)
-    spatial_attn = F.interpolate(spatial_attn, size=spatial_shape, mode='bilinear', align_corners=False)
+    spatial_attn = F.interpolate(spatial_attn, size=out_spatial_shape, mode='bilinear', align_corners=False)
 
     attn_mean, attn_std = spatial_attn.mean(dim=(2,3), keepdim=True), \
-                            spatial_attn.std(dim=(2,3), keepdim=True)
+                           spatial_attn.std(dim=(2,3), keepdim=True)
     # Lower bound of denom is attn_mean / 2, in case attentions are too uniform and attn_std is too small.
     denom = torch.clamp(attn_std + 0.001, min = attn_mean / 2)
+    M = -1 if reversed else 1
     # Normalize spatial_attn with mean and std, so that mean attn values are 0.
-    # and mean + x*std = exp(-x), i.e., the higher the attention value, the lower the weight.
+    # If reversed, then mean + x*std = exp(-x), i.e., the higher the attention value, the lower the weight.
     # The lower the attention value, the higher the weight, but no more than 1.
-    spatial_weight = torch.exp(-(spatial_attn - attn_mean) / denom).clamp(max=1)
+    spatial_weight = torch.exp(M * (spatial_attn - attn_mean) / denom).clamp(max=1)
     # Normalize spatial_weight so that the average weight across spatial dims of each instance is 1.
     spatial_weight = spatial_weight / spatial_weight.mean(dim=(2,3), keepdim=True)
 

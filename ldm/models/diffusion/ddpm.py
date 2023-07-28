@@ -95,6 +95,7 @@ class DDPM(pl.LightningModule):
                  prompt_delta_reg_weight=0.,
                  composition_prompt_mix_reg_weight=0.,
                  do_clip_teacher_filtering=False,
+                 do_attn_recon_loss=True,
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
                  use_fp_trick=True,       
                  ):
@@ -119,6 +120,7 @@ class DDPM(pl.LightningModule):
         self.do_clip_teacher_filtering      = do_clip_teacher_filtering
         self.prompt_mix_scheme              = 'mix_hijk'
         self.use_fp_trick                   = use_fp_trick
+        self.do_attn_recon_loss             = do_attn_recon_loss
 
         self.do_static_prompt_delta_reg     = False
         self.do_ada_prompt_delta_reg        = False
@@ -1245,7 +1247,7 @@ class LatentDiffusion(DDPM):
                 # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
                 # c: subj_single_prompts, which are plain prompts like 
                 # ['an illustration of a dirty z', 'an illustration of the cool z']
-                if self.do_static_prompt_delta_reg or self.do_comp_prompt_mix_reg:
+                if self.do_static_prompt_delta_reg or self.do_comp_prompt_mix_reg or self.do_attn_recon_loss:
                     if not is_reuse_init_iter:
                         subj_single_prompts = c
                         subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
@@ -1280,7 +1282,9 @@ class LatentDiffusion(DDPM):
                     c_static_emb, c_in, extra_info = self.get_learned_conditioning(delta_prompts, img_mask=img_mask)
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
-                    
+
+                    extra_info['do_attn_recon_loss'] = False
+
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
                     if self.do_comp_prompt_mix_reg:
@@ -1412,8 +1416,8 @@ class LatentDiffusion(DDPM):
 
                     # This iter is a simple ada prompt delta loss iter, without prompt mixing loss. 
                     # This branch is reached only if prompt mixing is not enabled.
-                    # "and not self.do_comp_prompt_mix_reg" is redundant, because it's "elif".
-                    # Added for clarity. 
+                    # "and not self.do_comp_prompt_mix_reg" is redundant, because it's at an "elif" branch.
+                    # Kept for clarity. 
                     elif self.do_ada_prompt_delta_reg and not self.do_comp_prompt_mix_reg:
                         # Do ada prompt delta loss in this iteration. 
                         # c_static_emb: static embeddings, [64, 77, 768]. 128 = 4 * 16. 
@@ -1430,13 +1434,24 @@ class LatentDiffusion(DDPM):
                         # The original scheme. Use the original subj_single_prompts embeddings and prompts.
                         # When num_compositions_per_image > 1, subj_single_prompts contains repeated prompts,
                         # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
-                        c_static_emb2 = subj_single_emb[:N_EMBEDS]
                         c_in2         = subj_single_prompts[:ORIG_BS]
+                        c_static_emb2 = subj_single_emb[:N_EMBEDS]
+                        if self.do_attn_recon_loss:
+                            c_in_cls         = cls_single_prompts[:ORIG_BS]
+                            c_static_emb_cls = cls_single_emb[:N_EMBEDS]
+                            # extra_info['do_attn_recon_loss'] will be not be set to True now,
+                            # but only when the inits are conditioned on c_cls.
+                            cond_cls = (c_static_emb_cls, c_in_cls, extra_info)
+                            # There's a loopy reference extra_info -> c_cls -> extra_info, but it's fine.
+                            extra_info['cond_cls'] = cond_cls
+
                         extra_info['iter_type']      = 'normal_recon'
                         extra_info['ada_bp_to_unet'] = False
+                        # extra_info['do_attn_recon_loss'] = self.do_attn_recon_loss
 
                     extra_info['cls_comp_prompts']   = cls_comp_prompts
                     extra_info['cls_single_prompts'] = cls_single_prompts
+                    # 'delta_prompts' is only used in comp_prompt_mix_reg iters.
                     extra_info['delta_prompts']      = c_in
 
                     # c_static_emb2 is the static embeddings of the prompts used in losses other than 
@@ -1697,6 +1712,7 @@ class LatentDiffusion(DDPM):
             # to the subject images than in the first denoising step. 
 
         cfg_scales_for_clip_loss = None
+        c_static_emb, c_in, extra_info = cond
 
         if self.is_comp_iter:
             # If bs=2, then HALF_BS=1.
@@ -1761,7 +1777,6 @@ class LatentDiffusion(DDPM):
                     noise   = noise.repeat(2, 1, 1, 1)
                     t       = t.repeat(2)
 
-                    c_static_emb, c_in, extra_info = cond
                     # print(c_in)
 
                     # Make two identical sets of c_static_emb2 and c_in2.
@@ -1782,7 +1797,8 @@ class LatentDiffusion(DDPM):
                 else:
                     noise   = noise[:HALF_BS].repeat(4, 1, 1, 1)
                     t       = t[:HALF_BS].repeat(4)
-                    # use cached x_start and cond. Already has the 4-type structure. No change here.
+                    # use cached x_start and cond. Already has the 4-type structure. 
+                    # No change to the condition here.
 
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
@@ -1811,6 +1827,46 @@ class LatentDiffusion(DDPM):
         twin_comp_ada_embeddings = None
 
         if iter_type == 'normal_recon':
+            if self.do_attn_recon_loss:
+                cond_cls = extra_info['cond_cls']
+                cond_cls[2]['do_attn_recon_loss'] = True
+
+                placeholder_indices = self.embedding_manager.placeholder_indices0
+                # For 'normal_recon' but do_attn_recon_loss=True, same to mix reg iters or ada reg iters, 
+                # 4 types of prompts are fed to embedding_manager to generate static embeddings in forward(). 
+                # placeholder_indices0 has a BS of 4, for the 2 types of subject prompts, each type 2 prompts.
+                # So we only keep the first half, which correspond to the 2 subject-single prompts.
+                placeholder_indices = (placeholder_indices[0].chunk(2)[0], placeholder_indices[1].chunk(2)[0])
+                self.guided_denoise(x_start, noise, t, cond_cls, 
+                                    has_grad=False, 
+                                    do_recon=False,
+                                    cfg_scales=None)
+
+                # unet_attns is a dict as: layer_idx -> attn_mat. 
+                # It contains the 6 specified conditioned layers of UNet attentions, 
+                # i.e., layers 7, 8, 12, 16, 17, 18.
+                unet_attns_cls_single = cond_cls[2]['unet_attns']
+                # Use the top-most captured attn layer to get the subject attention.
+                attn_layer_idx = 17
+                # [4, 8, 256, 77] / [4, 8, 64, 77] =>
+                # [4, 77, 8, 256] / [4, 77, 8, 64]
+                attn_mat_cls_single = unet_attns_cls_single[attn_layer_idx].permute(0, 3, 1, 2)
+                # placeholder_indices: ([0, 1], [6, 7]), when 2 embeddings for 1 token.
+                # The second token in a class prompt is a comma, which has little effect on the attn.
+                # subj_attn: [2, 8, 256 / 64] (only consider the first embedding 
+                # even if there are mult-embeddings for the subject token).
+                subj_attn_cls_single = attn_mat_cls_single[placeholder_indices]
+                # spatial_weight_cls_single: [2, 1, 64, 64].
+                # model_output, target:      [2, 4, 64, 64].
+                spatial_weight_cls_single, spatial_attn_cls_single = \
+                    convert_attn_to_spatial_weight(subj_attn_cls_single, 
+                                                   x_start.shape[0], 
+                                                   x_start.shape[2:],
+                                                   reversed=False)      
+                # Weight the loss at each pixel with the attention-derived spatial weights.          
+                model_output = model_output * spatial_weight_cls_single
+                target       = target       * spatial_weight_cls_single
+
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
             loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean().detach()})
@@ -2070,8 +2126,8 @@ class LatentDiffusion(DDPM):
             # It contains all the intermediate 25 layers of UNet features.
             unet_feats = cond[2]['unet_feats']
             # unet_attns is a dict as: layer_idx -> attn_mat. 
-            # It contains the 5 specified conditioned layers of UNet attentions, 
-            # i.e., layers 7, 8, 12, 16, 17.
+            # It contains the 6 specified conditioned layers of UNet attentions, 
+            # i.e., layers 7, 8, 12, 16, 17, 18.
             unet_attns = cond[2]['unet_attns']
             
             loss_subj_attn_distill, loss_feat_distill = \
@@ -2220,10 +2276,9 @@ class LatentDiffusion(DDPM):
                 
                 # convert_attn_to_spatial_weight() will detach attention weights to 
                 # avoid BP through attention.
-                #spatial_weight_subj_single, spatial_attn_subj_single = convert_attn_to_spatial_weight(subj_attn_subj_single, HALF_BS, feat_subj_single.shape[2:])
-                #spatial_weight_subj_comp,   spatial_attn_subj_comp   = convert_attn_to_spatial_weight(subj_attn_subj_comp,  HALF_BS, feat_subj_comp.shape[2:])
-                #spatial_weight_mix_single,  spatial_attn_mix_single  = convert_attn_to_spatial_weight(subj_attn_mix_single,  HALF_BS, feat_mix_single.shape[2:])
-                spatial_weight_mix_comp, spatial_attn_mix_comp = convert_attn_to_spatial_weight(subj_attn_mix_comp,   HALF_BS, feat_mix_comp.shape[2:])
+                spatial_weight_mix_comp, spatial_attn_mix_comp = convert_attn_to_spatial_weight(subj_attn_mix_comp,   HALF_BS, 
+                                                                                                feat_mix_comp.shape[2:],
+                                                                                                reversed=True)
 
                 # spatial_attn_mix_comp is returned for debugging purposes. Delete to release RAM.
                 del spatial_attn_mix_comp
