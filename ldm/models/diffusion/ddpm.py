@@ -2297,19 +2297,25 @@ class LatentDiffusion(DDPM):
                 
                 # convert_attn_to_spatial_weight() will detach attention weights to 
                 # avoid BP through attention.
-                spatial_weight_mix_comp, spatial_attn_mix_comp = convert_attn_to_spatial_weight(subj_attn_mix_comp,   HALF_BS, 
-                                                                                                feat_mix_comp.shape[2:],
-                                                                                                reversed=True)
+                spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(subj_attn_mix_comp, HALF_BS, 
+                                                                                                  feat_mix_comp.shape[2:],
+                                                                                                  reversed=True)
 
-                # spatial_attn_mix_comp is returned for debugging purposes. Delete to release RAM.
-                del spatial_attn_mix_comp
+                spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_attn_subj_comp, HALF_BS,
+                                                                                                  feat_subj_comp.shape[2:],
+                                                                                                  reversed=True)
+                spatial_weight = (spatial_weight_mix_comp + spatial_weight_subj_comp) / 2
+
+                # spatial_attn_mix_comp, spatial_attn_subj_comp are returned for debugging purposes. 
+                # Delete them to release RAM.
+                del spatial_attn_mix_comp, spatial_attn_subj_comp
 
                 # Use mix single/comp weights on both subject-only and mix features, 
                 # to reduce misalignment and facilitate distillation.
-                feat_subj_single = feat_subj_single * spatial_weight_mix_comp
-                feat_subj_comp   = feat_subj_comp   * spatial_weight_mix_comp
-                feat_mix_single  = feat_mix_single  * spatial_weight_mix_comp
-                feat_mix_comp    = feat_mix_comp    * spatial_weight_mix_comp
+                feat_subj_single = feat_subj_single * spatial_weight
+                feat_subj_comp   = feat_subj_comp   * spatial_weight
+                feat_mix_single  = feat_mix_single  * spatial_weight
+                feat_mix_comp    = feat_mix_comp    * spatial_weight
 
             do_feat_pooling = True
             feat_pool_kernel_size = 4
