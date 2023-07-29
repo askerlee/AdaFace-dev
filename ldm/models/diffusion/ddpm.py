@@ -1883,10 +1883,23 @@ class LatentDiffusion(DDPM):
                     convert_attn_to_spatial_weight(subj_attn_cls_single, 
                                                    x_start.shape[0], 
                                                    x_start.shape[2:],
-                                                   reversed=False)      
+                                                   reversed=False)  
+                # Inverse of the average weight of the foreground pixels, i.e. those
+                # with spatial_weight_cls_single > 1. 
+                # After applying fg_inv_scale, foreground pixels will receive similar weights
+                # as without using attentional weighting. But background pixels will be
+                # far less weighted, as their weights in spatial_weight_cls_single < 1, and 
+                # are further scaled down by fg_inv_scale.
+                fg_inv_scale = (spatial_weight_cls_single > 1.).sum() \
+                                / ((spatial_weight_cls_single > 1.) * spatial_weight_cls_single).sum() 
+                self.l_simple_weight_iter = self.l_simple_weight * fg_inv_scale
+                loss_dict.update({f'{prefix}/fg_inv_scale': fg_inv_scale.item()})
+
                 # Weight the loss at each pixel with the attention-derived spatial weights.          
                 model_output = model_output * spatial_weight_cls_single
                 target       = target       * spatial_weight_cls_single
+            else:
+                self.l_simple_weight_iter = self.l_simple_weight
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
@@ -1901,8 +1914,11 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/loss_gamma': loss_simple.mean()})
                 loss_dict.update({'logvar': self.logvar.data.mean().detach()})
 
-            # l_simple_weight = 1.
-            loss = self.l_simple_weight * loss_simple.mean()
+            # If do_attn_recon_loss_iter, then 
+            # l_simple_weight_iter = l_simple_weight (1) * fg_inv_scale, i.e.,
+            # the recon loss is scaled down by the average weight of focused pixels.
+            # The background pixels will be applied with a weight of << 1.
+            loss = self.l_simple_weight_iter * loss_simple.mean()
 
             loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
             loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
