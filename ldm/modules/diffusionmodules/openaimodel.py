@@ -774,7 +774,7 @@ class UNetModel(nn.Module):
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
                 # 'mix_' in iter_type: could be "mix_hijk" (training or inference) 
                 # or "mix_concat_cls" (inference only).
-                if iter_type.startswith("mix_"):
+                if iter_type.startswith("mix_") or do_attn_recon_loss:
                     assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
                     # "mix_concat_cls" is inference only.
                     if iter_type == 'mix_concat_cls':
