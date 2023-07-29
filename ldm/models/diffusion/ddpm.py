@@ -1349,11 +1349,13 @@ class LatentDiffusion(DDPM):
                         """
                         
                         total_training_steps = self.trainer.max_steps
+                        INIT_CLS_EMB_SCALE = 0.1
                         # Linearly decrease the scale of the subject embeddings from 1 to 0.5, i.e., 
                         # increase the scale of the class embeddings from 0 to 0.5, so that 
                         # the distillation keeps being effective. Otherwise the teacher 
                         # will become very similar to the student.
-                        subj_emb_scale = 1 - 0.5 * self.global_step / total_training_steps
+                        subj_emb_scale = 1 - INIT_CLS_EMB_SCALE \
+                                         - 0.5 * self.global_step / total_training_steps
                         
                         subj_comp_emb_qv   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
                                                             placeholder_indices_N, c1_subj_scale=subj_emb_scale)
