@@ -1287,7 +1287,7 @@ class LatentDiffusion(DDPM):
 
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
-                    if self.do_comp_prompt_mix_reg:
+                    if self.do_comp_prompt_mix_reg or self.do_attn_recon_loss:
                         # c_in2 is used to generate ada embeddings.
                         # Arrange c_in2 in the same layout as the static embeddings.
                         # The mix_single_prompts within c_in2 will only be used to generate ordinary 
@@ -1403,17 +1403,38 @@ class LatentDiffusion(DDPM):
                             mix_comp_emb   = mix_comp_emb_all_layers
                             mix_single_emb = mix_single_emb_all_layers
 
-                        # c_static_emb2 will be added with the ada embeddings to form the 
-                        # conditioning embeddings in the U-Net.
-                        # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
-                        # image generation and computing compositional mix loss.
-                        c_static_emb2 = torch.cat([ subj_single_emb2, subj_comp_emb2, 
-                                                    mix_single_emb,   mix_comp_emb ], dim=0)
-                        
-                        extra_info['iter_type']      = self.prompt_mix_scheme
-                        # Set ada_bp_to_unet to False will reduce performance.
-                        extra_info['ada_bp_to_unet'] = True
+                        if self.do_comp_prompt_mix_reg:
+                            # c_static_emb2 will be added with the ada embeddings to form the 
+                            # conditioning embeddings in the U-Net.
+                            # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
+                            # image generation and computing compositional mix loss.
+                            c_static_emb2 = torch.cat([ subj_single_emb2, subj_comp_emb2, 
+                                                        mix_single_emb,   mix_comp_emb ], dim=0)
+                            
+                            extra_info['iter_type']      = self.prompt_mix_scheme
+                            # Set ada_bp_to_unet to False will reduce performance.
+                            extra_info['ada_bp_to_unet'] = True
+                        # do_attn_recon_loss
+                        else:
+                            c_in_cls         = cls_single_prompts
+                            # Use the mixed embeddings as the static embeddings of the class prompts.
+                            # It strikes a balance between pure class embeddings and subject embeddings.
+                            c_static_emb_cls = mix_single_emb
+                            # extra_info['do_attn_recon_loss'] will be not be set to True now,
+                            # but only when the inits are conditioned on c_cls.
+                            cond_cls = (c_static_emb_cls, c_in_cls, extra_info)
+                            # There's a loopy reference extra_info -> c_cls -> extra_info, but it's fine.
+                            extra_info['cond_cls'] = cond_cls
+                            # Will set do_attn_recon_loss to True in p_losses().
+                            # extra_info['do_attn_recon_loss'] = self.do_attn_recon_loss
 
+                            # Same inits as the normal recon loss below.
+                            c_in2         = subj_single_prompts[:ORIG_BS]
+                            c_static_emb2 = subj_single_emb[:N_EMBEDS]
+
+                            extra_info['iter_type']      = 'normal_recon'
+                            extra_info['ada_bp_to_unet'] = False
+                            
                     # This iter is a simple ada prompt delta loss iter, without prompt mixing loss. 
                     # This branch is reached only if prompt mixing is not enabled.
                     # "and not self.do_comp_prompt_mix_reg" is redundant, because it's at an "elif" branch.
@@ -1436,18 +1457,9 @@ class LatentDiffusion(DDPM):
                         # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
                         c_in2         = subj_single_prompts[:ORIG_BS]
                         c_static_emb2 = subj_single_emb[:N_EMBEDS]
-                        if self.do_attn_recon_loss:
-                            c_in_cls         = cls_single_prompts[:ORIG_BS]
-                            c_static_emb_cls = cls_single_emb[:N_EMBEDS]
-                            # extra_info['do_attn_recon_loss'] will be not be set to True now,
-                            # but only when the inits are conditioned on c_cls.
-                            cond_cls = (c_static_emb_cls, c_in_cls, extra_info)
-                            # There's a loopy reference extra_info -> c_cls -> extra_info, but it's fine.
-                            extra_info['cond_cls'] = cond_cls
 
                         extra_info['iter_type']      = 'normal_recon'
                         extra_info['ada_bp_to_unet'] = False
-                        extra_info['do_attn_recon_loss'] = self.do_attn_recon_loss
 
                     extra_info['cls_comp_prompts']   = cls_comp_prompts
                     extra_info['cls_single_prompts'] = cls_single_prompts
@@ -1835,7 +1847,7 @@ class LatentDiffusion(DDPM):
                 # placeholder_indices0 has a BS of 4, for the 2 types of subject prompts, each type 2 prompts.
                 # So we only keep the first half, which correspond to the 2 subject-single prompts.
                 placeholder_indices = (placeholder_indices[0].chunk(2)[0], placeholder_indices[1].chunk(2)[0])
-                """                 
+
                 cond_cls = extra_info['cond_cls']
                 cond_cls[2]['do_attn_recon_loss'] = True
 
@@ -1845,12 +1857,10 @@ class LatentDiffusion(DDPM):
                                     cfg_scales=None)
                 unet_attns_cls_single = cond_cls[2]['unet_attns']
 
-                """
-
                 # unet_attns is a dict as: layer_idx -> attn_mat. 
                 # It contains the 6 specified conditioned layers of UNet attentions, 
                 # i.e., layers 7, 8, 12, 16, 17, 18.
-                unet_attns_cls_single = cond[2]['unet_attns']
+                # unet_attns_cls_single = cond[2]['unet_attns']
                 # Use the top-most captured attn layer to get the subject attention.
                 attn_layer_idx = 17
                 # [4, 8, 256, 77] / [4, 8, 64, 77] =>
