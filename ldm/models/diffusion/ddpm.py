@@ -142,10 +142,10 @@ class DDPM(pl.LightningModule):
         self.use_scheduler = scheduler_config is not None
         if self.use_scheduler:
             self.scheduler_config = scheduler_config
-            self.warmup_steps     = scheduler_config.params.warm_up_steps
+            self.warm_up_steps = scheduler_config.params.warm_up_steps
         else:
             self.scheduler = None
-            self.warmup_steps = 500
+            self.warm_up_steps = 500
 
         self.v_posterior = v_posterior
         self.original_elbo_weight = original_elbo_weight
@@ -453,6 +453,13 @@ class DDPM(pl.LightningModule):
         self.do_comp_prompt_mix_reg   = False
         self.is_comp_iter             = False
         self.calc_clip_loss           = False
+
+        # Only do attn recon loss after warm_up_steps (500) iterations, when the subject embedding
+        # and, correspondingly, the mix embedding stablize and the attention maps are accurate.
+        if self.global_step >= self.warm_up_steps:
+            self.do_attn_recon_loss_iter = self.do_attn_recon_loss
+        else:
+            self.do_attn_recon_loss_iter = False
 
         # If N_INTERM_REGS == 0, then no intermittent regularizations, set the two flags to False.
         if N_INTERM_REGS > 0 and self.composition_regs_iter_gap > 0 \
@@ -1247,7 +1254,7 @@ class LatentDiffusion(DDPM):
                 # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
                 # c: subj_single_prompts, which are plain prompts like 
                 # ['an illustration of a dirty z', 'an illustration of the cool z']
-                if self.do_static_prompt_delta_reg or self.do_comp_prompt_mix_reg or self.do_attn_recon_loss:
+                if self.do_static_prompt_delta_reg or self.do_comp_prompt_mix_reg or self.do_attn_recon_loss_iter:
                     if not is_reuse_init_iter:
                         subj_single_prompts = c
                         subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
@@ -1287,7 +1294,7 @@ class LatentDiffusion(DDPM):
 
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
-                    if self.do_comp_prompt_mix_reg or self.do_attn_recon_loss:
+                    if self.do_comp_prompt_mix_reg or self.do_attn_recon_loss_iter:
                         # c_in2 is used to generate ada embeddings.
                         # Arrange c_in2 in the same layout as the static embeddings.
                         # The mix_single_prompts within c_in2 will only be used to generate ordinary 
@@ -1414,7 +1421,7 @@ class LatentDiffusion(DDPM):
                             extra_info['iter_type']      = self.prompt_mix_scheme
                             # Set ada_bp_to_unet to False will reduce performance.
                             extra_info['ada_bp_to_unet'] = True
-                        # do_attn_recon_loss
+                        # do_attn_recon_loss_iter
                         else:
                             c_in_cls         = cls_single_prompts
                             # Use the mixed embeddings as the static embeddings of the class prompts.
@@ -1426,7 +1433,7 @@ class LatentDiffusion(DDPM):
                             # There's a loopy reference extra_info -> c_cls -> extra_info, but it's fine.
                             extra_info['cond_cls'] = cond_cls
                             # Will set do_attn_recon_loss to True in p_losses().
-                            # extra_info['do_attn_recon_loss'] = self.do_attn_recon_loss
+                            # extra_info['do_attn_recon_loss'] = self.do_attn_recon_loss_iter
 
                             # Same inits as the normal recon loss below.
                             c_in2         = subj_single_prompts[:ORIG_BS]
@@ -1839,10 +1846,9 @@ class LatentDiffusion(DDPM):
         twin_comp_ada_embeddings = None
 
         if iter_type == 'normal_recon':
-            if self.do_attn_recon_loss:
-
+            if self.do_attn_recon_loss_iter:
                 placeholder_indices = self.embedding_manager.placeholder_indices0
-                # For 'normal_recon' but do_attn_recon_loss=True, same to mix reg iters or ada reg iters, 
+                # For 'normal_recon' but do_attn_recon_loss_iter=True, same to mix reg iters or ada reg iters, 
                 # 4 types of prompts are fed to embedding_manager to generate static embeddings in forward(). 
                 # placeholder_indices0 has a BS of 4, for the 2 types of subject prompts, each type 2 prompts.
                 # So we only keep the first half, which correspond to the 2 subject-single prompts.
