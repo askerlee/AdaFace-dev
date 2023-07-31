@@ -97,36 +97,6 @@ imagenet_templates_small = [
     'a depiction of a small {}',
 ]
 
-imagenet_dual_templates_small = [
-    'a photo of a {} with {}',
-    'a rendering of a {} with {}',
-    'a cropped photo of the {} with {}',
-    'the photo of a {} with {}',
-    'a photo of a clean {} with {}',
-    'a photo of a dirty {} with {}',
-    'a dark photo of the {} with {}',
-    'a photo of my {} with {}',
-    'a photo of the cool {} with {}',
-    'a close-up photo of a {} with {}',
-    'a bright photo of the {} with {}',
-    'a cropped photo of a {} with {}',
-    'a photo of the {} with {}',
-    'a good photo of the {} with {}',
-    'a photo of one {} with {}',
-    'a close-up photo of the {} with {}',
-    'a rendition of the {} with {}',
-    'a photo of the clean {} with {}',
-    'a rendition of a {} with {}',
-    'a photo of a nice {} with {}',
-    'a good photo of a {} with {}',
-    'a photo of the nice {} with {}',
-    'a photo of the small {} with {}',
-    'a photo of the weird {} with {}',
-    'a photo of the large {} with {}',
-    'a photo of a cool {} with {}',
-    'a photo of a small {} with {}',
-]
-
 per_img_token_list = [
     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק', 'ר', 'ש', 'ת',
 ]
@@ -150,7 +120,8 @@ class PersonalizedBase(Dataset):
                  # that specifies the (minimum, maximum) scaling factors.
                  rand_scaling_range=None,
                  set="train",
-                 placeholder_token="z",
+                 placeholder_string="z",
+                 background_string=None,
                  # cls token used to compute the delta loss.
                  cls_delta_token=None,  
                 # num_vectors_per_token: how many vectors in each layer are allocated to model 
@@ -169,7 +140,9 @@ class PersonalizedBase(Dataset):
         # self._length = len(self.image_paths)
         self.num_images = len(self.image_paths)
         self._length = self.num_images 
-        self.placeholder_token  = placeholder_token
+        self.placeholder_string  = placeholder_string
+        self.background_string   = background_string
+
         if cls_delta_token is None:
             self.cls_delta_token = None
             self.use_default_cls_delta_token = True
@@ -223,7 +196,7 @@ class PersonalizedBase(Dataset):
         if not image.mode == "RGB":
             image = image.convert("RGB")
 
-        placeholder_string = self.placeholder_token
+        placeholder_string = self.placeholder_string
 
         if self.use_default_cls_delta_token:
             cls_delta_token = random.choice(default_cls_delta_tokens[self.broad_class])
@@ -239,22 +212,17 @@ class PersonalizedBase(Dataset):
             cls_delta_token    += ", " * (self.num_vectors_per_token - 1)
 
         template = random.choice(imagenet_templates_small)
+
         subj_prompt_single  = template.format(placeholder_string)
         cls_prompt_single   = template.format(cls_delta_token)
 
+        bg_suffix = " with {} in the background".format(self.background_string) if self.background_string is not None else None
+
         # "face portrait" trick for humans/animals.
         if self.broad_class == 1:
-            fp_trick_use_diff_templates = False
-            faceportrait_template = "a face portrait of a {}"
-            if fp_trick_use_diff_templates:
-                # subj_prompt_fp_template intentionally doesn't use the "face portrait" template.
-                # Most tokens are still aligned.
-                # It slightly improves compositionality at the cost of reducing face similarity.
-                subj_prompt_fp_template = "a good photo of a {}"
-            else:
-                subj_prompt_fp_template = faceportrait_template
-            subj_prompt_single_fp = subj_prompt_fp_template.format(placeholder_string)
-            cls_prompt_single_fp  = faceportrait_template.format(cls_delta_token)
+            fp_prompt_template = "a face portrait of a {}"
+            subj_prompt_single_fp = fp_prompt_template.format(placeholder_string)
+            cls_prompt_single_fp  = fp_prompt_template.format(cls_delta_token)
             subj_prompt_comps_fp  = []
             cls_prompt_comps_fp   = []
 
@@ -279,6 +247,13 @@ class PersonalizedBase(Dataset):
         example["cls_prompt_single"]    = cls_prompt_single
         example["subj_prompt_comp"]     = subj_prompt_comp
         example["cls_prompt_comp"]      = cls_prompt_comp
+        if bg_suffix is not None:
+            example["subj_prompt_single_bg"] = subj_prompt_single + bg_suffix
+            example["cls_prompt_single_bg"]  = cls_prompt_single  + bg_suffix
+            # *_comp_bg prompts are for static delta loss on training images.
+            example["subj_prompt_comp_bg"]   = subj_prompt_comp   + bg_suffix
+            example["cls_prompt_comp_bg"]    = cls_prompt_comp    + bg_suffix
+
         if self.broad_class == 1:
             subj_prompt_comp_fp = "|".join(subj_prompt_comps_fp)
             cls_prompt_comp_fp  = "|".join(cls_prompt_comps_fp)
@@ -292,6 +267,7 @@ class PersonalizedBase(Dataset):
         #print(f"subj_prompt_comp: {subj_prompt_comp}")
         #print(f"cls_prompt_comp: {cls_prompt_comp}")
 
+        # For subj_prompt_single, we put the caption in the "caption" field, instead of "subj_prompt_single".
         example["caption"]              = subj_prompt_single
 
         # default to score-sde preprocessing

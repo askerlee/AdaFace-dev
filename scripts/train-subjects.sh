@@ -3,7 +3,7 @@
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'eval'  -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'eval' -- $argv
 or begin
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] (ada|ti|db) [low high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
@@ -102,13 +102,14 @@ for i in $indices
     set -q cls_tokens; and set cls_token $cls_tokens[$i]; or set cls_token (string split " " $ada_prompt)[-1]
     set db_prompt0 "$db_prompts[$i]"
     set db_prompt  "$db_prompt0$db_suffix"
+    set -q bg_init_words; and set bg_init_word $bg_init_words[$i]; or set bg_init_word ""
 
     if [ $method = 'ti' ]; or [ $method = 'ada' ]; or [ $method = 'static-layerwise' ]
         if [ $method = 'ada' ]; or [ $method = 'static-layerwise' ]
-            set initword $ada_prompt
+            set init_words $ada_prompt
             set init_word_weights $ada_weight
         else
-            set initword $cls_token
+            set init_words $cls_token
             set init_word_weights 1
         end
 
@@ -143,9 +144,9 @@ for i in $indices
         set -q lr; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --lr $lr
         set -q min_rand_scaling; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --min_rand_scaling $min_rand_scaling
 
-        echo $subject: --init_word $initword $EXTRA_TRAIN_ARGS1
+        echo $subject: --init_words $init_words $EXTRA_TRAIN_ARGS1
         set fish_trace 1
-        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --placeholder_string "z" --init_word $initword --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_TRAIN_ARGS1
+        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --placeholder_string "z" --init_words $init_words --init_word_weights $init_word_weights --broad_class $broad_class --bg_init_words $bg_init_word $EXTRA_TRAIN_ARGS1
 
         if set -q _flag_eval
             if [ "$data_folder"  = 'dbeval-dataset' ]
