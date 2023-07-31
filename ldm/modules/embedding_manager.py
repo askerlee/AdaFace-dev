@@ -11,6 +11,7 @@ import copy
 from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler
 from functools import partial
 from typing import Callable, Optional, Sequence, Tuple
+from collections import OrderedDict
 
 torch.set_printoptions(precision=4, sci_mode=False)
 np.set_printoptions(precision=4, suppress=True)
@@ -268,6 +269,7 @@ class StaticLayerwiseEmbedding(nn.Module):
                  init_vec_weights=None, init_neg_vecs=None, has_bias=True, device_type="cuda",
                  token_string=""):
         super().__init__()
+        self.token_string = token_string
 
         self.num_layers = num_layers
         self.emb_dim = emb_dim
@@ -416,7 +418,7 @@ class AdaEmbedding(nn.Module):
                  has_bias=True, use_attn_pooler=True, infeat_type='fg_bg',
                  device_type="cuda", token_string=""):
         super().__init__()
-
+        self.token_string = token_string
         assert num_layers == len(layer_idx2emb_idx), f"num_layers={num_layers} != len(layer_idx2emb_idx)={len(layer_idx2emb_idx)}"
         self.num_layers = num_layers
         self.emb_dim = emb_dim
@@ -628,7 +630,7 @@ class EmbeddingManager(nn.Module):
             **kwargs
     ):
         super().__init__()
-        self.string_to_token_dict = {}
+        self.string_to_token_dict = OrderedDict()
         
         self.string_to_param_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict = nn.ModuleDict()
@@ -944,6 +946,12 @@ class EmbeddingManager(nn.Module):
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
 
+        cached_infeat_bg = None
+
+        # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
+        # the background token last (order controlled in main.py). 
+        # This order ensures that the background Ada embedder can always use 
+        # cached_infeat_bg produced by the previous subject Ada embedder.
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             # There's only one vector per token, we can do a simple replacement
             # embedded_text: [B, N, 768].
@@ -953,13 +961,24 @@ class EmbeddingManager(nn.Module):
             if placeholder_indices[0].numel() == 0:
                 continue
 
-            cached_infeat_bg = None
+            # Clear the infeat_bg cache before generating subject embedding(s) of a subject token.
+            # If the next token is the background token, the keep the cache, so that the background
+            # token will reuse the infeat_bg computed by the previous subject token.
+            if placeholder_string != self.background_string:
+                cached_infeat_bg = None
 
             for seq_offset in range(self.num_vectors_per_token[placeholder_string]):
                 placeholder_string_i = placeholder_string if seq_offset == 0 else f"{placeholder_string}{seq_offset}"
 
                 ada_embedder = self.string_to_ada_embedder_dict[placeholder_string_i].to(device)
                 assert isinstance(ada_embedder, AdaEmbedding)
+
+                # When it's the turn of the background Ada embedder, the cached_infeat_bg
+                # should have been computed by the previous subject Ada embedder. 
+                # Otherwise it's a bug.
+                if placeholder_string == self.background_string and seq_offset == 0 \
+                  and ada_embedder.infeat_type == 'bg' and cached_infeat_bg is None:
+                    breakpoint()
 
                 # Generate the actual placeholder_embedding on the fly.
                 # placeholder_embedding: [B, 768]. B: 2 or 4 (regularization batches).
@@ -975,8 +994,6 @@ class EmbeddingManager(nn.Module):
                     # Cache the bg infeat computed by the first (fg) ada embedder, 
                     # to be used by the second (bg) ada embedder.
                     cached_infeat_bg = infeat_bg
-                else:
-                    cached_infeat_bg = None
 
                 # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
                 # embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [2, 768].
