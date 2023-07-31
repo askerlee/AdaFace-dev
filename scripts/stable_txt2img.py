@@ -222,6 +222,10 @@ def parse_args():
                         help="Weight of the skip connections of the last few layers of CLIP text embedder. " 
                              "NOTE: the last element is the weight of the last layer.")
 
+    parser.add_argument("--placeholder_string", 
+                        type=str, default="z",
+                        help="Placeholder string which will be used in prompts to denote the concept.")
+    
     parser.add_argument("--num_vectors_per_token",
                         type=int, default=argparse.SUPPRESS,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
@@ -311,7 +315,8 @@ def main(opt):
     model.cond_stage_model.set_last_layers_skip_weights(opt.clip_last_layers_skip_weights)
     
     if hasattr(opt, 'num_vectors_per_token'):
-        model.embedding_manager.set_num_vectors_per_token(opt.num_vectors_per_token)
+        model.embedding_manager.set_num_vectors_per_token(opt.num_vectors_per_token, 
+                                                          placeholder_strings=[opt.placeholder_string])
     if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
     

@@ -655,6 +655,7 @@ class EmbeddingManager(nn.Module):
         # the concept through multiple learned pseudo-words. 
         # This setting was proposed in the TI paper,
         # and AdaPrompt also supports it for more expressive modeling.
+        self.num_vectors_per_token = {}
         self.set_num_vectors_per_token(num_vectors_per_token, placeholder_strings)
         self.background_string = background_string
 
@@ -1058,7 +1059,6 @@ class EmbeddingManager(nn.Module):
             if num_vectors_per_token is None:
                 num_vectors_per_token = 1
 
-            self.num_vectors_per_token = {}
             # During inference, placeholder_strings is None. So we use string_to_token_dict 
             # loaded from the ckpt.
             if placeholder_strings is None:
@@ -1067,7 +1067,7 @@ class EmbeddingManager(nn.Module):
                 self.num_vectors_per_token[k] = num_vectors_per_token
         else:
             self.num_vectors_per_token = num_vectors_per_token
-        print(f"Set num_vectors_per_token: {num_vectors_per_token}")
+        print(f"Set num_vectors_per_token: {self.num_vectors_per_token}")
 
     # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
     # which will be enabled again through set_ada_layer_temp_info() in ddpm.py.
