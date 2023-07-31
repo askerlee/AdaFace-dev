@@ -1063,8 +1063,8 @@ class EmbeddingManager(nn.Module):
             # loaded from the ckpt.
             if placeholder_strings is None:
                 placeholder_strings = self.string_to_token_dict.keys()
-                for k in placeholder_strings:
-                    self.num_vectors_per_token[k] = num_vectors_per_token
+            for k in placeholder_strings:
+                self.num_vectors_per_token[k] = num_vectors_per_token
         else:
             self.num_vectors_per_token = num_vectors_per_token
         print(f"Set num_vectors_per_token: {num_vectors_per_token}")
