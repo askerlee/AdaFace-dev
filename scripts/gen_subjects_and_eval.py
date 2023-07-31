@@ -117,6 +117,7 @@ if __name__ == "__main__":
     subjects, class_tokens, broad_classes, sel_set, ckpt_iters = \
             vars['subjects'], vars['class_tokens'], vars['broad_classes'], vars['sel_set'], vars['maxiters']
 
+    args.orig_placeholder = args.placeholder
     # If num_vectors_per_token == 3:
     # "z"    => "z, , "
     # Need to leave a space between multiple ",,", otherwise they are treated as one token.
@@ -366,7 +367,7 @@ if __name__ == "__main__":
         command_line += f" --clip_last_layers_skip_weights {args.clip_last_layers_skip_weights}"
 
         if hasattr(args, 'num_vectors_per_token'):
-            command_line += f" --placeholder_string {args.placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
+            command_line += f" --placeholder_string {args.orig_placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
             
         if args.compare_with_pardir:
             # Do evaluation on authenticity/composition.
