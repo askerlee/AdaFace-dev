@@ -1191,8 +1191,10 @@ class LatentDiffusion(DDPM):
                 CLS_PROMPT_COMP   = 'cls_prompt_comp_fp'
                 CLS_PROMPT_SINGLE = 'cls_prompt_single_fp'
             # "not self.do_comp_prompt_mix_reg": this iter is doing recon on training images.
-            # Only use_background_token on such cases.
-            elif not self.do_comp_prompt_mix_reg and self.use_background_token:
+            # Only use_background_token on such cases. To avoid the backgound token taking too much
+            # of the foreground, we only use the background token on half of the training images.
+            elif not self.do_comp_prompt_mix_reg and self.use_background_token \
+              and random.random() < 0.5:
                 c = batch['subj_prompt_single_bg']
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_bg'
                 CLS_PROMPT_COMP   = 'cls_prompt_comp_bg'
@@ -2252,7 +2254,7 @@ class LatentDiffusion(DDPM):
         feat_distill_layer_weights = { k: v / feat_distill_layer_weight_sum for k, v in feat_distill_layer_weights.items() }
         attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
         attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
-
+        
         orig_placeholder_ind_B, orig_placeholder_ind_T = placeholder_indices
         # The class prompts are at the latter half of the batch.
         # So we need to add the batch indices of the subject prompts, to locate
