@@ -366,7 +366,7 @@ if __name__ == "__main__":
         command_line += f" --clip_last_layers_skip_weights {args.clip_last_layers_skip_weights}"
 
         if hasattr(args, 'num_vectors_per_token'):
-            command_line += f" --num_vectors_per_token {args.num_vectors_per_token}"
+            command_line += f" --placeholder_string {args.placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
             
         if args.compare_with_pardir:
             # Do evaluation on authenticity/composition.
