@@ -798,7 +798,7 @@ class EmbeddingManager(nn.Module):
         self.clear_ada_layer_temp_info()
         self.clear_delta_loss_emb_mask()
         self.img_mask = None
-        self.cached_infeat_bg = None
+        self.cached_infeat_bg = {}
         self.layer_idx2emb_idx = layer_idx2emb_idx
         self.loss_call_count = 0
         # Store the text_embedder to compute the delta loss.
@@ -965,7 +965,7 @@ class EmbeddingManager(nn.Module):
             # If the next token is the background token, the keep the cache, so that the background
             # token will reuse the infeat_bg computed by the previous subject token.
             if placeholder_string != self.background_string:
-                self.cached_infeat_bg = None
+                self.cached_infeat_bg[layer_idx] = None
 
             for seq_offset in range(self.num_vectors_per_token[placeholder_string]):
                 placeholder_string_i = placeholder_string if seq_offset == 0 else f"{placeholder_string}{seq_offset}"
@@ -977,7 +977,7 @@ class EmbeddingManager(nn.Module):
                 # should have been computed by the previous subject Ada embedder. 
                 # Otherwise it's a bug.
                 if placeholder_string == self.background_string and seq_offset == 0 \
-                  and ada_embedder.infeat_type == 'bg' and self.cached_infeat_bg is None:
+                  and ada_embedder.infeat_type == 'bg' and self.cached_infeat_bg[layer_idx] is None:
                     breakpoint()
 
                 # Generate the actual placeholder_embedding on the fly.
@@ -989,11 +989,12 @@ class EmbeddingManager(nn.Module):
                 placeholder_embedding, infeat_bg = \
                             ada_embedder(layer_idx, layer_attn_components, time_emb,
                                          static_subj_embs_dict[placeholder_string_i],
-                                         self.img_mask, ada_bp_to_unet, self.cached_infeat_bg)
-                if seq_offset == 0:
+                                         self.img_mask, ada_bp_to_unet, self.cached_infeat_bg[layer_idx])
+                
+                if placeholder_string != self.background_string and seq_offset == 0:
                     # Cache the bg infeat computed by the first (fg) ada embedder, 
                     # to be used by the second Ada embedder and the background Ada embedder.
-                    self.cached_infeat_bg = infeat_bg
+                    self.cached_infeat_bg[layer_idx] = infeat_bg
 
                 # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
                 # embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [2, 768].
