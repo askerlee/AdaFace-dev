@@ -96,6 +96,7 @@ class DDPM(pl.LightningModule):
                  composition_prompt_mix_reg_weight=0.,
                  do_clip_teacher_filtering=False,
                  do_attn_recon_loss=True,
+                 use_background_token=False,
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
                  use_fp_trick=True,       
                  ):
@@ -119,8 +120,10 @@ class DDPM(pl.LightningModule):
         self.composition_prompt_mix_reg_weight = composition_prompt_mix_reg_weight
         self.do_clip_teacher_filtering      = do_clip_teacher_filtering
         self.prompt_mix_scheme              = 'mix_hijk'
-        self.use_fp_trick                   = use_fp_trick
+
         self.do_attn_recon_loss             = do_attn_recon_loss
+        self.use_background_token           = use_background_token
+        self.use_fp_trick                   = use_fp_trick
 
         self.do_static_prompt_delta_reg     = False
         self.do_ada_prompt_delta_reg        = False
@@ -1177,13 +1180,27 @@ class LatentDiffusion(DDPM):
             # *_fp prompts are like "a face portrait of ...". They are advantageous over "a photo of ..."
             # when doing compositional mix regularization. 
             # However this trick is only applicable to humans/animals.
-            # For objects, *_fp prompts are not available in batch, so they won't be used.
+            # For objects, even if use_fp_trick = True, 
+            # *_fp prompts are not available in batch, so they won't be used.
+            # Only use_background_token on training images. So if do_comp_prompt_mix_reg, 
+            # then no need to check use_background_token.
             if self.do_comp_prompt_mix_reg and self.use_fp_trick and 'subj_prompt_single_fp' in batch:
-                # Replace c = batch['caption'] by c = batch['subj_prompt_single_fp'].
+                # Replace c from the default batch['caption'] to batch['subj_prompt_single_fp'].
                 c = batch['subj_prompt_single_fp']
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_fp'
                 CLS_PROMPT_COMP   = 'cls_prompt_comp_fp'
                 CLS_PROMPT_SINGLE = 'cls_prompt_single_fp'
+            # "not self.do_comp_prompt_mix_reg": this iter is doing recon on training images.
+            # Only use_background_token on such cases.
+            elif not self.do_comp_prompt_mix_reg and self.use_background_token:
+                c = batch['subj_prompt_single_bg']
+                SUBJ_PROMPT_COMP  = 'subj_prompt_comp_bg'
+                CLS_PROMPT_COMP   = 'cls_prompt_comp_bg'
+                CLS_PROMPT_SINGLE = 'cls_prompt_single_bg'
+            # Either do_comp_prompt_mix_reg but not use_fp_trick, 
+            # or recon iters (not do_comp_prompt_mix_reg) and not use_background_token 
+            # (regardless whether use_fp_trick).
+            # We don't use_fp_tricks on training images. use_fp_tricks is only for compositional regularization.
             else:
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp'
                 CLS_PROMPT_COMP   = 'cls_prompt_comp'
@@ -1312,17 +1329,21 @@ class LatentDiffusion(DDPM):
 
                         c_in2 = subj_single_prompts + subj_comp_prompts + mix_single_prompts + mix_comp_prompts
 
+                        # Only keep the first half (for single prompts), as the second half is the same 
+                        # (for comp prompts, differs at the batch index, but the token index is identical).
+                        # placeholder_indices is only for (subj_single_prompts, subj_comp_prompts), since
+                        # the placeholder token doesn't appear in the class prompts. 
+                        # Now we take the first half of placeholder_indices_N, so that 
+                        # they only account for the subject single prompt, but they are also 
+                        # applicable to the other 3 types of prompts as they are all aligned 
+                        # at the beginning part of the prompts.
+                        # BUG: if the batch size of a mix batch > 4, then the placeholder_indices_N
+                        # corresponds to the indices in more than one instance. But patch_multi_embeddings()
+                        # treat the indices as if they are always in the same instance.
                         placeholder_indices_N = self.embedding_manager.placeholder_indices[1].chunk(2)[0]
                         
-                        if self.embedding_manager.num_vectors_per_token > 1:
-                            # Only keep the first half (for single prompts), as the second half is the same 
-                            # (for comp prompts, differs at the batch index, but the token index is identical).
-                            # placeholder_indices is only for (subj_single_prompts, subj_comp_prompts), since
-                            # the placeholder token doesn't appear in the class prompts. 
-                            # Now we take the first half of placeholder_indices_N, so that 
-                            # they only account for the subject single prompt, but they are also 
-                            # applicable to the other 3 types of prompts as they are all aligned 
-                            # at the beginning part of the prompts.
+                        # The subject is represented with a multi-embedding token.
+                        if len(placeholder_indices_N) > 1:
                             cls_single_emb = patch_multi_embeddings(cls_single_emb, placeholder_indices_N)
                             cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   placeholder_indices_N)
                             
@@ -1858,7 +1879,8 @@ class LatentDiffusion(DDPM):
 
                 cond_cls = extra_info['cond_cls']
                 cond_cls[2]['do_attn_recon_loss'] = True
-
+                #print(cond_cls[1])
+                
                 self.guided_denoise(x_start, noise, t, cond_cls, 
                                     has_grad=False, 
                                     do_recon=False,

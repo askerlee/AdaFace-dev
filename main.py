@@ -188,16 +188,23 @@ def get_parser(**parser_kwargs):
         help="Initialize embedding manager from a checkpoint")
 
     parser.add_argument("--placeholder_string", 
-        type=str, 
-        help="Placeholder string which will be used to denote the concept in future prompts. Overwrites the config options.")
+        type=str, default="z",
+        help="Placeholder string which will be used in prompts to denote the concept.")
+    parser.add_argument("--background_string", 
+        type=str, default=None,
+        help="Background string which will be used in prompts to denote the background in training images.")
 
-    parser.add_argument("--init_word", 
+    parser.add_argument("--init_words", 
         type=str, 
-        help="Words used to initialize token embedding")
+        help="Words used to initialize placeholder embedding")
+
+    parser.add_argument("--bg_init_words", 
+        type=str, default=None,
+        help="Words used to initialize background embedding")
 
     parser.add_argument("--init_word_weights", nargs="*", 
         type=float, 
-        help="Weights of each token in init_word")
+        help="Weights of each token in init_words")
 
     parser.add_argument("--init_neg_words", 
         type=str, default=None,
@@ -703,19 +710,32 @@ if __name__ == "__main__":
         config.model.params.do_attn_recon_loss = opt.do_attn_recon_loss
         
         if len(opt.init_word_weights) > 0:
-            assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_word))
+            assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_words))
 
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
-        if opt.placeholder_string:
-            config.model.params.personalization_config.params.placeholder_strings = [opt.placeholder_string]
-            config.data.params.train.params.placeholder_token       = opt.placeholder_string
-            config.data.params.validation.params.placeholder_token  = opt.placeholder_string
+        config.model.params.personalization_config.params.placeholder_strings = [opt.placeholder_string]
+        config.model.params.personalization_config.params.num_vectors_per_token = { opt.placeholder_string: opt.num_vectors_per_token}
+        config.data.params.train.params.placeholder_string       = opt.placeholder_string
+        config.data.params.validation.params.placeholder_string  = opt.placeholder_string
 
         # Currently, only supports one group of initial words and weights.
-        if opt.init_word:
-            config.model.params.personalization_config.params.initializer_words[0] = opt.init_word
+        if opt.init_words:
+            config.model.params.personalization_config.params.initializer_words[0] = opt.init_words
             if len(opt.init_word_weights) > 0:
                 config.model.params.personalization_config.params.initializer_weights[0] = opt.init_word_weights
+
+        if opt.background_string:
+            config.model.params.use_background_token = True
+            config.model.params.personalization_config.params.placeholder_strings.append(opt.background_string)
+            config.model.params.personalization_config.params.background_string = opt.background_string
+            # Always use only 1 vector for the background token.
+            config.model.params.personalization_config.params.num_vectors_per_token[opt.background_string] = 1
+            config.data.params.train.params.background_string      = opt.background_string
+            config.data.params.validation.params.background_string = opt.background_string
+
+            if opt.bg_init_words:
+                config.model.params.personalization_config.params.initializer_words.append(opt.bg_init_words)
+                config.model.params.personalization_config.params.initializer_weights.append([1.0] * len(re.split("\s+", opt.bg_init_words)))
 
         if opt.init_neg_words is not None:
             init_neg_words = re.split(r",\s*", opt.init_neg_words)
@@ -724,13 +744,11 @@ if __name__ == "__main__":
         config.data.params.train.params.broad_class       = opt.broad_class
         config.data.params.validation.params.broad_class  = opt.broad_class
 
-
         config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
         config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
 
         config.data.params.train.params.num_vectors_per_token     = opt.num_vectors_per_token
         config.data.params.validation.params.num_vectors_per_token = opt.num_vectors_per_token
-        config.model.params.personalization_config.params.num_vectors_per_token = opt.num_vectors_per_token
         
         if hasattr(opt, 'composition_regs_iter_gap'):
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
@@ -897,10 +915,10 @@ if __name__ == "__main__":
         # {'target': 'main.DataModuleFromConfig', 'params': {'batch_size': 2, 'num_workers': 2, 
         #  'wrap': False, 'train': {'target': 'ldm.data.personalized.PersonalizedBase', 
         #  'params': {'size': 512, 'set': 'train', 'repeats': 100, 
-        #  'placeholder_token': 'z', 'data_root': 'data/spikelee/'}}, 
+        #  'placeholder_string': 'z', 'data_root': 'data/spikelee/'}}, 
         #  'validation': {'target': 'ldm.data.personalized.PersonalizedBase', 
         #  'params': {'size': 512, 'set': 'val', 'repeats': 10, 
-        #  'placeholder_token': 'z', 'data_root': 'data/spikelee/'}}}}
+        #  'placeholder_string': 'z', 'data_root': 'data/spikelee/'}}}}
         config.data.params.train.params.data_root = opt.data_root
         config.data.params.validation.params.data_root = opt.data_root
         # data: DataModuleFromConfig
