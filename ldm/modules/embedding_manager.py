@@ -1050,11 +1050,21 @@ class EmbeddingManager(nn.Module):
         emb_idx = self.layer_idx2emb_idx[i]
         self.ada_embeddings[emb_idx] = embedding
 
-    def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings):
-        if num_vectors_per_token is None:
+    def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings=None):
+        if num_vectors_per_token is None or type(num_vectors_per_token) == int:
+            # If num_vectors_per_token is not specified, then set all tokens to have 1 vector.
+            # If num_vectors_per_token is an int, then set all tokens to have 
+            # num_vectors_per_token vectors.
+            if num_vectors_per_token is None:
+                num_vectors_per_token = 1
+
             self.num_vectors_per_token = {}
-            for k in placeholder_strings:
-                self.num_vectors_per_token[k] = 1
+            # During inference, placeholder_strings is None. So we use string_to_token_dict 
+            # loaded from the ckpt.
+            if placeholder_strings is None:
+                placeholder_strings = self.string_to_token_dict.keys()
+                for k in placeholder_strings:
+                    self.num_vectors_per_token[k] = num_vectors_per_token
         else:
             self.num_vectors_per_token = num_vectors_per_token
         print(f"Set num_vectors_per_token: {num_vectors_per_token}")
