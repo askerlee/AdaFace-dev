@@ -1880,7 +1880,7 @@ class LatentDiffusion(DDPM):
 
         if iter_type == 'normal_recon':
             if self.use_background_token_iter:
-                self.fg_bg_complementary_loss_weight = 0.0001
+                self.fg_bg_complementary_loss_weight = 0.001
                 fg_bg_complementary_loss = \
                             self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
                                                           self.embedding_manager.placeholder_indices_fg0,
@@ -2470,7 +2470,7 @@ class LatentDiffusion(DDPM):
             loss_layer_fg_bg_complementary = calc_delta_loss(bg_attn, 1 - subj_attn, 
                                                              do_demean_first=True,
                                                              first_n_dims_to_flatten=2, 
-                                                             ref_grad_scale=0)
+                                                             ref_grad_scale=0.1)
                 
             loss_fg_bg_complementary += loss_layer_fg_bg_complementary * attn_distill_layer_weight
 
