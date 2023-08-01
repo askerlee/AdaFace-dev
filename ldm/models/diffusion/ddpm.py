@@ -1197,6 +1197,7 @@ class LatentDiffusion(DDPM):
             # of the foreground, we only use the background token on half of the training images.
             # use_background_token_iter: only use background token after the first 500 iters, when
             # the subject token becomes stable.
+            #self.warm_up_steps 
             elif not self.do_comp_prompt_mix_reg and self.use_background_token \
               and self.global_step >= self.warm_up_steps \
               and random.random() < 0.5:
@@ -1460,9 +1461,9 @@ class LatentDiffusion(DDPM):
                             c_static_emb_cls = mix_single_emb
                             # extra_info['do_attn_recon_loss'] will be not be set to True now,
                             # but only when the inits are conditioned on c_cls.
-                            cond_cls = (c_static_emb_cls, c_in_cls, extra_info)
+                            cond_mix = (c_static_emb_cls, c_in_cls, extra_info)
                             # There's a loopy reference extra_info -> c_cls -> extra_info, but it's fine.
-                            extra_info['cond_cls'] = cond_cls
+                            extra_info['cond_mix'] = cond_mix
                             # Will set do_attn_recon_loss to True in p_losses().
                             # extra_info['do_attn_recon_loss'] = self.do_attn_recon_loss_iter
 
@@ -1879,17 +1880,25 @@ class LatentDiffusion(DDPM):
         twin_comp_ada_embeddings = None
 
         if iter_type == 'normal_recon':
-            if self.use_background_token_iter:
-                self.fg_bg_complementary_loss_weight = 0.001
-                fg_bg_complementary_loss = \
+            fg_bg_complementary_loss_weight = 0.002
+            # Compute subj_fg_bg_complementary_loss, only when 
+            # we don't compute mix_fg_bg_complementary_loss. 
+            # mix_fg_bg_complementary_loss is preferred over subj_fg_bg_complementary_loss,
+            # since the mix prompts produce slightly more accurate attention maps on the 
+            # foreground subject.
+            if self.use_background_token_iter and not self.do_attn_recon_loss_iter:
+                subj_fg_bg_complementary_loss = \
                             self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
-                                                          self.embedding_manager.placeholder_indices_fg0,
-                                                          self.embedding_manager.placeholder_indices_bg,
-                                                          x_start.shape[0]
-                                                         )
+                                                               self.embedding_manager.placeholder_indices_fg0,
+                                                               self.embedding_manager.placeholder_indices_bg,
+                                                               x_start.shape[0],
+                                                               fg_grad_scale=0.05
+                                                              )
+                
+                # Release RAM.
                 del cond[2]['unet_attns'], cond[2]['unet_feats']
-                loss += self.fg_bg_complementary_loss_weight * fg_bg_complementary_loss
-                loss_dict.update({f'{prefix}/fg_bg_complementary': fg_bg_complementary_loss.item()})
+                loss += fg_bg_complementary_loss_weight * subj_fg_bg_complementary_loss
+                loss_dict.update({f'{prefix}/fg_bg_complem_subj': subj_fg_bg_complementary_loss.item()})
                 # print(fg_bg_complementary_loss)
 
             if self.do_attn_recon_loss_iter:
@@ -1900,51 +1909,67 @@ class LatentDiffusion(DDPM):
                 # So we only keep the first half, which correspond to the 2 subject-single prompts.
                 placeholder_indices = (placeholder_indices[0].chunk(2)[0], placeholder_indices[1].chunk(2)[0])
 
-                cond_cls = extra_info['cond_cls']
-                cond_cls[2]['do_attn_recon_loss'] = True
-                #print(cond_cls[1])
+                cond_mix = extra_info['cond_mix']
+                cond_mix[2]['do_attn_recon_loss'] = True
+                #print(cond_mix[1])
                 
-                self.guided_denoise(x_start, noise, t, cond_cls, 
+                self.guided_denoise(x_start, noise, t, cond_mix, 
                                     has_grad=False, 
                                     do_recon=False,
                                     cfg_scales=None)
-                unet_attns_cls_single = cond_cls[2]['unet_attns']
+                unet_attns_mix_single = cond_mix[2]['unet_attns']
+
+                # Compute mix_fg_bg_complementary_loss, which is similar as
+                # subj_fg_bg_complementary_loss but with the mix prompts.
+                # placeholder_indices_fg0 here is the cached placeholder_indices_fg0 on subject prompts.
+                if self.use_background_token_iter:
+                    mix_fg_bg_complementary_loss = \
+                                self.calc_fg_bg_complementary_loss(unet_attns_mix_single, 
+                                                                   self.embedding_manager.placeholder_indices_fg0,
+                                                                   self.embedding_manager.placeholder_indices_bg,
+                                                                   x_start.shape[0],
+                                                                   fg_grad_scale=0.05
+                                                                  )
+                    
+                    # Do not release RAM, as it will be used to compute the spatial weights.
+                    loss += fg_bg_complementary_loss_weight * mix_fg_bg_complementary_loss
+                    loss_dict.update({f'{prefix}/fg_bg_complem_mix': mix_fg_bg_complementary_loss.item()})
 
                 # unet_attns is a dict as: layer_idx -> attn_mat. 
                 # It contains the 6 specified conditioned layers of UNet attentions, 
                 # i.e., layers 7, 8, 12, 16, 17, 18.
-                # unet_attns_cls_single = cond[2]['unet_attns']
+                # unet_attns_mix_single = cond[2]['unet_attns']
                 # Use the top-most captured attn layer to get the subject attention.
                 attn_layer_idx = 17
                 # [4, 8, 256, 77] / [4, 8, 64, 77] =>
                 # [4, 77, 8, 256] / [4, 77, 8, 64]
-                attn_mat_cls_single = unet_attns_cls_single[attn_layer_idx].permute(0, 3, 1, 2)
+                attn_mat_mix_single = unet_attns_mix_single[attn_layer_idx].permute(0, 3, 1, 2)
                 # placeholder_indices: ([0, 1], [6, 7]), when 2 embeddings for 1 token.
                 # The second token in a class prompt is a comma, which has little effect on the attn.
                 # subj_attn: [2, 8, 256 / 64] (only consider the first embedding 
                 # even if there are mult-embeddings for the subject token).
-                subj_attn_cls_single = attn_mat_cls_single[placeholder_indices]
-                # spatial_weight_cls_single: [2, 1, 64, 64].
+                subj_attn_mix_single = attn_mat_mix_single[placeholder_indices]
+                # spatial_weight_mix_single: [2, 1, 64, 64].
                 # model_output, target:      [2, 4, 64, 64].
-                spatial_weight_cls_single, spatial_attn_cls_single = \
-                    convert_attn_to_spatial_weight(subj_attn_cls_single, 
+                spatial_weight_mix_single, spatial_attn_mix_single = \
+                    convert_attn_to_spatial_weight(subj_attn_mix_single, 
                                                    x_start.shape[0], 
                                                    x_start.shape[2:],
                                                    reversed=False)  
                 # Inverse of the average weight of the foreground pixels, i.e. those
-                # with spatial_weight_cls_single > 1. 
+                # with spatial_weight_mix_single > 1. 
                 # After applying fg_inv_scale, foreground pixels will receive similar weights
                 # as without using attentional weighting. But background pixels will be
-                # far less weighted, as their weights in spatial_weight_cls_single < 1, and 
+                # far less weighted, as their weights in spatial_weight_mix_single < 1, and 
                 # are further scaled down by fg_inv_scale.
-                fg_inv_scale = (spatial_weight_cls_single > 1.).sum() \
-                                / ((spatial_weight_cls_single > 1.) * spatial_weight_cls_single).sum() 
+                fg_inv_scale = (spatial_weight_mix_single > 1.).sum() \
+                                / ((spatial_weight_mix_single > 1.) * spatial_weight_mix_single).sum() 
                 self.l_simple_weight_iter = self.l_simple_weight * fg_inv_scale
                 loss_dict.update({f'{prefix}/fg_inv_scale': fg_inv_scale.item()})
 
                 # Weight the loss at each pixel with the attention-derived spatial weights.          
-                model_output = model_output * spatial_weight_cls_single
-                target       = target       * spatial_weight_cls_single
+                model_output = model_output * spatial_weight_mix_single
+                target       = target       * spatial_weight_mix_single
             else:
                 self.l_simple_weight_iter = self.l_simple_weight
 
@@ -2428,7 +2453,9 @@ class LatentDiffusion(DDPM):
 
 
     def calc_fg_bg_complementary_loss(self, unet_attns, 
-                                 placeholder_indices_fg, placeholder_indices_bg, BS):
+                                      placeholder_indices_fg, 
+                                      placeholder_indices_bg, 
+                                      BS, fg_grad_scale=0.05):
         loss_fg_bg_complementary = 0
 
         # Discard top layers and the first few bottom layers from distillation.
@@ -2437,10 +2464,11 @@ class LatentDiffusion(DDPM):
         # Conditioning layers are 7, 8, 12, 16, 17. All the 5 layers have 1280 channels.
         # But intermediate layers also contribute to distillation. They have small weights.
         # Layer 16 has strong face semantics, so it is given a small weight.
-        attn_distill_layer_weights = { 7:  1., 8: 1.,
+        attn_distill_layer_weights = { #7:  1., 8: 1.,
                                        #9:  0.5, 10: 0.5, 11: 0.5,
                                        12: 1.,
-                                       16: 1., 17: 1.,
+                                       16: 1., 17: 1., 
+                                       18: 1.,
                                      }
         
         # Normalize the weights above so that each set sum to 1.
@@ -2470,7 +2498,7 @@ class LatentDiffusion(DDPM):
             loss_layer_fg_bg_complementary = calc_delta_loss(bg_attn, 1 - subj_attn, 
                                                              do_demean_first=True,
                                                              first_n_dims_to_flatten=2, 
-                                                             ref_grad_scale=0.1)
+                                                             ref_grad_scale=fg_grad_scale)
                 
             loss_fg_bg_complementary += loss_layer_fg_bg_complementary * attn_distill_layer_weight
 
