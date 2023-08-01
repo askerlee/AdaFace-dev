@@ -2492,10 +2492,15 @@ class LatentDiffusion(DDPM):
             
             attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
             # Align bg_attn with (1 - subj_attn), so that the two attention maps are complementary.
+            # exponent = 1: exponent is 3 by default, which lets the loss focus on large activations.
+            # But we don't want to only focus on large activations. So set it to 1.
             # do_demean_first: remove the means from both embeddings before calculating the delta loss.
             # This normalizes (1 - subj_attn), since most elements in subj_attn are almost 0.
-            # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
+            # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
+            # to make the two attention maps more complementary (expect the loss pushes the 
+            # subject embedding to a more accurate point).
             loss_layer_fg_bg_complementary = calc_delta_loss(bg_attn, 1 - subj_attn, 
+                                                             exponent=1,    
                                                              do_demean_first=True,
                                                              first_n_dims_to_flatten=2, 
                                                              ref_grad_scale=fg_grad_scale)
