@@ -216,7 +216,7 @@ class PersonalizedBase(Dataset):
         subj_prompt_single  = template.format(placeholder_string)
         cls_prompt_single   = template.format(cls_delta_token)
 
-        bg_suffix = " with {} in the background".format(self.background_string) if self.background_string is not None else None
+        bg_suffix = " with background {}".format(self.background_string) if self.background_string is not None else None
 
         # "face portrait" trick for humans/animals.
         if self.broad_class == 1:
