@@ -771,7 +771,7 @@ class EmbeddingManager(nn.Module):
                             # use both fg and bg features.
                             infeat_type = 'fg_bg'
                     elif placeholder_string == self.background_string:
-                        infeat_type = 'fg'
+                        infeat_type = 'bg'
                     else:
                         infeat_type = 'fg_bg'
 
