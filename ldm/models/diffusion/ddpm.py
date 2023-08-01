@@ -1197,9 +1197,8 @@ class LatentDiffusion(DDPM):
             # of the foreground, we only use the background token on half of the training images.
             # use_background_token_iter: only use background token after the first 500 iters, when
             # the subject token becomes stable.
-            # and self.global_step >= self.warm_up_steps \
             elif not self.do_comp_prompt_mix_reg and self.use_background_token \
-              and self.global_step >= 0 \
+              and self.global_step >= self.warm_up_steps \
               and random.random() < 0.5:
                 c = batch['subj_prompt_single_bg']
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_bg'
@@ -1881,7 +1880,7 @@ class LatentDiffusion(DDPM):
 
         if iter_type == 'normal_recon':
             if self.use_background_token_iter:
-                self.fg_bg_complementary_loss_weight = 0.001
+                self.fg_bg_complementary_loss_weight = 0.0001
                 fg_bg_complementary_loss = \
                             self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
                                                           self.embedding_manager.placeholder_indices_fg0,
@@ -1891,6 +1890,7 @@ class LatentDiffusion(DDPM):
                 del cond[2]['unet_attns'], cond[2]['unet_feats']
                 loss += self.fg_bg_complementary_loss_weight * fg_bg_complementary_loss
                 loss_dict.update({f'{prefix}/fg_bg_complementary': fg_bg_complementary_loss.item()})
+                # print(fg_bg_complementary_loss)
 
             if self.do_attn_recon_loss_iter:
                 placeholder_indices = self.embedding_manager.placeholder_indices_fg0
