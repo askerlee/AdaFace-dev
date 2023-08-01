@@ -1172,6 +1172,8 @@ class LatentDiffusion(DDPM):
         # c = batch["caption"]
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
         x, c = self.get_input(batch, self.first_stage_key)
+        
+        self.use_background_token_iter = False
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
         # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
@@ -1193,12 +1195,17 @@ class LatentDiffusion(DDPM):
             # "not self.do_comp_prompt_mix_reg": this iter is doing recon on training images.
             # Only use_background_token on such cases. To avoid the backgound token taking too much
             # of the foreground, we only use the background token on half of the training images.
+            # use_background_token_iter: only use background token after the first 500 iters, when
+            # the subject token becomes stable.
+            # and self.global_step >= self.warm_up_steps \
             elif not self.do_comp_prompt_mix_reg and self.use_background_token \
+              and self.global_step >= 0 \
               and random.random() < 0.5:
                 c = batch['subj_prompt_single_bg']
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_bg'
                 CLS_PROMPT_COMP   = 'cls_prompt_comp_bg'
                 CLS_PROMPT_SINGLE = 'cls_prompt_single_bg'
+                self.use_background_token_iter = True
             # Either do_comp_prompt_mix_reg but not use_fp_trick, 
             # or recon iters (not do_comp_prompt_mix_reg) and not use_background_token 
             # (regardless whether use_fp_trick).
@@ -1342,7 +1349,7 @@ class LatentDiffusion(DDPM):
                         # BUG: if the batch size of a mix batch > 4, then the placeholder_indices_N
                         # corresponds to the indices in more than one instance. But patch_multi_embeddings()
                         # treat the indices as if they are always in the same instance.
-                        placeholder_indices_N = self.embedding_manager.placeholder_indices[1].chunk(2)[0]
+                        placeholder_indices_N = self.embedding_manager.placeholder_indices_fg[1].chunk(2)[0]
                         
                         # The subject is represented with a multi-embedding token.
                         if len(placeholder_indices_N) > 1:
@@ -1844,6 +1851,8 @@ class LatentDiffusion(DDPM):
                     # use cached x_start and cond. Already has the 4-type structure. 
                     # No change to the condition here.
 
+        extra_info['use_background_token'] = self.use_background_token_iter
+
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
                                 has_grad=not is_teacher_filter_iter, 
@@ -1871,8 +1880,20 @@ class LatentDiffusion(DDPM):
         twin_comp_ada_embeddings = None
 
         if iter_type == 'normal_recon':
+            if self.use_background_token_iter:
+                self.fg_bg_contrast_loss_weight = 0.001
+                fg_bg_contrast_loss = \
+                            self.calc_fg_bg_contrast_loss(cond[2]['unet_attns'], 
+                                                          self.embedding_manager.placeholder_indices_fg0,
+                                                          self.embedding_manager.placeholder_indices_bg,
+                                                          x_start.shape[0]
+                                                         )
+                del cond[2]['unet_attns'], cond[2]['unet_feats']
+                loss += self.fg_bg_contrast_loss_weight * fg_bg_contrast_loss
+                loss_dict.update({f'{prefix}/fg_bg_contrast': fg_bg_contrast_loss.item()})
+
             if self.do_attn_recon_loss_iter:
-                placeholder_indices = self.embedding_manager.placeholder_indices0
+                placeholder_indices = self.embedding_manager.placeholder_indices_fg0
                 # For 'normal_recon' but do_attn_recon_loss_iter=True, same to mix reg iters or ada reg iters, 
                 # 4 types of prompts are fed to embedding_manager to generate static embeddings in forward(). 
                 # placeholder_indices0 has a BS of 4, for the 2 types of subject prompts, each type 2 prompts.
@@ -2195,7 +2216,7 @@ class LatentDiffusion(DDPM):
             
             loss_subj_attn_distill, loss_feat_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
-                                                          self.embedding_manager.placeholder_indices,
+                                                          self.embedding_manager.placeholder_indices_fg,
                                                           HALF_BS)
             
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
@@ -2234,7 +2255,7 @@ class LatentDiffusion(DDPM):
         # Discard top layers and the first few bottom layers from distillation.
         # distill_layer_weights: relative weight of each distillation layer. 
         # distill_layer_weights are normalized using distill_overall_weight.
-        # Conditioning layers are 7, 8, 12, 16, 17. All the 4 layers have 1280 channels.
+        # Conditioning layers are 7, 8, 12, 16, 17. All the 5 layers have 1280 channels.
         # But intermediate layers also contribute to distillation. They have small weights.
         # Layer 16 has strong face semantics, so it is given a small weight.
         feat_distill_layer_weights = { 7:  1., 8: 1.,   
@@ -2404,6 +2425,55 @@ class LatentDiffusion(DDPM):
             loss_feat_distill += loss_layer_feat_distill * feat_distill_layer_weight
 
         return loss_subj_attn_distill, loss_feat_distill
+
+
+    def calc_fg_bg_contrast_loss(self, unet_attns, 
+                                 placeholder_indices_fg, placeholder_indices_bg, BS):
+        loss_fg_bg_contrast = 0
+
+        # Discard top layers and the first few bottom layers from distillation.
+        # distill_layer_weights: relative weight of each distillation layer. 
+        # distill_layer_weights are normalized using distill_overall_weight.
+        # Conditioning layers are 7, 8, 12, 16, 17. All the 5 layers have 1280 channels.
+        # But intermediate layers also contribute to distillation. They have small weights.
+        # Layer 16 has strong face semantics, so it is given a small weight.
+        attn_distill_layer_weights = { 7:  1., 8: 1.,
+                                       #9:  0.5, 10: 0.5, 11: 0.5,
+                                       12: 1.,
+                                       16: 1., 17: 1.,
+                                     }
+        
+        # Normalize the weights above so that each set sum to 1.
+        attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
+        attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
+
+        for unet_layer_idx, unet_attn in unet_attns.items():
+            if (unet_layer_idx not in attn_distill_layer_weights):
+                continue
+
+            # [4, 8, 256, 77] / [4, 8, 64, 77] =>
+            # [4, 77, 8, 256] / [4, 77, 8, 64]
+            attn_mat = unet_attn.permute(0, 3, 1, 2)
+            # placeholder_indices_fg is actually placeholder_indices_fg0, i.e., the indices of the first
+            # embedding for each token. So the shapes of subj_attn and bg_attn are always the same.
+            # subj_attn: [4, 8, 256 / 64] (1 embedding  for 1 token) 
+            placeholder_indices_fg = (placeholder_indices_fg[0][:BS], placeholder_indices_fg[1][:BS])
+            placeholder_indices_bg = (placeholder_indices_bg[0][:BS], placeholder_indices_bg[1][:BS])
+            subj_attn = attn_mat[placeholder_indices_fg]
+            bg_attn   = attn_mat[placeholder_indices_bg]
+            
+            attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
+            # do_demean_first: remove the means from both embeddings before calculating the delta loss.
+            # This normalizes (1 - subj_attn), since most elements in subj_attn are almost 0.
+            # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
+            loss_layer_fg_bg_contrast = calc_delta_loss(bg_attn, 1 - subj_attn, 
+                                                        do_demean_first=True,
+                                                        first_n_dims_to_flatten=2, 
+                                                        ref_grad_scale=0)
+                
+            loss_fg_bg_contrast += loss_layer_fg_bg_contrast * attn_distill_layer_weight
+
+        return loss_fg_bg_contrast
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):

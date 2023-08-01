@@ -793,7 +793,7 @@ class EmbeddingManager(nn.Module):
                 if init_word_embeddings is not None:
                     self.initial_embeddings[placeholder_string_i] = torch.nn.Parameter(init_word_embeddings, requires_grad=False)
                 else:
-                    self.initial_embeddings[placeholder_string_i] = 0
+                    self.initial_embeddings[placeholder_string_i] = None
 
         self.static_subj_embs_dict = None
         self.clear_ada_layer_temp_info()
@@ -927,8 +927,8 @@ class EmbeddingManager(nn.Module):
             # If num_vectors_per_token > 1, then repeat the indices and add to offsets.
             # If background_string is None, then always update the indices. Otherwise, 
             # skip updating placeholder indices of the background string.
-            if placeholder_string != self.background_string:
-                self.update_placeholder_indices(orig_tokenized_text, placeholder_token, self.num_vectors_per_token[placeholder_string])
+            self.update_placeholder_indices(orig_tokenized_text, placeholder_token, self.num_vectors_per_token[placeholder_string],
+                                            is_fg_token=(placeholder_string != self.background_string))
 
         return embedded_text, static_subj_embs_dict
 
@@ -1022,11 +1022,11 @@ class EmbeddingManager(nn.Module):
 
         self.set_delta_loss_emb_mask(delta_loss_emb_mask)
 
-    def update_placeholder_indices(self, tokenized_text, placeholder_token, num_vectors_per_token):
+    def update_placeholder_indices(self, tokenized_text, placeholder_token, num_vectors_per_token, is_fg_token):
         placeholder_indices_B, placeholder_indices_N = \
             torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
         # placeholder_indices0: only indices the first embedding of each multi-embedding token.
-        self.placeholder_indices0 = (placeholder_indices_B, placeholder_indices_N)
+        placeholder_indices0 = (placeholder_indices_B, placeholder_indices_N)
 
         if num_vectors_per_token > 1:
             BS = placeholder_indices_B.shape[0]
@@ -1034,11 +1034,17 @@ class EmbeddingManager(nn.Module):
             placeholder_indices_N = placeholder_indices_N.unsqueeze(1).repeat(1, num_vectors_per_token).view(-1)
             # Add offsets to the indices of the pseudo-tokens.
             placeholder_indices_N_off = placeholder_indices_N + torch.arange(num_vectors_per_token, device=tokenized_text.device).repeat(BS)
-            self.placeholder_indices = (placeholder_indices_B, placeholder_indices_N_off)
+            placeholder_indices = (placeholder_indices_B, placeholder_indices_N_off)
         else:
             # placeholder_indices contains the indices of all placeholder embeddings.
-            self.placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
+            placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
         
+        if is_fg_token:
+            self.placeholder_indices_fg, self.placeholder_indices_fg0 = placeholder_indices, placeholder_indices0
+        else:
+            # background token only has one embedding. So no need to separately store placeholder_indices_bg0.
+            self.placeholder_indices_bg = placeholder_indices
+            
     def get_ada_emb_weight(self):
         if self.training:
             # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
@@ -1199,7 +1205,7 @@ class EmbeddingManager(nn.Module):
 
         for key in self.initial_embeddings:
             optimized = self.string_to_param_dict[key]
-            coarse = self.initial_embeddings[key].clone()
+            coarse = self.initial_embeddings[key]
             loss = loss + (optimized - coarse) @ (optimized - coarse).T / num_placeholders
 
         return loss
@@ -1222,7 +1228,7 @@ class EmbeddingManager(nn.Module):
 
             if reg_center_type == 'init':
                 # initial_embeddings[key] is already [L, 768]. No need to repeat().
-                reg_center = self.initial_embeddings[key].clone()
+                reg_center = self.initial_embeddings[key]
             else:
                 # make avg_embedding the same shape as embeddings, 
                 # to avoid F.*_loss() whining about broadcasting.
@@ -1289,7 +1295,7 @@ class EmbeddingManager(nn.Module):
 
                 # init_vecs could be scalar 0, if initial embeddings are not specified.
                 # In this case, loss_pre_vecs becomes the zero-centered attractor loss.
-                init_vecs = self.initial_embeddings[key].clone()
+                init_vecs = self.initial_embeddings[key]
 
                 # bias, pre_vecs, basis_vecs are structures existing in 
                 # both StaticLayerwiseEmbedding and AdaEmbedding.

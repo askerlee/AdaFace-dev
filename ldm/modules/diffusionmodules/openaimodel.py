@@ -733,6 +733,7 @@ class UNetModel(nn.Module):
         use_ada_context       = extra_info.get('use_ada_context', False)       if extra_info is not None else False
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
         do_attn_recon_loss    = extra_info.get('do_attn_recon_loss', False)    if extra_info is not None else False
+        use_background_token  = extra_info.get('use_background_token', False)  if extra_info is not None else False
 
         if use_layerwise_context:
             B = x.shape[0]
@@ -830,7 +831,8 @@ class UNetModel(nn.Module):
         # 12            [2, 1280, 8,  8]
         layer_idx = 0
 
-        if iter_type.startswith("mix_") or do_attn_recon_loss or iter_type == 'debug_attn':
+        if iter_type.startswith("mix_") or do_attn_recon_loss or use_background_token \
+          or iter_type == 'debug_attn':
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
             distill_layer_indices = [7, 8, 12, 16, 17, 18]
         else:

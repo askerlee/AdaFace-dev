@@ -279,6 +279,7 @@ def demean(x):
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
 # emb_mask: [2, 77, 1]
+# ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
 def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, 
                     do_demean_first=True, 
                     first_n_dims_to_flatten=3,
