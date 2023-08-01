@@ -1881,16 +1881,16 @@ class LatentDiffusion(DDPM):
 
         if iter_type == 'normal_recon':
             if self.use_background_token_iter:
-                self.fg_bg_contrast_loss_weight = 0.001
-                fg_bg_contrast_loss = \
-                            self.calc_fg_bg_contrast_loss(cond[2]['unet_attns'], 
+                self.fg_bg_complementary_loss_weight = 0.001
+                fg_bg_complementary_loss = \
+                            self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
                                                           self.embedding_manager.placeholder_indices_fg0,
                                                           self.embedding_manager.placeholder_indices_bg,
                                                           x_start.shape[0]
                                                          )
                 del cond[2]['unet_attns'], cond[2]['unet_feats']
-                loss += self.fg_bg_contrast_loss_weight * fg_bg_contrast_loss
-                loss_dict.update({f'{prefix}/fg_bg_contrast': fg_bg_contrast_loss.item()})
+                loss += self.fg_bg_complementary_loss_weight * fg_bg_complementary_loss
+                loss_dict.update({f'{prefix}/fg_bg_complementary': fg_bg_complementary_loss.item()})
 
             if self.do_attn_recon_loss_iter:
                 placeholder_indices = self.embedding_manager.placeholder_indices_fg0
@@ -2427,9 +2427,9 @@ class LatentDiffusion(DDPM):
         return loss_subj_attn_distill, loss_feat_distill
 
 
-    def calc_fg_bg_contrast_loss(self, unet_attns, 
+    def calc_fg_bg_complementary_loss(self, unet_attns, 
                                  placeholder_indices_fg, placeholder_indices_bg, BS):
-        loss_fg_bg_contrast = 0
+        loss_fg_bg_complementary = 0
 
         # Discard top layers and the first few bottom layers from distillation.
         # distill_layer_weights: relative weight of each distillation layer. 
@@ -2463,17 +2463,18 @@ class LatentDiffusion(DDPM):
             bg_attn   = attn_mat[placeholder_indices_bg]
             
             attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
+            # Align bg_attn with (1 - subj_attn), so that the two attention maps are complementary.
             # do_demean_first: remove the means from both embeddings before calculating the delta loss.
             # This normalizes (1 - subj_attn), since most elements in subj_attn are almost 0.
             # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
-            loss_layer_fg_bg_contrast = calc_delta_loss(bg_attn, 1 - subj_attn, 
-                                                        do_demean_first=True,
-                                                        first_n_dims_to_flatten=2, 
-                                                        ref_grad_scale=0)
+            loss_layer_fg_bg_complementary = calc_delta_loss(bg_attn, 1 - subj_attn, 
+                                                             do_demean_first=True,
+                                                             first_n_dims_to_flatten=2, 
+                                                             ref_grad_scale=0)
                 
-            loss_fg_bg_contrast += loss_layer_fg_bg_contrast * attn_distill_layer_weight
+            loss_fg_bg_complementary += loss_layer_fg_bg_complementary * attn_distill_layer_weight
 
-        return loss_fg_bg_contrast
+        return loss_fg_bg_complementary
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):
