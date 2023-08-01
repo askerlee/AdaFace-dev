@@ -758,6 +758,7 @@ class EmbeddingManager(nn.Module):
                                                                    init_neg_vecs=init_neg_embeddings,
                                                                    token_string=placeholder_string_i)
 
+                    # use_sep_fg_bg_embedders implies multi-embedding per token.
                     if use_sep_fg_bg_embedders:
                         if seq_offset == 0:
                             # The first ada embedder uses only fg features.
@@ -770,7 +771,7 @@ class EmbeddingManager(nn.Module):
                             # use both fg and bg features.
                             infeat_type = 'fg_bg'
                     elif placeholder_string == self.background_string:
-                        infeat_type = 'fg_bg'
+                        infeat_type = 'fg'
                     else:
                         infeat_type = 'fg_bg'
 
@@ -986,6 +987,8 @@ class EmbeddingManager(nn.Module):
                 # a call to get_static_embedding(). 
                 # The pipeline is generate static embeddings first, then generate the ada embeddings. 
                 # So this assumption should always hold.
+                # For background Ada embedder, cached_infeat_bg is only used when
+                # infeat_type == 'bg'. Otherwise, it's ignored.
                 placeholder_embedding, infeat_bg = \
                             ada_embedder(layer_idx, layer_attn_components, time_emb,
                                          static_subj_embs_dict[placeholder_string_i],
