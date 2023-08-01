@@ -11,6 +11,7 @@ import copy
 from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler
 from functools import partial
 from typing import Callable, Optional, Sequence, Tuple
+from collections import OrderedDict
 
 torch.set_printoptions(precision=4, sci_mode=False)
 np.set_printoptions(precision=4, suppress=True)
@@ -268,6 +269,7 @@ class StaticLayerwiseEmbedding(nn.Module):
                  init_vec_weights=None, init_neg_vecs=None, has_bias=True, device_type="cuda",
                  token_string=""):
         super().__init__()
+        self.token_string = token_string
 
         self.num_layers = num_layers
         self.emb_dim = emb_dim
@@ -416,7 +418,7 @@ class AdaEmbedding(nn.Module):
                  has_bias=True, use_attn_pooler=True, infeat_type='fg_bg',
                  device_type="cuda", token_string=""):
         super().__init__()
-
+        self.token_string = token_string
         assert num_layers == len(layer_idx2emb_idx), f"num_layers={num_layers} != len(layer_idx2emb_idx)={len(layer_idx2emb_idx)}"
         self.num_layers = num_layers
         self.emb_dim = emb_dim
@@ -628,7 +630,7 @@ class EmbeddingManager(nn.Module):
             **kwargs
     ):
         super().__init__()
-        self.string_to_token_dict = {}
+        self.string_to_token_dict = OrderedDict()
         
         self.string_to_param_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict = nn.ModuleDict()
@@ -655,6 +657,7 @@ class EmbeddingManager(nn.Module):
         # the concept through multiple learned pseudo-words. 
         # This setting was proposed in the TI paper,
         # and AdaPrompt also supports it for more expressive modeling.
+        self.num_vectors_per_token = {}
         self.set_num_vectors_per_token(num_vectors_per_token, placeholder_strings)
         self.background_string = background_string
 
@@ -755,6 +758,7 @@ class EmbeddingManager(nn.Module):
                                                                    init_neg_vecs=init_neg_embeddings,
                                                                    token_string=placeholder_string_i)
 
+                    # use_sep_fg_bg_embedders implies multi-embedding per token.
                     if use_sep_fg_bg_embedders:
                         if seq_offset == 0:
                             # The first ada embedder uses only fg features.
@@ -767,7 +771,7 @@ class EmbeddingManager(nn.Module):
                             # use both fg and bg features.
                             infeat_type = 'fg_bg'
                     elif placeholder_string == self.background_string:
-                        infeat_type = 'bg'
+                        infeat_type = 'fg'
                     else:
                         infeat_type = 'fg_bg'
 
@@ -795,6 +799,7 @@ class EmbeddingManager(nn.Module):
         self.clear_ada_layer_temp_info()
         self.clear_delta_loss_emb_mask()
         self.img_mask = None
+        self.cached_infeat_bg = {}
         self.layer_idx2emb_idx = layer_idx2emb_idx
         self.loss_call_count = 0
         # Store the text_embedder to compute the delta loss.
@@ -802,6 +807,7 @@ class EmbeddingManager(nn.Module):
         self.ada_embeddings = None
         self.ada_bp_to_unet = False
         self.is_comp_iter   = False
+
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_string={}".format(
                 placeholder_strings, num_vectors_per_token, layerwise_lora_rank, ada_emb_weight, self.background_string))
             
@@ -943,6 +949,10 @@ class EmbeddingManager(nn.Module):
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
 
+        # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
+        # the background token last (order controlled in main.py). 
+        # This order ensures that the background Ada embedder can always use 
+        # cached_infeat_bg produced by the previous subject Ada embedder.
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             # There's only one vector per token, we can do a simple replacement
             # embedded_text: [B, N, 768].
@@ -952,7 +962,11 @@ class EmbeddingManager(nn.Module):
             if placeholder_indices[0].numel() == 0:
                 continue
 
-            cached_infeat_bg = None
+            # Clear the infeat_bg cache before generating subject embedding(s) of a subject token.
+            # If the next token is the background token, the keep the cache, so that the background
+            # token will reuse the infeat_bg computed by the previous subject token.
+            if placeholder_string != self.background_string:
+                self.cached_infeat_bg[layer_idx] = None
 
             for seq_offset in range(self.num_vectors_per_token[placeholder_string]):
                 placeholder_string_i = placeholder_string if seq_offset == 0 else f"{placeholder_string}{seq_offset}"
@@ -960,22 +974,30 @@ class EmbeddingManager(nn.Module):
                 ada_embedder = self.string_to_ada_embedder_dict[placeholder_string_i].to(device)
                 assert isinstance(ada_embedder, AdaEmbedding)
 
+                # When it's the turn of the background Ada embedder, the cached_infeat_bg
+                # should have been computed by the previous subject Ada embedder. 
+                # Otherwise it's a bug.
+                if placeholder_string == self.background_string and seq_offset == 0 \
+                  and ada_embedder.infeat_type == 'bg' and self.cached_infeat_bg[layer_idx] is None:
+                    breakpoint()
+
                 # Generate the actual placeholder_embedding on the fly.
                 # placeholder_embedding: [B, 768]. B: 2 or 4 (regularization batches).
                 # Before this call, we assume static_subj_embs has been generated by 
                 # a call to get_static_embedding(). 
                 # The pipeline is generate static embeddings first, then generate the ada embeddings. 
                 # So this assumption should always hold.
+                # For background Ada embedder, cached_infeat_bg is only used when
+                # infeat_type == 'bg'. Otherwise, it's ignored.
                 placeholder_embedding, infeat_bg = \
                             ada_embedder(layer_idx, layer_attn_components, time_emb,
                                          static_subj_embs_dict[placeholder_string_i],
-                                         self.img_mask, ada_bp_to_unet, cached_infeat_bg)
-                if seq_offset == 0:
+                                         self.img_mask, ada_bp_to_unet, self.cached_infeat_bg[layer_idx])
+                
+                if placeholder_string != self.background_string and seq_offset == 0:
                     # Cache the bg infeat computed by the first (fg) ada embedder, 
-                    # to be used by the second (bg) ada embedder.
-                    cached_infeat_bg = infeat_bg
-                else:
-                    cached_infeat_bg = None
+                    # to be used by the second Ada embedder and the background Ada embedder.
+                    self.cached_infeat_bg[layer_idx] = infeat_bg
 
                 # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
                 # embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [2, 768].
@@ -1050,14 +1072,23 @@ class EmbeddingManager(nn.Module):
         emb_idx = self.layer_idx2emb_idx[i]
         self.ada_embeddings[emb_idx] = embedding
 
-    def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings):
-        if num_vectors_per_token is None:
-            self.num_vectors_per_token = {}
+    def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings=None):
+        if num_vectors_per_token is None or type(num_vectors_per_token) == int:
+            # If num_vectors_per_token is not specified, then set all tokens to have 1 vector.
+            # If num_vectors_per_token is an int, then set all tokens to have 
+            # num_vectors_per_token vectors.
+            if num_vectors_per_token is None:
+                num_vectors_per_token = 1
+
+            # During inference, placeholder_strings is None. So we use string_to_token_dict 
+            # loaded from the ckpt.
+            if placeholder_strings is None:
+                placeholder_strings = self.string_to_token_dict.keys()
             for k in placeholder_strings:
-                self.num_vectors_per_token[k] = 1
+                self.num_vectors_per_token[k] = num_vectors_per_token
         else:
             self.num_vectors_per_token = num_vectors_per_token
-        print(f"Set num_vectors_per_token: {num_vectors_per_token}")
+        print(f"Set num_vectors_per_token: {self.num_vectors_per_token}")
 
     # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
     # which will be enabled again through set_ada_layer_temp_info() in ddpm.py.
