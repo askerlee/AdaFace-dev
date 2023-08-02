@@ -168,10 +168,19 @@ class CrossAttention(nn.Module):
             nn.Dropout(dropout)
         )
         self.save_attn_mat = False
-
+        self.force_grad    = False
+        
     def forward(self, x, context=None, mask=None):
         h = self.heads
 
+        # If the autograd status should be overridden, then do it here, 
+        # and restore the status before this function returns.
+        if not torch.is_grad_enabled() and self.force_grad:
+            is_grad_forced = True
+            torch.set_grad_enabled(True)
+        else:
+            is_grad_forced = False
+            
         q = self.to_q(x)
         context = default(context, x)
         if callable(context):
@@ -206,6 +215,11 @@ class CrossAttention(nn.Module):
 
         out = einsum('b i j, b j d -> b i d', attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+
+        # Restore the autograd status.
+        if is_grad_forced:
+            torch.set_grad_enabled(False)
+
         return self.to_out(out)
 
 

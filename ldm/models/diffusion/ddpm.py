@@ -459,7 +459,7 @@ class DDPM(pl.LightningModule):
 
         # Only do attn recon loss after warm_up_steps (500) iterations, when the subject embedding
         # and, correspondingly, the mix embedding stablize and the attention maps are accurate.
-        if self.global_step >= self.warm_up_steps:
+        if self.global_step >= 0: #self.warm_up_steps:
             self.do_attn_recon_loss_iter = self.do_attn_recon_loss
         else:
             self.do_attn_recon_loss_iter = False
@@ -1199,7 +1199,7 @@ class LatentDiffusion(DDPM):
             # the subject token becomes stable.
             #self.warm_up_steps 
             elif not self.do_comp_prompt_mix_reg and self.use_background_token \
-              and self.global_step >= self.warm_up_steps \
+              and self.global_step >= 0 \
               and random.random() < 0.5:
                 c = batch['subj_prompt_single_bg']
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_bg'
@@ -1521,6 +1521,7 @@ class LatentDiffusion(DDPM):
                     # c[2]: extra_info. Here is only reached when do_static_prompt_delta_reg = False.
                     # Either prompt_delta_reg_weight == 0 or it's called by self.validation_step().
                     c[2]['iter_type'] = 'normal_recon'
+                    extra_info['ada_bp_to_unet'] = False
                     self.c_static_emb = None
 
             # shorten_cond_schedule: False. Skipped.
@@ -1672,16 +1673,26 @@ class LatentDiffusion(DDPM):
 
     # do_recon: return denoised images. 
     # if do_recon and cfg_scale > 1, apply classifier-free guidance. 
-    # has_grad: when returning do_recon (e.g. to select the better instance by smaller clip loss), 
-    # to speed up, no BP is done on these instances, so has_grad=False.
-    def guided_denoise(self, x_start, noise, t, cond, has_grad=True, do_recon=False, cfg_scales=None):
+    # unet_has_grad: when returning do_recon (e.g. to select the better instance by smaller clip loss), 
+    # to speed up, no BP is done on these instances, so unet_has_grad=False.
+    def guided_denoise(self, x_start, noise, t, cond, unet_has_grad=True, 
+                       crossattn_force_grad=True, do_recon=False, cfg_scales=None):
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
         # model_output is the predicted noise.
-        if not has_grad:
+        # if not unet_has_grad, we save RAM by not storing the computation graph.
+        # crossattn_force_grad: even if unet_has_grad = False, 
+        # we can still enable gradients on cross attention layers,
+        # so that limited optimizations w.r.t. the embedders can be done (but unable to BP through UNet).
+        if not unet_has_grad:
+            self.model.diffusion_model.crossattn_force_grad = crossattn_force_grad
             with torch.no_grad():
                 model_output = self.apply_model(x_noisy, t, cond)
+            # Restore force_grad to False, i.e., no explicit override of whether there's grad.
+            self.model.diffusion_model.crossattn_force_grad = False
         else:
+            # if unet_has_grad, we don't have to take care of embedding_manager.force_grad.
+            # Subject embeddings will naturally have gradients.
             model_output = self.apply_model(x_noisy, t, cond)
 
         # Save ada embeddings generated during apply_model(), to be used in delta loss. 
@@ -1855,7 +1866,7 @@ class LatentDiffusion(DDPM):
 
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
-                                has_grad=not is_teacher_filter_iter, 
+                                unet_has_grad=not is_teacher_filter_iter, 
                                 do_recon=self.calc_clip_loss,
                                 cfg_scales=cfg_scales_for_clip_loss)
 
@@ -1917,8 +1928,11 @@ class LatentDiffusion(DDPM):
                 
                 # We don't add noise to x_start, so that the obtained attention maps are more accurate.
                 t0 = torch.zeros_like(t)
+                # crossattn_force_grad: override the cross attention layers' autograd status, so that we can BP
+                # from the complementary loss through the cross attention.
                 self.guided_denoise(x_start, noise, t0, cond_mix, 
-                                    has_grad=False, 
+                                    unet_has_grad=False, 
+                                    crossattn_force_grad=True,
                                     do_recon=False,
                                     cfg_scales=None)
                 unet_attns_mix_single = cond_mix[2]['unet_attns']
@@ -1926,17 +1940,19 @@ class LatentDiffusion(DDPM):
                 # Compute mix_fg_bg_complementary_loss, which is similar as
                 # subj_fg_bg_complementary_loss but with the mix prompts.
                 # placeholder_indices_fg0 here is the cached placeholder_indices_fg0 on subject prompts.
-                # fg_grad_scale is 0, because there's no grad when denoising with mixed prompts above.
+                # fg_grad_scale > 0, because we override the embedding manager's autograd status,
+                # so that gradients can still be BP-ed from the cross attention layers, even if 
+                # unet_has_grad=False.
                 if self.use_background_token_iter:
                     mix_fg_bg_complementary_loss = \
                                 self.calc_fg_bg_complementary_loss(unet_attns_mix_single, 
                                                                    self.embedding_manager.placeholder_indices_fg0,
                                                                    self.embedding_manager.placeholder_indices_bg,
                                                                    x_start.shape[0],
-                                                                   fg_grad_scale=0
+                                                                   fg_grad_scale=0.05
                                                                   )
                     
-                    # Do not release RAM, as it will be used to compute the spatial weights.
+                    # Do not delete cond_mix[2]['unet_attns'], as it will be used to compute the spatial weights.
                     loss += fg_bg_complementary_loss_weight * mix_fg_bg_complementary_loss
                     loss_dict.update({f'{prefix}/fg_bg_complem_mix': mix_fg_bg_complementary_loss.item()})
 
@@ -2124,7 +2140,7 @@ class LatentDiffusion(DDPM):
                     # do classifier-free guidance, so that x_recon are better instances
                     # to be used to initialize the next reuse_init comp iteration.
                     model_output, x_recon, ada_embeddings = \
-                        self.guided_denoise(x_start, noise, t, cond_orig, has_grad=True, 
+                        self.guided_denoise(x_start, noise, t, cond_orig, unet_has_grad=True, 
                                             do_recon=True, cfg_scales=cfg_scales_for_clip_loss)
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
@@ -2178,7 +2194,8 @@ class LatentDiffusion(DDPM):
                         # so no need to generate them)
                         # twin_single_ada_embeddings has gradients, as has_grad=True by default.
                         model_output, x_recon, twin_single_ada_embeddings = \
-                            self.guided_denoise(x_start_, noise_, t_, cond_single)
+                            self.guided_denoise(x_start_, noise_, t_, cond_single,
+                                                unet_has_grad=False, crossattn_force_grad=True)
                         
                         # No need to concatenate these two, instead let calc_prompt_delta_loss() handle the intricacy.
                         ada_embeddings = (twin_single_ada_embeddings, twin_comp_ada_embeddings)
