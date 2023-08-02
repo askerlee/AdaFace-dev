@@ -75,19 +75,18 @@ all_styles = [ "cartoon style", "animation", "anime art", "comic book art", "ste
                "sci-fi movie", "sculpture", "bronze sculpture", "abyss art", "blade runner style", "cyberpunk art",
                "synthwave", "pencil sketch", "pastel colors", "childrens book's illustration", "pixar movie",
                "as a crochet figure", "as a 3d model", "closeup shot", "close view", "D&D sci-fi",
-               # add style 
-               'pop art', "portrait art", "watercolour painting", "chalk art", "concepture art", "bauhaus style", "cubism style",
-               "photorealistic painting", "surrealism painting", "impressionism", "expressionism", "abstract art", "minimalism"
+               "pop art", "portrait art", "watercolour painting", "chalk art", "concepture art", "bauhaus style", 
+               "photorealistic painting", "surrealism painting", "impressionism", "expressionism", "abstract art", "minimalism",
+               "low poly", "cubism style",
              ]
 # concept art|realistic painting|character design|anime sketch|trending in artstation|hyper realistic|vivid colors|clear face|detailed face
 all_modifiers = [ "concept art", "realistic painting", "character design", "anime sketch", 
                   "trending in artstation", "hyper realistic", "vivid colors", "clear face", 
                   "detailed face", "semirealism", "hyperrealistic", "highly detailed", "octane render",
                   "unreal 5", "photorealistic", "sharp focus", "digital painting", "illustration",
-                  "volumetric lighting", "dreamy", "illustration", "cinematic", ''
-                  ##new
-                    "surreal", "hd", "4k", "8k", "3d", "4d", "pixelate", "blur", 
-                    "beautiful", "very beautiful", "symmetrical", "macabre", "at night" 
+                  "volumetric lighting", "dreamy", "cinematic", 
+                  "surreal", "hd", "4k", "8k", "3d", "4d", "pixelate", "blur", 
+                  "beautiful", "very beautiful", "symmetrical", "macabre", "at night" 
                 ]
 
 #add time prompts
