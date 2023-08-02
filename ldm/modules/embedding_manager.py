@@ -806,7 +806,7 @@ class EmbeddingManager(nn.Module):
         self.text_embedder = text_embedder
         self.ada_embeddings = None
         self.ada_bp_to_unet = False
-        self.is_comp_iter   = False
+        self.force_grad     = False
 
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_string={}".format(
                 placeholder_strings, num_vectors_per_token, layerwise_lora_rank, ada_emb_weight, self.background_string))
@@ -839,6 +839,7 @@ class EmbeddingManager(nn.Module):
                                        self.ada_bp_to_unet)
             # Release ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
+
             return ada_embedded_text
 
         else:
@@ -855,6 +856,7 @@ class EmbeddingManager(nn.Module):
                                                       B, N, self.num_unet_layers, device)
             # Cache the static embeddings to be used in ada embedding computation later.
             self.static_subj_embs_dict = static_subj_embs_dict
+
             return static_embeddings
     
     # N: length of sequence (including padding).

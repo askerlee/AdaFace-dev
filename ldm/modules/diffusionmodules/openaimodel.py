@@ -505,6 +505,7 @@ class UNetModel(nn.Module):
         self.num_head_channels = num_head_channels
         self.num_heads_upsample = num_heads_upsample
         self.predict_codebook_ids = n_embed is not None
+        self.crossattn_force_grad = False
 
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
@@ -847,6 +848,7 @@ class UNetModel(nn.Module):
                 # module.transformer_blocks: contains only 1 BasicTransformerBlock 
                 # that does cross-attention with layer_context in attn2 only.
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
+                module[1].transformer_blocks[0].attn2.force_grad = self.crossattn_force_grad
 
             # layer_context: [2, 77, 768], conditioning embedding.
             # emb: [2, 1280], time embedding.
@@ -856,6 +858,7 @@ class UNetModel(nn.Module):
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
                     distill_feats[layer_idx] = h
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
+                    module[1].transformer_blocks[0].force_grad = False
 
             layer_idx += 1
         
@@ -864,13 +867,15 @@ class UNetModel(nn.Module):
 
         if layer_idx in distill_layer_indices:
             self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = True
- 
+            self.middle_block[1].transformer_blocks[0].attn2.force_grad = self.crossattn_force_grad
+
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, get_layer_idx_context)
         if layer_idx in distill_layer_indices:
                 distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.attn_mat 
                 distill_feats[layer_idx] = h
                 self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = False
+                self.middle_block[1].transformer_blocks[0].attn2.force_grad = False
 
         layer_idx += 1
 
@@ -894,14 +899,16 @@ class UNetModel(nn.Module):
 
             if layer_idx in distill_layer_indices:
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
- 
+                module[1].transformer_blocks[0].attn2.force_grad = self.crossattn_force_grad
+
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, get_layer_idx_context)
             if layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
                     distill_feats[layer_idx] = h
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
-
+                    module[1].transformer_blocks[0].attn2.force_grad = False
+                    
             layer_idx += 1
 
         extra_info['unet_feats'] = distill_feats
