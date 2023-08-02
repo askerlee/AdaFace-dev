@@ -459,7 +459,7 @@ class DDPM(pl.LightningModule):
 
         # Only do attn recon loss after warm_up_steps (500) iterations, when the subject embedding
         # and, correspondingly, the mix embedding stablize and the attention maps are accurate.
-        if self.global_step >= self.warm_up_steps:
+        if self.global_step >= 0:
             self.do_attn_recon_loss_iter = self.do_attn_recon_loss
         else:
             self.do_attn_recon_loss_iter = False
@@ -1199,7 +1199,7 @@ class LatentDiffusion(DDPM):
             # the subject token becomes stable.
             #self.warm_up_steps 
             elif not self.do_comp_prompt_mix_reg and self.use_background_token \
-              and self.global_step >= self.warm_up_steps \
+              and self.global_step >= 0 \
               and random.random() < 0.5:
                 c = batch['subj_prompt_single_bg']
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_bg'
