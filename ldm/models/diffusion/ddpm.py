@@ -1880,13 +1880,15 @@ class LatentDiffusion(DDPM):
         twin_comp_ada_embeddings = None
 
         if iter_type == 'normal_recon':
-            fg_bg_complementary_loss_weight = 0.002
+            # If do_attn_recon_loss_iter, then fg_bg_complementary_loss_weight is halved, 
+            # as we compute two such losses.
+            fg_bg_complementary_loss_weight = 0.001 if self.do_attn_recon_loss_iter else 0.002
             # Compute subj_fg_bg_complementary_loss, only when 
             # we don't compute mix_fg_bg_complementary_loss. 
             # mix_fg_bg_complementary_loss is preferred over subj_fg_bg_complementary_loss,
             # since the mix prompts produce slightly more accurate attention maps on the 
             # foreground subject.
-            if self.use_background_token_iter and not self.do_attn_recon_loss_iter:
+            if self.use_background_token_iter:
                 subj_fg_bg_complementary_loss = \
                             self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
                                                                self.embedding_manager.placeholder_indices_fg0,
@@ -1913,7 +1915,9 @@ class LatentDiffusion(DDPM):
                 cond_mix[2]['do_attn_recon_loss'] = True
                 #print(cond_mix[1])
                 
-                self.guided_denoise(x_start, noise, t, cond_mix, 
+                # We don't add noise to x_start, so that the obtained attention maps are more accurate.
+                t0 = torch.zeros_like(t)
+                self.guided_denoise(x_start, noise, t0, cond_mix, 
                                     has_grad=False, 
                                     do_recon=False,
                                     cfg_scales=None)
@@ -1922,13 +1926,14 @@ class LatentDiffusion(DDPM):
                 # Compute mix_fg_bg_complementary_loss, which is similar as
                 # subj_fg_bg_complementary_loss but with the mix prompts.
                 # placeholder_indices_fg0 here is the cached placeholder_indices_fg0 on subject prompts.
+                # fg_grad_scale is 0, because there's no grad when denoising with mixed prompts above.
                 if self.use_background_token_iter:
                     mix_fg_bg_complementary_loss = \
                                 self.calc_fg_bg_complementary_loss(unet_attns_mix_single, 
                                                                    self.embedding_manager.placeholder_indices_fg0,
                                                                    self.embedding_manager.placeholder_indices_bg,
                                                                    x_start.shape[0],
-                                                                   fg_grad_scale=0.05
+                                                                   fg_grad_scale=0
                                                                   )
                     
                     # Do not release RAM, as it will be used to compute the spatial weights.
