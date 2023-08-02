@@ -1977,6 +1977,9 @@ class LatentDiffusion(DDPM):
                                                    x_start.shape[0], 
                                                    x_start.shape[2:],
                                                    reversed=False)  
+                
+                # Release RAM.
+                del cond_mix[2]['unet_attns'], cond_mix[2]['unet_feats']
                 # Inverse of the average weight of the foreground pixels, i.e. those
                 # with spatial_weight_mix_single > 1. 
                 # After applying fg_inv_scale, foreground pixels will receive similar weights
