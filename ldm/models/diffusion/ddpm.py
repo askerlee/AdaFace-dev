@@ -1200,7 +1200,7 @@ class LatentDiffusion(DDPM):
             #self.warm_up_steps 
             elif not self.do_comp_prompt_mix_reg and self.use_background_token \
               and self.global_step >= 0 \
-              and random.random() < 0.5:
+              and random.random() < 0.9:
                 c = batch['subj_prompt_single_bg']
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_bg'
                 CLS_PROMPT_COMP   = 'cls_prompt_comp_bg'
