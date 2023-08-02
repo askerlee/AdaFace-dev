@@ -354,6 +354,10 @@ def main(opt):
         batched_subdirs = [ opt.indiv_subdir ] * len(batched_prompts)
         # Append None to the end of batched_subdirs, for indiv_subdir change detection.
         batched_subdirs.append(None)
+
+        if opt.compare_with:
+            assert opt.class_prompt is not None, "Must specify --class_prompt when calculating CLIP similarities."
+
         batched_class_long_prompts = [ opt.class_prompt ] * len(batched_prompts)
         batched_ref_prompts        = [ opt.ref_prompt ] * len(batched_prompts)
 
