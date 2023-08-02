@@ -1,11 +1,34 @@
 #!/usr/bin/fish
 # Trainign scripts for the 25 subjects, using AdaPrompt/TI/DreamBooth.
+function parse_range_str
+    set range_str $argv[1]
+
+    if test -z $range_str
+        return
+    end
+
+    set range_parts (string split ',' -- $range_str)
+
+    for part in $range_parts
+        if string match -qr '-' -- $part
+            set a (echo $part | awk -F- '{print $1}')
+            set b (echo $part | awk -F- '{print $2}')
+            for i in (seq $a $b)
+                echo $i
+            end
+        else
+            set a $part
+            echo $a
+        end
+    end
+end
+
 set self (status basename)
 echo $self $argv
 
 argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'eval' -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] (ada|ti|db) [low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] (ada|ti|db) [low-high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -13,7 +36,7 @@ end
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'static-layerwise' ]; or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] (ada|ti|db) [|low high] [EXTRA_ARGS]"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] (ada|ti|db) [|low-high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
     exit 1
 end
@@ -27,16 +50,13 @@ source $subj_file
 
 set -q _flag_gpu; and set GPU $_flag_gpu; or set GPU 0
 # BUGGY: if L, H are not specified, then $argv[2], $argv[3] may contain unrecognized arguments.
-set -q argv[2]; and set L $argv[2]; or set L 1
-set -q argv[3]; and set H $argv[3]; or set H (count $subjects)
-set EXTRA_TRAIN_ARGS0 $argv[4..-1]
+set -q argv[2]; and set range $argv[2]; or set range "1-"(count $subjects)
+set EXTRA_TRAIN_ARGS0 $argv[3..-1]
+set indices (parse_range_str $range)
 
 set -q _flag_lr; and set lr $_flag_lr; or set -e lr
 set -q _flag_min_rand_scaling; and set min_rand_scaling $_flag_min_rand_scaling; or set -e min_rand_scaling
 #set fish_trace 1
-
-set indices0 (seq 1 (count $subjects))
-set indices $indices0[(seq $L $H)]
 
 # default bb_type is v15.
 set -q _flag_bb_type; or set _flag_bb_type 'v15-dste'
