@@ -1200,7 +1200,7 @@ class LatentDiffusion(DDPM):
             #self.warm_up_steps 
             elif not self.do_comp_prompt_mix_reg and self.use_background_token \
               and self.global_step >= 0 \
-              and random.random() < 0.9:
+              and random.random() < 0.8:
                 c = batch['subj_prompt_single_bg']
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_bg'
                 CLS_PROMPT_COMP   = 'cls_prompt_comp_bg'
@@ -1893,13 +1893,13 @@ class LatentDiffusion(DDPM):
         if iter_type == 'normal_recon':
             # If do_attn_recon_loss_iter, then fg_bg_complementary_loss_weight is halved, 
             # as we compute two such losses.
-            fg_bg_complementary_loss_weight = 0.001 if self.do_attn_recon_loss_iter else 0.002
+            fg_bg_complementary_loss_weight = 0.002 #if self.do_attn_recon_loss_iter else 0.002
             # Compute subj_fg_bg_complementary_loss, only when 
-            # we don't compute mix_fg_bg_complementary_loss. 
+            # we don't compute mix_fg_bg_complementary_loss. Otherwise it'll take too much RAM.
             # mix_fg_bg_complementary_loss is preferred over subj_fg_bg_complementary_loss,
             # since the mix prompts produce slightly more accurate attention maps on the 
             # foreground subject.
-            if self.use_background_token_iter:
+            if self.use_background_token_iter and not self.do_attn_recon_loss_iter:
                 subj_fg_bg_complementary_loss = \
                             self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
                                                                self.embedding_manager.placeholder_indices_fg0,
