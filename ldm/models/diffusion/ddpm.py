@@ -1192,12 +1192,12 @@ class LatentDiffusion(DDPM):
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_fp'
                 CLS_PROMPT_COMP   = 'cls_prompt_comp_fp'
                 CLS_PROMPT_SINGLE = 'cls_prompt_single_fp'
-            # "not self.do_comp_prompt_mix_reg": this iter is doing recon on training images.
-            # Only use_background_token on such cases. To avoid the backgound token taking too much
-            # of the foreground, we only use the background token on half of the training images.
-            # use_background_token_iter: only use background token after the first 500 iters, when
-            # the subject token becomes stable.
-            #self.warm_up_steps 
+            # "not self.do_comp_prompt_mix_reg": implies no ada delta loss.
+            # So this iter is only doing recon on training images.
+            # Only use_background_token on such cases. 
+            # *_comp_bg: used for static delta loss. 
+            # To avoid the backgound token taking too much of the foreground, 
+            # we only use the background token on 80% of the training images.
             elif not self.do_comp_prompt_mix_reg and self.use_background_token \
               and self.global_step >= 0 \
               and random.random() < 0.8:
@@ -2377,8 +2377,9 @@ class LatentDiffusion(DDPM):
                 attn_subj_delta = subj_attn_subj_comp - subj_attn_subj_single
                 attn_mix_delta  = subj_attn_mix_comp  - subj_attn_mix_single
                 loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
+                                                             exponent=2,    
                                                              first_n_dims_to_flatten=2, 
-                                                             ref_grad_scale=0)
+                                                             ref_grad_scale=0.05)
                 
                 # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comp/subj_attn_mix_single. 
                 # Use this scaler to release the graph and avoid OOM.
@@ -2491,8 +2492,8 @@ class LatentDiffusion(DDPM):
         # Layer 16 has strong face semantics, so it is given a small weight.
         attn_distill_layer_weights = { #7:  1., 8: 1.,
                                        #9:  0.5, 10: 0.5, 11: 0.5,
-                                       12: 1.,
-                                       16: 1., 17: 1., 
+                                       12: 0.5,
+                                       16: 0.5, 17: 1., 
                                        18: 1.,
                                      }
         
