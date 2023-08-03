@@ -2377,7 +2377,7 @@ class LatentDiffusion(DDPM):
                 attn_subj_delta = subj_attn_subj_comp - subj_attn_subj_single
                 attn_mix_delta  = subj_attn_mix_comp  - subj_attn_mix_single
                 loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
-                                                             exponent=2,    
+                                                             exponent=3,    
                                                              first_n_dims_to_flatten=2, 
                                                              ref_grad_scale=0.05)
                 
@@ -2385,7 +2385,7 @@ class LatentDiffusion(DDPM):
                 # Use this scaler to release the graph and avoid OOM.
                 subj_attn_mix_comp_gs   = mix_attn_grad_scaler(subj_attn_mix_comp)
                 subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
-                loss_layer_subj_comp_attn   = self.get_loss(subj_attn_subj_comp,   subj_attn_mix_comp_gs,  mean=True)
+                loss_layer_subj_comp_attn   = self.get_loss(subj_attn_subj_comp,   subj_attn_mix_comp_gs,   mean=True)
                 loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
 
                 # Align the attention corresponding to each embedding individually.
@@ -2492,8 +2492,8 @@ class LatentDiffusion(DDPM):
         # Layer 16 has strong face semantics, so it is given a small weight.
         attn_distill_layer_weights = { #7:  1., 8: 1.,
                                        #9:  0.5, 10: 0.5, 11: 0.5,
-                                       12: 0.5,
-                                       16: 0.5, 17: 1., 
+                                       12: 1.,
+                                       16: 1., 17: 1., 
                                        18: 1.,
                                      }
         
@@ -2526,7 +2526,7 @@ class LatentDiffusion(DDPM):
             # to make the two attention maps more complementary (expect the loss pushes the 
             # subject embedding to a more accurate point).
             loss_layer_fg_bg_complementary = calc_delta_loss(bg_attn, 1 - subj_attn, 
-                                                             exponent=1,    
+                                                             exponent=2,    
                                                              do_demean_first=True,
                                                              first_n_dims_to_flatten=2, 
                                                              ref_grad_scale=fg_grad_scale)
