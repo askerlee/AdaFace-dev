@@ -1185,6 +1185,7 @@ class EmbeddingManager(nn.Module):
                         km2 = km.replace(k, k2)
                         self.string_to_param_dict[km2] = ckpt["string_to_param"][km]
                         self.string_to_ada_embedder_dict[km2] = ckpt["string_to_ada_embedder"][km]
+                        ckpt["num_vectors_per_token"][km2] = ckpt["num_vectors_per_token"][km]
                         print(f"Loaded {km}->{km2} from {ckpt_path}")
 
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
