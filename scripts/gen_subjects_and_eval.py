@@ -105,7 +105,9 @@ def parse_args():
     parser.add_argument("--ada_emb_weight",
                         type=float, default=-1,
                         help="Weight of ada embeddings (in contrast to static embeddings)")
-
+    # --dryrun
+    parser.add_argument("--dryrun", action="store_true",
+                        help="Dry run: only print the commands without actual execution")
 
     args = parser.parse_args()
     return args, parser
@@ -379,9 +381,10 @@ if __name__ == "__main__":
                 command_line += f" --calc_face_sim"
 
         print(command_line)
-        os.system(command_line)
+        if not args.dryrun:
+            os.system(command_line)
 
-    if args.scores_csv is not None:
+    if args.scores_csv is not None and not args.dryrun:
         if not os.path.exists(args.scores_csv):
             print(f"Error: {args.scores_csv} not found.")
             exit(0)
