@@ -16,9 +16,9 @@ set -g are_faces     1                  1                     1                1
 # -1: use default range [0.1, 0.3]. 0.6: hard subjects, use [0.2, 0.6].
 # set -g prompt_mix_max  -1               -1                    0.9              -1           -1             -1           -1           0.9               -1         0.9          -1           -1                   -1           -1             -1                    0.6          -1             0.6           -1              -1           -1            1.2            0.9                 -1                    -1
 #                     objects    humans/animals    cartoon characters
-set -g lrs            3e-4       8e-4              3e-4
+set -g lrs            6e-4       8e-4              6e-4
 set -g z_prefixes     ""         "portrait of"     ""
-set -g maxiters       3500       4500              3500
+set -g maxiters       2500       4000              2500
 # All subjects are humans/animals. The other two classes are listed for completeness.
 # Individual LR for each class in the broad classes, according to their difficulties / inherent complexity.
 # A prefix of "portrait of" for animals/humans suggests SD to focus on the face area of the subject.
