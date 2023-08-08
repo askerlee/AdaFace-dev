@@ -788,6 +788,7 @@ class EmbeddingManager(nn.Module):
 
                 with torch.no_grad():
                     init_word_embeddings = get_embeddings_for_tokens(init_word_tokens.cpu())
+                    # init_word_embeddings: [2, 768]. avg_init_word_embedding: [1, 768].
                     avg_init_word_embedding = (init_word_embeddings * init_word_weights.unsqueeze(1)).sum(dim=0, keepdim=True)
 
             else:
@@ -835,6 +836,7 @@ class EmbeddingManager(nn.Module):
             else:
                 # Degenerate to Textual Inversion. 
                 # ANCHOR[id=init_embed] : 16*K vectors are initialized with the same embedding.
+                # avg_init_word_embedding: [1, 768] => [1, 2, 768]
                 avg_init_word_embedding = avg_init_word_embedding.unsqueeze(0).repeat(self.num_layers_per_embedder, num_vectors_per_token, 1)
                 token_params = torch.nn.Parameter(avg_init_word_embedding, requires_grad=True)
                 token_ada_embedder = None
