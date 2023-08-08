@@ -577,9 +577,6 @@ class AdaEmbedding(nn.Module):
                 img_mask=None, bp_to_unet=False, cached_infeat_bg=None):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
         pooler  = self.poolers[emb_idx]
-        # Some weights at the masked half are updated and become nonzero. 
-        # So we mask them again.
-        self.mask_linear_weights(emb_idx)
 
         if self.debug:
             breakpoint()
@@ -595,18 +592,26 @@ class AdaEmbedding(nn.Module):
             
             # Even if layer_infeat is grad-scaled, the pooler still receives the full gradient.
             # But the grad is scaled when it's further passed to the UNet.
-            if self.use_attn_pooler and self.is_bg_only and cached_infeat_bg is not None:
+            if self.use_attn_pooler and self.is_bg_only:
+                assert cached_infeat_bg is not None, "cached_infeat_bg must be provided when is_bg_only is True."
                 infeat_pooled = cached_infeat_bg
                 infeat_fg_bg  = None
                 infeat_bg     = None
+                # Do not mask weights in this case, as the infeat only contains bg features.
             else:
                 infeat_pooled    = pooler(layer_attn_components, static_subj_layer_emb, img_mask, bp_to_unet)
                 if self.use_attn_pooler:
                     infeat_fg, infeat_bg = infeat_pooled
-                    infeat_pooled = infeat_fg_bg = torch.cat([infeat_fg, infeat_bg], dim=-1)
+                    infeat_fg_bg = torch.cat([infeat_fg, infeat_bg], dim=-1)
                 else:
                     infeat_fg_bg = infeat_pooled
                     infeat_bg    = None
+
+                infeat_pooled = infeat_fg_bg
+                # Some Linears only use either fg or bg features. 
+                # So we mask weights at the unused half, since the corresponding weights are 
+                # updated during BP and become nonzero. 
+                self.mask_linear_weights(emb_idx)
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
