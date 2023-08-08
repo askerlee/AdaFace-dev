@@ -797,7 +797,8 @@ class EmbeddingManager(nn.Module):
 
             num_vectors_per_token = self.token2num_vectors[placeholder_string]
 
-            if initializer_words is not None and idx < len(initializer_words):
+            if (initializer_words is not None) and idx < len(initializer_words) \
+              and (placeholder_string != self.background_string):
                 init_word_tokens = get_tokens_for_string(initializer_words[idx])
                 N = len(init_word_tokens)
                 if initializer_weights is not None and idx < len(initializer_weights):
@@ -815,6 +816,7 @@ class EmbeddingManager(nn.Module):
                     avg_init_word_embedding = (init_word_embeddings * init_word_weights.unsqueeze(1)).sum(dim=0, keepdim=True)
 
             else:
+                # The background embedding is not initialized with any word embedding.
                 layerwise_lora_rank  = layerwise_lora_default_rank
                 init_word_embeddings = None
                 init_word_weights    = None
