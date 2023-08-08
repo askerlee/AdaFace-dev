@@ -1,22 +1,17 @@
 import torch
 from torch import nn, einsum
-from torch.nn.init import xavier_uniform_
 from einops import rearrange, repeat
-from inspect import isfunction
 
 import torch.nn.functional as F
 import numpy as np
-import copy
 
 from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler
 from functools import partial
-from typing import Callable, Optional, Sequence, Tuple
 from collections import OrderedDict
 
+# When debugging, make the printed tensors less messy.
 torch.set_printoptions(precision=4, sci_mode=False)
 np.set_printoptions(precision=4, suppress=True)
-
-PROGRESSIVE_SCALE = 2000
 
 def get_clip_tokens_for_string(tokenizer, string, force_single_token=False):
     '''
@@ -495,8 +490,9 @@ class AdaEmbedding(nn.Module):
 
         # Unless is_bg_only, then always use both fg and bg features as the input to the Linear, 
         # therefore the input feature dim is doubled.
-        # But for a particular Linear, the fg or bg half of the weights may be masked 
-        # according to emb_infeat_types.
+        # But a particular Linear may only use either the fg or bg half of the features according to emb_infeat_types, 
+        # so the other half of the weights will be masked.
+        # If is_bg_only, then only use bg features as the input to the Linear, and no weight masking is needed.
         H  = 1 if self.is_bg_only else 2
         # If all Linears only use half of the input features (effectively H=1, although nominally H=2), 
         # then only use 1/4 of the time embeddings. Otherwise, use 1/2 of the time embeddings.
@@ -546,9 +542,12 @@ class AdaEmbedding(nn.Module):
         self.call_count = 0
         self.debug = False
 
-    # If specified masked_layer_idx, then only mask for one layer.
-    # When generating ada embeddings for each layer in turn, this will reduce processing time.
+    # If masked_layer_idx is specified, then only mask for one layer. Otherwise, mask for all layers.
+    # When generating ada embeddings for each layer in turn, only masking one layer will reduce processing time.
     def mask_linear_weights(self, masked_layer_idx=None):
+        # Skip masking if is_bg_only.
+        if self.is_bg_only:
+            return
         # All layers have the same number of in_features and out_features.
         HALF_D = self.layer_maps[0].in_features // 2
 
@@ -577,6 +576,10 @@ class AdaEmbedding(nn.Module):
                 img_mask=None, bp_to_unet=False, cached_infeat_bg=None):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
         pooler  = self.poolers[emb_idx]
+        # Some Linears only use either fg or bg features. 
+        # So we mask weights at the unused half, since the corresponding weights are 
+        # updated during BP and become nonzero. 
+        self.mask_linear_weights(emb_idx)
 
         if self.debug:
             breakpoint()
@@ -597,7 +600,8 @@ class AdaEmbedding(nn.Module):
                 infeat_pooled = cached_infeat_bg
                 infeat_fg_bg  = None
                 infeat_bg     = None
-                # Do not mask weights in this case, as the infeat only contains bg features.
+                # Do not mask weights in this case, as infeat_pooled only contains bg features, and 
+                # H = 1, i.e., the in_features of the Linear is not doubled.
             else:
                 infeat_pooled    = pooler(layer_attn_components, static_subj_layer_emb, img_mask, bp_to_unet)
                 if self.use_attn_pooler:
@@ -608,10 +612,6 @@ class AdaEmbedding(nn.Module):
                     infeat_bg    = None
 
                 infeat_pooled = infeat_fg_bg
-                # Some Linears only use either fg or bg features. 
-                # So we mask weights at the unused half, since the corresponding weights are 
-                # updated during BP and become nonzero. 
-                self.mask_linear_weights(emb_idx)
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
