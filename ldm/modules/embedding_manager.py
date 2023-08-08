@@ -811,6 +811,7 @@ class EmbeddingManager(nn.Module):
                 if placeholder_string == self.background_string:
                     bg_emb_count = 1
                     fg_emb_count = 0
+                    num_vectors_per_token = 1
                 else:
                     # Around half of the embeddings are fg embeddings, and the other half are bg embeddings.
                     # If num_vectors_per_token[placeholder_string] = 1, then there's only one fg embedding.
