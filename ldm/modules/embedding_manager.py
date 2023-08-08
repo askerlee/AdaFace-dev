@@ -313,7 +313,7 @@ class StaticLayerwiseEmbedding(nn.Module):
         # basis_comm_weights is added with basis_rand_weights. 
         # basis_rand_weights is a random component of the actual weights.
         # So equal weights here won't cause non-identifiable parameters and equal graidents.
-        self.basis_comm_weights = nn.Parameter(torch.ones(1, self.K, r) / r)
+        self.basis_comm_weights = nn.Parameter(torch.ones(1, self.K, r) / r, requires_grad=True)
 
         # init_up_noise_stds is only applied when init_vecs is passed in.
         if init_vecs is not None:
@@ -365,7 +365,7 @@ class StaticLayerwiseEmbedding(nn.Module):
 
         if self.has_bias:
             # bias: 16 * 768.
-            self.bias        = nn.Parameter(torch.zeros(num_layers, self.K, emb_dim))
+            self.bias        = nn.Parameter(torch.zeros(num_layers, self.K, emb_dim), requires_grad=True)
         else:
             self.bias = 0
 
@@ -434,18 +434,46 @@ class AdaEmbedding(nn.Module):
 
         # Only takes bg features. Could possibly use cached bg features.
         self.is_bg_only = (bg_emb_count == self.K)
+        self.r = r
+        self.use_attn_pooler = use_attn_pooler
 
         # emb_infeat_types: 0 = fg, 1 = bg, 2 = fg_bg. 
         # Usually there are no type-2 (fg_bg) embeddings.
         self.emb_infeat_types = [ 0 ] * self.fg_emb_count + [ 1 ] * self.bg_emb_count \
                                 + [ 2 ] * (self.K - self.fg_emb_count - self.bg_emb_count)
-        
-        self.r = r
+
+        cand_basis_masks = [ torch.cat([ torch.ones(r),  torch.zeros(r) ]),
+                             torch.cat([ torch.zeros(r), torch.ones(r) ]),
+                             torch.ones(2 * r) ]
+        # basis_mask: [K, 2*r]. 
+        # The purpose of basis_mask is to separate the basis vectors into fg and bg parts, so that
+        # fg-only embeddings only use the fg part of the basis vectors, 
+        # and bg-only embeddings only use the bg part.
+        basis_mask = torch.stack([ cand_basis_masks[emb_infeat_type] for emb_infeat_type in self.emb_infeat_types ], dim=0)
+        # basis_mask will be put on cuda automatically.
+        self.register_buffer(name='basis_mask', tensor=basis_mask, persistent=False)
+
         self.device_type = device_type
-        self.unet_midlayer_idx = 13
         self.layer_idx2emb_idx = layer_idx2emb_idx
         # emb_idx2layer_idx: Reverse mapping of layer_idx2emb_idx.
         self.emb_idx2layer_idx = { v: k for k, v in layer_idx2emb_idx.items() }
+
+        # Unless is_bg_only, then always use both fg and bg features as the input to the Linear, 
+        # therefore the input feature dim is doubled.
+        # But a particular Linear may only use either the fg or bg half of the features according to emb_infeat_types, 
+        # so the other half of the weights will be masked.
+        # If is_bg_only, then only use bg features as the input to the Linear, and no weight masking is needed.
+        self.H = H  = 1 if self.is_bg_only else 2
+        # If all Linears only use half of the input features (effectively H=1, although nominally H=2), 
+        # then only use 1/4 of the time embeddings. Otherwise, use 1/2 of the time embeddings.
+        TIME_Hs = [ 2 if (self.use_attn_pooler and emb_infeat_type == 2) else 1 for emb_infeat_type in self.emb_infeat_types ]
+        TIME_H = max(TIME_Hs)
+        # The dimension of the time embeddings used will be 
+        # the first TD_frac dimensions of image features.
+        # Most infeat_dims: 1280, *0.25 = 320. 
+        # 320 dim should contain enough info, and avoid
+        # overweighing the image features.
+        self.TD_frac = 0.25 * TIME_H
 
         if init_vecs is not None:
             # Only one vector is passed in.
@@ -458,24 +486,24 @@ class AdaEmbedding(nn.Module):
                 )
 
             N = self.N = init_vecs.shape[0]
-            self.pre_vecs = nn.Parameter(init_vecs.clone(), requires_grad=True)
+            self.pre_vecs = nn.Parameter(init_vecs.unsqueeze(0).repeat(H, 1, 1), requires_grad=True)
             # Normalize pre_vecs, to roughly equalize the contributions of different predefined basis vectors.
             # self.pre_vecs.data = F.normalize(self.pre_vecs, dim=1)
         else:
             N = self.N = 0
             self.pre_vecs = None
 
-        # basis_vecs: [12, 768], consists of r-N basis vectors. Will be updated through BP.
-        self.basis_vecs = nn.Parameter(torch.randn(r - N, emb_dim), requires_grad=True)
+        # Separate pre_vecs and basis_vecs, to apply different regularizations on them.
+        # basis_vecs: [2, 12, 768], consists of r-N basis vectors. Will be updated through BP.
+        self.basis_vecs = nn.Parameter(torch.randn(H, r - N, emb_dim), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
-        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1) / 4.
+        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=-1) / 4.
         # Always set the last basis vector to 0.
-        self.basis_vecs.data[-1] = 0
+        self.basis_vecs.data[:, -1] = 0
 
         self.attn_infeat_dims = list(attn_infeat_dims)
         # self.infeat_dims = [ 320 for i in range(25) ]
 
-        self.use_attn_pooler = use_attn_pooler
         poolers = []
         for i in range(num_layers):
             infeat_dim = self.attn_infeat_dims[i]
@@ -487,23 +515,6 @@ class AdaEmbedding(nn.Module):
             poolers.append(pooler)
 
         self.poolers = nn.ModuleList(poolers)
-
-        # Unless is_bg_only, then always use both fg and bg features as the input to the Linear, 
-        # therefore the input feature dim is doubled.
-        # But a particular Linear may only use either the fg or bg half of the features according to emb_infeat_types, 
-        # so the other half of the weights will be masked.
-        # If is_bg_only, then only use bg features as the input to the Linear, and no weight masking is needed.
-        H  = 1 if self.is_bg_only else 2
-        # If all Linears only use half of the input features (effectively H=1, although nominally H=2), 
-        # then only use 1/4 of the time embeddings. Otherwise, use 1/2 of the time embeddings.
-        TIME_Hs = [ 2 if (self.use_attn_pooler and emb_infeat_type == 2) else 1 for emb_infeat_type in self.emb_infeat_types ]
-        TIME_H = max(TIME_Hs)
-        # The dimension of the time embeddings used will be 
-        # the first TD_frac dimensions of image features.
-        # Most infeat_dims: 1280, *0.25 = 320. 
-        # 320 dim should contain enough info, and avoid
-        # overweighing the image features.
-        self.TD_frac = 0.25 * TIME_H
 
         layer_maps = []
         layer_out_lns  = []
@@ -518,10 +529,10 @@ class AdaEmbedding(nn.Module):
             self.TDs.append(TD)
 
             # input  dim: self.attn_infeat_dims[i] + TD, since first TD dims of time_emb is part of the input features.
-            # output dim: r * K, will be reshaped to [K, r].
+            # output dim: r * H * K, will be reshaped to [K, r*H].
             # This Linear outputs K sets of r-dim vectors, 
             # each set being the coefficients of the r basis vectors. 
-            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD, r * self.K, bias=True) )
+            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD, r * H * self.K, bias=True) )
             layer_lncat2s.append(LNCat2(self.attn_infeat_dims[i] * H, TD))
             # layer_out_lns: a LayerNorm that's applied on all K embeddings at the same time.
             layer_out_lns.append( nn.LayerNorm(emb_dim, elementwise_affine=True) )
@@ -534,7 +545,7 @@ class AdaEmbedding(nn.Module):
         self.has_bias = has_bias
         if has_bias:
             # bias: 25 * 768.
-            self.bias        = nn.Parameter(torch.zeros(num_layers, self.K, emb_dim))
+            self.bias        = nn.Parameter(torch.zeros(num_layers, self.K, emb_dim), requires_grad=True)
         else:
             self.bias        = 0
 
@@ -548,26 +559,25 @@ class AdaEmbedding(nn.Module):
         # Skip masking if is_bg_only.
         if self.is_bg_only:
             return
-        # All layers have the same number of in_features and out_features.
-        HALF_D = self.layer_maps[0].in_features // 2
 
         layer_range = range(self.num_layers) if masked_layer_idx is None else [masked_layer_idx]
 
         for layer_idx in layer_range:
+            HALF_D = self.layer_maps[layer_idx].in_features // 2
             layer_map_weight = self.layer_maps[layer_idx].weight.data
             # The weight of Linear has shape [out_features, in_features]. 
-            # Change the out_features to [K, r].
-            layer_map_weight_embs = layer_map_weight.reshape(self.K, self.r, -1)
-            for k in range(self.K):
-                emb_infeat_type = self.emb_infeat_types[k]
+            # Split the out_features to [K, 2*r].
+            layer_map_weight_embs = layer_map_weight.reshape(self.K, self.H * self.r, -1)
 
-                # fg. Mask the second half of the weights (corresponding to bg features).
-                if emb_infeat_type == 0:
-                    layer_map_weight_embs[k, :, HALF_D:] = 0
-                # bg. Mask the first half of the weights (corresponding to fg features).
-                elif emb_infeat_type == 1:
-                    layer_map_weight_embs[k, :, :HALF_D] = 0
-                # Otherwise, emb_infeat_type == 2, fg_bg. Do no mask.
+            cand_fg_bg_masks = [ torch.cat([ torch.ones(HALF_D), torch.zeros(HALF_D) ]),
+                                 torch.cat([ torch.zeros(HALF_D), torch.ones(HALF_D) ]),
+                                 torch.ones(2 * HALF_D) ]
+            
+            # fg_bg_mask: [K, in_features]
+            fg_bg_mask = torch.stack([ cand_fg_bg_masks[emb_infeat_type] for emb_infeat_type in self.emb_infeat_types ], dim=0)
+            fg_bg_mask = fg_bg_mask.to(layer_map_weight_embs.device)
+            # layer_map_weight_embs: [K, 2*r, in_features]. fg_bg_mask: [K, 1, in_features]
+            layer_map_weight_embs *= fg_bg_mask.unsqueeze(1)
         
     # layer_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
@@ -580,7 +590,7 @@ class AdaEmbedding(nn.Module):
         # So we mask weights at the unused half, since the corresponding weights are 
         # updated during BP and become nonzero. 
         self.mask_linear_weights(emb_idx)
-
+        
         if self.debug:
             breakpoint()
 
@@ -632,21 +642,30 @@ class AdaEmbedding(nn.Module):
             # cat(ln(infeat_pooled), ln(time_emb)) as the input features.
             infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled, time_feat)
 
-            # basis_dyn_weight: [2, 12*K] => [2, K, 12]
-            basis_dyn_weight = self.layer_maps[emb_idx](infeat_time).reshape(-1, self.K, self.r)
+            # basis_dyn_weight: [2, 2*r*K] => [2, K, 2*r]
+            basis_dyn_weight = self.layer_maps[emb_idx](infeat_time).reshape(-1, self.K, self.H * self.r)
             # bias: [1, K, 768]
             bias = self.bias[emb_idx].unsqueeze(0)
 
             if self.N > 0:
-                basis_vecs = torch.cat([self.pre_vecs, self.basis_vecs], dim=0)
+                # pre_vecs:   [2, N, 768], basis_vecs: [2, r - N, 768]. 
+                # basis_vecs: [2, r, 768].
+                # 2 at dim 0: H, i.e., fg and bg.
+                basis_vecs = torch.cat([self.pre_vecs, self.basis_vecs], dim=1)
             else:
                 basis_vecs = self.basis_vecs
+            
+            # basis_vecs: [2, r, 768] => [2*r, 768].
+            basis_vecs = basis_vecs.view(self.H * self.r, self.emb_dim)
+
+            # basis_mask: [K, 2*r].
+            # [BS, K, 2*r] * [1, K, 2*r] => [2, K, 2*r].
+            basis_dyn_weight_masked = basis_dyn_weight * self.basis_mask.unsqueeze(0)
+            # out_vecs_unnorm: [2, K, 768].
+            # [2, K, 12] x [12, 768] = [2, K, 768]
+            out_vecs_unnorm = torch.matmul(basis_dyn_weight_masked, basis_vecs)
 
             out_ln = self.layer_out_lns[emb_idx]
-            # out_vec_unnorm: [2, K, 768].
-            # [2, K, 12] x [12, 768] = [2, K, 768]
-            out_vecs_unnorm = torch.matmul(basis_dyn_weight, basis_vecs)
-
             # emb_dim: 768.
             out_vecs0 = out_ln(out_vecs_unnorm) / np.sqrt(self.emb_dim)
             # [2, K, 768] + [1, K, 768] = [2, K, 768].
@@ -745,7 +764,7 @@ class EmbeddingManager(nn.Module):
         # Save this function to be used in load() when doing placeholder substitution.
         self.get_tokens_for_string = get_tokens_for_string
 
-        # init_neg_embeddings are almost useless. Keep here just in case.
+        # init_neg_embeddings are never used. Keep here just in case.
         if initializer_neg_words is not None and len(initializer_neg_words) > 0:
             init_neg_embeddings = []
             for neg_words in initializer_neg_words:
@@ -763,8 +782,6 @@ class EmbeddingManager(nn.Module):
         else:
             init_neg_embeddings = None
             NEG = 0
-
-        self.no_init_vecs_for_extra_static_embedders = True
 
         for idx, placeholder_string in enumerate(placeholder_strings):
             # get_token_for_string <= get_clip_token_for_string.
@@ -838,7 +855,7 @@ class EmbeddingManager(nn.Module):
                 # ANCHOR[id=init_embed] : 16*K vectors are initialized with the same embedding.
                 # avg_init_word_embedding: [1, 768] => [1, 2, 768]
                 avg_init_word_embedding = avg_init_word_embedding.unsqueeze(0).repeat(self.num_layers_per_embedder, num_vectors_per_token, 1)
-                token_params = torch.nn.Parameter(avg_init_word_embedding, requires_grad=True)
+                token_params = nn.Parameter(avg_init_word_embedding, requires_grad=True)
                 token_ada_embedder = None
 
             # token_params: an embedding vector or a StaticLayerwiseEmbedding object (when use_layerwise_embedding).
@@ -847,7 +864,9 @@ class EmbeddingManager(nn.Module):
             self.string_to_ada_embedder_dict[placeholder_string] = token_ada_embedder
 
             if init_word_embeddings is not None:
-                self.initial_embeddings[placeholder_string] = torch.nn.Parameter(init_word_embeddings, requires_grad=False)
+                # initial_embeddings won't be optimized. Just used to compute the regularization loss.
+                # Use nn.Parameter to put it on cuda. Not to use register_buffer(), since it's a dict.
+                self.initial_embeddings[placeholder_string] = nn.Parameter(init_word_embeddings, requires_grad=False)
             else:
                 self.initial_embeddings[placeholder_string] = None
 

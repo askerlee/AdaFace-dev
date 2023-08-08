@@ -735,6 +735,7 @@ class UNetModel(nn.Module):
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
         do_attn_recon_loss    = extra_info.get('do_attn_recon_loss', False)    if extra_info is not None else False
         use_background_token  = extra_info.get('use_background_token', False)  if extra_info is not None else False
+        subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
 
         if use_layerwise_context:
             B = x.shape[0]
@@ -751,7 +752,7 @@ class UNetModel(nn.Module):
         def get_layer_context(layer_idx, layer_attn_components):
             # print(h.shape)
             if not use_layerwise_context:
-                return context
+                return context, None
 
             # skipped_layers: 0, 3, 6, 9, 10, 11, 13, 14, 15
             # 25 layers, among which 16 layers are conditioned.
@@ -759,7 +760,8 @@ class UNetModel(nn.Module):
                                   17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
             # Simply return None, as the context is not used anyway.
             if layer_idx not in layer_idx2emb_idx:
-                return None
+                return None, None
+            
             emb_idx = layer_idx2emb_idx[layer_idx]
             layer_static_context = context[emb_idx]
             hijk_layer_indices = [7, 8, 12, 16, 17, 18]
@@ -814,7 +816,8 @@ class UNetModel(nn.Module):
             else:
                 layer_context = layer_static_context
 
-            return layer_context
+            # subj_indices is passed in extra_info, which is obtained when generating static embeddings.
+            return layer_context, subj_indices
     
         
         # 0  input h:   [2, 4,    64, 64]
