@@ -1340,9 +1340,9 @@ class LatentDiffusion(DDPM):
 
                         # Only keep the first half (for single prompts), as the second half is the same 
                         # (for comp prompts, differs at the batch index, but the token index is identical).
-                        # placeholder_indices is only for (subj_single_prompts, subj_comp_prompts), since
+                        # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
                         # the placeholder token doesn't appear in the class prompts. 
-                        # Now we take the first half of placeholder_indices_N, so that 
+                        # Now we take the first half of placeholder_indices_fg, so that 
                         # they only account for the subject single prompt, but they are also 
                         # applicable to the other 3 types of prompts as they are all aligned 
                         # at the beginning part of the prompts.

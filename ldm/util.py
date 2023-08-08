@@ -414,6 +414,9 @@ def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=Tr
     # flat_attn has been detached before passing to this function. So no need to detach spatial_weight.
     return spatial_weight, spatial_attn
 
+def repl_with_conv_attn(attn, k, subj_indices):
+    pass
+
 def patch_multi_embeddings(text_embedding, placeholder_indices_N):
     M = len(placeholder_indices_N)
     # num_vectors_per_token = 1. No patching is needed.
