@@ -445,13 +445,19 @@ class AdaEmbedding(nn.Module):
         cand_basis_masks = [ torch.cat([ torch.ones(r),  torch.zeros(r) ]),
                              torch.cat([ torch.zeros(r), torch.ones(r) ]),
                              torch.ones(2 * r) ]
-        # basis_mask: [K, 2*r]. 
-        # The purpose of basis_mask is to separate the basis vectors into fg and bg parts, so that
-        # fg-only embeddings only use the fg part of the basis vectors, 
-        # and bg-only embeddings only use the bg part.
-        basis_mask = torch.stack([ cand_basis_masks[emb_infeat_type] for emb_infeat_type in self.emb_infeat_types ], dim=0)
-        # basis_mask will be put on cuda automatically.
-        self.register_buffer(name='basis_mask', tensor=basis_mask, persistent=False)
+        
+        if not self.is_bg_only:
+            # basis_mask: [K, 2*r]. 
+            # The purpose of basis_mask is to separate the basis vectors into fg and bg parts, so that
+            # fg-only embeddings only use the fg part of the basis vectors, 
+            # and bg-only embeddings only use the bg part.
+            basis_mask = torch.stack([ cand_basis_masks[emb_infeat_type] for emb_infeat_type in self.emb_infeat_types ], dim=0)
+            # basis_mask: [K, 2*r] -> [1, K, 2*r].
+            basis_mask = basis_mask.unsqueeze(0)
+            # basis_mask will be put on cuda automatically.
+            self.register_buffer(name='basis_mask', tensor=basis_mask, persistent=False)
+        else:
+            self.basis_mask = 1
 
         self.device_type = device_type
         self.layer_idx2emb_idx = layer_idx2emb_idx
@@ -660,7 +666,7 @@ class AdaEmbedding(nn.Module):
 
             # basis_mask: [K, 2*r].
             # [BS, K, 2*r] * [1, K, 2*r] => [2, K, 2*r].
-            basis_dyn_weight_masked = basis_dyn_weight * self.basis_mask.unsqueeze(0)
+            basis_dyn_weight_masked = basis_dyn_weight * self.basis_mask
             # out_vecs_unnorm: [2, K, 768].
             # [2, K, 12] x [12, 768] = [2, K, 768]
             out_vecs_unnorm = torch.matmul(basis_dyn_weight_masked, basis_vecs)
