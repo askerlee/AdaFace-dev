@@ -185,7 +185,7 @@ class CrossAttention(nn.Module):
         q = self.to_q(x)
         context = default(context, x)
         if callable(context):
-            # Pass x, ... to context() to get the real context
+            # Pass (x, ...) to context() to get the real context
             context, subj_indices = context((x, q, self.to_k, self.scale))
         else:
             subj_indices = None
