@@ -390,6 +390,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             # torch.matmul(lora_up, basis_vecs): 16 * 768.
 
             if self.N > 0:
+                # basis_vecs: [r, 768].
                 basis_vecs = torch.cat([self.pre_vecs, self.basis_vecs], dim=0)
             else:
                 basis_vecs = self.basis_vecs
@@ -398,13 +399,14 @@ class StaticLayerwiseEmbedding(nn.Module):
             out_vecs = torch.matmul(basis_weights, basis_vecs)
             # Apply layer-and-embedding specific layer normalization.
             # Note the order of for i ... for k ... in the list comprehension is the same as 
-            # a conventional for loop: for i ...
-            #                              for k ...
+            # a conventional for loop: 1 for i ...
+            #                          2     for k ...
             # Otherwise embeddings in out_vecs_ln will be in wrong order.
             out_vecs_ln = [ self.layers_out_lns[i][k](out_vecs[i,k]) for i in range(self.num_layers) for k in range(self.K) ]
             out_vecs_ln = torch.stack(out_vecs_ln, dim=0).reshape(self.num_layers, self.K, -1) / np.sqrt(self.out_emb_dim)
 
-            # Different layers have different biases.
+            # Different layers and embeddings have different biases.
+            # self.bias: [16, K, 768].
             out_vecs_ln = out_vecs_ln + self.bias
             # Return static embeddings of all layers together: [16, K, 768].
             return out_vecs_ln
@@ -498,6 +500,7 @@ class AdaEmbedding(nn.Module):
                 )
 
             N = self.N = init_vecs.shape[0]
+            # pre_vecs: [2, 1, 768].
             self.pre_vecs = nn.Parameter(init_vecs.unsqueeze(0).repeat(H, 1, 1), requires_grad=True)
             # Normalize pre_vecs, to roughly equalize the contributions of different predefined basis vectors.
             # self.pre_vecs.data = F.normalize(self.pre_vecs, dim=1)
@@ -506,7 +509,7 @@ class AdaEmbedding(nn.Module):
             self.pre_vecs = None
 
         # Separate pre_vecs and basis_vecs, to apply different regularizations on them.
-        # basis_vecs: [2, 12, 768], consists of r-N basis vectors. Will be updated through BP.
+        # basis_vecs: [K, r-N, 768], consists of r-N basis vectors. Will be updated through BP.
         self.basis_vecs = nn.Parameter(torch.randn(H, r - N, out_emb_dim), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
         self.basis_vecs.data = F.normalize(self.basis_vecs, dim=-1) / 4.
@@ -557,10 +560,10 @@ class AdaEmbedding(nn.Module):
 
         self.has_bias = has_bias
         if has_bias:
-            # bias: 25 * 768.
-            self.bias        = nn.Parameter(torch.zeros(num_layers, self.K, out_emb_dim), requires_grad=True)
+            # bias: [16, K, 768].
+            self.bias = nn.Parameter(torch.zeros(num_layers, self.K, out_emb_dim), requires_grad=True)
         else:
-            self.bias        = 0
+            self.bias = 0
 
         print(f"AdaEmbedding {token_string} initialized with {fg_emb_count}/{bg_emb_count}/{self.K} fg/bg/total embs, {self.N} init vectors ({init_words}), {self.r} basis vectors")
         self.call_count = 0
@@ -671,6 +674,10 @@ class AdaEmbedding(nn.Module):
                 basis_vecs = self.basis_vecs
             
             # basis_vecs: [2, r, 768] => [2*r, 768].
+            # Do not initialize basis_vecs as [2*r, 768] in the first place, so that
+            # the K-r flattened basis_vecs will be organized as 
+            # [pre_vecs, learned_vecs, pre_vecs, learned_vecs].
+            # They correspond to the fg/bg parts of basis_dyn_weight.
             basis_vecs = basis_vecs.view(self.H * self.r, self.out_emb_dim)
 
             # basis_mask: [K, 2*r].
@@ -1404,14 +1411,17 @@ class EmbeddingManager(nn.Module):
                 # from drifting too far from init_vecs.
                 if embobj.has_bias:
                     loss_bias        = selective_reg_loss(embobj.bias, loss_type=euc_loss_type)
-                    bias_reg_weight  = bias_reg_weight_base  * torch.norm(embobj.bias, dim=1).mean().item() ** T
+                    # embobj.bias: now [Layers, K, 768].
+                    bias_reg_weight  = bias_reg_weight_base  * torch.norm(embobj.bias, dim=-1).mean().item() ** T
                 else:
                     loss_bias        = 0.
                     bias_reg_weight  = 0.
 
                 loss_basis       = selective_reg_loss(embobj.basis_vecs, loss_type=euc_loss_type)
-                basis_reg_weight = basis_reg_weight_base * torch.norm(embobj.basis_vecs, dim=1).mean().item() ** T
+                # basis_vecs: now [K, r-N, 768] for Ada embedder, or [r-N, 768] for Static embedder.
+                basis_reg_weight = basis_reg_weight_base * torch.norm(embobj.basis_vecs, dim=-1).mean().item() ** T
                 if embobj.N > 0:
+                    # If pre_vecs has a K dim (shape [K, 1, 768]), then init_vecs is automatically broadcasted.
                     loss_pre_vecs = selective_reg_loss(embobj.pre_vecs - init_vecs, loss_type=euc_loss_type)
                 else:
                     loss_pre_vecs = 0.

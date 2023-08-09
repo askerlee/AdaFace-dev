@@ -1215,6 +1215,7 @@ class LatentDiffusion(DDPM):
                 CLS_PROMPT_COMP   = 'cls_prompt_comp'
                 CLS_PROMPT_SINGLE = 'cls_prompt_single'
 
+
             # Each prompt_comp consists of multiple prompts separated by "|".
             # Split them into a list of subj_comp_prompts/cls_comp_prompts.
             for prompt_comp in batch[SUBJ_PROMPT_COMP]:
@@ -1945,6 +1946,8 @@ class LatentDiffusion(DDPM):
                 # so that gradients can still be BP-ed from the cross attention layers, even if 
                 # unet_has_grad=False.
                 if self.use_background_token_iter:
+                    # placeholder_indices_bg contains the background token indices of the 4 types of prompts.
+                    # So we only take the beginning BS indices out of it.
                     mix_fg_bg_complementary_loss = \
                                 self.calc_fg_bg_complementary_loss(unet_attns_mix_single, 
                                                                    self.embedding_manager.placeholder_indices_fg0,
@@ -2264,7 +2267,6 @@ class LatentDiffusion(DDPM):
             # It contains the 6 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17, 18.
             unet_attns = cond[2]['unet_attns']
-            
             loss_subj_attn_distill, loss_feat_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
                                                           self.embedding_manager.placeholder_indices_fg,
