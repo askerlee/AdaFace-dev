@@ -279,10 +279,6 @@ class StaticLayerwiseEmbedding(nn.Module):
             )
 
         if init_vecs is not None:
-            # Only one vector is passed in.
-            if init_vecs.ndim == 1:
-                init_vecs = init_vecs.unsqueeze(0)
-
             if init_vecs.shape[1] != out_emb_dim or init_vecs.shape[0] > num_layers:
                 raise ValueError(
                     f"StaticLayerwiseEmbedding init vectors shape {init_vecs.shape} must be (<={num_layers}, {out_emb_dim})"
@@ -444,23 +440,6 @@ class AdaEmbedding(nn.Module):
         self.emb_infeat_types = [ 0 ] * self.fg_emb_count + [ 1 ] * self.bg_emb_count \
                                 + [ 2 ] * (self.K - self.fg_emb_count - self.bg_emb_count)
 
-        cand_basis_masks = [ torch.cat([ torch.ones(r),  torch.zeros(r) ]),
-                             torch.cat([ torch.zeros(r), torch.ones(r) ]),
-                             torch.ones(2 * r) ]
-        
-        if not self.is_bg_only:
-            # basis_mask: [K, 2*r]. 
-            # The purpose of basis_mask is to separate the basis vectors into fg and bg parts, so that
-            # fg-only embeddings only use the fg part of the basis vectors, 
-            # and bg-only embeddings only use the bg part.
-            basis_mask = torch.stack([ cand_basis_masks[emb_infeat_type] for emb_infeat_type in self.emb_infeat_types ], dim=0)
-            # basis_mask: [K, 2*r] -> [1, K, 2*r].
-            basis_mask = basis_mask.unsqueeze(0)
-            # basis_mask will be put on cuda automatically.
-            self.register_buffer(name='basis_mask', tensor=basis_mask, persistent=False)
-        else:
-            self.basis_mask = 1
-
         self.device_type = device_type
         self.layer_idx2emb_idx = layer_idx2emb_idx
         # emb_idx2layer_idx: Reverse mapping of layer_idx2emb_idx.
@@ -484,27 +463,26 @@ class AdaEmbedding(nn.Module):
         self.TD_frac = 0.25 * TIME_H
 
         if init_vecs is not None:
-            # Only one vector is passed in.
-            if init_vecs.ndim == 1:
-                init_vecs = init_vecs.unsqueeze(0)
-
             if init_vecs.shape[1] != out_emb_dim or init_vecs.shape[0] > num_layers:
                 raise ValueError(
                     f"AdaEmbedding LoRA init vectors shape {init_vecs.shape} must be (<={num_layers}, {out_emb_dim})"
                 )
 
+            # N: number of init vectors.
             N = self.N = init_vecs.shape[0]
-            # pre_vecs: [2, 1, 768].
-            self.pre_vecs = nn.Parameter(init_vecs.unsqueeze(0).repeat(H, 1, 1), requires_grad=True)
+            # pre_vecs: [K, 1, 768].
+            self.pre_vecs = nn.Parameter(init_vecs.unsqueeze(0).repeat(self.K, 1, 1), requires_grad=True)
             # Normalize pre_vecs, to roughly equalize the contributions of different predefined basis vectors.
             # self.pre_vecs.data = F.normalize(self.pre_vecs, dim=1)
         else:
             N = self.N = 0
             self.pre_vecs = None
 
+        # basis_vecs: [K, r-N, 768], K sets, each consisting of r-N randomly initialized basis vectors. 
+        # Will be updated through BP.
+        # Each embedding of the K embeddings has its own basis_vecs and pre_vecs.
         # Separate pre_vecs and basis_vecs, to apply different regularizations on them.
-        # basis_vecs: [K, r-N, 768], consists of r-N basis vectors. Will be updated through BP.
-        self.basis_vecs = nn.Parameter(torch.randn(H, r - N, out_emb_dim), requires_grad=True)
+        self.basis_vecs = nn.Parameter(torch.randn(self.K, r - N, out_emb_dim), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
         self.basis_vecs.data = F.normalize(self.basis_vecs, dim=-1) / 4.
         # Always set the last basis vector to 0.
@@ -538,10 +516,10 @@ class AdaEmbedding(nn.Module):
             self.TDs.append(TD)
 
             # input  dim: self.attn_infeat_dims[i] + TD, since first TD dims of time_emb is part of the input features.
-            # output dim: r * H * K, will be reshaped to [K, r*H].
+            # output dim: r * K, will be reshaped to [K, r].
             # This Linear outputs K sets of r-dim vectors, 
             # each set being the coefficients of the r basis vectors. 
-            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD, r * H * self.K, bias=True) )
+            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD, r * self.K, bias=True) )
             layer_lncat2s.append(LNCat2(self.attn_infeat_dims[i] * H, TD))
             # A specific LayerNorm is applied on each of the K embeddings in each layer.
             layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
@@ -550,7 +528,7 @@ class AdaEmbedding(nn.Module):
         self.layer_maps     = nn.ModuleList(layer_maps)
         self.layers_out_lns = nn.ModuleList(layers_out_lns)
         self.layer_lncat2s  = nn.ModuleList(layer_lncat2s)
-        self.mask_linear_weights()
+        self.mask_layer_map_weights()
 
         self.has_bias = has_bias
         if has_bias:
@@ -565,10 +543,13 @@ class AdaEmbedding(nn.Module):
 
     # If masked_layer_idx is specified, then only mask for one layer. Otherwise, mask for all layers.
     # When generating ada embeddings for each layer in turn, only masking one layer will reduce processing time.
-    def mask_linear_weights(self, masked_layer_idx=None):
+    def mask_layer_map_weights(self, masked_layer_idx=None):
+        # Currently only supports H = 1 or 2.
         # Skip masking if is_bg_only.
         if self.H == 1:
             return
+
+        assert self.H == 2
 
         layer_range = range(self.num_layers) if masked_layer_idx is None else [masked_layer_idx]
 
@@ -578,43 +559,42 @@ class AdaEmbedding(nn.Module):
             assert self.layer_maps[layer_idx].in_features == HALF_D * self.H + TD
             layer_map_weight = self.layer_maps[layer_idx].weight.data
             # The weight of Linear has shape [out_features, in_features]. 
-            # Split the out_features to [K, 2*r].
-            layer_map_weight_embs = layer_map_weight.reshape(self.K, self.H * self.r, -1)
+            # Split the first dim, out_features => [K, r].
+            layer_map_weight_embs = layer_map_weight.view(self.K, self.r, -1)
 
             cand_fg_bg_masks = [ torch.cat([ torch.ones(HALF_D), torch.zeros(HALF_D), torch.ones(TD) ]),
                                  torch.cat([ torch.zeros(HALF_D), torch.ones(HALF_D), torch.ones(TD) ]),
-                                 torch.ones(HALF_D * self.H + TD) ]
+                                 torch.ones(HALF_D * 2 + TD) ]
             
-            # fg_bg_mask: [K, in_features]
+            # fg_bg_mask: [K, in_features]. Mask part of the input features.
             fg_bg_mask = torch.stack([ cand_fg_bg_masks[emb_infeat_type] for emb_infeat_type in self.emb_infeat_types ], dim=0)
             fg_bg_mask = fg_bg_mask.to(layer_map_weight_embs.device)
             # layer_map_weight_embs: [K, 2*r, in_features]. fg_bg_mask: [K, 1, in_features]
             layer_map_weight_embs *= fg_bg_mask.unsqueeze(1)
-        
+            # Suppose layer_map_weight: [12, 720]. 320 fg + 320 bg + 80 time.
+            # After masking, [:6] will be like [nonzero * 320, 0       * 320, nonzero * 80],
+            # and            [6:] will be like [0       * 320, nonzero * 320, nonzero * 80].
+
     # layer_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
     # time_emb: [B, 1280].
-    def forward(self, layer_idx, layer_attn_components, time_emb, static_subj_embs, 
+    def forward(self, layer_idx, layer_attn_components, time_emb, static_subj_layer_emb, 
                 img_mask=None, bp_to_unet=False, cached_infeat_bg=None):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
         pooler  = self.poolers[emb_idx]
         # Some Linears only use either fg or bg features. 
         # So we mask weights at the unused half, since the corresponding weights are 
         # updated during BP and become nonzero. 
-        self.mask_linear_weights(emb_idx)
+        self.mask_layer_map_weights(emb_idx)
         
         if self.debug:
             breakpoint()
 
         with torch.autocast(device_type=self.device_type, enabled=True):
-            # basis_dyn_weight: [B, r] = [2, 12].
-            # We do not BP into the UNet. So cut off the gradient flow here to reduce RAM and compute.
-            # infeat_pooled: [B, C_layer]
+            # If not bp_to_unet, then do not BP into the UNet. 
+            # So cut off the gradient flow here to reduce RAM and compute.
+            # The gradient is cut off within pooler.
 
-            # static_subj_layer_emb should be quite similar to the ada embedding at this layer.
-            # Use static_subj_layer_emb as the query to do the attention-based pooling.
-            static_subj_layer_emb   = static_subj_embs[emb_idx]
-            
             # Even if layer_infeat is grad-scaled, the pooler still receives the full gradient.
             # But the grad is scaled when it's further passed to the UNet.
             if self.use_attn_pooler and self.is_bg_only:
@@ -625,6 +605,8 @@ class AdaEmbedding(nn.Module):
                 # Do not mask weights in this case, as infeat_pooled only contains bg features, and 
                 # H = 1, i.e., the in_features of the Linear is not doubled.
             else:
+                # static_subj_layer_emb should be quite similar to the ada embedding at this layer.
+                # Use static_subj_layer_emb as the query to do the attention-based pooling.
                 infeat_pooled    = pooler(layer_attn_components, static_subj_layer_emb, img_mask, bp_to_unet)
                 if self.use_attn_pooler:
                     infeat_fg, infeat_bg = infeat_pooled
@@ -642,7 +624,8 @@ class AdaEmbedding(nn.Module):
             # Note to take the first TD dimensions, instead of the last TD dimensions,
             # as the leading dimensions are most sensitive to time change, 
             # and the last dimensions tend to be the same for all time steps.
-            # TD is C_layer/2, so that the time embeddings won't dominate the image features infeat_pooled.
+            # TD is typically C_layer/4, so that the time embeddings won't dominate 
+            # the image features infeat_pooled.
             TD = self.TDs[emb_idx]
             
             ablate_time = False
@@ -654,36 +637,24 @@ class AdaEmbedding(nn.Module):
             # cat(ln(infeat_pooled), ln(time_emb)) as the input features.
             infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled, time_feat)
 
-            # basis_dyn_weight: [BS, 2*r*K] => [BS, K, 2*r]
-            basis_dyn_weight = self.layer_maps[emb_idx](infeat_time).reshape(-1, self.K, self.H * self.r)
+            # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
+            # Consider the last dim. 
+            basis_dyn_coeffs = self.layer_maps[emb_idx](infeat_time).reshape(-1, self.K, self.r)
             # bias: [1, K, 768]
             bias = self.bias[emb_idx].unsqueeze(0)
 
             # self.N: number of pre_vecs.
             if self.N > 0:
-                # pre_vecs:   [2, N, 768], basis_vecs: [2, r - N, 768]. 
-                # basis_vecs: [2, r, 768].
-                # 2 at dim 0: H, i.e., fg and bg.
+                # pre_vecs:   [K, N, 768], basis_vecs: [K, r - N, 768]. 
+                # basis_vecs: [K, r, 768].
                 basis_vecs = torch.cat([self.pre_vecs, self.basis_vecs], dim=1)
             else:
                 basis_vecs = self.basis_vecs
-            
-            # basis_vecs: [2, r, 768] => [2*r, 768].
-            # Do not initialize basis_vecs as [2*r, 768] in the first place, so that
-            # the K-r flattened basis_vecs will be organized as 
-            # [pre_vecs, learned_vecs, pre_vecs, learned_vecs].
-            # They correspond to the fg/bg parts of basis_dyn_weight.
-            basis_vecs = basis_vecs.view(self.H * self.r, self.out_emb_dim)
-
-            # basis_mask: [K, 2*r].
-            # [BS, K, 2*r] * [1, K, 2*r] => [BS, K, 2*r].
-            basis_dyn_weight_masked = basis_dyn_weight * self.basis_mask
-            # [BS, K, 2*r] x [2*r, 768] = [BS, K, 768]
-            # out_vecs_unnorm: [BS, K, 768].
-            out_vecs_unnorm = torch.matmul(basis_dyn_weight_masked, basis_vecs)
 
             out_lns = self.layers_out_lns[emb_idx]
-            out_vecs0 = torch.stack([ out_lns[k](out_vecs_unnorm[:, k]) for k in range(self.K) ], dim=1)
+            # out_vecs_unnorm: K elements, each is [BS, 1, r] x [r, 768]_k = [BS, 1, 768].
+            out_vecs_unnorm = [ torch.matmul(basis_dyn_coeffs[:, k], basis_vecs[k]) for k in range(self.K) ]
+            out_vecs0 = torch.stack([ out_lns[k](out_vecs_unnorm[k]) for k in range(self.K) ], dim=1)
             # out_emb_dim: 768.
             out_vecs0 = out_vecs0 / np.sqrt(self.out_emb_dim)
             # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
@@ -696,7 +667,7 @@ class AdaEmbedding(nn.Module):
             if self.verbose and self.call_count % 10 == 0:
                 calc_stats(f'{emb_idx} time_emb', time_emb[:, :TD])
                 calc_stats(f'{emb_idx} infeat_fg_bg', infeat_fg_bg)
-                calc_stats(f'{emb_idx} basis_dyn_weight', basis_dyn_weight)
+                calc_stats(f'{emb_idx} basis_dyn_coeffs', basis_dyn_coeffs)
                 calc_stats(f'{emb_idx} out_vecs0', out_vecs0)
                 calc_stats(f'{emb_idx} bias', bias)
 
@@ -741,7 +712,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_ada_embedder_dict = nn.ModuleDict()
         self.initial_embeddings = nn.ParameterDict() # These should not be optimized
 
-        self.set_ada_emb_weight(ada_emb_weight, init=True)
+        self.set_ada_emb_weight(ada_emb_weight, first_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
 
         self.use_layerwise_embedding = use_layerwise_embedding
@@ -925,7 +896,7 @@ class EmbeddingManager(nn.Module):
             # Clear the cached placeholder indices, and store the new ones computed 
             # in the current function call.
             self.placeholder_indices = None
-            # We need to clone embedded_text, as sometimes (when it's not layerwise such as TI) 
+            # We need to clone embedded_text, as sometimes (when it's not layerwise, such as TI) 
             # the modification in get_static_embedding() is in-place. 
             static_embeddings, static_subj_embs_dict = \
                             self.get_static_embedding(tokenized_text, embedded_text.clone(), 
@@ -946,6 +917,10 @@ class EmbeddingManager(nn.Module):
             # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
             # "Tuck" the layer dimension into the batch dimension, 
             # to keep embedded_text in 3D, same as the input.
+            # After repeat, the same instance is repeated 16 times, which are adjacent 
+            # to each other across the batch dim:
+            # [b1_l1, ..., b1_l16, b2_l1, ..., b2_l16, ..., bB_l1, ..., bB_l16].
+            # {________b1________} {_______b2_______}  ...  {_______bB________}
             embedded_text = embedded_text.unsqueeze(1).repeat(1, num_unet_layers, 1, 1).view(B * num_unet_layers, N, -1)
             # tokenized_text: [B, 16, N] => [16*B, N]
             # tokenized_text has to be repeated along the layer dimension as well, so that 
@@ -969,14 +944,13 @@ class EmbeddingManager(nn.Module):
             # embedded_text[placeholder_indices]: [32, 768]. placeholder_embeddings: [16, K, 768].
             # The first 16 elements (0-8) in embedded_text[placeholder_indices] correspond to the 16 layers of the 
             # first instance in the batch.
-            # 16 layers of placeholder_embeddings are repeated B times.
+            # 16 layers of placeholder_embeddings are repeated BATCH_REAL_OCCURS times.
             # placeholder_embeddings: [16, 768] repeat=> [32, 768]
-            # Note that the 16 layers are initialized with the same embedding. 
             # LINK #init_embed
 
-            # REAL_OCCURS: the real number of occurrences of the placeholder in the current batch,
+            # BATCH_REAL_OCCURS: the real number of occurrences of the placeholder in the current batch,
             # not repetitively counting the occurrences in the embedded_text repeated for M layers.
-            REAL_OCCURS = placeholder_indices[0].numel() // self.num_layers_per_embedder
+            BATCH_REAL_OCCURS = placeholder_indices[0].numel() // self.num_layers_per_embedder
 
             static_embedder = embedder_dict[placeholder_string].to(device)
             if isinstance(static_embedder, StaticLayerwiseEmbedding):
@@ -993,9 +967,17 @@ class EmbeddingManager(nn.Module):
             for k in range(self.token2num_vectors[placeholder_string]):
                 placeholder_indices_k = (placeholder_indices[0], placeholder_indices[1] + k)
                 # embedded_text is repeated 16 times along the layer dimension, with size of dim 0 = 16 * BS.
+                # After repeat, the same instance is repeated 16 times, which are adjacent 
+                # to each other across the batch dim:
+                # [b1_l1, ..., b1_l16, b2_l1, ..., b2_l16, ..., bB_l1, ..., bB_l16].
+                # {________b1________} {_______b2_______}  ...  {_______bB________}
                 # The first dim of placeholder_embeddings is the layer dim (size = 16). 
-                # So we repeat it BS times to match the batch dim.
-                embedded_text[placeholder_indices_k] = placeholder_embeddings[:, k].repeat(REAL_OCCURS, 1)
+                # So we repeat the 16 layers of the k-th embedding, placeholder_embeddings[:, k], 
+                # BATCH_REAL_OCCURS times, to match 16*BATCH_REAL_OCCURS.
+                # After repeat, the RHS is
+                # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
+                # {________b1________} {_______b2_______}  ...  {_______bB________}
+                embedded_text[placeholder_indices_k] = placeholder_embeddings[:, k].repeat(BATCH_REAL_OCCURS, 1)
                 
             # Cache the placeholder indices for mix prompt distillation.
             # Note placeholder_indices are recomputed in update_placeholder_indices(), 
@@ -1024,6 +1006,7 @@ class EmbeddingManager(nn.Module):
             ada_bp_to_unet=False
     ):
         device = tokenized_text.device
+        emb_idx = self.layer_idx2emb_idx[layer_idx]
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
 
@@ -1056,6 +1039,11 @@ class EmbeddingManager(nn.Module):
                 and ada_embedder.is_bg_only and self.cached_infeat_bg[layer_idx] is None:
                 breakpoint()
 
+            # static_subj_embs_dict[placeholder_string]: static_subj_embeddings, [16, K, 768].
+            # If K > 1, only take the first embedding out of the K embeddings.
+            # static_subj_layer_emb: [768].
+            static_subj_layer_emb = static_subj_embs_dict[placeholder_string][emb_idx, 0]
+
             # Generate the actual placeholder_embeddings on the fly.
             # placeholder_embeddings: [B, K, 768]. B: 2 or 4 (regularization batches).
             # Before this call, we assume static_subj_embs has been generated by 
@@ -1066,13 +1054,14 @@ class EmbeddingManager(nn.Module):
             # is_bg_only. Otherwise, it's ignored.
             placeholder_embeddings, infeat_bg = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
-                                     # If K > 1, only take the first embedding out of the K embeddings.
-                                     static_subj_embs_dict[placeholder_string][:, 0],
-                                     self.img_mask, ada_bp_to_unet, self.cached_infeat_bg[layer_idx])
+                                     static_subj_layer_emb,
+                                     self.img_mask, ada_bp_to_unet, 
+                                     self.cached_infeat_bg[layer_idx])
             
             if placeholder_string != self.background_string:
                 # Cache the bg infeat computed by the first (fg) ada embedder, 
                 # to be used by the second Ada embedder and the background Ada embedder.
+                # NOTE: this assumes the background token always appears after the subject tokens.
                 self.cached_infeat_bg[layer_idx] = infeat_bg
 
             for k in range(self.token2num_vectors[placeholder_string]):
@@ -1088,7 +1077,7 @@ class EmbeddingManager(nn.Module):
                 placeholder_indices_k = (placeholder_indices[0], placeholder_indices[1] + k)
                 # placeholder_embeddings: [BS, K, 768]. BS: 2 or 4 (regularization batches).
                 embedded_text[placeholder_indices_k] = placeholder_embeddings[placeholder_indices[0], k]
-            
+                
         return embedded_text
 
     # Update token embedding mask.
@@ -1108,6 +1097,10 @@ class EmbeddingManager(nn.Module):
 
         if num_vectors_per_token > 1:
             BS = placeholder_indices_B.shape[0]
+            # unsqueeze(1) -> [B, 1] => [B, num_vectors_per_token] => [B * num_vectors_per_token].
+            # Make sure the embedding indices of the same instance are grouped together.
+            # [b1_v1, b1_v2, b1_v3, b2_v1, b2_v2, b2_v3, ...].
+            # Then we can easily get the indices of a certain sub-batch.
             placeholder_indices_B = placeholder_indices_B.unsqueeze(1).repeat(1, num_vectors_per_token).view(-1)
             placeholder_indices_N = placeholder_indices_N.unsqueeze(1).repeat(1, num_vectors_per_token).view(-1)
             # Add offsets to the indices of the pseudo-tokens.
@@ -1131,8 +1124,8 @@ class EmbeddingManager(nn.Module):
             rand_ada_emb_weight = self.ada_emb_weight        
         return rand_ada_emb_weight
     
-    def set_ada_emb_weight(self, ada_emb_weight, init=False):
-        if init:
+    def set_ada_emb_weight(self, ada_emb_weight, first_print=False):
+        if first_print:
             print(f"Setting ada_emb_weight = {ada_emb_weight}")
         else:
             if self.ada_emb_weight != ada_emb_weight:
@@ -1268,7 +1261,7 @@ class EmbeddingManager(nn.Module):
 
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
             if "ada_emb_weight" in ckpt:
-                self.set_ada_emb_weight(ckpt["ada_emb_weight"])
+                self.set_ada_emb_weight(ckpt["ada_emb_weight"], first_print=True)
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
 
