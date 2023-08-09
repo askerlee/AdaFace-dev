@@ -206,10 +206,6 @@ def get_parser(**parser_kwargs):
         type=float, 
         help="Weights of each token in init_words")
 
-    parser.add_argument("--init_neg_words", 
-        type=str, default=None,
-        help="Negative words (commma separated) used to initialize token embedding")
-
     parser.add_argument("--cls_delta_token",
         type=str, default=None,
         help="A single word to use in class-level prompts for delta loss")
@@ -736,10 +732,6 @@ if __name__ == "__main__":
             if opt.bg_init_words:
                 config.model.params.personalization_config.params.initializer_words.append(opt.bg_init_words)
                 config.model.params.personalization_config.params.initializer_weights.append([1.0] * len(re.split("\s+", opt.bg_init_words)))
-
-        if opt.init_neg_words is not None:
-            init_neg_words = re.split(r",\s*", opt.init_neg_words)
-            config.model.params.personalization_config.params.initializer_neg_words = init_neg_words
 
         config.data.params.train.params.broad_class       = opt.broad_class
         config.data.params.validation.params.broad_class  = opt.broad_class

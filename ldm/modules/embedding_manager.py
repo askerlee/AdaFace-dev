@@ -262,7 +262,7 @@ class StaticLayerwiseEmbedding(nn.Module):
     # has_bias: if enabled, the output vectors will be dominated by self.bias.
     def __init__(self, num_layers=16, num_vectors_per_token=1, 
                  out_emb_dim=768, r=6, init_noise_stds=(0.1, 0.04), 
-                 init_words=None, init_vecs=None, init_vec_weights=None, init_neg_vecs=None, 
+                 init_words=None, init_vecs=None, init_vec_weights=None, 
                  has_bias=True, device_type="cuda",
                  token_string=""):
         super().__init__()
@@ -316,6 +316,7 @@ class StaticLayerwiseEmbedding(nn.Module):
         # So equal weights here won't cause non-identifiable parameters and equal graidents.
         self.basis_comm_weights = nn.Parameter(torch.ones(1, self.K, r) / r, requires_grad=True)
 
+        # N: number of init vectors.
         # init_up_noise_stds is only applied when init_vecs is passed in.
         if init_vecs is not None:
             self.basis_comm_weights.data.fill_(1. / N)
@@ -327,7 +328,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             # By default, these weights are 1/6*0.4 = 0.067.
             self.basis_comm_weights.data[:, :, N:] *= 0.4
 
-            # basis_comm_weights: [1, r]
+            # basis_comm_weights: [1, K, r]
             if init_vec_weights is not None:
                 assert len(init_vec_weights) == len(init_vecs), f"init_vec_weights must have length {len(init_vecs)}"
                 # Assume init_vec_weights is already normalized, i.e., init_vec_weights.sum() = 1.
@@ -355,18 +356,6 @@ class StaticLayerwiseEmbedding(nn.Module):
         else:
             self.N = 0
 
-        if init_neg_vecs is not None:
-            # NEG: number of negative initial vectors.
-            NEG = init_neg_vecs.shape[0]
-            self.NEG = NEG
-            # The no. N~N+NEG vectors in basis_vecs are init_neg_vecs (no noise added).
-            # The remaining num_layers-(N+NEG) vectors are gaussian noises on the unit ball.
-            self.basis_vecs.data[:NEG] = -init_neg_vecs.clone()
-            # self.basis_comm_weights.data[N:N+NEG] = 1. / NEG
-            # Do not tinker with the columns corresponding to negative vectors in basis_rand_weights.
-        else:
-            self.NEG = 0
-
         if self.has_bias:
             # bias: 16 * 768.
             self.bias = nn.Parameter(torch.zeros(num_layers, self.K, out_emb_dim), requires_grad=True)
@@ -393,6 +382,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             # torch.matmul: matrix multiplication.
             # torch.matmul(lora_up, basis_vecs): 16 * 768.
 
+            # self.N: number of pre_vecs.
             if self.N > 0:
                 # basis_vecs: [r, 768].
                 basis_vecs = torch.cat([self.pre_vecs, self.basis_vecs], dim=0)
@@ -669,6 +659,7 @@ class AdaEmbedding(nn.Module):
             # bias: [1, K, 768]
             bias = self.bias[emb_idx].unsqueeze(0)
 
+            # self.N: number of pre_vecs.
             if self.N > 0:
                 # pre_vecs:   [2, N, 768], basis_vecs: [2, r - N, 768]. 
                 # basis_vecs: [2, r, 768].
@@ -725,7 +716,6 @@ class EmbeddingManager(nn.Module):
             background_string=None,
             initializer_words=None,
             initializer_weights=None,
-            initializer_neg_words=None,
             # num_vectors_per_token: how many vectors in each layer are allocated to model 
             # the subject (represented as the subject token) and the background. 
             # num_vectors_per_token is an int or a dict.
@@ -791,25 +781,6 @@ class EmbeddingManager(nn.Module):
         # Save this function to be used in load() when doing placeholder substitution.
         self.get_tokens_for_string = get_tokens_for_string
 
-        # init_neg_embeddings are never used. Keep here just in case.
-        if initializer_neg_words is not None and len(initializer_neg_words) > 0:
-            init_neg_embeddings = []
-            for neg_words in initializer_neg_words:
-                if neg_words is None or len(neg_words) == 0:
-                    continue
-                neg_token_ids = get_tokens_for_string(neg_words)
-                with torch.no_grad():
-                    init_neg_embeddings.append(get_embeddings_for_tokens(neg_token_ids.cpu()))
-            if len(init_neg_embeddings) > 0:
-                init_neg_embeddings = torch.cat(init_neg_embeddings, dim=0)
-                NEG = init_neg_embeddings.shape[0]
-            else:
-                init_neg_embeddings = None
-                NEG = 0
-        else:
-            init_neg_embeddings = None
-            NEG = 0
-
         for idx, placeholder_string in enumerate(placeholder_strings):
             # get_token_for_string <= get_clip_token_for_string.
             # force_single_token = True, as there should be only one token in placeholder_string.
@@ -830,7 +801,7 @@ class EmbeddingManager(nn.Module):
                     # Equal weights for all words.
                     init_word_weights = torch.ones(N, dtype=torch.float32) / N
 
-                layerwise_lora_rank = round(layerwise_lora_rank_token_ratio * N + NEG + 1) if self.use_layerwise_embedding else -1
+                layerwise_lora_rank = round(layerwise_lora_rank_token_ratio * N + 1) if self.use_layerwise_embedding else -1
 
                 with torch.no_grad():
                     init_word_embeddings = get_embeddings_for_tokens(init_word_tokens.cpu())
@@ -859,7 +830,6 @@ class EmbeddingManager(nn.Module):
                                                                (0.1, 0.02), 
                                                                init_words,
                                                                init_word_embeddings, init_word_weights, 
-                                                               init_neg_vecs=init_neg_embeddings,
                                                                token_string=placeholder_string)
 
                 if placeholder_string == self.background_string:
@@ -1371,7 +1341,6 @@ class EmbeddingManager(nn.Module):
 
     def layerwise_embedding_norm_loss(self):
         loss = 0.
-        num_placeholders  = len(self.initial_embeddings)
         euc_loss_type     = 'l2'       # l1, l2. l2 is recommended.
 
         # Update: revert the reduction of the reg weight of the global bias, although 
@@ -1395,6 +1364,7 @@ class EmbeddingManager(nn.Module):
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.
         T = 1.5
+        num_out_embeddings  = 0
 
         for key in self.initial_embeddings:
             for embobj in (self.string_to_param_dict[key], 
@@ -1404,17 +1374,19 @@ class EmbeddingManager(nn.Module):
                   and not isinstance(embobj, AdaEmbedding):
                     continue
                 
+                # init_vecs is used to regularize pre_vecs.
                 # init_vecs could be scalar 0, if initial embeddings are not specified.
                 # In this case, loss_pre_vecs becomes the zero-centered attractor loss.
                 init_vecs = self.initial_embeddings[key]
 
-                # bias, pre_vecs, basis_vecs are structures existing in 
+                # bias, pre_vecs, basis_vecs exist in 
                 # both StaticLayerwiseEmbedding and AdaEmbedding.
                 # pre_vecs: basis vectors that are initialized by prespecified init_vecs. 
                 # pre_vecs are updated through BP. Therefore, loss_pre_vecs prevents pre_vecs 
                 # from drifting too far from init_vecs.
                 if embobj.has_bias:
                     loss_bias        = selective_reg_loss(embobj.bias, loss_type=euc_loss_type)
+                    # bias_reg_weight is computed dynamically. But it's detached from the graph.
                     # embobj.bias: now [Layers, K, 768].
                     bias_reg_weight  = bias_reg_weight_base  * torch.norm(embobj.bias, dim=-1).mean().item() ** T
                 else:
@@ -1422,9 +1394,12 @@ class EmbeddingManager(nn.Module):
                     bias_reg_weight  = 0.
 
                 loss_basis       = selective_reg_loss(embobj.basis_vecs, loss_type=euc_loss_type)
+                # Like bias_reg_weight, basis_reg_weight is also computed dynamically 
+                # and detached from the graph.
                 # basis_vecs: now [K, r-N, 768] for Ada embedder, or [r-N, 768] for Static embedder.
                 basis_reg_weight = basis_reg_weight_base * torch.norm(embobj.basis_vecs, dim=-1).mean().item() ** T
 
+                # N: number of pre_vecs (init_vecs).
                 if embobj.N > 0:
                     # If pre_vecs has a K dim (shape [K, 1, 768]), then init_vecs is automatically broadcasted.
                     loss_pre_vecs = selective_reg_loss(embobj.pre_vecs - init_vecs, loss_type=euc_loss_type)
@@ -1449,6 +1424,7 @@ class EmbeddingManager(nn.Module):
 
                 # If it's Ada embedder, times K (eff_K = K) to account for each of the K embeddings.
                 eff_K = 1 if isinstance(embobj, StaticLayerwiseEmbedding) else embobj.K
+                num_out_embeddings += eff_K
 
                 # The losses of most components are times eff_K, except for ada attn pooler, 
                 # whose parameters don't inflate with K.
@@ -1484,7 +1460,7 @@ class EmbeddingManager(nn.Module):
                     loss_boost = 1.
                 loss = loss + curr_loss * loss_boost
 
-        return loss / num_placeholders
+        return loss / num_out_embeddings
 
     def embedding_to_loss(self):
         self.loss_call_count += 1
@@ -1594,9 +1570,9 @@ class EmbeddingManager(nn.Module):
         # self.clear_delta_loss_emb_mask()
         # delta_loss = static_delta_loss + ada_delta_loss * ada_comp_loss_boost_ratio
         return static_delta_loss, ada_delta_loss
-    
-# if this script is run from the command-line, do the following
+
 if __name__ == '__main__':
+    # The example code below is obsolete.    
     attnpool = AttentionalPooler()
     x = torch.randn(2, 768, 16, 16)
     mask = torch.randint(2, size=(2, 1, 16, 16)).float()

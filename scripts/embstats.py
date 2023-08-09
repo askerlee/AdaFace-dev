@@ -50,12 +50,9 @@ for emb_ckpt_filename in emb_ckpt_files:
             calc_stats("basis_rand_weights", embeddings.basis_rand_weights)
             basis_vecs = embeddings.basis_vecs.detach().cpu()
             N = embeddings.N
-            NEG = embeddings.NEG
             calc_stats("basis_vecs_pos", embeddings.basis_vecs[:N])
-            if NEG > 0:
-                calc_stats("basis_vecs_neg",     embeddings.basis_vecs[N:N+NEG])
 
-            calc_stats("basis_vecs_rand", embeddings.basis_vecs[N+NEG:])
+            calc_stats("basis_vecs_rand", embeddings.basis_vecs[N:])
             if not isinstance(embeddings.bias, int):
                 calc_stats("bias", embeddings.bias)
             embeddings = embeddings(False)
