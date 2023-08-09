@@ -247,7 +247,7 @@ class AttentionalPooler(nn.Module):
         return fg_out.squeeze(1), bg_out.squeeze(1)
 
 class StaticLayerwiseEmbedding(nn.Module):
-    # num_layers: 16 (9 layers out of 25 of UNet are skipped), emb_dim: 768, 
+    # num_layers: 16 (9 layers out of 25 of UNet are skipped), out_emb_dim: 768, 
     # r: rank of basis vectors. Usually set as (num of init words * ratio), ratio=2 or 3.
     # num of init words is usually 2. So r is usually 4~6.
     # If using init_vecs, init_noise_stds are applied to basis_rand_weights. 
@@ -261,7 +261,7 @@ class StaticLayerwiseEmbedding(nn.Module):
     # init_up_noise_stds[1] << init_up_noise_stds[0].
     # has_bias: if enabled, the output vectors will be dominated by self.bias.
     def __init__(self, num_layers=16, num_vectors_per_token=1, 
-                 emb_dim=768, r=6, init_noise_stds=(0.1, 0.04), 
+                 out_emb_dim=768, r=6, init_noise_stds=(0.1, 0.04), 
                  init_words=None, init_vecs=None, init_vec_weights=None, init_neg_vecs=None, 
                  has_bias=True, device_type="cuda",
                  token_string=""):
@@ -270,12 +270,12 @@ class StaticLayerwiseEmbedding(nn.Module):
 
         self.num_layers = num_layers
         self.K = num_vectors_per_token
-        self.emb_dim = emb_dim
+        self.out_emb_dim = out_emb_dim
         self.r = r
 
-        if r > min(num_layers, emb_dim):
+        if r > min(num_layers, out_emb_dim):
             raise ValueError(
-                f"StaticLayerwiseEmbedding LoRA rank {r} must be less or equal than {min(num_layers, emb_dim)}"
+                f"StaticLayerwiseEmbedding LoRA rank {r} must be less or equal than {min(num_layers, out_emb_dim)}"
             )
 
         if init_vecs is not None:
@@ -283,9 +283,9 @@ class StaticLayerwiseEmbedding(nn.Module):
             if init_vecs.ndim == 1:
                 init_vecs = init_vecs.unsqueeze(0)
 
-            if init_vecs.shape[1] != emb_dim or init_vecs.shape[0] > num_layers:
+            if init_vecs.shape[1] != out_emb_dim or init_vecs.shape[0] > num_layers:
                 raise ValueError(
-                    f"StaticLayerwiseEmbedding init vectors shape {init_vecs.shape} must be (<={num_layers}, {emb_dim})"
+                    f"StaticLayerwiseEmbedding init vectors shape {init_vecs.shape} must be (<={num_layers}, {out_emb_dim})"
                 )
 
             N = self.N = init_vecs.shape[0]
@@ -301,7 +301,7 @@ class StaticLayerwiseEmbedding(nn.Module):
         # basis_rand_weights: 16 * r, basis_vecs: r * 768. basis_rand_weights * basis_vecs: 16 * 768.
         self.basis_rand_weights    = nn.Parameter(torch.randn(num_layers, self.K, r))
         # basis_vecs consists of r basis vectors. Will be updated through BP.
-        self.basis_vecs = nn.Parameter(torch.randn(r - N, emb_dim), requires_grad=True)
+        self.basis_vecs = nn.Parameter(torch.randn(r - N, out_emb_dim), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
         self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1) / 4.
         # Always set the last basis vector to 0.
@@ -365,15 +365,16 @@ class StaticLayerwiseEmbedding(nn.Module):
 
         if self.has_bias:
             # bias: 16 * 768.
-            self.bias        = nn.Parameter(torch.zeros(num_layers, self.K, emb_dim), requires_grad=True)
+            self.bias = nn.Parameter(torch.zeros(num_layers, self.K, out_emb_dim), requires_grad=True)
         else:
             self.bias = 0
 
-        layer_out_lns  = []
+        layers_out_lns = []
         for i in range(num_layers):
-            layer_out_lns.append( nn.LayerNorm(emb_dim, elementwise_affine=True) )
-
-        self.layer_out_lns = nn.ModuleList(layer_out_lns)
+            # A specific LayerNorm is applied on each of the K embeddings in each layer.
+            layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
+            layers_out_lns.append(layer_out_lns)
+        self.layers_out_lns = nn.ModuleList(layers_out_lns)
 
         print(f"StaticLayerwiseEmbedding {token_string} initialized with {self.K} total embs, {self.N} init vectors ({init_words}), {self.r} basis vectors")
 
@@ -395,9 +396,14 @@ class StaticLayerwiseEmbedding(nn.Module):
 
             # [16, K, r] * [r, 768] -> [16, K, 768].
             out_vecs = torch.matmul(basis_weights, basis_vecs)
-            # Apply layer-specific layer normalization.
-            out_vecs_ln = [ self.layer_out_lns[i](out_vecs[i]) for i in range(self.num_layers) ]
-            out_vecs_ln = torch.stack(out_vecs_ln, dim=0) / np.sqrt(self.emb_dim)
+            # Apply layer-and-embedding specific layer normalization.
+            # Note the order of for i ... for k ... in the list comprehension is the same as 
+            # a conventional for loop: for i ...
+            #                              for k ...
+            # Otherwise embeddings in out_vecs_ln will be in wrong order.
+            out_vecs_ln = [ self.layers_out_lns[i][k](out_vecs[i,k]) for i in range(self.num_layers) for k in range(self.K) ]
+            out_vecs_ln = torch.stack(out_vecs_ln, dim=0).reshape(self.num_layers, self.K, -1) / np.sqrt(self.out_emb_dim)
+            breakpoint()
 
             # Different layers have different biases.
             out_vecs_ln = out_vecs_ln + self.bias
@@ -406,14 +412,14 @@ class StaticLayerwiseEmbedding(nn.Module):
 
 class AdaEmbedding(nn.Module):
     # num_layers: 16 (9 layers out of 25 of UNet are skipped).
-    # emb_dim: 768, r: 12.
+    # out_emb_dim: 768, r: 12.
     # infeat_dims: a list of 25 integers, each is the dimension of 
     # the input feature from the respective layer. 9 of them are skipped.
     # infeat_dims are (almost) reflective around the middle layer, except for the first and last layers.
     # Layer indices absent in layer_idx2emb_idx are skipped layers.
     def __init__(self, num_layers=16, num_vectors_per_token=1, 
                  fg_emb_count=1, bg_emb_count=0,
-                 emb_dim=768, r=12, 
+                 out_emb_dim=768, r=12, 
                  init_words=None, init_vecs=None, 
                  attn_infeat_dims = [ 320, 320, 640, 640, 1280, 1280, 1280, 1280, 
                                       1280, 1280, 640, 640, 640, 320, 320, 320 ],
@@ -426,7 +432,7 @@ class AdaEmbedding(nn.Module):
         self.token_string = token_string
         assert num_layers == len(layer_idx2emb_idx), f"num_layers={num_layers} != len(layer_idx2emb_idx)={len(layer_idx2emb_idx)}"
         self.num_layers = num_layers
-        self.emb_dim = emb_dim
+        self.out_emb_dim = out_emb_dim
         self.K = num_vectors_per_token
         self.fg_emb_count = fg_emb_count
         self.bg_emb_count = bg_emb_count
@@ -487,9 +493,9 @@ class AdaEmbedding(nn.Module):
             if init_vecs.ndim == 1:
                 init_vecs = init_vecs.unsqueeze(0)
 
-            if init_vecs.shape[1] != emb_dim or init_vecs.shape[0] > num_layers:
+            if init_vecs.shape[1] != out_emb_dim or init_vecs.shape[0] > num_layers:
                 raise ValueError(
-                    f"AdaEmbedding LoRA init vectors shape {init_vecs.shape} must be (<={num_layers}, {emb_dim})"
+                    f"AdaEmbedding LoRA init vectors shape {init_vecs.shape} must be (<={num_layers}, {out_emb_dim})"
                 )
 
             N = self.N = init_vecs.shape[0]
@@ -502,7 +508,7 @@ class AdaEmbedding(nn.Module):
 
         # Separate pre_vecs and basis_vecs, to apply different regularizations on them.
         # basis_vecs: [2, 12, 768], consists of r-N basis vectors. Will be updated through BP.
-        self.basis_vecs = nn.Parameter(torch.randn(H, r - N, emb_dim), requires_grad=True)
+        self.basis_vecs = nn.Parameter(torch.randn(H, r - N, out_emb_dim), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
         self.basis_vecs.data = F.normalize(self.basis_vecs, dim=-1) / 4.
         # Always set the last basis vector to 0.
@@ -516,7 +522,7 @@ class AdaEmbedding(nn.Module):
             infeat_dim = self.attn_infeat_dims[i]
 
             if self.use_attn_pooler:
-                pooler = AttentionalPooler(i, infeat_dim, emb_dim, infeat_grad_scale=0.5)
+                pooler = AttentionalPooler(i, infeat_dim, out_emb_dim, infeat_grad_scale=0.5)
             else:
                 pooler = AvgPool1d() #MaskedAvgPool2d()
             poolers.append(pooler)
@@ -524,7 +530,7 @@ class AdaEmbedding(nn.Module):
         self.poolers = nn.ModuleList(poolers)
 
         layer_maps = []
-        layer_out_lns  = []
+        layers_out_lns  = []
         # lncat2s: multiple cat(LN(infeat), LN(time_emb)).
         layer_lncat2s = []
         self.TDs = []
@@ -541,18 +547,19 @@ class AdaEmbedding(nn.Module):
             # each set being the coefficients of the r basis vectors. 
             layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD, r * H * self.K, bias=True) )
             layer_lncat2s.append(LNCat2(self.attn_infeat_dims[i] * H, TD))
-            # layer_out_lns: a LayerNorm that's applied on all K embeddings at the same time.
-            layer_out_lns.append( nn.LayerNorm(emb_dim, elementwise_affine=True) )
+            # A specific LayerNorm is applied on each of the K embeddings in each layer.
+            layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
+            layers_out_lns.append(layer_out_lns)
 
-        self.layer_maps    = nn.ModuleList(layer_maps)
-        self.layer_out_lns = nn.ModuleList(layer_out_lns)
-        self.layer_lncat2s = nn.ModuleList(layer_lncat2s)
+        self.layer_maps     = nn.ModuleList(layer_maps)
+        self.layers_out_lns = nn.ModuleList(layers_out_lns)
+        self.layer_lncat2s  = nn.ModuleList(layer_lncat2s)
         self.mask_linear_weights()
 
         self.has_bias = has_bias
         if has_bias:
             # bias: 25 * 768.
-            self.bias        = nn.Parameter(torch.zeros(num_layers, self.K, emb_dim), requires_grad=True)
+            self.bias        = nn.Parameter(torch.zeros(num_layers, self.K, out_emb_dim), requires_grad=True)
         else:
             self.bias        = 0
 
@@ -564,21 +571,23 @@ class AdaEmbedding(nn.Module):
     # When generating ada embeddings for each layer in turn, only masking one layer will reduce processing time.
     def mask_linear_weights(self, masked_layer_idx=None):
         # Skip masking if is_bg_only.
-        if self.is_bg_only:
+        if self.H == 1:
             return
 
         layer_range = range(self.num_layers) if masked_layer_idx is None else [masked_layer_idx]
 
         for layer_idx in layer_range:
-            HALF_D = self.layer_maps[layer_idx].in_features // 2
+            HALF_D = self.attn_infeat_dims[layer_idx]
+            TD     = self.TDs[layer_idx]
+            assert self.layer_maps[layer_idx].in_features == HALF_D * self.H + TD
             layer_map_weight = self.layer_maps[layer_idx].weight.data
             # The weight of Linear has shape [out_features, in_features]. 
             # Split the out_features to [K, 2*r].
             layer_map_weight_embs = layer_map_weight.reshape(self.K, self.H * self.r, -1)
 
-            cand_fg_bg_masks = [ torch.cat([ torch.ones(HALF_D), torch.zeros(HALF_D) ]),
-                                 torch.cat([ torch.zeros(HALF_D), torch.ones(HALF_D) ]),
-                                 torch.ones(2 * HALF_D) ]
+            cand_fg_bg_masks = [ torch.cat([ torch.ones(HALF_D), torch.zeros(HALF_D), torch.ones(TD) ]),
+                                 torch.cat([ torch.zeros(HALF_D), torch.ones(HALF_D), torch.ones(TD) ]),
+                                 torch.ones(HALF_D * self.H + TD) ]
             
             # fg_bg_mask: [K, in_features]
             fg_bg_mask = torch.stack([ cand_fg_bg_masks[emb_infeat_type] for emb_infeat_type in self.emb_infeat_types ], dim=0)
@@ -649,7 +658,7 @@ class AdaEmbedding(nn.Module):
             # cat(ln(infeat_pooled), ln(time_emb)) as the input features.
             infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled, time_feat)
 
-            # basis_dyn_weight: [2, 2*r*K] => [2, K, 2*r]
+            # basis_dyn_weight: [BS, 2*r*K] => [BS, K, 2*r]
             basis_dyn_weight = self.layer_maps[emb_idx](infeat_time).reshape(-1, self.K, self.H * self.r)
             # bias: [1, K, 768]
             bias = self.bias[emb_idx].unsqueeze(0)
@@ -663,19 +672,20 @@ class AdaEmbedding(nn.Module):
                 basis_vecs = self.basis_vecs
             
             # basis_vecs: [2, r, 768] => [2*r, 768].
-            basis_vecs = basis_vecs.view(self.H * self.r, self.emb_dim)
+            basis_vecs = basis_vecs.view(self.H * self.r, self.out_emb_dim)
 
             # basis_mask: [K, 2*r].
-            # [BS, K, 2*r] * [1, K, 2*r] => [2, K, 2*r].
+            # [BS, K, 2*r] * [1, K, 2*r] => [BS, K, 2*r].
             basis_dyn_weight_masked = basis_dyn_weight * self.basis_mask
-            # out_vecs_unnorm: [2, K, 768].
-            # [2, K, 12] x [12, 768] = [2, K, 768]
+            # [BS, K, 2*r] x [2*r, 768] = [BS, K, 768]
+            # out_vecs_unnorm: [BS, K, 768].
             out_vecs_unnorm = torch.matmul(basis_dyn_weight_masked, basis_vecs)
 
-            out_ln = self.layer_out_lns[emb_idx]
-            # emb_dim: 768.
-            out_vecs0 = out_ln(out_vecs_unnorm) / np.sqrt(self.emb_dim)
-            # [2, K, 768] + [1, K, 768] = [2, K, 768].
+            out_lns = self.layers_out_lns[emb_idx]
+            out_vecs0 = torch.stack([ out_lns[k](out_vecs_unnorm[:, k]) for k in range(self.K) ], dim=1)
+            # out_emb_dim: 768.
+            out_vecs0 = out_vecs0 / np.sqrt(self.out_emb_dim)
+            # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
             out_vecs  = out_vecs0 + bias
 
             if 'call_count' not in self.__dict__:
@@ -807,6 +817,7 @@ class EmbeddingManager(nn.Module):
                     init_word_weights = torch.tensor(init_word_weights, dtype=torch.float32)
                     init_word_weights = init_word_weights / init_word_weights.sum()
                 else:
+                    # Equal weights for all words.
                     init_word_weights = torch.ones(N, dtype=torch.float32) / N
 
                 layerwise_lora_rank = round(layerwise_lora_rank_token_ratio * N + NEG + 1) if self.use_layerwise_embedding else -1
