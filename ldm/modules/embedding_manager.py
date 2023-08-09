@@ -300,7 +300,8 @@ class StaticLayerwiseEmbedding(nn.Module):
 
         # basis_rand_weights: 16 * r, basis_vecs: r * 768. basis_rand_weights * basis_vecs: 16 * 768.
         self.basis_rand_weights    = nn.Parameter(torch.randn(num_layers, self.K, r))
-        # basis_vecs consists of r basis vectors. Will be updated through BP.
+        # basis_vecs consists of r-N randomly initialized basis vectors. 
+        # Will be updated through BP.
         self.basis_vecs = nn.Parameter(torch.randn(r - N, out_emb_dim), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
         self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1) / 4.
@@ -318,6 +319,9 @@ class StaticLayerwiseEmbedding(nn.Module):
         # init_up_noise_stds is only applied when init_vecs is passed in.
         if init_vecs is not None:
             self.basis_comm_weights.data.fill_(1. / N)
+            # In basis_comm_weights, 
+            # [:, :, N:] corresponds to randomly initialized self.basis_vecs.
+            # [:, :, :N] corresponds to self.pre_vecs.
             # Lower the weights of the remaining r-N random vectors, to prevent the model  
             # from going too far away from the subspace spanned with init_vecs.
             # By default, these weights are 1/6*0.4 = 0.067.
@@ -1399,7 +1403,7 @@ class EmbeddingManager(nn.Module):
                 if not isinstance(embobj, StaticLayerwiseEmbedding) \
                   and not isinstance(embobj, AdaEmbedding):
                     continue
-
+                
                 # init_vecs could be scalar 0, if initial embeddings are not specified.
                 # In this case, loss_pre_vecs becomes the zero-centered attractor loss.
                 init_vecs = self.initial_embeddings[key]
@@ -1420,6 +1424,7 @@ class EmbeddingManager(nn.Module):
                 loss_basis       = selective_reg_loss(embobj.basis_vecs, loss_type=euc_loss_type)
                 # basis_vecs: now [K, r-N, 768] for Ada embedder, or [r-N, 768] for Static embedder.
                 basis_reg_weight = basis_reg_weight_base * torch.norm(embobj.basis_vecs, dim=-1).mean().item() ** T
+
                 if embobj.N > 0:
                     # If pre_vecs has a K dim (shape [K, 1, 768]), then init_vecs is automatically broadcasted.
                     loss_pre_vecs = selective_reg_loss(embobj.pre_vecs - init_vecs, loss_type=euc_loss_type)
@@ -1442,12 +1447,17 @@ class EmbeddingManager(nn.Module):
                 if type(loss_bias) == int:
                     breakpoint()
 
-                curr_loss = loss_bias               * bias_reg_weight \
-                            + loss_basis            * basis_reg_weight \
-                            + loss_pre_vecs         * pre_vecs_reg_weight \
-                            + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
-                            + loss_ada_maps_bias    * ada_maps_bias_reg_weight \
-                            + loss_ada_attn_pooler  * ada_attn_poolers_reg_weight
+                # If it's Ada embedder, times K (eff_K = K) to account for each of the K embeddings.
+                eff_K = 1 if isinstance(embobj, StaticLayerwiseEmbedding) else embobj.K
+
+                # The losses of most components are times eff_K, except for ada attn pooler, 
+                # whose parameters don't inflate with K.
+                curr_loss = (  loss_bias             * bias_reg_weight \
+                             + loss_basis            * basis_reg_weight \
+                             + loss_pre_vecs         * pre_vecs_reg_weight \
+                             + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
+                             + loss_ada_maps_bias    * ada_maps_bias_reg_weight ) * eff_K \
+                             + loss_ada_attn_pooler  * ada_attn_poolers_reg_weight
                 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
