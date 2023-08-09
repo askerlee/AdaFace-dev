@@ -403,7 +403,6 @@ class StaticLayerwiseEmbedding(nn.Module):
             # Otherwise embeddings in out_vecs_ln will be in wrong order.
             out_vecs_ln = [ self.layers_out_lns[i][k](out_vecs[i,k]) for i in range(self.num_layers) for k in range(self.K) ]
             out_vecs_ln = torch.stack(out_vecs_ln, dim=0).reshape(self.num_layers, self.K, -1) / np.sqrt(self.out_emb_dim)
-            breakpoint()
 
             # Different layers have different biases.
             out_vecs_ln = out_vecs_ln + self.bias
