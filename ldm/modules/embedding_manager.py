@@ -262,7 +262,7 @@ class StaticLayerwiseEmbedding(nn.Module):
     # has_bias: if enabled, the output vectors will be dominated by self.bias.
     def __init__(self, num_layers=16, num_vectors_per_token=1, 
                  emb_dim=768, r=6, init_noise_stds=(0.1, 0.04), 
-                 init_vecs=None, init_vec_weights=None, init_neg_vecs=None, 
+                 init_words=None, init_vecs=None, init_vec_weights=None, init_neg_vecs=None, 
                  has_bias=True, device_type="cuda",
                  token_string=""):
         super().__init__()
@@ -375,7 +375,7 @@ class StaticLayerwiseEmbedding(nn.Module):
 
         self.layer_out_lns = nn.ModuleList(layer_out_lns)
 
-        print(f"StaticLayerwiseEmbedding {token_string} initialized with {self.K} total embs, {self.N} init vectors, {self.r} basis vectors")
+        print(f"StaticLayerwiseEmbedding {token_string} initialized with {self.K} total embs, {self.N} init vectors ({init_words}), {self.r} basis vectors")
 
     # Return static embeddings of all layers together.
     def forward(self, only_bias=False):
@@ -413,7 +413,8 @@ class AdaEmbedding(nn.Module):
     # Layer indices absent in layer_idx2emb_idx are skipped layers.
     def __init__(self, num_layers=16, num_vectors_per_token=1, 
                  fg_emb_count=1, bg_emb_count=0,
-                 emb_dim=768, r=12, init_vecs=None, 
+                 emb_dim=768, r=12, 
+                 init_words=None, init_vecs=None, 
                  attn_infeat_dims = [ 320, 320, 640, 640, 1280, 1280, 1280, 1280, 
                                       1280, 1280, 640, 640, 640, 320, 320, 320 ],
                  # skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15],
@@ -555,7 +556,7 @@ class AdaEmbedding(nn.Module):
         else:
             self.bias        = 0
 
-        print(f"AdaEmbedding {token_string} initialized with {fg_emb_count}/{bg_emb_count}/{self.K} fg/bg/total embs, {self.N} init vectors, {self.r} basis vectors")
+        print(f"AdaEmbedding {token_string} initialized with {fg_emb_count}/{bg_emb_count}/{self.K} fg/bg/total embs, {self.N} init vectors ({init_words}), {self.r} basis vectors")
         self.call_count = 0
         self.debug = False
 
@@ -797,9 +798,9 @@ class EmbeddingManager(nn.Module):
 
             num_vectors_per_token = self.token2num_vectors[placeholder_string]
 
-            if (initializer_words is not None) and idx < len(initializer_words) \
-              and (placeholder_string != self.background_string):
-                init_word_tokens = get_tokens_for_string(initializer_words[idx])
+            if (initializer_words is not None) and idx < len(initializer_words):
+                init_words = initializer_words[idx]
+                init_word_tokens = get_tokens_for_string(init_words)
                 N = len(init_word_tokens)
                 if initializer_weights is not None and idx < len(initializer_weights):
                     init_word_weights = initializer_weights[idx]
@@ -835,6 +836,7 @@ class EmbeddingManager(nn.Module):
                                                                self.token_dim, 
                                                                layerwise_lora_rank, 
                                                                (0.1, 0.02), 
+                                                               init_words,
                                                                init_word_embeddings, init_word_weights, 
                                                                init_neg_vecs=init_neg_embeddings,
                                                                token_string=placeholder_string)
@@ -855,6 +857,7 @@ class EmbeddingManager(nn.Module):
                                                    bg_emb_count,
                                                    self.token_dim,                                                    
                                                    layerwise_lora_rank, 
+                                                   init_words,
                                                    init_word_embeddings,
                                                    use_attn_pooler=ada_use_attn_pooler,
                                                    token_string=placeholder_string)
