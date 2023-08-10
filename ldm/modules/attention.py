@@ -185,7 +185,9 @@ class CrossAttention(nn.Module):
         q = self.to_q(x)
         context = default(context, x)
         if callable(context):
-            # Pass (x, ...) to context() to get the real context
+            # Pass (x, ...) to context() to get the real context.
+            # If uncond (null condition) is active, then returned subj_indices = None.
+            # Don't do conv attn if uncond is active.
             context, subj_indices = context((x, q, self.to_k, self.scale))
         else:
             subj_indices = None
@@ -204,6 +206,8 @@ class CrossAttention(nn.Module):
                 
         # In-place replacement of the row(s) in the attention matrix sim corresponding to the subject tokens, 
         # by attention scores computed with a convolutional attention mechanism.
+        # If uncond (null condition) is active, then returned subj_indices = None.
+        # Don't do conv attn if uncond is active.
         if self.use_conv_attn and subj_indices is not None:
             replace_rows_by_conv_attn(sim, k, subj_indices)
 

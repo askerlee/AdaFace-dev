@@ -506,7 +506,8 @@ class UNetModel(nn.Module):
         self.num_heads_upsample = num_heads_upsample
         self.predict_codebook_ids = n_embed is not None
         self.crossattn_force_grad = False
-
+        self.use_conv_attn = False
+        
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
@@ -736,6 +737,11 @@ class UNetModel(nn.Module):
         do_attn_recon_loss    = extra_info.get('do_attn_recon_loss', False)    if extra_info is not None else False
         use_background_token  = extra_info.get('use_background_token', False)  if extra_info is not None else False
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
+        if subj_indices is not None:
+            subj_indices_B, subj_indices_N = subj_indices
+        else:
+            # If uncond (null) condition is active, then subj_indices = None.
+            subj_indices_B, subj_indices_N = None, None
 
         if use_layerwise_context:
             B = x.shape[0]
@@ -795,10 +801,10 @@ class UNetModel(nn.Module):
                         # Here, the 1st dim of mix_layer_ada_context is the batch.
                         # But we can still use patch_multi_embeddings() without specially processing, since patch_multi_embeddings
                         # in both cases, the 2nd dim is the token dim, so patch_multi_embeddings() works in both cases.
-                        # extra_info['subj_indices_N']: subject token indices within the subject single prompt (BS=1).
-                        # len(subj_indices_N):          embedding number of the subject token.
+                        # subj_indices_N:      subject token indices within the subject single prompt (BS=1).
+                        # len(subj_indices_N): embedding number of the subject token.
                         mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
-                                                                       extra_info['subj_indices_N']) 
+                                                                       subj_indices_N) 
                         layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
                         
                 # layer_static_context, layer_ada_context: [2, 77, 768]
@@ -854,6 +860,7 @@ class UNetModel(nn.Module):
                 # that does cross-attention with layer_context in attn2 only.
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
                 module[1].transformer_blocks[0].attn2.force_grad = self.crossattn_force_grad
+                module[1].transformer_blocks[0].attn2.use_conv_attn = self.use_conv_attn
 
             # layer_context: [2, 77, 768], conditioning embedding.
             # emb: [2, 1280], time embedding.
@@ -864,6 +871,7 @@ class UNetModel(nn.Module):
                     distill_feats[layer_idx] = h
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
                     module[1].transformer_blocks[0].force_grad = False
+                    module[1].transformer_blocks[0].attn2.use_conv_attn = False
 
             layer_idx += 1
         
@@ -873,6 +881,7 @@ class UNetModel(nn.Module):
         if layer_idx in distill_layer_indices:
             self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = True
             self.middle_block[1].transformer_blocks[0].attn2.force_grad = self.crossattn_force_grad
+            self.middle_block[1].transformer_blocks[0].attn2.use_conv_attn = self.use_conv_attn
 
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, get_layer_idx_context)
@@ -881,6 +890,7 @@ class UNetModel(nn.Module):
                 distill_feats[layer_idx] = h
                 self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = False
                 self.middle_block[1].transformer_blocks[0].attn2.force_grad = False
+                self.middle_block[1].transformer_blocks[0].attn2.use_conv_attn = False
 
         layer_idx += 1
 
@@ -905,6 +915,7 @@ class UNetModel(nn.Module):
             if layer_idx in distill_layer_indices:
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
                 module[1].transformer_blocks[0].attn2.force_grad = self.crossattn_force_grad
+                module[1].transformer_blocks[0].attn2.use_conv_attn = self.use_conv_attn
 
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, get_layer_idx_context)
@@ -913,7 +924,8 @@ class UNetModel(nn.Module):
                     distill_feats[layer_idx] = h
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
                     module[1].transformer_blocks[0].attn2.force_grad = False
-                    
+                    module[1].transformer_blocks[0].attn2.use_conv_attn = False
+
             layer_idx += 1
 
         extra_info['unet_feats'] = distill_feats

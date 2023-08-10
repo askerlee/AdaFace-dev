@@ -213,6 +213,9 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--num_vectors_per_token",
         type=int, default=1,
         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
+    parser.add_argument("--use_conv_attn",
+        action="store_true", 
+        help="Use convolutional attention at subject tokens")
     
     # layerwise_lora_rank_token_ratio. When there are two tokens, 
     # it seems that increasing the rank to 3 doesn't help.
@@ -742,6 +745,12 @@ if __name__ == "__main__":
         config.data.params.train.params.num_vectors_per_token     = opt.num_vectors_per_token
         config.data.params.validation.params.num_vectors_per_token = opt.num_vectors_per_token
         
+        if opt.use_conv_attn:
+            assert opt.num_vectors_per_token == 4 or opt.num_vectors_per_token == 9, \
+                    f"Only support 4 or 9 embeddings per token but got {opt.num_vectors_per_token}. " \
+                    "4 = 2*2 kernel, 9 = 3*3 kernel."
+            config.model.params.use_conv_attn = True
+
         if hasattr(opt, 'composition_regs_iter_gap'):
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
 
