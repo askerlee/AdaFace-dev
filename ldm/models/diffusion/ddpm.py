@@ -1319,6 +1319,22 @@ class LatentDiffusion(DDPM):
 
                     extra_info['do_attn_recon_loss'] = False
 
+                    # Only keep the first half (for single prompts), as the second half is the same 
+                    # (for comp prompts, differs at the batch index, but the token index is identical).
+                    # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
+                    # the placeholder token doesn't appear in the class prompts. 
+                    # Now we take the first half of placeholder_indices_fg, so that 
+                    # they only account for the subject single prompt, but they are also 
+                    # applicable to the other 3 types of prompts as they are all aligned 
+                    # at the beginning part of the prompts.
+                    # BUG: if the batch size of a mix batch > 4, then the subj_indices_N
+                    # corresponds to the indices in more than one instance. But patch_multi_embeddings()
+                    # treat the indices as if they are always in the same instance.
+                    subj_indices_B = self.embedding_manager.placeholder_indices_fg[0].chunk(2)[0]
+                    subj_indices_N = self.embedding_manager.placeholder_indices_fg[1].chunk(2)[0]
+                    subj_indices = (subj_indices_B, subj_indices_N)
+                    extra_info['subj_indices'] = subj_indices
+
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
                     if self.do_comp_prompt_mix_reg or self.do_attn_recon_loss_iter:
@@ -1339,27 +1355,16 @@ class LatentDiffusion(DDPM):
 
                         c_in2 = subj_single_prompts + subj_comp_prompts + mix_single_prompts + mix_comp_prompts
 
-                        # Only keep the first half (for single prompts), as the second half is the same 
-                        # (for comp prompts, differs at the batch index, but the token index is identical).
-                        # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
-                        # the placeholder token doesn't appear in the class prompts. 
-                        # Now we take the first half of placeholder_indices_fg, so that 
-                        # they only account for the subject single prompt, but they are also 
-                        # applicable to the other 3 types of prompts as they are all aligned 
-                        # at the beginning part of the prompts.
-                        # BUG: if the batch size of a mix batch > 4, then the placeholder_indices_N
-                        # corresponds to the indices in more than one instance. But patch_multi_embeddings()
-                        # treat the indices as if they are always in the same instance.
-                        placeholder_indices_N = self.embedding_manager.placeholder_indices_fg[1].chunk(2)[0]
-                        
                         # The subject is represented with a multi-embedding token.
-                        if len(placeholder_indices_N) > 1:
-                            cls_single_emb = patch_multi_embeddings(cls_single_emb, placeholder_indices_N)
-                            cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   placeholder_indices_N)
+                        if len(subj_indices_N) > 1:
+                            cls_single_emb = patch_multi_embeddings(cls_single_emb, subj_indices_N)
+                            cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   subj_indices_N)
                             
-                            # Store placeholder_indices_N to be used to 
+                            # subj_indices_N: subject token indices within the subject single prompt (BS=1).
+                            # len(subj_indices_N): embedding number of the subject token.
+                            # Store subj_indices_N to be used to 
                             # patch the ada embeddings of the mix half in the U-Net.
-                            extra_info['placeholder_indices_N'] = placeholder_indices_N
+                            extra_info['subj_indices_N'] = subj_indices_N
 
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comp_emb and cls_comp_emb will be mixed.
@@ -1373,9 +1378,9 @@ class LatentDiffusion(DDPM):
                         # won't be mixed, but simply repeated.
 
                         """                         
-                        subj_comp_emb_qv   = scale_emb_in_embs(subj_comp_emb,   placeholder_indices_N, 
+                        subj_comp_emb_qv   = scale_emb_in_embs(subj_comp_emb,   subj_indices_N, 
                                                                scale=subj_emb_scale, scale_first_only=False)
-                        subj_single_emb_qv = scale_emb_in_embs(subj_single_emb, placeholder_indices_N, 
+                        subj_single_emb_qv = scale_emb_in_embs(subj_single_emb, subj_indices_N, 
                                                                scale=subj_emb_scale, scale_first_only=False)
                         """
                         
@@ -1389,10 +1394,15 @@ class LatentDiffusion(DDPM):
                         subj_emb_scale = 1 - INIT_CLS_EMB_SCALE \
                                          - (FINAL_CLS_EMB_SCALE - INIT_CLS_EMB_SCALE) * self.global_step / total_training_steps
 
+                        # mix_embeddings('add'):  being subj_comp_emb almost everywhere, except those at subj_indices_N,
+                        # where they are subj_comp_emb * subj_emb_scale + cls_comp_emb * (1 - subj_emb_scale).
+                        # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
+                        # Each is of a single instance. So only provides subj_indices_N 
+                        # (multiple token indices of the same instance).
                         subj_comp_emb_qv   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
-                                                            placeholder_indices_N, c1_subj_scale=subj_emb_scale)
+                                                            subj_indices_N, c1_subj_scale=subj_emb_scale)
                         subj_single_emb_qv = mix_embeddings('add', subj_single_emb, cls_single_emb,
-                                                            placeholder_indices_N, c1_subj_scale=subj_emb_scale)
+                                                            subj_indices_N, c1_subj_scale=subj_emb_scale)
 
                         mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_qv,   cls_comp_emb],   dim=1)
                         mix_single_emb_all_layers = torch.cat([subj_single_emb_qv, cls_single_emb], dim=1)
@@ -1524,6 +1534,7 @@ class LatentDiffusion(DDPM):
                     # Either prompt_delta_reg_weight == 0 or it's called by self.validation_step().
                     c[2]['iter_type'] = 'normal_recon'
                     extra_info['ada_bp_to_unet'] = False
+                    extra_info['subj_indices'] = copy.copy(self.embedding_manager.placeholder_indices_fg)
                     self.c_static_emb = None
 
             # shorten_cond_schedule: False. Skipped.
@@ -1895,7 +1906,7 @@ class LatentDiffusion(DDPM):
         if iter_type == 'normal_recon':
             # If do_attn_recon_loss_iter, then fg_bg_complementary_loss_weight is halved, 
             # as we compute two such losses.
-            fg_bg_complementary_loss_weight = 0.002 #if self.do_attn_recon_loss_iter else 0.002
+            fg_bg_complementary_loss_weight = 0.002
             # Compute subj_fg_bg_complementary_loss, only when 
             # we don't compute mix_fg_bg_complementary_loss. Otherwise it'll take too much RAM.
             # mix_fg_bg_complementary_loss is preferred over subj_fg_bg_complementary_loss,
@@ -1917,12 +1928,12 @@ class LatentDiffusion(DDPM):
                 # print(fg_bg_complementary_loss)
 
             if self.do_attn_recon_loss_iter:
-                placeholder_indices = self.embedding_manager.placeholder_indices_fg0
+                subj_indices0 = self.embedding_manager.placeholder_indices_fg0
                 # For 'normal_recon' but do_attn_recon_loss_iter=True, same to mix reg iters or ada reg iters, 
                 # 4 types of prompts are fed to embedding_manager to generate static embeddings in forward(). 
-                # placeholder_indices0 has a BS of 4, for the 2 types of subject prompts, each type 2 prompts.
+                # subj_indices00 has a BS of 4, for the 2 types of subject prompts, each type 2 prompts.
                 # So we only keep the first half, which correspond to the 2 subject-single prompts.
-                placeholder_indices = (placeholder_indices[0].chunk(2)[0], placeholder_indices[1].chunk(2)[0])
+                subj_indices0 = (subj_indices0[0].chunk(2)[0], subj_indices0[1].chunk(2)[0])
 
                 cond_mix = extra_info['cond_mix']
                 cond_mix[2]['do_attn_recon_loss'] = True
@@ -1969,11 +1980,10 @@ class LatentDiffusion(DDPM):
                 # [4, 8, 256, 77] / [4, 8, 64, 77] =>
                 # [4, 77, 8, 256] / [4, 77, 8, 64]
                 attn_mat_mix_single = unet_attns_mix_single[attn_layer_idx].permute(0, 3, 1, 2)
-                # placeholder_indices: ([0, 1], [6, 7]), when 2 embeddings for 1 token.
-                # The second token in a class prompt is a comma, which has little effect on the attn.
+                # subj_indices0: ([0, 1], [6, 7]).
                 # subj_attn: [2, 8, 256 / 64] (only consider the first embedding 
                 # even if there are mult-embeddings for the subject token).
-                subj_attn_mix_single = attn_mat_mix_single[placeholder_indices]
+                subj_attn_mix_single = attn_mat_mix_single[subj_indices0]
                 # spatial_weight_mix_single: [2, 1, 64, 64].
                 # model_output, target:      [2, 4, 64, 64].
                 spatial_weight_mix_single, spatial_attn_mix_single = \
@@ -2058,7 +2068,8 @@ class LatentDiffusion(DDPM):
             # DO NOT use CLIP loss to optimize the model. It will hurt the performance.
             with torch.no_grad():
                 clip_images = self.decode_first_stage(clip_images_code)
-                losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   clip_images,  
+                losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   
+                                                                                     clip_images,  
                                                                                      reduction='diag')
                 #print(clip_prompts_comp)
 
