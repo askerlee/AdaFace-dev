@@ -6,7 +6,7 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import repl_with_conv_attn
+from ldm.util import replace_rows_by_conv_attn
 
 def exists(val):
     return val is not None
@@ -169,13 +169,13 @@ class CrossAttention(nn.Module):
         )
         self.save_attn_mat = False
         self.force_grad    = False
-        self.conv_attn     = False
+        self.use_conv_attn = False
 
     def forward(self, x, context=None, mask=None):
         h = self.heads
 
         # If the autograd status should be overridden, then do it here, 
-        # and restore the status before this function returns.
+        # and restore the status before the function returns.
         if not torch.is_grad_enabled() and self.force_grad:
             is_grad_forced = True
             torch.set_grad_enabled(True)
@@ -202,16 +202,16 @@ class CrossAttention(nn.Module):
 
         sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
                 
+        # In-place replacement of the row(s) in the attention matrix sim corresponding to the subject tokens, 
+        # by attention scores computed with a convolutional attention mechanism.
+        if self.use_conv_attn and subj_indices is not None:
+            replace_rows_by_conv_attn(sim, k, subj_indices)
+
         if exists(mask):
             mask = rearrange(mask, 'b ... -> b (...)')
             max_neg_value = -torch.finfo(sim.dtype).max
             mask = repeat(mask, 'b j -> (b h) () j', h=h)
             sim.masked_fill_(~mask, max_neg_value)
-
-        # In-place replacement of the row in the attention matrix sim corresponding to the subject token, 
-        # by attention scores computed with a convolutional attention mechanism.
-        if self.conv_attn and subj_indices is not None:
-            repl_with_conv_attn(sim, k, subj_indices)
 
         # attention, what we cannot get enough of
         attn = sim.softmax(dim=-1)
