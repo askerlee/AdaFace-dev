@@ -412,7 +412,7 @@ class AdaEmbedding(nn.Module):
     # infeat_dims are (almost) reflective around the middle layer, except for the first and last layers.
     # Layer indices absent in layer_idx2emb_idx are skipped layers.
     def __init__(self, num_layers=16, num_vectors_per_token=1, 
-                 fg_emb_count=1, bg_emb_count=0,
+                 fg_emb_count=1, bg_emb_count=0, use_cached_bg=False,
                  out_emb_dim=768, r=12, 
                  init_words=None, init_vecs=None, 
                  attn_infeat_dims = [ 320, 320, 640, 640, 1280, 1280, 1280, 1280, 
@@ -433,8 +433,11 @@ class AdaEmbedding(nn.Module):
         assert fg_emb_count + bg_emb_count <= self.K, \
             f"fg_emb_count={fg_emb_count} + bg_emb_count={bg_emb_count} > num_vectors_per_token={self.K}"
 
-        # Only takes bg features. Could possibly use cached bg features.
+        self.use_cached_bg = use_cached_bg
+        # Only takes bg or fg features but not both.
+        self.is_fg_only = (fg_emb_count == self.K) 
         self.is_bg_only = (bg_emb_count == self.K)
+        self.is_one_stream_only = self.is_fg_only or self.is_bg_only
         self.r = r
         self.use_attn_pooler = use_attn_pooler
 
@@ -448,12 +451,12 @@ class AdaEmbedding(nn.Module):
         # emb_idx2layer_idx: Reverse mapping of layer_idx2emb_idx.
         self.emb_idx2layer_idx = { v: k for k, v in layer_idx2emb_idx.items() }
 
-        # Unless is_bg_only, then always use both fg and bg features as the input to the Linear, 
+        # Unless is_one_stream_only, then always use both fg and bg features as the input to the Linear, 
         # therefore the input feature dim is doubled.
         # But a particular Linear may only use either the fg or bg half of the features according to emb_infeat_types, 
         # so the other half of the weights will be masked.
-        # If is_bg_only, then only use bg features as the input to the Linear, and no weight masking is needed.
-        self.H = H  = 1 if self.is_bg_only else 2
+        # If is_one_stream_only, then only use fg or bg features as the input to the Linear, and no weight masking is needed.
+        self.H = H  = 1 if self.is_one_stream_only else 2
         # If all Linears only use half of the input features (effectively H=1, although nominally H=2), 
         # then only use 1/4 of the time embeddings. Otherwise, use 1/2 of the time embeddings.
         TIME_Hs = [ 2 if (self.use_attn_pooler and emb_infeat_type == 2) else 1 for emb_infeat_type in self.emb_infeat_types ]
@@ -549,7 +552,7 @@ class AdaEmbedding(nn.Module):
     # When generating ada embeddings for each layer in turn, only masking one layer will reduce processing time.
     def mask_layer_map_weights(self, masked_layer_idx=None):
         # Currently only supports H = 1 or 2.
-        # Skip masking if is_bg_only.
+        # Skip masking if is_one_stream_only.
         if self.H == 1:
             return
 
@@ -590,6 +593,8 @@ class AdaEmbedding(nn.Module):
         # So we mask weights at the unused half, since the corresponding weights are 
         # updated during BP and become nonzero. 
         self.mask_layer_map_weights(emb_idx)
+        if not self.is_fg_only and self.use_cached_bg:
+            assert cached_infeat_bg is not None, "cached_infeat_bg must be provided when use_cached_bg."
         
         if self.debug:
             breakpoint()
@@ -601,8 +606,8 @@ class AdaEmbedding(nn.Module):
 
             # Even if layer_infeat is grad-scaled, the pooler still receives the full gradient.
             # But the grad is scaled when it's further passed to the UNet.
-            if self.use_attn_pooler and self.is_bg_only:
-                assert cached_infeat_bg is not None, "cached_infeat_bg must be provided when is_bg_only is True."
+
+            if self.use_attn_pooler and self.is_bg_only and self.use_cached_bg:
                 infeat_pooled = cached_infeat_bg
                 infeat_fg_bg  = None
                 infeat_bg     = None
@@ -614,12 +619,20 @@ class AdaEmbedding(nn.Module):
                 infeat_pooled    = pooler(layer_attn_components, static_subj_layer_emb, img_mask, bp_to_unet)
                 if self.use_attn_pooler:
                     infeat_fg, infeat_bg = infeat_pooled
+                    if self.use_cached_bg:
+                        # Discard infeat_bg obtained from the attn pooler, and use cached_infeat_bg instead.
+                        infeat_bg = cached_infeat_bg
                     infeat_fg_bg = torch.cat([infeat_fg, infeat_bg], dim=-1)
                 else:
                     infeat_fg_bg = infeat_pooled
                     infeat_bg    = None
 
-                infeat_pooled = infeat_fg_bg
+                if self.is_fg_only:
+                    infeat_pooled = infeat_fg
+                elif self.is_bg_only:       # implies not self.use_cached_bg.
+                    infeat_pooled = infeat_bg
+                else:
+                    infeat_pooled = infeat_fg_bg
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
@@ -808,19 +821,22 @@ class EmbeddingManager(nn.Module):
                                                                token_string=placeholder_string)
 
                 if placeholder_string == self.background_string:
+                    fg_emb_count = 1
                     bg_emb_count = 1
-                    fg_emb_count = 0
-                    num_vectors_per_token = 1
+                    num_vectors_per_token = 2
+                    use_cached_bg = True
                 else:
                     # Around half of the embeddings are fg embeddings, and the other half are bg embeddings.
                     # If num_vectors_per_token[placeholder_string] = 1, then there's only one fg embedding.
                     bg_emb_count = num_vectors_per_token // 2
                     fg_emb_count = num_vectors_per_token - bg_emb_count
-
+                    use_cached_bg = False
+                    
                 token_ada_embedder  = AdaEmbedding(self.num_layers_per_embedder, 
                                                    num_vectors_per_token, 
                                                    fg_emb_count, 
                                                    bg_emb_count,
+                                                   use_cached_bg,
                                                    self.token_dim,                                                    
                                                    layerwise_lora_rank, 
                                                    init_words,
@@ -1040,7 +1056,7 @@ class EmbeddingManager(nn.Module):
             # should have been computed by the previous subject Ada embedder. 
             # Otherwise it's a bug.
             if placeholder_string == self.background_string \
-                and ada_embedder.is_bg_only and self.cached_infeat_bg[layer_idx] is None:
+                and ada_embedder.use_cached_bg and self.cached_infeat_bg[layer_idx] is None:
                 breakpoint()
 
             # static_subj_embs_dict[placeholder_string]: static_subj_embeddings, [16, K, 768].
@@ -1055,7 +1071,7 @@ class EmbeddingManager(nn.Module):
             # The pipeline is generate static embeddings first, then generate the ada embeddings. 
             # So this assumption should always hold.
             # For background Ada embedder, cached_infeat_bg is only used when
-            # is_bg_only. Otherwise, it's ignored.
+            # use_cached_bg. Otherwise, it's ignored.
             placeholder_embeddings, infeat_bg = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
                                      static_subj_layer_emb,
@@ -1419,17 +1435,15 @@ class EmbeddingManager(nn.Module):
                 if type(loss_bias) == int:
                     breakpoint()
 
-                # If it's Ada embedder, times K (eff_K = K) to account for each of the K embeddings.
-                eff_K = 1 if isinstance(embobj, StaticLayerwiseEmbedding) else embobj.K
-                num_out_embeddings += eff_K
+                num_out_embeddings += embobj.K
 
-                # The losses of most components are times eff_K, except for ada attn pooler, 
-                # whose parameters don't inflate with K.
+                # The losses of most components are times embobj.K, except for ada attn pooler, 
+                # whose parameters don't get inflated with K.
                 curr_loss = (  loss_bias             * bias_reg_weight \
                              + loss_basis            * basis_reg_weight \
                              + loss_pre_vecs         * pre_vecs_reg_weight \
                              + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
-                             + loss_ada_maps_bias    * ada_maps_bias_reg_weight ) * eff_K \
+                             + loss_ada_maps_bias    * ada_maps_bias_reg_weight ) * embobj.K \
                              + loss_ada_attn_pooler  * ada_attn_poolers_reg_weight
                 
                 debug = True
