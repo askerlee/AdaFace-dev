@@ -285,22 +285,25 @@ class StaticLayerwiseEmbedding(nn.Module):
                 )
 
             N = self.N = init_vecs.shape[0]
-            # pre_vecs: basis vectors that are initialized by prespecified init_vecs. 
-            # pre_vecs are updated through BP.
-            self.pre_vecs = nn.Parameter(init_vecs.clone(), requires_grad=True)
+            # pre_vecs: basis vectors that are initialized by prespecified init_vecs, updated through BP.
+            # pre_vecs: [K, N, 768].
+            self.pre_vecs = nn.Parameter(init_vecs.unsqueeze(0).repeat(self.K, 1, 1), requires_grad=True)
             # Normalize pre_vecs, to roughly equalize the contributions of different predefined vectors.
-            # self.pre_vecs.data = F.normalize(self.pre_vecs.data, dim=1)
+            # self.pre_vecs.data = F.normalize(self.pre_vecs.data, dim=-1)
         else:
-            self.N = N = 0
+            N = self.N = 0
             self.pre_vecs = None
 
-        # basis_rand_weights: 16 * r, basis_vecs: r * 768. basis_rand_weights * basis_vecs: 16 * 768.
-        self.basis_rand_weights    = nn.Parameter(torch.randn(num_layers, self.K, r))
-        # basis_vecs consists of r-N randomly initialized basis vectors. 
+        # basis_rand_weights: 16 * K * r, basis_vecs: K * r * 768. 
+        # output embeddings: basis_rand_weights * basis_vecs = 16 * K * 768.
+        self.basis_rand_weights = nn.Parameter(torch.randn(num_layers, self.K, r))
+        # basis_vecs: [K, r-N, 768], K sets, each consisting of r-N randomly initialized basis vectors. 
         # Will be updated through BP.
-        self.basis_vecs = nn.Parameter(torch.randn(r - N, out_emb_dim), requires_grad=True)
+        # Each embedding of the K embeddings has its own basis_vecs and pre_vecs.
+        # Separate pre_vecs and basis_vecs, to apply different regularizations on them.
+        self.basis_vecs = nn.Parameter(torch.randn(self.K, r - N, out_emb_dim), requires_grad=True)
         # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
-        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=1) / 4.
+        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=-1) / 4.
         # Always set the last basis vector to 0.
         self.basis_vecs.data[-1] = 0
 
@@ -380,19 +383,19 @@ class StaticLayerwiseEmbedding(nn.Module):
 
             # self.N: number of pre_vecs.
             if self.N > 0:
-                # basis_vecs: [r, 768].
-                basis_vecs = torch.cat([self.pre_vecs, self.basis_vecs], dim=0)
+                # basis_vecs: [K, r, 768].
+                basis_vecs = torch.cat([self.pre_vecs, self.basis_vecs], dim=1)
             else:
                 basis_vecs = self.basis_vecs
 
-            # [16, K, r] * [r, 768] -> [16, K, 768].
-            out_vecs = torch.matmul(basis_weights, basis_vecs)
+            # For each k < K, [16, 1, r]_k * [r, 768]_k -> [16, 1, 768].
+            out_vecs_unnorm = [ torch.matmul(basis_weights[:, k], basis_vecs[k]) for k in range(self.K) ]
             # Apply layer-and-embedding specific layer normalization.
             # Note the order of for i ... for k ... in the list comprehension is the same as 
             # a conventional for loop: 1 for i ...
             #                          2     for k ...
             # Otherwise embeddings in out_vecs_ln will be in wrong order.
-            out_vecs_ln = [ self.layers_out_lns[i][k](out_vecs[i,k]) for i in range(self.num_layers) for k in range(self.K) ]
+            out_vecs_ln = [ self.layers_out_lns[i][k](out_vecs_unnorm[k][i]) for i in range(self.num_layers) for k in range(self.K) ]
             out_vecs_ln = torch.stack(out_vecs_ln, dim=0).reshape(self.num_layers, self.K, -1) / np.sqrt(self.out_emb_dim)
 
             # Different layers and embeddings have different biases.
@@ -470,10 +473,11 @@ class AdaEmbedding(nn.Module):
 
             # N: number of init vectors.
             N = self.N = init_vecs.shape[0]
-            # pre_vecs: [K, 1, 768].
+            # pre_vecs: basis vectors that are initialized by prespecified init_vecs, updated through BP.
+            # pre_vecs: [K, N, 768].
             self.pre_vecs = nn.Parameter(init_vecs.unsqueeze(0).repeat(self.K, 1, 1), requires_grad=True)
             # Normalize pre_vecs, to roughly equalize the contributions of different predefined basis vectors.
-            # self.pre_vecs.data = F.normalize(self.pre_vecs, dim=1)
+            # self.pre_vecs.data = F.normalize(self.pre_vecs, dim=-1)
         else:
             N = self.N = 0
             self.pre_vecs = None
@@ -554,17 +558,17 @@ class AdaEmbedding(nn.Module):
         layer_range = range(self.num_layers) if masked_layer_idx is None else [masked_layer_idx]
 
         for layer_idx in layer_range:
-            HALF_D = self.attn_infeat_dims[layer_idx]
-            TD     = self.TDs[layer_idx]
-            assert self.layer_maps[layer_idx].in_features == HALF_D * self.H + TD
+            SINGLE_D = self.attn_infeat_dims[layer_idx]
+            TD       = self.TDs[layer_idx]
+            assert self.layer_maps[layer_idx].in_features == SINGLE_D * 2 + TD
             layer_map_weight = self.layer_maps[layer_idx].weight.data
             # The weight of Linear has shape [out_features, in_features]. 
             # Split the first dim, out_features => [K, r].
             layer_map_weight_embs = layer_map_weight.view(self.K, self.r, -1)
 
-            cand_fg_bg_masks = [ torch.cat([ torch.ones(HALF_D), torch.zeros(HALF_D), torch.ones(TD) ]),
-                                 torch.cat([ torch.zeros(HALF_D), torch.ones(HALF_D), torch.ones(TD) ]),
-                                 torch.ones(HALF_D * 2 + TD) ]
+            cand_fg_bg_masks = [ torch.cat([ torch.ones(SINGLE_D),  torch.zeros(SINGLE_D), torch.ones(TD) ]),
+                                 torch.cat([ torch.zeros(SINGLE_D), torch.ones(SINGLE_D),  torch.ones(TD) ]),
+                                 torch.ones(SINGLE_D * 2 + TD) ]
             
             # fg_bg_mask: [K, in_features]. Mask part of the input features.
             fg_bg_mask = torch.stack([ cand_fg_bg_masks[emb_infeat_type] for emb_infeat_type in self.emb_infeat_types ], dim=0)
@@ -944,13 +948,13 @@ class EmbeddingManager(nn.Module):
             # embedded_text[placeholder_indices]: [32, 768]. placeholder_embeddings: [16, K, 768].
             # The first 16 elements (0-8) in embedded_text[placeholder_indices] correspond to the 16 layers of the 
             # first instance in the batch.
-            # 16 layers of placeholder_embeddings are repeated BATCH_REAL_OCCURS times.
+            # 16 layers of placeholder_embeddings are repeated REAL_OCCURS_IN_BATCH times.
             # placeholder_embeddings: [16, 768] repeat=> [32, 768]
             # LINK #init_embed
 
-            # BATCH_REAL_OCCURS: the real number of occurrences of the placeholder in the current batch,
+            # REAL_OCCURS_IN_BATCH: the real number of occurrences of the placeholder in the current batch,
             # not repetitively counting the occurrences in the embedded_text repeated for M layers.
-            BATCH_REAL_OCCURS = placeholder_indices[0].numel() // self.num_layers_per_embedder
+            REAL_OCCURS_IN_BATCH = placeholder_indices[0].numel() // self.num_layers_per_embedder
 
             static_embedder = embedder_dict[placeholder_string].to(device)
             if isinstance(static_embedder, StaticLayerwiseEmbedding):
@@ -961,7 +965,7 @@ class EmbeddingManager(nn.Module):
                 placeholder_embeddings = static_embedder()
                 static_subj_embs_dict[placeholder_string] = placeholder_embeddings
             else:
-                # static_embedder is already the embedding.
+                # static_embedder is already the embeddings.
                 placeholder_embeddings = static_embedder
 
             for k in range(self.token2num_vectors[placeholder_string]):
@@ -973,11 +977,11 @@ class EmbeddingManager(nn.Module):
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
                 # The first dim of placeholder_embeddings is the layer dim (size = 16). 
                 # So we repeat the 16 layers of the k-th embedding, placeholder_embeddings[:, k], 
-                # BATCH_REAL_OCCURS times, to match 16*BATCH_REAL_OCCURS.
+                # REAL_OCCURS_IN_BATCH times, to match 16*REAL_OCCURS_IN_BATCH.
                 # After repeat, the RHS is
                 # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
-                embedded_text[placeholder_indices_k] = placeholder_embeddings[:, k].repeat(BATCH_REAL_OCCURS, 1)
+                embedded_text[placeholder_indices_k] = placeholder_embeddings[:, k].repeat(REAL_OCCURS_IN_BATCH, 1)
                 
             # Cache the placeholder indices for mix prompt distillation.
             # Note placeholder_indices are recomputed in update_placeholder_indices(), 
