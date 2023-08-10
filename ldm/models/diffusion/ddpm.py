@@ -1907,7 +1907,7 @@ class LatentDiffusion(DDPM):
                                                                self.embedding_manager.placeholder_indices_fg0,
                                                                self.embedding_manager.placeholder_indices_bg,
                                                                x_start.shape[0],
-                                                               fg_grad_scale=0.05
+                                                               fg_grad_scale=0
                                                               )
                 
                 # Release RAM.
@@ -1953,7 +1953,7 @@ class LatentDiffusion(DDPM):
                                                                    self.embedding_manager.placeholder_indices_fg0,
                                                                    self.embedding_manager.placeholder_indices_bg,
                                                                    x_start.shape[0],
-                                                                   fg_grad_scale=0.05
+                                                                   fg_grad_scale=0
                                                                   )
                     
                     # Do not delete cond_mix[2]['unet_attns'], as it will be used to compute the spatial weights.
@@ -2486,7 +2486,7 @@ class LatentDiffusion(DDPM):
     def calc_fg_bg_complementary_loss(self, unet_attns, 
                                       placeholder_indices_fg, 
                                       placeholder_indices_bg, 
-                                      BS, fg_grad_scale=0.05):
+                                      BS, fg_grad_scale=0):
         loss_fg_bg_complementary = 0
 
         # Discard top layers and the first few bottom layers from distillation.
