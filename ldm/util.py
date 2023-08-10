@@ -234,6 +234,9 @@ def mix_embeddings(mix_scheme, c1, c2, placeholder_indices_N=None,
             scale_mask[:, placeholder_indices_N] = c1_subj_scale
             # 1 - scale_mask: almost 0 everywhere, except those corresponding to the placeholder tokens 
             # being 1 - c1_subj_scale.
+            # c1, c2: [16, 77, 768].
+            # Each is of a single instance. So only provides subj_indices_N 
+            # (multiple token indices of the same instance).
             c_mix = c1 * scale_mask + c2 * (1 - scale_mask)
         else:
             c_mix = c1 + c2
@@ -477,7 +480,7 @@ class GradientScaler(nn.Module):
         self._alpha = torch.tensor(alpha, requires_grad=False)
 
     def forward(self, input_):
-        return ScaleGrad.apply(input_, self._alpha)
+        return ScaleGrad.apply(input_, self._alpha.to(input_.device))
 
 def gen_gradient_scaler(alpha):
     if alpha > 0:

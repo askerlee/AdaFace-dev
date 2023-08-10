@@ -795,8 +795,10 @@ class UNetModel(nn.Module):
                         # Here, the 1st dim of mix_layer_ada_context is the batch.
                         # But we can still use patch_multi_embeddings() without specially processing, since patch_multi_embeddings
                         # in both cases, the 2nd dim is the token dim, so patch_multi_embeddings() works in both cases.
+                        # extra_info['subj_indices_N']: subject token indices within the subject single prompt (BS=1).
+                        # len(subj_indices_N):          embedding number of the subject token.
                         mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
-                                                                       extra_info['placeholder_indices_N']) 
+                                                                       extra_info['subj_indices_N']) 
                         layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
                         
                 # layer_static_context, layer_ada_context: [2, 77, 768]
