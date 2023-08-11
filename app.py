@@ -121,8 +121,6 @@ with gr.Blocks() as demo:
                 with gr.Row() as row:
                     scale = gr.Slider(minimum=0, maximum=20, value=10.0 ,label="Scale", step=1)
                 with gr.Row() as row4:
-                    C = gr.Slider(minimum=0, maximum=4, value=4, label="Channels", step=1)
-                    f = gr.Slider(minimum=0, maximum=10, value=8, label="f", step=1)
                     bs = gr.Slider(minimum=0, maximum=20, value=8, label="Batch Size", step=1)
                     n_repeat = gr.Slider(minimum=0, maximum=20, value=1, label="n_repeat", step=1)
                 with gr.Row() as row5:
@@ -169,7 +167,7 @@ with gr.Blocks() as demo:
                     output = gr.Image(label="Output")
                 button1.click(generate, outputs=output, inputs=[ \
                     prompt, class_prompt, config, model, scale, n_iters, ddim_eta, n_samples, ddim_steps, gpu, \
-                    embedding_paths, H, W, C, f, bs, n_repeat, n_rows, seed, precision, \
+                    embedding_paths, H, W, 4, 8, bs, n_repeat, n_rows, seed, precision, \
                     subj_scale, ada_emb_weight, mask_weight, broad_class, \
                     clip_last_layer_skip_weight1, clip_last_layer_skip_weight2, plmse, fixed_code, no_preview])
                 
