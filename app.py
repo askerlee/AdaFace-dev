@@ -16,8 +16,6 @@ with open('webui-setting-config.yaml','r') as f: # open config file to load pre 
 
 
 def generate(*args):
- 
-    
     opt.prompt = args[0]
     opt.class_prompt = args[1]
     opt.config = args[2]
@@ -38,14 +36,13 @@ def generate(*args):
     opt.n_rows = args[15]
     opt.seed = args[16]
     opt.precision = args[17]
-    opt.subj_scale = args[18]
-    opt.ada_emb_weight = args[19]
+    opt.ada_emb_weight = args[18]
     opt.mask_weight = 0.0
-    opt.broad_class = args[20]
-    opt.clip_last_layers_skip_weights = (args[21], args[22])
-    opt.plms = args[23]
-    opt.fixed_code = args[24]
-    opt.no_preview = args[25]
+    opt.broad_class = args[19]
+    opt.clip_last_layers_skip_weights = (args[20], args[21])
+    opt.plms = args[22]
+    opt.fixed_code = args[23]
+    opt.no_preview = args[24]
     opt.bb_type = ""
 
     if opt.init_img == '':
@@ -76,17 +73,16 @@ def generate(*args):
 
 with gr.Blocks() as demo:
     gr.Markdown("# AdaPrompt")
-    model_entries = os.listdir('models/stable-diffusion-v-1-5/')
-    model_entries = ['models/stable-diffusion-v-1-5/' + model_entry for model_entry in model_entries]
+    model_subfolders = os.listdir('models/')
+    model_entries = [ os.path.join("models", model_subfolder, model_filename) for model_subfolder in model_subfolders for model_filename in os.listdir('models/' + model_subfolder) ]
     print(model_entries)
     with gr.Row():
         with gr.Column(scale=1, min_width=200):
-            model = gr.Dropdown( model_entries, label='Model (checkpoint)',value = 'models/stable-diffusion-v-1-5/v1-5-dste.ckpt',info = 'under models/stable-diffusion/ directory') #add value ='preious selection from state
+            model = gr.Dropdown( model_entries, label='Model (checkpoint)',value = 'models/stable-diffusion-v-1-5/v1-5-dste.ckpt',info = 'under models/ directory') #add value ='preious selection from state
             print(model)
             # model = 'models/stable-diffusion/' + f'{model}' 
             # print(model)
             
-
         with gr.Column(scale=3):
             pass
     #add a drop down
@@ -140,7 +136,6 @@ with gr.Blocks() as demo:
                 with gr.Row():
                     precision = gr.Dropdown(['autocast', 'float32', 'float64'], label='Precision',value='autocast')
                 with gr.Row() as row6:
-                    subj_scale = gr.Slider(minimum=0, maximum=10, value=5.0, label="Subject Scale", step=0.1)
                     ada_emb_weight = gr.Slider(minimum=-1, maximum=10, value=0.5, label="Ada Emb Weight", step=0.1)
                     # mask_weight = gr.Slider(minimum=0, maximum=10, value=0.0, label="Mask Weight", step=0.1)
                     broad_class = gr.Slider(minimum=0, maximum=10, value=0, label="Broad Class", step=1)
@@ -168,7 +163,7 @@ with gr.Blocks() as demo:
                 button1.click(generate, outputs=output, inputs=[ \
                     prompt, class_prompt, config, model, scale, n_iters, ddim_eta, n_samples, ddim_steps, gpu, \
                     embedding_paths, H, W, bs, n_repeat, n_rows, seed, precision, \
-                    subj_scale, ada_emb_weight, broad_class, \
+                    ada_emb_weight, broad_class, \
                     clip_last_layer_skip_weight1, clip_last_layer_skip_weight2, plms, fixed_code, no_preview])
                 
                 # button2.click(close)
