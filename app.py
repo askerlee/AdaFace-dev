@@ -81,7 +81,7 @@ with gr.Blocks() as demo:
     print(model_entries)
     with gr.Row():
         with gr.Column(scale=1, min_width=200):
-            model = gr.Dropdown( model_entries, label='Model (checkpoint)',value = 'v1-5-dste.ckpt',info = 'under models/stable-diffusion/ directory') #add value ='preious selection from state
+            model = gr.Dropdown( model_entries, label='Model (checkpoint)',value = 'models/stable-diffusion-v-1-5/v1-5-dste.ckpt',info = 'under models/stable-diffusion/ directory') #add value ='preious selection from state
             print(model)
             # model = 'models/stable-diffusion/' + f'{model}' 
             # print(model)
