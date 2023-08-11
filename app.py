@@ -31,21 +31,21 @@ def generate(*args):
     opt.embedding_paths = args[10]
     opt.H = args[11]
     opt.W = args[12]
-    opt.C = args[13]
-    opt.f = args[14]
-    opt.bs = args[15]
-    opt.n_repeat = args[16]
-    opt.n_rows = args[17]
-    opt.seed = args[18]
-    opt.precision = args[19]
-    opt.subj_scale = args[20]
-    opt.ada_emb_weight = args[21]
-    opt.mask_weight = args[22]
-    opt.broad_class = args[23]
-    opt.clip_last_layers_skip_weights = (args[24], args[25])
-    opt.plms = args[26]
-    opt.fixed_code = args[27]
-    opt.no_preview = args[28]
+    opt.C = 4
+    opt.f = 8
+    opt.bs = args[13]
+    opt.n_repeat = args[14]
+    opt.n_rows = args[15]
+    opt.seed = args[16]
+    opt.precision = args[17]
+    opt.subj_scale = args[18]
+    opt.ada_emb_weight = args[19]
+    opt.mask_weight = 0.0
+    opt.broad_class = args[20]
+    opt.clip_last_layers_skip_weights = (args[21], args[22])
+    opt.plms = args[23]
+    opt.fixed_code = args[24]
+    opt.no_preview = args[25]
     opt.bb_type = ""
 
     if opt.init_img == '':
@@ -142,7 +142,7 @@ with gr.Blocks() as demo:
                 with gr.Row() as row6:
                     subj_scale = gr.Slider(minimum=0, maximum=10, value=5.0, label="Subject Scale", step=0.1)
                     ada_emb_weight = gr.Slider(minimum=-1, maximum=10, value=0.5, label="Ada Emb Weight", step=0.1)
-                    mask_weight = gr.Slider(minimum=0, maximum=10, value=0.0, label="Mask Weight", step=0.1)
+                    # mask_weight = gr.Slider(minimum=0, maximum=10, value=0.0, label="Mask Weight", step=0.1)
                     broad_class = gr.Slider(minimum=0, maximum=10, value=0, label="Broad Class", step=1)
                     clip_last_layer_skip_weight1 = gr.Slider(minimum=0, maximum=1, value=0.5, label="Clip Last Layer Skip Weight", step=0.1)
                     clip_last_layer_skip_weight2 = gr.Slider(minimum=0, maximum=1, value=0.5, label="Clip Second Last Layer Skip Weight", step=0.1)
@@ -150,7 +150,7 @@ with gr.Blocks() as demo:
                     
                 with gr.Row() as row7:
                     # skip_grid = gr.Checkbox(label="Skip Grid", info="Skip Grid")
-                    plmse = gr.Checkbox(label="PLMSE")
+                    plms = gr.Checkbox(label="PLMS Sampler")
                     # skip_save = gr.Checkbox(label="Skip Save", info="Skip Save")
                     
                     fixed_code = gr.Checkbox(label="Fixed Code")
@@ -167,9 +167,9 @@ with gr.Blocks() as demo:
                     output = gr.Image(label="Output")
                 button1.click(generate, outputs=output, inputs=[ \
                     prompt, class_prompt, config, model, scale, n_iters, ddim_eta, n_samples, ddim_steps, gpu, \
-                    embedding_paths, H, W, 4, 8, bs, n_repeat, n_rows, seed, precision, \
-                    subj_scale, ada_emb_weight, mask_weight, broad_class, \
-                    clip_last_layer_skip_weight1, clip_last_layer_skip_weight2, plmse, fixed_code, no_preview])
+                    embedding_paths, H, W, bs, n_repeat, n_rows, seed, precision, \
+                    subj_scale, ada_emb_weight, broad_class, \
+                    clip_last_layer_skip_weight1, clip_last_layer_skip_weight2, plms, fixed_code, no_preview])
                 
                 # button2.click(close)
     with gr.Tab(label="Training") as tab0:
