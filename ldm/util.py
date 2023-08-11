@@ -417,10 +417,10 @@ def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=Tr
     # flat_attn has been detached before passing to this function. So no need to detach spatial_weight.
     return spatial_weight, spatial_attn
 
-def replace_rows_by_conv_attn(attn_mat, k, subj_indices):
+def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices):
     # input features x: [4, 256, 1280].
     # attn_mat: [32, 256, 77]. 32: b * h. b = 4, h = 8.
-    # k: [32, 77, 160]
+    # q, k: [32, 77, 160]
     # subj_indices: [0, 0, 0, 0], [6, 7, 8, 9].
     # prompts: 'a face portrait of a z, , ,  swimming in the ocean, with backlight', 
     #          'a face portrait of a z, , ,  swimming in the ocean, with backlight', 

@@ -209,7 +209,7 @@ class CrossAttention(nn.Module):
         # If uncond (null condition) is active, then returned subj_indices = None.
         # Don't do conv attn if uncond is active.
         if self.use_conv_attn and subj_indices is not None:
-            replace_rows_by_conv_attn(sim, k, subj_indices)
+            replace_rows_by_conv_attn(sim, q, k, subj_indices)
 
         if exists(mask):
             mask = rearrange(mask, 'b ... -> b (...)')
