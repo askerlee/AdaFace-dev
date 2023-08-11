@@ -1329,15 +1329,14 @@ class LatentDiffusion(DDPM):
                     # they only account for the subject single prompt, but they are also 
                     # applicable to the other 3 types of prompts as they are all aligned 
                     # at the beginning part of the prompts.
-                    # BUG: if the batch size of a mix batch > 4, then the subj_indices_N
+                    # BUG: if the batch size of a mix batch > 4, then the subj_indices_half_N
                     # corresponds to the indices in more than one instance. But patch_multi_embeddings()
                     # treat the indices as if they are always in the same instance.
-                    subj_indices_B = self.embedding_manager.placeholder_indices_fg[0].chunk(2)[0]
-                    # subj_indices_N: subject token indices within the subject single prompt (BS=1).
-                    # len(subj_indices_N): embedding number of the subject token.
-                    subj_indices_N = self.embedding_manager.placeholder_indices_fg[1].chunk(2)[0]
-                    subj_indices = (subj_indices_B, subj_indices_N)
-                    extra_info['subj_indices'] = subj_indices
+                    subj_indices_half_B = self.embedding_manager.placeholder_indices_fg[0].chunk(2)[0]
+                    # subj_indices_half_N: subject token indices within the subject single prompt (BS=1).
+                    # len(subj_indices_half_N): embedding number of the subject token.
+                    subj_indices_half_N = self.embedding_manager.placeholder_indices_fg[1].chunk(2)[0]
+                    extra_info['subj_indices'] = copy.copy(self.embedding_manager.placeholder_indices_fg)
 
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
@@ -1360,9 +1359,9 @@ class LatentDiffusion(DDPM):
                         c_in2 = subj_single_prompts + subj_comp_prompts + mix_single_prompts + mix_comp_prompts
 
                         # The subject is represented with a multi-embedding token.
-                        if len(subj_indices_N) > 1:
-                            cls_single_emb = patch_multi_embeddings(cls_single_emb, subj_indices_N)
-                            cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   subj_indices_N)
+                        if len(subj_indices_half_N) > 1:
+                            cls_single_emb = patch_multi_embeddings(cls_single_emb, subj_indices_half_N)
+                            cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   subj_indices_half_N)
                             
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comp_emb and cls_comp_emb will be mixed.
@@ -1376,9 +1375,9 @@ class LatentDiffusion(DDPM):
                         # won't be mixed, but simply repeated.
 
                         """                         
-                        subj_comp_emb_qv   = scale_emb_in_embs(subj_comp_emb,   subj_indices_N, 
+                        subj_comp_emb_qv   = scale_emb_in_embs(subj_comp_emb,   subj_indices_half_N, 
                                                                scale=subj_emb_scale, scale_first_only=False)
-                        subj_single_emb_qv = scale_emb_in_embs(subj_single_emb, subj_indices_N, 
+                        subj_single_emb_qv = scale_emb_in_embs(subj_single_emb, subj_indices_half_N, 
                                                                scale=subj_emb_scale, scale_first_only=False)
                         """
                         
@@ -1392,15 +1391,15 @@ class LatentDiffusion(DDPM):
                         subj_emb_scale = 1 - INIT_CLS_EMB_SCALE \
                                          - (FINAL_CLS_EMB_SCALE - INIT_CLS_EMB_SCALE) * self.global_step / total_training_steps
 
-                        # mix_embeddings('add'):  being subj_comp_emb almost everywhere, except those at subj_indices_N,
+                        # mix_embeddings('add'):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
                         # where they are subj_comp_emb * subj_emb_scale + cls_comp_emb * (1 - subj_emb_scale).
                         # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
-                        # Each is of a single instance. So only provides subj_indices_N 
+                        # Each is of a single instance. So only provides subj_indices_half_N 
                         # (multiple token indices of the same instance).
                         subj_comp_emb_qv   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
-                                                            subj_indices_N, c1_subj_scale=subj_emb_scale)
+                                                            subj_indices_half_N, c1_subj_scale=subj_emb_scale)
                         subj_single_emb_qv = mix_embeddings('add', subj_single_emb, cls_single_emb,
-                                                            subj_indices_N, c1_subj_scale=subj_emb_scale)
+                                                            subj_indices_half_N, c1_subj_scale=subj_emb_scale)
 
                         mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_qv,   cls_comp_emb],   dim=1)
                         mix_single_emb_all_layers = torch.cat([subj_single_emb_qv, cls_single_emb], dim=1)
