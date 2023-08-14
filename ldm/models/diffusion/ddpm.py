@@ -459,13 +459,6 @@ class DDPM(pl.LightningModule):
         self.is_comp_iter             = False
         self.calc_clip_loss           = False
 
-        # Only do attn recon loss after warm_up_steps (500) iterations, when the subject embedding
-        # and, correspondingly, the mix embedding stablize and the attention maps are accurate.
-        if self.global_step >= 0:
-            self.do_attn_recon_loss_iter = self.do_attn_recon_loss
-        else:
-            self.do_attn_recon_loss_iter = False
-
         # If N_INTERM_REGS == 0, then no intermittent regularizations, set the two flags to False.
         if N_INTERM_REGS > 0 and self.composition_regs_iter_gap > 0 \
             and self.global_step % self.composition_regs_iter_gap == 0:
@@ -489,6 +482,13 @@ class DDPM(pl.LightningModule):
             # Always calculate clip loss during comp reg iterations, even if is_teacher_filter_iter is False.
             # This is to monitor how well the model performs on compositionality.
             self.calc_clip_loss = True
+            self.do_attn_recon_loss_iter = False
+
+        elif self.global_step >= 0:
+            # do_attn_recon_loss_iter only if not is_comp_iter, i.e., not compositional reg iteration.
+            self.do_attn_recon_loss_iter = self.do_attn_recon_loss
+        else:
+            self.do_attn_recon_loss_iter = False
 
         # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
         if self.scheduler is not None:
@@ -1319,8 +1319,6 @@ class LatentDiffusion(DDPM):
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
 
-                    extra_info['do_attn_recon_loss'] = False
-
                     # Only keep the first half (for single prompts), as the second half is the same 
                     # (for comp prompts, differs at the batch index, but the token index is identical).
                     # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
@@ -1336,7 +1334,12 @@ class LatentDiffusion(DDPM):
                     # subj_indices_half_N: subject token indices within the subject single prompt (BS=1).
                     # len(subj_indices_half_N): embedding number of the subject token.
                     subj_indices_half_N = self.embedding_manager.placeholder_indices_fg[1].chunk(2)[0]
-                    extra_info['subj_indices'] = copy.copy(self.embedding_manager.placeholder_indices_fg)
+                    if self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg:
+                        assert not self.do_attn_recon_loss_iter
+                        extra_info['subj_indices'] = copy.copy(self.embedding_manager.placeholder_indices_fg)
+                    else:
+                        assert self.do_attn_recon_loss_iter
+                        extra_info['subj_indices'] = (subj_indices_half_B, subj_indices_half_N)
 
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
@@ -1468,13 +1471,13 @@ class LatentDiffusion(DDPM):
                             # Use the mixed embeddings as the static embeddings of the class prompts.
                             # It strikes a balance between pure class embeddings and subject embeddings.
                             c_static_emb_cls = mix_single_emb
-                            # extra_info['do_attn_recon_loss'] will be not be set to True now,
-                            # but only when the inits are conditioned on c_cls.
-                            cond_mix = (c_static_emb_cls, c_in_cls, extra_info)
+                            extra_info2 = copy.copy(extra_info)
+                            # cond_mix uses class single prompts. Set iter_type to 'mix_recon' to 
+                            # distinguish it from 'normal_recon' which uses subject single prompts.
+                            extra_info2['iter_type']      = 'mix_recon'
+                            cond_mix = (c_static_emb_cls, c_in_cls, extra_info2)
                             # There's a loopy reference extra_info -> c_cls -> extra_info, but it's fine.
                             extra_info['cond_mix'] = cond_mix
-                            # Will set do_attn_recon_loss to True in p_losses().
-                            # extra_info['do_attn_recon_loss'] = self.do_attn_recon_loss_iter
 
                             # Same inits as the normal recon loss below.
                             c_in2         = subj_single_prompts[:ORIG_BS]
@@ -1693,7 +1696,7 @@ class LatentDiffusion(DDPM):
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
         old_use_conv_attn = self.model.diffusion_model.use_conv_attn
-        self.model.diffusion_model.use_conv_attn = use_conv_attn
+        self.model.diffusion_model.set_use_conv_attn(use_conv_attn)
 
         # model_output is the predicted noise.
         # if not unet_has_grad, we save RAM by not storing the computation graph.
@@ -1746,7 +1749,7 @@ class LatentDiffusion(DDPM):
         else:
             x_recon = None
         
-        self.model.diffusion_model.use_conv_attn = old_use_conv_attn
+        self.model.diffusion_model.set_use_conv_attn(old_use_conv_attn)
 
         return model_output, x_recon, ada_embeddings
 
@@ -1881,6 +1884,7 @@ class LatentDiffusion(DDPM):
                     # No change to the condition here.
 
         extra_info['use_background_token'] = self.use_background_token_iter
+        iter_type = cond[2]['iter_type']
 
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
@@ -1906,7 +1910,6 @@ class LatentDiffusion(DDPM):
             target       = target       * img_mask
             model_output = model_output * img_mask
         
-        iter_type = cond[2]['iter_type']
         loss = 0
         twin_comp_ada_embeddings = None
 
@@ -1943,7 +1946,6 @@ class LatentDiffusion(DDPM):
                 subj_indices0 = (subj_indices0[0].chunk(2)[0], subj_indices0[1].chunk(2)[0])
 
                 cond_mix = extra_info['cond_mix']
-                cond_mix[2]['do_attn_recon_loss'] = True
                 #print(cond_mix[1])
                 
                 # We don't add noise to x_start, so that the obtained attention maps are more accurate.
@@ -2222,6 +2224,9 @@ class LatentDiffusion(DDPM):
                         # (cls-single ada embeddings are the same as cls-single static embeddings, 
                         # so no need to generate them)
                         # twin_single_ada_embeddings has gradients, as has_grad=True by default.
+                        # The iter_type is still 'mix_hijk'. But it should output the same results as 
+                        # normal prompt embeddings, since subj_single_emb 
+                        # consists of identical q, k embeddings.
                         model_output, x_recon, twin_single_ada_embeddings = \
                             self.guided_denoise(x_start_, noise_, t_, cond_single,
                                                 # Both prompts are subj-single prompts, so use_conv_attn.
@@ -3045,6 +3050,8 @@ class DiffusionWrapper(pl.LightningModule):
                 extra_info      = None
             # c_static_emb = torch.cat(c_crossattn, 1)
             # self.diffusion_model: UNetModel.
+            #if 'iter_type' in extra_info:
+            #    print(extra_info['iter_type'], c_in)
             out = self.diffusion_model(x, t, context=c_static_emb, context_in=c_in, extra_info=extra_info)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
