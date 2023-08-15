@@ -170,6 +170,7 @@ class CrossAttention(nn.Module):
         self.save_attn_mat = False
         self.force_grad    = False
         self.use_conv_attn = False
+        self.infeat_size   = None
 
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -196,6 +197,7 @@ class CrossAttention(nn.Module):
             context, hijk_context = context
             k = self.to_k(hijk_context)
         else:
+            hijk_context = None
             k = self.to_k(context)
             
         v = self.to_v(context)
@@ -209,7 +211,8 @@ class CrossAttention(nn.Module):
         # If uncond (null condition) is active, then returned subj_indices = None.
         # Don't do conv attn if uncond is active.
         if self.use_conv_attn and subj_indices is not None:
-            replace_rows_by_conv_attn(sim, k, subj_indices)
+            # infeat_size is set in SpatialTransformer.forward().
+            sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, h, self.scale)
 
         if exists(mask):
             mask = rearrange(mask, 'b ... -> b (...)')
@@ -299,6 +302,7 @@ class SpatialTransformer(nn.Module):
         x = self.proj_in(x)
         x = rearrange(x, 'b c h w -> b (h w) c')
         for block in self.transformer_blocks:
+            block.attn2.infeat_size = (h, w)
             x = block(x, context=context)
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
         

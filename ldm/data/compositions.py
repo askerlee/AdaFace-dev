@@ -93,7 +93,8 @@ all_modifiers = [ "concept art", "realistic painting", "character design", "anim
 all_time = ["futuristic", "modern", "ancient", "antique","retro","old-fashioned", "youthful"]
 
 #add light prompts
-all_light = ['daylight', 'moonlight', "natural light", "front light", "backlight", "soft light", "hard light", "moody light", "dramatic light", "dynamic light" ]
+all_light = ['daylight', 'moonlight', "natural light", "front light", "backlight", "soft light", 
+             "hard light", "moody light", "dramatic light", "dynamic light", "natural light" ]
 
 
 all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve",

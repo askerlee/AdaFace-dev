@@ -16,8 +16,6 @@ with open('webui-setting-config.yaml','r') as f: # open config file to load pre 
 
 
 def generate(*args):
- 
-    
     opt.prompt = args[0]
     opt.class_prompt = args[1]
     opt.config = args[2]
@@ -26,27 +24,26 @@ def generate(*args):
     opt.n_iters = args[5]
     opt.ddim_eta = args[6]
     opt.n_samples = args[7]
-    opt.dim_step = args[8]
+    opt.ddim_steps = args[8]
     opt.gpu = int(args[9])
     opt.embedding_paths = args[10]
     opt.H = args[11]
     opt.W = args[12]
-    opt.C = args[13]
-    opt.f = args[14]
-    opt.bs = args[15]
-    opt.n_repeat = args[16]
-    opt.n_rows = args[17]
-    opt.seed = args[18]
-    opt.precision = args[19]
-    opt.subj_scale = args[20]
-    opt.ada_emb_weight = args[21]
-    opt.mask_weight = args[22]
-    opt.broad_class = args[23]
-    opt.clip_last_layers_skip_weights = args[24]
-    opt.plms = args[25]
-    opt.fixed_code = args[26]
-    opt.no_preview = args[27]
-
+    opt.C = 4
+    opt.f = 8
+    opt.bs = args[13]
+    opt.n_repeat = args[14]
+    opt.n_rows = args[15]
+    opt.seed = args[16]
+    opt.precision = args[17]
+    opt.ada_emb_weight = args[18]
+    opt.mask_weight = 0.0
+    opt.broad_class = args[19]
+    opt.clip_last_layers_skip_weights = (args[20], args[21])
+    opt.plms = args[22]
+    opt.fixed_code = args[23]
+    opt.no_preview = args[24]
+    opt.bb_type = ""
 
     if opt.init_img == '':
         opt.init_img = None
@@ -76,17 +73,16 @@ def generate(*args):
 
 with gr.Blocks() as demo:
     gr.Markdown("# AdaPrompt")
-    model_entries = os.listdir('models/stable-diffusion/')
-    model_entries = ['models/stable-diffusion/' + model_entry for model_entry in model_entries]
+    model_subfolders = os.listdir('models/')
+    model_entries = [ os.path.join("models", model_subfolder, model_filename) for model_subfolder in model_subfolders for model_filename in os.listdir('models/' + model_subfolder) ]
     print(model_entries)
     with gr.Row():
         with gr.Column(scale=1, min_width=200):
-            model = gr.Dropdown( model_entries, label='Model (checkpoint)',value = 'v1-5-pruned.ckpt',info = 'under models/stable-diffusion/ directory') #add value ='preious selection from state
+            model = gr.Dropdown( model_entries, label='Model (checkpoint)',value = 'models/stable-diffusion-v-1-5/v1-5-dste.ckpt',info = 'under models/ directory') #add value ='preious selection from state
             print(model)
             # model = 'models/stable-diffusion/' + f'{model}' 
             # print(model)
             
-
         with gr.Column(scale=3):
             pass
     #add a drop down
@@ -96,8 +92,8 @@ with gr.Blocks() as demo:
             with gr.Column(scale=2) as col1:
                 prompt = gr.Textbox(lines=2, label="Prompt", placeholder="Enter a prompt...")
                 class_prompt = gr.Textbox(lines=2, label="Class Prompt", placeholder="Enter a class prompt...")
-                embedding_path_entries = os.listdir('subject-models/ada-0709')
-                embedding_path_entries = ['subject-models/ada-0709/' + path + '/embeddings_gs-4500.pt' for path in embedding_path_entries]
+                embedding_path_entries = os.listdir('releases/ada-0810')
+                embedding_path_entries = ['releases/ada-0810/' + path + '/embeddings_gs-4500.pt' for path in embedding_path_entries]
                 embedding_paths = gr.Dropdown (list(embedding_path_entries), label='Embedding Path', info='will add more later', multiselect=True)
                 with gr.Row() as row00:
                     with gr.Column():
@@ -107,8 +103,8 @@ with gr.Blocks() as demo:
                     with gr.Column():
                         n_iters = gr.Slider(minimum=0, maximum=75, value=20, label="Number of Iterations", step=1)
                 with gr.Row() as row2:
-                    ddim_eta = gr.Slider(minimum=0, maximum=1, value=0.0, label="Dimension", step=0.1)
-                    dim_step = gr.Slider(minimum=0, maximum=250,value=50,  label="Dimension Step", step=1)
+                    ddim_eta = gr.Slider(minimum=0, maximum=1, value=0.0, label="DDIM eta", step=0.1)
+                    ddim_steps = gr.Slider(minimum=0, maximum=250,value=50,  label="Number of DDIM Steps", step=1)
                     # gpu = gr.Checkbox(label="Use GPU", value=True)
                     gpu = gr.Dropdown( [0,1,2,3,4,-1], label="GPU", value = '0' , info='GPU id; -1 for CPU')
                 with gr.Row() as row3:
@@ -121,8 +117,6 @@ with gr.Blocks() as demo:
                 with gr.Row() as row:
                     scale = gr.Slider(minimum=0, maximum=20, value=10.0 ,label="Scale", step=1)
                 with gr.Row() as row4:
-                    C = gr.Slider(minimum=0, maximum=4, value=4, label="Channels", step=1)
-                    f = gr.Slider(minimum=0, maximum=10, value=8, label="f", step=1)
                     bs = gr.Slider(minimum=0, maximum=20, value=8, label="Batch Size", step=1)
                     n_repeat = gr.Slider(minimum=0, maximum=20, value=1, label="n_repeat", step=1)
                 with gr.Row() as row5:
@@ -142,23 +136,22 @@ with gr.Blocks() as demo:
                 with gr.Row():
                     precision = gr.Dropdown(['autocast', 'float32', 'float64'], label='Precision',value='autocast')
                 with gr.Row() as row6:
-                    subj_scale = gr.Slider(minimum=0, maximum=10, value=1.0, label="Subject Scale", step=0.1)
-                    ada_emb_weight = gr.Slider(minimum=-1, maximum=10, value=-1.0, label="Ada Emb Weight", step=0.1)
-                    mask_weight = gr.Slider(minimum=0, maximum=10, value=0.0, label="Mask Weight", step=0.1)
+                    ada_emb_weight = gr.Slider(minimum=-1, maximum=10, value=0.5, label="Ada Emb Weight", step=0.1)
+                    # mask_weight = gr.Slider(minimum=0, maximum=10, value=0.0, label="Mask Weight", step=0.1)
                     broad_class = gr.Slider(minimum=0, maximum=10, value=0, label="Broad Class", step=1)
                     clip_last_layer_skip_weight1 = gr.Slider(minimum=0, maximum=1, value=0.5, label="Clip Last Layer Skip Weight", step=0.1)
                     clip_last_layer_skip_weight2 = gr.Slider(minimum=0, maximum=1, value=0.5, label="Clip Second Last Layer Skip Weight", step=0.1)
-                    clip_last_layers_skip_weights = [clip_last_layer_skip_weight1, clip_last_layer_skip_weight2]
+                    # clip_last_layers_skip_weights = [clip_last_layer_skip_weight1, clip_last_layer_skip_weight2]
                     
                 with gr.Row() as row7:
                     # skip_grid = gr.Checkbox(label="Skip Grid", info="Skip Grid")
-                    plmse = gr.Checkbox(label="PLMSE")
+                    plms = gr.Checkbox(label="PLMS Sampler")
                     # skip_save = gr.Checkbox(label="Skip Save", info="Skip Save")
                     
                     fixed_code = gr.Checkbox(label="Fixed Code")
                     no_preview = gr.Checkbox(label="No Preview")
         
-               # add 'subject-models/' to everyting in the list
+               # add 'releases/' to everyting in the list
 
             with gr.Column(scale=1.5) as col2:
                 #add image output 
@@ -168,9 +161,10 @@ with gr.Blocks() as demo:
                 with gr.Row():
                     output = gr.Image(label="Output")
                 button1.click(generate, outputs=output, inputs=[ \
-                    prompt, class_prompt, config, model, scale, n_iters, ddim_eta, n_samples, dim_step, gpu, \
-                    embedding_paths, H, W, C, f, bs, n_repeat, n_rows, seed, precision, \
-                    subj_scale, ada_emb_weight, mask_weight, broad_class, clip_last_layers_skip_weights, plmse, fixed_code, no_preview])
+                    prompt, class_prompt, config, model, scale, n_iters, ddim_eta, n_samples, ddim_steps, gpu, \
+                    embedding_paths, H, W, bs, n_repeat, n_rows, seed, precision, \
+                    ada_emb_weight, broad_class, \
+                    clip_last_layer_skip_weight1, clip_last_layer_skip_weight2, plms, fixed_code, no_preview])
                 
                 # button2.click(close)
     with gr.Tab(label="Training") as tab0:
@@ -262,12 +256,6 @@ with gr.Blocks() as demo:
 
         imgButton.click(display_images,imgDir,gallery)
         gridButton.click(display_images,gridDir,gallery)
-
-
-    
-
-    
-    
 
 if __name__ == "__main__":
     demo.launch(share=True, show_error = True)

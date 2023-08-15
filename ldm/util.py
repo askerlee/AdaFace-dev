@@ -417,18 +417,121 @@ def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=Tr
     # flat_attn has been detached before passing to this function. So no need to detach spatial_weight.
     return spatial_weight, spatial_attn
 
-def replace_rows_by_conv_attn(attn_mat, k, subj_indices):
-    # input features x: [4, 256, 1280].
-    # attn_mat: [32, 256, 77]. 32: b * h. b = 4, h = 8.
-    # k: [32, 77, 160]
-    # subj_indices: [0, 0, 0, 0], [6, 7, 8, 9].
+# infeat_size: (h, w) of the input feature map (before flattening).
+# H: number of heads.
+def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_scale):
+    # input features x: [4, 4096, 320].
+    # attn_mat: [32, 4096, 77]. 32: b * h. b = 4, h = 8.
+    # q: [32, 4096, 40]. k: [32, 77, 40]. 32: b * h.
+    # subj_indices: [0, 0, 0, 0, 1, 1, 1, 1], [6, 7, 8, 9, 6, 7, 8, 9].
     # prompts: 'a face portrait of a z, , ,  swimming in the ocean, with backlight', 
     #          'a face portrait of a z, , ,  swimming in the ocean, with backlight', 
     #          'a face portrait of a cat, , ,  swimming in the ocean, with backlight', 
     #          'a face portrait of a cat, , ,  swimming in the ocean, with backlight'
-    # The first two prompts are identical, since it's a teacher filter iter.
-    breakpoint()
-    pass
+    # The first two prompts are identical, since this is a teacher filter iter.
+
+    # attn_mat_shape: [32, 4096, 77]
+    attn_mat_shape = attn_mat.shape
+
+    indices_B, indices_N = subj_indices
+    indices_B_uniq = torch.unique(indices_B)
+    # BS: sub-batch size that contains the subject token. 
+    # Probably BS < the full batch size.
+    # M: number of embeddings for each subject token.
+    BS = len(indices_B_uniq)
+    M  = len(indices_N) // BS
+
+    # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77].
+    attn_mat = attn_mat.reshape(-1, H, *attn_mat.shape[1:])
+    # q: [32, 4096, 40] => [4, 8, 4096, 40].
+    q = q.reshape(-1, H, *q.shape[1:])
+    # k: [32, 77, 40] => [4, 8, 77, 40].
+    k = k.reshape(-1, H, *k.shape[1:])
+    # C: number of channels in the embeddings.
+    C = q.shape[-1]
+    # ks: conv kernel size.
+    ks = int(np.sqrt(M))
+    # if ks == 2, pad 1 pixel on the right and bottom.
+    # pads: left, right, top, bottom.
+    if ks == 2:
+        pads = (0, 1, 0, 1)
+    # if ks == 3, pad 1 pixel on each side.
+    else:
+        pads = (1, 1, 1, 1)
+    padder = nn.ZeroPad2d(pads)
+
+    # Traversed x: (0, 0) or (-1, 1). The range of delta x.
+    # Add 1 to the upper bound to make the range inclusive.
+    x_bound = (-pads[0], pads[1] + 1)
+    # Traversed y: (-1, 1).           The range of delta y.
+    # Add 1 to the upper bound to make the range inclusive.
+    y_bound = (-pads[2], pads[3] + 1)
+
+    # Clone to make attn_mat2 a non-leaf node. Otherwise, 
+    # we can't do attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.
+    attn_mat2 = attn_mat.clone()
+
+    for b in range(BS):
+        subj_attn_dxys = []
+        index_b = indices_B_uniq[b]
+        # subj_q: [8, 4096, 40].
+        subj_q = q[index_b]
+        # subj_q_2d: [8, 4096, 40] => [1, 320, 64, 64]
+        subj_q_2d = subj_q.permute(0, 2, 1).reshape(1, H * C, *infeat_size)
+        # subj_q_padded: [1, 320, 65, 65].
+        subj_q_padded = padder(subj_q_2d)
+
+        # indices_b: [0, 0, 0, 0]. indices_n: [6, 7, 8, 9].
+        indices_b = indices_B[b * M : b * M + M]
+        indices_n = indices_N[b * M : b * M + M]
+        if (indices_b != index_b).any():
+            breakpoint()
+        # subj_k: k[[0], :, [6,7,8,9]], shape [4, 8, 40] => [8, 4, 40], [H, M, C].
+        subj_k = k[indices_b, :, indices_n].transpose(0, 1)
+
+        # subj_conv.weight: [8, 40, 2, 2]. The input channel number is 40 * 8 = 320.
+        # But due to grouping, the weight shape is [8, 40, 2, 2] instead of [8, 320, 2, 2].
+        subj_conv = nn.Conv2d(C * H, H, ks, bias=False, groups=H)
+        # subj_k: [8, 4, 40] => [8, 40, 4] => [8, 40, 2, 2].
+        subj_conv.weight = nn.Parameter(subj_k.permute(0, 2, 1).reshape(subj_conv.weight.shape))
+        # subj_attn: [1, 8, 64, 64]
+        # Note to scale attention scores by sim_scale, and divide by M.
+        # sim_scale is to keep consistent to the original cross attention scores.
+        # Divide by M is to evenly distribute the attention scores to each embedding.
+        subj_attn = subj_conv(subj_q_padded) * sim_scale / M
+        # dx, dy: the relative position of a subject token to the center subject token.
+        # s1, s2, s3, s4 => s1    s2
+        #                   s3    s4
+        # So if first loop over dy (rows), then loop over dx (columns), the traversed order is s1, s2, s3, s4.
+        # (We can also traverse in the order s1, s3, s2, s4. It doesn't really matter.)
+        for dy in range(*y_bound):
+            for dx in range(*x_bound):
+                if dx <= 0 and dy <= 0:
+                    # (dx, dy) == (0, 0) is a special case of this else branch.
+                    # If (dx, dy) == (0, 0), subj_attn_dxy is the same as subj_attn.
+                    subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, -dx:], (0, -dx, 0, -dy))
+                elif dx <= 0 and dy > 0:
+                    subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, -dx:], (0, -dx, dy, 0))
+                elif dx > 0 and dy <= 0:
+                    subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, :-dx], (dx, 0,  0, -dy))
+                else:
+                    subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, :-dx], (dx, 0,  dy, 0))
+
+                subj_attn_dxys.append(subj_attn_dxy)
+
+        # dx, dy: the relative position of a subject token to the center subject token.
+        # s1, s2, s3, s4 => s1    s2
+        #                   s3    s4
+        # The traversed order is s1, s2, s3, s4. So we can flatten the list to get 
+        # consecutive 4 columns of attention.
+        # subj_attn_dxys: [4, 8, 64, 64] => [4, 8, 4096].
+        subj_attn_dxys = torch.cat(subj_attn_dxys, dim=0).reshape(M, H, -1)
+        # attn_mat: [4, 8, 4096, 77], [B, H, N, T]. N: number of visual tokens. T: number of text tokens.
+        # attn_mat[[0], :, :, [6,7,8,9]]: [4, 8, 4096]
+        attn_mat2[indices_b, :, :, indices_n] = subj_attn_dxys
+
+    # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
+    return attn_mat2.reshape(attn_mat_shape)
 
 def patch_multi_embeddings(text_embedding, placeholder_indices_N):
     M = len(placeholder_indices_N)

@@ -507,7 +507,7 @@ class UNetModel(nn.Module):
         self.predict_codebook_ids = n_embed is not None
         self.crossattn_force_grad = False
         self.use_conv_attn = False
-        
+
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
@@ -712,6 +712,26 @@ class UNetModel(nn.Module):
         self.middle_block.apply(convert_module_to_f32)
         self.output_blocks.apply(convert_module_to_f32)
 
+    # Set use_conv_attn for all cross-attention layers
+    def set_use_conv_attn(self, use_conv_attn):
+        self.use_conv_attn = use_conv_attn
+        layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
+                              17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
+        layer_idx = 0
+        for module in self.input_blocks:
+            if layer_idx in layer_idx2emb_idx:
+                module[1].transformer_blocks[0].attn2.use_conv_attn = use_conv_attn
+            layer_idx += 1
+
+        if layer_idx in layer_idx2emb_idx:
+            self.middle_block[1].transformer_blocks[0].attn2.use_conv_attn = use_conv_attn
+        layer_idx += 1
+
+        for module in self.output_blocks:
+            if layer_idx in layer_idx2emb_idx:
+                module[1].transformer_blocks[0].attn2.use_conv_attn = use_conv_attn
+            layer_idx += 1
+
     def forward(self, x, timesteps=None, context=None, y=None, 
                 context_in=None, extra_info=None, **kwargs):
         """
@@ -734,9 +754,9 @@ class UNetModel(nn.Module):
         use_layerwise_context = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
         use_ada_context       = extra_info.get('use_ada_context', False)       if extra_info is not None else False
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
-        do_attn_recon_loss    = extra_info.get('do_attn_recon_loss', False)    if extra_info is not None else False
         use_background_token  = extra_info.get('use_background_token', False)  if extra_info is not None else False
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
+        
         if subj_indices is not None:
             subj_indices_B, subj_indices_N = subj_indices
         else:
@@ -784,8 +804,9 @@ class UNetModel(nn.Module):
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
                 # 'mix_' in iter_type: could be "mix_hijk" (training or inference) 
                 # or "mix_concat_cls" (inference only).
-                if iter_type.startswith("mix_") or do_attn_recon_loss:
-                    assert layer_ada_context.shape[1] == layer_static_context.shape[1] // 2
+                if iter_type.startswith("mix_"):
+                    if layer_ada_context.shape[1] != layer_static_context.shape[1] // 2:
+                        breakpoint()
                     # "mix_concat_cls" is inference only.
                     if iter_type == 'mix_concat_cls':
                         # Do not BP into the copy of ada embeddings that are added with the mixed embeddings. 
@@ -843,7 +864,7 @@ class UNetModel(nn.Module):
         # 12            [2, 1280, 8,  8]
         layer_idx = 0
 
-        if iter_type.startswith("mix_") or do_attn_recon_loss or use_background_token \
+        if iter_type.startswith("mix_") or use_background_token \
           or iter_type == 'debug_attn':
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
             distill_layer_indices = [7, 8, 12, 16, 17, 18]
@@ -860,7 +881,6 @@ class UNetModel(nn.Module):
                 # that does cross-attention with layer_context in attn2 only.
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
                 module[1].transformer_blocks[0].attn2.force_grad = self.crossattn_force_grad
-                module[1].transformer_blocks[0].attn2.use_conv_attn = self.use_conv_attn
 
             # layer_context: [2, 77, 768], conditioning embedding.
             # emb: [2, 1280], time embedding.
@@ -871,7 +891,6 @@ class UNetModel(nn.Module):
                     distill_feats[layer_idx] = h
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
                     module[1].transformer_blocks[0].force_grad = False
-                    module[1].transformer_blocks[0].attn2.use_conv_attn = False
 
             layer_idx += 1
         
@@ -881,7 +900,6 @@ class UNetModel(nn.Module):
         if layer_idx in distill_layer_indices:
             self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = True
             self.middle_block[1].transformer_blocks[0].attn2.force_grad = self.crossattn_force_grad
-            self.middle_block[1].transformer_blocks[0].attn2.use_conv_attn = self.use_conv_attn
 
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, get_layer_idx_context)
@@ -890,7 +908,6 @@ class UNetModel(nn.Module):
                 distill_feats[layer_idx] = h
                 self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = False
                 self.middle_block[1].transformer_blocks[0].attn2.force_grad = False
-                self.middle_block[1].transformer_blocks[0].attn2.use_conv_attn = False
 
         layer_idx += 1
 
@@ -915,7 +932,6 @@ class UNetModel(nn.Module):
             if layer_idx in distill_layer_indices:
                 module[1].transformer_blocks[0].attn2.save_attn_mat = True
                 module[1].transformer_blocks[0].attn2.force_grad = self.crossattn_force_grad
-                module[1].transformer_blocks[0].attn2.use_conv_attn = self.use_conv_attn
 
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, get_layer_idx_context)
@@ -924,7 +940,6 @@ class UNetModel(nn.Module):
                     distill_feats[layer_idx] = h
                     module[1].transformer_blocks[0].attn2.save_attn_mat = False
                     module[1].transformer_blocks[0].attn2.force_grad = False
-                    module[1].transformer_blocks[0].attn2.use_conv_attn = False
 
             layer_idx += 1
 
