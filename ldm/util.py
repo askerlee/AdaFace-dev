@@ -489,12 +489,11 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
         # subj_k: k[[0], :, [6,7,8,9]], shape [4, 8, 40] => [8, 40, 4], [H, C, M].
         subj_k = k[indices_b, :, indices_n].permute(1, 2, 0)
 
-        # subj_conv.weight: [8, 40, 2, 2]. First 2 is height (y), second 2 is width (x).
+        # subj_k -> conv weight: [8, 40, 2, 2]. First 2 is height (y), second 2 is width (x).
         # The input channel number is 40 * 8 = 320.
         # But due to grouping, the weight shape is [8, 40, 2, 2] instead of [8, 320, 2, 2].
         # Each output channel belongs to an individual group. 
         # The shape of the weight 40*8 should be viewed as 8 groups of 40*1.
-        subj_conv = nn.Conv2d(C * H, H, ks, bias=False, groups=H)
         # subj_k: [8, 4, 40] => [8, 40, 4] => [8, 40, 2, 2].
         # So the 4 embeddings (s1, s2, s3, s4) in subj_k are arranged as 
         #                |  (s1 s2
@@ -504,7 +503,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
         # Note to scale attention scores by sim_scale, and divide by M.
         # sim_scale is to keep consistent to the original cross attention scores.
         # Divide by M so that the attention scores are evenly distributed to the M embeddings.
-        subj_attn = F.conv2d(subj_q_padded, subj_k.reshape(subj_conv.weight.shape), groups=H) * sim_scale / M
+        subj_attn = F.conv2d(subj_q_padded, subj_k.reshape(H, C, ks, ks), groups=H) * sim_scale / M
         # Shift subj_attn (with 0 padding) to yield ks*ks slightly different attention maps 
         # for the M embeddings.
         # dx, dy: the relative position of a subject token to the center subject token.
