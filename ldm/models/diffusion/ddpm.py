@@ -1376,7 +1376,7 @@ class LatentDiffusion(DDPM):
                             
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comp_emb and cls_comp_emb will be mixed.
-                        # In subj_comp_emb_qv_mix, subj_single_emb_qv_mix, the M subject embeddings are scaled down by 0.5,
+                        # In subj_comp_emb_v_mix, subj_single_emb_v_mix, the M subject embeddings are scaled down by 0.5,
                         # /* and added with 0.5 * class embeddings */, 
                         # so that other components will express more during guidance. 
                         # and the token number will be the double of subj_comp_emb.
@@ -1386,9 +1386,9 @@ class LatentDiffusion(DDPM):
                         # won't be mixed, but simply repeated.
 
                         """                         
-                        subj_comp_emb_qv   = scale_emb_in_embs(subj_comp_emb,   subj_indices_half_N, 
+                        subj_comp_emb_v   = scale_emb_in_embs(subj_comp_emb,   subj_indices_half_N, 
                                                                scale=subj_emb_scale, scale_first_only=False)
-                        subj_single_emb_qv = scale_emb_in_embs(subj_single_emb, subj_indices_half_N, 
+                        subj_single_emb_v = scale_emb_in_embs(subj_single_emb, subj_indices_half_N, 
                                                                scale=subj_emb_scale, scale_first_only=False)
                         """
                         
@@ -1407,13 +1407,18 @@ class LatentDiffusion(DDPM):
                         # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
                         # Each is of a single instance. So only provides subj_indices_half_N 
                         # (multiple token indices of the same instance).
-                        subj_comp_emb_qv   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
+                        subj_comp_emb_v   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
                                                             subj_indices_half_N, c1_subj_scale=subj_emb_scale)
-                        subj_single_emb_qv = mix_embeddings('add', subj_single_emb, cls_single_emb,
+                        subj_single_emb_v = mix_embeddings('add', subj_single_emb, cls_single_emb,
                                                             subj_indices_half_N, c1_subj_scale=subj_emb_scale)
 
-                        mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_qv,   cls_comp_emb],   dim=1)
-                        mix_single_emb_all_layers = torch.cat([subj_single_emb_qv, cls_single_emb], dim=1)
+                        if random.random() < 0.5:
+                            mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_v,   cls_comp_emb],   dim=1)
+                            mix_single_emb_all_layers = torch.cat([subj_single_emb_v, cls_single_emb], dim=1)
+                        else:
+                            # Swap embeddings that produce q and v.
+                            mix_comp_emb_all_layers   = torch.cat([cls_comp_emb,   subj_comp_emb_v],   dim=1)
+                            mix_single_emb_all_layers = torch.cat([cls_single_emb, subj_single_emb_v], dim=1)
 
                         #mix_comp_emb_all_layers  = cls_comp_emb
                         #mix_single_emb_all_layers = cls_single_emb
