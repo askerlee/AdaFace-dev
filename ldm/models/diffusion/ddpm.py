@@ -94,6 +94,7 @@ class DDPM(pl.LightningModule):
                  composition_regs_iter_gap=-1,
                  prompt_delta_reg_weight=0.,
                  composition_prompt_mix_reg_weight=0.,
+                 fg_bg_complementary_loss_weight=0.,
                  do_clip_teacher_filtering=False,
                  do_attn_recon_loss=True,
                  use_background_token=False,
@@ -119,6 +120,7 @@ class DDPM(pl.LightningModule):
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.prompt_delta_reg_weight         = prompt_delta_reg_weight
         self.composition_prompt_mix_reg_weight = composition_prompt_mix_reg_weight
+        self.fg_bg_complementary_loss_weight   = fg_bg_complementary_loss_weight
         self.do_clip_teacher_filtering      = do_clip_teacher_filtering
         self.prompt_mix_scheme              = 'mix_hijk'
 
@@ -1922,9 +1924,6 @@ class LatentDiffusion(DDPM):
         twin_comp_ada_embeddings = None
 
         if iter_type == 'normal_recon':
-            # If do_attn_recon_loss_iter, then fg_bg_complementary_loss_weight is halved, 
-            # as we compute two such losses.
-            fg_bg_complementary_loss_weight = 0.002
             # Compute subj_fg_bg_complementary_loss, only when 
             # we don't compute mix_fg_bg_complementary_loss. Otherwise it'll take too much RAM.
             # mix_fg_bg_complementary_loss is preferred over subj_fg_bg_complementary_loss,
@@ -1933,7 +1932,7 @@ class LatentDiffusion(DDPM):
             if self.use_background_token_iter and not self.do_attn_recon_loss_iter:
                 subj_fg_bg_complementary_loss = \
                             self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
-                                                               self.embedding_manager.placeholder_indices_fg0,
+                                                               self.embedding_manager.placeholder_indices_fg,
                                                                self.embedding_manager.placeholder_indices_bg,
                                                                x_start.shape[0],
                                                                fg_grad_scale=0.01
@@ -1941,7 +1940,7 @@ class LatentDiffusion(DDPM):
                 
                 # Release RAM.
                 del cond[2]['unet_attns'], cond[2]['unet_feats']
-                loss += fg_bg_complementary_loss_weight * subj_fg_bg_complementary_loss
+                loss += self.fg_bg_complementary_loss_weight * subj_fg_bg_complementary_loss
                 loss_dict.update({f'{prefix}/fg_bg_complem_subj': subj_fg_bg_complementary_loss.item()})
                 # print(fg_bg_complementary_loss)
 
@@ -1979,14 +1978,14 @@ class LatentDiffusion(DDPM):
                     # So we only take the beginning BS indices out of it.
                     mix_fg_bg_complementary_loss = \
                                 self.calc_fg_bg_complementary_loss(unet_attns_mix_single, 
-                                                                   self.embedding_manager.placeholder_indices_fg0,
+                                                                   self.embedding_manager.placeholder_indices_fg,
                                                                    self.embedding_manager.placeholder_indices_bg,
                                                                    x_start.shape[0],
                                                                    fg_grad_scale=0.01
                                                                   )
                     
                     # Do not delete cond_mix[2]['unet_attns'], as it will be used to compute the spatial weights.
-                    loss += fg_bg_complementary_loss_weight * mix_fg_bg_complementary_loss
+                    loss += self.fg_bg_complementary_loss_weight * mix_fg_bg_complementary_loss
                     loss_dict.update({f'{prefix}/fg_bg_complem_mix': mix_fg_bg_complementary_loss.item()})
 
                 # unet_attns is a dict as: layer_idx -> attn_mat. 
@@ -2524,7 +2523,6 @@ class LatentDiffusion(DDPM):
                                       placeholder_indices_fg, 
                                       placeholder_indices_bg, 
                                       BS, fg_grad_scale=0.01):
-        loss_fg_bg_complementary = 0
 
         # Discard top layers and the first few bottom layers from distillation.
         # distill_layer_weights: relative weight of each distillation layer. 
@@ -2542,20 +2540,29 @@ class LatentDiffusion(DDPM):
         # Normalize the weights above so that each set sum to 1.
         attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
         attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
+        # M: 4, number of embeddings per subject token.
+        M = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
+        loss_fg_bg_complementary = 0
 
         for unet_layer_idx, unet_attn in unet_attns.items():
             if (unet_layer_idx not in attn_distill_layer_weights):
                 continue
 
-            # [4, 8, 256, 77] / [4, 8, 64, 77] =>
-            # [4, 77, 8, 256] / [4, 77, 8, 64]
+            # [2, 8, 256, 77] / [2, 8, 64, 77] =>
+            # [2, 77, 8, 256] / [2, 77, 8, 64]
             attn_mat = unet_attn.permute(0, 3, 1, 2)
-            # placeholder_indices_fg is actually placeholder_indices_fg0, i.e., the indices of the first
-            # embedding for each token. So the shapes of subj_attn and bg_attn are always the same.
-            # subj_attn: [4, 8, 256 / 64] (1 embedding  for 1 token) 
-            placeholder_indices_fg = (placeholder_indices_fg[0][:BS], placeholder_indices_fg[1][:BS])
+            # In each instance, placeholder_indices_fg has M times as many elements as placeholder_indices_bg.
+            # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
+            #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
+            # placeholder_indices_bg: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
+            # BS = 2, so we only keep instances indexed by [0, 1].
+            # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
+            placeholder_indices_fg = (placeholder_indices_fg[0][:BS*M], placeholder_indices_fg[1][:BS*M])
+            # placeholder_indices_bg: ([0, 1], [11, 12]).
             placeholder_indices_bg = (placeholder_indices_bg[0][:BS], placeholder_indices_bg[1][:BS])
-            subj_attn = attn_mat[placeholder_indices_fg]
+            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] average over M embeddings -> [2, 8, 64]
+            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, M, *attn_mat.shape[2:]).mean(dim=1)
+            # bg_attn: [2, 8, 64].
             bg_attn   = attn_mat[placeholder_indices_bg]
             
             attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
