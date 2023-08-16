@@ -326,6 +326,8 @@ def main(opt):
                 f"Only support 4 or 9 embeddings per token but got {opt.num_vectors_per_token}. " \
                 "4 = 2*2 kernel, 9 = 3*3 kernel."
         model.use_conv_attn = True
+        kernel_desc = "2x2" if opt.num_vectors_per_token == 4 else "3x3"
+        print(f"Use {kernel_desc} Conv Attention with subject embeddings")
 
     if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
