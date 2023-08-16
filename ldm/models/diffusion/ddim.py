@@ -206,22 +206,27 @@ class DDIMSampler(object):
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
             e_t = self.model.apply_model(x, t, c)
         else:
+            # Double the batch size for unconditional and conditional conditioning.
             x_in = torch.cat([x] * 2)
             t_in = torch.cat([t] * 2)
             if isinstance(c, tuple):
                 c_c, c_in_c, extra_info = c
                 c_u, c_in_u, _ = unconditional_conditioning
-                # Concatenated conditining embedding in the order of (unconditional, conditional)
-                uc_c = torch.cat([c_u, c_c])
-                # Concatenated input context (prompts) in the order of (unconditional, conditional)
-                uc_c_in = sum([c_in_u, c_in_c], [])
+                # Concatenated conditining embedding in the order of (conditional, unconditional).
+                # NOTE: the original order is (unconditional, conditional). But if we use_conv_attn,
+                # extra_info['subj_indices'] index the conditional prompts. If we prepend unconditonal prompts,
+                # subj_indices need to be manually adjusted. 
+                # (conditional, unconditional) don't need to adjust subj_indices.
+                twin_c = torch.cat([c_c, c_u])
+                # Concatenated input context (prompts) in the order of (conditional, unconditional).
+                twin_in = sum([c_in_c, c_in_u], [])
                 # Combined context tuple.
-                c2 = (uc_c, uc_c_in, extra_info)
+                c2 = (twin_c, twin_in, extra_info)
             else:
-                c2 = torch.cat([unconditional_conditioning, c])
+                c2 = torch.cat([c, unconditional_conditioning])
 
             # model.apply_model() -> DiffusionWrapper.forward() -> UNetModel.forward().
-            e_t_uncond, e_t = self.model.apply_model(x_in, t_in, c2).chunk(2)
+            e_t, e_t_uncond = self.model.apply_model(x_in, t_in, c2).chunk(2)
             # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
             e_t = e_t_uncond + unconditional_guidance_scale * (e_t - e_t_uncond)
 

@@ -25,7 +25,10 @@ def parse_args():
     parser.add_argument("--num_vectors_per_token",
                         type=int, default=argparse.SUPPRESS,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
-                        
+    parser.add_argument("--use_conv_attn",
+                        action="store_true", 
+                        help="Use convolutional attention at subject tokens")
+                            
     parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
     
@@ -126,6 +129,11 @@ if __name__ == "__main__":
     if hasattr(args, 'num_vectors_per_token') and args.num_vectors_per_token > 1:
         args.placeholder += ", " * (args.num_vectors_per_token - 1)
 
+    if args.use_conv_attn:
+        assert args.num_vectors_per_token == 4 or args.num_vectors_per_token == 9, \
+                f"Only support 4 or 9 embeddings per token but got {args.num_vectors_per_token}. " \
+                "4 = 2*2 kernel, 9 = 3*3 kernel."
+            
     if hasattr(args, 'z_prefix'):
         # * 3 for 3 broad classes, i.e., all classes use the same args.z_prefix.
         z_prefixes = [args.z_prefix] * 3    
@@ -370,6 +378,8 @@ if __name__ == "__main__":
 
         if hasattr(args, 'num_vectors_per_token'):
             command_line += f" --placeholder_string {args.orig_placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
+        if args.use_conv_attn:
+            command_line += f" --use_conv_attn"
             
         if args.compare_with_pardir:
             # Do evaluation on authenticity/composition.

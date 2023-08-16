@@ -714,7 +714,9 @@ class UNetModel(nn.Module):
 
     # Set use_conv_attn for all cross-attention layers
     def set_use_conv_attn(self, use_conv_attn):
+        old_use_conv_attn = self.use_conv_attn
         self.use_conv_attn = use_conv_attn
+
         layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                               17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
         layer_idx = 0
@@ -732,6 +734,8 @@ class UNetModel(nn.Module):
                 module[1].transformer_blocks[0].attn2.use_conv_attn = use_conv_attn
             layer_idx += 1
 
+        return old_use_conv_attn
+    
     def forward(self, x, timesteps=None, context=None, y=None, 
                 context_in=None, extra_info=None, **kwargs):
         """
@@ -751,12 +755,18 @@ class UNetModel(nn.Module):
 
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
+
         use_layerwise_context = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
         use_ada_context       = extra_info.get('use_ada_context', False)       if extra_info is not None else False
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
         use_background_token  = extra_info.get('use_background_token', False)  if extra_info is not None else False
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
+        use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
+        debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
         
+        if use_conv_attn:
+            old_use_conv_attn = self.set_use_conv_attn(True)
+
         if subj_indices is not None:
             subj_indices_B, subj_indices_N = subj_indices
         else:
@@ -864,8 +874,7 @@ class UNetModel(nn.Module):
         # 12            [2, 1280, 8,  8]
         layer_idx = 0
 
-        if iter_type.startswith("mix_") or use_background_token \
-          or iter_type == 'debug_attn':
+        if iter_type.startswith("mix_") or use_background_token or debug_attn:
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
             distill_layer_indices = [7, 8, 12, 16, 17, 18]
         else:
@@ -946,9 +955,12 @@ class UNetModel(nn.Module):
         extra_info['unet_feats'] = distill_feats
         extra_info['unet_attns'] = distill_attns
 
-        if iter_type == 'debug_attn':
+        if debug_attn:
             breakpoint()
-            
+        
+        if use_conv_attn:
+            self.set_use_conv_attn(old_use_conv_attn)
+
         # [2, 320, 64, 64]
         h = h.type(x.dtype)
         if self.predict_codebook_ids:
