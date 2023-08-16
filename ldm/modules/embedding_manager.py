@@ -873,13 +873,16 @@ class EmbeddingManager(nn.Module):
         self.layer_idx2emb_idx = layer_idx2emb_idx
         self.loss_call_count = 0
         # Store the text_embedder to compute the delta loss.
-        self.text_embedder = text_embedder
+        self.text_embedder  = text_embedder
         self.ada_embeddings = None
         self.ada_bp_to_unet = False
         self.force_grad     = False
+        self.placeholder_indices_bg = None
+        self.placeholder_indices_fg = None
+        self.placeholder_indices_fg0 = None
 
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_string={}".format(
-                placeholder_strings, num_vectors_per_token, layerwise_lora_rank, ada_emb_weight, self.background_string))
+               placeholder_strings, num_vectors_per_token, layerwise_lora_rank, ada_emb_weight, self.background_string))
             
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_layers = 16 
@@ -951,11 +954,21 @@ class EmbeddingManager(nn.Module):
             # mirror-reflect the embedding along the layer dimension, to make it symmetric 
             # in the encoder & decoder.
 
+        self.clear_placeholder_indices('all')
+
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             # If there's only one vector per token, we can do a simple replacement
             placeholder_indices = torch.where(tokenized_text == placeholder_token.to(device))
             # No placeholder token is found in the current batch.
             if placeholder_indices[0].numel() == 0:
+                # If is_bg_token, then set placeholder_indices_bg to None.
+                # Otherwise it's fg token, but we don't set placeholder_indices_fg to None, 
+                # as there may be multiple fg tokens.
+                # During inference, self.background_string is not set.
+                # So even if placeholder_token is bg token, still placeholder_string != self.background_string,
+                # and we do nothing (but bg indices have been set to None above).
+                if placeholder_string == self.background_string:
+                    self.clear_placeholder_indices('bg')
                 continue
             
             # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
@@ -1010,7 +1023,7 @@ class EmbeddingManager(nn.Module):
             # If background_string is None, then always update the indices. Otherwise, 
             # skip updating placeholder indices of the background string.
             self.update_placeholder_indices(orig_tokenized_text, placeholder_token, self.token2num_vectors[placeholder_string],
-                                            is_fg_token=(placeholder_string != self.background_string))
+                                            is_bg_token=(placeholder_string == self.background_string))
 
         return embedded_text, static_subj_embs_dict
 
@@ -1111,12 +1124,25 @@ class EmbeddingManager(nn.Module):
 
         self.set_delta_loss_emb_mask(delta_loss_emb_mask)
 
-    def update_placeholder_indices(self, tokenized_text, placeholder_token, num_vectors_per_token, is_fg_token):
+    def clear_placeholder_indices(self, type='all'):
+        if type == 'all':
+            self.placeholder_indices_fg, self.placeholder_indices_fg0 = None, None
+            self.placeholder_indices_bg = None
+        elif type == 'fg':
+            self.placeholder_indices_fg, self.placeholder_indices_fg0 = None, None
+        elif type == 'bg':
+            self.placeholder_indices_bg = None
+
+    def update_placeholder_indices(self, tokenized_text, placeholder_token, num_vectors_per_token, is_bg_token):
         placeholder_indices_B, placeholder_indices_N = \
             torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
         # placeholder_indices0: only indices the first embedding of each multi-embedding token.
         placeholder_indices0 = (placeholder_indices_B, placeholder_indices_N)
-
+        if len(placeholder_indices_B) == 0:
+            if is_bg_token:
+                self.placeholder_indices_bg = None
+            return
+        
         if num_vectors_per_token > 1:
             BS = placeholder_indices_B.shape[0]
             # unsqueeze(1) -> [B, 1] => [B, num_vectors_per_token] => [B * num_vectors_per_token].
@@ -1132,11 +1158,11 @@ class EmbeddingManager(nn.Module):
             # placeholder_indices contains the indices of all placeholder embeddings.
             placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
         
-        if is_fg_token:
-            self.placeholder_indices_fg, self.placeholder_indices_fg0 = placeholder_indices, placeholder_indices0
-        else:
+        if is_bg_token:
             # background token only has one embedding. So no need to separately store placeholder_indices_bg0.
             self.placeholder_indices_bg = placeholder_indices
+        else:
+            self.placeholder_indices_fg, self.placeholder_indices_fg0 = placeholder_indices, placeholder_indices0
             
     def get_ada_emb_weight(self):
         if self.training:

@@ -788,8 +788,11 @@ class LatentDiffusion(DDPM):
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
                 
-                extra_info = { 'use_layerwise_context': self.use_layerwise_embedding, 
-                               'use_ada_context':       self.use_ada_embedding,
+                extra_info = { 
+                                'use_layerwise_context': self.use_layerwise_embedding, 
+                                'use_ada_context':       self.use_ada_embedding,
+                                'use_conv_attn':         self.use_conv_attn,
+                                'subj_indices':          copy.copy(self.embedding_manager.placeholder_indices_fg),
                              }
                 
                 if self.use_ada_embedding:
@@ -1330,6 +1333,9 @@ class LatentDiffusion(DDPM):
                     # BUG: if the batch size of a mix batch > 4, then the subj_indices_half_N
                     # corresponds to the indices in more than one instance. But patch_multi_embeddings()
                     # treat the indices as if they are always in the same instance.
+                    if self.embedding_manager.placeholder_indices_fg is None:
+                        breakpoint()
+                        
                     subj_indices_half_B = self.embedding_manager.placeholder_indices_fg[0].chunk(2)[0]
                     # subj_indices_half_N: subject token indices within the subject single prompt (BS=1).
                     # len(subj_indices_half_N): embedding number of the subject token.
@@ -1475,6 +1481,8 @@ class LatentDiffusion(DDPM):
                             # cond_mix uses class single prompts. Set iter_type to 'mix_recon' to 
                             # distinguish it from 'normal_recon' which uses subject single prompts.
                             extra_info2['iter_type']      = 'mix_recon'
+                            # cond_mix uses class single prompts. So do not use_conv_attn.
+                            extra_info2['use_conv_attn']  = False
                             cond_mix = (c_static_emb_cls, c_in_cls, extra_info2)
                             # There's a loopy reference extra_info -> c_cls -> extra_info, but it's fine.
                             extra_info['cond_mix'] = cond_mix
@@ -1691,12 +1699,9 @@ class LatentDiffusion(DDPM):
     # unet_has_grad: when returning do_recon (e.g. to select the better instance by smaller clip loss), 
     # to speed up, no BP is done on these instances, so unet_has_grad=False.
     def guided_denoise(self, x_start, noise, t, cond, unet_has_grad=True, 
-                       crossattn_force_grad=True, use_conv_attn=False,
+                       crossattn_force_grad=True, 
                        do_recon=False, cfg_scales=None):
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-
-        old_use_conv_attn = self.model.diffusion_model.use_conv_attn
-        self.model.diffusion_model.set_use_conv_attn(use_conv_attn)
 
         # model_output is the predicted noise.
         # if not unet_has_grad, we save RAM by not storing the computation graph.
@@ -1749,8 +1754,6 @@ class LatentDiffusion(DDPM):
         else:
             x_recon = None
         
-        self.model.diffusion_model.set_use_conv_attn(old_use_conv_attn)
-
         return model_output, x_recon, ada_embeddings
 
     # Release part of the computation graph on unused instances to save RAM.
@@ -1886,11 +1889,11 @@ class LatentDiffusion(DDPM):
         extra_info['use_background_token'] = self.use_background_token_iter
         iter_type = cond[2]['iter_type']
 
+        # There are always some subj prompts in this batch. So if self.use_conv_attn,
+        # then cond['use_conv_attn'] = True, it will inform U-Net to do conv attn.
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
                                 unet_has_grad=not is_teacher_filter_iter, 
-                                # There are always some subj prompts in this batch. So use_conv_attn.
-                                use_conv_attn=self.use_conv_attn,
                                 do_recon=self.calc_clip_loss,
                                 cfg_scales=cfg_scales_for_clip_loss)
 
@@ -1952,11 +1955,10 @@ class LatentDiffusion(DDPM):
                 t0 = torch.zeros_like(t)
                 # crossattn_force_grad: override the cross attention layers' autograd status, so that we can BP
                 # from the complementary loss through the cross attention.
+                # cond_mix: cls prompts. So do not use_conv_attn. cond_mix[2]['use_conv_attn'] is False
                 self.guided_denoise(x_start, noise, t0, cond_mix, 
                                     unet_has_grad=False, 
                                     crossattn_force_grad=True,
-                                    # cond_mix: cls prompts. So no use_conv_attn.
-                                    use_conv_attn=False,    
                                     do_recon=False,
                                     cfg_scales=None)
                 unet_attns_mix_single = cond_mix[2]['unet_attns']
@@ -2168,10 +2170,10 @@ class LatentDiffusion(DDPM):
                     # do_recon=True: return denoised images x_recon. If cfg_scale > 1, 
                     # do classifier-free guidance, so that x_recon are better instances
                     # to be used to initialize the next reuse_init comp iteration.
+                    # student prompts are subject prompts. So in cond_orig, 
+                    # use_conv_attn = self.use_conv_attn.
                     model_output, x_recon, ada_embeddings = \
                         self.guided_denoise(x_start, noise, t, cond_orig, unet_has_grad=True, 
-                                            # student prompts are subject prompts. So use_conv_attn.
-                                            use_conv_attn=self.use_conv_attn,
                                             do_recon=True, cfg_scales=cfg_scales_for_clip_loss)
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
@@ -2227,10 +2229,11 @@ class LatentDiffusion(DDPM):
                         # The iter_type is still 'mix_hijk'. But it should output the same results as 
                         # normal prompt embeddings, since subj_single_emb 
                         # consists of identical q, k embeddings.
+                        # Both prompts are subj-single prompts, so in cond_single 
+                        # (inherits extra_info from cond),
+                        # use_conv_attn = self.use_conv_attn.
                         model_output, x_recon, twin_single_ada_embeddings = \
                             self.guided_denoise(x_start_, noise_, t_, cond_single,
-                                                # Both prompts are subj-single prompts, so use_conv_attn.
-                                                use_conv_attn=self.use_conv_attn,
                                                 unet_has_grad=False, crossattn_force_grad=True)
                         
                         # No need to concatenate these two, instead let calc_prompt_delta_loss() handle the intricacy.

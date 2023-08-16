@@ -229,7 +229,10 @@ def parse_args():
     parser.add_argument("--num_vectors_per_token",
                         type=int, default=argparse.SUPPRESS,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
-                    
+    parser.add_argument("--use_conv_attn",
+                        action="store_true", 
+                        help="Use convolutional attention at subject tokens")
+                        
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
     parser.add_argument("--bb_type", type=str, default="")
@@ -317,6 +320,13 @@ def main(opt):
     if hasattr(opt, 'num_vectors_per_token'):
         model.embedding_manager.set_num_vectors_per_token(opt.num_vectors_per_token, 
                                                           placeholder_strings=[opt.placeholder_string])
+
+    if opt.use_conv_attn:
+        assert opt.num_vectors_per_token == 4 or opt.num_vectors_per_token == 9, \
+                f"Only support 4 or 9 embeddings per token but got {opt.num_vectors_per_token}. " \
+                "4 = 2*2 kernel, 9 = 3*3 kernel."
+        model.use_conv_attn = True
+
     if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
     
@@ -359,7 +369,7 @@ def main(opt):
             assert opt.class_prompt is not None, "Must specify --class_prompt when calculating CLIP similarities."
 
         batched_class_long_prompts = [ opt.class_prompt ] * len(batched_prompts)
-        batched_ref_prompts        = [ opt.ref_prompt ] * len(batched_prompts)
+        batched_ref_prompts        = [ opt.ref_prompt ]   * len(batched_prompts)
 
     else:
         print(f"Reading prompts from {opt.from_file}")
@@ -459,8 +469,6 @@ def main(opt):
                         print(f"\n{p_i+1}/{prompt_block_count}", prompts[0])
                         uc = None
 
-                        # It's legal that prompt_mix_weight < 0, in which case 
-                        # we enhance the expression of the subject.
                         if prompt_mix_weight != 0:
                             # If ref_prompt is None (default), then ref_c is None, i.e., no mixing.
                             ref_prompt = batched_ref_prompts[p_i]
@@ -487,6 +495,8 @@ def main(opt):
                         if isinstance(prompts, tuple):
                             prompts = list(prompts)
                         c = model.get_learned_conditioning(prompts)
+                        
+                        # ref_c is not None, implies (prompt_mix_weight != 0 and ref_prompt is not None).
                         if ref_c is not None:
                             # c / ref_c are tuples of (cond, prompts, extra_info).
                             c0_mix_all_layers = mix_embeddings(c[0], ref_c[0], prompt_mix_weight, 
@@ -515,10 +525,7 @@ def main(opt):
                             c = (c0_mix, c[1], c[2])
 
                         if opt.debug and ref_c is None:
-                            c[2]['iter_type'] = 'debug_attn'
-
-                        #else:
-                        #    c[2]['iter_type'] = 'static_hijk'
+                            c[2]['debug_attn'] = True
 
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                         # During inference, the batch size is *doubled*. 
