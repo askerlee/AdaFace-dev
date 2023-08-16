@@ -2523,7 +2523,6 @@ class LatentDiffusion(DDPM):
                                       placeholder_indices_fg, 
                                       placeholder_indices_bg, 
                                       BS, fg_grad_scale=0.01):
-        loss_fg_bg_complementary = 0
 
         # Discard top layers and the first few bottom layers from distillation.
         # distill_layer_weights: relative weight of each distillation layer. 
@@ -2541,6 +2540,9 @@ class LatentDiffusion(DDPM):
         # Normalize the weights above so that each set sum to 1.
         attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
         attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
+        # M: 4, number of embeddings per subject token.
+        M = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
+        loss_fg_bg_complementary = 0
 
         for unet_layer_idx, unet_attn in unet_attns.items():
             if (unet_layer_idx not in attn_distill_layer_weights):
@@ -2554,16 +2556,14 @@ class LatentDiffusion(DDPM):
             #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
             # placeholder_indices_bg: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
             # BS = 2, so we only keep instances indexed by [0, 1].
-            # M: 4, number of embeddings per subject token.
-            M = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
             # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
             placeholder_indices_fg = (placeholder_indices_fg[0][:BS*M], placeholder_indices_fg[1][:BS*M])
             # placeholder_indices_bg: ([0, 1], [11, 12]).
             placeholder_indices_bg = (placeholder_indices_bg[0][:BS], placeholder_indices_bg[1][:BS])
-            # subj_attn: [8, 8, 64] => [2, 4, 8, 64]
-            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, M, *attn_mat.shape[1:])
-            # bg_attn: [2, 8, 64] -> [2, 1, 8, 64] -> [2, 4, 8, 64]
-            bg_attn   = attn_mat[placeholder_indices_bg].unsqueeze(1).repeat(1, M, 1, 1)
+            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] average over M embeddings -> [2, 8, 64]
+            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, M, *attn_mat.shape[2:]).mean(dim=1)
+            # bg_attn: [2, 8, 64].
+            bg_attn   = attn_mat[placeholder_indices_bg]
             
             attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
             # Align bg_attn with (1 - subj_attn), so that the two attention maps are complementary.
