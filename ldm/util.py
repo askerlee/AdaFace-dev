@@ -437,8 +437,8 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
     indices_B_uniq = torch.unique(indices_B)
     # BS: sub-batch size that contains the subject token. 
     # Probably BS < the full batch size.
-    # M: number of embeddings for each subject token.
     BS = len(indices_B_uniq)
+    # M: number of embeddings for each subject token.
     M  = len(indices_N) // BS
 
     # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77].
@@ -460,15 +460,15 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
         pads = (1, 1, 1, 1)
     padder = nn.ZeroPad2d(pads)
 
-    # Traversed x: (0, 0) or (-1, 1). The range of delta x.
+    # Traversed delta x: {0, 1} (ks=2) or {-1, 0, 1} (ks=3)
     # Add 1 to the upper bound to make the range inclusive.
-    x_bound = (-pads[0], pads[1] + 1)
-    # Traversed y: (-1, 1).           The range of delta y.
+    delta_x_bound = (-pads[0], pads[1] + 1)
+    # Traversed delta y: {0, 1} (ks=2) or {-1, 0, 1} (ks=3).
     # Add 1 to the upper bound to make the range inclusive.
-    y_bound = (-pads[2], pads[3] + 1)
+    delta_y_bound = (-pads[2], pads[3] + 1)
 
     # Clone to make attn_mat2 a non-leaf node. Otherwise, 
-    # we can't do attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.
+    # we can't do in-place assignment like attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.
     attn_mat2 = attn_mat.clone()
 
     for b in range(BS):
@@ -476,7 +476,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
         index_b = indices_B_uniq[b]
         # subj_q: [8, 4096, 40].
         subj_q = q[index_b]
-        # subj_q_2d: [8, 4096, 40] => [1, 320, 64, 64]
+        # subj_q_2d: [8, 4096, 40] => [8, 40, 4096] => [1, 320, 64, 64]
         subj_q_2d = subj_q.permute(0, 2, 1).reshape(1, H * C, *infeat_size)
         # subj_q_padded: [1, 320, 65, 65].
         subj_q_padded = padder(subj_q_2d)
@@ -486,48 +486,68 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
         indices_n = indices_N[b * M : b * M + M]
         if (indices_b != index_b).any():
             breakpoint()
-        # subj_k: k[[0], :, [6,7,8,9]], shape [4, 8, 40] => [8, 4, 40], [H, M, C].
-        subj_k = k[indices_b, :, indices_n].transpose(0, 1)
+        # subj_k: k[[0], :, [6,7,8,9]], shape [4, 8, 40] => [8, 40, 4], [H, C, M].
+        subj_k = k[indices_b, :, indices_n].permute(1, 2, 0)
 
-        # subj_conv.weight: [8, 40, 2, 2]. The input channel number is 40 * 8 = 320.
+        # subj_conv.weight: [8, 40, 2, 2]. First 2 is height (y), second 2 is width (x).
+        # The input channel number is 40 * 8 = 320.
         # But due to grouping, the weight shape is [8, 40, 2, 2] instead of [8, 320, 2, 2].
+        # Each output channel belongs to an individual group. 
+        # The shape of the weight 40*8 should be viewed as 8 groups of 40*1.
         subj_conv = nn.Conv2d(C * H, H, ks, bias=False, groups=H)
         # subj_k: [8, 4, 40] => [8, 40, 4] => [8, 40, 2, 2].
-        subj_conv.weight = nn.Parameter(subj_k.permute(0, 2, 1).reshape(subj_conv.weight.shape))
+        # So the 4 embeddings (s1, s2, s3, s4) in subj_k are arranged as 
+        #                |  (s1 s2
+        #              H |   s3 s4)
+        #                    _____ W
         # subj_attn: [1, 8, 64, 64]
         # Note to scale attention scores by sim_scale, and divide by M.
         # sim_scale is to keep consistent to the original cross attention scores.
-        # Divide by M is to evenly distribute the attention scores to each embedding.
-        subj_attn = subj_conv(subj_q_padded) * sim_scale / M
+        # Divide by M so that the attention scores are evenly distributed to the M embeddings.
+        subj_attn = F.conv2d(subj_q_padded, subj_k.reshape(subj_conv.weight.shape), groups=H) * sim_scale / M
+        # Shift subj_attn (with 0 padding) to yield ks*ks slightly different attention maps 
+        # for the M embeddings.
         # dx, dy: the relative position of a subject token to the center subject token.
-        # s1, s2, s3, s4 => s1    s2
-        #                   s3    s4
-        # So if first loop over dy (rows), then loop over dx (columns), the traversed order is s1, s2, s3, s4.
-        # (We can also traverse in the order s1, s3, s2, s4. It doesn't really matter.)
-        for dy in range(*y_bound):
-            for dx in range(*x_bound):
-                if dx <= 0 and dy <= 0:
-                    # (dx, dy) == (0, 0) is a special case of this else branch.
-                    # If (dx, dy) == (0, 0), subj_attn_dxy is the same as subj_attn.
+        # dx: shift along rows    (width,  the last dim). 
+        # dy: shift along columns (height, the second-last dim).
+        # s1, s2, s3, s4 => s1 s2
+        #                   s3 s4
+        # Since the first  loop is over dy (vertical move,   or move within a column), 
+        # and   the second loop is over dx (horizontal move, or move within a row), 
+        # the traversed order is s1, s2, s3, s4.
+        # NOTE: This order should be consistent with how subj_k is reshaped to the conv weight. 
+        # Otherwise wrong attn maps will be assigend to some of the subject embeddings.
+        for dy in range(*delta_y_bound):
+            for dx in range(*delta_x_bound):
+                if dx == 0 and dy == 0:
+                    subj_attn_dxy = subj_attn
+                elif dx <= 0 and dy <= 0:
                     subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, -dx:], (0, -dx, 0, -dy))
                 elif dx <= 0 and dy > 0:
                     subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, -dx:], (0, -dx, dy, 0))
                 elif dx > 0 and dy <= 0:
                     subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, :-dx], (dx, 0,  0, -dy))
                 else:
+                    # dx > 0 and dy > 0
                     subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, :-dx], (dx, 0,  dy, 0))
 
+                # subj_attn_dxy: [1, 8, 64, 64].
+                # Since first loop is over dy (each loop forms a column in the feature maps), 
+                # and   second loop   over dx (each loop forms a row    in the feature maps), 
+                # the order in subj_attn_dxys is s1, s2, s3, s4.
                 subj_attn_dxys.append(subj_attn_dxy)
 
         # dx, dy: the relative position of a subject token to the center subject token.
-        # s1, s2, s3, s4 => s1    s2
-        #                   s3    s4
+        # s1, s2, s3, s4 => s1 s2
+        #                   s3 s4
         # The traversed order is s1, s2, s3, s4. So we can flatten the list to get 
-        # consecutive 4 columns of attention.
+        # consecutive 4 columns of attention. 
         # subj_attn_dxys: [4, 8, 64, 64] => [4, 8, 4096].
         subj_attn_dxys = torch.cat(subj_attn_dxys, dim=0).reshape(M, H, -1)
-        # attn_mat: [4, 8, 4096, 77], [B, H, N, T]. N: number of visual tokens. T: number of text tokens.
-        # attn_mat[[0], :, :, [6,7,8,9]]: [4, 8, 4096]
+        # attn_mat2: [4, 8, 4096, 77], [B, H, N, T]. 
+        # B: the whole batch (>=BS). H: number of heads. 
+        # N: number of visual tokens. T: number of text tokens.
+        # attn_mat2[[0], :, :, [6,7,8,9]]: [4, 8, 4096]
         attn_mat2[indices_b, :, :, indices_n] = subj_attn_dxys
 
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].

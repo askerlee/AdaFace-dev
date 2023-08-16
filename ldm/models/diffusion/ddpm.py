@@ -1699,9 +1699,13 @@ class LatentDiffusion(DDPM):
     # unet_has_grad: when returning do_recon (e.g. to select the better instance by smaller clip loss), 
     # to speed up, no BP is done on these instances, so unet_has_grad=False.
     def guided_denoise(self, x_start, noise, t, cond, unet_has_grad=True, 
-                       crossattn_force_grad=True, 
+                       crossattn_force_grad=False, 
                        do_recon=False, cfg_scales=None):
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+
+        if unet_has_grad:
+            # No need to force grad on cross attention layers, as the whole U-Net has grad.
+            crossattn_force_grad = False
 
         # model_output is the predicted noise.
         # if not unet_has_grad, we save RAM by not storing the computation graph.
@@ -1890,10 +1894,11 @@ class LatentDiffusion(DDPM):
         iter_type = cond[2]['iter_type']
 
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
-        # then cond['use_conv_attn'] = True, it will inform U-Net to do conv attn.
+        # then cond[2]['use_conv_attn'] = True, it will inform U-Net to do conv attn.
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
                                 unet_has_grad=not is_teacher_filter_iter, 
+                                crossattn_force_grad=False,
                                 do_recon=self.calc_clip_loss,
                                 cfg_scales=cfg_scales_for_clip_loss)
 
