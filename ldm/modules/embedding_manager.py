@@ -1621,6 +1621,7 @@ class EmbeddingManager(nn.Module):
             # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
             # Each is [1, 16, 77, 768]
             # static_subj_single_emb[IND_B, :, IND_N]: [1, 16, 768]
+            # static_cls_single_emb[IND_B, :, IND_N]:  [1, 16, 768]
             subj_emb_diff_loss += calc_delta_loss(static_subj_single_emb[IND_B, :, IND_N], 
                                                   static_cls_single_emb[IND_B, :, IND_N],
                                                   exponent=2,    
@@ -1635,6 +1636,7 @@ class EmbeddingManager(nn.Module):
             subj_emb_diff_count = 2
 
             if ada_delta_loss > 0:
+                # static_cls_single_emb is the same as ada_cls_single_emb.
                 subj_emb_diff_loss += calc_delta_loss(ada_subj_single_emb[IND_B, :, IND_N],
                                                       static_cls_single_emb[IND_B, :, IND_N],
                                                       exponent=2,
@@ -1642,6 +1644,7 @@ class EmbeddingManager(nn.Module):
                                                       first_n_dims_to_flatten=2)
                 subj_emb_diff_count += 1
                 if not is_twin_non_teachable:
+                    # static_cls_comp_emb is the same as ada_cls_comp_emb.
                     subj_emb_diff_loss += calc_delta_loss(ada_subj_comp_emb[IND_B, :, IND_N],
                                                           static_cls_comp_emb[IND_B, :, IND_N],
                                                           exponent=2,

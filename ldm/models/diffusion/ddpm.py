@@ -1302,6 +1302,9 @@ class LatentDiffusion(DDPM):
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             chunk_list(self.cached_inits['delta_prompts'], 4)
 
+                    #if self.use_background_token_iter:
+                    #    print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     ORIG_BS  = len(x)
                     N_EMBEDS = ORIG_BS * N_LAYERS
