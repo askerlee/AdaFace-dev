@@ -1636,17 +1636,17 @@ class EmbeddingManager(nn.Module):
 
             if ada_delta_loss > 0:
                 subj_emb_diff_loss += calc_delta_loss(ada_subj_single_emb[IND_B, :, IND_N],
-                                                    static_cls_comp_emb[IND_B, :, IND_N],
-                                                    exponent=2,
-                                                    do_demean_first=False,
-                                                    first_n_dims_to_flatten=2)
+                                                      static_cls_single_emb[IND_B, :, IND_N],
+                                                      exponent=2,
+                                                      do_demean_first=False,
+                                                      first_n_dims_to_flatten=2)
                 subj_emb_diff_count += 1
                 if not is_twin_non_teachable:
                     subj_emb_diff_loss += calc_delta_loss(ada_subj_comp_emb[IND_B, :, IND_N],
-                                                        static_cls_comp_emb[IND_B, :, IND_N],
-                                                        exponent=2,
-                                                        do_demean_first=False,
-                                                        first_n_dims_to_flatten=2)
+                                                          static_cls_comp_emb[IND_B, :, IND_N],
+                                                          exponent=2,
+                                                          do_demean_first=False,
+                                                          first_n_dims_to_flatten=2)
                     subj_emb_diff_count += 1
                 # Otherwise, it's an is_twin_non_teachable iteration. 
                 # ada_subj_comp_emb has no grad. 
