@@ -669,9 +669,11 @@ class LatentDiffusion(DDPM):
             # which maps custom tokens to embeddings
             for param in self.embedding_manager.optimized_parameters():
                 param.requires_grad = True
+            self.num_vectors_per_token = max(self.embedding_manager.token2num_vectors.values())
         else:
             # For DreamBooth.
             self.embedding_manager = None
+            self.num_vectors_per_token = 1
 
         self.generation_cache = []
         self.generation_cache_img_flags = []
@@ -1180,6 +1182,11 @@ class LatentDiffusion(DDPM):
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
         x, c = self.get_input(batch, self.first_stage_key)
         
+        if self.use_conv_attn:
+            p_bg_token = 1
+        else:
+            p_bg_token = 0.8
+
         self.use_background_token_iter = False
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
@@ -1207,7 +1214,7 @@ class LatentDiffusion(DDPM):
             # we only use the background token on 80% of the training images.
             elif not self.do_comp_prompt_mix_reg and self.use_background_token \
               and self.global_step >= 0 \
-              and random.random() < 0.8:
+              and random.random() < p_bg_token:
                 c = batch['subj_prompt_single_bg']
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_bg'
                 CLS_PROMPT_COMP   = 'cls_prompt_comp_bg'
@@ -1221,7 +1228,6 @@ class LatentDiffusion(DDPM):
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp'
                 CLS_PROMPT_COMP   = 'cls_prompt_comp'
                 CLS_PROMPT_SINGLE = 'cls_prompt_single'
-
 
             # Each prompt_comp consists of multiple prompts separated by "|".
             # Split them into a list of subj_comp_prompts/cls_comp_prompts.
@@ -1338,16 +1344,21 @@ class LatentDiffusion(DDPM):
                     if self.embedding_manager.placeholder_indices_fg is None:
                         breakpoint()
                         
-                    subj_indices_half_B = self.embedding_manager.placeholder_indices_fg[0].chunk(2)[0]
-                    # subj_indices_half_N: subject token indices within the subject single prompt (BS=1).
+                    # subj_indices_half_B, subj_indices_half_N: subject token indices 
+                    # within the subject single prompt (BS=1).
                     # len(subj_indices_half_N): embedding number of the subject token.
-                    subj_indices_half_N = self.embedding_manager.placeholder_indices_fg[1].chunk(2)[0]
+                    subj_indices_half_B  = self.embedding_manager.placeholder_indices_fg[0].chunk(2)[0]
+                    subj_indices_half_N  = self.embedding_manager.placeholder_indices_fg[1].chunk(2)[0]
+
                     if self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg:
-                        assert not self.do_attn_recon_loss_iter
-                        extra_info['subj_indices'] = copy.copy(self.embedding_manager.placeholder_indices_fg)
+                        extra_info['subj_indices']  = copy.copy(self.embedding_manager.placeholder_indices_fg)
                     else:
                         assert self.do_attn_recon_loss_iter
                         extra_info['subj_indices'] = (subj_indices_half_B, subj_indices_half_N)
+
+                    subj_indices0_half_B = self.embedding_manager.placeholder_indices_fg0[0].chunk(2)[0]
+                    subj_indices0_half_N = self.embedding_manager.placeholder_indices_fg0[1].chunk(2)[0]
+                    extra_info['subj_indices0'] = (subj_indices0_half_B, subj_indices0_half_N)
 
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
@@ -1376,7 +1387,7 @@ class LatentDiffusion(DDPM):
                             
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comp_emb and cls_comp_emb will be mixed.
-                        # In subj_comp_emb_v_mix, subj_single_emb_v_mix, the M subject embeddings are scaled down by 0.5,
+                        # In subj_comp_emb_v_mix, subj_single_emb_v_mix, the K subject embeddings are scaled down by 0.5,
                         # /* and added with 0.5 * class embeddings */, 
                         # so that other components will express more during guidance. 
                         # and the token number will be the double of subj_comp_emb.
@@ -1393,8 +1404,8 @@ class LatentDiffusion(DDPM):
                         """
                         
                         total_training_steps = self.trainer.max_steps
-                        INIT_CLS_EMB_SCALE  = 0.2
-                        FINAL_CLS_EMB_SCALE = 0.6
+                        INIT_CLS_EMB_SCALE  = 0.1
+                        FINAL_CLS_EMB_SCALE = 0.3
                         # Linearly increase the scale of the class embeddings from 0.1 to 0.3, i.e., 
                         # Linearly decrease the scale of the subject embeddings from 0.9 to 0.7, 
                         # so that the distillation keeps being effective. Otherwise the teacher 
@@ -1723,8 +1734,7 @@ class LatentDiffusion(DDPM):
             cond[2]['crossattn_force_grad'] = crossattn_force_grad
             with torch.no_grad():
                 model_output = self.apply_model(x_noisy, t, cond)
-            # Restore force_grad to False, i.e., no explicit override of whether there's grad.
-            cond[2]['crossattn_force_grad'] = False
+            del cond[2]['crossattn_force_grad']
         else:
             # if unet_has_grad, we don't have to take care of embedding_manager.force_grad.
             # Subject embeddings will naturally have gradients.
@@ -2209,7 +2219,7 @@ class LatentDiffusion(DDPM):
                     if is_teacher_filter_iter:
                         # twin_comp_ada_embeddings is within no_grad(), so it won't receive gradients.
                         # Nonetheless, the delta loss takes both twin_single_ada_embeddings 
-                        # and twin_comp_ada_embeddings as input,  the ada embeddings 
+                        # and twin_comp_ada_embeddings as input, the ada embeddings 
                         # can still be optimized through twin_single_ada_embeddings.
                         twin_comp_ada_embeddings = ada_embeddings
                         # Ada delta loss requires twin subj-single embeddings that match the 
@@ -2281,24 +2291,28 @@ class LatentDiffusion(DDPM):
 
         if self.do_static_prompt_delta_reg:
             # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
-            static_delta_loss, ada_delta_loss = \
+            static_delta_loss, ada_delta_loss, subj_emb_diff_loss = \
                 self.embedding_manager.calc_prompt_delta_loss( 
                                         self.c_static_emb, ada_embeddings,
-                                        self.do_ada_prompt_delta_reg
-                                        )
+                                        self.do_ada_prompt_delta_reg,
+                                        extra_info['subj_indices0']
+                                       )
             
             loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
             if ada_delta_loss != 0:
                 loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
+            if subj_emb_diff_loss != 0:
+                loss_dict.update({f'{prefix}/subj_emb_diff_loss': subj_emb_diff_loss.mean().detach()})
+
             # The prompt delta loss for ada embeddings is only applied 
             # every self.composition_regs_iter_gap iterations. So the ada loss 
             # should be boosted proportionally to composition_regs_iter_gap. 
             # Divide it by 2 to reduce the proportion of ada emb loss relative to 
             # static emb loss in the total loss.                
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            loss_comp_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
-            loss += (self.prompt_delta_reg_weight * loss_comp_delta_reg)
-            # print(f'loss_comp_delta_reg: {loss_comp_delta_reg.mean():.6f}')
+            loss_prompt_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss \
+                                    + subj_emb_diff_loss * 0.01
+            loss += (self.prompt_delta_reg_weight * loss_prompt_delta_reg)
         
         if self.do_comp_prompt_mix_reg and is_iter_teachable:
             # unet_feats is a dict as: layer_idx -> unet_feat. 
@@ -2545,8 +2559,10 @@ class LatentDiffusion(DDPM):
         # Normalize the weights above so that each set sum to 1.
         attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
         attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
-        # M: 4, number of embeddings per subject token.
-        M = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
+        # K: 4, number of embeddings per subject token.
+        K = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
+        assert self.num_vectors_per_token == K
+
         loss_fg_bg_complementary = 0
 
         for unet_layer_idx, unet_attn in unet_attns.items():
@@ -2556,17 +2572,17 @@ class LatentDiffusion(DDPM):
             # [2, 8, 256, 77] / [2, 8, 64, 77] =>
             # [2, 77, 8, 256] / [2, 77, 8, 64]
             attn_mat = unet_attn.permute(0, 3, 1, 2)
-            # In each instance, placeholder_indices_fg has M times as many elements as placeholder_indices_bg.
+            # In each instance, placeholder_indices_fg has K times as many elements as placeholder_indices_bg.
             # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
             #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
             # placeholder_indices_bg: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
             # BS = 2, so we only keep instances indexed by [0, 1].
             # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
-            placeholder_indices_fg = (placeholder_indices_fg[0][:BS*M], placeholder_indices_fg[1][:BS*M])
+            placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K], placeholder_indices_fg[1][:BS*K])
             # placeholder_indices_bg: ([0, 1], [11, 12]).
             placeholder_indices_bg = (placeholder_indices_bg[0][:BS], placeholder_indices_bg[1][:BS])
-            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] max among M embeddings -> [2, 8, 64]
-            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, M, *attn_mat.shape[2:])
+            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] mean among K embeddings -> [2, 8, 64]
+            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K, *attn_mat.shape[2:]).mean(dim=1)
             # bg_attn: [2, 8, 64].
             bg_attn   = attn_mat[placeholder_indices_bg]
             
@@ -2579,18 +2595,13 @@ class LatentDiffusion(DDPM):
             # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
             # to make the two attention maps more complementary (expect the loss pushes the 
             # subject embedding to a more accurate point).
-            loss_layer_fg_bg_comple_max = calc_delta_loss(bg_attn, 1 - subj_attn.max(dim=1)[0], 
-                                                             exponent=2,    
-                                                             do_demean_first=True,
-                                                             first_n_dims_to_flatten=2, 
-                                                             ref_grad_scale=fg_grad_scale)
-            loss_layer_fg_bg_comple_mean = calc_delta_loss(bg_attn, 1 - subj_attn.mean(dim=1), 
-                                                             exponent=2,    
-                                                             do_demean_first=True,
-                                                             first_n_dims_to_flatten=2, 
-                                                             ref_grad_scale=fg_grad_scale)
+            loss_layer_fg_bg_comple_mean = calc_delta_loss(bg_attn, 1 - subj_attn, 
+                                                           exponent=2,    
+                                                           do_demean_first=True,
+                                                           first_n_dims_to_flatten=2, 
+                                                           ref_grad_scale=fg_grad_scale)
             
-            loss_fg_bg_complementary += (loss_layer_fg_bg_comple_max + loss_layer_fg_bg_comple_mean) * attn_distill_layer_weight * 0.5
+            loss_fg_bg_complementary += loss_layer_fg_bg_comple_mean * attn_distill_layer_weight
 
         return loss_fg_bg_complementary
 
