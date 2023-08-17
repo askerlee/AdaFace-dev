@@ -1618,7 +1618,6 @@ class EmbeddingManager(nn.Module):
                 breakpoint()
             IND_B, IND_N = subj_indices0
             subj_emb_diff_loss = 0
-            breakpoint()
             # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
             # Each is [1, 16, 77, 768]
             # static_subj_single_emb[IND_B, :, IND_N]: [1, 16, 768]
