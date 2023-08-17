@@ -1951,7 +1951,7 @@ class LatentDiffusion(DDPM):
                                                                self.embedding_manager.placeholder_indices_fg,
                                                                self.embedding_manager.placeholder_indices_bg,
                                                                x_start.shape[0],
-                                                               fg_grad_scale=0.05
+                                                               fg_grad_scale=0.01
                                                               )
                 
                 # Release RAM.
@@ -1997,7 +1997,7 @@ class LatentDiffusion(DDPM):
                                                                    self.embedding_manager.placeholder_indices_fg,
                                                                    self.embedding_manager.placeholder_indices_bg,
                                                                    x_start.shape[0],
-                                                                   fg_grad_scale=0.05
+                                                                   fg_grad_scale=0.01
                                                                   )
                     
                     # Do not delete cond_mix[2]['unet_attns'], as it will be used to compute the spatial weights.
@@ -2311,8 +2311,9 @@ class LatentDiffusion(DDPM):
             # Divide it by 2 to reduce the proportion of ada emb loss relative to 
             # static emb loss in the total loss.                
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
+            subj_emb_diff_loss_weight = 0.002
             loss_prompt_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss \
-                                    + subj_emb_diff_loss * 0.01
+                                    + subj_emb_diff_loss * subj_emb_diff_loss_weight
             loss += (self.prompt_delta_reg_weight * loss_prompt_delta_reg)
         
         if self.do_comp_prompt_mix_reg and is_iter_teachable:
@@ -2440,7 +2441,7 @@ class LatentDiffusion(DDPM):
                 loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
                                                              exponent=3,    
                                                              first_n_dims_to_flatten=2, 
-                                                             ref_grad_scale=0.05)
+                                                             ref_grad_scale=0.01)
                 
                 # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comp/subj_attn_mix_single. 
                 # Use this scaler to release the graph and avoid OOM.
@@ -2538,11 +2539,10 @@ class LatentDiffusion(DDPM):
 
         return loss_subj_attn_distill, loss_feat_distill
 
-
     def calc_fg_bg_complementary_loss(self, unet_attns, 
                                       placeholder_indices_fg, 
                                       placeholder_indices_bg, 
-                                      BS, fg_grad_scale=0.05):
+                                      BS, fg_grad_scale=0.01):
 
         # Discard top layers and the first few bottom layers from distillation.
         # distill_layer_weights: relative weight of each distillation layer. 
