@@ -1393,7 +1393,7 @@ class LatentDiffusion(DDPM):
                         """
                         
                         total_training_steps = self.trainer.max_steps
-                        INIT_CLS_EMB_SCALE  = 0.2
+                        INIT_CLS_EMB_SCALE  = 0.4
                         FINAL_CLS_EMB_SCALE = 0.4
                         # Linearly increase the scale of the class embeddings from 0.1 to 0.3, i.e., 
                         # Linearly decrease the scale of the subject embeddings from 0.9 to 0.7, 
@@ -1412,7 +1412,7 @@ class LatentDiffusion(DDPM):
                         subj_single_emb_v = mix_embeddings('add', subj_single_emb, cls_single_emb,
                                                             subj_indices_half_N, c1_subj_scale=subj_emb_scale)
 
-                        if random.random() < 0.5:
+                        if random.random() < 1: #0.5:
                             mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_v,   cls_comp_emb],   dim=1)
                             mix_single_emb_all_layers = torch.cat([subj_single_emb_v, cls_single_emb], dim=1)
                         else:
