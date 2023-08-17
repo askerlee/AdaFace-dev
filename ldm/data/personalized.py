@@ -213,16 +213,21 @@ class PersonalizedBase(Dataset):
 
         template = random.choice(imagenet_templates_small)
 
-        subj_prompt_single  = template.format(placeholder_string)
-        cls_prompt_single   = template.format(cls_delta_token)
+        subj_prompt_single          = template
+        cls_prompt_single           = template
 
-        bg_suffix = " with background {}".format(self.background_string) if self.background_string is not None else None
+        #subj_prompt_single          = template.format(placeholder_string)
+        #cls_prompt_single           = template.format(cls_delta_token)
+
+        bg_suffix = " with background {}".format(self.background_string) if self.background_string is not None else ""
+        placeholder_string_with_bg  = placeholder_string + bg_suffix
+        cls_delta_token_with_bg     = cls_delta_token    + bg_suffix
 
         # "face portrait" trick for humans/animals.
         if self.broad_class == 1:
             fp_prompt_template = "a face portrait of a {}"
-            subj_prompt_single_fp = fp_prompt_template.format(placeholder_string)
-            cls_prompt_single_fp  = fp_prompt_template.format(cls_delta_token)
+            subj_prompt_single_fp = fp_prompt_template
+            cls_prompt_single_fp  = fp_prompt_template
             subj_prompt_comps_fp  = []
             cls_prompt_comps_fp   = []
 
@@ -241,34 +246,39 @@ class PersonalizedBase(Dataset):
                 subj_prompt_comps_fp.append(subj_prompt_comp_fp)
                 cls_prompt_comps_fp.append(cls_prompt_comp_fp)
 
-        # Will split by "|" in the ddpm trainer.
-        subj_prompt_comp = "|".join(subj_prompt_comps)
-        cls_prompt_comp  = "|".join(cls_prompt_comps)
-        example["cls_prompt_single"]    = cls_prompt_single
+        # For subj_prompt_single, we put the caption in the "caption" field, instead of "subj_prompt_single".
+        example["caption"]              = subj_prompt_single.format(placeholder_string)
+        example["cls_prompt_single"]    = cls_prompt_single.format(cls_delta_token)
+        # Will be split by "|" in the ddpm trainer.
+        subj_prompt_comp = "|".join([ subj_prompt_comp.format(placeholder_string) for subj_prompt_comp in subj_prompt_comps])
+        cls_prompt_comp  = "|".join([ cls_prompt_comp.format(cls_delta_token)     for cls_prompt_comp  in cls_prompt_comps])
         example["subj_prompt_comp"]     = subj_prompt_comp
         example["cls_prompt_comp"]      = cls_prompt_comp
-        if bg_suffix is not None:
-            example["subj_prompt_single_bg"] = subj_prompt_single + bg_suffix
-            example["cls_prompt_single_bg"]  = cls_prompt_single  + bg_suffix
+
+        if bg_suffix:
+            example["subj_prompt_single_bg"] = subj_prompt_single.format(placeholder_string_with_bg)
+            example["cls_prompt_single_bg"]  = cls_prompt_single.format(cls_delta_token_with_bg)
             # *_comp_bg prompts are for static delta loss on training images.
-            example["subj_prompt_comp_bg"]   = subj_prompt_comp   + bg_suffix
-            example["cls_prompt_comp_bg"]    = cls_prompt_comp    + bg_suffix
+            example["subj_prompt_comp_bg"]   = "|".join([ subj_prompt_comp.format(placeholder_string_with_bg) for subj_prompt_comp in subj_prompt_comps])
+            example["cls_prompt_comp_bg"]    = "|".join([ cls_prompt_comp.format(cls_delta_token_with_bg)     for cls_prompt_comp  in cls_prompt_comps])
 
         if self.broad_class == 1:
-            subj_prompt_comp_fp = "|".join(subj_prompt_comps_fp)
-            cls_prompt_comp_fp  = "|".join(cls_prompt_comps_fp)
             # Delta loss requires subj_prompt_single/cls_prompt_single to be token-wise aligned
             # with subj_prompt_comp/cls_prompt_comp, so we need to specify them in the dataloader as well.
-            example["subj_prompt_single_fp"] = subj_prompt_single_fp
-            example["cls_prompt_single_fp"]  = cls_prompt_single_fp
-            example["subj_prompt_comp_fp"]   = subj_prompt_comp_fp
-            example["cls_prompt_comp_fp"]    = cls_prompt_comp_fp
+            example["subj_prompt_single_fp"] = subj_prompt_single_fp.format(placeholder_string_with_bg)
+            example["cls_prompt_single_fp"]  = cls_prompt_single_fp.format(cls_delta_token_with_bg)
+            example["subj_prompt_comp_fp"]   = "|".join([ subj_prompt_comp.format(placeholder_string_with_bg) for subj_prompt_comp in subj_prompt_comps_fp]) 
+            example["cls_prompt_comp_fp"]    = "|".join([ cls_prompt_comp.format(cls_delta_token_with_bg)     for cls_prompt_comp  in cls_prompt_comps_fp])
+
+            if bg_suffix:
+                example["subj_prompt_single_bg"] = subj_prompt_single_fp.format(placeholder_string_with_bg)
+                example["cls_prompt_single_bg"]  = cls_prompt_single_fp.format(cls_delta_token_with_bg)
+                # *_comp_bg prompts are for static delta loss on training images.
+                example["subj_prompt_comp_bg"]   = "|".join([ subj_prompt_comp.format(placeholder_string_with_bg) for subj_prompt_comp in subj_prompt_comps_fp])
+                example["cls_prompt_comp_bg"]    = "|".join([ cls_prompt_comp.format(cls_delta_token_with_bg)     for cls_prompt_comp  in cls_prompt_comps_fp])
 
         #print(f"subj_prompt_comp: {subj_prompt_comp}")
         #print(f"cls_prompt_comp: {cls_prompt_comp}")
-
-        # For subj_prompt_single, we put the caption in the "caption" field, instead of "subj_prompt_single".
-        example["caption"]              = subj_prompt_single
 
         # default to score-sde preprocessing
         img = np.array(image).astype(np.uint8)

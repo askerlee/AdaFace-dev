@@ -1302,6 +1302,9 @@ class LatentDiffusion(DDPM):
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             chunk_list(self.cached_inits['delta_prompts'], 4)
 
+                    #if self.use_background_token_iter:
+                    #    print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     ORIG_BS  = len(x)
                     N_EMBEDS = ORIG_BS * N_LAYERS
@@ -2311,7 +2314,7 @@ class LatentDiffusion(DDPM):
             # Divide it by 2 to reduce the proportion of ada emb loss relative to 
             # static emb loss in the total loss.                
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            subj_emb_diff_loss_weight = 0.002
+            subj_emb_diff_loss_weight = 0 #0.002
             loss_prompt_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss \
                                     + subj_emb_diff_loss * subj_emb_diff_loss_weight
             loss += (self.prompt_delta_reg_weight * loss_prompt_delta_reg)
