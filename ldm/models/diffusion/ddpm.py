@@ -1720,11 +1720,11 @@ class LatentDiffusion(DDPM):
         # we can still enable gradients on cross attention layers,
         # so that limited optimizations w.r.t. the embedders can be done (but unable to BP through UNet).
         if not unet_has_grad:
-            self.model.diffusion_model.crossattn_force_grad = crossattn_force_grad
+            cond[2]['crossattn_force_grad'] = crossattn_force_grad
             with torch.no_grad():
                 model_output = self.apply_model(x_noisy, t, cond)
             # Restore force_grad to False, i.e., no explicit override of whether there's grad.
-            self.model.diffusion_model.crossattn_force_grad = False
+            cond[2]['crossattn_force_grad'] = False
         else:
             # if unet_has_grad, we don't have to take care of embedding_manager.force_grad.
             # Subject embeddings will naturally have gradients.

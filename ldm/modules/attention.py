@@ -168,7 +168,7 @@ class CrossAttention(nn.Module):
             nn.Dropout(dropout)
         )
         self.save_attn_mat = False
-        self.force_grad    = False
+        self.crossattn_force_grad = False
         self.use_conv_attn = False
         self.infeat_size   = None
 
@@ -177,7 +177,7 @@ class CrossAttention(nn.Module):
 
         # If the autograd status should be overridden, then do it here, 
         # and restore the status before the function returns.
-        if not torch.is_grad_enabled() and self.force_grad:
+        if not torch.is_grad_enabled() and self.crossattn_force_grad:
             is_grad_forced = True
             torch.set_grad_enabled(True)
         else:
