@@ -1393,8 +1393,8 @@ class LatentDiffusion(DDPM):
                         """
                         
                         total_training_steps = self.trainer.max_steps
-                        INIT_CLS_EMB_SCALE  = 0.1
-                        FINAL_CLS_EMB_SCALE = 0.3
+                        INIT_CLS_EMB_SCALE  = 0.2
+                        FINAL_CLS_EMB_SCALE = 0.4
                         # Linearly increase the scale of the class embeddings from 0.1 to 0.3, i.e., 
                         # Linearly decrease the scale of the subject embeddings from 0.9 to 0.7, 
                         # so that the distillation keeps being effective. Otherwise the teacher 
@@ -1940,7 +1940,7 @@ class LatentDiffusion(DDPM):
                                                                self.embedding_manager.placeholder_indices_fg,
                                                                self.embedding_manager.placeholder_indices_bg,
                                                                x_start.shape[0],
-                                                               fg_grad_scale=0.01
+                                                               fg_grad_scale=0.05
                                                               )
                 
                 # Release RAM.
@@ -1986,7 +1986,7 @@ class LatentDiffusion(DDPM):
                                                                    self.embedding_manager.placeholder_indices_fg,
                                                                    self.embedding_manager.placeholder_indices_bg,
                                                                    x_start.shape[0],
-                                                                   fg_grad_scale=0.01
+                                                                   fg_grad_scale=0.05
                                                                   )
                     
                     # Do not delete cond_mix[2]['unet_attns'], as it will be used to compute the spatial weights.
@@ -2527,7 +2527,7 @@ class LatentDiffusion(DDPM):
     def calc_fg_bg_complementary_loss(self, unet_attns, 
                                       placeholder_indices_fg, 
                                       placeholder_indices_bg, 
-                                      BS, fg_grad_scale=0.01):
+                                      BS, fg_grad_scale=0.05):
 
         # Discard top layers and the first few bottom layers from distillation.
         # distill_layer_weights: relative weight of each distillation layer. 
@@ -2565,8 +2565,8 @@ class LatentDiffusion(DDPM):
             placeholder_indices_fg = (placeholder_indices_fg[0][:BS*M], placeholder_indices_fg[1][:BS*M])
             # placeholder_indices_bg: ([0, 1], [11, 12]).
             placeholder_indices_bg = (placeholder_indices_bg[0][:BS], placeholder_indices_bg[1][:BS])
-            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] average over M embeddings -> [2, 8, 64]
-            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, M, *attn_mat.shape[2:]).mean(dim=1)
+            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] max among M embeddings -> [2, 8, 64]
+            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, M, *attn_mat.shape[2:]).max(dim=1)[0]
             # bg_attn: [2, 8, 64].
             bg_attn   = attn_mat[placeholder_indices_bg]
             
