@@ -2582,8 +2582,8 @@ class LatentDiffusion(DDPM):
             placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K], placeholder_indices_fg[1][:BS*K])
             # placeholder_indices_bg: ([0, 1], [11, 12]).
             placeholder_indices_bg = (placeholder_indices_bg[0][:BS], placeholder_indices_bg[1][:BS])
-            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] max among M embeddings -> [2, 8, 64]
-            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, M, *attn_mat.shape[2:])
+            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] max among K embeddings -> [2, 8, 64]
+            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K, *attn_mat.shape[2:]).mean(dim=1)
             # bg_attn: [2, 8, 64].
             bg_attn   = attn_mat[placeholder_indices_bg]
             
@@ -2596,13 +2596,13 @@ class LatentDiffusion(DDPM):
             # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
             # to make the two attention maps more complementary (expect the loss pushes the 
             # subject embedding to a more accurate point).
-            loss_layer_fg_bg_comple_mean = calc_delta_loss(bg_attn, 1 - subj_attn, 
+            loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, 1 - subj_attn, 
                                                            exponent=2,    
                                                            do_demean_first=True,
                                                            first_n_dims_to_flatten=2, 
                                                            ref_grad_scale=fg_grad_scale)
             
-            loss_fg_bg_complementary += loss_layer_fg_bg_comple_mean * attn_distill_layer_weight
+            loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_distill_layer_weight
 
         return loss_fg_bg_complementary
 
