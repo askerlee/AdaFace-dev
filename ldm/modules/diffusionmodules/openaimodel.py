@@ -507,7 +507,8 @@ class UNetModel(nn.Module):
         self.predict_codebook_ids = n_embed is not None
         self.crossattn_force_grad = False
         self.use_conv_attn = False
-
+        self.save_attn_mat = False
+        
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
