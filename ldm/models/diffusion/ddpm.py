@@ -1393,8 +1393,8 @@ class LatentDiffusion(DDPM):
                         """
                         
                         total_training_steps = self.trainer.max_steps
-                        INIT_CLS_EMB_SCALE  = 0.4
-                        FINAL_CLS_EMB_SCALE = 0.4
+                        INIT_CLS_EMB_SCALE  = 0.2
+                        FINAL_CLS_EMB_SCALE = 0.6
                         # Linearly increase the scale of the class embeddings from 0.1 to 0.3, i.e., 
                         # Linearly decrease the scale of the subject embeddings from 0.9 to 0.7, 
                         # so that the distillation keeps being effective. Otherwise the teacher 
@@ -2590,7 +2590,7 @@ class LatentDiffusion(DDPM):
                                                              first_n_dims_to_flatten=2, 
                                                              ref_grad_scale=fg_grad_scale)
             
-            loss_fg_bg_complementary += (loss_layer_fg_bg_comple_max + loss_layer_fg_bg_comple_mean) * attn_distill_layer_weight
+            loss_fg_bg_complementary += (loss_layer_fg_bg_comple_max + loss_layer_fg_bg_comple_mean) * attn_distill_layer_weight * 0.5
 
         return loss_fg_bg_complementary
 
