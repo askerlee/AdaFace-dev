@@ -1351,7 +1351,8 @@ class LatentDiffusion(DDPM):
                     subj_indices_half_N  = self.embedding_manager.placeholder_indices_fg[1].chunk(2)[0]
 
                     if self.do_comp_prompt_mix_reg or self.do_ada_prompt_delta_reg:
-                        extra_info['subj_indices']  = copy.copy(self.embedding_manager.placeholder_indices_fg)
+                        assert not self.do_attn_recon_loss_iter
+                        extra_info['subj_indices'] = copy.copy(self.embedding_manager.placeholder_indices_fg)
                     else:
                         assert self.do_attn_recon_loss_iter
                         extra_info['subj_indices'] = (subj_indices_half_B, subj_indices_half_N)
@@ -2581,8 +2582,8 @@ class LatentDiffusion(DDPM):
             placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K], placeholder_indices_fg[1][:BS*K])
             # placeholder_indices_bg: ([0, 1], [11, 12]).
             placeholder_indices_bg = (placeholder_indices_bg[0][:BS], placeholder_indices_bg[1][:BS])
-            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] mean among K embeddings -> [2, 8, 64]
-            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K, *attn_mat.shape[2:]).mean(dim=1)
+            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] max among M embeddings -> [2, 8, 64]
+            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, M, *attn_mat.shape[2:])
             # bg_attn: [2, 8, 64].
             bg_attn   = attn_mat[placeholder_indices_bg]
             
