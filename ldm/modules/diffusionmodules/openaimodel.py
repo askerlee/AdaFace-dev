@@ -712,29 +712,46 @@ class UNetModel(nn.Module):
         self.middle_block.apply(convert_module_to_f32)
         self.output_blocks.apply(convert_module_to_f32)
 
-    # Set use_conv_attn for all cross-attention layers
-    def set_use_conv_attn(self, use_conv_attn):
-        old_use_conv_attn = self.use_conv_attn
-        self.use_conv_attn = use_conv_attn
+    # set_cross_attn_flags: Set one or more flags for all cross-attention layers.
+    def set_cross_attn_flags(self, flag_dict, ca_layer_indices=None):
+        if flag_dict is None:
+            return None
+        
+        old_flag_dict = {}
 
-        layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
-                              17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
-        layer_idx = 0
-        for module in self.input_blocks:
-            if layer_idx in layer_idx2emb_idx:
-                module[1].transformer_blocks[0].attn2.use_conv_attn = use_conv_attn
+        all_ca_layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
+                                 17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
+        if ca_layer_indices is None:
+            ca_layer_idx2emb_idx = all_ca_layer_idx2emb_idx
+        else:
+            ca_layer_idx2emb_idx = { k: all_ca_layer_idx2emb_idx[k] for k in ca_layer_indices }
+            if len(ca_layer_idx2emb_idx) == 0:
+                return old_flag_dict
+            
+        for k, v in flag_dict.items():
+            old_v = self.__dict__[k]
+            old_flag_dict[k] = old_v
+            self.__dict__[k] = v
+
+            layer_idx = 0
+            for module in self.input_blocks:
+                if layer_idx in ca_layer_idx2emb_idx:
+                    # module: SpatialTransformer.
+                    # module.transformer_blocks: contains only 1 BasicTransformerBlock 
+                    # that does cross-attention with layer_context in attn2 only.                    
+                    module[1].transformer_blocks[0].attn2.__dict__[k] = v
+                layer_idx += 1
+
+            if layer_idx in ca_layer_idx2emb_idx:
+                self.middle_block[1].transformer_blocks[0].attn2.__dict__[k] = v
             layer_idx += 1
 
-        if layer_idx in layer_idx2emb_idx:
-            self.middle_block[1].transformer_blocks[0].attn2.use_conv_attn = use_conv_attn
-        layer_idx += 1
+            for module in self.output_blocks:
+                if layer_idx in ca_layer_idx2emb_idx:
+                    module[1].transformer_blocks[0].attn2.__dict__[k] = v
+                layer_idx += 1
 
-        for module in self.output_blocks:
-            if layer_idx in layer_idx2emb_idx:
-                module[1].transformer_blocks[0].attn2.use_conv_attn = use_conv_attn
-            layer_idx += 1
-
-        return old_use_conv_attn
+        return old_flag_dict
     
     def forward(self, x, timesteps=None, context=None, y=None, 
                 context_in=None, extra_info=None, **kwargs):
@@ -763,9 +780,10 @@ class UNetModel(nn.Module):
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
         debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
-        
+        crossattn_force_grad  = extra_info.get('crossattn_force_grad', False)  if extra_info is not None else False
+
         if use_conv_attn:
-            old_use_conv_attn = self.set_use_conv_attn(True)
+            ca_old_flags = self.set_cross_attn_flags({'use_conv_attn': True})
 
         if subj_indices is not None:
             subj_indices_B, subj_indices_N = subj_indices
@@ -877,20 +895,15 @@ class UNetModel(nn.Module):
         if iter_type.startswith("mix_") or use_background_token or debug_attn:
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
             distill_layer_indices = [7, 8, 12, 16, 17, 18]
+            distill_ca_old_flags = self.set_cross_attn_flags({'crossattn_force_grad': crossattn_force_grad, 
+                                                              'save_attn_mat': True}, 
+                                                             ca_layer_indices=distill_layer_indices)
         else:
             distill_layer_indices = []
+            distill_ca_flags = None
 
         for module in self.input_blocks:
             get_layer_idx_context = partial(get_layer_context, layer_idx)
-            # layer_context = get_layer_context(layer_idx, h)
-
-            if layer_idx in distill_layer_indices:
-                # module: SpatialTransformer.
-                # module.transformer_blocks: contains only 1 BasicTransformerBlock 
-                # that does cross-attention with layer_context in attn2 only.
-                module[1].transformer_blocks[0].attn2.save_attn_mat = True
-                module[1].transformer_blocks[0].attn2.force_grad = self.crossattn_force_grad
-
             # layer_context: [2, 77, 768], conditioning embedding.
             # emb: [2, 1280], time embedding.
             h = module(h, emb, get_layer_idx_context)
@@ -898,25 +911,16 @@ class UNetModel(nn.Module):
             if layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
                     distill_feats[layer_idx] = h
-                    module[1].transformer_blocks[0].attn2.save_attn_mat = False
-                    module[1].transformer_blocks[0].force_grad = False
 
             layer_idx += 1
         
-        # layer_context = get_layer_context(layer_idx, h)
         get_layer_idx_context = partial(get_layer_context, layer_idx)
-
-        if layer_idx in distill_layer_indices:
-            self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = True
-            self.middle_block[1].transformer_blocks[0].attn2.force_grad = self.crossattn_force_grad
 
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, get_layer_idx_context)
         if layer_idx in distill_layer_indices:
                 distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.attn_mat 
                 distill_feats[layer_idx] = h
-                self.middle_block[1].transformer_blocks[0].attn2.save_attn_mat = False
-                self.middle_block[1].transformer_blocks[0].attn2.force_grad = False
 
         layer_idx += 1
 
@@ -933,22 +937,15 @@ class UNetModel(nn.Module):
         # 24 [2, 320,  64, 64]
         
         for module in self.output_blocks:
-            # layer_context = get_layer_context(layer_idx, h)
             get_layer_idx_context = partial(get_layer_context, layer_idx)
 
             h = th.cat([h, hs.pop()], dim=1)
-
-            if layer_idx in distill_layer_indices:
-                module[1].transformer_blocks[0].attn2.save_attn_mat = True
-                module[1].transformer_blocks[0].attn2.force_grad = self.crossattn_force_grad
 
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, get_layer_idx_context)
             if layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
                     distill_feats[layer_idx] = h
-                    module[1].transformer_blocks[0].attn2.save_attn_mat = False
-                    module[1].transformer_blocks[0].attn2.force_grad = False
 
             layer_idx += 1
 
@@ -958,8 +955,11 @@ class UNetModel(nn.Module):
         if debug_attn:
             breakpoint()
         
+        # Restore the original flags in cross-attention layers.
         if use_conv_attn:
-            self.set_use_conv_attn(old_use_conv_attn)
+            self.set_cross_attn_flags(ca_old_flags)
+        if distill_ca_old_flags is not None:
+            self.set_cross_attn_flags(distill_ca_old_flags, ca_layer_indices=distill_layer_indices)
 
         # [2, 320, 64, 64]
         h = h.type(x.dtype)
