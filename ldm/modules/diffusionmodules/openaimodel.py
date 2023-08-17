@@ -508,7 +508,7 @@ class UNetModel(nn.Module):
         self.crossattn_force_grad = False
         self.use_conv_attn = False
         self.save_attn_mat = False
-        
+
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
@@ -901,7 +901,7 @@ class UNetModel(nn.Module):
                                                              ca_layer_indices=distill_layer_indices)
         else:
             distill_layer_indices = []
-            distill_ca_flags = None
+            distill_ca_old_flags = None
 
         for module in self.input_blocks:
             get_layer_idx_context = partial(get_layer_context, layer_idx)
