@@ -713,7 +713,8 @@ class UNetModel(nn.Module):
         self.middle_block.apply(convert_module_to_f32)
         self.output_blocks.apply(convert_module_to_f32)
 
-    # set_cross_attn_flags: Set one or more flags for all cross-attention layers.
+    # set_cross_attn_flags: Set one or more flags for all or a subset of cross-attention layers.
+    # If ca_layer_indices is None, then set the flags for all cross-attention layers.
     def set_cross_attn_flags(self, flag_dict, ca_layer_indices=None):
         if flag_dict is None:
             return None
@@ -778,13 +779,12 @@ class UNetModel(nn.Module):
         use_ada_context       = extra_info.get('use_ada_context', False)       if extra_info is not None else False
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
         use_background_token  = extra_info.get('use_background_token', False)  if extra_info is not None else False
-        subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
-        debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
+        subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
         crossattn_force_grad  = extra_info.get('crossattn_force_grad', False)  if extra_info is not None else False
+        debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
 
-        if use_conv_attn:
-            ca_old_flags = self.set_cross_attn_flags({'use_conv_attn': True})
+        ca_old_flags = self.set_cross_attn_flags({'use_conv_attn': use_conv_attn})
 
         if subj_indices is not None:
             subj_indices_B, subj_indices_N = subj_indices
@@ -874,7 +874,8 @@ class UNetModel(nn.Module):
             else:
                 layer_context = layer_static_context
 
-            # subj_indices is passed in extra_info, which is obtained when generating static embeddings.
+            # subj_indices is passed from extra_info, which was obtained when generating static embeddings.
+            # Return subj_indices to cross attention layers for conv attn computation.
             return layer_context, subj_indices
     
         
@@ -957,8 +958,7 @@ class UNetModel(nn.Module):
             breakpoint()
         
         # Restore the original flags in cross-attention layers.
-        if use_conv_attn:
-            self.set_cross_attn_flags(ca_old_flags)
+        self.set_cross_attn_flags(ca_old_flags)
         if distill_ca_old_flags is not None:
             self.set_cross_attn_flags(distill_ca_old_flags, ca_layer_indices=distill_layer_indices)
 
