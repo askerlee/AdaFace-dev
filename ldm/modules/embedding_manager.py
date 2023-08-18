@@ -820,11 +820,12 @@ class EmbeddingManager(nn.Module):
                                                                token_string=placeholder_string)
 
                 if placeholder_string == self.background_string:
-                    # Only 1 embedding taking both fg and bg infeat. 
-                    # So fg_emb_count = bg_emb_count = 0, and num_vectors_per_token = 1.
-                    fg_emb_count = 0
-                    bg_emb_count = 0
-                    num_vectors_per_token = 1
+                    # Reserve 1 embedding to take both fg and bg infeat. 
+                    # If num_vectors_per_token == 1, fg_emb_count = 0, bg_emb_count = 0.
+                    # If num_vectors_per_token == 2, fg_emb_count = 1, bg_emb_count = 0.
+                    # If num_vectors_per_token == 3 (not recommended), fg_emb_count = 1, bg_emb_count = 1.
+                    fg_emb_count = num_vectors_per_token // 2
+                    bg_emb_count = num_vectors_per_token - fg_emb_count - 1
                     use_cached_bg = True
                 else:
                     # Around half of the embeddings are fg embeddings, and the other half are bg embeddings.

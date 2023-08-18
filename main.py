@@ -213,6 +213,10 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--num_vectors_per_token",
         type=int, default=1,
         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
+    parser.add_argument("--num_vectors_per_bg_token",
+        type=int, default=1,
+        help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
+    
     parser.add_argument("--use_conv_attn",
         action="store_true", 
         help="Use convolutional attention at subject tokens")
@@ -727,8 +731,8 @@ if __name__ == "__main__":
             config.model.params.use_background_token = True
             config.model.params.personalization_config.params.placeholder_strings.append(opt.background_string)
             config.model.params.personalization_config.params.background_string = opt.background_string
-            # Always use only 1 vector for the background token.
-            config.model.params.personalization_config.params.num_vectors_per_token[opt.background_string] = 1
+            # The background token can also be represented with 1 or more embeddings.
+            config.model.params.personalization_config.params.num_vectors_per_token[opt.background_string] = opt.num_vectors_per_bg_token
             config.data.params.train.params.background_string      = opt.background_string
             config.data.params.validation.params.background_string = opt.background_string
 
