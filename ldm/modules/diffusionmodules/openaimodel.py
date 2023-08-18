@@ -792,6 +792,9 @@ class UNetModel(nn.Module):
             # If uncond (null) condition is active, then subj_indices = None.
             subj_indices_B, subj_indices_N = None, None
 
+        #if iter_type == 'mix_recon':
+        #    breakpoint()
+
         if use_layerwise_context:
             B = x.shape[0]
             # If use_layerwise_context, then context is static layerwise embeddings.

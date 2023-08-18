@@ -1496,7 +1496,7 @@ class LatentDiffusion(DDPM):
                             extra_info['iter_type']      = self.prompt_mix_scheme
                             # Set ada_bp_to_unet to False will reduce performance.
                             extra_info['ada_bp_to_unet'] = True
-                        # do_attn_recon_loss_iter
+                        # do_attn_recon_loss
                         else:
                             # c_in_cls         = cls_single_prompts
                             # Use the mixed embeddings as the static embeddings of the class prompts.
@@ -1506,9 +1506,9 @@ class LatentDiffusion(DDPM):
                             # cond_mix uses class single prompts. Set iter_type to 'mix_recon' to 
                             # distinguish it from 'normal_recon' which uses subject single prompts.
                             extra_info2['iter_type']      = 'mix_recon'
-                            # cond_mix uses class single prompts. So do not use_conv_attn.
-                            extra_info2['use_conv_attn']  = False
-                            cond_mix = (c_static_emb_cls, subj_single_prompts, extra_info2)
+                            # Inherit 'use_conv_attn' from extra_info.
+                            # extra_info2['use_conv_attn']  = False
+                            cond_mix = (c_static_emb_cls, cls_single_prompts, extra_info2)
                             # There's a loopy reference extra_info -> c_cls -> extra_info, but it's fine.
                             extra_info['cond_mix'] = cond_mix
 
@@ -2612,10 +2612,10 @@ class LatentDiffusion(DDPM):
             # to make the two attention maps more complementary (expect the loss pushes the 
             # subject embedding to a more accurate point).
             loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, 1 - subj_attn, 
-                                                           exponent=2,    
-                                                           do_demean_first=True,
-                                                           first_n_dims_to_flatten=2, 
-                                                           ref_grad_scale=fg_grad_scale)
+                                                      exponent=2,    
+                                                      do_demean_first=True,
+                                                      first_n_dims_to_flatten=2, 
+                                                      ref_grad_scale=fg_grad_scale)
             
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_distill_layer_weight
 
