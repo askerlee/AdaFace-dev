@@ -431,6 +431,7 @@ class DDPM(pl.LightningModule):
 
     def init_iter_flags(self):
         self.iter_flags = { 'calc_clip_loss':           False,
+                            'do_normal_recon':          True,
                             'do_attn_recon_loss':       False,
                             'is_comp_iter':             False,
                             'do_comp_prompt_mix_reg':   False,
@@ -488,6 +489,7 @@ class DDPM(pl.LightningModule):
             # Always calculate clip loss during comp reg iterations, even if self.iter_flags['do_teacher_filter'] is False.
             # This is to monitor how well the model performs on compositionality.
             self.iter_flags['calc_clip_loss'] = True
+            self.iter_flags['do_normal_recon']    = False
             self.iter_flags['do_attn_recon_loss'] = False
 
         elif self.global_step >= 0:
@@ -1514,6 +1516,7 @@ class LatentDiffusion(DDPM):
                             c_in2         = subj_single_prompts[:ORIG_BS]
                             c_static_emb2 = subj_single_emb[:N_EMBEDS]
 
+                            assert self.iter_flags['do_normal_recon']
                             extra_info['iter_type']      = 'normal_recon'
                             extra_info['ada_bp_to_unet'] = False
                             
@@ -1540,6 +1543,7 @@ class LatentDiffusion(DDPM):
                         c_in2         = subj_single_prompts[:ORIG_BS]
                         c_static_emb2 = subj_single_emb[:N_EMBEDS]
 
+                        assert self.iter_flags['do_normal_recon']
                         extra_info['iter_type']      = 'normal_recon'
                         extra_info['ada_bp_to_unet'] = False
 
@@ -1565,6 +1569,7 @@ class LatentDiffusion(DDPM):
                     c = self.get_learned_conditioning(c)
                     # c[2]: extra_info. Here is only reached when do_static_prompt_delta_reg = False.
                     # Either prompt_delta_reg_weight == 0 or it's called by self.validation_step().
+                    assert self.iter_flags['do_normal_recon']
                     c[2]['iter_type'] = 'normal_recon'
                     extra_info['ada_bp_to_unet'] = False
                     extra_info['subj_indices'] = copy.copy(self.embedding_manager.placeholder_indices_fg)
@@ -1947,7 +1952,7 @@ class LatentDiffusion(DDPM):
         loss = 0
         twin_comp_ada_embeddings = None
 
-        if iter_type == 'normal_recon':
+        if self.iter_flags['do_normal_recon']:
             # Compute subj_fg_bg_complementary_loss, only when 
             # we don't compute mix_fg_bg_complementary_loss. Otherwise it'll take too much RAM.
             # mix_fg_bg_complementary_loss is preferred over subj_fg_bg_complementary_loss,
@@ -1970,7 +1975,7 @@ class LatentDiffusion(DDPM):
 
             if self.iter_flags['do_attn_recon_loss']:
                 subj_indices0 = self.embedding_manager.placeholder_indices_fg0
-                # For 'normal_recon' but do_attn_recon_loss_iter=True, same to mix reg iters or ada reg iters, 
+                # For 'do_normal_recon' but do_attn_recon_loss_iter=True, same to mix reg iters or ada reg iters, 
                 # 4 types of prompts are fed to embedding_manager to generate static embeddings in forward(). 
                 # subj_indices00 has a BS of 4, for the 2 types of subject prompts, each type 2 prompts.
                 # So we only keep the first half, which correspond to the 2 subject-single prompts.
