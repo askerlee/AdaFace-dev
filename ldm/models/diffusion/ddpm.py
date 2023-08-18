@@ -1498,7 +1498,7 @@ class LatentDiffusion(DDPM):
                             extra_info['ada_bp_to_unet'] = True
                         # do_attn_recon_loss_iter
                         else:
-                            c_in_cls         = cls_single_prompts
+                            # c_in_cls         = cls_single_prompts
                             # Use the mixed embeddings as the static embeddings of the class prompts.
                             # It strikes a balance between pure class embeddings and subject embeddings.
                             c_static_emb_cls = mix_single_emb
@@ -1508,7 +1508,7 @@ class LatentDiffusion(DDPM):
                             extra_info2['iter_type']      = 'mix_recon'
                             # cond_mix uses class single prompts. So do not use_conv_attn.
                             extra_info2['use_conv_attn']  = False
-                            cond_mix = (c_static_emb_cls, c_in_cls, extra_info2)
+                            cond_mix = (c_static_emb_cls, subj_single_prompts, extra_info2)
                             # There's a loopy reference extra_info -> c_cls -> extra_info, but it's fine.
                             extra_info['cond_mix'] = cond_mix
 
@@ -1931,6 +1931,7 @@ class LatentDiffusion(DDPM):
                                 unet_has_grad=not self.iter_flags['do_teacher_filter'], 
                                 crossattn_force_grad=False,
                                 do_recon=self.iter_flags['calc_clip_loss'],
+                                # cfg_scales: classifier-free guidance scales.
                                 cfg_scales=cfg_scales_for_clip_loss)
 
         loss_dict = {}
