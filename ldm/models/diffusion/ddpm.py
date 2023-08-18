@@ -127,7 +127,10 @@ class DDPM(pl.LightningModule):
         self.do_attn_recon_loss             = do_attn_recon_loss
         self.use_conv_attn                  = use_conv_attn
         self.use_background_token           = use_background_token
-        self.use_fp_trick                   = use_fp_trick
+        # If use_conv_attn, the subject is well expressed, and use_fp_trick is unnecessary 
+        # (actually harmful).
+        self.use_fp_trick = False if self.use_conv_attn else use_fp_trick
+
         self.cached_inits_available         = False
         self.cached_inits                   = None
         self.init_iter_flags()
