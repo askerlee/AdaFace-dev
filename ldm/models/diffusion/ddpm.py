@@ -2577,6 +2577,8 @@ class LatentDiffusion(DDPM):
         attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
         # K: 4, number of embeddings per subject token.
         K = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
+        # K_bg: 1 or 2, number of embeddings per background token.
+        K_bg = len(placeholder_indices_bg[0]) // len(torch.unique(placeholder_indices_bg[0]))
         assert self.num_vectors_per_token == K
 
         loss_fg_bg_complementary = 0
@@ -2596,12 +2598,12 @@ class LatentDiffusion(DDPM):
             # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
             placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K], placeholder_indices_fg[1][:BS*K])
             # placeholder_indices_bg: ([0, 1], [11, 12]).
-            placeholder_indices_bg = (placeholder_indices_bg[0][:BS], placeholder_indices_bg[1][:BS])
-            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] max among K embeddings -> [2, 8, 64]
+            placeholder_indices_bg = (placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg])
+            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] mean among K embeddings    -> [2, 8, 64]
             subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K, *attn_mat.shape[2:]).mean(dim=1)
-            # bg_attn: [2, 8, 64].
-            bg_attn   = attn_mat[placeholder_indices_bg]
-            
+            # bg_attn:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
+            bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).mean(dim=1)
+
             attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
             # Align bg_attn with (1 - subj_attn), so that the two attention maps are complementary.
             # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
