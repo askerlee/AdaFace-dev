@@ -852,20 +852,23 @@ class UNetModel(nn.Module):
                         # iter_type == 'mix_hijk'. Separate layer_static_context into q and k.
                         layer_static_context, layer_static_key_context = \
                             layer_static_context.chunk(2, dim=1)
-                        # The second half of a mix_hijk batch is always the mix instances,
-                        # even for twin comp sets.                        
-                        subj_layer_ada_context, mix_layer_ada_context = layer_ada_context.chunk(2)
-                        # In ddpm, patch_multi_embeddings() is applied on a text embedding whose 1st dim is the 16 layers.
-                        # Here, the 1st dim of mix_layer_ada_context is the batch.
-                        # But we can still use patch_multi_embeddings() without specially processing, since patch_multi_embeddings
-                        # in both cases, the 2nd dim is the token dim, so patch_multi_embeddings() works in both cases.
-                        # subj_indices_N:      subject token indices within the subject single prompt (BS=1).
-                        # len(subj_indices_N): embedding number of the subject token.
-                        # mix_layer_ada_context: [2, 77, 768]. subj_indices_N: [6, 7, 8, 9, 6, 7, 8, 9]. 
-                        # Four embeddings (6,7,8,9) for each token.
-                        mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
-                                                                       subj_indices_N) 
-                        layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
+                        if iter_type == 'mix_hijk':
+                            # The second half of a mix_hijk batch is always the mix instances,
+                            # even for twin comp sets.                        
+                            subj_layer_ada_context, mix_layer_ada_context = layer_ada_context.chunk(2)
+                            # In ddpm, patch_multi_embeddings() is applied on a text embedding whose 1st dim is the 16 layers.
+                            # Here, the 1st dim of mix_layer_ada_context is the batch.
+                            # But we can still use patch_multi_embeddings() without specially processing, since patch_multi_embeddings
+                            # in both cases, the 2nd dim is the token dim, so patch_multi_embeddings() works in both cases.
+                            # subj_indices_N:      subject token indices within the subject single prompt (BS=1).
+                            # len(subj_indices_N): embedding number of the subject token.
+                            # mix_layer_ada_context: [2, 77, 768]. subj_indices_N: [6, 7, 8, 9, 6, 7, 8, 9]. 
+                            # Four embeddings (6,7,8,9) for each token.
+                            mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
+                                                                        subj_indices_N) 
+                            layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
+                        # otherwise, iter_type == 'mix_recon'. The two instances in the batch are 
+                        # both subject single prompts. No need to patch_multi_embeddings().
                         
                 # layer_static_context, layer_ada_context: [2, 77, 768]
                 # layer_hyb_context: layer context fed to the current UNet layer, [2, 77, 768]
