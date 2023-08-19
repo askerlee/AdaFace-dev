@@ -2341,13 +2341,14 @@ class LatentDiffusion(DDPM):
             # It contains the 6 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17, 18.
             unet_attns = cond[2]['unet_attns']
-            loss_subj_attn_distill, loss_feat_distill = \
+            loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
                                                           self.embedding_manager.placeholder_indices_fg,
                                                           HALF_BS)
             
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
-            loss_dict.update({f'{prefix}/loss_subj_attn_distill': loss_subj_attn_distill.detach()})
+            loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.detach()})
+            loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill': loss_subj_attn_norm_distill.detach()})
 
             # In a reused init iter, the denoise image may not look so authentic, so
             # it receives a smaller weight.
@@ -2355,7 +2356,7 @@ class LatentDiffusion(DDPM):
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.4
 
-            loss_prompt_mix_reg =   loss_subj_attn_distill * distill_subj_attn_weight + \
+            loss_prompt_mix_reg =   (loss_subj_attn_delta_distill + loss_subj_attn_norm_distill) * distill_subj_attn_weight + \
                                     loss_feat_distill      * distill_feat_weight 
             
             loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
@@ -2371,7 +2372,8 @@ class LatentDiffusion(DDPM):
         # under subj_comp_prompts should satisfy the delta loss constraint:
         # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
         # F(subj_single_prompts) - F(cls_single_prompts)
-        loss_subj_attn_distill = 0
+        loss_subj_attn_delta_distill = 0
+        loss_subj_attn_norm_distill  = 0
         loss_feat_distill      = 0
 
         delta_attn_loss_scale    = 1
@@ -2467,10 +2469,10 @@ class LatentDiffusion(DDPM):
 
                 # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
                 # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
-                loss_subj_attn_distill += ( loss_layer_subj_delta_attn * delta_attn_loss_scale \
+                loss_subj_attn_delta_distill += ( loss_layer_subj_delta_attn * delta_attn_loss_scale \
                                                 + (loss_layer_subj_comp_attn + loss_layer_subj_single_attn) * direct_attn_loss_scale \
-                                                + (loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm) * direct_attn_norm_loss_scale \
-                                          ) * attn_distill_layer_weight
+                                                ) * attn_distill_layer_weight
+                loss_subj_attn_norm_distill  += ( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) * direct_attn_norm_loss_scale * attn_distill_layer_weight
 
             use_subj_attn_as_spatial_weights = True
             if use_subj_attn_as_spatial_weights:
@@ -2547,7 +2549,7 @@ class LatentDiffusion(DDPM):
             # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
             loss_feat_distill += loss_layer_feat_distill * feat_distill_layer_weight
 
-        return loss_subj_attn_distill, loss_feat_distill
+        return loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_distill
 
     def calc_fg_bg_complementary_loss(self, unet_attns, 
                                       placeholder_indices_fg, 
@@ -2623,7 +2625,7 @@ class LatentDiffusion(DDPM):
         # Do demean: loss_fg_bg_complementary is 1 ~ 1.2. 
         # No demean: loss_fg_bg_complementary is 0.2 ~ 0.3.
         if not do_demean_first:
-            loss_fg_bg_complementary *= 2
+            loss_fg_bg_complementary *= 3
 
         return loss_fg_bg_complementary
 
