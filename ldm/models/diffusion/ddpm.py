@@ -2418,7 +2418,7 @@ class LatentDiffusion(DDPM):
         #   tensor([6,  7,   6, 7,   6, 7,   6, 7]) )
         placeholder_indices = (placeholder_indices_B, placeholder_indices_T)
         # K_fg: 4, number of embeddings per subject token.
-        K_fg = len(orig_placeholder_ind_B[0]) // len(torch.unique(orig_placeholder_ind_B[0]))
+        K_fg = len(orig_placeholder_ind_B) // len(torch.unique(orig_placeholder_ind_B))
 
         mix_feat_grad_scale = 0.1
         mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
