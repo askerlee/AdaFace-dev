@@ -1985,12 +1985,13 @@ class LatentDiffusion(DDPM):
                 cond_mix = extra_info['cond_mix']
                 #print(cond_mix[1])
                 
-                # We don't add noise to x_start, so that the obtained attention maps are more accurate.
-                t0 = torch.zeros_like(t)
+                # We only add a small amount of noise to x_start, so that the obtained attention maps are more accurate.
+                t_small = torch.randint(int(self.num_timesteps * 0.2), int(self.num_timesteps * 0.4), 
+                                        size=t.shape, device=x_start.device)
                 # crossattn_force_grad: override the cross attention layers' autograd status, so that we can BP
                 # from the complementary loss through the cross attention.
                 # cond_mix: cls prompts. So do not use_conv_attn. cond_mix[2]['use_conv_attn'] is False
-                self.guided_denoise(x_start, noise, t0, cond_mix, 
+                self.guided_denoise(x_start, noise, t_small, cond_mix, 
                                     unet_has_grad=False, 
                                     crossattn_force_grad=True,
                                     do_recon=False,
