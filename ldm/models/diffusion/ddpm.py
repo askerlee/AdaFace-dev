@@ -1418,8 +1418,8 @@ class LatentDiffusion(DDPM):
                         # so that the distillation keeps being effective. Otherwise the teacher 
                         # will gradually become very similar to the student in the end.
                         subj_emb_scale = 1 - INIT_CLS_EMB_SCALE \
-                                         - (FINAL_CLS_EMB_SCALE - INIT_CLS_EMB_SCALE) * self.global_step / total_training_steps
-
+                                         - (FINAL_CLS_EMB_SCALE - INIT_CLS_EMB_SCALE) * np.random.uniform(0.8, 1.3) \
+                                            * self.global_step / total_training_steps
                         # mix_embeddings('add'):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
                         # where they are subj_comp_emb * subj_emb_scale + cls_comp_emb * (1 - subj_emb_scale).
                         # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
