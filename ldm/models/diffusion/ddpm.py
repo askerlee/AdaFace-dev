@@ -2379,7 +2379,7 @@ class LatentDiffusion(DDPM):
         delta_attn_loss_scale    = 1
         direct_attn_loss_scale   = 2
         # The norm is actually the abs().mean(), so it has small magnitudes and should be scaled up.
-        direct_attn_norm_loss_scale = 3
+        direct_attn_norm_loss_scale = 6
 
         # Discard top layers and the first few bottom layers from distillation.
         # distill_layer_weights: relative weight of each distillation layer. 
@@ -2417,11 +2417,12 @@ class LatentDiffusion(DDPM):
         # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
         #   tensor([6,  7,   6, 7,   6, 7,   6, 7]) )
         placeholder_indices = (placeholder_indices_B, placeholder_indices_T)
+
         mix_feat_grad_scale = 0.1
+        mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
         # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to teacher attn. 
         # Setting to 0 may prevent the graph from being released and OOM.
         mix_attn_grad_scale  = 0.01  
-        mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
         mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
 
         for unet_layer_idx, unet_feat in unet_feats.items():
@@ -2480,9 +2481,10 @@ class LatentDiffusion(DDPM):
                     continue
                 feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
 
+                # feat_subj_single, ...: [1, 1280, 16, 16]
                 feat_subj_single, feat_subj_comp, feat_mix_single, feat_mix_comp \
                     = unet_feat.chunk(4)
-                
+
                 # convert_attn_to_spatial_weight() will detach attention weights to 
                 # avoid BP through attention.
                 spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(subj_attn_mix_comp, HALF_BS, 
