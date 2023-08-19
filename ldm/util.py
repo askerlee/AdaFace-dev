@@ -286,7 +286,7 @@ def demean(x):
 def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, 
                     do_demean_first=True, 
                     first_n_dims_to_flatten=3,
-                    ref_grad_scale=0):
+                    ref_grad_scale=0, debug=False):
     B = delta.shape[0]
     loss = 0
 
@@ -312,7 +312,7 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3,
                 breakpoint()
 
         # Flatten delta and ref_delta, by tucking the layer and token dimensions into the batch dimension.
-        # dela: [2464, 768], ref_delta: [2464, 768]
+        # delta_i: [2464, 768], ref_delta_i: [2464, 768]
         delta_i     = delta_i.view(delta_i.shape[:first_n_dims_to_flatten].numel(), -1)
         ref_delta_i = ref_delta_i.view(delta_i.shape)
         emb_mask_i  = emb_mask_i.flatten() if emb_mask_i is not None else None
@@ -325,6 +325,10 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3,
         # But since cosine is scale invariant, de-scale is not necessary and won't have effects.
         # LN = demean & de-scale. So in theory, LN is equivalent to demean() here. But LN may introduce
         # numerical instability. So we use simple demean() here.
+
+        if debug:
+            breakpoint()
+
         if do_demean_first:
             delta_i     = demean(delta_i)
             ref_delta_i = demean(ref_delta_i)

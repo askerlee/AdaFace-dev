@@ -1987,12 +1987,13 @@ class LatentDiffusion(DDPM):
                 #print(cond_mix[1])
                 
                 # We only add a small amount of noise to x_start, so that the obtained attention maps are more accurate.
-                t_small = torch.randint(int(self.num_timesteps * 0.2), int(self.num_timesteps * 0.4), 
-                                        size=t.shape, device=x_start.device)
+                #t_small = torch.randint(0, int(self.num_timesteps * 0.1), 
+                #                        size=t.shape, device=x_start.device)
+                t0 = torch.zeros_like(t)
                 # crossattn_force_grad: override the cross attention layers' autograd status, so that we can BP
                 # from the complementary loss through the cross attention.
                 # cond_mix: cls prompts. So do not use_conv_attn. cond_mix[2]['use_conv_attn'] is False
-                self.guided_denoise(x_start, noise, t_small, cond_mix, 
+                self.guided_denoise(x_start, noise, t0, cond_mix, 
                                     unet_has_grad=False, 
                                     crossattn_force_grad=True,
                                     do_recon=False,
@@ -2108,8 +2109,6 @@ class LatentDiffusion(DDPM):
                 clip_images_code = torch.cat([x_recon_subj_comp, x_recon_mix_comp], dim=0)
                 clip_prompts_comp = cond[2]['cls_comp_prompts'] * 2
 
-            # Remove the prefix 'a face portrait of ' from the prompts.
-            clip_prompts_comp = [ p.replace('a face portrait of ', '') for p in clip_prompts_comp ]
             if len(clip_images_code) != len(clip_prompts_comp):
                 breakpoint()
 
@@ -2378,7 +2377,7 @@ class LatentDiffusion(DDPM):
         delta_attn_loss_scale    = 1
         direct_attn_loss_scale   = 2
         # The norm is actually the abs().mean(), so it has small magnitudes and should be scaled up.
-        direct_attn_norm_loss_scale = 10
+        direct_attn_norm_loss_scale = 5
 
         # Discard top layers and the first few bottom layers from distillation.
         # distill_layer_weights: relative weight of each distillation layer. 
@@ -2436,17 +2435,10 @@ class LatentDiffusion(DDPM):
             # We don't need BP through attention into UNet.
             attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
             # subj_attn: [4, 8, 256 / 64] (1 embedding  for 1 token) 
-            # or         [8, 8, 256 / 64] (2 embeddings for 1 token)
+            # or         [16, 8, 256 / 64] (4 embeddings for 1 token)
             subj_attn = attn_mat[placeholder_indices]
             # subj_attn_subj_single, ...: [1, 8, 256] (1 embedding  for 1 token) 
-            # or                          [2, 8, 256] (2 embeddings for 1 token)
-            multi_emb_weights = torch.ones(subj_attn.shape[0], 1, 1, device=subj_attn.device)
-            # multi_emb_weights: The extra embeddings have smaller weights (0.5) than the main embedding (1.0) 
-            # at subj_attn[0].
-            # Such that they receive less restrictions than the main embedding, and can be "freer" to 
-            # learn to attend to the background.
-            multi_emb_weights[1:] = 0.5
-            subj_attn = subj_attn * multi_emb_weights
+            # or                          [4, 8, 256] (4 embeddings for 1 token)
             subj_attn_subj_single, subj_attn_subj_comp, subj_attn_mix_single,  subj_attn_mix_comp \
                 = subj_attn.chunk(4)
 
@@ -2457,7 +2449,7 @@ class LatentDiffusion(DDPM):
                 # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
                 # towards class embeddings, hurting authenticity.
                 loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
-                                                             exponent=3,    
+                                                             exponent=2,    
                                                              first_n_dims_to_flatten=2, 
                                                              ref_grad_scale=0.01)
                 
@@ -2606,6 +2598,7 @@ class LatentDiffusion(DDPM):
             # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] mean among K_fg embeddings -> [2, 8, 64]
             subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat.shape[2:]).mean(dim=1)
             # bg_attn:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
+            # 8: 8 attention heads. Last dim 64: number of image tokens.
             bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).mean(dim=1)
 
             attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
@@ -2617,17 +2610,18 @@ class LatentDiffusion(DDPM):
             # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
             # to make the two attention maps more complementary (expect the loss pushes the 
             # subject embedding to a more accurate point).
-            loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, 1 - subj_attn, 
+            loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, subj_attn.max().detach() - subj_attn, 
                                                       exponent=2,    
                                                       do_demean_first=do_demean_first,
                                                       first_n_dims_to_flatten=2, 
-                                                      ref_grad_scale=fg_grad_scale)
+                                                      ref_grad_scale=fg_grad_scale,
+                                                      debug=False)
             
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_distill_layer_weight
 
         # If not doing demean, the loss will be smaller in magnitude, so we scale it up.
         # Do demean: loss_fg_bg_complementary is 1 ~ 1.2. 
-        # No demean: loss_fg_bg_complementary is 0.3 ~ 0.4.
+        # No demean: loss_fg_bg_complementary is 0.2 ~ 0.3.
         if not do_demean_first:
             loss_fg_bg_complementary *= 2
 
