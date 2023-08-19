@@ -239,7 +239,7 @@ def mix_embeddings(mix_scheme, c1, c2, placeholder_indices_N=None,
             # (multiple token indices of the same instance).
             c_mix = c1 * scale_mask + c2 * (1 - scale_mask)
         else:
-            c_mix = c1 + c2
+            c_mix = c1 * c1_subj_scale + c2 * (1 - c1_subj_scale)
 
     elif mix_scheme == 'concat':
         c_mix = torch.cat([ c1, c2 * c2_mix_weight ], dim=1)
