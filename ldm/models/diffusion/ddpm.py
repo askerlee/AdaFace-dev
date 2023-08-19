@@ -1965,7 +1965,8 @@ class LatentDiffusion(DDPM):
                                                                self.embedding_manager.placeholder_indices_fg,
                                                                self.embedding_manager.placeholder_indices_bg,
                                                                x_start.shape[0],
-                                                               fg_grad_scale=0.01
+                                                               fg_grad_scale=0.01,
+                                                               do_demean_first=False
                                                               )
                 
                 # Release RAM.
@@ -2012,7 +2013,8 @@ class LatentDiffusion(DDPM):
                                                                    self.embedding_manager.placeholder_indices_fg,
                                                                    self.embedding_manager.placeholder_indices_bg,
                                                                    x_start.shape[0],
-                                                                   fg_grad_scale=0.01
+                                                                   fg_grad_scale=0.01,
+                                                                   do_demean_first=False
                                                                   )
                     
                     # Do not delete cond_mix[2]['unet_attns'], as it will be used to compute the spatial weights.
@@ -2558,7 +2560,8 @@ class LatentDiffusion(DDPM):
     def calc_fg_bg_complementary_loss(self, unet_attns, 
                                       placeholder_indices_fg, 
                                       placeholder_indices_bg, 
-                                      BS, fg_grad_scale=0.01):
+                                      BS, fg_grad_scale=0.01,
+                                      do_demean_first=False):
 
         # Discard top layers and the first few bottom layers from distillation.
         # distill_layer_weights: relative weight of each distillation layer. 
@@ -2616,11 +2619,17 @@ class LatentDiffusion(DDPM):
             # subject embedding to a more accurate point).
             loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, 1 - subj_attn, 
                                                       exponent=2,    
-                                                      do_demean_first=False,
+                                                      do_demean_first=do_demean_first,
                                                       first_n_dims_to_flatten=2, 
                                                       ref_grad_scale=fg_grad_scale)
             
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_distill_layer_weight
+
+        # If not doing demean, the loss will be smaller in magnitude, so we scale it up.
+        # Do demean: loss_fg_bg_complementary is 1 ~ 1.2. 
+        # No demean: loss_fg_bg_complementary is 0.3 ~ 0.4.
+        if not do_demean_first:
+            loss_fg_bg_complementary *= 2
 
         return loss_fg_bg_complementary
 
