@@ -1426,9 +1426,9 @@ class LatentDiffusion(DDPM):
                         # Each is of a single instance. So only provides subj_indices_half_N 
                         # (multiple token indices of the same instance).
                         subj_comp_emb_v   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
-                                                            None, c1_subj_scale=subj_emb_scale)
+                                                            subj_indices_half_N, c1_subj_scale=subj_emb_scale)
                         subj_single_emb_v = mix_embeddings('add', subj_single_emb, cls_single_emb,
-                                                            None, c1_subj_scale=subj_emb_scale)
+                                                            subj_indices_half_N, c1_subj_scale=subj_emb_scale)
 
                         if random.random() < 1: #0.5:
                             mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_v,   cls_comp_emb],   dim=1)
