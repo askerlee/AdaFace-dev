@@ -617,10 +617,12 @@ class AdaEmbedding(nn.Module):
                 # Use static_subj_layer_emb as the query to do the attention-based pooling.
                 infeat_pooled    = pooler(layer_attn_components, static_subj_layer_emb, img_mask, bp_to_unet)
                 if self.use_attn_pooler:
+                    # infeat_fg, infeat_bg: [2, 320]
                     infeat_fg, infeat_bg = infeat_pooled
                     if self.use_cached_bg:
                         # Discard infeat_bg obtained from the attn pooler, and use cached_infeat_bg instead.
                         infeat_bg = cached_infeat_bg
+                    # infeat_fg_bg: [2, 640]
                     infeat_fg_bg = torch.cat([infeat_fg, infeat_bg], dim=-1)
                 else:
                     infeat_fg_bg = infeat_pooled
@@ -820,7 +822,7 @@ class EmbeddingManager(nn.Module):
                                                                token_string=placeholder_string)
 
                 if placeholder_string == self.background_string:
-                    # Reserve 1 embedding to take both fg and bg infeat. 
+                    # Reserve 1 embedding to take both fg and cached-bg infeat. 
                     # If num_vectors_per_token == 1, fg_emb_count = 0, bg_emb_count = 0.
                     # If num_vectors_per_token == 2, fg_emb_count = 1, bg_emb_count = 0.
                     # If num_vectors_per_token == 3 (not recommended), fg_emb_count = 1, bg_emb_count = 1.

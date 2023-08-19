@@ -2409,14 +2409,16 @@ class LatentDiffusion(DDPM):
         # The class prompts are at the latter half of the batch.
         # So we need to add the batch indices of the subject prompts, to locate
         # the corresponding class prompts.
-        cls_placeholder_indices_B = orig_placeholder_ind_B + HALF_BS * 2
+        cls_placeholder_ind_B = orig_placeholder_ind_B + HALF_BS * 2
         # Concatenate the placeholder indices of the subject prompts and class prompts.
-        placeholder_indices_B = torch.cat([orig_placeholder_ind_B, cls_placeholder_indices_B], dim=0)
+        placeholder_indices_B = torch.cat([orig_placeholder_ind_B, cls_placeholder_ind_B ], dim=0)
         placeholder_indices_T = torch.cat([orig_placeholder_ind_T, orig_placeholder_ind_T], dim=0)
         # placeholder_indices: 
         # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
         #   tensor([6,  7,   6, 7,   6, 7,   6, 7]) )
         placeholder_indices = (placeholder_indices_B, placeholder_indices_T)
+        # K_fg: 4, number of embeddings per subject token.
+        K_fg = len(orig_placeholder_ind_B[0]) // len(torch.unique(orig_placeholder_ind_B[0]))
 
         mix_feat_grad_scale = 0.1
         mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
@@ -2433,15 +2435,15 @@ class LatentDiffusion(DDPM):
             feat_subj_single, feat_subj_comp, feat_mix_single, feat_mix_comp \
                 = unet_feat.chunk(4)
             
-            # [4, 8, 256, 77] / [4, 8, 64, 77] =>
-            # [4, 77, 8, 256] / [4, 77, 8, 64]
+            # attn_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
             # We don't need BP through attention into UNet.
             attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
-            # subj_attn: [4, 8, 256 / 64] (1 embedding  for 1 token) 
-            # or         [16, 8, 256 / 64] (4 embeddings for 1 token)
-            subj_attn = attn_mat[placeholder_indices]
+            # subj_attn: [4, 8, 256] (1 embedding  for 1 token)  => [4, 1, 8, 256] mean => [4, 8, 256]
+            # or         [16, 8, 256] (4 embeddings for 1 token) => [4, 4, 8, 256] mean => [4, 8, 256]
+            # mean is taken across the multiple subject tokens.
+            subj_attn = attn_mat[placeholder_indices].reshape(HALF_BS*4, K_fg, *attn_mat.shape[2:]).mean(dim=1)
             # subj_attn_subj_single, ...: [1, 8, 256] (1 embedding  for 1 token) 
-            # or                          [4, 8, 256] (4 embeddings for 1 token)
+            # or                          [1, 8, 256] (4 embeddings for 1 token)
             subj_attn_subj_single, subj_attn_subj_comp, subj_attn_mix_single,  subj_attn_mix_comp \
                 = subj_attn.chunk(4)
 
@@ -2616,7 +2618,7 @@ class LatentDiffusion(DDPM):
             # subject embedding to a more accurate point).
             loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, subj_attn.max().detach() - subj_attn, 
                                                       exponent=2,    
-                                                      do_demean_first=do_demean_first,
+                                                      do_demean_first=do_demean_first,  # False
                                                       first_n_dims_to_flatten=2, 
                                                       ref_grad_scale=fg_grad_scale,
                                                       debug=False)
