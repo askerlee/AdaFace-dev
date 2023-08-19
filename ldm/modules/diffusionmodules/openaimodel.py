@@ -869,18 +869,18 @@ class UNetModel(nn.Module):
                             layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
                         # otherwise, iter_type == 'mix_recon'. The two instances in the batch are 
                         # both subject single prompts. No need to patch_multi_embeddings().
-                        
-                # layer_static_context, layer_ada_context: [2, 77, 768]
-                # layer_hyb_context: layer context fed to the current UNet layer, [2, 77, 768]
-                layer_hyb_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
 
-                if (iter_type == 'mix_hijk' and layer_idx in hijk_layer_indices):
+                # layer_static_context, layer_ada_context: [2, 77, 768]
+                # layer_agg_context: aggregated (static and ada) layer context fed to the current UNet layer, [2, 77, 768]
+                layer_agg_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
+
+                if ((iter_type == 'mix_hijk' or iter_type == 'mix_recon') and layer_idx in hijk_layer_indices):
                     # Replace layer_static_context with layer_static_key_context.
                     layer_key_context = layer_static_key_context * static_emb_weight + layer_ada_context * ada_emb_weight
-                    # Pass both embeddings for hijacking the key of layer_hyb_context by layer_key_context.
-                    layer_context = (layer_hyb_context, layer_key_context)
+                    # Pass both embeddings for hijacking the key of layer_agg_context by layer_key_context.
+                    layer_context = (layer_agg_context, layer_key_context)
                 else:
-                    layer_context = layer_hyb_context
+                    layer_context = layer_agg_context
                 # Otherwise, iter_type == 'mix_hijk' but layer_idx not in hijk_layer_indices.
                 # i.e., this layer is not mixed. In that case, 
                 # layer_key_context == layer_static_context, and we just discard layer_key_context.
