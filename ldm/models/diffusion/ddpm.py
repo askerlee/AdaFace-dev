@@ -1367,6 +1367,13 @@ class LatentDiffusion(DDPM):
                     subj_indices0_half_N = self.embedding_manager.placeholder_indices_fg0[1].chunk(2)[0]
                     extra_info['subj_indices0'] = (subj_indices0_half_B, subj_indices0_half_N)
 
+                    # The subject is represented with a multi-embedding token. The corresponding tokens
+                    # in the class prompts are "class , , ,", 
+                    # therefore the embeddings of "," need to be patched.
+                    if len(subj_indices_half_N) > 1:
+                        cls_single_emb = patch_multi_embeddings(cls_single_emb, subj_indices_half_N)
+                        cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   subj_indices_half_N)
+                        
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
                     if self.iter_flags['do_comp_prompt_mix_reg'] or self.iter_flags['do_attn_recon_loss']:
@@ -1387,11 +1394,6 @@ class LatentDiffusion(DDPM):
 
                         c_in2 = subj_single_prompts + subj_comp_prompts + mix_single_prompts + mix_comp_prompts
 
-                        # The subject is represented with a multi-embedding token.
-                        if len(subj_indices_half_N) > 1:
-                            cls_single_emb = patch_multi_embeddings(cls_single_emb, subj_indices_half_N)
-                            cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   subj_indices_half_N)
-                            
                         # The static embeddings of subj_comp_prompts and cls_comp_prompts,
                         # i.e., subj_comp_emb and cls_comp_emb will be mixed.
                         # In subj_comp_emb_v_mix, subj_single_emb_v_mix, the K subject embeddings are scaled down by 0.5,
