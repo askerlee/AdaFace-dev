@@ -556,7 +556,10 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)
 
-def patch_multi_embeddings(text_embedding, placeholder_indices_N):
+def patch_multi_embeddings(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):
+    # In a do_teacher_filter iteration, placeholder_indices_N may consist of the indices of 2 instances.
+    # So we need to deduplicate them first.
+    placeholder_indices_N = torch.unique(placeholder_indices_N)
     M = len(placeholder_indices_N)
     # num_vectors_per_token = 1. No patching is needed.
     if M == 1:
@@ -571,9 +574,18 @@ def patch_multi_embeddings(text_embedding, placeholder_indices_N):
     repl_mask[:, placeholder_indices_N] = 1
     repl_text_embedding = torch.zeros_like(text_embedding)
     # Almost 0 everywhere, except being the class embedding at locations of the multi-embedding token.
-    # Repeat m times the class embedding (corresponding to the subject embedding 
-    # "z" at placeholder_indices_N0); but divide it by m to avoid changing the output after cross-attention.
-    repl_text_embedding[:, placeholder_indices_N] = text_embedding[:, placeholder_indices_N0].repeat(1, M, 1) / M
+    # Repeat M times the class embedding (corresponding to the subject embedding 
+    # "z" at placeholder_indices_N0); 
+    # Divide them by D to avoid the cross-attention over-focusing on the class-level subject.
+    if divide_scheme == 'sqrt_M':
+        D = np.sqrt(M)
+    elif divide_scheme == 'M':
+        D = M
+    elif divide_scheme == 'none' or divide_scheme is None:
+        D = 1
+
+    repl_text_embedding[:, placeholder_indices_N] = text_embedding[:, placeholder_indices_N0].repeat(1, M, 1) / 1
+
     # Keep the embeddings at almost everywhere, but only replace the embeddings at placeholder_indices_N.
     # Directly replacing by slicing with placeholder_indices_N will cause errors.
     patched_text_embedding = text_embedding * (1 - repl_mask) + repl_text_embedding * repl_mask

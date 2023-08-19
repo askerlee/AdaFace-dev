@@ -2440,7 +2440,7 @@ class LatentDiffusion(DDPM):
             attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
             # subj_attn: [4, 8, 256] (1 embedding  for 1 token)  => [4, 1, 8, 256] mean => [4, 8, 256]
             # or         [16, 8, 256] (4 embeddings for 1 token) => [4, 4, 8, 256] mean => [4, 8, 256]
-            # mean is taken across the multiple subject tokens.
+            # mean() is taken across the multiple subject tokens.
             subj_attn = attn_mat[placeholder_indices].reshape(HALF_BS*4, K_fg, *attn_mat.shape[2:]).mean(dim=1)
             # subj_attn_subj_single, ...: [1, 8, 256] (1 embedding  for 1 token) 
             # or                          [1, 8, 256] (4 embeddings for 1 token)

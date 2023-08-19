@@ -828,6 +828,11 @@ class UNetModel(nn.Module):
                 ada_embedder   = extra_info['ada_embedder']
                 ada_bp_to_unet = extra_info.get('ada_bp_to_unet', False)
                 # emb: time embedding. h: features from the previous layer.
+                # context_in: ['an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
+                #              'an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
+                #              'an illustration of a dirty cat, , ,  swimming in the ocean, with backlight', 
+                #              'an illustration of a dirty cat, , ,  swimming in the ocean, with backlight']
+                # The 1st and 2nd, and 3rd and 4th prompts are the same, if it's a do_teacher_filter iteration.
                 layer_ada_context, ada_emb_weight \
                     = ada_embedder(context_in, layer_idx, layer_attn_components, emb, ada_bp_to_unet)
                 static_emb_weight = 1 - ada_emb_weight
@@ -856,6 +861,8 @@ class UNetModel(nn.Module):
                         # in both cases, the 2nd dim is the token dim, so patch_multi_embeddings() works in both cases.
                         # subj_indices_N:      subject token indices within the subject single prompt (BS=1).
                         # len(subj_indices_N): embedding number of the subject token.
+                        # mix_layer_ada_context: [2, 77, 768]. subj_indices_N: [6, 7, 8, 9, 6, 7, 8, 9]. 
+                        # Four embeddings (6,7,8,9) for each token.
                         mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
                                                                        subj_indices_N) 
                         layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
