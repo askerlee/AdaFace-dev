@@ -2575,11 +2575,11 @@ class LatentDiffusion(DDPM):
         # Normalize the weights above so that each set sum to 1.
         attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
         attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
-        # K: 4, number of embeddings per subject token.
-        K = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
+        # K_fg: 4, number of embeddings per subject token.
+        K_fg = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
         # K_bg: 1 or 2, number of embeddings per background token.
         K_bg = len(placeholder_indices_bg[0]) // len(torch.unique(placeholder_indices_bg[0]))
-        assert self.num_vectors_per_token == K
+        assert self.num_vectors_per_token == K_fg
 
         loss_fg_bg_complementary = 0
 
@@ -2590,17 +2590,17 @@ class LatentDiffusion(DDPM):
             # [2, 8, 256, 77] / [2, 8, 64, 77] =>
             # [2, 77, 8, 256] / [2, 77, 8, 64]
             attn_mat = unet_attn.permute(0, 3, 1, 2)
-            # In each instance, placeholder_indices_fg has K times as many elements as placeholder_indices_bg.
+            # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
             # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
             #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
             # placeholder_indices_bg: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
             # BS = 2, so we only keep instances indexed by [0, 1].
             # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
-            placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K], placeholder_indices_fg[1][:BS*K])
+            placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K_fg], placeholder_indices_fg[1][:BS*K_fg])
             # placeholder_indices_bg: ([0, 1], [11, 12]).
             placeholder_indices_bg = (placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg])
-            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] mean among K embeddings    -> [2, 8, 64]
-            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K, *attn_mat.shape[2:]).mean(dim=1)
+            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] mean among K_fg embeddings -> [2, 8, 64]
+            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat.shape[2:]).mean(dim=1)
             # bg_attn:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
             bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).mean(dim=1)
 
@@ -2615,7 +2615,7 @@ class LatentDiffusion(DDPM):
             # subject embedding to a more accurate point).
             loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, 1 - subj_attn, 
                                                       exponent=2,    
-                                                      do_demean_first=True,
+                                                      do_demean_first=False,
                                                       first_n_dims_to_flatten=2, 
                                                       ref_grad_scale=fg_grad_scale)
             
