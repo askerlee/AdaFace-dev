@@ -2379,7 +2379,7 @@ class LatentDiffusion(DDPM):
         delta_attn_loss_scale    = 1
         direct_attn_loss_scale   = 2
         # The norm is actually the abs().mean(), so it has small magnitudes and should be scaled up.
-        direct_attn_norm_loss_scale = 5
+        direct_attn_norm_loss_scale = 3
 
         # Discard top layers and the first few bottom layers from distillation.
         # distill_layer_weights: relative weight of each distillation layer. 
@@ -2451,7 +2451,7 @@ class LatentDiffusion(DDPM):
                 # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
                 # towards class embeddings, hurting authenticity.
                 loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
-                                                             exponent=2,    
+                                                             exponent=3,
                                                              first_n_dims_to_flatten=2, 
                                                              ref_grad_scale=0.01)
                 
