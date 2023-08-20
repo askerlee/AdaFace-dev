@@ -124,6 +124,8 @@ class PersonalizedBase(Dataset):
                  background_string=None,
                  # cls token used to compute the delta loss.
                  cls_delta_token=None,  
+                 # background tokens used to compute the delta loss.
+                 cls_bg_delta_tokens=None,
                 # num_vectors_per_token: how many vectors in each layer are allocated to model 
                 # the subject. If num_vectors_per_token > 1, pad with "," in the prompts to leave
                 # room for those extra vectors.
@@ -144,11 +146,11 @@ class PersonalizedBase(Dataset):
         self.background_string   = background_string
 
         if cls_delta_token is None:
-            self.cls_delta_token = None
-            self.use_default_cls_delta_token = True
+            self.cls_delta_tokens = default_cls_delta_tokens[self.broad_class]
         else:
-            self.cls_delta_token = cls_delta_token
-            self.use_default_cls_delta_token = False
+            self.cls_delta_tokens = [ cls_delta_token ]
+
+        self.cls_bg_delta_tokens = cls_bg_delta_tokens
 
         self.num_vectors_per_token = num_vectors_per_token
         self.center_crop = center_crop
@@ -198,10 +200,11 @@ class PersonalizedBase(Dataset):
 
         placeholder_string = self.placeholder_string
 
-        if self.use_default_cls_delta_token:
-            cls_delta_token = random.choice(default_cls_delta_tokens[self.broad_class])
-        else:
-            cls_delta_token = self.cls_delta_token
+        cls_delta_token = random.choice(self.cls_delta_tokens)
+        # If background_string is None, then cls_bg_delta_tokens should be None as well, 
+        # and cls_bg_delta_token is None.
+        cls_bg_delta_token = random.choice(self.cls_bg_delta_tokens) if self.cls_bg_delta_tokens is not None \
+                               else self.background_string
 
         # If num_vectors_per_token == 3:
         # "z"    => "z, , "
@@ -220,8 +223,11 @@ class PersonalizedBase(Dataset):
         #cls_prompt_single           = template.format(cls_delta_token)
 
         bg_suffix = " with background {}".format(self.background_string) if self.background_string is not None else ""
+        # If background_string is None, then cls_bg_delta_token is None as well, thus cls_bg_suffix is "".
+        cls_bg_suffix = " with background {}".format(cls_bg_delta_token) if cls_bg_delta_token is not None else ""
+        # bug_suffix: " with background y". cls_bg_suffix: " with background grass/rock".
         placeholder_string_with_bg  = placeholder_string + bg_suffix
-        cls_delta_token_with_bg     = cls_delta_token    + bg_suffix
+        cls_delta_token_with_bg     = cls_delta_token    + cls_bg_suffix
 
         # "face portrait" trick for humans/animals.
         if self.broad_class == 1:

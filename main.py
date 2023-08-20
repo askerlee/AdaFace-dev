@@ -208,8 +208,8 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--cls_delta_token",
         type=str, default=None,
-        help="A single word to use in class-level prompts for delta loss")
-
+        help="A single word to be used in class-level prompts for delta loss")
+    
     parser.add_argument("--num_vectors_per_token",
         type=int, default=1,
         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
@@ -739,6 +739,8 @@ if __name__ == "__main__":
             if opt.bg_init_words:
                 config.model.params.personalization_config.params.initializer_words.append(opt.bg_init_words)
                 config.model.params.personalization_config.params.initializer_weights.append([1.0] * len(re.split("\s+", opt.bg_init_words)))
+                config.data.params.train.params.cls_bg_delta_tokens      = re.split(r"\s+", opt.bg_init_words)
+                config.data.params.validation.params.cls_bg_delta_tokens = re.split(r"\s+", opt.bg_init_words)
 
         config.data.params.train.params.broad_class       = opt.broad_class
         config.data.params.validation.params.broad_class  = opt.broad_class
