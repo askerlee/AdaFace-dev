@@ -2622,11 +2622,6 @@ class LatentDiffusion(DDPM):
         placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K_fg], placeholder_indices_fg[1][:BS*K_fg])
         # placeholder_indices_bg: ([0, 1], [11, 12]).
         placeholder_indices_bg = (placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg])
-        # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] mean among K_fg embeddings -> [2, 8, 64]
-        subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat.shape[2:]).mean(dim=1)
-        # bg_attn:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
-        # 8: 8 attention heads. Last dim 64: number of image tokens.
-        bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).mean(dim=1)
 
         for unet_layer_idx, unet_attn in unet_attns.items():
             if (unet_layer_idx not in attn_distill_layer_weights):
@@ -2635,6 +2630,11 @@ class LatentDiffusion(DDPM):
             # [2, 8, 256, 77] / [2, 8, 64, 77] =>
             # [2, 77, 8, 256] / [2, 77, 8, 64]
             attn_mat = unet_attn.permute(0, 3, 1, 2)
+            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] mean among K_fg embeddings -> [2, 8, 64]
+            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat.shape[2:]).mean(dim=1)
+            # bg_attn:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
+            # 8: 8 attention heads. Last dim 64: number of image tokens.
+            bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).mean(dim=1)
 
             attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
             # Align bg_attn with (1 - subj_attn), so that the two attention maps are complementary.
