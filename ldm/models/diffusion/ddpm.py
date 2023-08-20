@@ -1180,10 +1180,17 @@ class LatentDiffusion(DDPM):
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
         x, c = self.get_input(batch, self.first_stage_key)
         
-        if self.use_conv_attn:
-            p_bg_token = 0.9
+        if self.iter_flags['do_comp_prompt_mix_reg']:
+            # Allow a small prob of using background token in mix reg iterations 
+            # (Note Mix reg iterations are the same iterations as Ada delta reg iterations).
+            p_bg_token = 0.1
         else:
-            p_bg_token = 0.8
+            # This iter is only doing recon on training images.
+            # use_background_token is mainly for such cases. 
+            if self.use_conv_attn:
+                p_bg_token = 0.9
+            else:
+                p_bg_token = 0.8
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
@@ -1206,13 +1213,10 @@ class LatentDiffusion(DDPM):
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_fp'
                 CLS_PROMPT_COMP   = 'cls_prompt_comp_fp'
                 CLS_PROMPT_SINGLE = 'cls_prompt_single_fp'
-            # "not self.iter_flags['do_comp_prompt_mix_reg']": implies no ada delta loss.
-            # So this iter is only doing recon on training images.
-            # Only use_background_token on such cases. 
             # *_comp_bg: used for static delta loss. 
             # To avoid the backgound token taking too much of the foreground, 
             # we only use the background token on 80% of the training images.
-            elif not self.iter_flags['do_comp_prompt_mix_reg'] and self.use_background_token \
+            elif self.use_background_token \
               and self.global_step >= 0 \
               and random.random() < p_bg_token:
                 c = batch['subj_prompt_single_bg']
