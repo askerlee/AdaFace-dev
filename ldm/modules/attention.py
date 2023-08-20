@@ -226,7 +226,7 @@ class CrossAttention(nn.Module):
 
         if self.save_attn_mat:
             self.cached_attn_mat = rearrange(attn, '(b h) i j -> b h i j', h=h)
-            self.cached_k        = rearrange(k,    '(b h) n d -> b h n d', h=h)
+            self.cached_k        = rearrange(k,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
             #breakpoint()
 
         out = einsum('b i j, b j d -> b i d', attn, v)

@@ -1382,6 +1382,8 @@ class LatentDiffusion(DDPM):
 
                     # In mix reg iters, background tokens only appear 10% of the time.
                     if self.iter_flags['use_background_token']:
+                        if self.embedding_manager.placeholder_indices_bg is None:
+                            breakpoint()
                         # Patch background embeddings when the number of background embeddings > 1.
                         bg_indices_half_B  = self.embedding_manager.placeholder_indices_bg[0].chunk(2)[0]
                         bg_indices_half_N  = self.embedding_manager.placeholder_indices_bg[1].chunk(2)[0]
