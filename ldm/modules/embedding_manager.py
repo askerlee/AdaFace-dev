@@ -821,7 +821,7 @@ class EmbeddingManager(nn.Module):
                                                                init_word_embeddings, init_word_weights, 
                                                                token_string=placeholder_string)
 
-                if False: #placeholder_string == self.background_string:
+                if placeholder_string == self.background_string:
                     # Reserve 1 embedding to take both fg and cached-bg infeat. 
                     # If num_vectors_per_token == 1, fg_emb_count = 0, bg_emb_count = 0.
                     # If num_vectors_per_token == 2, fg_emb_count = 1, bg_emb_count = 0.
@@ -1161,8 +1161,7 @@ class EmbeddingManager(nn.Module):
             placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
         
         if is_bg_token:
-            # background token only has one embedding. So no need to separately store placeholder_indices_bg0.
-            self.placeholder_indices_bg = placeholder_indices
+            self.placeholder_indices_bg, self.placeholder_indices_bg0 = placeholder_indices, placeholder_indices0
         else:
             self.placeholder_indices_fg, self.placeholder_indices_fg0 = placeholder_indices, placeholder_indices0
             
