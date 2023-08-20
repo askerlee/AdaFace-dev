@@ -821,7 +821,7 @@ class EmbeddingManager(nn.Module):
                                                                init_word_embeddings, init_word_weights, 
                                                                token_string=placeholder_string)
 
-                if placeholder_string == self.background_string:
+                if False: #placeholder_string == self.background_string:
                     # Reserve 1 embedding to take both fg and cached-bg infeat. 
                     # If num_vectors_per_token == 1, fg_emb_count = 0, bg_emb_count = 0.
                     # If num_vectors_per_token == 2, fg_emb_count = 1, bg_emb_count = 0.

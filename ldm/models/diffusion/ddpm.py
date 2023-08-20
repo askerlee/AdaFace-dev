@@ -1378,6 +1378,7 @@ class LatentDiffusion(DDPM):
                         cls_single_emb = patch_multi_embeddings(cls_single_emb, subj_indices_half_N)
                         cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   subj_indices_half_N)
 
+                    # In mix reg iters, background tokens only appear 10% of the time.
                     if self.embedding_manager.placeholder_indices_bg is not None:
                         # Patch background embeddings when the number of background embeddings > 1.
                         bg_indices_half_B  = self.embedding_manager.placeholder_indices_bg[0].chunk(2)[0]
