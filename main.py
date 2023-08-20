@@ -748,9 +748,11 @@ if __name__ == "__main__":
         config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
         config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
 
-        config.data.params.train.params.num_vectors_per_token     = opt.num_vectors_per_token
+        config.data.params.train.params.num_vectors_per_token      = opt.num_vectors_per_token
         config.data.params.validation.params.num_vectors_per_token = opt.num_vectors_per_token
-        
+        config.data.params.train.params.num_vectors_per_bg_token      = opt.num_vectors_per_bg_token
+        config.data.params.validation.params.num_vectors_per_bg_token = opt.num_vectors_per_bg_token
+
         if opt.use_conv_attn:
             assert opt.num_vectors_per_token == 4 or opt.num_vectors_per_token == 9, \
                     f"Only support 4 or 9 embeddings per token but got {opt.num_vectors_per_token}. " \
