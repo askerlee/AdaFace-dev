@@ -228,7 +228,7 @@ class CrossAttention(nn.Module):
             self.cached_attn_mat = rearrange(attn, '(b h) i j -> b h i j', h=h)
             # cached_k will be used in ddpm.py:calc_fg_bg_key_ortho_loss(), in which two ks will multiply each other.
             # So sqrt(self.scale) will scale the product of two ks by self.scale.
-            self.cached_k        = rearrange(k,    '(b h) n d -> b h n d', h=h)
+            self.cached_k        = rearrange(k,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
             #breakpoint()
 
         out = einsum('b i j, b j d -> b i d', attn, v)
