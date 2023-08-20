@@ -1305,6 +1305,7 @@ class LatentDiffusion(DDPM):
                         subj_single_prompts = c
                         subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
                     else:
+                        self.iter_flags['use_background_token'] = self.cached_inits['use_background_token']
                         # self.iter_flags['reuse_init_conds'], discard the prompts offered in shared_step().
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             chunk_list(self.cached_inits['delta_prompts'], 4)
@@ -2248,9 +2249,11 @@ class LatentDiffusion(DDPM):
                     x_start_reuse = x_recon.detach().chunk(2)[1].repeat(2, 1, 1, 1)
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but mix comp = subj comp.
-                    self.cached_inits = { 'x_start':        x_start_reuse, 
-                                          'delta_prompts':  cond_orig[2]['delta_prompts'],
-                                          't':              t }
+                    self.cached_inits = { 'x_start':                x_start_reuse, 
+                                          'delta_prompts':          cond_orig[2]['delta_prompts'],
+                                          't':                      t,
+                                          'use_background_token':   self.iter_flags['use_background_token'], }
+                    
                     # Do not put cached_inits_available on self.iter_flags, as iter_flags will be reset
                     # in the beginning of the next iteration.
                     self.cached_inits_available = True
