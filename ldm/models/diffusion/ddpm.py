@@ -1378,13 +1378,14 @@ class LatentDiffusion(DDPM):
                         cls_single_emb = patch_multi_embeddings(cls_single_emb, subj_indices_half_N)
                         cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   subj_indices_half_N)
 
-                    # Patch background embeddings when the number of background embeddings > 1.
-                    bg_indices_half_B  = self.embedding_manager.placeholder_indices_bg[0].chunk(2)[0]
-                    bg_indices_half_N  = self.embedding_manager.placeholder_indices_bg[1].chunk(2)[0]
-                    extra_info['bg_indices'] = (bg_indices_half_B, bg_indices_half_N)
-                    if len(bg_indices_half_N) > 1:
-                        cls_single_emb = patch_multi_embeddings(cls_single_emb, bg_indices_half_N)
-                        cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   bg_indices_half_N)
+                    if self.embedding_manager.placeholder_indices_bg is not None:
+                        # Patch background embeddings when the number of background embeddings > 1.
+                        bg_indices_half_B  = self.embedding_manager.placeholder_indices_bg[0].chunk(2)[0]
+                        bg_indices_half_N  = self.embedding_manager.placeholder_indices_bg[1].chunk(2)[0]
+                        extra_info['bg_indices'] = (bg_indices_half_B, bg_indices_half_N)
+                        if len(bg_indices_half_N) > 1:
+                            cls_single_emb = patch_multi_embeddings(cls_single_emb, bg_indices_half_N)
+                            cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   bg_indices_half_N)
 
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
