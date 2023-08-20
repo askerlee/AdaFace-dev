@@ -2697,6 +2697,9 @@ class LatentDiffusion(DDPM):
 
         loss_fg_bg_key_ortho = 0
 
+        fg_ks_grad_scale = 0.1
+        fg_ks_grad_scaler = gen_gradient_scaler(fg_ks_grad_scale)
+
         # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
         # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
@@ -2721,12 +2724,13 @@ class LatentDiffusion(DDPM):
 
             # subj_ks, bg_ks: [2, 8, 160] => [16, 160]
             subj_ks = subj_ks.reshape(-1, subj_ks.shape[-1])
+            subj_ks_gs = fg_ks_grad_scaler(subj_ks)
             bg_ks   = bg_ks.reshape(-1, bg_ks.shape[-1])
 
-            k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
             # Ignore negative values. Only penalize positive correlations.
-            loss_layer_fg_bg_key_ortho = torch.clip(torch.mm(subj_ks, bg_ks.T), min=0).mean()
+            loss_layer_fg_bg_key_ortho = torch.clip(torch.mm(subj_ks_gs, bg_ks.T), min=0).mean()
             
+            k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
             loss_fg_bg_key_ortho += loss_layer_fg_bg_key_ortho * k_ortho_layer_weight
 
         return loss_fg_bg_key_ortho
