@@ -144,6 +144,7 @@ class PersonalizedBase(Dataset):
         self._length = self.num_images 
         self.placeholder_string  = placeholder_string
         self.background_string   = background_string
+        self.broad_class = broad_class
 
         if cls_delta_token is None:
             self.cls_delta_tokens = default_cls_delta_tokens[self.broad_class]
@@ -183,7 +184,6 @@ class PersonalizedBase(Dataset):
             self.flip = None
 
         self.num_compositions_per_image = num_compositions_per_image
-        self.broad_class = broad_class
         # cartoon characters are usually depicted as human-like, so is_animal is True.
         self.is_animal = (broad_class == 1 or broad_class == 2)
 
