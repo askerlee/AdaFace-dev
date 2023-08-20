@@ -771,6 +771,7 @@ class UNetModel(nn.Module):
         hs = []
         distill_feats = {}
         distill_attns = {}
+        distill_ks    = {}
 
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
@@ -925,7 +926,8 @@ class UNetModel(nn.Module):
             h = module(h, emb, get_layer_idx_context)
             hs.append(h)
             if layer_idx in distill_layer_indices:
-                    distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
+                    distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.cached_attn_mat 
+                    distill_ks[layer_idx]    = module[1].transformer_blocks[0].attn2.cached_k
                     distill_feats[layer_idx] = h
 
             layer_idx += 1
@@ -935,7 +937,8 @@ class UNetModel(nn.Module):
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, get_layer_idx_context)
         if layer_idx in distill_layer_indices:
-                distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.attn_mat 
+                distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.cached_attn_mat 
+                distill_ks[layer_idx]    = self.middle_block[1].transformer_blocks[0].attn2.cached_k
                 distill_feats[layer_idx] = h
 
         layer_idx += 1
@@ -960,14 +963,16 @@ class UNetModel(nn.Module):
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, get_layer_idx_context)
             if layer_idx in distill_layer_indices:
-                    distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
+                    distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.cached_attn_mat 
+                    distill_ks[layer_idx]    = module[1].transformer_blocks[0].attn2.cached_k
                     distill_feats[layer_idx] = h
 
             layer_idx += 1
 
         extra_info['unet_feats'] = distill_feats
         extra_info['unet_attns'] = distill_attns
-
+        extra_info['unet_ks']    = distill_ks
+        
         if debug_attn:
             breakpoint()
         

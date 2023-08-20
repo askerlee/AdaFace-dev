@@ -95,6 +95,7 @@ class DDPM(pl.LightningModule):
                  prompt_delta_reg_weight=0.,
                  composition_prompt_mix_reg_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
+                 fg_bg_key_ortho_loss_weight=0.,
                  do_clip_teacher_filtering=False,
                  do_attn_recon_loss=True,
                  use_background_token=False,
@@ -121,6 +122,7 @@ class DDPM(pl.LightningModule):
         self.prompt_delta_reg_weight         = prompt_delta_reg_weight
         self.composition_prompt_mix_reg_weight = composition_prompt_mix_reg_weight
         self.fg_bg_complementary_loss_weight   = fg_bg_complementary_loss_weight
+        self.fg_bg_key_ortho_loss_weight       = fg_bg_key_ortho_loss_weight
         self.do_clip_teacher_filtering      = do_clip_teacher_filtering
         self.prompt_mix_scheme              = 'mix_hijk'
 
@@ -1379,7 +1381,7 @@ class LatentDiffusion(DDPM):
                         cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   subj_indices_half_N)
 
                     # In mix reg iters, background tokens only appear 10% of the time.
-                    if self.embedding_manager.placeholder_indices_bg is not None:
+                    if self.iter_flags['use_background_token']:
                         # Patch background embeddings when the number of background embeddings > 1.
                         bg_indices_half_B  = self.embedding_manager.placeholder_indices_bg[0].chunk(2)[0]
                         bg_indices_half_N  = self.embedding_manager.placeholder_indices_bg[1].chunk(2)[0]
@@ -1509,7 +1511,7 @@ class LatentDiffusion(DDPM):
                             c_static_emb2 = torch.cat([ subj_single_emb2, subj_comp_emb2, 
                                                         mix_single_emb,   mix_comp_emb ], dim=0)
                             
-                            extra_info['iter_type']      = self.prompt_mix_scheme
+                            extra_info['iter_type']      = self.prompt_mix_scheme   # 'mix_hijk'
                             # Set ada_bp_to_unet to False will reduce performance.
                             extra_info['ada_bp_to_unet'] = True
                         # do_attn_recon_loss
@@ -1970,6 +1972,16 @@ class LatentDiffusion(DDPM):
         twin_comp_ada_embeddings = None
 
         if self.iter_flags['do_normal_recon']:
+            if self.iter_flags['use_background_token'] and self.fg_bg_key_ortho_loss_weight > 0:
+                fg_bg_key_ortho_loss = \
+                    self.calc_fg_bg_key_ortho_loss(cond[2]['unet_ks'], 
+                                                    self.embedding_manager.placeholder_indices_fg,
+                                                    self.embedding_manager.placeholder_indices_bg,
+                                                    x_start.shape[0])
+                loss += self.fg_bg_key_ortho_loss_weight * fg_bg_key_ortho_loss
+                loss_dict.update({f'{prefix}/fg_bg_key_ortho': fg_bg_key_ortho_loss.item()})
+                del cond[2]['unet_ks']
+
             # Compute subj_fg_bg_complementary_loss, only when 
             # we don't compute mix_fg_bg_complementary_loss. Otherwise it'll take too much RAM.
             # mix_fg_bg_complementary_loss is preferred over subj_fg_bg_complementary_loss,
@@ -1989,7 +2001,6 @@ class LatentDiffusion(DDPM):
                 del cond[2]['unet_attns'], cond[2]['unet_feats']
                 loss += self.fg_bg_complementary_loss_weight * subj_fg_bg_complementary_loss
                 loss_dict.update({f'{prefix}/fg_bg_complem_subj': subj_fg_bg_complementary_loss.item()})
-                # print(fg_bg_complementary_loss)
 
             if self.iter_flags['do_attn_recon_loss']:
                 subj_indices0 = self.embedding_manager.placeholder_indices_fg0
@@ -2588,6 +2599,7 @@ class LatentDiffusion(DDPM):
                                        12: 1.,
                                        16: 1., 17: 1., 
                                        18: 1.,
+                                       19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25, 23: 0.25, 24: 0.25,
                                      }
         
         # Normalize the weights above so that each set sum to 1.
@@ -2601,6 +2613,21 @@ class LatentDiffusion(DDPM):
 
         loss_fg_bg_complementary = 0
 
+        # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
+        # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
+        #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
+        # placeholder_indices_bg: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
+        # BS = 2, so we only keep instances indexed by [0, 1].
+        # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
+        placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K_fg], placeholder_indices_fg[1][:BS*K_fg])
+        # placeholder_indices_bg: ([0, 1], [11, 12]).
+        placeholder_indices_bg = (placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg])
+        # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] mean among K_fg embeddings -> [2, 8, 64]
+        subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat.shape[2:]).mean(dim=1)
+        # bg_attn:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
+        # 8: 8 attention heads. Last dim 64: number of image tokens.
+        bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).mean(dim=1)
+
         for unet_layer_idx, unet_attn in unet_attns.items():
             if (unet_layer_idx not in attn_distill_layer_weights):
                 continue
@@ -2608,20 +2635,6 @@ class LatentDiffusion(DDPM):
             # [2, 8, 256, 77] / [2, 8, 64, 77] =>
             # [2, 77, 8, 256] / [2, 77, 8, 64]
             attn_mat = unet_attn.permute(0, 3, 1, 2)
-            # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
-            # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
-            #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
-            # placeholder_indices_bg: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
-            # BS = 2, so we only keep instances indexed by [0, 1].
-            # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
-            placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K_fg], placeholder_indices_fg[1][:BS*K_fg])
-            # placeholder_indices_bg: ([0, 1], [11, 12]).
-            placeholder_indices_bg = (placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg])
-            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] mean among K_fg embeddings -> [2, 8, 64]
-            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat.shape[2:]).mean(dim=1)
-            # bg_attn:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
-            # 8: 8 attention heads. Last dim 64: number of image tokens.
-            bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).mean(dim=1)
 
             attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
             # Align bg_attn with (1 - subj_attn), so that the two attention maps are complementary.
@@ -2648,6 +2661,70 @@ class LatentDiffusion(DDPM):
             loss_fg_bg_complementary *= 3
 
         return loss_fg_bg_complementary
+
+    def calc_fg_bg_key_ortho_loss(self, unet_ks, 
+                                  placeholder_indices_fg, 
+                                  placeholder_indices_bg, 
+                                  BS):
+
+        # Discard top layers and the first few bottom layers from distillation.
+        # distill_layer_weights: relative weight of each distillation layer. 
+        # distill_layer_weights are normalized using distill_overall_weight.
+        # Conditioning layers are 7, 8, 12, 16, 17. All the 5 layers have 1280 channels.
+        # But intermediate layers also contribute to distillation. They have small weights.
+        # Layer 16 has strong face semantics, so it is given a small weight.
+        k_ortho_layer_weights = { #7:  1., 8: 1.,
+                                 9:  0.5, 10: 0.5, 11: 0.5,
+                                 12: 1.,
+                                 16: 1., 17: 1., 
+                                 18: 1.,
+                                 19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25, 23: 0.25, 24: 0.25,
+                                }
+        
+        # Normalize the weights above so that each set sum to 1.
+        k_ortho_layer_weight_sum = np.sum(list(k_ortho_layer_weights.values()))
+        k_ortho_layer_weights = { k: v / k_ortho_layer_weight_sum for k, v in k_ortho_layer_weights.items() }
+        # K_fg: 4, number of embeddings per subject token.
+        K_fg = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
+        # K_bg: 1 or 2, number of embeddings per background token.
+        K_bg = len(placeholder_indices_bg[0]) // len(torch.unique(placeholder_indices_bg[0]))
+        assert self.num_vectors_per_token == K_fg
+
+        loss_fg_bg_key_ortho = 0
+
+        # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
+        # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
+        #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
+        # placeholder_indices_bg: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
+        # BS = 2, so we only keep instances indexed by [0, 1].
+        # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
+        placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K_fg], placeholder_indices_fg[1][:BS*K_fg])
+        # placeholder_indices_bg: ([0, 1], [11, 12]).
+        placeholder_indices_bg = (placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg])
+
+        for unet_layer_idx, unet_seq_k in unet_ks.items():
+            if (unet_layer_idx not in k_ortho_layer_weights):
+                continue
+
+            # [2, 8, 77, 160] => [2, 77, 8, 160]
+            unet_seq_k = unet_seq_k.permute(0, 2, 1, 3)
+            # subj_attn: [8, 8, 160] -> [2, 4, 8, 160] mean among K_fg embeddings -> [2, 8, 160]
+            subj_ks = unet_seq_k[placeholder_indices_fg].reshape(BS, K_fg, *unet_seq_k.shape[2:]).mean(dim=1)
+            # bg_attn:   [4, 8, 160] -> [2, 2, 8, 160] mean among K_bg embeddings -> [2, 8, 160]
+            # 8: 8 attention heads. Last dim 64: number of image tokens.
+            bg_ks   = unet_seq_k[placeholder_indices_bg].reshape(BS, K_bg, *unet_seq_k.shape[2:]).mean(dim=1)
+
+            # subj_ks, bg_ks: [2, 8, 160] => [16, 160]
+            subj_ks = subj_ks.reshape(-1, subj_ks.shape[-1])
+            bg_ks   = bg_ks.reshape(-1, bg_ks.shape[-1])
+
+            k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
+            # Ignore negative values. Only penalize positive correlations.
+            loss_layer_fg_bg_key_ortho = torch.clip(torch.mm(subj_ks, bg_ks.T), min=0).mean()
+            
+            loss_fg_bg_key_ortho += loss_layer_fg_bg_key_ortho * k_ortho_layer_weight
+
+        return loss_fg_bg_key_ortho
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):

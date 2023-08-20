@@ -225,8 +225,8 @@ class CrossAttention(nn.Module):
         attn = sim.softmax(dim=-1)
 
         if self.save_attn_mat:
-            self.attn_mat = rearrange(attn, '(b h) i j -> b h i j', h=h)
-            #attn_mat = self.attn_mat.detach().cpu().numpy()
+            self.cached_attn_mat = rearrange(attn, '(b h) i j -> b h i j', h=h)
+            self.cached_k        = rearrange(k,    '(b h) n d -> b h n d', h=h)
             #breakpoint()
 
         out = einsum('b i j, b j d -> b i d', attn, v)
