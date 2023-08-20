@@ -1377,7 +1377,15 @@ class LatentDiffusion(DDPM):
                     if len(subj_indices_half_N) > 1:
                         cls_single_emb = patch_multi_embeddings(cls_single_emb, subj_indices_half_N)
                         cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   subj_indices_half_N)
-                        
+
+                    # Patch background embeddings when the number of background embeddings > 1.
+                    bg_indices_half_B  = self.embedding_manager.placeholder_indices_bg[0].chunk(2)[0]
+                    bg_indices_half_N  = self.embedding_manager.placeholder_indices_bg[1].chunk(2)[0]
+                    extra_info['bg_indices'] = (bg_indices_half_B, bg_indices_half_N)
+                    if len(bg_indices_half_N) > 1:
+                        cls_single_emb = patch_multi_embeddings(cls_single_emb, bg_indices_half_N)
+                        cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   bg_indices_half_N)
+
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
                     if self.iter_flags['do_comp_prompt_mix_reg'] or self.iter_flags['do_attn_recon_loss']:
@@ -1514,7 +1522,7 @@ class LatentDiffusion(DDPM):
                             extra_info2['iter_type']      = 'mix_recon'
                             # Inherit 'use_conv_attn' from extra_info.
                             # extra_info2['use_conv_attn']  = False
-                            cond_mix = (c_static_emb_cls, cls_single_prompts, extra_info2)
+                            cond_mix = (c_static_emb_cls, subj_single_prompts, extra_info2)
                             # There's a loopy reference extra_info -> c_cls -> extra_info, but it's fine.
                             extra_info['cond_mix'] = cond_mix
 

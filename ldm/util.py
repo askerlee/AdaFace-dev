@@ -557,6 +557,9 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
     return attn_mat2.reshape(attn_mat_shape)
 
 def patch_multi_embeddings(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):
+    if placeholder_indices_N is None:
+        return text_embedding
+    
     # In a do_teacher_filter iteration, placeholder_indices_N may consist of the indices of 2 instances.
     # So we need to deduplicate them first.
     placeholder_indices_N = torch.unique(placeholder_indices_N)

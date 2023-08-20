@@ -781,16 +781,15 @@ class UNetModel(nn.Module):
         use_background_token  = extra_info.get('use_background_token', False)  if extra_info is not None else False
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
+        bg_indices            = extra_info.get('bg_indices', None)             if extra_info is not None else None
         crossattn_force_grad  = extra_info.get('crossattn_force_grad', False)  if extra_info is not None else False
         debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
 
         ca_old_flags = self.set_cross_attn_flags({'use_conv_attn': use_conv_attn})
 
-        if subj_indices is not None:
-            subj_indices_B, subj_indices_N = subj_indices
-        else:
-            # If uncond (null) condition is active, then subj_indices = None.
-            subj_indices_B, subj_indices_N = None, None
+        # If uncond (null) condition is active, then subj_indices = None.
+        subj_indices_B, subj_indices_N = subj_indices if subj_indices is not None else (None, None)
+        bg_indices_B,   bg_indices_N   = bg_indices   if bg_indices   is not None else (None, None)
 
         #if iter_type == 'mix_recon':
         #    breakpoint()
@@ -865,7 +864,9 @@ class UNetModel(nn.Module):
                             # mix_layer_ada_context: [2, 77, 768]. subj_indices_N: [6, 7, 8, 9, 6, 7, 8, 9]. 
                             # Four embeddings (6,7,8,9) for each token.
                             mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
-                                                                        subj_indices_N) 
+                                                                           subj_indices_N)
+                            mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
+                                                                           bg_indices_N)
                             layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
                         # otherwise, iter_type == 'mix_recon'. The two instances in the batch are 
                         # both subject single prompts. No need to patch_multi_embeddings().
