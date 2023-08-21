@@ -120,7 +120,7 @@ class AttentionalPooler(nn.Module):
     def __init__(self, layer_idx, feat_dim, token_emb_dim, lora_dim=64,
                  infeat_grad_scale=0.5):
         super().__init__()
-        self.n_heads = 1
+        self.n_heads = 1 #8    # Set to the same number of heads as the CrossAttention layers.
         self.layer_inner_dim = feat_dim
         
         if lora_dim > 0:
@@ -196,6 +196,7 @@ class AttentionalPooler(nn.Module):
 
         # to_q is actually to_k in the UNet attention layer, 
         # as the subject embedding is used as the key in UNet.
+        # After applying to_q on token_q_emb, q consists of 8 heads.
         q = to_q(self.ln_q(token_q_emb))
         # q: [1, 320] -> [N, 1, 320]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
@@ -203,13 +204,13 @@ class AttentionalPooler(nn.Module):
         # k: query from the UNet attention layer. Used as key here.
         # No need to go through to_k() here, as it's already the query from the UNet attention layer.
         k = self.ln_k(k)
+        # v: simply normalized x (layer_infeat).
         v = self.ln_x(x)
 
-        # q: [8, 1, 32], k: [8, 256, 32], v: [8, 256, 192]. 8: B*Head = 2*4.
-        # The 768 dims of v are split into 4 heads, each head has 192 dims.
-        # This is kind of arbitrary, as there's no v projection that makes each head have congruent channels.
-        # But introducing a v projection would greatly increase parameters.
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
+        # q: [8, 1, 320], k: [8, 4096, 320], v: [8, 4096, 320]. 8: B*Head = 1 * 8.
+        # The 320 dims of q,k are split into 8 heads, each head has 40 dims.
+        #breakpoint()
+        q, k = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k))
 
         if self.use_lora:
             # lora_q: [N, 1, 320] -> [N, 1, 64].
