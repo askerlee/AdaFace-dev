@@ -2109,7 +2109,7 @@ class LatentDiffusion(DDPM):
             # l_simple_weight_iter = l_simple_weight (1) * fg_inv_scale, i.e.,
             # the recon loss is scaled down by the average weight of focused pixels.
             # The background pixels will be applied with a weight of << 1.
-            loss = self.l_simple_weight_iter * loss_simple.mean()
+            loss += self.l_simple_weight_iter * loss_simple.mean()
 
             loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
             loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
