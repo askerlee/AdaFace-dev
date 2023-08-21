@@ -117,7 +117,7 @@ class AvgPool1d(nn.Module):
 
 # There's almost no learnable parameters in AttentionalPooler, except elementwise affines in 3 LayerNorms.
 class AttentionalPooler(nn.Module):
-    def __init__(self, layer_idx, feat_dim, token_emb_dim, lora_dim=96,
+    def __init__(self, layer_idx, feat_dim, token_emb_dim, lora_dim=64,
                  infeat_grad_scale=0.5):
         super().__init__()
         # Set to the same number of heads as the CrossAttention layers.
@@ -845,8 +845,10 @@ class EmbeddingManager(nn.Module):
                     # If num_vectors_per_token == 1, fg_emb_count = 0, bg_emb_count = 0.
                     # If num_vectors_per_token == 2, fg_emb_count = 1, bg_emb_count = 0.
                     # If num_vectors_per_token == 3 (not recommended), fg_emb_count = 1, bg_emb_count = 1.
-                    fg_emb_count = num_vectors_per_token // 2
-                    bg_emb_count = num_vectors_per_token - fg_emb_count - 1
+                    #fg_emb_count = num_vectors_per_token // 2
+                    #bg_emb_count = num_vectors_per_token - fg_emb_count - 1
+                    bg_emb_count = num_vectors_per_token // 2
+                    fg_emb_count = num_vectors_per_token - bg_emb_count                    
                     use_cached_bg = True
                 else:
                     # Around half of the embeddings are fg embeddings, and the other half are bg embeddings.
