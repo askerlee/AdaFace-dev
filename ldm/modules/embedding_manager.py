@@ -222,7 +222,7 @@ class AttentionalPooler(nn.Module):
             if self.n_heads > 1:
                 # q: [B, 1, 320]    -> [B, 320, 1]
                 # k: [B, 4096, 320] -> [B, 320, 4096]
-                q_ln, k_ln = map(lambda t: t.permute(0, 2, 1) for t in (q_ln, k_ln))
+                q_ln, k_ln = map(lambda t: t.permute(0, 2, 1), (q_ln, k_ln))
 
             # lora_q: [B, 320, 1] -> [B, 128, 1].
             # NOTE: 320 and 128 are multi-head concatenated, 8*40 and 8*16.
@@ -233,7 +233,7 @@ class AttentionalPooler(nn.Module):
             if self.n_heads > 1:
                 # lora_q: [B, 128, 1]    -> [B, 1, 128]
                 # lora_k: [8, 128, 4096] -> [8, 4096, 128]
-                lora_q, lora_k = map(lambda t: t.permute(0, 2, 1) for t in (lora_q, lora_k))
+                lora_q, lora_k = map(lambda t: t.permute(0, 2, 1), (lora_q, lora_k))
 
             # Dot product of the last dim. lora_scores: [B, 1, 4096].
             lora_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) * self.lora_attn_score_scale
