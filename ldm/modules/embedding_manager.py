@@ -117,10 +117,12 @@ class AvgPool1d(nn.Module):
 
 # There's almost no learnable parameters in AttentionalPooler, except elementwise affines in 3 LayerNorms.
 class AttentionalPooler(nn.Module):
-    def __init__(self, layer_idx, feat_dim, token_emb_dim, lora_dim=128,
+    def __init__(self, layer_idx, feat_dim, token_emb_dim, lora_dim=96,
                  infeat_grad_scale=0.5):
         super().__init__()
-        self.n_heads = 8    # Set to the same number of heads as the CrossAttention layers.
+        # Set to the same number of heads as the CrossAttention layers.
+        # All CrossAttention layers in UNet have 8 heads.
+        self.n_heads = 8    
         self.layer_inner_dim = feat_dim
         
         if lora_dim > 0:
