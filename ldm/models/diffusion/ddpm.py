@@ -2715,15 +2715,16 @@ class LatentDiffusion(DDPM):
                 continue
 
             # unet_seq_k [2, 8, 77, 160].
-            # 8: 8 attention heads. Last dim 160: number of image tokens.
+            # H = 8, number of attention heads. D: 160, number of image tokens.
+            H, D = unet_seq_k.shape[1], unet_seq_k.shape[-1]
             # subj_attn [8, 8, 160] => [2, 4, 8, 160] => [2, 8, 4, 160] => [16, 4, 160]
             # Put the 4 subject embeddings in the 2nd to last dimension for torch.mm().
             # The ortho losses on different "instances" are computed separately 
             # and there's no interaction among them.
             # Head is merged into batch, since different heads shouldn't have interactions as well.
-            subj_ks = unet_seq_k[ind_fg_B, :, ind_fg_N].reshape(BS, K_fg, *unet_seq_k.shape[2:]).permute(0, 2, 1, 3).reshape(-1, K_fg, unet_seq_k.shape[-1])
+            subj_ks = unet_seq_k[ind_fg_B, :, ind_fg_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3).reshape(-1, K_fg, D)
             # bg_attn:   [4, 8, 160] => [2, 2, 8, 160] => [2, 8, 2, 160] => [16, 2, 160]
-            bg_ks   = unet_seq_k[placeholder_indices_bg].reshape(BS, K_bg, *unet_seq_k.shape[2:]).permute(0, 2, 1, 3).reshape(-1, K_bg, unet_seq_k.shape[-1])
+            bg_ks   = unet_seq_k[ind_bg_B, :, ind_bg_N].reshape(BS, K_bg, H, D).permute(0, 2, 1, 3).reshape(-1, K_bg, D)
 
             subj_ks_gs = fg_ks_grad_scaler(subj_ks)
             # Only penalize positive correlations, and ignore negative values. 
