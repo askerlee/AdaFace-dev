@@ -157,21 +157,21 @@ class AttentionalPooler(nn.Module):
         if bp_to_unet:
             if self.infeat_grad_scale < 1:
                 #grad_scaler = grad_scaler.cuda()
-                layer_infeat_gradscaled  = self.infeat_grad_scaler(layer_infeat)
-                layer_inquery_gradscaled = self.infeat_grad_scaler(layer_inquery)
+                layer_infeat_gs  = self.infeat_grad_scaler(layer_infeat)
+                layer_inquery_gs = self.infeat_grad_scaler(layer_inquery)
             else:
-                layer_infeat_gradscaled  = layer_infeat
-                layer_inquery_gradscaled = layer_inquery
+                layer_infeat_gs  = layer_infeat
+                layer_inquery_gs = layer_inquery
         else:
             # Ordinary image reconstruction iterations. No BP into the UNet.
             # But if attentional pooler is used, it will also not be BPed into and not updated.
             # When not bp_to_unet, completely cut off the gradient flow into the UNet.
             # bp_to_unet is enabled when doing composition regularization iterations. 
-            layer_infeat_gradscaled  = layer_infeat.detach()
-            layer_inquery_gradscaled = layer_inquery.detach()
+            layer_infeat_gs  = layer_infeat.detach()
+            layer_inquery_gs = layer_inquery.detach()
 
-        x = layer_infeat_gradscaled
-        k = layer_inquery_gradscaled
+        x = layer_infeat_gs
+        k = layer_inquery_gs
         # Use to_k of the UNet attention layer as to_q here, 
         # as the subject embedding is used as the key in UNet.
         to_q = layer_to_k
@@ -212,7 +212,8 @@ class AttentionalPooler(nn.Module):
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
 
         if self.use_lora:
-            # lora_q: [N, 1, 320] -> [N, 1, 64]
+            # lora_q: [N, 1, 320] -> [N, 1, 64].
+            # NOTE: 320 is multi-head concatenated, 8*40.
             lora_q = self.lora_to_q(self.lora_ln_q(q))
             # lora_k: [N, L, 64]
             lora_k = self.lora_to_k(self.lora_ln_k(k))

@@ -2722,9 +2722,9 @@ class LatentDiffusion(DDPM):
             # The ortho losses on different "instances" are computed separately 
             # and there's no interaction among them.
             # Head is merged into batch, since different heads shouldn't have interactions as well.
-            subj_ks = unet_seq_k[ind_fg_B, :, ind_fg_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3).reshape(-1, K_fg, D)
+            subj_ks = unet_seq_k[ind_fg_B, :, ind_fg_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3).reshape(BS * H, K_fg, D)
             # bg_attn:   [4, 8, 160] => [2, 2, 8, 160] => [2, 8, 2, 160] => [16, 2, 160]
-            bg_ks   = unet_seq_k[ind_bg_B, :, ind_bg_N].reshape(BS, K_bg, H, D).permute(0, 2, 1, 3).reshape(-1, K_bg, D)
+            bg_ks   = unet_seq_k[ind_bg_B, :, ind_bg_N].reshape(BS, K_bg, H, D).permute(0, 2, 1, 3).reshape(BS * H, K_bg, D)
 
             subj_ks_gs = fg_ks_grad_scaler(subj_ks)
             # Only penalize positive correlations, and ignore negative values. 
