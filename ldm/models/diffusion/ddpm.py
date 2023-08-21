@@ -2699,7 +2699,7 @@ class LatentDiffusion(DDPM):
         loss_fg_bg_key_ortho = 0
 
         # The fg embeddings should change more slowly than the bg embeddings.
-        fg_ks_grad_scale = 0.5
+        fg_ks_grad_scale = 1 #0.5
         fg_ks_grad_scaler = gen_gradient_scaler(fg_ks_grad_scale)
 
         # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
