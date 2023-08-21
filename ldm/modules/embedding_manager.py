@@ -124,7 +124,7 @@ class AttentionalPooler(nn.Module):
         self.layer_inner_dim = feat_dim
         
         if lora_dim > 0:
-            self.use_lora = True
+            self.use_lora = True    # default
             self.lora_attn_score_scale = lora_dim ** -0.5
             self.lora_ln_q  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
             self.lora_ln_k  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)

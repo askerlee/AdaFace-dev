@@ -2706,29 +2706,29 @@ class LatentDiffusion(DDPM):
         # placeholder_indices_bg: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
         # BS = 2, so we only keep instances indexed by [0, 1].
         # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
-        placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K_fg], placeholder_indices_fg[1][:BS*K_fg])
+        ind_fg_B, ind_fg_N = placeholder_indices_fg[0][:BS*K_fg], placeholder_indices_fg[1][:BS*K_fg]
         # placeholder_indices_bg: ([0, 1], [11, 12]).
-        placeholder_indices_bg = (placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg])
+        ind_bg_B, ind_bg_N = placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg]
 
         for unet_layer_idx, unet_seq_k in unet_ks.items():
             if (unet_layer_idx not in k_ortho_layer_weights):
                 continue
 
-            # [2, 8, 77, 160] => [2, 77, 8, 160]
-            unet_seq_k = unet_seq_k.permute(0, 2, 1, 3)
-            # subj_attn: [8, 8, 160] -> [2, 4, 8, 160] mean among K_fg embeddings -> [2, 8, 160]
-            subj_ks = unet_seq_k[placeholder_indices_fg].reshape(BS, K_fg, *unet_seq_k.shape[2:]).mean(dim=1)
-            # bg_attn:   [4, 8, 160] -> [2, 2, 8, 160] mean among K_bg embeddings -> [2, 8, 160]
-            # 8: 8 attention heads. Last dim 64: number of image tokens.
-            bg_ks   = unet_seq_k[placeholder_indices_bg].reshape(BS, K_bg, *unet_seq_k.shape[2:]).mean(dim=1)
+            # unet_seq_k [2, 8, 77, 160].
+            # 8: 8 attention heads. Last dim 160: number of image tokens.
+            # subj_attn [8, 8, 160] => [2, 4, 8, 160] => [2, 8, 4, 160] => [16, 4, 160]
+            # Put the 4 subject embeddings in the 2nd to last dimension for torch.mm().
+            # The ortho losses on different "instances" are computed separately 
+            # and there's no interaction among them.
+            # Head is merged into batch, since different heads shouldn't have interactions as well.
+            subj_ks = unet_seq_k[ind_fg_B, :, ind_fg_N].reshape(BS, K_fg, *unet_seq_k.shape[2:]).permute(0, 2, 1, 3).reshape(-1, K_fg, unet_seq_k.shape[-1])
+            # bg_attn:   [4, 8, 160] => [2, 2, 8, 160] => [2, 8, 2, 160] => [16, 2, 160]
+            bg_ks   = unet_seq_k[placeholder_indices_bg].reshape(BS, K_bg, *unet_seq_k.shape[2:]).permute(0, 2, 1, 3).reshape(-1, K_bg, unet_seq_k.shape[-1])
 
-            # subj_ks, bg_ks: [2, 8, 160] => [16, 160]
-            subj_ks = subj_ks.reshape(-1, subj_ks.shape[-1])
             subj_ks_gs = fg_ks_grad_scaler(subj_ks)
-            bg_ks   = bg_ks.reshape(-1, bg_ks.shape[-1])
-
-            # Ignore negative values. Only penalize positive correlations.
-            loss_layer_fg_bg_key_ortho = torch.clip(torch.mm(subj_ks_gs, bg_ks.T), min=0).mean()
+            # Only penalize positive correlations, and ignore negative values. 
+            # Use matmul() instead of mm(), since mm() is only for two 2-D tensors.
+            loss_layer_fg_bg_key_ortho = torch.clip(torch.matmul(subj_ks_gs, bg_ks.transpose(1, 2)), min=0).mean()
             
             k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
             loss_fg_bg_key_ortho += loss_layer_fg_bg_key_ortho * k_ortho_layer_weight
