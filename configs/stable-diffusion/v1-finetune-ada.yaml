@@ -39,7 +39,7 @@ model:
     # typical prompt mix reg loss: 0.2, * weight -> 4e-5.
     composition_prompt_mix_reg_weight:  2e-4
     fg_bg_complementary_loss_weight:    2e-4
-    fg_bg_key_ortho_loss_weight:        2e-4
+    fg_bg_key_ortho_loss_weight:        4e-5
 
     optimizer_type: AdamW     # sophia
     scheduler_config:
