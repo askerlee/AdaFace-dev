@@ -2498,8 +2498,8 @@ class LatentDiffusion(DDPM):
                 loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
 
                 # Align the attention corresponding to each embedding individually.
-                loss_layer_subj_comp_attn_norm   = (subj_attn_subj_comp.mean(dim=(1,2))   - subj_attn_mix_comp_gs.mean(dim=(1,2))).abs().mean()
-                loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean(dim=(1,2)) - subj_attn_mix_single_gs.mean(dim=(1,2))).abs().mean()
+                loss_layer_subj_comp_attn_norm   = (subj_attn_subj_comp.mean(dim=2)   - subj_attn_mix_comp_gs.mean(dim=2)).abs().mean()
+                loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean(dim=2) - subj_attn_mix_single_gs.mean(dim=2)).abs().mean()
                 # print(loss_layer_subj_comp_attn_norm, loss_layer_subj_single_attn_norm)
 
                 # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
@@ -2536,6 +2536,7 @@ class LatentDiffusion(DDPM):
 
                 # Use mix single/comp weights on both subject-only and mix features, 
                 # to reduce misalignment and facilitate distillation.
+                # The multiple heads are aggregated by mean(), since the weighted features don't have multiple heads.
                 feat_subj_single = feat_subj_single * spatial_weight
                 feat_subj_comp   = feat_subj_comp   * spatial_weight
                 feat_mix_single  = feat_mix_single  * spatial_weight
@@ -2715,7 +2716,7 @@ class LatentDiffusion(DDPM):
             if (unet_layer_idx not in k_ortho_layer_weights):
                 continue
 
-            # unet_seq_k [2, 8, 77, 160].
+            # unet_seq_k: [B, H, N, D] = [2, 8, 77, 160].
             # H = 8, number of attention heads. D: 160, number of image tokens.
             H, D = unet_seq_k.shape[1], unet_seq_k.shape[-1]
             # subj_attn [8, 8, 160] => [2, 4, 8, 160] => [2, 8, 4, 160] => [16, 4, 160]
