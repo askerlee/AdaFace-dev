@@ -1343,6 +1343,8 @@ class LatentDiffusion(DDPM):
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
 
+                    extra_info['ada_bp_to_unet'] = False
+
                     # Only keep the first half (for single prompts), as the second half is the same 
                     # (for comp prompts, differs at the batch index, but the token index is identical).
                     # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
@@ -1546,7 +1548,6 @@ class LatentDiffusion(DDPM):
 
                             assert self.iter_flags['do_normal_recon']
                             extra_info['iter_type']      = 'normal_recon'
-                            extra_info['ada_bp_to_unet'] = False
                             
                     # This iter is a simple ada prompt delta loss iter, without prompt mixing loss. 
                     # This branch is reached only if prompt mixing is not enabled.
@@ -1562,7 +1563,6 @@ class LatentDiffusion(DDPM):
                         # c_in2 consists of four types of prompts: 
                         # subj_single, subj_comp, cls_single, cls_comp.
                         extra_info['iter_type']      = 'do_ada_prompt_delta_reg'
-                        extra_info['ada_bp_to_unet'] = False
                         
                     else:
                         # The original scheme. Use the original subj_single_prompts embeddings and prompts.
@@ -1573,7 +1573,6 @@ class LatentDiffusion(DDPM):
 
                         assert self.iter_flags['do_normal_recon']
                         extra_info['iter_type']      = 'normal_recon'
-                        extra_info['ada_bp_to_unet'] = False
 
                     extra_info['cls_comp_prompts']   = cls_comp_prompts
                     extra_info['cls_single_prompts'] = cls_single_prompts
