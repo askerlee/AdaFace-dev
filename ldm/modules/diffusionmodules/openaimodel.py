@@ -507,7 +507,7 @@ class UNetModel(nn.Module):
         self.predict_codebook_ids = n_embed is not None
         self.crossattn_force_grad = False
         self.use_conv_attn = False
-        self.save_attn_mat = False
+        self.save_attn_vars = False
 
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
@@ -772,6 +772,7 @@ class UNetModel(nn.Module):
         distill_feats = {}
         distill_attns = {}
         distill_ks    = {}
+        feat_shapes   = {}
 
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
@@ -911,9 +912,9 @@ class UNetModel(nn.Module):
 
         if iter_type.startswith("mix_") or use_background_token or debug_attn:
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
-            distill_layer_indices = [7, 8, 12, 16, 17, 18]
+            distill_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
             distill_ca_old_flags = self.set_cross_attn_flags({'crossattn_force_grad': crossattn_force_grad, 
-                                                              'save_attn_mat': True}, 
+                                                              'save_attn_vars': True}, 
                                                              ca_layer_indices=distill_layer_indices)
         else:
             distill_layer_indices = []
@@ -928,7 +929,8 @@ class UNetModel(nn.Module):
             if layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.cached_attn_mat 
                     distill_ks[layer_idx]    = module[1].transformer_blocks[0].attn2.cached_k
-                    distill_feats[layer_idx] = h
+                    distill_feats[layer_idx] = module[1].transformer_blocks[0].attn2.cached_out
+                    feat_shapes[layer_idx]   = h.shape
 
             layer_idx += 1
         
@@ -939,7 +941,8 @@ class UNetModel(nn.Module):
         if layer_idx in distill_layer_indices:
                 distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.cached_attn_mat 
                 distill_ks[layer_idx]    = self.middle_block[1].transformer_blocks[0].attn2.cached_k
-                distill_feats[layer_idx] = h
+                distill_feats[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.cached_out
+                feat_shapes[layer_idx]   = h.shape
 
         layer_idx += 1
 
@@ -965,14 +968,16 @@ class UNetModel(nn.Module):
             if layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.cached_attn_mat 
                     distill_ks[layer_idx]    = module[1].transformer_blocks[0].attn2.cached_k
-                    distill_feats[layer_idx] = h
+                    distill_feats[layer_idx] = module[1].transformer_blocks[0].attn2.cached_out
+                    feat_shapes[layer_idx]   = h.shape
 
             layer_idx += 1
 
-        extra_info['unet_feats'] = distill_feats
-        extra_info['unet_attns'] = distill_attns
-        extra_info['unet_ks']    = distill_ks
-        
+        extra_info['unet_feats']    = distill_feats
+        extra_info['unet_attns']    = distill_attns
+        extra_info['unet_ks']       = distill_ks
+        extra_info['feat_shapes']   = feat_shapes
+
         if debug_attn:
             breakpoint()
         

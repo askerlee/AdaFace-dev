@@ -167,7 +167,7 @@ class CrossAttention(nn.Module):
             nn.Linear(inner_dim, query_dim),
             nn.Dropout(dropout)
         )
-        self.save_attn_mat = False
+        self.save_attn_vars = False
         self.crossattn_force_grad = False
         self.use_conv_attn = False
         self.infeat_size   = None
@@ -224,21 +224,23 @@ class CrossAttention(nn.Module):
         # attention, what we cannot get enough of
         attn = sim.softmax(dim=-1)
 
-        if self.save_attn_mat:
+        out = einsum('b i j, b j d -> b i d', attn, v)
+        out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+        out = self.to_out(out)
+
+        if self.save_attn_vars:
             self.cached_attn_mat = rearrange(attn, '(b h) i j -> b h i j', h=h)
             # cached_k will be used in ddpm.py:calc_fg_bg_key_ortho_loss(), in which two ks will multiply each other.
             # So sqrt(self.scale) will scale the product of two ks by self.scale.
             self.cached_k        = rearrange(k,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
+            self.cached_out      = out
             #breakpoint()
-
-        out = einsum('b i j, b j d -> b i d', attn, v)
-        out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
 
         # Restore the autograd status.
         if is_grad_forced:
             torch.set_grad_enabled(False)
 
-        return self.to_out(out)
+        return out
 
 
 class BasicTransformerBlock(nn.Module):

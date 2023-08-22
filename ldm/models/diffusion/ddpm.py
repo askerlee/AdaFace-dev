@@ -2206,6 +2206,8 @@ class LatentDiffusion(DDPM):
                 # Repeat to match the number of instances in the batch.
                 # log_image_flags: take values in {0, 1, 2, 3}, 
                 # i.e., no box, green, red, purple boxes respectively.
+                # no box: not teachable;                 green:  teachable in the first iter and not reused;
+                # red: teachable in the first iter but not in the second iter; purple: teachable in both iters.
                 # If self.iter_flags['do_teacher_filter'] and an instance is teachable, then in the log image file, 
                 # log_image_flag = 1, so the instance has a green bounary box in the logged image.
                 log_image_flags = are_insts_teachable.repeat(2).int()
@@ -2383,15 +2385,16 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_comp_prompt_mix_reg'] and self.iter_flags['is_teachable']:
             # unet_feats is a dict as: layer_idx -> unet_feat. 
             # It contains all the intermediate 25 layers of UNet features.
-            unet_feats = cond[2]['unet_feats']
+            unet_feats  = cond[2]['unet_feats']
             # unet_attns is a dict as: layer_idx -> attn_mat. 
             # It contains the 6 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17, 18.
-            unet_attns = cond[2]['unet_attns']
+            unet_attns  = cond[2]['unet_attns']
+            feat_shapes = cond[2]['feat_shapes']
             loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
                                                           self.embedding_manager.placeholder_indices_fg,
-                                                          HALF_BS)
+                                                          HALF_BS, feat_shapes)
             
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.detach()})
@@ -2413,7 +2416,7 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    def calc_prompt_mix_loss(self, unet_feats, unet_attns, placeholder_indices, HALF_BS):
+    def calc_prompt_mix_loss(self, unet_feats, unet_attns, placeholder_indices, HALF_BS, feat_shapes):
         # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -2434,16 +2437,18 @@ class LatentDiffusion(DDPM):
         # Conditioning layers are 7, 8, 12, 16, 17. All the 5 layers have 1280 channels.
         # But intermediate layers also contribute to distillation. They have small weights.
         # Layer 16 has strong face semantics, so it is given a small weight.
-        feat_distill_layer_weights = { 7:  1., 8: 1.,   
-                                       #9:  0.5, 10: 0.5, 11: 0.5, 
-                                       12: 0.5, 
-                                       16: 0.5, 17: 0.5,
-                                     }
-
-        attn_distill_layer_weights = { 7:  1., 8: 1.,
-                                       #9:  0.5, 10: 0.5, 11: 0.5,
+        feat_distill_layer_weights = { # 7:  1., 8: 1.,   
                                        12: 1.,
                                        16: 1., 17: 1.,
+                                       18: 0.5,
+                                       19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25 #, 23: 0.25, 24: 0.25,  
+                                     }
+
+        attn_distill_layer_weights = { # 7:  1., 8: 1.,
+                                       12: 1.,
+                                       16: 1., 17: 1.,
+                                       18: 0.5,
+                                       19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25 #, 23: 0.25, 24: 0.25,                                       
                                      }
         
         # Normalize the weights above so that each set sum to 1.
@@ -2473,10 +2478,16 @@ class LatentDiffusion(DDPM):
         # Setting to 0 may prevent the graph from being released and OOM.
         mix_attn_grad_scale  = 0.01  
         mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
+        feat_is_intermediate = True
 
         for unet_layer_idx, unet_feat in unet_feats.items():
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
                 continue
+
+            feat_shape = feat_shapes[unet_layer_idx]
+            if feat_is_intermediate:
+                # [4, 64, 1280] => [4, 1280, 64] => [4, 1280, 8, 8]
+                unet_feat = unet_feat.permute(0, 2, 1).reshape(feat_shape)
 
             # each is [1, 1280, 16, 16]
             feat_subj_single, feat_subj_comp, feat_mix_single, feat_mix_comp \
@@ -2616,11 +2627,10 @@ class LatentDiffusion(DDPM):
         # But intermediate layers also contribute to distillation. They have small weights.
         # Layer 16 has strong face semantics, so it is given a small weight.
         attn_distill_layer_weights = { #7:  1., 8: 1.,
-                                       #9:  0.5, 10: 0.5, 11: 0.5,
                                        12: 1.,
                                        16: 1., 17: 1., 
-                                       18: 1.,
-                                       19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25, 23: 0.25, 24: 0.25,
+                                       18: 0.5,
+                                       19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25 #, 23: 0.25, 24: 0.25,
                                      }
         
         # Normalize the weights above so that each set sum to 1.
@@ -2695,11 +2705,10 @@ class LatentDiffusion(DDPM):
         # But intermediate layers also contribute to distillation. They have small weights.
         # Layer 16 has strong face semantics, so it is given a small weight.
         k_ortho_layer_weights = { #7:  1., 8: 1.,
-                                 9:  0.5, 10: 0.5, 11: 0.5,
                                  12: 1.,
                                  16: 1., 17: 1., 
-                                 18: 1.,
-                                 19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25, 23: 0.25, 24: 0.25,
+                                 18: 0.5,
+                                 19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25, # 23: 0.25, 24: 0.25,
                                 }
         
         # Normalize the weights above so that each set sum to 1.
