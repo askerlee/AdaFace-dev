@@ -1343,6 +1343,8 @@ class LatentDiffusion(DDPM):
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
 
+                    extra_info['ada_bp_to_unet'] = False
+
                     # Only keep the first half (for single prompts), as the second half is the same 
                     # (for comp prompts, differs at the batch index, but the token index is identical).
                     # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
@@ -1546,7 +1548,6 @@ class LatentDiffusion(DDPM):
 
                             assert self.iter_flags['do_normal_recon']
                             extra_info['iter_type']      = 'normal_recon'
-                            extra_info['ada_bp_to_unet'] = False
                             
                     # This iter is a simple ada prompt delta loss iter, without prompt mixing loss. 
                     # This branch is reached only if prompt mixing is not enabled.
@@ -1562,7 +1563,6 @@ class LatentDiffusion(DDPM):
                         # c_in2 consists of four types of prompts: 
                         # subj_single, subj_comp, cls_single, cls_comp.
                         extra_info['iter_type']      = 'do_ada_prompt_delta_reg'
-                        extra_info['ada_bp_to_unet'] = False
                         
                     else:
                         # The original scheme. Use the original subj_single_prompts embeddings and prompts.
@@ -1573,7 +1573,6 @@ class LatentDiffusion(DDPM):
 
                         assert self.iter_flags['do_normal_recon']
                         extra_info['iter_type']      = 'normal_recon'
-                        extra_info['ada_bp_to_unet'] = False
 
                     extra_info['cls_comp_prompts']   = cls_comp_prompts
                     extra_info['cls_single_prompts'] = cls_single_prompts
@@ -2390,11 +2389,10 @@ class LatentDiffusion(DDPM):
             # It contains the 6 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17, 18.
             unet_attns  = cond[2]['unet_attns']
-            feat_shapes = cond[2]['feat_shapes']
             loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
                                                           self.embedding_manager.placeholder_indices_fg,
-                                                          HALF_BS, feat_shapes)
+                                                          HALF_BS)
             
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.detach()})
@@ -2416,7 +2414,7 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    def calc_prompt_mix_loss(self, unet_feats, unet_attns, placeholder_indices, HALF_BS, feat_shapes):
+    def calc_prompt_mix_loss(self, unet_feats, unet_attns, placeholder_indices, HALF_BS):
         # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -2483,11 +2481,6 @@ class LatentDiffusion(DDPM):
         for unet_layer_idx, unet_feat in unet_feats.items():
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
                 continue
-
-            feat_shape = feat_shapes[unet_layer_idx]
-            if feat_is_intermediate:
-                # [4, 64, 1280] => [4, 1280, 64] => [4, 1280, 8, 8]
-                unet_feat = unet_feat.permute(0, 2, 1).reshape(HALF_BS*4, -1, *feat_shape)
 
             # each is [1, 1280, 16, 16]
             feat_subj_single, feat_subj_comp, feat_mix_single, feat_mix_comp \

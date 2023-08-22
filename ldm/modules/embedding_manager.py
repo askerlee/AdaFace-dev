@@ -142,6 +142,8 @@ class AttentionalPooler(nn.Module):
         self.ln_x = nn.LayerNorm(feat_dim,      elementwise_affine=True)
         self.ln_k = nn.LayerNorm(feat_dim,      elementwise_affine=True)
         self.ln_q = nn.LayerNorm(token_emb_dim, elementwise_affine=True)
+        self.ln_fg_out = nn.LayerNorm(feat_dim, elementwise_affine=True)
+        self.ln_bg_out = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
         self.layer_idx = layer_idx
 
@@ -257,6 +259,8 @@ class AttentionalPooler(nn.Module):
         # The residual of the mean input features subtracted by fg_out.
         bg_out = v.mean(dim=1, keepdim=True) - fg_out
 
+        fg_out = self.ln_fg_out(fg_out)
+        bg_out = self.ln_bg_out(bg_out)
         # out: [2, 1, 768], [2, 1, 768] => [2, 1, 1536] => [2, 1536].
         # out = torch.cat([fg_out, bg_out], dim=-1)
         # out: N, 1, D -> N, D, i.e., ([2, 768], [2, 768]).

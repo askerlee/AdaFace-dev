@@ -772,7 +772,6 @@ class UNetModel(nn.Module):
         distill_feats = {}
         distill_attns = {}
         distill_ks    = {}
-        feat_shapes   = {}
 
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
@@ -929,8 +928,7 @@ class UNetModel(nn.Module):
             if layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.cached_attn_mat 
                     distill_ks[layer_idx]    = module[1].transformer_blocks[0].attn2.cached_k
-                    distill_feats[layer_idx] = module[1].transformer_blocks[0].attn2.cached_out
-                    feat_shapes[layer_idx]   = module[1].transformer_blocks[0].attn2.cached_infeat_size
+                    distill_feats[layer_idx] = h
 
             layer_idx += 1
         
@@ -941,8 +939,7 @@ class UNetModel(nn.Module):
         if layer_idx in distill_layer_indices:
                 distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.cached_attn_mat 
                 distill_ks[layer_idx]    = self.middle_block[1].transformer_blocks[0].attn2.cached_k
-                distill_feats[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.cached_out
-                feat_shapes[layer_idx]   = self.middle_block[1].transformer_blocks[0].attn2.cached_infeat_size
+                distill_feats[layer_idx] = h
 
         layer_idx += 1
 
@@ -968,15 +965,13 @@ class UNetModel(nn.Module):
             if layer_idx in distill_layer_indices:
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.cached_attn_mat 
                     distill_ks[layer_idx]    = module[1].transformer_blocks[0].attn2.cached_k
-                    distill_feats[layer_idx] = module[1].transformer_blocks[0].attn2.cached_out
-                    feat_shapes[layer_idx]   = module[1].transformer_blocks[0].attn2.cached_infeat_size
+                    distill_feats[layer_idx] = h
 
             layer_idx += 1
 
         extra_info['unet_feats']    = distill_feats
         extra_info['unet_attns']    = distill_attns
         extra_info['unet_ks']       = distill_ks
-        extra_info['feat_shapes']   = feat_shapes
 
         if debug_attn:
             breakpoint()
