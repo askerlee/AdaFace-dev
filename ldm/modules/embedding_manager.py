@@ -840,22 +840,13 @@ class EmbeddingManager(nn.Module):
                                                                init_word_embeddings, init_word_weights, 
                                                                token_string=placeholder_string)
 
+                # Reserve 1 embedding to take both fg and cached-bg infeat. 
+                # Around half of the embeddings are fg embeddings, and the other half are bg embeddings.
+                fg_emb_count = num_vectors_per_token // 2
+                bg_emb_count = num_vectors_per_token - 1 - fg_emb_count
+
                 if placeholder_string == self.background_string:
-                    # Reserve 1 embedding to take both fg and cached-bg infeat. 
-                    # If num_vectors_per_token == 1, fg_emb_count = 0, bg_emb_count = 0.
-                    # If num_vectors_per_token == 2, fg_emb_count = 1, bg_emb_count = 0.
-                    # If num_vectors_per_token == 3 (not recommended), fg_emb_count = 1, bg_emb_count = 1.
-                    #fg_emb_count = num_vectors_per_token // 2
-                    #bg_emb_count = num_vectors_per_token - fg_emb_count - 1
-                    bg_emb_count = num_vectors_per_token // 2
-                    fg_emb_count = num_vectors_per_token - bg_emb_count                    
                     use_cached_bg = True
-                else:
-                    # Around half of the embeddings are fg embeddings, and the other half are bg embeddings.
-                    # If num_vectors_per_token[placeholder_string] = 1, then there's only one fg embedding.
-                    bg_emb_count = num_vectors_per_token // 2
-                    fg_emb_count = num_vectors_per_token - bg_emb_count
-                    use_cached_bg = False
 
                 token_ada_embedder  = AdaEmbedding(self.num_layers_per_embedder, 
                                                    num_vectors_per_token, 
