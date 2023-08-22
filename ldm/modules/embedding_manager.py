@@ -845,8 +845,7 @@ class EmbeddingManager(nn.Module):
                 fg_emb_count = num_vectors_per_token // 2
                 bg_emb_count = num_vectors_per_token - 1 - fg_emb_count
 
-                if placeholder_string == self.background_string:
-                    use_cached_bg = True
+                use_cached_bg = (placeholder_string == self.background_string)
 
                 token_ada_embedder  = AdaEmbedding(self.num_layers_per_embedder, 
                                                    num_vectors_per_token, 
