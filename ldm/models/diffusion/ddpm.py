@@ -2487,7 +2487,7 @@ class LatentDiffusion(DDPM):
             feat_shape = feat_shapes[unet_layer_idx]
             if feat_is_intermediate:
                 # [4, 64, 1280] => [4, 1280, 64] => [4, 1280, 8, 8]
-                unet_feat = unet_feat.permute(0, 2, 1).reshape(feat_shape)
+                unet_feat = unet_feat.permute(0, 2, 1).reshape(HALF_BS*4, -1, *feat_shape)
 
             # each is [1, 1280, 16, 16]
             feat_subj_single, feat_subj_comp, feat_mix_single, feat_mix_comp \

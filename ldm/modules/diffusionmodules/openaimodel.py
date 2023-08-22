@@ -930,7 +930,7 @@ class UNetModel(nn.Module):
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.cached_attn_mat 
                     distill_ks[layer_idx]    = module[1].transformer_blocks[0].attn2.cached_k
                     distill_feats[layer_idx] = module[1].transformer_blocks[0].attn2.cached_out
-                    feat_shapes[layer_idx]   = h.shape
+                    feat_shapes[layer_idx]   = module[1].transformer_blocks[0].attn2.cached_infeat_size
 
             layer_idx += 1
         
@@ -942,7 +942,7 @@ class UNetModel(nn.Module):
                 distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.cached_attn_mat 
                 distill_ks[layer_idx]    = self.middle_block[1].transformer_blocks[0].attn2.cached_k
                 distill_feats[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.cached_out
-                feat_shapes[layer_idx]   = h.shape
+                feat_shapes[layer_idx]   = self.middle_block[1].transformer_blocks[0].attn2.cached_infeat_size
 
         layer_idx += 1
 
@@ -969,7 +969,7 @@ class UNetModel(nn.Module):
                     distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.cached_attn_mat 
                     distill_ks[layer_idx]    = module[1].transformer_blocks[0].attn2.cached_k
                     distill_feats[layer_idx] = module[1].transformer_blocks[0].attn2.cached_out
-                    feat_shapes[layer_idx]   = h.shape
+                    feat_shapes[layer_idx]   = module[1].transformer_blocks[0].attn2.cached_infeat_size
 
             layer_idx += 1
 

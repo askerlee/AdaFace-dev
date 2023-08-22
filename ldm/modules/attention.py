@@ -234,6 +234,7 @@ class CrossAttention(nn.Module):
             # So sqrt(self.scale) will scale the product of two ks by self.scale.
             self.cached_k        = rearrange(k,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
             self.cached_out      = out
+            self.cached_infeat_size = self.infeat_size
             #breakpoint()
 
         # Restore the autograd status.
