@@ -239,7 +239,7 @@ def mix_embeddings(mix_scheme, c1, c2, placeholder_indices_N=None,
             # (multiple token indices of the same instance).
             c_mix = c1 * scale_mask + c2 * (1 - scale_mask)
         else:
-            c_mix = c1 + c2
+            c_mix = c1 * c1_subj_scale + c2 * (1 - c1_subj_scale)
 
     elif mix_scheme == 'concat':
         c_mix = torch.cat([ c1, c2 * c2_mix_weight ], dim=1)
@@ -286,7 +286,7 @@ def demean(x):
 def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, 
                     do_demean_first=True, 
                     first_n_dims_to_flatten=3,
-                    ref_grad_scale=0):
+                    ref_grad_scale=0, debug=False):
     B = delta.shape[0]
     loss = 0
 
@@ -312,7 +312,7 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3,
                 breakpoint()
 
         # Flatten delta and ref_delta, by tucking the layer and token dimensions into the batch dimension.
-        # dela: [2464, 768], ref_delta: [2464, 768]
+        # delta_i: [2464, 768], ref_delta_i: [2464, 768]
         delta_i     = delta_i.view(delta_i.shape[:first_n_dims_to_flatten].numel(), -1)
         ref_delta_i = ref_delta_i.view(delta_i.shape)
         emb_mask_i  = emb_mask_i.flatten() if emb_mask_i is not None else None
@@ -325,6 +325,10 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3,
         # But since cosine is scale invariant, de-scale is not necessary and won't have effects.
         # LN = demean & de-scale. So in theory, LN is equivalent to demean() here. But LN may introduce
         # numerical instability. So we use simple demean() here.
+
+        if debug:
+            breakpoint()
+
         if do_demean_first:
             delta_i     = demean(delta_i)
             ref_delta_i = demean(ref_delta_i)
@@ -552,7 +556,13 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)
 
-def patch_multi_embeddings(text_embedding, placeholder_indices_N):
+def patch_multi_embeddings(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):
+    if placeholder_indices_N is None:
+        return text_embedding
+    
+    # In a do_teacher_filter iteration, placeholder_indices_N may consist of the indices of 2 instances.
+    # So we need to deduplicate them first.
+    placeholder_indices_N = torch.unique(placeholder_indices_N)
     M = len(placeholder_indices_N)
     # num_vectors_per_token = 1. No patching is needed.
     if M == 1:
@@ -567,9 +577,18 @@ def patch_multi_embeddings(text_embedding, placeholder_indices_N):
     repl_mask[:, placeholder_indices_N] = 1
     repl_text_embedding = torch.zeros_like(text_embedding)
     # Almost 0 everywhere, except being the class embedding at locations of the multi-embedding token.
-    # Repeat m times the class embedding (corresponding to the subject embedding 
-    # "z" at placeholder_indices_N0); but divide it by m to avoid changing the output after cross-attention.
-    repl_text_embedding[:, placeholder_indices_N] = text_embedding[:, placeholder_indices_N0].repeat(1, M, 1) / M
+    # Repeat M times the class embedding (corresponding to the subject embedding 
+    # "z" at placeholder_indices_N0); 
+    # Divide them by D to avoid the cross-attention over-focusing on the class-level subject.
+    if divide_scheme == 'sqrt_M':
+        D = np.sqrt(M)
+    elif divide_scheme == 'M':
+        D = M
+    elif divide_scheme == 'none' or divide_scheme is None:
+        D = 1
+
+    repl_text_embedding[:, placeholder_indices_N] = text_embedding[:, placeholder_indices_N0].repeat(1, M, 1) / 1
+
     # Keep the embeddings at almost everywhere, but only replace the embeddings at placeholder_indices_N.
     # Directly replacing by slicing with placeholder_indices_N will cause errors.
     patched_text_embedding = text_embedding * (1 - repl_mask) + repl_text_embedding * repl_mask
@@ -615,6 +634,8 @@ class GradientScaler(nn.Module):
         return ScaleGrad.apply(input_, self._alpha.to(input_.device))
 
 def gen_gradient_scaler(alpha):
+    if alpha == 1:
+        return lambda x: x
     if alpha > 0:
         return GradientScaler(alpha)
     else:

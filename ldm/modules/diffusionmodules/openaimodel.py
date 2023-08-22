@@ -771,6 +771,7 @@ class UNetModel(nn.Module):
         hs = []
         distill_feats = {}
         distill_attns = {}
+        distill_ks    = {}
 
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
@@ -781,16 +782,18 @@ class UNetModel(nn.Module):
         use_background_token  = extra_info.get('use_background_token', False)  if extra_info is not None else False
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
+        bg_indices            = extra_info.get('bg_indices', None)             if extra_info is not None else None
         crossattn_force_grad  = extra_info.get('crossattn_force_grad', False)  if extra_info is not None else False
         debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
 
         ca_old_flags = self.set_cross_attn_flags({'use_conv_attn': use_conv_attn})
 
-        if subj_indices is not None:
-            subj_indices_B, subj_indices_N = subj_indices
-        else:
-            # If uncond (null) condition is active, then subj_indices = None.
-            subj_indices_B, subj_indices_N = None, None
+        # If uncond (null) condition is active, then subj_indices = None.
+        subj_indices_B, subj_indices_N = subj_indices if subj_indices is not None else (None, None)
+        bg_indices_B,   bg_indices_N   = bg_indices   if bg_indices   is not None else (None, None)
+
+        #if iter_type == 'mix_recon':
+        #    breakpoint()
 
         if use_layerwise_context:
             B = x.shape[0]
@@ -825,6 +828,11 @@ class UNetModel(nn.Module):
                 ada_embedder   = extra_info['ada_embedder']
                 ada_bp_to_unet = extra_info.get('ada_bp_to_unet', False)
                 # emb: time embedding. h: features from the previous layer.
+                # context_in: ['an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
+                #              'an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
+                #              'an illustration of a dirty cat, , ,  swimming in the ocean, with backlight', 
+                #              'an illustration of a dirty cat, , ,  swimming in the ocean, with backlight']
+                # The 1st and 2nd, and 3rd and 4th prompts are the same, if it's a do_teacher_filter iteration.
                 layer_ada_context, ada_emb_weight \
                     = ada_embedder(context_in, layer_idx, layer_attn_components, emb, ada_bp_to_unet)
                 static_emb_weight = 1 - ada_emb_weight
@@ -844,30 +852,37 @@ class UNetModel(nn.Module):
                         # iter_type == 'mix_hijk'. Separate layer_static_context into q and k.
                         layer_static_context, layer_static_key_context = \
                             layer_static_context.chunk(2, dim=1)
-                        # The second half of a mix_hijk batch is always the mix instances,
-                        # even for twin comp sets.                        
-                        subj_layer_ada_context, mix_layer_ada_context = layer_ada_context.chunk(2)
-                        # In ddpm, patch_multi_embeddings() is applied on a text embedding whose 1st dim is the 16 layers.
-                        # Here, the 1st dim of mix_layer_ada_context is the batch.
-                        # But we can still use patch_multi_embeddings() without specially processing, since patch_multi_embeddings
-                        # in both cases, the 2nd dim is the token dim, so patch_multi_embeddings() works in both cases.
-                        # subj_indices_N:      subject token indices within the subject single prompt (BS=1).
-                        # len(subj_indices_N): embedding number of the subject token.
-                        mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
-                                                                       subj_indices_N) 
-                        layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
-                        
-                # layer_static_context, layer_ada_context: [2, 77, 768]
-                # layer_hyb_context: layer context fed to the current UNet layer, [2, 77, 768]
-                layer_hyb_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
+                        if iter_type == 'mix_hijk':
+                            # The second half of a mix_hijk batch is always the mix instances,
+                            # even for twin comp sets.                        
+                            subj_layer_ada_context, mix_layer_ada_context = layer_ada_context.chunk(2)
+                            # In ddpm, patch_multi_embeddings() is applied on a text embedding whose 1st dim is the 16 layers.
+                            # Here, the 1st dim of mix_layer_ada_context is the batch.
+                            # But we can still use patch_multi_embeddings() without specially processing, since patch_multi_embeddings
+                            # in both cases, the 2nd dim is the token dim, so patch_multi_embeddings() works in both cases.
+                            # subj_indices_N:      subject token indices within the subject single prompt (BS=1).
+                            # len(subj_indices_N): embedding number of the subject token.
+                            # mix_layer_ada_context: [2, 77, 768]. subj_indices_N: [6, 7, 8, 9, 6, 7, 8, 9]. 
+                            # Four embeddings (6,7,8,9) for each token.
+                            mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
+                                                                           subj_indices_N)
+                            mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
+                                                                           bg_indices_N)
+                            layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
+                        # otherwise, iter_type == 'mix_recon'. The two instances in the batch are 
+                        # both subject single prompts. No need to patch_multi_embeddings().
 
-                if (iter_type == 'mix_hijk' and layer_idx in hijk_layer_indices):
+                # layer_static_context, layer_ada_context: [2, 77, 768]
+                # layer_agg_context: aggregated (static and ada) layer context fed to the current UNet layer, [2, 77, 768]
+                layer_agg_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
+
+                if ((iter_type == 'mix_hijk' or iter_type == 'mix_recon') and layer_idx in hijk_layer_indices):
                     # Replace layer_static_context with layer_static_key_context.
                     layer_key_context = layer_static_key_context * static_emb_weight + layer_ada_context * ada_emb_weight
-                    # Pass both embeddings for hijacking the key of layer_hyb_context by layer_key_context.
-                    layer_context = (layer_hyb_context, layer_key_context)
+                    # Pass both embeddings for hijacking the key of layer_agg_context by layer_key_context.
+                    layer_context = (layer_agg_context, layer_key_context)
                 else:
-                    layer_context = layer_hyb_context
+                    layer_context = layer_agg_context
                 # Otherwise, iter_type == 'mix_hijk' but layer_idx not in hijk_layer_indices.
                 # i.e., this layer is not mixed. In that case, 
                 # layer_key_context == layer_static_context, and we just discard layer_key_context.
@@ -911,7 +926,8 @@ class UNetModel(nn.Module):
             h = module(h, emb, get_layer_idx_context)
             hs.append(h)
             if layer_idx in distill_layer_indices:
-                    distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
+                    distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.cached_attn_mat 
+                    distill_ks[layer_idx]    = module[1].transformer_blocks[0].attn2.cached_k
                     distill_feats[layer_idx] = h
 
             layer_idx += 1
@@ -921,7 +937,8 @@ class UNetModel(nn.Module):
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, get_layer_idx_context)
         if layer_idx in distill_layer_indices:
-                distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.attn_mat 
+                distill_attns[layer_idx] = self.middle_block[1].transformer_blocks[0].attn2.cached_attn_mat 
+                distill_ks[layer_idx]    = self.middle_block[1].transformer_blocks[0].attn2.cached_k
                 distill_feats[layer_idx] = h
 
         layer_idx += 1
@@ -946,14 +963,16 @@ class UNetModel(nn.Module):
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, get_layer_idx_context)
             if layer_idx in distill_layer_indices:
-                    distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.attn_mat 
+                    distill_attns[layer_idx] = module[1].transformer_blocks[0].attn2.cached_attn_mat 
+                    distill_ks[layer_idx]    = module[1].transformer_blocks[0].attn2.cached_k
                     distill_feats[layer_idx] = h
 
             layer_idx += 1
 
         extra_info['unet_feats'] = distill_feats
         extra_info['unet_attns'] = distill_attns
-
+        extra_info['unet_ks']    = distill_ks
+        
         if debug_attn:
             breakpoint()
         

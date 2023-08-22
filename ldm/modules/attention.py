@@ -148,7 +148,7 @@ class SpatialSelfAttention(nn.Module):
 
         return x+h_
 
-
+# All CrossAttention layers have 8 heads.
 class CrossAttention(nn.Module):
     def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0.):
         super().__init__()
@@ -225,8 +225,10 @@ class CrossAttention(nn.Module):
         attn = sim.softmax(dim=-1)
 
         if self.save_attn_mat:
-            self.attn_mat = rearrange(attn, '(b h) i j -> b h i j', h=h)
-            #attn_mat = self.attn_mat.detach().cpu().numpy()
+            self.cached_attn_mat = rearrange(attn, '(b h) i j -> b h i j', h=h)
+            # cached_k will be used in ddpm.py:calc_fg_bg_key_ortho_loss(), in which two ks will multiply each other.
+            # So sqrt(self.scale) will scale the product of two ks by self.scale.
+            self.cached_k        = rearrange(k,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
             #breakpoint()
 
         out = einsum('b i j, b j d -> b i d', attn, v)

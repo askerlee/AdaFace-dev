@@ -120,16 +120,22 @@ class AttentionalPooler(nn.Module):
     def __init__(self, layer_idx, feat_dim, token_emb_dim, lora_dim=64,
                  infeat_grad_scale=0.5):
         super().__init__()
-        self.n_heads = 1
+        # Set to the same number of heads as the CrossAttention layers.
+        # All CrossAttention layers in UNet have 8 heads.
+        self.n_heads = 8    
         self.layer_inner_dim = feat_dim
         
         if lora_dim > 0:
-            self.use_lora = True
+            self.use_lora = True    # default
             self.lora_attn_score_scale = lora_dim ** -0.5
             self.lora_ln_q  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
             self.lora_ln_k  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
-            self.lora_to_k  = nn.Linear(self.layer_inner_dim, lora_dim, bias=False)
-            self.lora_to_q  = nn.Linear(self.layer_inner_dim, lora_dim, bias=False)
+            if self.n_heads > 1:
+                self.lora_to_k  = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
+                self.lora_to_q  = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
+            else:
+                self.lora_to_k  = nn.Linear(self.layer_inner_dim, lora_dim, bias=False)
+                self.lora_to_q  = nn.Linear(self.layer_inner_dim, lora_dim, bias=False)
         else:
             self.use_lora = False
 
@@ -157,21 +163,21 @@ class AttentionalPooler(nn.Module):
         if bp_to_unet:
             if self.infeat_grad_scale < 1:
                 #grad_scaler = grad_scaler.cuda()
-                layer_infeat_gradscaled  = self.infeat_grad_scaler(layer_infeat)
-                layer_inquery_gradscaled = self.infeat_grad_scaler(layer_inquery)
+                layer_infeat_gs  = self.infeat_grad_scaler(layer_infeat)
+                layer_inquery_gs = self.infeat_grad_scaler(layer_inquery)
             else:
-                layer_infeat_gradscaled  = layer_infeat
-                layer_inquery_gradscaled = layer_inquery
+                layer_infeat_gs  = layer_infeat
+                layer_inquery_gs = layer_inquery
         else:
             # Ordinary image reconstruction iterations. No BP into the UNet.
             # But if attentional pooler is used, it will also not be BPed into and not updated.
             # When not bp_to_unet, completely cut off the gradient flow into the UNet.
             # bp_to_unet is enabled when doing composition regularization iterations. 
-            layer_infeat_gradscaled  = layer_infeat.detach()
-            layer_inquery_gradscaled = layer_inquery.detach()
+            layer_infeat_gs  = layer_infeat.detach()
+            layer_inquery_gs = layer_inquery.detach()
 
-        x = layer_infeat_gradscaled
-        k = layer_inquery_gradscaled
+        x = layer_infeat_gs
+        k = layer_inquery_gs
         # Use to_k of the UNet attention layer as to_q here, 
         # as the subject embedding is used as the key in UNet.
         to_q = layer_to_k
@@ -184,7 +190,7 @@ class AttentionalPooler(nn.Module):
                 mask = rearrange(mask, 'b ... -> b (...)')
                 # N, 1, L -> N*Head, 1, L, i.e., [8, 1, 256].
                 # einops.repeat() is more convenient than unsqueeze().repeat().squeeze().
-                mask = repeat(mask, 'b j -> (b h) () j', h=h)
+                mask = repeat(mask, 'b j -> (b h) () j', h=self.n_heads)
 
             # x: N, D, H, W -> N, D, S -> N, S, D
             x = x.flatten(2).permute(0, 2, 1)
@@ -196,6 +202,7 @@ class AttentionalPooler(nn.Module):
 
         # to_q is actually to_k in the UNet attention layer, 
         # as the subject embedding is used as the key in UNet.
+        # After applying to_q on token_q_emb, q consists of 8 heads.
         q = to_q(self.ln_q(token_q_emb))
         # q: [1, 320] -> [N, 1, 320]
         q = repeat(q, 'n d -> b n d', b=x.shape[0])
@@ -203,20 +210,34 @@ class AttentionalPooler(nn.Module):
         # k: query from the UNet attention layer. Used as key here.
         # No need to go through to_k() here, as it's already the query from the UNet attention layer.
         k = self.ln_k(k)
+        # v: simply normalized x (layer_infeat).
         v = self.ln_x(x)
 
-        # q: [8, 1, 32], k: [8, 256, 32], v: [8, 256, 192]. 8: B*Head = 2*4.
-        # The 768 dims of v are split into 4 heads, each head has 192 dims.
-        # This is kind of arbitrary, as there's no v projection that makes each head have congruent channels.
-        # But introducing a v projection would greatly increase parameters.
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
+        # q: [B, 1, 320], k: [B, 4096, 320], v: [B, 4096, 320]. 
+        # The 320 dims of q,k consist of 8 heads, each head having 40 dims.
+        #breakpoint()
 
         if self.use_lora:
-            # lora_q: [N, 1, 320] -> [N, 1, 64]
-            lora_q = self.lora_to_q(self.lora_ln_q(q))
-            # lora_k: [N, L, 64]
-            lora_k = self.lora_to_k(self.lora_ln_k(k))
-            # lora_scores: [8, 1, 256].
+            q_ln = self.lora_ln_q(q)
+            k_ln = self.lora_ln_k(k)
+
+            if self.n_heads > 1:
+                # q: [B, 1, 320]    -> [B, 320, 1]
+                # k: [B, 4096, 320] -> [B, 320, 4096]
+                q_ln, k_ln = map(lambda t: t.permute(0, 2, 1), (q_ln, k_ln))
+
+            # lora_q: [B, 320, 1] -> [B, 128, 1].
+            # NOTE: 320 and 128 are multi-head concatenated, 8*40 and 8*16.
+            lora_q = self.lora_to_q(q_ln)
+            # lora_k: [B, 320, 4096] -> [B, 128, 4096].
+            lora_k = self.lora_to_k(k_ln)
+
+            if self.n_heads > 1:
+                # lora_q: [B, 128, 1]    -> [B, 1, 128]
+                # lora_k: [8, 128, 4096] -> [8, 4096, 128]
+                lora_q, lora_k = map(lambda t: t.permute(0, 2, 1), (lora_q, lora_k))
+
+            # Dot product of the last dim. lora_scores: [B, 1, 4096].
             lora_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) * self.lora_attn_score_scale
             sim_scores  = lora_scores
 
@@ -229,13 +250,11 @@ class AttentionalPooler(nn.Module):
             max_neg_value = -torch.finfo(sim_scores.dtype).max
             sim_scores.masked_fill_(~mask, max_neg_value)
 
+        # attn: [B, 1, 4096]
         attn = sim_scores.softmax(dim=-1)
 
-        # fg_out: [8, 1, 192].
+        # fg_out: [B, 1, 320]. 320: feature dimension. 
         fg_out = einsum('b i j, b j d -> b i d', attn, v)
-        # fg_out: [8, 1, 192] -> [2, 1, 4*192] = [2, 1, 768].
-        fg_out = rearrange(fg_out, '(b h) n d -> b n (h d)', h=h)
-
         # The residual of the mean input features subtracted by fg_out.
         bg_out = v.mean(dim=1, keepdim=True) - fg_out
 
@@ -617,10 +636,12 @@ class AdaEmbedding(nn.Module):
                 # Use static_subj_layer_emb as the query to do the attention-based pooling.
                 infeat_pooled    = pooler(layer_attn_components, static_subj_layer_emb, img_mask, bp_to_unet)
                 if self.use_attn_pooler:
+                    # infeat_fg, infeat_bg: [2, 320]
                     infeat_fg, infeat_bg = infeat_pooled
                     if self.use_cached_bg:
                         # Discard infeat_bg obtained from the attn pooler, and use cached_infeat_bg instead.
                         infeat_bg = cached_infeat_bg
+                    # infeat_fg_bg: [2, 640]
                     infeat_fg_bg = torch.cat([infeat_fg, infeat_bg], dim=-1)
                 else:
                     infeat_fg_bg = infeat_pooled
@@ -819,19 +840,13 @@ class EmbeddingManager(nn.Module):
                                                                init_word_embeddings, init_word_weights, 
                                                                token_string=placeholder_string)
 
+                # Reserve 1 embedding to take both fg and cached-bg infeat. 
+                # Around half of the embeddings are fg embeddings, and the other half are bg embeddings.
+                fg_emb_count = num_vectors_per_token // 2
+                bg_emb_count = num_vectors_per_token - 1 - fg_emb_count
+
                 if placeholder_string == self.background_string:
-                    # Only 1 embedding taking both fg and bg infeat. 
-                    # So fg_emb_count = bg_emb_count = 0, and num_vectors_per_token = 1.
-                    fg_emb_count = 0
-                    bg_emb_count = 0
-                    num_vectors_per_token = 1
                     use_cached_bg = True
-                else:
-                    # Around half of the embeddings are fg embeddings, and the other half are bg embeddings.
-                    # If num_vectors_per_token[placeholder_string] = 1, then there's only one fg embedding.
-                    bg_emb_count = num_vectors_per_token // 2
-                    fg_emb_count = num_vectors_per_token - bg_emb_count
-                    use_cached_bg = False
 
                 token_ada_embedder  = AdaEmbedding(self.num_layers_per_embedder, 
                                                    num_vectors_per_token, 
@@ -1158,8 +1173,7 @@ class EmbeddingManager(nn.Module):
             placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
         
         if is_bg_token:
-            # background token only has one embedding. So no need to separately store placeholder_indices_bg0.
-            self.placeholder_indices_bg = placeholder_indices
+            self.placeholder_indices_bg, self.placeholder_indices_bg0 = placeholder_indices, placeholder_indices0
         else:
             self.placeholder_indices_fg, self.placeholder_indices_fg0 = placeholder_indices, placeholder_indices0
             
