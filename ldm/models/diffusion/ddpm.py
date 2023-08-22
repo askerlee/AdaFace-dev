@@ -1446,17 +1446,17 @@ class LatentDiffusion(DDPM):
                         # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
                         # Each is of a single instance. So only provides subj_indices_half_N 
                         # (multiple token indices of the same instance).
-                        mix_whole_seq = True
-                        if mix_whole_seq:
-                            MIX_INDICES = None
+                        MIX_WHOLE_SEQ = True
+                        if MIX_WHOLE_SEQ:
+                            mix_indices = None
                         else:
                             # Only mix at subject embeddings.
-                            MIX_INDICES = subj_indices_half_N
+                            mix_indices = subj_indices_half_N
 
                         subj_comp_emb_v   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
-                                                            MIX_INDICES, c1_subj_scale=subj_emb_scale)
+                                                            mix_indices, c1_subj_scale=subj_emb_scale)
                         subj_single_emb_v = mix_embeddings('add', subj_single_emb, cls_single_emb,
-                                                            MIX_INDICES, c1_subj_scale=subj_emb_scale)
+                                                            mix_indices, c1_subj_scale=subj_emb_scale)
 
                         if random.random() < 1: #0.5:
                             mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_v,   cls_comp_emb],   dim=1)
@@ -1468,18 +1468,18 @@ class LatentDiffusion(DDPM):
 
                         #mix_comp_emb_all_layers  = cls_comp_emb
                         #mix_single_emb_all_layers = cls_single_emb
-                        # If prompt_mix_grad_scale == 0, stop gradient on mix_comp_emb, 
+                        # If PROMPT_MIX_GRAD_SCALE == 0, stop gradient on mix_comp_emb, 
                         # since it serves as the reference.
                         # If we don't stop gradient on mix_comp_emb, 
                         # then chance is that mix_comp_emb might be dominated by subj_comp_emb2,
                         # so that mix_comp_emb will produce images similar as subj_comp_emb2 does.
                         # Stopping the gradient will improve compositionality but reduce face similarity.
-                        prompt_mix_grad_scale = 0.01
-                        if prompt_mix_grad_scale == 0:
+                        PROMPT_MIX_GRAD_SCALE = 0.01
+                        if PROMPT_MIX_GRAD_SCALE == 0:
                             mix_comp_emb_all_layers   = mix_comp_emb_all_layers.detach()
                             mix_single_emb_all_layers = mix_single_emb_all_layers.detach()
-                        elif prompt_mix_grad_scale != 1:
-                            grad_scaler = GradientScaler(prompt_mix_grad_scale)
+                        elif PROMPT_MIX_GRAD_SCALE != 1:
+                            grad_scaler = GradientScaler(PROMPT_MIX_GRAD_SCALE)
                             mix_comp_emb_all_layers   = grad_scaler(mix_comp_emb_all_layers)
                             mix_single_emb_all_layers = grad_scaler(mix_single_emb_all_layers)
 
@@ -1982,16 +1982,6 @@ class LatentDiffusion(DDPM):
         twin_comp_ada_embeddings = None
 
         if self.iter_flags['do_normal_recon']:
-            if self.iter_flags['use_background_token'] and self.fg_bg_key_ortho_loss_weight > 0:
-                fg_bg_key_ortho_loss = \
-                    self.calc_fg_bg_key_ortho_loss(cond[2]['unet_ks'], 
-                                                    self.embedding_manager.placeholder_indices_fg,
-                                                    self.embedding_manager.placeholder_indices_bg,
-                                                    x_start.shape[0])
-                loss += self.fg_bg_key_ortho_loss_weight * fg_bg_key_ortho_loss
-                loss_dict.update({f'{prefix}/fg_bg_key_ortho': fg_bg_key_ortho_loss.item()})
-                del cond[2]['unet_ks']
-
             # Compute subj_fg_bg_complementary_loss, only when 
             # we don't compute mix_fg_bg_complementary_loss. Otherwise it'll take too much RAM.
             # mix_fg_bg_complementary_loss is preferred over subj_fg_bg_complementary_loss,
@@ -2007,8 +1997,17 @@ class LatentDiffusion(DDPM):
                                                                do_demean_first=False
                                                               )
                 
+                if self.fg_bg_key_ortho_loss_weight > 0:
+                    fg_bg_key_ortho_loss = \
+                        self.calc_fg_bg_key_ortho_loss(cond[2]['unet_ks'], 
+                                                        self.embedding_manager.placeholder_indices_fg,
+                                                        self.embedding_manager.placeholder_indices_bg,
+                                                        x_start.shape[0])
+                    loss += self.fg_bg_key_ortho_loss_weight * fg_bg_key_ortho_loss
+                    loss_dict.update({f'{prefix}/fg_bg_key_ortho': fg_bg_key_ortho_loss.item()})
+                
                 # Release RAM.
-                del cond[2]['unet_attns'], cond[2]['unet_feats']
+                del cond[2]['unet_attns'], cond[2]['unet_feats'], cond[2]['unet_ks']
                 loss += self.fg_bg_complementary_loss_weight * subj_fg_bg_complementary_loss
                 loss_dict.update({f'{prefix}/fg_bg_complem_subj': subj_fg_bg_complementary_loss.item()})
 
@@ -2059,6 +2058,15 @@ class LatentDiffusion(DDPM):
                     loss += self.fg_bg_complementary_loss_weight * mix_fg_bg_complementary_loss
                     loss_dict.update({f'{prefix}/fg_bg_complem_mix': mix_fg_bg_complementary_loss.item()})
 
+                    if self.fg_bg_key_ortho_loss_weight > 0:
+                        fg_bg_key_ortho_loss = \
+                            self.calc_fg_bg_key_ortho_loss(cond_mix[2]['unet_ks'], 
+                                                            self.embedding_manager.placeholder_indices_fg,
+                                                            self.embedding_manager.placeholder_indices_bg,
+                                                            x_start.shape[0])
+                        loss += self.fg_bg_key_ortho_loss_weight * fg_bg_key_ortho_loss
+                        loss_dict.update({f'{prefix}/fg_bg_key_ortho': fg_bg_key_ortho_loss.item()})
+
                 # unet_attns is a dict as: layer_idx -> attn_mat. 
                 # It contains the 6 specified conditioned layers of UNet attentions, 
                 # i.e., layers 7, 8, 12, 16, 17, 18.
@@ -2081,7 +2089,7 @@ class LatentDiffusion(DDPM):
                                                    reversed=False)  
                 
                 # Release RAM.
-                del cond_mix[2]['unet_attns'], cond_mix[2]['unet_feats']
+                del cond_mix[2]['unet_attns'], cond_mix[2]['unet_feats'], cond_mix[2]['unet_ks']
                 # Inverse of the average weight of the foreground pixels, i.e. those
                 # with spatial_weight_mix_single > 1. 
                 # After applying fg_inv_scale, foreground pixels will receive similar weights

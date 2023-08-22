@@ -157,7 +157,6 @@ class AttentionalPooler(nn.Module):
     # Use UNet feature query as k, and subject token as q, to compute the attention, 
     # which aggregates the original UNet layer input features x.
     def forward(self, layer_attn_components, token_q_emb, mask=None, bp_to_unet=False):
-        h = self.n_heads
         layer_infeat, layer_inquery, layer_to_k, attn_score_scale = layer_attn_components
 
         if bp_to_unet:
@@ -840,8 +839,10 @@ class EmbeddingManager(nn.Module):
                                                                init_word_embeddings, init_word_weights, 
                                                                token_string=placeholder_string)
 
+                
                 # Reserve 1 embedding to take both fg and cached-bg infeat. 
                 # Around half of the embeddings are fg embeddings, and the other half are bg embeddings.
+                # If num_vectors_per_token == 1, then fg_emb_count = 0, bg_emb_count = 0.
                 fg_emb_count = num_vectors_per_token // 2
                 bg_emb_count = num_vectors_per_token - 1 - fg_emb_count
 
