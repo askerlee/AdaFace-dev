@@ -2390,11 +2390,10 @@ class LatentDiffusion(DDPM):
             # It contains the 6 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17, 18.
             unet_attns  = cond[2]['unet_attns']
-            feat_shapes = cond[2]['feat_shapes']
             loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
                                                           self.embedding_manager.placeholder_indices_fg,
-                                                          HALF_BS, feat_shapes)
+                                                          HALF_BS)
             
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.detach()})
@@ -2416,7 +2415,7 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    def calc_prompt_mix_loss(self, unet_feats, unet_attns, placeholder_indices, HALF_BS, feat_shapes):
+    def calc_prompt_mix_loss(self, unet_feats, unet_attns, placeholder_indices, HALF_BS):
         # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -2483,11 +2482,6 @@ class LatentDiffusion(DDPM):
         for unet_layer_idx, unet_feat in unet_feats.items():
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
                 continue
-
-            feat_shape = feat_shapes[unet_layer_idx]
-            if feat_is_intermediate:
-                # [4, 64, 1280] => [4, 1280, 64] => [4, 1280, 8, 8]
-                unet_feat = unet_feat.permute(0, 2, 1).reshape(HALF_BS*4, -1, *feat_shape)
 
             # each is [1, 1280, 16, 16]
             feat_subj_single, feat_subj_comp, feat_mix_single, feat_mix_comp \
