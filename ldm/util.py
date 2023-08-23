@@ -689,3 +689,8 @@ def chunk_list(lst, num_chunks):
     # looping till length lst
     for i in range(0, len(lst), chunk_size): 
         yield lst[i:i + chunk_size]
+
+def halve_token_indices(token_indices):
+    token_indices_half_B  = token_indices[0].chunk(2)[0]
+    token_indices_half_N  = token_indices[1].chunk(2)[0]
+    return (token_indices_half_B, token_indices_half_N)

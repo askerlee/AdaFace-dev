@@ -23,10 +23,9 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, mix_embeddings, \
-                       scale_emb_in_embs, ortho_subtract, calc_stats, \
-                       GradientScaler, gen_gradient_scaler, \
+                       ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
-                       save_grid, chunk_list, patch_multi_embeddings
+                       save_grid, chunk_list, patch_multi_embeddings, halve_token_indices
 
 from ldm.modules.ema import LitEma
 from ldm.modules.sophia import SophiaG
@@ -435,13 +434,14 @@ class DDPM(pl.LightningModule):
         self.iter_flags = { 'calc_clip_loss':           False,
                             'do_normal_recon':          True,
                             'do_attn_recon_loss':       False,
-                            'is_comp_iter':             False,
+                            'is_compos_iter':           False,
                             'do_comp_prompt_mix_reg':   False,
                             'do_ada_prompt_delta_reg':  False,
                             # 'do_teacher_filter':        False,
                             # 'is_teachable':             False,
                             'use_background_token':     False,
                             'reuse_init_conds':         False,
+                            'skip_delta_loss':          False,
                           }
         
     # This shared_step() is overridden by LatentDiffusion::shared_step() and never called. 
@@ -455,30 +455,38 @@ class DDPM(pl.LightningModule):
         self.init_iter_flags()
 
         # How many regularizations are done intermittently during the training iterations?
-        interm_reg_types = []
-        interm_reg_probs = []
-        # There's only one reg type: 'do_comp_prompt_mix_reg' in interm_reg_types.
+        cand_reg_types = []
+        cand_reg_probs = []
+        # do_comp_prompt_mix_reg implies do_ada_prompt_delta_reg.
+        # So if do_comp_prompt_mix_reg is enabled (composition_prompt_mix_reg_weight > 0),
+        # then no need to put do_ada_prompt_delta_reg in cand_reg_types.
+        # Otherwise, we need to put do_ada_prompt_delta_reg in cand_reg_types.
+        # There's only one reg type: 'do_comp_prompt_mix_reg' in cand_reg_types.
         # This structure is kept for possible future extensions.
         if self.composition_prompt_mix_reg_weight > 0:
-            interm_reg_types.append('do_comp_prompt_mix_reg')
-            interm_reg_probs.append(2.)
+            cand_reg_types.append('do_comp_prompt_mix_reg')
+            cand_reg_probs.append(1.)
+        else:
+            cand_reg_types.append('do_ada_prompt_delta_reg')
+            cand_reg_probs.append(1.)
+
         # NOTE: No need to have standalone ada prompt delta reg, 
         # since each prompt mix reg iter will also do ada prompt delta reg.
 
-        N_INTERM_REGS = len(interm_reg_types)
-        interm_reg_probs = np.array(interm_reg_probs) / np.sum(interm_reg_probs)
+        N_CAND_REGS = len(cand_reg_types)
+        cand_reg_probs = np.array(cand_reg_probs) / np.sum(cand_reg_probs)
 
-        # If N_INTERM_REGS == 0, then no intermittent regularizations, set the two flags to False.
-        if N_INTERM_REGS > 0 and self.composition_regs_iter_gap > 0 \
+        # If N_CAND_REGS == 0, then no intermittent regularizations, set the two flags to False.
+        if N_CAND_REGS > 0 and self.composition_regs_iter_gap > 0 \
             and self.global_step % self.composition_regs_iter_gap == 0:
-            # Alternate among the regularizations in interm_reg_types. 
+            # Alternate among the regularizations in cand_reg_types. 
             # If both do_ada_prompt_delta_reg and do_comp_prompt_mix_reg,
             # then alternate between do_ada_prompt_delta_reg and do_comp_prompt_mix_reg.
             # The two regularizations cannot be done in the same batch, as they require
             # different handling of prompts and are calculated by different loss functions.
-            # reg_type_idx = (self.global_step // self.composition_regs_iter_gap) % N_INTERM_REGS
-            reg_type_idx = np.random.choice(N_INTERM_REGS, p=interm_reg_probs)
-            iter_reg_type     = interm_reg_types[reg_type_idx]
+            # reg_type_idx = (self.global_step // self.composition_regs_iter_gap) % N_CAND_REGS
+            reg_type_idx = np.random.choice(N_CAND_REGS, p=cand_reg_probs)
+            iter_reg_type     = cand_reg_types[reg_type_idx]
             if iter_reg_type   == 'do_ada_prompt_delta_reg':
                 self.iter_flags['do_comp_prompt_mix_reg']  = False
                 self.iter_flags['do_ada_prompt_delta_reg'] = True
@@ -487,7 +495,7 @@ class DDPM(pl.LightningModule):
                 self.iter_flags['do_comp_prompt_mix_reg']  = True
                 self.iter_flags['do_ada_prompt_delta_reg'] = True
 
-            self.iter_flags['is_comp_iter'] = True
+            self.iter_flags['is_compos_iter'] = True
             # Always calculate clip loss during comp reg iterations, even if self.iter_flags['do_teacher_filter'] is False.
             # This is to monitor how well the model performs on compositionality.
             self.iter_flags['calc_clip_loss'] = True
@@ -495,7 +503,7 @@ class DDPM(pl.LightningModule):
             self.iter_flags['do_attn_recon_loss'] = False
 
         elif self.global_step >= 0:
-            # do_attn_recon_loss only if not is_comp_iter, i.e., not a compositional reg iteration.
+            # do_attn_recon_loss only if not is_compos_iter, i.e., not a compositional reg iteration.
             self.iter_flags['do_attn_recon_loss'] = self.do_attn_recon_loss
 
         # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
@@ -682,7 +690,7 @@ class LatentDiffusion(DDPM):
             self.num_vectors_per_token = 1
 
         self.generation_cache = []
-        self.generation_cache_img_flags = []
+        self.generation_cache_img_colors = []
         self.cache_start_iter = 0
         self.num_cached_generations = 0
         
@@ -802,7 +810,14 @@ class LatentDiffusion(DDPM):
                                 'use_layerwise_context': self.use_layerwise_embedding, 
                                 'use_ada_context':       self.use_ada_embedding,
                                 'use_conv_attn':         self.use_conv_attn,
+                                # Default is False. Will be changed to True in forward() if necessary.
+                                'ada_bp_to_unet':        False, 
+                                # Setting up 'subj_indices' here is necessary for inference.
+                                # During training, 'subj_indices' will be overwritten in p_losses().
+                                # Although 'bg_indices' is usually not used during inference,
+                                # we also set it up here just in case.
                                 'subj_indices':          copy.copy(self.embedding_manager.placeholder_indices_fg),
+                                'bg_indices':            copy.copy(self.embedding_manager.placeholder_indices_bg),
                              }
                 
                 if self.use_ada_embedding:
@@ -1287,6 +1302,7 @@ class LatentDiffusion(DDPM):
     #LINK #shared_step
     def forward(self, x, c, delta_prompts=None, img_mask=None, *args, **kwargs):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
+        # If cached_inits_available, cached_inits are only used if do_comp_prompt_mix_reg = True.
         self.iter_flags['reuse_init_conds']     = (self.do_clip_teacher_filtering and self.iter_flags['do_comp_prompt_mix_reg'] \
                                                    and self.cached_inits_available)
 
@@ -1305,12 +1321,11 @@ class LatentDiffusion(DDPM):
                         subj_single_prompts = c
                         subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
                     else:
-                        self.iter_flags['use_background_token'] = self.cached_inits['use_background_token']
-                        # self.iter_flags['reuse_init_conds'], discard the prompts offered in shared_step().
+                        # reuse_init_conds, discard the prompts offered in shared_step().
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             chunk_list(self.cached_inits['delta_prompts'], 4)
-                        # cached_inits will be used in p_losses(), 
-                        # so don't turn off cached_inits_available yet.
+                        self.iter_flags['use_background_token'] = self.cached_inits['use_background_token']
+                        # cached_inits will be used in p_losses(), so don't turn off cached_inits_available yet.
 
                     #if self.iter_flags['use_background_token']:
                     #    print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
@@ -1318,17 +1333,20 @@ class LatentDiffusion(DDPM):
                     N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     ORIG_BS  = len(x)
                     N_EMBEDS = ORIG_BS * N_LAYERS
-                    # HALF_BS is at least 1. So if ORIG_BS == 1, then HALF_BS = 1.
-                    HALF_BS  = max(ORIG_BS // 2, 1)
                     
                     if self.iter_flags['do_comp_prompt_mix_reg'] or self.iter_flags['do_ada_prompt_delta_reg']:
+                        # BLOCK_SIZE is at least 1. So if ORIG_BS == 1, then BLOCK_SIZE = 1.
+                        BLOCK_SIZE  = max(ORIG_BS // 2, 1)
                         # Only keep the first half of batched prompts to save RAM.
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
-                            subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
-                            cls_single_prompts[:HALF_BS],  cls_comp_prompts[:HALF_BS]
+                            subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
+                            cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE]
+                    # Otherwise, do_attn_recon_loss, or (do_static_prompt_delta_reg but not do_ada_prompt_delta_reg).
+                    # Do not halve the batch.
                                             
                     # If not do_ada_prompt_delta_reg, we still compute the static embeddings 
-                    # of the 4 types of prompts, to compute static delta loss. But now there are 8 prompts (4*BS=8).
+                    # of the 4 types of prompts, to compute static delta loss. 
+                    # But now there are 8 prompts (4 * ORIG_BS = 8), as the batch is not halved.
                     delta_prompts = subj_single_prompts + subj_comp_prompts \
                                     + cls_single_prompts + cls_comp_prompts
                     # print(delta_prompts)
@@ -1343,8 +1361,12 @@ class LatentDiffusion(DDPM):
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
 
+                    # By default, ada_bp_to_unet is False. Will be changed to True if do_comp_prompt_mix_reg.
                     extra_info['ada_bp_to_unet'] = False
 
+                    # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
+                    # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
+                    extra_info['subj_indices_2b'] = copy.copy(self.embedding_manager.placeholder_indices_fg)
                     # Only keep the first half (for single prompts), as the second half is the same 
                     # (for comp prompts, differs at the batch index, but the token index is identical).
                     # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
@@ -1353,47 +1375,33 @@ class LatentDiffusion(DDPM):
                     # they only account for the subject single prompt, but they are also 
                     # applicable to the other 3 types of prompts as they are all aligned 
                     # at the beginning part of the prompts.
-                    # BUG: if the batch size of a mix batch > 4, then the subj_indices_half_N
-                    # corresponds to the indices in more than one instance. But patch_multi_embeddings()
-                    # treat the indices as if they are always in the same instance.
-                    if self.embedding_manager.placeholder_indices_fg is None:
-                        breakpoint()
-                        
-                    # subj_indices_half_B, subj_indices_half_N: subject token indices 
-                    # within the subject single prompt (BS=1).
-                    # len(subj_indices_half_N): embedding number of the subject token.
-                    subj_indices_half_B  = self.embedding_manager.placeholder_indices_fg[0].chunk(2)[0]
-                    subj_indices_half_N  = self.embedding_manager.placeholder_indices_fg[1].chunk(2)[0]
-
-                    if self.iter_flags['do_comp_prompt_mix_reg'] or self.iter_flags['do_ada_prompt_delta_reg']:
-                        assert not self.iter_flags['do_attn_recon_loss']
-                        extra_info['subj_indices'] = copy.copy(self.embedding_manager.placeholder_indices_fg)
-                    else:
-                        assert self.iter_flags['do_attn_recon_loss']
-                        extra_info['subj_indices'] = (subj_indices_half_B, subj_indices_half_N)
-
-                    subj_indices0_half_B = self.embedding_manager.placeholder_indices_fg0[0].chunk(2)[0]
-                    subj_indices0_half_N = self.embedding_manager.placeholder_indices_fg0[1].chunk(2)[0]
-                    extra_info['subj_indices0'] = (subj_indices0_half_B, subj_indices0_half_N)
-
+                    extra_info['subj_indices_1b'] = halve_token_indices(extra_info['subj_indices_2b'])
+                    subj_indices_half_N  = extra_info['subj_indices_1b'][1]
                     # The subject is represented with a multi-embedding token. The corresponding tokens
                     # in the class prompts are "class , , ,", 
                     # therefore the embeddings of "," need to be patched.
+                    # BUG: if the batch size of a mix batch > 4, then the subj_indices_half_N
+                    # corresponds to the indices in more than one instance. But patch_multi_embeddings()
+                    # treat the indices as if they are always in the same instance.
+                    # len(subj_indices_half_N): embedding number of the subject token.
                     if len(subj_indices_half_N) > 1:
                         cls_single_emb = patch_multi_embeddings(cls_single_emb, subj_indices_half_N)
                         cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   subj_indices_half_N)
 
-                    # In mix reg iters, background tokens only appear 10% of the time.
+                    # In mix reg iters, background tokens only appear 10% of the time 
+                    # to provide delta reg on ada embeddings of bg tokens.
                     if self.iter_flags['use_background_token']:
-                        if self.embedding_manager.placeholder_indices_bg is None:
-                            breakpoint()
+                        extra_info['bg_indices_2b'] = copy.copy(self.embedding_manager.placeholder_indices_bg)
+                        extra_info['bg_indices_1b'] = halve_token_indices(extra_info['bg_indices_2b'])
+                        # bg_indices_half_N: the first half batch of background token indices (the token dim)
+                        bg_indices_half_N = extra_info['bg_indices_1b'][1]
                         # Patch background embeddings when the number of background embeddings > 1.
-                        bg_indices_half_B  = self.embedding_manager.placeholder_indices_bg[0].chunk(2)[0]
-                        bg_indices_half_N  = self.embedding_manager.placeholder_indices_bg[1].chunk(2)[0]
-                        extra_info['bg_indices'] = (bg_indices_half_B, bg_indices_half_N)
                         if len(bg_indices_half_N) > 1:
                             cls_single_emb = patch_multi_embeddings(cls_single_emb, bg_indices_half_N)
                             cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   bg_indices_half_N)
+                    else:
+                        extra_info['bg_indices_2b'] = None
+                        extra_info['bg_indices_1b'] = None
 
                     # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
                     # may be True or False, depending whether mix reg is enabled.
@@ -1426,13 +1434,6 @@ class LatentDiffusion(DDPM):
                         # This is only for static embeddings. The dynamically generated ada embeddings 
                         # won't be mixed, but simply repeated.
 
-                        """                         
-                        subj_comp_emb_v   = scale_emb_in_embs(subj_comp_emb,   subj_indices_half_N, 
-                                                               scale=subj_emb_scale, scale_first_only=False)
-                        subj_single_emb_v = scale_emb_in_embs(subj_single_emb, subj_indices_half_N, 
-                                                               scale=subj_emb_scale, scale_first_only=False)
-                        """
-                        
                         total_training_steps = self.trainer.max_steps
                         INIT_CLS_EMB_SCALE  = 0.1
                         FINAL_CLS_EMB_SCALE = 0.3
@@ -1448,7 +1449,7 @@ class LatentDiffusion(DDPM):
                         # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
                         # Each is of a single instance. So only provides subj_indices_half_N 
                         # (multiple token indices of the same instance).
-                        MIX_WHOLE_SEQ = True
+                        MIX_WHOLE_SEQ = False
                         if MIX_WHOLE_SEQ:
                             mix_indices = None
                         else:
@@ -1480,15 +1481,15 @@ class LatentDiffusion(DDPM):
                         if PROMPT_MIX_GRAD_SCALE == 0:
                             mix_comp_emb_all_layers   = mix_comp_emb_all_layers.detach()
                             mix_single_emb_all_layers = mix_single_emb_all_layers.detach()
-                        elif PROMPT_MIX_GRAD_SCALE != 1:
-                            grad_scaler = GradientScaler(PROMPT_MIX_GRAD_SCALE)
+                        else:
+                            grad_scaler = gen_gradient_scaler(PROMPT_MIX_GRAD_SCALE)
                             mix_comp_emb_all_layers   = grad_scaler(mix_comp_emb_all_layers)
                             mix_single_emb_all_layers = grad_scaler(mix_single_emb_all_layers)
 
                         if self.use_layerwise_embedding:
                             # 4, 5, 6, 7, 8, 9 correspond to original layer indices 7, 8, 12, 16, 17, 18.
                             # (same as used in computing mixing loss)
-                            sync_layer_indices = [4, 5, 6, 7, 8, 9]
+                            sync_layer_indices = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
                             layer_mask = torch.zeros_like(mix_comp_emb_all_layers).reshape(-1, N_LAYERS, *mix_comp_emb_all_layers.shape[1:])
                             layer_mask[:, sync_layer_indices] = 1
                             layer_mask = layer_mask.reshape(-1, *mix_comp_emb_all_layers.shape[1:])
@@ -1583,24 +1584,30 @@ class LatentDiffusion(DDPM):
                     # the static delta loss, e.g., used to estimate the ada embeddings.
                     # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
                     # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
+                    # c_static_emb2: [64, 154, 768]
                     c = (c_static_emb2, c_in2, extra_info)
                     # c_static_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
                     # cls_single_prompts, cls_comp_prompts. 
                     # c_static_emb is backed up to be used to compute the static delta loss.
+                    # c_static_emb: [64, 77, 768]
                     self.c_static_emb = c_static_emb
 
                 else:
                     # Not (self.do_static_prompt_delta_reg or 'do_comp_prompt_mix_reg' or 'do_attn_recon_loss'.
                     # That is, no delta loss, compositional mix loss, or attention-weighted recon loss. 
-                    # Keep the tuple c unchanged.
+                    # Keep the tuple c unchanged. prompts: subject single.
                     c = self.get_learned_conditioning(c)
                     # c[2]: extra_info. Here is only reached when do_static_prompt_delta_reg = False.
                     # Either prompt_delta_reg_weight == 0 or it's called by self.validation_step().
                     assert self.iter_flags['do_normal_recon']
                     c[2]['iter_type'] = 'normal_recon'
-                    extra_info['ada_bp_to_unet'] = False
-                    extra_info['subj_indices'] = copy.copy(self.embedding_manager.placeholder_indices_fg)
+                    # No need to set up subj_indices_2b or subj_indices_1b. 
+                    # We don't meddle with the whole batch of prompts, so just use all the computed indices.
+                    # They have been set in get_learned_conditioning().
                     self.c_static_emb = None
+
+                # c[2]: extra_info. 
+                c[2]['use_background_token'] = self.iter_flags['use_background_token']
 
             # shorten_cond_schedule: False. Skipped.
             if self.shorten_cond_schedule:  # TODO: drop this option
@@ -1834,37 +1841,57 @@ class LatentDiffusion(DDPM):
         noise = default(noise, lambda: torch.randn_like(x_start))
         #print(cond[1])
 
-        # If cached_inits_available, cached_inits are only used if do_comp_prompt_mix_reg = True.
-        # In this case, do_teacher_filtering = True, and we choose the better instance 
-        # between the two in the batch, if it's above the usable threshold.
-        # do_teacher_filtering and cached_inits_available are mutually exclusive.
-        self.iter_flags['do_teacher_filter'] = (self.do_clip_teacher_filtering and self.iter_flags['do_comp_prompt_mix_reg'] \
-                                                and not self.cached_inits_available)
         # reuse_init_conds was evaluated in LatentDiffusion::forward().
-        # self.iter_flags['reuse_init_conds']     = (self.do_clip_teacher_filtering and self.iter_flags['do_comp_prompt_mix_reg'] \
-        #                                            and self.cached_inits_available)
-
-        if self.iter_flags['reuse_init_conds']:
-            # If self.iter_flags['reuse_init_conds'], we use the cached x_start and cond.
-            # cond is already organized as (subj single, subj comp, mix single, mix comp). 
-            # No need to manipulate.
-            # noise will be kept as the sampled random noise at the beginning of p_losses(). 
-            x_start = self.cached_inits['x_start']
-            prev_t  = self.cached_inits['t']
-            # Avoid the next mix iter to still use the cached inits.
-            self.cached_inits_available = False
-            self.cached_inits = None
-            # reuse init iter takes a smaller cfg scale, as in the second denoising step, 
-            # a particular scale tend to make the cfg-denoised mixed images more dissimilar 
-            # to the subject images than in the first denoising step. 
+        # If not reuse_init_conds and do_teacher_filtering, then we choose the better instance 
+        # between the two in the batch, if it's above the usable threshold.
+        # do_teacher_filtering and reuse_init_conds are mutually exclusive.
+        self.iter_flags['do_teacher_filter'] = (self.do_clip_teacher_filtering and self.iter_flags['do_comp_prompt_mix_reg'] \
+                                                and not self.iter_flags['reuse_init_conds'])
 
         cfg_scales_for_clip_loss = None
         c_static_emb, c_in, extra_info = cond
 
-        if self.iter_flags['is_comp_iter']:
-            # If bs=2, then HALF_BS=1.
-            if not self.iter_flags['reuse_init_conds']:
-                HALF_BS  = max(x_start.shape[0] // 2, 1)
+        if self.iter_flags['is_compos_iter']:
+            # The prompts are either (subj single, subj comp, cls single, cls comp) or
+            # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
+            # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
+            extra_info['subj_indices'] = extra_info['subj_indices_2b']
+            extra_info['bg_indices']   = extra_info['bg_indices_2b']
+
+            # Only reuse_init_conds if do_comp_prompt_mix_reg.
+            if self.iter_flags['reuse_init_conds']:
+                # If self.iter_flags['reuse_init_conds'], we use the cached x_start and cond.
+                # cond is already organized as (subj single, subj comp, mix single, mix comp). 
+                # No need to manipulate.
+                # noise will be kept as the sampled random noise at the beginning of p_losses(). 
+                x_start = self.cached_inits['x_start']
+                prev_t  = self.cached_inits['t']
+                # Avoid the next mix iter to still use the cached inits.
+                self.cached_inits_available = False
+                self.cached_inits = None
+                # reuse init iter takes a smaller cfg scale, as in the second denoising step, 
+                # a particular scale tend to make the cfg-denoised mixed images more dissimilar 
+                # to the subject images than in the first denoising step. 
+
+                # If reuse_init_conds, ORIG_BS is already doubled in the previous 
+                # compositional iteration. So divide by 4.
+                BLOCK_SIZE  = max(x_start.shape[0] // 4, 1)
+                # Randomly choose t from the middle 300-600 timesteps, 
+                # so as to match the once-denoised x_start.
+                # generate the full batch size of t, but actually only use the first block of BLOCK_SIZE.
+                # This is to make the code consistent with the non-comp case and avoid unnecessary confusion.
+                t_mid = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.75), 
+                                      (x_start.shape[0],), device=x_start.device)
+                # t_upperbound: old t - 150. That is, at least 150 steps away from the previous t.
+                t_upperbound = prev_t - int(self.num_timesteps * 0.15)
+                # t should be at least 150 steps away from the previous t, 
+                # so that the noise level is sufficiently different.
+                t = torch.minimum(t_mid, t_upperbound)
+
+            else:
+                # Fresh compositional iter.
+                # x_start is of ORIG_BS = 2. So BLOCK_SIZE=1.
+                BLOCK_SIZE  = max(x_start.shape[0] // 2, 1)
                 # At 80% of the chance, randomly initialize x_start and t. Note the batch size is still 2 here.
                 # At 20% of the chance, use a noisy x_start based on the training images. 
                 # This may help the model ignore the background in the training images given prompts, 
@@ -1876,40 +1903,27 @@ class LatentDiffusion(DDPM):
                 # Randomly choose t from the largest 150 timesteps, so as to match the completely noisy x_start.
                 t_tail = torch.randint(int(self.num_timesteps * 0.85), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
                 t = t_tail
-            else:
-                # If self.iter_flags['reuse_init_conds'], BS is already doubled in the previous 
-                # compositional iteration. So divide by 4.
-                HALF_BS  = max(x_start.shape[0] // 4, 1)
-                # Randomly choose t from the middle 300-600 timesteps, 
-                # so as to match the once-denoised x_start.
-                # generate the full batch size of t, but actually only use the first HALF_BS.
-                # This is to make the code consistent with the non-comp case and avoid unnecessary confusion.
-                t_mid = torch.randint(int(self.num_timesteps * 0.6), int(self.num_timesteps * 0.75), 
-                                      (x_start.shape[0],), device=x_start.device)
-                # t_upperbound: old t - 150. That is, at least 150 steps away from the previous t.
-                t_upperbound = prev_t - int(self.num_timesteps * 0.15)
-                # t should be at least 150 steps away from the previous t, 
-                # so that the noise level is sufficiently different.
-                t = torch.minimum(t_mid, t_upperbound)
 
             # Ignore img_mask.
             img_mask = None
 
-            # Only do delta loss reg. This happens if composition_prompt_mix_reg_weight = 0.
+            # Only do ada delta loss. This usually won't happen unless composition_prompt_mix_reg_weight = 0.
             if not self.iter_flags['do_comp_prompt_mix_reg']:
                 # Generate a batch of 4 instances with the same initial x_start, noise and t.
                 # This doubles the batch size to 4, if bs=2.
-                x_start = x_start[:HALF_BS].repeat(4, 1, 1, 1)
-                noise   = noise[:HALF_BS].repeat(4, 1, 1, 1)
-                t       = t[:HALF_BS].repeat(4)
+                x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
+                noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
+                t       = t[:BLOCK_SIZE].repeat(4)
                 # Calculate CLIP score only for image quality evaluation
                 cfg_scales_for_clip_loss = torch.ones_like(t) * 5
             else:
+                # do_comp_prompt_mix_reg. We need to compute CLIP scores for teacher filtering.
+                # Set up cfg configs for guidance to denoise images, which are input to CLIP.
                 # Teachers are slightly more aggressive, to increase the teachable fraction.                
                 cfg_scale_for_teacher  = 6
                 cfg_scale_for_student  = 5
-                cfg_scales_for_teacher   = torch.ones(HALF_BS*2, device=x_start.device) * cfg_scale_for_teacher
-                cfg_scales_for_student   = torch.ones(HALF_BS*2, device=x_start.device) * cfg_scale_for_student
+                cfg_scales_for_teacher   = torch.ones(BLOCK_SIZE*2, device=x_start.device) * cfg_scale_for_teacher
+                cfg_scales_for_student   = torch.ones(BLOCK_SIZE*2, device=x_start.device) * cfg_scale_for_student
                 cfg_scales_for_clip_loss = torch.cat([cfg_scales_for_student, cfg_scales_for_teacher], dim=0)
 
                 # First iteration of a two-iteration do_comp_prompt_mix_reg.
@@ -1940,16 +1954,31 @@ class LatentDiffusion(DDPM):
                     cond_orig = cond
                     # Replace cond with the cond for twin comp sets.
                     cond = (c_static_emb2, c_in2, extra_info)
-                # Not self.iter_flags['do_teacher_filter']. Either self.iter_flags['reuse_init_conds'], or not self.do_clip_teacher_filtering.
-                # In the latter case, only compute the emb reg and delta loss on the mixed images.
+                # Not self.iter_flags['do_teacher_filter']. This branch is do_comp_prompt_mix_reg.
+                # So it's either reuse_init_conds, or not do_clip_teacher_filtering.
+                # In any case, we do not need to change the prompts and static embeddings 
+                # and simply do mix reg.
                 else:
-                    noise   = noise[:HALF_BS].repeat(4, 1, 1, 1)
-                    t       = t[:HALF_BS].repeat(4)
-                    # use cached x_start and cond. Already has the 4-type structure. 
-                    # No change to the condition here.
+                    # If reuse_init_conds, x_start and prev_t is already 4-fold repeated.
+                    # But noise and t are not. So we still need to make them 4-fold repeated.
+                    noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
+                    t       = t[:BLOCK_SIZE].repeat(4)
+                    # use cached x_start and cond. cond already has the 4-type structure. 
+                    # No change to cond here.
+                    # NOTE cond is mainly determined by the prompts c_in. Since c_in is inherited from
+                    # the previous iteration, cond is also almost the same.
 
-        extra_info['use_background_token'] = self.iter_flags['use_background_token']
-        iter_type = cond[2]['iter_type']
+        # Otherwise, it's a recon iter (attentional or unweighted).
+        else:
+            assert self.iter_flags['do_normal_recon']
+            if self.iter_flags['do_attn_recon_loss']:
+                # The prompts used to compute the static embeddings are 
+                # (subj single, subj comp, cls single, cls comp).
+                # But only the subj single block is used for recon.
+                extra_info['subj_indices'] = extra_info['subj_indices_1b']
+                extra_info['bg_indices']   = extra_info['bg_indices_1b']
+            # Otherwise it's an unweighted recon iter. 
+            # subj_indices and bg_indices have been set in get_learned_conditioning().
 
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
         # then cond[2]['use_conv_attn'] = True, it will inform U-Net to do conv attn.
@@ -1987,10 +2016,14 @@ class LatentDiffusion(DDPM):
             # since the mix prompts produce slightly more accurate attention maps on the 
             # foreground subject.
             if self.iter_flags['use_background_token'] and not self.iter_flags['do_attn_recon_loss']:
+                # extra_info['subj_indices'] and extra_info['bg_indices'] are used, instead of
+                # extra_info['subj_indices_1b'] and extra_info['bg_indices_1b']. 
+                # Because it's unweighted recon, the original prompts are the same as here,
+                # and the indices to the whole batch are applicable.
                 subj_fg_bg_complementary_loss = \
                             self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
-                                                               self.embedding_manager.placeholder_indices_fg,
-                                                               self.embedding_manager.placeholder_indices_bg,
+                                                               extra_info['subj_indices'],
+                                                               extra_info['bg_indices'],
                                                                x_start.shape[0],
                                                                fg_grad_scale=0.01,
                                                                do_demean_first=False
@@ -1999,9 +2032,9 @@ class LatentDiffusion(DDPM):
                 if self.fg_bg_key_ortho_loss_weight > 0:
                     fg_bg_key_ortho_loss = \
                         self.calc_fg_bg_key_ortho_loss(cond[2]['unet_ks'], 
-                                                        self.embedding_manager.placeholder_indices_fg,
-                                                        self.embedding_manager.placeholder_indices_bg,
-                                                        x_start.shape[0])
+                                                       extra_info['subj_indices'],
+                                                       extra_info['bg_indices'],
+                                                       x_start.shape[0])
                     loss += self.fg_bg_key_ortho_loss_weight * fg_bg_key_ortho_loss
                     loss_dict.update({f'{prefix}/fg_bg_key_ortho': fg_bg_key_ortho_loss.item()})
                 
@@ -2011,16 +2044,13 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/fg_bg_complem_subj': subj_fg_bg_complementary_loss.item()})
 
             if self.iter_flags['do_attn_recon_loss']:
-                subj_indices0 = self.embedding_manager.placeholder_indices_fg0
-                # For 'do_normal_recon' but do_attn_recon_loss_iter=True, same to mix reg iters or ada reg iters, 
-                # 4 types of prompts are fed to embedding_manager to generate static embeddings in forward(). 
-                # subj_indices00 has a BS of 4, for the 2 types of subject prompts, each type 2 prompts.
-                # So we only keep the first half, which correspond to the 2 subject-single prompts.
-                subj_indices0 = (subj_indices0[0].chunk(2)[0], subj_indices0[1].chunk(2)[0])
-
                 cond_mix = extra_info['cond_mix']
+                # The prompts used in cond_mix are the subj single block within the prompts 
+                # for static embedding generation. So the indices are *_1b.
+                cond_mix[2]['subj_indices'] = extra_info['subj_indices_1b']
+                cond_mix[2]['bg_indices']   = extra_info['bg_indices_1b']
                 #print(cond_mix[1])
-                
+
                 # We only add a small amount of noise to x_start, so that the obtained attention maps are more accurate.
                 #t_small = torch.randint(0, int(self.num_timesteps * 0.1), 
                 #                        size=t.shape, device=x_start.device)
@@ -2037,7 +2067,6 @@ class LatentDiffusion(DDPM):
 
                 # Compute mix_fg_bg_complementary_loss, which is similar as
                 # subj_fg_bg_complementary_loss but with the mix prompts.
-                # placeholder_indices_fg0 here is the cached placeholder_indices_fg0 on subject prompts.
                 # fg_grad_scale > 0, because we override the embedding manager's autograd status,
                 # so that gradients can still be BP-ed from the cross attention layers, even if 
                 # unet_has_grad=False.
@@ -2046,8 +2075,8 @@ class LatentDiffusion(DDPM):
                     # So we only take the beginning BS indices out of it.
                     mix_fg_bg_complementary_loss = \
                                 self.calc_fg_bg_complementary_loss(unet_attns_mix_single, 
-                                                                   self.embedding_manager.placeholder_indices_fg,
-                                                                   self.embedding_manager.placeholder_indices_bg,
+                                                                   cond_mix[2]['subj_indices'],
+                                                                   cond_mix[2]['bg_indices'],
                                                                    x_start.shape[0],
                                                                    fg_grad_scale=0.01,
                                                                    do_demean_first=False
@@ -2060,25 +2089,27 @@ class LatentDiffusion(DDPM):
                     if self.fg_bg_key_ortho_loss_weight > 0:
                         fg_bg_key_ortho_loss = \
                             self.calc_fg_bg_key_ortho_loss(cond_mix[2]['unet_ks'], 
-                                                            self.embedding_manager.placeholder_indices_fg,
-                                                            self.embedding_manager.placeholder_indices_bg,
-                                                            x_start.shape[0])
+                                                           cond_mix[2]['subj_indices'],
+                                                           cond_mix[2]['bg_indices'],
+                                                           x_start.shape[0])
                         loss += self.fg_bg_key_ortho_loss_weight * fg_bg_key_ortho_loss
                         loss_dict.update({f'{prefix}/fg_bg_key_ortho': fg_bg_key_ortho_loss.item()})
 
                 # unet_attns is a dict as: layer_idx -> attn_mat. 
-                # It contains the 6 specified conditioned layers of UNet attentions, 
-                # i.e., layers 7, 8, 12, 16, 17, 18.
-                # unet_attns_mix_single = cond[2]['unet_attns']
-                # Use the top-most captured attn layer to get the subject attention.
-                attn_layer_idx = 17
+                # It contains the 12 specified conditioned layers of UNet attentions, 
+                # i.e., layers 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24.
+                # 7~22 are regularized with losses.
+                # Use the 22nd layer, i.e., the attn layer at the top-most regularized ones 
+                # to get the subject attention, which should be more accurate than lower-level layers.
+                attn_layer_idx = 22
                 # [4, 8, 256, 77] / [4, 8, 64, 77] =>
                 # [4, 77, 8, 256] / [4, 77, 8, 64]
                 attn_mat_mix_single = unet_attns_mix_single[attn_layer_idx].permute(0, 3, 1, 2)
-                # subj_indices0: ([0, 1], [6, 7]).
+                subj_indices = extra_info['subj_indices_1b']
+                # subj_indices: ([0, 1], [6, 7]).
                 # subj_attn: [2, 8, 256 / 64] (only consider the first embedding 
                 # even if there are mult-embeddings for the subject token).
-                subj_attn_mix_single = attn_mat_mix_single[subj_indices0]
+                subj_attn_mix_single = attn_mat_mix_single[subj_indices]
                 # spatial_weight_mix_single: [2, 1, 64, 64].
                 # model_output, target:      [2, 4, 64, 64].
                 spatial_weight_mix_single, spatial_attn_mix_single = \
@@ -2131,8 +2162,8 @@ class LatentDiffusion(DDPM):
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
 
-        # is_comp_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
-        if self.iter_flags['is_comp_iter'] and self.iter_flags['calc_clip_loss']:
+        # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
+        if self.iter_flags['is_compos_iter'] and self.iter_flags['calc_clip_loss']:
             # Images generated both under subj_comp_prompts and mix_comp_prompts 
             # are subject to the CLIP text-image matching evaluation.
             # If self.iter_flags['do_teacher_filter'] (implying do_comp_prompt_mix_reg), 
@@ -2203,17 +2234,17 @@ class LatentDiffusion(DDPM):
                 self.iter_flags['is_teachable']  = are_insts_teachable.sum() > 0
                 # Number of filtered pairs is half of the batch size. 
                 # Repeat to match the number of instances in the batch.
-                # log_image_flags: take values in {0, 1, 2, 3}, 
+                # log_image_colors: take values in {0, 1, 2, 3}, 
                 # i.e., no box, green, red, purple boxes respectively.
                 # no box: not teachable;                 green:  teachable in the first iter and not reused;
                 # red: teachable in the first iter but not in the second iter; purple: teachable in both iters.
                 # If self.iter_flags['do_teacher_filter'] and an instance is teachable, then in the log image file, 
                 # log_image_flag = 1, so the instance has a green bounary box in the logged image.
-                log_image_flags = are_insts_teachable.repeat(2).int()
+                log_image_colors = are_insts_teachable.repeat(2).int()
                 if self.iter_flags['reuse_init_conds']:
                     # If reuse_init_conds and an instance is teachable, then in the log image file,
                     # log_image_flag = 3, so the instance has a purple bounary box in the logged image.
-                    log_image_flags += 2
+                    log_image_colors += 2
 
                 self.num_total_teacher_filter_iters += 1
                 self.num_teachable_iters += int(self.iter_flags['is_teachable'])
@@ -2252,8 +2283,7 @@ class LatentDiffusion(DDPM):
                     # do_recon=True: return denoised images x_recon. If cfg_scale > 1, 
                     # do classifier-free guidance, so that x_recon are better instances
                     # to be used to initialize the next reuse_init comp iteration.
-                    # student prompts are subject prompts. So in cond_orig, 
-                    # use_conv_attn = self.use_conv_attn.
+                    # student prompts are subject prompts.  
                     model_output, x_recon, ada_embeddings = \
                         self.guided_denoise(x_start, noise, t, cond_orig, unet_has_grad=True, 
                                             do_recon=True, cfg_scales=cfg_scales_for_clip_loss)
@@ -2264,7 +2294,7 @@ class LatentDiffusion(DDPM):
                     # the mix half is better at composition (it's worse on subject authenticity, but that's fine).
                     x_start_reuse = x_recon.detach().chunk(2)[1].repeat(2, 1, 1, 1)
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
-                    # mix single = class single, but mix comp = subj comp.
+                    # mix single = class single, but under some settings, maybe mix comp = subj comp.
                     self.cached_inits = { 'x_start':                x_start_reuse, 
                                           'delta_prompts':          cond_orig[2]['delta_prompts'],
                                           't':                      t,
@@ -2273,17 +2303,18 @@ class LatentDiffusion(DDPM):
                     # Do not put cached_inits_available on self.iter_flags, as iter_flags will be reset
                     # in the beginning of the next iteration.
                     self.cached_inits_available = True
-
+                    
                 elif not self.iter_flags['is_teachable']:
                     # If not is_teachable, do not do distillation this time 
                     # (since both instances are not good teachers), 
                     # so only compute emb reg and static/ada delta loss.
                     self.release_plosses_intermediates(locals())
+                    self.iter_flags['skip_delta_loss'] = True
 
                     # In an self.iter_flags['do_teacher_filter'], and not teachable instances are found.
                     # guided_denoise() above is done on twin comp instances, 
                     # and we've computed twin_comp_ada_embeddings.
-                    if self.iter_flags['do_teacher_filter']:
+                    if False: # self.iter_flags['do_teacher_filter']:
                         # twin_comp_ada_embeddings is within no_grad(), so it won't receive gradients.
                         # Nonetheless, the delta loss takes both twin_single_ada_embeddings 
                         # and twin_comp_ada_embeddings as input, the ada embeddings 
@@ -2335,19 +2366,19 @@ class LatentDiffusion(DDPM):
                 # Do nothing.
 
             else:
-                # Not self.iter_flags['do_teacher_filter'], nor reuse_init_conds. 
-                # Only one possibility: not self.do_clip_teacher_filtering.
-                # The teacher instance is always teachable as filtering is totally disabled.
+                # Not do_teacher_filter, nor reuse_init_conds. 
+                # So only one possibility: not do_clip_teacher_filtering.
+                # The teacher instance is always teachable as teacher filtering is disabled.
                 self.iter_flags['is_teachable'] = True
                 self.distill_loss_clip_discount = 1
-                # Since not self.iter_flags['do_teacher_filter']/reuse_init_conds, log_image_flags are all 0,
+                # Since not self.iter_flags['do_teacher_filter']/reuse_init_conds, log_image_colors are all 0,
                 # i.e., no box to be drawn on the images in cache_and_log_generations().
-                log_image_flags = torch.zeros(clip_images.shape[0], device=x_start.device)
+                log_image_colors = torch.zeros(clip_images.shape[0], device=x_start.device)
 
-            self.cache_and_log_generations(clip_images, log_image_flags)
+            self.cache_and_log_generations(clip_images, log_image_colors)
 
         else:
-            # Not is_comp_iter. Distillation won't be done in this iter, so is_teachable = False.
+            # Not is_compos_iter. Distillation won't be done in this iter, so is_teachable = False.
             self.iter_flags['is_teachable'] = False
             
         if self.embedding_reg_weight > 0:
@@ -2355,13 +2386,13 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg.detach()})
             loss += (self.embedding_reg_weight * loss_embedding_reg)
 
-        if self.do_static_prompt_delta_reg:
+        if self.do_static_prompt_delta_reg and not self.iter_flags['skip_delta_loss']:
             # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
             static_delta_loss, ada_delta_loss, subj_emb_diff_loss = \
                 self.embedding_manager.calc_prompt_delta_loss( 
                                         self.c_static_emb, ada_embeddings,
                                         self.iter_flags['do_ada_prompt_delta_reg'],
-                                        extra_info['subj_indices']
+                                        extra_info['subj_indices_1b']
                                        )
             
             loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
@@ -2391,8 +2422,8 @@ class LatentDiffusion(DDPM):
             unet_attns  = cond[2]['unet_attns']
             loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
-                                                          self.embedding_manager.placeholder_indices_fg,
-                                                          HALF_BS)
+                                                          extra_info['subj_indices_2b'],
+                                                          BLOCK_SIZE)
             
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.detach()})
@@ -2414,15 +2445,12 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    def calc_prompt_mix_loss(self, unet_feats, unet_attns, placeholder_indices, HALF_BS):
+    def calc_prompt_mix_loss(self, unet_feats, unet_attns, placeholder_indices, BLOCK_SIZE):
         # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
         # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
         # F(subj_single_prompts) - F(cls_single_prompts)
-        loss_subj_attn_delta_distill = 0
-        loss_subj_attn_norm_distill  = 0
-        loss_feat_distill      = 0
 
         delta_attn_loss_scale    = 1
         direct_attn_loss_scale   = 2
@@ -2459,7 +2487,7 @@ class LatentDiffusion(DDPM):
         # The class prompts are at the latter half of the batch.
         # So we need to add the batch indices of the subject prompts, to locate
         # the corresponding class prompts.
-        cls_placeholder_ind_B = orig_placeholder_ind_B + HALF_BS * 2
+        cls_placeholder_ind_B = orig_placeholder_ind_B + BLOCK_SIZE * 2
         # Concatenate the placeholder indices of the subject prompts and class prompts.
         placeholder_indices_B = torch.cat([orig_placeholder_ind_B, cls_placeholder_ind_B ], dim=0)
         placeholder_indices_T = torch.cat([orig_placeholder_ind_T, orig_placeholder_ind_T], dim=0)
@@ -2478,6 +2506,10 @@ class LatentDiffusion(DDPM):
         mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
         feat_is_intermediate = True
 
+        loss_subj_attn_delta_distill = 0
+        loss_subj_attn_norm_distill  = 0
+        loss_feat_distill = 0
+
         for unet_layer_idx, unet_feat in unet_feats.items():
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
                 continue
@@ -2492,7 +2524,7 @@ class LatentDiffusion(DDPM):
             # subj_attn: [4, 8, 256] (1 embedding  for 1 token)  => [4, 1, 8, 256] mean => [4, 8, 256]
             # or         [16, 8, 256] (4 embeddings for 1 token) => [4, 4, 8, 256] mean => [4, 8, 256]
             # mean() is taken across the multiple subject tokens.
-            subj_attn = attn_mat[placeholder_indices].reshape(HALF_BS*4, K_fg, *attn_mat.shape[2:]).mean(dim=1)
+            subj_attn = attn_mat[placeholder_indices].reshape(BLOCK_SIZE*4, K_fg, *attn_mat.shape[2:]).mean(dim=1)
             # subj_attn_subj_single, ...: [1, 8, 256] (1 embedding  for 1 token) 
             # or                          [1, 8, 256] (4 embeddings for 1 token)
             subj_attn_subj_single, subj_attn_subj_comp, subj_attn_mix_single,  subj_attn_mix_comp \
@@ -2542,11 +2574,11 @@ class LatentDiffusion(DDPM):
                 # avoid BP through attention.
                 # reversed=True: larger subject attention => smaller spatial weight, i.e., 
                 # pay more attention to the context.
-                spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(subj_attn_mix_comp, HALF_BS, 
+                spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(subj_attn_mix_comp, BLOCK_SIZE, 
                                                                                                   feat_mix_comp.shape[2:],
                                                                                                   reversed=True)
 
-                spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_attn_subj_comp, HALF_BS,
+                spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_attn_subj_comp, BLOCK_SIZE,
                                                                                                   feat_subj_comp.shape[2:],
                                                                                                   reversed=True)
                 spatial_weight = (spatial_weight_mix_comp + spatial_weight_subj_comp) / 2
@@ -2960,23 +2992,23 @@ class LatentDiffusion(DDPM):
 
         return samples, intermediates
 
-    def cache_and_log_generations(self, samples, img_flags, max_cache_size=48):
+    def cache_and_log_generations(self, samples, img_colors, max_cache_size=48):
         self.generation_cache.append(samples)
-        self.generation_cache_img_flags.append(img_flags)
+        self.generation_cache_img_colors.append(img_colors)
         self.num_cached_generations += len(samples)
 
         if self.num_cached_generations >= max_cache_size:
             grid_folder = self.logger._save_dir + f'/samples'
             os.makedirs(grid_folder, exist_ok=True)
             grid_filename = grid_folder + f'/{self.cache_start_iter:04d}-{self.global_step:04d}.png'
-            save_grid(self.generation_cache, self.generation_cache_img_flags, 
+            save_grid(self.generation_cache, self.generation_cache_img_colors, 
                       grid_filename, 12, do_normalize=True)
             print(f"{self.num_cached_generations} generations saved to {grid_filename}")
             
             # Clear the cache. If num_cached_generations > max_cache_size,
             # some samples at the end of the cache will be discarded.
             self.generation_cache = []
-            self.generation_cache_img_flags = []
+            self.generation_cache_img_colors = []
             self.num_cached_generations = 0
             self.cache_start_iter = self.global_step + 1
 

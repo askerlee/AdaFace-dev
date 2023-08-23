@@ -1640,6 +1640,7 @@ class EmbeddingManager(nn.Module):
             # static_cls_single_emb and static_cls_comp_emb should have been patched at subj_indices.
             # static_subj_single_emb[IND_B, :, IND_N]: [1, 16, 768]
             # static_cls_single_emb[IND_B, :, IND_N]:  [1, 16, 768]
+
             subj_emb_diff_loss += calc_delta_loss(static_subj_single_emb[IND_B, :, IND_N], 
                                                   static_cls_single_emb[IND_B, :, IND_N],
                                                   exponent=2,    
@@ -1654,6 +1655,9 @@ class EmbeddingManager(nn.Module):
             subj_emb_diff_count = 2
 
             if ada_delta_loss > 0:
+                # TODO 
+                # ada_subj_single_emb has a batch size of 2. But subj_indices only has a batch size of 1.
+                # So we miss the loss computation on the 2nd instance.
                 # static_cls_single_emb is the same as ada_cls_single_emb.
                 subj_emb_diff_loss += calc_delta_loss(ada_subj_single_emb[IND_B, :, IND_N],
                                                       static_cls_single_emb[IND_B, :, IND_N],
@@ -1661,6 +1665,8 @@ class EmbeddingManager(nn.Module):
                                                       do_demean_first=False,
                                                       first_n_dims_to_flatten=2)
                 subj_emb_diff_count += 1
+                # If is_twin_non_teachable, then ada_subj_comp_emb has no grad. 
+                # Computing the delta loss between ada_subj_comp_emb and static_cls_comp_emb is meaningless.
                 if not is_twin_non_teachable:
                     # static_cls_comp_emb is the same as ada_cls_comp_emb.
                     subj_emb_diff_loss += calc_delta_loss(ada_subj_comp_emb[IND_B, :, IND_N],
