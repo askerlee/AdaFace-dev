@@ -792,6 +792,24 @@ class UNetModel(nn.Module):
         subj_indices_B, subj_indices_N = subj_indices if subj_indices is not None else (None, None)
         bg_indices_B,   bg_indices_N   = bg_indices   if bg_indices   is not None else (None, None)
 
+        # Sanity check.
+        do_sanity_check = False
+        if do_sanity_check:
+            for b in range(x.shape[0]):
+                if ' z,' in context_in[b] and b not in subj_indices_B:
+                    breakpoint()
+                if ' y,' in context_in[b] and b not in bg_indices_B:
+                    breakpoint()
+
+            if subj_indices is not None:
+                for b in th.unique(subj_indices_B):
+                    if ' z,' not in context_in[b]:
+                        breakpoint()
+            if bg_indices_B is not None:
+                for b in th.unique(bg_indices_B):
+                    if ' y,' not in context_in[b]:
+                        breakpoint()
+
         #if iter_type == 'mix_recon':
         #    breakpoint()
 
