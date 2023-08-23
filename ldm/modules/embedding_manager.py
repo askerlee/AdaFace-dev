@@ -847,6 +847,7 @@ class EmbeddingManager(nn.Module):
                 # Reserve 1 embedding to take both fg and cached-bg infeat. 
                 # Around half of the embeddings are fg embeddings, and the other half are bg embeddings.
                 # If num_vectors_per_token == 1, then fg_emb_count = 0, bg_emb_count = 0.
+                # If num_vectors_per_token >= 2, then fg_emb_count = K//2, bg_emb_count = K - 1 - fg_emb_count.
                 fg_emb_count = num_vectors_per_token // 2
                 bg_emb_count = num_vectors_per_token - 1 - fg_emb_count
 
@@ -1533,7 +1534,7 @@ class EmbeddingManager(nn.Module):
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
     def calc_prompt_delta_loss(self, static_embeddings, ada_embeddings, do_ada_prompt_delta_reg,
-                               subj_indices0=None):
+                               subj_indices=None):
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_layers
         else:
@@ -1631,13 +1632,14 @@ class EmbeddingManager(nn.Module):
         else:
             ada_delta_loss = 0
 
-        if subj_indices0 is not None:
-            if static_subj_single_emb.shape[0] != subj_indices0[0].shape[0]:
+        if subj_indices is not None:
+            if static_subj_single_emb.shape[0] != subj_indices[0].shape[0]:
                 breakpoint()
-            IND_B, IND_N = subj_indices0
+            IND_B, IND_N = subj_indices
             subj_emb_diff_loss = 0
             # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
             # Each is [1, 16, 77, 768]
+            # static_cls_single_emb and static_cls_comp_emb should have been patched at subj_indices.
             # static_subj_single_emb[IND_B, :, IND_N]: [1, 16, 768]
             # static_cls_single_emb[IND_B, :, IND_N]:  [1, 16, 768]
             subj_emb_diff_loss += calc_delta_loss(static_subj_single_emb[IND_B, :, IND_N], 

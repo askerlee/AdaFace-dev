@@ -2361,7 +2361,7 @@ class LatentDiffusion(DDPM):
                 self.embedding_manager.calc_prompt_delta_loss( 
                                         self.c_static_emb, ada_embeddings,
                                         self.iter_flags['do_ada_prompt_delta_reg'],
-                                        extra_info['subj_indices0']
+                                        extra_info['subj_indices']
                                        )
             
             loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
@@ -2376,7 +2376,7 @@ class LatentDiffusion(DDPM):
             # Divide it by 2 to reduce the proportion of ada emb loss relative to 
             # static emb loss in the total loss.                
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            subj_emb_diff_loss_weight = 0.002
+            subj_emb_diff_loss_weight = 1e-5 # Very small weight, mainly for diagnosis.
             loss_prompt_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss \
                                     + subj_emb_diff_loss * subj_emb_diff_loss_weight
             loss += (self.prompt_delta_reg_weight * loss_prompt_delta_reg)
@@ -2540,6 +2540,8 @@ class LatentDiffusion(DDPM):
 
                 # convert_attn_to_spatial_weight() will detach attention weights to 
                 # avoid BP through attention.
+                # reversed=True: larger subject attention => smaller spatial weight, i.e., 
+                # pay more attention to the context.
                 spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(subj_attn_mix_comp, HALF_BS, 
                                                                                                   feat_mix_comp.shape[2:],
                                                                                                   reversed=True)
@@ -2578,6 +2580,7 @@ class LatentDiffusion(DDPM):
             feat_mix_single  = pooler(feat_mix_single).reshape(feat_mix_single.shape[0], -1)
             feat_mix_comp    = pooler(feat_mix_comp).reshape(feat_mix_comp.shape[0], -1)
 
+            # mix_feat_grad_scale = 0.1.
             feat_mix_single  = mix_feat_grad_scaler(feat_mix_single)
             feat_mix_comp    = mix_feat_grad_scaler(feat_mix_comp)
 
