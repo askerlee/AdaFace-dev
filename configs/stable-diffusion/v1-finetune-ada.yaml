@@ -29,7 +29,7 @@ model:
     use_ada_embedding: True
     do_clip_teacher_filtering: True
     use_fp_trick:              True
-    do_attn_recon_loss:        True
+    do_attn_recon_loss:        False
     # typical loss_embedding_reg is ~0.04, * weight -> 8e-4.
     embedding_reg_weight:               0.02
     # composition_regs does composition_prompt_mix_reg, which always comes with prompt_delta_reg.
@@ -40,7 +40,7 @@ model:
     composition_prompt_mix_reg_weight:  2e-4
     fg_bg_complementary_loss_weight:    1e-3
     # typical fg_bg_key_ortho_loss: 6, * weight -> 2.4e-4
-    fg_bg_key_ortho_loss_weight:        0
+    fg_bg_key_ortho_loss_weight:        4e-5
 
     optimizer_type: AdamW     # sophia
     scheduler_config:
