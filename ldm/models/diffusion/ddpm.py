@@ -1342,7 +1342,8 @@ class LatentDiffusion(DDPM):
                             subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
                             cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE]
                     # Otherwise, do_attn_recon_loss, or (do_static_prompt_delta_reg but not do_ada_prompt_delta_reg).
-                    # Do not halve the batch.
+                    # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 2.
+                    # 8 prompts will be fed into get_learned_conditioning().
                                             
                     # If not do_ada_prompt_delta_reg, we still compute the static embeddings 
                     # of the 4 types of prompts, to compute static delta loss. 
@@ -1489,7 +1490,7 @@ class LatentDiffusion(DDPM):
                         if self.use_layerwise_embedding:
                             # 4, 5, 6, 7, 8, 9 correspond to original layer indices 7, 8, 12, 16, 17, 18.
                             # (same as used in computing mixing loss)
-                            sync_layer_indices = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+                            sync_layer_indices = [4, 5, 6, 7, 8, 9] #, 10, 11, 12, 13]
                             layer_mask = torch.zeros_like(mix_comp_emb_all_layers).reshape(-1, N_LAYERS, *mix_comp_emb_all_layers.shape[1:])
                             layer_mask[:, sync_layer_indices] = 1
                             layer_mask = layer_mask.reshape(-1, *mix_comp_emb_all_layers.shape[1:])
@@ -1792,7 +1793,8 @@ class LatentDiffusion(DDPM):
         else:
             ada_embeddings = None
 
-        # Unconditional noises are never optimized.
+        # Get model output conditioned on uncond.
+        # Unconditional prompts and reconstructed images are never involved in optimization.
         if do_recon:
             with torch.no_grad():
                 x_start_ = x_start.chunk(2)[0]
@@ -1975,6 +1977,8 @@ class LatentDiffusion(DDPM):
                 # The prompts used to compute the static embeddings are 
                 # (subj single, subj comp, cls single, cls comp).
                 # But only the subj single block is used for recon.
+                # The blocks as input to get_learned_conditioning() are not halved. 
+                # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
                 extra_info['subj_indices'] = extra_info['subj_indices_1b']
                 extra_info['bg_indices']   = extra_info['bg_indices_1b']
             # Otherwise it's an unweighted recon iter. 
@@ -2099,9 +2103,9 @@ class LatentDiffusion(DDPM):
                 # It contains the 12 specified conditioned layers of UNet attentions, 
                 # i.e., layers 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24.
                 # 7~22 are regularized with losses.
-                # Use the 22nd layer, i.e., the attn layer at the top-most regularized ones 
+                # Use the 18th layer, i.e., the attn layer at the top-most mixed ones 
                 # to get the subject attention, which should be more accurate than lower-level layers.
-                attn_layer_idx = 22
+                attn_layer_idx = 18
                 # [4, 8, 256, 77] / [4, 8, 64, 77] =>
                 # [4, 77, 8, 256] / [4, 77, 8, 64]
                 attn_mat_mix_single = unet_attns_mix_single[attn_layer_idx].permute(0, 3, 1, 2)
@@ -2388,6 +2392,8 @@ class LatentDiffusion(DDPM):
 
         if self.do_static_prompt_delta_reg and not self.iter_flags['skip_delta_loss']:
             # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
+            # Use subj_indices_1b here, since this index is used to extract 
+            # subject embeddings from each block, and compare two such blocks.
             static_delta_loss, ada_delta_loss, subj_emb_diff_loss = \
                 self.embedding_manager.calc_prompt_delta_loss( 
                                         self.c_static_emb, ada_embeddings,
@@ -2414,17 +2420,21 @@ class LatentDiffusion(DDPM):
         
         if self.iter_flags['do_comp_prompt_mix_reg'] and self.iter_flags['is_teachable']:
             # unet_feats is a dict as: layer_idx -> unet_feat. 
-            # It contains all the intermediate 25 layers of UNet features.
+            # It contains the 6 specified conditioned layers of UNet features.
+            # i.e., layers 7, 8, 12, 16, 17, 18.
             unet_feats  = cond[2]['unet_feats']
             # unet_attns is a dict as: layer_idx -> attn_mat. 
             # It contains the 6 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17, 18.
             unet_attns  = cond[2]['unet_attns']
+            # subj_indices_2b is used here, as it's used to index subj single and subj comp embeddings.
+            # The indices will be shifted along the batch dimension (size doubled) within calc_prompt_mix_loss()
+            # to index all the 4 blocks.
             loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
                                                           extra_info['subj_indices_2b'],
                                                           BLOCK_SIZE)
-            
+
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill': loss_subj_attn_norm_distill.detach()})
