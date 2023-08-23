@@ -2029,7 +2029,7 @@ class LatentDiffusion(DDPM):
                                                                extra_info['subj_indices'],
                                                                extra_info['bg_indices'],
                                                                x_start.shape[0],
-                                                               fg_grad_scale=0.01
+                                                               fg_grad_scale=0.05
                                                               )
                 
                 if self.fg_bg_key_ortho_loss_weight > 0:
@@ -2081,7 +2081,7 @@ class LatentDiffusion(DDPM):
                                                                    cond_mix[2]['subj_indices'],
                                                                    cond_mix[2]['bg_indices'],
                                                                    x_start.shape[0],
-                                                                   fg_grad_scale=0.01
+                                                                   fg_grad_scale=0.05
                                                                   )
                     
                     # Do not delete cond_mix[2]['unet_attns'], as it will be used to compute the spatial weights.
@@ -2653,7 +2653,7 @@ class LatentDiffusion(DDPM):
     def calc_fg_bg_complementary_loss(self, unet_attns, 
                                       placeholder_indices_fg, 
                                       placeholder_indices_bg, 
-                                      BS, fg_grad_scale=0.01):
+                                      BS, fg_grad_scale=0.05):
         # Discard top layers and the first few bottom layers from distillation.
         # distill_layer_weights: relative weight of each distillation layer. 
         # distill_layer_weights are normalized using distill_overall_weight.
@@ -2688,6 +2688,9 @@ class LatentDiffusion(DDPM):
         # placeholder_indices_bg: ([0, 1], [11, 12]).
         placeholder_indices_bg = (placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg])
 
+        #fg_attn_grad_scale  = 0.5
+        #fg_attn_grad_scaler = gen_gradient_scaler(fg_attn_grad_scale)
+
         for unet_layer_idx, unet_attn in unet_attns.items():
             if (unet_layer_idx not in attn_distill_layer_weights):
                 continue
@@ -2697,6 +2700,7 @@ class LatentDiffusion(DDPM):
             attn_mat = unet_attn.permute(0, 3, 1, 2)
             # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] mean among K_fg embeddings -> [2, 8, 64]
             subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat.shape[2:]).mean(dim=1)
+
             # bg_attn:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
             bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).mean(dim=1)
@@ -2720,7 +2724,7 @@ class LatentDiffusion(DDPM):
         # If not doing demean, the loss will be smaller in magnitude, so we scale it up.
         # Do demean: loss_fg_bg_complementary is 1 ~ 1.2. 
         # No demean: loss_fg_bg_complementary is 0.2 ~ 0.3.
-        loss_fg_bg_complementary *= 3
+        #loss_fg_bg_complementary *= 3
 
         return loss_fg_bg_complementary
 
