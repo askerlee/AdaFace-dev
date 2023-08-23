@@ -1633,8 +1633,6 @@ class EmbeddingManager(nn.Module):
             ada_delta_loss = 0
 
         if subj_indices is not None:
-            if static_subj_single_emb.shape[0] != subj_indices[0].shape[0]:
-                breakpoint()
             IND_B, IND_N = subj_indices
             subj_emb_diff_loss = 0
             # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
