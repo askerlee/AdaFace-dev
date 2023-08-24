@@ -441,7 +441,6 @@ class DDPM(pl.LightningModule):
                             # 'is_teachable':             False,
                             'use_background_token':     False,
                             'reuse_init_conds':         False,
-                            'skip_delta_loss':          False,
                           }
         
     # This shared_step() is overridden by LatentDiffusion::shared_step() and never called. 
@@ -1996,17 +1995,15 @@ class LatentDiffusion(DDPM):
         else:
             assert self.iter_flags['do_normal_recon']
 
-        # If not ada_bp_to_unet, then we don't need unet_has_grad, only cross-attn layers need grad.
-        unet_has_grad = not self.iter_flags['do_teacher_filter'] #extra_info['ada_bp_to_unet']
-        # If do_teacher_filter, even cross-attn layers do not need grad.
-        crossattn_force_grad = False #not unet_has_grad and not self.iter_flags['do_teacher_filter']
-
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
         # then cond[2]['use_conv_attn'] = True, it will inform U-Net to do conv attn.
+        # Disabling unet_has_grad for recon iters will greatly reduce performance,
+        # although ada_bp_to_unet = False for recon iters.
+        # (probably because gradients of static embeddings still need to go through UNet)
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
-                                unet_has_grad=unet_has_grad, 
-                                crossattn_force_grad=crossattn_force_grad,
+                                unet_has_grad=not self.iter_flags['do_teacher_filter'], 
+                                crossattn_force_grad=False,
                                 do_recon=self.iter_flags['calc_clip_loss'],
                                 # cfg_scales: classifier-free guidance scales.
                                 cfg_scales=cfg_scales_for_clip_loss)
@@ -2334,7 +2331,6 @@ class LatentDiffusion(DDPM):
                     # (since both instances are not good teachers), 
                     # so only compute emb reg and static/ada delta loss.
                     self.release_plosses_intermediates(locals())
-                    self.iter_flags['skip_delta_loss'] = True
 
                     # In an self.iter_flags['do_teacher_filter'], and not teachable instances are found.
                     # guided_denoise() above is done on twin comp instances, 
@@ -2411,7 +2407,7 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg.mean().detach()})
             loss += (self.embedding_reg_weight * loss_embedding_reg)
 
-        if self.do_static_prompt_delta_reg and not self.iter_flags['skip_delta_loss']:
+        if self.do_static_prompt_delta_reg:
             # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
             # Use subj_indices_1b here, since this index is used to extract 
             # subject embeddings from each block, and compare two such blocks.
