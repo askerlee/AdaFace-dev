@@ -1599,9 +1599,6 @@ class EmbeddingManager(nn.Module):
                 # mix comp ada embeddings are generated with the same comp prompts as subj comp.
                 # But some layers of the static embeddings are different, so the ada embeddings
                 # are different from above layer 5.
-                # NOTE: twin_comp_ada_embeddings has no grad. 
-                # So delta loss will BP through twin_single_ada_embeddings. 
-                # BUG: Not sure if this will cause bias of the optimization.
                 twin_single_ada_embeddings, twin_comp_ada_embeddings = ada_embeddings
                 # ada_subj_comp_emb: [2, 16, 77, 768]
                 ada_subj_comp_emb, ada_cls_comp_emb \
