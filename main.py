@@ -262,7 +262,7 @@ def get_parser(**parser_kwargs):
     # are all equavalent.
     parser.add_argument("--use_fp_trick", nargs="?", type=str2bool, const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
-    parser.add_argument("--do_attn_recon_loss", nargs="?", type=str2bool, const=True, default=True,
+    parser.add_argument("--do_attn_recon_loss", nargs="?", type=str2bool, const=True, default=False,
                         help="Whether to use the attentional reconstruction loss")
     
     parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5, 0.5],
