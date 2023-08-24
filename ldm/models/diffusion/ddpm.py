@@ -1528,6 +1528,12 @@ class LatentDiffusion(DDPM):
                             extra_info['iter_type']      = self.prompt_mix_scheme   # 'mix_hijk'
                             # Set ada_bp_to_unet to False will reduce performance.
                             extra_info['ada_bp_to_unet'] = True
+
+                            # The prompts are either (subj single, subj comp, cls single, cls comp) or
+                            # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
+                            # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
+                            extra_info['subj_indices'] = extra_info['subj_indices_2b']
+                            extra_info['bg_indices']   = extra_info['bg_indices_2b']                            
                         # do_attn_recon_loss
                         else:
                             # c_in_cls         = cls_single_prompts
@@ -1550,7 +1556,15 @@ class LatentDiffusion(DDPM):
 
                             assert self.iter_flags['do_normal_recon']
                             extra_info['iter_type']      = 'normal_recon'
-                            
+
+                            # The prompts used to compute the static embeddings are 
+                            # (subj single, subj comp, cls single, cls comp).
+                            # But only the subj single block is used for recon.
+                            # The blocks as input to get_learned_conditioning() are not halved. 
+                            # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
+                            extra_info['subj_indices'] = extra_info['subj_indices_1b']
+                            extra_info['bg_indices']   = extra_info['bg_indices_1b']
+
                     # This iter is a simple ada prompt delta loss iter, without prompt mixing loss. 
                     # This branch is reached only if prompt mixing is not enabled.
                     # "and not self.iter_flags['do_comp_prompt_mix_reg']" is redundant, because it's at an "elif" branch.
@@ -1565,7 +1579,12 @@ class LatentDiffusion(DDPM):
                         # c_in2 consists of four types of prompts: 
                         # subj_single, subj_comp, cls_single, cls_comp.
                         extra_info['iter_type']      = 'do_ada_prompt_delta_reg'
-                        
+                        # The prompts are either (subj single, subj comp, cls single, cls comp) or
+                        # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
+                        # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
+                        extra_info['subj_indices'] = extra_info['subj_indices_2b']
+                        extra_info['bg_indices']   = extra_info['bg_indices_2b']    
+                                                
                     else:
                         # The original scheme. Use the original subj_single_prompts embeddings and prompts.
                         # When num_compositions_per_image > 1, subj_single_prompts contains repeated prompts,
@@ -1576,6 +1595,14 @@ class LatentDiffusion(DDPM):
                         assert self.iter_flags['do_normal_recon']
                         extra_info['iter_type']      = 'normal_recon'
 
+                        # The prompts used to compute the static embeddings are 
+                        # (subj single, subj comp, cls single, cls comp).
+                        # But only the subj single block is used for recon.
+                        # The blocks as input to get_learned_conditioning() are not halved. 
+                        # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
+                        extra_info['subj_indices'] = extra_info['subj_indices_1b']
+                        extra_info['bg_indices']   = extra_info['bg_indices_1b']
+                        
                     extra_info['cls_comp_prompts']   = cls_comp_prompts
                     extra_info['cls_single_prompts'] = cls_single_prompts
                     # 'delta_prompts' is only used in comp_prompt_mix_reg iters.
@@ -1596,15 +1623,16 @@ class LatentDiffusion(DDPM):
                 else:
                     # Not (self.do_static_prompt_delta_reg or 'do_comp_prompt_mix_reg' or 'do_attn_recon_loss'.
                     # That is, no delta loss, compositional mix loss, or attention-weighted recon loss. 
+                    # It's an unweighted recon iter. 
                     # Keep the tuple c unchanged. prompts: subject single.
                     c = self.get_learned_conditioning(c)
                     # c[2]: extra_info. Here is only reached when do_static_prompt_delta_reg = False.
                     # Either prompt_delta_reg_weight == 0 or it's called by self.validation_step().
                     assert self.iter_flags['do_normal_recon']
                     c[2]['iter_type'] = 'normal_recon'
+                    # subj_indices and bg_indices have been set in get_learned_conditioning().
                     # No need to set up subj_indices_2b or subj_indices_1b. 
                     # We don't meddle with the whole batch of prompts, so just use all the computed indices.
-                    # They have been set in get_learned_conditioning().
                     self.c_static_emb = None
 
                 # c[2]: extra_info. 
@@ -1854,12 +1882,6 @@ class LatentDiffusion(DDPM):
         c_static_emb, c_in, extra_info = cond
 
         if self.iter_flags['is_compos_iter']:
-            # The prompts are either (subj single, subj comp, cls single, cls comp) or
-            # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
-            # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
-            extra_info['subj_indices'] = extra_info['subj_indices_2b']
-            extra_info['bg_indices']   = extra_info['bg_indices_2b']
-
             # Only reuse_init_conds if do_comp_prompt_mix_reg.
             if self.iter_flags['reuse_init_conds']:
                 # If self.iter_flags['reuse_init_conds'], we use the cached x_start and cond.
@@ -1973,16 +1995,6 @@ class LatentDiffusion(DDPM):
         # Otherwise, it's a recon iter (attentional or unweighted).
         else:
             assert self.iter_flags['do_normal_recon']
-            if self.iter_flags['do_attn_recon_loss']:
-                # The prompts used to compute the static embeddings are 
-                # (subj single, subj comp, cls single, cls comp).
-                # But only the subj single block is used for recon.
-                # The blocks as input to get_learned_conditioning() are not halved. 
-                # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
-                extra_info['subj_indices'] = extra_info['subj_indices_1b']
-                extra_info['bg_indices']   = extra_info['bg_indices_1b']
-            # Otherwise it's an unweighted recon iter. 
-            # subj_indices and bg_indices have been set in get_learned_conditioning().
 
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
         # then cond[2]['use_conv_attn'] = True, it will inform U-Net to do conv attn.
@@ -2316,7 +2328,7 @@ class LatentDiffusion(DDPM):
                     # In an self.iter_flags['do_teacher_filter'], and not teachable instances are found.
                     # guided_denoise() above is done on twin comp instances, 
                     # and we've computed twin_comp_ada_embeddings.
-                    if False: # self.iter_flags['do_teacher_filter']:
+                    if self.iter_flags['do_teacher_filter']:
                         # twin_comp_ada_embeddings is within no_grad(), so it won't receive gradients.
                         # Nonetheless, the delta loss takes both twin_single_ada_embeddings 
                         # and twin_comp_ada_embeddings as input, the ada embeddings 
