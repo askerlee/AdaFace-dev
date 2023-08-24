@@ -2338,7 +2338,7 @@ class LatentDiffusion(DDPM):
                 elif not self.iter_flags['is_teachable']:
                     # If not is_teachable, do not do distillation this time 
                     # (since both instances are not good teachers), 
-                    # so only compute emb reg and static/ada delta loss.
+                    # NOTE: thus we can only compute emb reg and delta loss.
                     self.release_plosses_intermediates(locals())
 
                     # In an self.iter_flags['do_teacher_filter'], and not teachable instances are found.
@@ -2346,6 +2346,8 @@ class LatentDiffusion(DDPM):
                     # and we've computed twin_comp_ada_embeddings.
                     if self.iter_flags['do_teacher_filter']:
                         # twin_comp_ada_embeddings is within no_grad(), so it won't receive gradients.
+                        # NOTE: ada_embeddings here comes from the first call to guided_denoise(),
+                        # not the call immediately above. Therefore, it has no gradients.
                         # Nonetheless, the delta loss takes both twin_single_ada_embeddings 
                         # and twin_comp_ada_embeddings as input, the ada embeddings 
                         # can still be optimized through twin_single_ada_embeddings.
