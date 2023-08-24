@@ -1250,7 +1250,7 @@ class EmbeddingManager(nn.Module):
     # -> EmbeddingManager.forward() -> here.
     # Occasionally, image_logger is called, which calls LatentDiffusion.log_images ->
     # .get_learned_conditioning() -> ... -> here.
-    # Such delta_loss_emb_mask won't be used in calc_prompt_delta_loss() and won't be cleared.
+    # Such delta_loss_emb_mask won't be used in calc_prompt_emb_delta_loss() and won't be cleared.
     # delta_loss_emb_mask: [B, N, 768], where N is the padded prompt length.
     def set_delta_loss_emb_mask(self, delta_loss_emb_mask):
         self.delta_loss_emb_mask = delta_loss_emb_mask
@@ -1533,7 +1533,7 @@ class EmbeddingManager(nn.Module):
     # Textual inversion is supported, where static_embeddings is only one embedding.
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
-    def calc_prompt_delta_loss(self, static_embeddings, ada_embeddings, do_ada_prompt_delta_reg,
+    def calc_prompt_emb_delta_loss(self, static_embeddings, ada_embeddings, do_ada_prompt_delta_reg,
                                subj_indices=None):
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_layers
