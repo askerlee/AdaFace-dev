@@ -1858,6 +1858,8 @@ class LatentDiffusion(DDPM):
             del cond[2]['unet_feats']
         if 'unet_attns' in cond[2]:
             del cond[2]['unet_attns']        
+        if 'unet_ks' in cond[2]:
+            del cond[2]['unet_ks']
 
     # t: steps.
     # cond: (c_static_emb, c_in, extra_info). c_in is the textual prompts. 
@@ -2301,14 +2303,21 @@ class LatentDiffusion(DDPM):
                     # Use the original cond, which is organized as 
                     # (subj single, subj comp, mix single, mix comp).
 
+                    # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
+                    # on mix reg and ada embeddings is generated for the delta loss. 
+                    # (The previous call to guided_denoise() didn't enable gradients, 
+                    # as it's only used to filter a teacher.)
+                    # If unet_has_grad=False, the gradients of the ada delta loss
+                    # couldn't pass through UNet, reducing the performance.
                     # do_recon=True: return denoised images x_recon. If cfg_scale > 1, 
                     # do classifier-free guidance, so that x_recon are better instances
                     # to be used to initialize the next reuse_init comp iteration.
                     # student prompts are subject prompts.  
                     model_output, x_recon, ada_embeddings = \
-                        self.guided_denoise(x_start, noise, t, cond_orig, unet_has_grad=False, 
-                                            crossattn_force_grad=True,
+                        self.guided_denoise(x_start, noise, t, cond_orig, unet_has_grad=True, 
+                                            crossattn_force_grad=False,
                                             do_recon=True, cfg_scales=cfg_scales_for_clip_loss)
+
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
                     # since this x_recon was denoised under this cond.
