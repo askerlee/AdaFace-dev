@@ -407,11 +407,11 @@ class DDPM(pl.LightningModule):
         loss_simple = loss.mean() * self.l_simple_weight
 
         loss_vlb = (self.lvlb_weights[t] * loss).mean()
-        loss_dict.update({f'{log_prefix}/loss_vlb': loss_vlb.detach()})
+        loss_dict.update({f'{log_prefix}/loss_vlb': loss_vlb.mean().detach()})
 
         loss = loss_simple + self.original_elbo_weight * loss_vlb
 
-        loss_dict.update({f'{log_prefix}/loss': loss.detach()})
+        loss_dict.update({f'{log_prefix}/loss': loss.mean().detach()})
 
         return loss, loss_dict
 
@@ -1996,12 +1996,17 @@ class LatentDiffusion(DDPM):
         else:
             assert self.iter_flags['do_normal_recon']
 
+        # If not ada_bp_to_unet, then we don't need unet_has_grad, only cross-attn layers need grad.
+        unet_has_grad = extra_info['ada_bp_to_unet']
+        # If do_teacher_filter, even cross-attn layers do not need grad.
+        crossattn_force_grad = not unet_has_grad and not self.iter_flags['do_teacher_filter']
+
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
         # then cond[2]['use_conv_attn'] = True, it will inform U-Net to do conv attn.
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
-                                unet_has_grad=not self.iter_flags['do_teacher_filter'], 
-                                crossattn_force_grad=False,
+                                unet_has_grad=unet_has_grad, 
+                                crossattn_force_grad=crossattn_force_grad,
                                 do_recon=self.iter_flags['calc_clip_loss'],
                                 # cfg_scales: classifier-free guidance scales.
                                 cfg_scales=cfg_scales_for_clip_loss)
@@ -2036,14 +2041,20 @@ class LatentDiffusion(DDPM):
                 # extra_info['subj_indices_1b'] and extra_info['bg_indices_1b']. 
                 # Because it's unweighted recon, the original prompts are the same as here,
                 # and the indices to the whole batch are applicable.
-                subj_fg_bg_complementary_loss = \
-                            self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
-                                                               extra_info['subj_indices'],
-                                                               extra_info['bg_indices'],
-                                                               x_start.shape[0],
-                                                               fg_grad_scale=0.05
-                                                              )
+                if self.fg_bg_complementary_loss_weight > 0:
+                    subj_fg_bg_complementary_loss = \
+                                self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
+                                                                extra_info['subj_indices'],
+                                                                extra_info['bg_indices'],
+                                                                x_start.shape[0],
+                                                                fg_grad_scale=0.05
+                                                                )
+                    loss += self.fg_bg_complementary_loss_weight * subj_fg_bg_complementary_loss
+                    loss_dict.update({f'{prefix}/fg_bg_complem': subj_fg_bg_complementary_loss.mean().detach()})
                 
+                # Release RAM.
+                del cond[2]['unet_attns'], cond[2]['unet_feats']
+
                 if self.fg_bg_key_ortho_loss_weight > 0:
                     fg_bg_key_ortho_loss = \
                         self.calc_fg_bg_key_ortho_loss(cond[2]['unet_ks'], 
@@ -2051,12 +2062,10 @@ class LatentDiffusion(DDPM):
                                                        extra_info['bg_indices'],
                                                        x_start.shape[0])
                     loss += self.fg_bg_key_ortho_loss_weight * fg_bg_key_ortho_loss
-                    loss_dict.update({f'{prefix}/fg_bg_key_ortho': fg_bg_key_ortho_loss.item()})
+                    loss_dict.update({f'{prefix}/fg_bg_key_ortho': fg_bg_key_ortho_loss.mean().detach()})
                 
                 # Release RAM.
-                del cond[2]['unet_attns'], cond[2]['unet_feats'], cond[2]['unet_ks']
-                loss += self.fg_bg_complementary_loss_weight * subj_fg_bg_complementary_loss
-                loss_dict.update({f'{prefix}/fg_bg_complem_subj': subj_fg_bg_complementary_loss.item()})
+                del cond[2]['unet_ks']
 
             if self.iter_flags['do_attn_recon_loss']:
                 cond_mix = extra_info['cond_mix']
@@ -2086,19 +2095,20 @@ class LatentDiffusion(DDPM):
                 # so that gradients can still be BP-ed from the cross attention layers, even if 
                 # unet_has_grad=False.
                 if self.iter_flags['use_background_token']:
-                    # placeholder_indices_bg contains the background token indices of the 4 types of prompts.
-                    # So we only take the beginning BS indices out of it.
-                    mix_fg_bg_complementary_loss = \
-                                self.calc_fg_bg_complementary_loss(unet_attns_mix_single, 
-                                                                   cond_mix[2]['subj_indices'],
-                                                                   cond_mix[2]['bg_indices'],
-                                                                   x_start.shape[0],
-                                                                   fg_grad_scale=0.05
-                                                                  )
-                    
-                    # Do not delete cond_mix[2]['unet_attns'], as it will be used to compute the spatial weights.
-                    loss += self.fg_bg_complementary_loss_weight * mix_fg_bg_complementary_loss
-                    loss_dict.update({f'{prefix}/fg_bg_complem_mix': mix_fg_bg_complementary_loss.item()})
+                    if self.fg_bg_complementary_loss_weight > 0:
+                        # placeholder_indices_bg contains the background token indices of the 4 types of prompts.
+                        # So we only take the beginning BS indices out of it.
+                        mix_fg_bg_complementary_loss = \
+                                    self.calc_fg_bg_complementary_loss(unet_attns_mix_single, 
+                                                                    cond_mix[2]['subj_indices'],
+                                                                    cond_mix[2]['bg_indices'],
+                                                                    x_start.shape[0],
+                                                                    fg_grad_scale=0.05
+                                                                    )
+                        
+                        # Do not delete cond_mix[2]['unet_attns'], as it will be used to compute the spatial weights.
+                        loss += self.fg_bg_complementary_loss_weight * mix_fg_bg_complementary_loss
+                        loss_dict.update({f'{prefix}/fg_bg_complem': mix_fg_bg_complementary_loss.mean().detach()})
 
                     if self.fg_bg_key_ortho_loss_weight > 0:
                         fg_bg_key_ortho_loss = \
@@ -2107,7 +2117,7 @@ class LatentDiffusion(DDPM):
                                                            cond_mix[2]['bg_indices'],
                                                            x_start.shape[0])
                         loss += self.fg_bg_key_ortho_loss_weight * fg_bg_key_ortho_loss
-                        loss_dict.update({f'{prefix}/fg_bg_key_ortho': fg_bg_key_ortho_loss.item()})
+                        loss_dict.update({f'{prefix}/fg_bg_key_ortho': fg_bg_key_ortho_loss.mean().detach()})
 
                 # unet_attns is a dict as: layer_idx -> attn_mat. 
                 # It contains the 12 specified conditioned layers of UNet attentions, 
@@ -2143,7 +2153,7 @@ class LatentDiffusion(DDPM):
                 fg_inv_scale = (spatial_weight_mix_single > 1.).sum() \
                                 / ((spatial_weight_mix_single > 1.) * spatial_weight_mix_single).sum() 
                 self.l_simple_weight_iter = self.l_simple_weight * fg_inv_scale
-                loss_dict.update({f'{prefix}/fg_inv_scale': fg_inv_scale.item()})
+                loss_dict.update({f'{prefix}/fg_inv_scale': fg_inv_scale.mean().detach()})
 
                 # Weight the loss at each pixel with the attention-derived spatial weights.          
                 model_output = model_output * spatial_weight_mix_single
@@ -2161,7 +2171,7 @@ class LatentDiffusion(DDPM):
             loss_simple = loss_simple / torch.exp(logvar_t) + logvar_t
             # loss = loss_simple / torch.exp(self.logvar) + self.logvar
             if self.learn_logvar:
-                loss_dict.update({f'{prefix}/loss_gamma': loss_simple.mean()})
+                loss_dict.update({f'{prefix}/loss_gamma': loss_simple.mean().detach()})
                 loss_dict.update({'logvar': self.logvar.data.mean().detach()})
 
             # If do_attn_recon_loss_iter, then 
@@ -2172,7 +2182,7 @@ class LatentDiffusion(DDPM):
 
             loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
             loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
-            loss_dict.update({f'{prefix}/loss_vlb': loss_vlb.detach()})
+            loss_dict.update({f'{prefix}/loss_vlb': loss_vlb.mean().detach()})
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
 
@@ -2217,11 +2227,11 @@ class LatentDiffusion(DDPM):
                 = losses_clip_comp.chunk(2)
             
             if not self.iter_flags['reuse_init_conds']:
-                loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean()})
-                loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_mix_comp.mean()})
+                loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean().detach()})
+                loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach()})
             else:
-                loss_dict.update({f'{prefix}/reuse_loss_clip_subj_comp': losses_clip_subj_comp.mean()})
-                loss_dict.update({f'{prefix}/reuse_loss_clip_cls_comp':  losses_clip_mix_comp.mean()})
+                loss_dict.update({f'{prefix}/reuse_loss_clip_subj_comp': losses_clip_subj_comp.mean().detach()})
+                loss_dict.update({f'{prefix}/reuse_loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach()})
 
             if self.iter_flags['do_teacher_filter'] or self.iter_flags['reuse_init_conds']:
                 # Discard instances that seem to be too far from the text 
@@ -2299,7 +2309,8 @@ class LatentDiffusion(DDPM):
                     # to be used to initialize the next reuse_init comp iteration.
                     # student prompts are subject prompts.  
                     model_output, x_recon, ada_embeddings = \
-                        self.guided_denoise(x_start, noise, t, cond_orig, unet_has_grad=True, 
+                        self.guided_denoise(x_start, noise, t, cond_orig, unet_has_grad=False, 
+                                            crossattn_force_grad=True,
                                             do_recon=True, cfg_scales=cfg_scales_for_clip_loss)
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
@@ -2397,7 +2408,7 @@ class LatentDiffusion(DDPM):
             
         if self.embedding_reg_weight > 0:
             loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
-            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg.detach()})
+            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg.mean().detach()})
             loss += (self.embedding_reg_weight * loss_embedding_reg)
 
         if self.do_static_prompt_delta_reg and not self.iter_flags['skip_delta_loss']:
@@ -2445,9 +2456,9 @@ class LatentDiffusion(DDPM):
                                                           extra_info['subj_indices_2b'],
                                                           BLOCK_SIZE)
 
-            loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.detach()})
-            loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.detach()})
-            loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill': loss_subj_attn_norm_distill.detach()})
+            loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach()})
 
             # In a reused init iter, the denoise image may not look so authentic, so
             # it receives a smaller weight.
@@ -2461,7 +2472,7 @@ class LatentDiffusion(DDPM):
             loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
             self.release_plosses_intermediates(locals())
 
-        loss_dict.update({f'{prefix}/loss': loss.detach()})
+        loss_dict.update({f'{prefix}/loss': loss.mean().detach()})
 
         return loss, loss_dict
 
