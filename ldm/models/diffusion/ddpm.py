@@ -1997,9 +1997,9 @@ class LatentDiffusion(DDPM):
             assert self.iter_flags['do_normal_recon']
 
         # If not ada_bp_to_unet, then we don't need unet_has_grad, only cross-attn layers need grad.
-        unet_has_grad = extra_info['ada_bp_to_unet']
+        unet_has_grad = not self.iter_flags['do_teacher_filter'] #extra_info['ada_bp_to_unet']
         # If do_teacher_filter, even cross-attn layers do not need grad.
-        crossattn_force_grad = not unet_has_grad and not self.iter_flags['do_teacher_filter']
+        crossattn_force_grad = False #not unet_has_grad and not self.iter_flags['do_teacher_filter']
 
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
         # then cond[2]['use_conv_attn'] = True, it will inform U-Net to do conv attn.
