@@ -92,7 +92,7 @@ class DDPM(pl.LightningModule):
                  use_ada_embedding=False,
                  composition_regs_iter_gap=-1,
                  prompt_delta_reg_weight=0.,
-                 composition_prompt_mix_reg_weight=0.,
+                 mix_prompt_distill_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_key_ortho_loss_weight=0.,
                  do_clip_teacher_filtering=False,
@@ -119,7 +119,7 @@ class DDPM(pl.LightningModule):
 
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.prompt_delta_reg_weight         = prompt_delta_reg_weight
-        self.composition_prompt_mix_reg_weight = composition_prompt_mix_reg_weight
+        self.mix_prompt_distill_weight       = mix_prompt_distill_weight
         self.fg_bg_complementary_loss_weight   = fg_bg_complementary_loss_weight
         self.fg_bg_key_ortho_loss_weight       = fg_bg_key_ortho_loss_weight
         self.do_clip_teacher_filtering      = do_clip_teacher_filtering
@@ -431,16 +431,16 @@ class DDPM(pl.LightningModule):
         return x
 
     def init_iter_flags(self):
-        self.iter_flags = { 'calc_clip_loss':           False,
-                            'do_normal_recon':          True,
-                            'do_attn_recon_loss':       False,
-                            'is_compos_iter':           False,
-                            'do_comp_prompt_mix_reg':   False,
-                            'do_ada_prompt_delta_reg':  False,
+        self.iter_flags = { 'calc_clip_loss':               False,
+                            'do_normal_recon':              True,
+                            'do_attn_recon_loss':           False,
+                            'is_compos_iter':               False,
+                            'do_mix_prompt_distillation':   False,
+                            'do_ada_prompt_delta_reg':      False,
                             # 'do_teacher_filter':        False,
                             # 'is_teachable':             False,
-                            'use_background_token':     False,
-                            'reuse_init_conds':         False,
+                            'use_background_token':         False,
+                            'reuse_init_conds':             False,
                           }
         
     # This shared_step() is overridden by LatentDiffusion::shared_step() and never called. 
@@ -456,14 +456,14 @@ class DDPM(pl.LightningModule):
         # How many regularizations are done intermittently during the training iterations?
         cand_reg_types = []
         cand_reg_probs = []
-        # do_comp_prompt_mix_reg implies do_ada_prompt_delta_reg.
-        # So if do_comp_prompt_mix_reg is enabled (composition_prompt_mix_reg_weight > 0),
+        # do_mix_prompt_distillation implies do_ada_prompt_delta_reg.
+        # So if do_mix_prompt_distillation is enabled (mix_prompt_distill_weight > 0),
         # then no need to put do_ada_prompt_delta_reg in cand_reg_types.
         # Otherwise, we need to put do_ada_prompt_delta_reg in cand_reg_types.
-        # There's only one reg type: 'do_comp_prompt_mix_reg' in cand_reg_types.
+        # There's only one reg type: 'do_mix_prompt_distillation' in cand_reg_types.
         # This structure is kept for possible future extensions.
-        if self.composition_prompt_mix_reg_weight > 0:
-            cand_reg_types.append('do_comp_prompt_mix_reg')
+        if self.mix_prompt_distill_weight > 0:
+            cand_reg_types.append('do_mix_prompt_distillation')
             cand_reg_probs.append(1.)
         else:
             cand_reg_types.append('do_ada_prompt_delta_reg')
@@ -479,19 +479,19 @@ class DDPM(pl.LightningModule):
         if N_CAND_REGS > 0 and self.composition_regs_iter_gap > 0 \
             and self.global_step % self.composition_regs_iter_gap == 0:
             # Alternate among the regularizations in cand_reg_types. 
-            # If both do_ada_prompt_delta_reg and do_comp_prompt_mix_reg,
-            # then alternate between do_ada_prompt_delta_reg and do_comp_prompt_mix_reg.
+            # If both do_ada_prompt_delta_reg and do_mix_prompt_distillation,
+            # then alternate between do_ada_prompt_delta_reg and do_mix_prompt_distillation.
             # The two regularizations cannot be done in the same batch, as they require
             # different handling of prompts and are calculated by different loss functions.
             # reg_type_idx = (self.global_step // self.composition_regs_iter_gap) % N_CAND_REGS
             reg_type_idx = np.random.choice(N_CAND_REGS, p=cand_reg_probs)
             iter_reg_type     = cand_reg_types[reg_type_idx]
             if iter_reg_type   == 'do_ada_prompt_delta_reg':
-                self.iter_flags['do_comp_prompt_mix_reg']  = False
+                self.iter_flags['do_mix_prompt_distillation']  = False
                 self.iter_flags['do_ada_prompt_delta_reg'] = True
-            # do_comp_prompt_mix_reg => do_ada_prompt_delta_reg = True.
-            elif iter_reg_type == 'do_comp_prompt_mix_reg':
-                self.iter_flags['do_comp_prompt_mix_reg']  = True
+            # do_mix_prompt_distillation => do_ada_prompt_delta_reg = True.
+            elif iter_reg_type == 'do_mix_prompt_distillation':
+                self.iter_flags['do_mix_prompt_distillation']  = True
                 self.iter_flags['do_ada_prompt_delta_reg'] = True
 
             self.iter_flags['is_compos_iter'] = True
@@ -829,7 +829,7 @@ class LatentDiffusion(DDPM):
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
                     # Do not consider mask on compositional reg iterations.
                     if img_mask is not None and \
-                        (   self.iter_flags['do_comp_prompt_mix_reg'] \
+                        (   self.iter_flags['do_mix_prompt_distillation'] \
                          or self.iter_flags['do_ada_prompt_delta_reg']):
                         img_mask = None
 
@@ -1196,7 +1196,7 @@ class LatentDiffusion(DDPM):
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
         x, c = self.get_input(batch, self.first_stage_key)
         
-        if self.iter_flags['do_comp_prompt_mix_reg']:
+        if self.iter_flags['do_mix_prompt_distillation']:
             # Allow a small prob of using background token in mix reg iterations 
             # (Note Mix reg iterations are the same iterations as Ada delta reg iterations).
             p_bg_token = 0.1
@@ -1211,19 +1211,19 @@ class LatentDiffusion(DDPM):
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
         # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
-        if self.do_static_prompt_delta_reg or self.iter_flags['do_comp_prompt_mix_reg']:
+        if self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation']:
             subj_comp_prompts = []
             # *_fp prompts are like "a face portrait of ...". They are advantageous over "a photo of ..."
             # when doing compositional mix regularization. 
             # However this trick is only applicable to humans/animals.
             # For objects, even if use_fp_trick = True, 
             # *_fp prompts are not available in batch, so they won't be used.
-            # Only use_background_token on training images. So if do_comp_prompt_mix_reg, 
+            # Only use_background_token on training images. So if do_mix_prompt_distillation, 
             # then no need to check use_background_token.
             # 'subj_prompt_single_fp' in batch is True <=> (broad_class == 1 and use_fp_trick).
-            # If do_comp_prompt_mix_reg but broad_class == 0 or 2, this statement is False, and 
+            # If do_mix_prompt_distillation but broad_class == 0 or 2, this statement is False, and 
             # used prompts will be 'subj_prompt_comp', 'cls_prompt_single', 'cls_prompt_comp'...
-            if self.iter_flags['do_comp_prompt_mix_reg'] and (self.use_fp_trick and 'subj_prompt_single_fp' in batch):
+            if self.iter_flags['do_mix_prompt_distillation'] and (self.use_fp_trick and 'subj_prompt_single_fp' in batch):
                 # Replace c from the default batch['caption'] to batch['subj_prompt_single_fp'].
                 c = batch['subj_prompt_single_fp']
                 SUBJ_PROMPT_COMP  = 'subj_prompt_comp_fp'
@@ -1240,8 +1240,8 @@ class LatentDiffusion(DDPM):
                 CLS_PROMPT_COMP   = 'cls_prompt_comp_bg'
                 CLS_PROMPT_SINGLE = 'cls_prompt_single_bg'
                 self.iter_flags['use_background_token'] = True
-            # Either do_comp_prompt_mix_reg but not (use_fp_trick and broad_class == 1), 
-            # or recon iters (not do_comp_prompt_mix_reg) and not use_background_token 
+            # Either do_mix_prompt_distillation but not (use_fp_trick and broad_class == 1), 
+            # or recon iters (not do_mix_prompt_distillation) and not use_background_token 
             # We don't use_fp_tricks on training images. use_fp_tricks is only for compositional regularization.
             else:
                 # c has been assigned at the first line of this function.
@@ -1259,7 +1259,7 @@ class LatentDiffusion(DDPM):
             cls_single_prompts = batch[CLS_PROMPT_SINGLE]
             # REPEATS: how many prompts correspond to each image.
             REPEATS = len(subj_comp_prompts[0])
-            if REPEATS == 1 or self.iter_flags['do_comp_prompt_mix_reg'] or self.iter_flags['do_ada_prompt_delta_reg']:
+            if REPEATS == 1 or self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_prompt_delta_reg']:
                 # When this iter computes ada prompt delta loss / prompt mixing loss, 
                 # only use the first of the composition prompts (in effect num_compositions_per_image=1),
                 # otherwise it will use more than 40G RAM.
@@ -1301,8 +1301,8 @@ class LatentDiffusion(DDPM):
     #LINK #shared_step
     def forward(self, x, c, delta_prompts=None, img_mask=None, *args, **kwargs):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
-        # If cached_inits_available, cached_inits are only used if do_comp_prompt_mix_reg = True.
-        self.iter_flags['reuse_init_conds']     = (self.do_clip_teacher_filtering and self.iter_flags['do_comp_prompt_mix_reg'] \
+        # If cached_inits_available, cached_inits are only used if do_mix_prompt_distillation = True.
+        self.iter_flags['reuse_init_conds']     = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
                                                    and self.cached_inits_available)
 
         if self.model.conditioning_key is not None:
@@ -1315,7 +1315,7 @@ class LatentDiffusion(DDPM):
                 # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
                 # c: subj_single_prompts, which are plain prompts like 
                 # ['an illustration of a dirty z', 'an illustration of the cool z']
-                if self.do_static_prompt_delta_reg or self.iter_flags['do_comp_prompt_mix_reg'] or self.iter_flags['do_attn_recon_loss']:
+                if self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_attn_recon_loss']:
                     if not self.iter_flags['reuse_init_conds']:
                         subj_single_prompts = c
                         subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
@@ -1333,7 +1333,7 @@ class LatentDiffusion(DDPM):
                     ORIG_BS  = len(x)
                     N_EMBEDS = ORIG_BS * N_LAYERS
                     
-                    if self.iter_flags['do_comp_prompt_mix_reg'] or self.iter_flags['do_ada_prompt_delta_reg']:
+                    if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_prompt_delta_reg']:
                         # BLOCK_SIZE is at least 1. So if ORIG_BS == 1, then BLOCK_SIZE = 1.
                         BLOCK_SIZE  = max(ORIG_BS // 2, 1)
                         # Only keep the first half of batched prompts to save RAM.
@@ -1361,7 +1361,7 @@ class LatentDiffusion(DDPM):
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
 
-                    # By default, ada_bp_to_unet is False. Will be changed to True if do_comp_prompt_mix_reg.
+                    # By default, ada_bp_to_unet is False. Will be changed to True if do_mix_prompt_distillation.
                     extra_info['ada_bp_to_unet'] = False
 
                     # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
@@ -1403,9 +1403,9 @@ class LatentDiffusion(DDPM):
                         extra_info['bg_indices_2b'] = None
                         extra_info['bg_indices_1b'] = None
 
-                    # if do_ada_prompt_delta_reg, then do_comp_prompt_mix_reg 
+                    # if do_ada_prompt_delta_reg, then do_mix_prompt_distillation 
                     # may be True or False, depending whether mix reg is enabled.
-                    if self.iter_flags['do_comp_prompt_mix_reg'] or self.iter_flags['do_attn_recon_loss']:
+                    if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_attn_recon_loss']:
                         # c_in2 is used to generate ada embeddings.
                         # Arrange c_in2 in the same layout as the static embeddings.
                         # The mix_single_prompts within c_in2 will only be used to generate ordinary 
@@ -1516,7 +1516,7 @@ class LatentDiffusion(DDPM):
                             mix_comp_emb   = mix_comp_emb_all_layers
                             mix_single_emb = mix_single_emb_all_layers
 
-                        if self.iter_flags['do_comp_prompt_mix_reg']:
+                        if self.iter_flags['do_mix_prompt_distillation']:
                             # c_static_emb2 will be added with the ada embeddings to form the 
                             # conditioning embeddings in the U-Net.
                             # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
@@ -1566,9 +1566,9 @@ class LatentDiffusion(DDPM):
 
                     # This iter is a simple ada prompt delta loss iter, without prompt mixing loss. 
                     # This branch is reached only if prompt mixing is not enabled.
-                    # "and not self.iter_flags['do_comp_prompt_mix_reg']" is redundant, because it's at an "elif" branch.
+                    # "and not self.iter_flags['do_mix_prompt_distillation']" is redundant, because it's at an "elif" branch.
                     # Kept for clarity. 
-                    elif self.iter_flags['do_ada_prompt_delta_reg'] and not self.iter_flags['do_comp_prompt_mix_reg']:
+                    elif self.iter_flags['do_ada_prompt_delta_reg'] and not self.iter_flags['do_mix_prompt_distillation']:
                         # Do ada prompt delta loss in this iteration. 
                         # c_static_emb: static embeddings, [64, 77, 768]. 128 = 4 * 16. 
                         # 4 is the total number of prompts in delta_prompts. 
@@ -1620,7 +1620,7 @@ class LatentDiffusion(DDPM):
                     self.c_static_emb = c_static_emb
 
                 else:
-                    # Not (self.do_static_prompt_delta_reg or 'do_comp_prompt_mix_reg' or 'do_attn_recon_loss'.
+                    # Not (self.do_static_prompt_delta_reg or 'do_mix_prompt_distillation' or 'do_attn_recon_loss'.
                     # That is, no delta loss, compositional mix loss, or attention-weighted recon loss. 
                     # It's an unweighted recon iter. 
                     # Keep the tuple c unchanged. prompts: subject single.
@@ -1876,14 +1876,14 @@ class LatentDiffusion(DDPM):
         # If not reuse_init_conds and do_teacher_filtering, then we choose the better instance 
         # between the two in the batch, if it's above the usable threshold.
         # do_teacher_filtering and reuse_init_conds are mutually exclusive.
-        self.iter_flags['do_teacher_filter'] = (self.do_clip_teacher_filtering and self.iter_flags['do_comp_prompt_mix_reg'] \
+        self.iter_flags['do_teacher_filter'] = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
                                                 and not self.iter_flags['reuse_init_conds'])
 
         cfg_scales_for_clip_loss = None
         c_static_emb, c_in, extra_info = cond
 
         if self.iter_flags['is_compos_iter']:
-            # Only reuse_init_conds if do_comp_prompt_mix_reg.
+            # Only reuse_init_conds if do_mix_prompt_distillation.
             if self.iter_flags['reuse_init_conds']:
                 # If self.iter_flags['reuse_init_conds'], we use the cached x_start and cond.
                 # cond is already organized as (subj single, subj comp, mix single, mix comp). 
@@ -1932,8 +1932,8 @@ class LatentDiffusion(DDPM):
             # Ignore img_mask.
             img_mask = None
 
-            # Only do ada delta loss. This usually won't happen unless composition_prompt_mix_reg_weight = 0.
-            if not self.iter_flags['do_comp_prompt_mix_reg']:
+            # Only do ada delta loss. This usually won't happen unless mix_prompt_distill_weight = 0.
+            if not self.iter_flags['do_mix_prompt_distillation']:
                 # Generate a batch of 4 instances with the same initial x_start, noise and t.
                 # This doubles the batch size to 4, if bs=2.
                 x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
@@ -1942,7 +1942,7 @@ class LatentDiffusion(DDPM):
                 # Calculate CLIP score only for image quality evaluation
                 cfg_scales_for_clip_loss = torch.ones_like(t) * 5
             else:
-                # do_comp_prompt_mix_reg. We need to compute CLIP scores for teacher filtering.
+                # do_mix_prompt_distillation. We need to compute CLIP scores for teacher filtering.
                 # Set up cfg configs for guidance to denoise images, which are input to CLIP.
                 # Teachers are slightly more aggressive, to increase the teachable fraction.                
                 cfg_scale_for_teacher  = 6
@@ -1951,7 +1951,7 @@ class LatentDiffusion(DDPM):
                 cfg_scales_for_student   = torch.ones(BLOCK_SIZE*2, device=x_start.device) * cfg_scale_for_student
                 cfg_scales_for_clip_loss = torch.cat([cfg_scales_for_student, cfg_scales_for_teacher], dim=0)
 
-                # First iteration of a two-iteration do_comp_prompt_mix_reg.
+                # First iteration of a two-iteration do_mix_prompt_distillation.
                 # Generate a batch of 4 instances in two sets, each set with the same initial x_start, noise and t.
                 # Then filter, find the best teachable set (if any) and pass to the recursive iteration.
                 # If no teachable set is found, skip recursion and the prompt mix reg.
@@ -1979,7 +1979,7 @@ class LatentDiffusion(DDPM):
                     cond_orig = cond
                     # Replace cond with the cond for twin comp sets.
                     cond = (c_static_emb2, c_in2, extra_info)
-                # Not self.iter_flags['do_teacher_filter']. This branch is do_comp_prompt_mix_reg.
+                # Not self.iter_flags['do_teacher_filter']. This branch is do_mix_prompt_distillation.
                 # So it's either reuse_init_conds, or not do_clip_teacher_filtering.
                 # In any case, we do not need to change the prompts and static embeddings 
                 # and simply do mix reg.
@@ -2189,7 +2189,7 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['is_compos_iter'] and self.iter_flags['calc_clip_loss']:
             # Images generated both under subj_comp_prompts and mix_comp_prompts 
             # are subject to the CLIP text-image matching evaluation.
-            # If self.iter_flags['do_teacher_filter'] (implying do_comp_prompt_mix_reg), 
+            # If self.iter_flags['do_teacher_filter'] (implying do_mix_prompt_distillation), 
             # the batch is (subj_comp_emb, subj_comp_emb, mix_comp_emb,  mix_comp_emb).
             # So cls_comp_prompts is used to compute the CLIP text-image matching loss on
             # images guided by the subject or mixed embeddings.
@@ -2446,7 +2446,7 @@ class LatentDiffusion(DDPM):
                                     + subj_emb_diff_loss * subj_emb_diff_loss_weight
             loss += (self.prompt_delta_reg_weight * loss_prompt_delta_reg)
         
-        if self.iter_flags['do_comp_prompt_mix_reg'] and self.iter_flags['is_teachable']:
+        if self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']:
             # unet_feats is a dict as: layer_idx -> unet_feat. 
             # It contains the 6 specified conditioned layers of UNet features.
             # i.e., layers 7, 8, 12, 16, 17, 18.
@@ -2476,7 +2476,7 @@ class LatentDiffusion(DDPM):
             loss_prompt_mix_reg =   (loss_subj_attn_delta_distill + loss_subj_attn_norm_distill) * distill_subj_attn_weight + \
                                     loss_feat_distill      * distill_feat_weight 
             
-            loss += self.composition_prompt_mix_reg_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
+            loss += self.mix_prompt_distill_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
             self.release_plosses_intermediates(locals())
 
         loss_dict.update({f'{prefix}/loss': loss.mean().detach()})
@@ -2484,7 +2484,7 @@ class LatentDiffusion(DDPM):
         return loss, loss_dict
 
     def calc_prompt_mix_loss(self, unet_feats, unet_attns, placeholder_indices, BLOCK_SIZE):
-        # do_comp_prompt_mix_reg iterations. No ordinary image reconstruction loss.
+        # do_mix_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
         # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
