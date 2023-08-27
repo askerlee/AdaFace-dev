@@ -396,14 +396,14 @@ class PersonalizedBase(Dataset):
 
             # aug_mask[aug_mask > 0] = 1. No need to do thresholding, as aug_mask is uint8.
             example["aug_mask"]  = aug_mask
+            if aug_mask is not None:
+                if np.any(image_mask * aug_mask[:, :, np.newaxis] != image_mask):
+                    breakpoint()
 
         image   = image_mask[:, :, :3]
         # fg_mask is a 1-channel mask.
         fg_mask = image_mask[:, :, 3]
 
-        if aug_mask is not None:
-            if np.any(image_mask * aug_mask[:, :, np.newaxis] != image_mask):
-                breakpoint()
 
         # Also return the unnormalized numpy array image.
         # example["image_unnorm"]: 0~255

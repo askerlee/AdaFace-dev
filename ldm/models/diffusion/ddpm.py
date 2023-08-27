@@ -1301,12 +1301,15 @@ class LatentDiffusion(DDPM):
         else:
             fg_mask = None
 
-        loss = self(x, c, delta_prompts, img_mask=img_mask, fg_mask=fg_mask, **kwargs)
+        batch_have_fg_mask = batch['has_fg_mask']
+        loss = self(x, c, delta_prompts, img_mask=img_mask, fg_mask=fg_mask, 
+                    batch_have_fg_mask=batch_have_fg_mask, **kwargs)
         return loss
 
     # LatentDiffusion.forward() is only called during training, by shared_step().
     #LINK #shared_step
-    def forward(self, x, c, delta_prompts=None, img_mask=None, fg_mask=None, *args, **kwargs):
+    def forward(self, x, c, delta_prompts=None, img_mask=None, fg_mask=None, 
+                batch_have_fg_mask=None, *args, **kwargs):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         # If cached_inits_available, cached_inits are only used if do_mix_prompt_distillation = True.
         self.iter_flags['reuse_init_conds']     = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
@@ -1653,7 +1656,8 @@ class LatentDiffusion(DDPM):
 
         # self.model (UNetModel) is called in p_losses().
         #LINK #p_losses
-        return self.p_losses(x, c, t, img_mask=img_mask, fg_mask=fg_mask, *args, **kwargs)
+        return self.p_losses(x, c, t, img_mask=img_mask, fg_mask=fg_mask, 
+                             batch_have_fg_mask=batch_have_fg_mask, *args, **kwargs)
 
     def _rescale_annotations(self, bboxes, crop_coordinates):  # TODO: move to dataset
         def rescale_bbox(bbox):
@@ -1873,7 +1877,7 @@ class LatentDiffusion(DDPM):
     # extra_info: a dict that contains 'ada_embedder' and other fields. 
     # ada_embedder: a function to convert c_in to ada embeddings.
     # ANCHOR[id=p_losses]
-    def p_losses(self, x_start, cond, t, noise=None, img_mask=None, fg_mask=None):
+    def p_losses(self, x_start, cond, t, noise=None, img_mask=None, fg_mask=None, batch_have_fg_mask=None):
         # If noise is not None, then use the provided noise.
         # Otherwise, generate noise randomly.
         noise = default(noise, lambda: torch.randn_like(x_start))
