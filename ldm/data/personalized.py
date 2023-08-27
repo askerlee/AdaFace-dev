@@ -138,9 +138,12 @@ class PersonalizedBase(Dataset):
 
         self.data_root = data_root
 
-        self.image_paths = [os.path.join(self.data_root, file_path) for file_path in sorted(os.listdir(self.data_root))]
+        # image_paths and mask_paths are full paths.
+        image_paths         = [os.path.join(self.data_root, file_path) for file_path in sorted(os.listdir(self.data_root))]
+        self.image_paths    = list(filter(lambda x: "_mask" not in x, image_paths))
+        fg_mask_paths       = [ os.path.splitext(x)[0] + "_mask.png" for x in self.image_paths ]
+        self.fg_mask_paths  = list(map(lambda x: x if x in image_paths else None, fg_mask_paths))
 
-        # self._length = len(self.image_paths)
         self.num_images = len(self.image_paths)
         self._length = self.num_images 
         self.placeholder_string  = placeholder_string
@@ -195,10 +198,36 @@ class PersonalizedBase(Dataset):
     def __getitem__(self, index):
         example = {}
         image_path = self.image_paths[index % self.num_images]
-        image = Image.open(image_path)
+        fg_mask_path  = self.fg_mask_paths[index % self.num_images] 
+        image_obj = Image.open(image_path)
+        if not image_obj.mode == "RGB":
+            image_obj = image_obj.convert("RGB")
 
-        if not image.mode == "RGB":
-            image = image.convert("RGB")
+        # default to score-sde preprocessing -- i don't understand what this comment means, but keep it here. 
+        image       = np.array(image_obj).astype(np.uint8)
+        # Convert back to Image object, so that image_obj is made sure to be uint8.
+        image_obj   = Image.fromarray(image)
+
+        if fg_mask_path is not None:
+            # mask is 8-bit grayscale, with same size as image. E.g., image is of [1282, 1282, 3],
+            # then mask is of [1282, 1282], with values True or False. 
+            # After converting to "L", mask is still [1282, 1282],
+            # but pixel values change from True (1) to 255.
+            fg_mask_obj = Image.open(fg_mask_path).convert("L")
+            has_fg_mask = True
+        else:
+            # This mask is created to avoid multiple None-checking later. But it's not passed to the trainer.
+            # image_obj has been converted to "RGB" if it doesn't have 3 channels. 
+            # So mask is of [1282, 1282, 3] as well.
+            fg_mask_obj = Image.fromarray(np.ones_like(image[:, :, 0]))
+            has_fg_mask = False
+
+        # image is made sure to be uint8. So fg_mask is also uint8.
+        fg_mask     = np.array(fg_mask_obj).astype(np.uint8)
+        # Concatenate fg_mask to the last channel of image, so that we don't need to transform fg_mask separately.
+        # image_mask: (1282, 1282, 4)
+        image_mask  = np.concatenate([image, fg_mask[:, :, np.newaxis]], axis=2)
+        image_mask_obj  = Image.fromarray(image_mask)
 
         placeholder_string = self.placeholder_string
         background_string  = self.background_string
@@ -291,40 +320,40 @@ class PersonalizedBase(Dataset):
         #print(f"subj_prompt_comp: {subj_prompt_comp}")
         #print(f"cls_prompt_comp: {cls_prompt_comp}")
 
-        # default to score-sde preprocessing
-        img = np.array(image).astype(np.uint8)
-        
         if self.center_crop:        # default: False
-            crop = min(img.shape[0], img.shape[1])
-            h, w, = img.shape[0], img.shape[1]
-            img = img[(h - crop) // 2:(h + crop) // 2,
-                (w - crop) // 2:(w + crop) // 2]
+            crop = min(image.shape[0], image.shape[1])
+            h, w, = image.shape[0], image.shape[1]
+            image_mask = image_mask[(h - crop) // 2:(h + crop) // 2,
+                         (w - crop) // 2:(w + crop) // 2]
+            
+            image_mask_obj  = Image.fromarray(image_mask_obj)
 
-        image = Image.fromarray(img)
         if self.size is not None:
-            image = image.resize((self.size, self.size), resample=self.interpolation)
+            image_mask_obj = image_mask_obj.resize((self.size, self.size), resample=self.interpolation)
 
         if self.flip:
-            image = self.flip(image)
-            
+            image_mask_obj = self.flip(image_mask_obj)
+        
+        image_mask = np.array(image_mask_obj)
+
         scale_p = 0.5
         # Do random scaling with 50% chance. Not to do it all the time, 
         # as it seems to hurt (maybe introduced domain gap between training and inference?)
         if self.random_scaler:
             if random.random() < scale_p:
-                image_tensor = torch.tensor(np.array(image).astype(np.uint8)).permute(2, 0, 1)
-                mask = torch.ones_like(image_tensor[0:1])
-                image_ext = torch.cat([image_tensor, mask], dim=0)
+                image_tensor = torch.tensor(image_mask).permute(2, 0, 1)
+                aug_mask    = torch.ones_like(image_tensor[0:1])
+                image_ext   = torch.cat([image_tensor, aug_mask], dim=0)
                 # image_ext: [4, 512, 512]
-                image_ext = self.random_scaler(image_ext)
+                image_ext   = self.random_scaler(image_ext)
                 # After random scaling, the valid area is only a sub-region at the center of the image.
                 # NOTE: random shifting DISABLED, as it seems to hurt.
                 # ??% chance to randomly roll towards right and bottom (), 
                 # and ??% chance to keep the valid area at the center.
-                shift_p = 0     #0.5
+                shift_p = 0.5
                 if random.random() < shift_p:
                     # count number of empty lines at the left, right, top, bottom edges of image_ext.
-                    # mask = image_ext[3] is uint8, so all pixels >= 0. 
+                    # aug_mask = image_ext[3] is uint8, so all pixels >= 0. 
                     # sum(dim=1).cumsum() == 0 means this is an empty row at the top of the image.
                     top0     = (image_ext[3].sum(dim=1).cumsum(dim=0) == 0).sum().item()
                     # flip first then cumsum(), so that cumsum() is from bottom to top.
@@ -356,19 +385,34 @@ class PersonalizedBase(Dataset):
                         dx = 0
                     image_ext = torch.roll(image_ext, shifts=(dy, dx), dims=(1, 2))
 
-                image_tensor = image_ext[:3].permute(1, 2, 0).numpy().astype(np.uint8)
-                mask = image_ext[3].numpy().astype(np.uint8)
+                # image_mask is a concatenation of image and mask, not a mask for the image.
+                image_mask  = image_ext[:4].permute(1, 2, 0).numpy().astype(np.uint8)
+                # aug_mask is a 1-channel mask.
+                aug_mask    = image_ext[4].numpy().astype(np.uint8)
+                # aug_mask[aug_mask > 0] = 1. No need to do thresholding, as aug_mask is uint8.
+                example["aug_mask"]  = aug_mask
             else:
-                # No scaling happens, so the whole image is masked.
-                mask = np.ones_like(np.array(image).astype(np.uint8)[:, :, 0])
+                # No scaling happens, so we don't put 'aug_mask' into the example.
+                pass
 
-            # mask[mask > 0] = 1. No need to do thresholding, as mask is uint8.
-            example["mask"]  = mask
+        image   = image_mask[:, :, :3]
+        # fg_mask is a 1-channel mask.
+        fg_mask = image_mask[:, :, 3]
+
+        if aug_mask is not None:
+            if np.any(image_mask * aug_mask[:, :, np.newaxis] != image_mask):
+                breakpoint()
 
         # Also return the unnormalized numpy array image.
-        image = np.array(image).astype(np.uint8)
-        # example["image_unnorm"]: [0, 255]
+        # example["image_unnorm"]: 0~255
         example["image_unnorm"] = image
         # example["image"]: [-1, 1]
         example["image"] = (image / 127.5 - 1.0).astype(np.float32)
+
+        if has_fg_mask:
+            example["fg_mask"] = fg_mask
+        else:
+            # No fg_mask is loaded from file. so we don't put 'fg_mask' into the example.
+            pass
+
         return example
