@@ -103,7 +103,7 @@ class MaskedAvgPool2d(nn.Module):
 class MaskedAvgPool1d(nn.Module):
     def __init__(self, dim=1, keepdim=True):
         super().__init__()
-        self.dim = 1
+        self.dim = dim
         self.keepdim = keepdim
 
     #    x: [N, L, C], mask: [N, L, 1].
@@ -112,9 +112,9 @@ class MaskedAvgPool1d(nn.Module):
     # L: number of patches.
     # Return: [N, C] (if keepdim=False) or [N, 1, C] (if keepdim=True and dim=1),
     # or [N, C, 1] (if keepdim=False and dim=2).
-    def forward(self, x, k=None, mask=None):
+    def forward(self, x, mask=None):
         if mask is None:
-            return x.mean(dim=1)
+            return x.mean(dim=self.dim, keepdim=self.keepdim)
         
         x = x * mask
         x = x.sum(dim=self.dim, keepdim=self.keepdim) / mask.sum(dim=self.dim, keepdim=self.keepdim)
@@ -255,8 +255,7 @@ class AttentionalPooler(nn.Module):
         fg_out = einsum('b i j, b j d -> b i d', attn, v)
         # v: [B, 4096, 320]. 
         # The residual of the mean input features subtracted by fg_out.
-        bg_out = self.v_pooler(v) - fg_out
-
+        bg_out = self.v_pooler(v, mask.permute(0, 2, 1)) - fg_out
         fg_out = self.ln_fg_out(fg_out)
         bg_out = self.ln_bg_out(bg_out)
         # out: [2, 1, 768], [2, 1, 768] => [2, 1, 1536] => [2, 1536].
