@@ -183,6 +183,8 @@ class PersonalizedBase(Dataset):
                 # Because the scaled "images" are extended with two mask channels, which contain many zeros,
                 # We have to use interpolation=InterpolationMode.NEAREST, otherwise the zeros in the mask will 
                 # be interpolated to image pixel values.
+                # RandomAffine() doesn't change the input image size, 
+                # so transforms.Resize() is redundant. Anyway, just keep it here.
                 self.random_scaler = transforms.Compose([
                                         transforms.RandomAffine(degrees=0, shear=0, scale=rand_scaling_range,
                                                                 interpolation=InterpolationMode.NEAREST),

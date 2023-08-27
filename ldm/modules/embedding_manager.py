@@ -159,7 +159,8 @@ class AttentionalPooler(nn.Module):
     # Use UNet feature query as k, and subject token as q, to compute the attention, 
     # which aggregates the original UNet layer input features x.
     def forward(self, layer_attn_components, token_q_emb, mask=None, bp_to_unet=False):
-        layer_infeat, layer_inquery, layer_to_k, attn_score_scale = layer_attn_components
+        layer_infeat, layer_inquery, layer_to_k, layer_infeat_size, \
+            attn_score_scale = layer_attn_components
 
         if bp_to_unet:
             if self.infeat_grad_scale < 1:
@@ -182,23 +183,6 @@ class AttentionalPooler(nn.Module):
         # Use to_k of the UNet attention layer as to_q here, 
         # as the subject embedding is used as the key in UNet.
         to_q = layer_to_k
-
-        if x.ndim == 4:
-            if mask is not None:
-                mask = F.interpolate(mask, size=x.shape[2:], mode='nearest')
-                # float_tensor.bool() converts to 0.1/0.2... to True.
-                # N, 1, H, W -> N, 1, L=H*W
-                mask = rearrange(mask, 'b ... -> b (...)')
-                # N, 1, L -> N*Head, 1, L, i.e., [8, 1, 256].
-                # einops.repeat() is more convenient than unsqueeze().repeat().squeeze().
-                mask = repeat(mask, 'b j -> (b h) () j', h=self.n_heads)
-
-            # x: N, D, H, W -> N, D, S -> N, S, D
-            x = x.flatten(2).permute(0, 2, 1)
-        else:
-            mask = None
-            # x is already 3D.
-
         token_q_emb = token_q_emb.unsqueeze(0)
 
         # to_q is actually to_k in the UNet attention layer, 
@@ -247,6 +231,12 @@ class AttentionalPooler(nn.Module):
             sim_scores = einsum('b i d, b j d -> b i j', q, k) * attn_score_scale
 
         if mask is not None:
+            # mask: [2, 1, 64, 64] 
+            mask = F.interpolate(mask, size=layer_infeat_size, mode='nearest')
+            # N, 1, H, W -> N, 1, L=H*W
+            # => [2, 1, 4096]
+            mask = rearrange(mask, 'b ... -> b 1 (...)')
+            # float_tensor.bool() converts 0.1/0.2... to True.
             mask = mask.bool()
             max_neg_value = -torch.finfo(sim_scores.dtype).max
             sim_scores.masked_fill_(~mask, max_neg_value)

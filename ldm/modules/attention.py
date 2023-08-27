@@ -182,14 +182,15 @@ class CrossAttention(nn.Module):
             torch.set_grad_enabled(True)
         else:
             is_grad_forced = False
-            
+        
+        # x, q: [4, 4096, 320]
         q = self.to_q(x)
         context = default(context, x)
         if callable(context):
             # Pass (x, ...) to context() to get the real context.
             # If uncond (null condition) is active, then returned subj_indices = None.
             # Don't do conv attn if uncond is active.
-            context, subj_indices = context((x, q, self.to_k, self.scale))
+            context, subj_indices = context((x, q, self.to_k, self.infeat_size, self.scale))
         else:
             subj_indices = None
 
