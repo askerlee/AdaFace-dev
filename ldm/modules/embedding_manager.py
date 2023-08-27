@@ -258,7 +258,12 @@ class AttentionalPooler(nn.Module):
         fg_out = einsum('b i j, b j d -> b i d', attn, v)
         # v: [B, 4096, 320]. 
         # The residual of the mean input features subtracted by fg_out.
-        bg_out = self.v_pooler(v, mask) - fg_out
+        if 'v_pooler' in self.__dict__:
+            bg_out = self.v_pooler(v, mask) - fg_out
+        else:
+            # Compatible with older code
+            bg_out = v.mean(dim=1, keepdim=True) - fg_out
+
         fg_out = self.ln_fg_out(fg_out)
         bg_out = self.ln_bg_out(bg_out)
         # out: [2, 1, 768], [2, 1, 768] => [2, 1, 1536] => [2, 1536].
