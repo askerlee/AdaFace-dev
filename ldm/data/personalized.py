@@ -4,6 +4,7 @@ import PIL
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
+from torchvision.transforms import InterpolationMode
 from .compositions import sample_compositions
 import random
 import torch
@@ -114,7 +115,6 @@ class PersonalizedBase(Dataset):
                  data_root,
                  size=None,
                  repeats=100,
-                 interpolation="nearest",
                  flip_p=0.5,
                  # rand_scaling_range: None (disabled) or a tuple of floats
                  # that specifies the (minimum, maximum) scaling factors.
@@ -168,20 +168,25 @@ class PersonalizedBase(Dataset):
             self.is_training = False
 
         self.size = size
+        interpolation_scheme = "nearest"
         self.interpolation = {"nearest":  PIL.Image.NEAREST,
                               "bilinear": PIL.Image.BILINEAR,
                               "bicubic":  PIL.Image.BICUBIC,
                               "lanczos":  PIL.Image.LANCZOS,
-                              }[interpolation]
+                              }[interpolation_scheme]
         
         if self.is_training:
             self.flip = transforms.RandomHorizontalFlip(p=flip_p)
             if rand_scaling_range is not None:
                 # If the scale factor > 1, RandomAffine will crop the scaled image to the original size.
                 # If the scale factor < 1, RandomAffine will pad the scaled image to the original size.
+                # Because the scaled "images" are extended with two mask channels, which contain many zeros,
+                # We have to use interpolation=InterpolationMode.NEAREST, otherwise the zeros in the mask will 
+                # be interpolated to image pixel values.
                 self.random_scaler = transforms.Compose([
-                                        transforms.RandomAffine(degrees=0, shear=0, scale=rand_scaling_range),
-                                        transforms.Resize(size),
+                                        transforms.RandomAffine(degrees=0, shear=0, scale=rand_scaling_range,
+                                                                interpolation=InterpolationMode.NEAREST),
+                                        transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
                                     ])
                 print(f"{set} images will be randomly scaled in range {rand_scaling_range}")
         else:
@@ -329,9 +334,12 @@ class PersonalizedBase(Dataset):
             image_mask_obj  = Image.fromarray(image_mask)
 
         if self.size is not None:
+            # Because image_mask_obj has an extra channel of mask, which contains many zeros.
             # Using resampling schemes other than 'NEAREST' will introduce many zeros at the border. 
-            # But I don't know why.
+            # Therefore, we fix the resampling/interpolation scheme to be 'NEAREST'.
+            #image_mask_obj_old = image_mask_obj
             image_mask_obj = image_mask_obj.resize((self.size, self.size), resample=self.interpolation)
+            #breakpoint()
 
         if self.flip:
             image_mask_obj = self.flip(image_mask_obj)
@@ -385,6 +393,8 @@ class PersonalizedBase(Dataset):
                             dx = -(dx - right0 + MG)
                     else:
                         dx = 0
+                    # Because the image border is padded with zeros, we can simply roll() 
+                    # without worrying about the border values.
                     image_ext = torch.roll(image_ext, shifts=(dy, dx), dims=(1, 2))
 
                 # image_mask is a concatenation of image and mask, not a mask for the image.
