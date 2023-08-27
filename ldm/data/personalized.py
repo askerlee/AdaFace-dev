@@ -389,11 +389,13 @@ class PersonalizedBase(Dataset):
                 image_mask  = image_ext[:4].permute(1, 2, 0).numpy().astype(np.uint8)
                 # aug_mask is a 1-channel mask.
                 aug_mask    = image_ext[4].numpy().astype(np.uint8)
-                # aug_mask[aug_mask > 0] = 1. No need to do thresholding, as aug_mask is uint8.
-                example["aug_mask"]  = aug_mask
             else:
-                # No scaling happens, so we don't put 'aug_mask' into the example.
-                pass
+                # No scaling happens, but we still have to put a all-1 'aug_mask' into the example.
+                # 'aug_mask' has to be present in all examples, otherwise collation will cause exceptions.
+                aug_mask = np.ones_like(image_mask[:, :, 0])
+
+            # aug_mask[aug_mask > 0] = 1. No need to do thresholding, as aug_mask is uint8.
+            example["aug_mask"]  = aug_mask
 
         image   = image_mask[:, :, :3]
         # fg_mask is a 1-channel mask.
@@ -409,10 +411,9 @@ class PersonalizedBase(Dataset):
         # example["image"]: [-1, 1]
         example["image"] = (image / 127.5 - 1.0).astype(np.float32)
 
-        if has_fg_mask:
-            example["fg_mask"] = fg_mask
-        else:
-            # No fg_mask is loaded from file. so we don't put 'fg_mask' into the example.
-            pass
+        # If no fg_mask is loaded from file. 'fg_mask' is all-1, and 'has_fg_mask' is set to False.
+        # 'fg_mask' has to be present in all examples, otherwise collation will cause exceptions.
+        example["has_fg_mask"]  = has_fg_mask
+        example["fg_mask"]      = fg_mask
 
         return example

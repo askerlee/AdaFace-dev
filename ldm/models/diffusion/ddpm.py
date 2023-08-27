@@ -2028,11 +2028,13 @@ class LatentDiffusion(DDPM):
         else:
             raise NotImplementedError()
 
-        # Only compute the loss on the masked region.
-        if img_mask is not None:
-            target       = target       * img_mask
-            model_output = model_output * img_mask
-        
+        if img_mask is not None and self.iter_flags['do_normal_recon']:
+            try:
+                target       = target       * img_mask
+                model_output = model_output * img_mask
+            except:
+                breakpoint()
+
         loss = 0
         twin_comp_ada_embeddings = None
 
