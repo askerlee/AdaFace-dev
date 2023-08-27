@@ -100,19 +100,24 @@ class MaskedAvgPool2d(nn.Module):
         x = x.sum(dim=(2,3)) / mask.sum(dim=(2,3))
         return x
 
-class AvgPool1d(nn.Module):
-    def __init__(self):
+class MaskedAvgPool1d(nn.Module):
+    def __init__(self, dim=1, keepdim=True):
         super().__init__()
+        self.dim = 1
+        self.keepdim = keepdim
 
-    # x: [N, C, L], mask: [N, 1, L0] of 1s (keep) or 0s (discard).
-    # L: feature map size, L0: original sequence length.
-    # Return: [N, C]
+    #    x: [N, L, C], mask: [N, L, 1].
+    # or x: [N, C, L], mask: [N, 1, L].
+    # mask: values are 1s (keep) or 0s (discard).
+    # L: number of patches.
+    # Return: [N, C] (if keepdim=False) or [N, 1, C] (if keepdim=True and dim=1),
+    # or [N, C, 1] (if keepdim=False and dim=2).
     def forward(self, x, k=None, mask=None):
-        #if mask is None:
-        return x.mean(dim=1)
+        if mask is None:
+            return x.mean(dim=1)
         
         x = x * mask
-        x = x.sum(dim=2) / mask.sum(dim=2)
+        x = x.sum(dim=self.dim, keepdim=self.keepdim) / mask.sum(dim=self.dim, keepdim=self.keepdim)
         return x
 
 # There's almost no learnable parameters in AttentionalPooler, except elementwise affines in 3 LayerNorms.
@@ -153,6 +158,8 @@ class AttentionalPooler(nn.Module):
             self.infeat_grad_scaler = GradientScaler(self.infeat_grad_scale)
         else:
             self.infeat_grad_scaler = None
+
+        self.v_pooler = MaskedAvgPool1d(dim=1, keepdim=True)
 
     # k: query in the UNet attention layer. Used as key here.
     # token_q_emb: [768,] static subject embedding of this layer. Used as query here.
@@ -246,8 +253,9 @@ class AttentionalPooler(nn.Module):
 
         # fg_out: [B, 1, 320]. 320: feature dimension. 
         fg_out = einsum('b i j, b j d -> b i d', attn, v)
+        # v: [B, 4096, 320]. 
         # The residual of the mean input features subtracted by fg_out.
-        bg_out = v.mean(dim=1, keepdim=True) - fg_out
+        bg_out = self.v_pooler(v) - fg_out
 
         fg_out = self.ln_fg_out(fg_out)
         bg_out = self.ln_bg_out(bg_out)
