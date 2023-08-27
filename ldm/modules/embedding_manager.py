@@ -248,6 +248,9 @@ class AttentionalPooler(nn.Module):
             max_neg_value = -torch.finfo(sim_scores.dtype).max
             sim_scores.masked_fill_(~mask, max_neg_value)
 
+            # Prepare to be used by v_pooler.
+            mask = mask.permute(0, 2, 1)
+
         # attn: [B, 1, 4096]
         attn = sim_scores.softmax(dim=-1)
 
@@ -255,7 +258,7 @@ class AttentionalPooler(nn.Module):
         fg_out = einsum('b i j, b j d -> b i d', attn, v)
         # v: [B, 4096, 320]. 
         # The residual of the mean input features subtracted by fg_out.
-        bg_out = self.v_pooler(v, mask.permute(0, 2, 1)) - fg_out
+        bg_out = self.v_pooler(v, mask) - fg_out
         fg_out = self.ln_fg_out(fg_out)
         bg_out = self.ln_bg_out(bg_out)
         # out: [2, 1, 768], [2, 1, 768] => [2, 1, 1536] => [2, 1536].
