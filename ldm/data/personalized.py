@@ -114,7 +114,7 @@ class PersonalizedBase(Dataset):
                  data_root,
                  size=None,
                  repeats=100,
-                 interpolation="bicubic",
+                 interpolation="nearest",
                  flip_p=0.5,
                  # rand_scaling_range: None (disabled) or a tuple of floats
                  # that specifies the (minimum, maximum) scaling factors.
@@ -168,7 +168,7 @@ class PersonalizedBase(Dataset):
             self.is_training = False
 
         self.size = size
-        self.interpolation = {"linear":   PIL.Image.LINEAR,
+        self.interpolation = {"nearest":  PIL.Image.NEAREST,
                               "bilinear": PIL.Image.BILINEAR,
                               "bicubic":  PIL.Image.BICUBIC,
                               "lanczos":  PIL.Image.LANCZOS,
@@ -207,7 +207,7 @@ class PersonalizedBase(Dataset):
         image       = np.array(image_obj).astype(np.uint8)
         # Convert back to Image object, so that image_obj is made sure to be uint8.
         image_obj   = Image.fromarray(image)
-
+       
         if fg_mask_path is not None:
             # mask is 8-bit grayscale, with same size as image. E.g., image is of [1282, 1282, 3],
             # then mask is of [1282, 1282], with values True or False. 
@@ -326,9 +326,11 @@ class PersonalizedBase(Dataset):
             image_mask = image_mask[(h - crop) // 2:(h + crop) // 2,
                          (w - crop) // 2:(w + crop) // 2]
             
-            image_mask_obj  = Image.fromarray(image_mask_obj)
+            image_mask_obj  = Image.fromarray(image_mask)
 
         if self.size is not None:
+            # Using resampling schemes other than 'NEAREST' will introduce many zeros at the border. 
+            # But I don't know why.
             image_mask_obj = image_mask_obj.resize((self.size, self.size), resample=self.interpolation)
 
         if self.flip:
@@ -389,6 +391,10 @@ class PersonalizedBase(Dataset):
                 image_mask  = image_ext[:4].permute(1, 2, 0).numpy().astype(np.uint8)
                 # aug_mask is a 1-channel mask.
                 aug_mask    = image_ext[4].numpy().astype(np.uint8)
+
+                # Sanity check.
+                if np.any(image_mask * aug_mask[:, :, np.newaxis] != image_mask):
+                    breakpoint()
             else:
                 # No scaling happens, but we still have to put a all-1 'aug_mask' into the example.
                 # 'aug_mask' has to be present in all examples, otherwise collation will cause exceptions.
@@ -396,14 +402,10 @@ class PersonalizedBase(Dataset):
 
             # aug_mask[aug_mask > 0] = 1. No need to do thresholding, as aug_mask is uint8.
             example["aug_mask"]  = aug_mask
-            if aug_mask is not None:
-                if np.any(image_mask * aug_mask[:, :, np.newaxis] != image_mask):
-                    breakpoint()
 
         image   = image_mask[:, :, :3]
         # fg_mask is a 1-channel mask.
         fg_mask = image_mask[:, :, 3]
-
 
         # Also return the unnormalized numpy array image.
         # example["image_unnorm"]: 0~255

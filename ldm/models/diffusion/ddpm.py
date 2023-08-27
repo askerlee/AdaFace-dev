@@ -2033,11 +2033,8 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError()
 
         if img_mask is not None and self.iter_flags['do_normal_recon']:
-            try:
-                target       = target       * img_mask
-                model_output = model_output * img_mask
-            except:
-                breakpoint()
+            target       = target       * img_mask
+            model_output = model_output * img_mask
 
         loss = 0
         twin_comp_ada_embeddings = None
@@ -2056,11 +2053,11 @@ class LatentDiffusion(DDPM):
                 if self.fg_bg_complementary_loss_weight > 0:
                     subj_fg_bg_complementary_loss = \
                                 self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
-                                                                extra_info['subj_indices'],
-                                                                extra_info['bg_indices'],
-                                                                x_start.shape[0],
-                                                                fg_grad_scale=0.05
-                                                                )
+                                                                   extra_info['subj_indices'],
+                                                                   extra_info['bg_indices'],
+                                                                   x_start.shape[0],
+                                                                   fg_grad_scale=0.05
+                                                                  )
                     loss += self.fg_bg_complementary_loss_weight * subj_fg_bg_complementary_loss
                     loss_dict.update({f'{prefix}/fg_bg_complem': subj_fg_bg_complementary_loss.mean().detach()})
                 
