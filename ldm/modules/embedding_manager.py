@@ -1584,7 +1584,7 @@ class EmbeddingManager(nn.Module):
             cls_delta    = static_cls_comp_emb  - static_cls_single_emb
             static_delta = static_subj_comp_emb - static_subj_single_emb
 
-        static_delta_loss   = calc_delta_loss(static_delta, cls_delta, delta_loss_emb_mask)
+        static_delta_loss   = calc_delta_loss(static_delta, cls_delta, emb_mask=delta_loss_emb_mask)
 
         if do_ada_prompt_delta_reg and ada_embeddings is not None:
             # ada_embeddings: [4, 16, 77, 768]
@@ -1609,7 +1609,7 @@ class EmbeddingManager(nn.Module):
                 # They only differ on initial noises.
                 # So simply repeat cls_delta at the batch dim to match the twin ada embeddings.
                 cls_delta = cls_delta.repeat(2, 1, 1, 1)
-                delta_loss_emb_mask = delta_loss_emb_mask.repeat(2, 1, 1, 1)
+                delta_loss_emb_mask2 = delta_loss_emb_mask.repeat(2, 1, 1, 1)
             else:
                 is_twin_non_teachable = False
                 # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
@@ -1617,13 +1617,14 @@ class EmbeddingManager(nn.Module):
                 # the subject token.
                 ada_subj_single_emb, ada_subj_comp_emb, ada_cls_single_emb, ada_cls_comp_emb \
                     = ada_embeddings.chunk(4)
+                delta_loss_emb_mask2 = delta_loss_emb_mask
 
             if use_ortho_subtract:
                 ada_delta = ortho_subtract(ada_subj_comp_emb, ada_subj_single_emb)
             else:
                 ada_delta = ada_subj_comp_emb - ada_subj_single_emb
 
-            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, delta_loss_emb_mask)
+            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, emb_mask=delta_loss_emb_mask2)
             # The cached ada embeddings are useless now, release them.
             self.clear_ada_embedding_cache()
         else:
@@ -1638,6 +1639,8 @@ class EmbeddingManager(nn.Module):
             # static_subj_single_emb[IND_B, :, IND_N]: [1, 16, 768]
             # static_cls_single_emb[IND_B, :, IND_N]:  [1, 16, 768]
 
+            # These losses are only for the subject embeddings (instead of all embeddings).
+            # So no need to use emb_mask.
             subj_emb_diff_loss += calc_delta_loss(static_subj_single_emb[IND_B, :, IND_N], 
                                                   static_cls_single_emb[IND_B, :, IND_N],
                                                   exponent=2,    

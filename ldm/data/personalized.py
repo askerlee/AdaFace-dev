@@ -143,7 +143,11 @@ class PersonalizedBase(Dataset):
         self.image_paths    = list(filter(lambda x: "_mask" not in x, image_paths))
         fg_mask_paths       = [ os.path.splitext(x)[0] + "_mask.png" for x in self.image_paths ]
         self.fg_mask_paths  = list(map(lambda x: x if x in image_paths else None, fg_mask_paths))
+        num_valid_fg_masks  = sum([ 1 if x is not None else 0 for x in self.fg_mask_paths ])
 
+        print("{} images and {} fg masks found in '{}'".format( \
+            len(self.image_paths), num_valid_fg_masks, self.data_root))
+              
         self.num_images = len(self.image_paths)
         self._length = self.num_images 
         self.placeholder_string  = placeholder_string
@@ -226,7 +230,9 @@ class PersonalizedBase(Dataset):
             # This mask is created to avoid multiple None-checking later. But it's not passed to the trainer.
             # image_obj has been converted to "RGB" if it doesn't have 3 channels. 
             # So mask is of [1282, 1282, 3] as well.
-            fg_mask_obj = Image.fromarray(np.ones_like(image[:, :, 0]))
+            # To conform with the case where fg_mask_path is not None, we make the fg_mask 
+            # pixel values to be either 0 or 255.
+            fg_mask_obj = Image.fromarray(np.ones_like(image[:, :, 0]) * 255)
             has_fg_mask = False
 
         # image is made sure to be uint8. So fg_mask is also uint8.
@@ -425,9 +431,10 @@ class PersonalizedBase(Dataset):
         # example["image"]: [-1, 1]
         example["image"] = (image / 127.5 - 1.0).astype(np.float32)
 
+        example["has_fg_mask"]  = has_fg_mask
+        # Map 255 to 1, so that fg_mask is binary.
         # If no fg_mask is loaded from file. 'fg_mask' is all-1, and 'has_fg_mask' is set to False.
         # 'fg_mask' has to be present in all examples, otherwise collation will cause exceptions.
-        example["has_fg_mask"]  = has_fg_mask
-        example["fg_mask"]      = fg_mask
+        example["fg_mask"]      = fg_mask / 255
 
         return example

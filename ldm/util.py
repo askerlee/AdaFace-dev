@@ -283,12 +283,19 @@ def demean(x):
 # delta, ref_delta: [2, 16, 77, 768].
 # emb_mask: [2, 77, 1]
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
-def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3, 
-                    do_demean_first=True, 
+def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
+                    exponent=3, do_demean_first=True, 
                     first_n_dims_to_flatten=3,
                     ref_grad_scale=0, debug=False):
     B = delta.shape[0]
     loss = 0
+    if batch_mask is not None:
+        assert batch_mask.shape == (B,)
+        # All instances are not counted. So return 0.
+        if batch_mask.sum() == 0:
+            return 0
+    else:
+        batch_mask = torch.ones(B)
 
     # Calculate the loss for each sample in the batch, 
     # as the mask may be different for each sample.
@@ -350,9 +357,11 @@ def calc_delta_loss(delta, ref_delta, emb_mask=None, exponent=3,
         else:
             loss_i = loss_i.mean()
 
+        loss_i = loss_i * batch_mask[i]
+
         loss += loss_i
 
-    loss /= B
+    loss /= batch_mask.sum()
     return loss
 
 def calc_stats(ts, ts_name=None):
