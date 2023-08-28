@@ -134,6 +134,7 @@ class PersonalizedBase(Dataset):
                  center_crop=False,
                  num_compositions_per_image=1,
                  broad_class=1,
+                 verbose=False,
                  ):
 
         self.data_root = data_root
@@ -145,8 +146,9 @@ class PersonalizedBase(Dataset):
         self.fg_mask_paths  = list(map(lambda x: x if x in image_paths else None, fg_mask_paths))
         num_valid_fg_masks  = sum([ 1 if x is not None else 0 for x in self.fg_mask_paths ])
 
-        print("{} images and {} fg masks found in '{}'".format( \
-            len(self.image_paths), num_valid_fg_masks, self.data_root))
+        if verbose:
+            print("{} images and {} fg masks found in '{}'".format( \
+                  len(self.image_paths), num_valid_fg_masks, self.data_root))
               
         self.num_images = len(self.image_paths)
         self._length = self.num_images 
