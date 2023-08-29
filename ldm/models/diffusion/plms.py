@@ -82,15 +82,15 @@ class PLMSSampler(object):
         if conditioning is not None:
             if isinstance(conditioning, dict):
                 cbs = conditioning[list(conditioning.keys())[0]].shape[0]
-                if cbs != batch_size:
-                    print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
+                #if cbs != batch_size:
+                #    print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
             else:
                 if isinstance(conditioning, tuple):
                     conditioning_ = conditioning[0]
                 else:
                     conditioning_ = conditioning
-                if conditioning_.shape[0] != batch_size:
-                    print(f"Warning: Got {conditioning_.shape[0]} conditionings but batch-size is {batch_size}")
+                #if conditioning_.shape[0] != batch_size:
+                #    print(f"Warning: Got {conditioning_.shape[0]} conditionings but batch-size is {batch_size}")
 
         self.make_schedule(ddim_num_steps=S, ddim_eta=eta, verbose=verbose)
         # sampling

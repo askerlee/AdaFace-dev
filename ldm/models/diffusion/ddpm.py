@@ -2317,7 +2317,8 @@ class LatentDiffusion(DDPM):
             # Divide it by 2 to reduce the proportion of ada emb loss relative to 
             # static emb loss in the total loss.                
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            subj_emb_diff_loss_weight = 1e-4
+            # Make subj_emb_diff_loss_weight very small so that it's ineffective. We only monitor the loss value.
+            subj_emb_diff_loss_weight = 1e-8
             loss_prompt_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss \
                                     + subj_emb_diff_loss * subj_emb_diff_loss_weight
             loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
