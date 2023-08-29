@@ -1298,6 +1298,8 @@ class LatentDiffusion(DDPM):
         batch_have_fg_mask = batch['has_fg_mask']
         loss = self(x, c, delta_prompts, img_mask=img_mask, fg_mask=fg_mask, 
                     batch_have_fg_mask=batch_have_fg_mask, **kwargs)
+        # batch["mask_image_ratio"] is a batch of identical mask_image_ratio. We only need one.
+        self.mask_image_ratio = batch["mask_image_ratio"][0]
         return loss
 
     # LatentDiffusion.forward() is only called during training, by shared_step().
@@ -2349,8 +2351,11 @@ class LatentDiffusion(DDPM):
             distill_feat_weight      = 0.5 if (not self.iter_flags['reuse_init_conds']) else 0.3
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.4
-
-            loss_prompt_mix_reg =   (loss_subj_attn_delta_distill + loss_subj_attn_norm_distill) * distill_subj_attn_weight + \
+            # If mask_image_ratio = 1, i.e., all training images have corresponding masks, then 
+            # loss_subj_attn_norm_distill is totally disabled. 
+            subj_attn_norm_distill_loss_discount = 1 - self.mask_image_ratio
+            loss_prompt_mix_reg =   (loss_subj_attn_delta_distill + \
+                                     loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_discount) * distill_subj_attn_weight + \
                                     loss_feat_distill      * distill_feat_weight 
             
             loss += self.mix_prompt_distill_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
