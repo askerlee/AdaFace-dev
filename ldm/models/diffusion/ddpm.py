@@ -131,7 +131,8 @@ class DDPM(pl.LightningModule):
         # If use_conv_attn, the subject is well expressed, and use_fp_trick is unnecessary 
         # (actually harmful).
         self.use_fp_trick = False if self.use_conv_attn else use_fp_trick
-
+        self.mask_image_ratio = 0
+        
         self.cached_inits_available          = False
         self.cached_inits                    = None
         self.init_iter_flags()
