@@ -2352,8 +2352,8 @@ class LatentDiffusion(DDPM):
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.4
             # If mask_image_ratio = 1, i.e., all training images have corresponding masks, then 
-            # loss_subj_attn_norm_distill is totally disabled. 
-            subj_attn_norm_distill_loss_discount = 1 - self.mask_image_ratio
+            # loss_subj_attn_norm_distill = 0.5, and the norm distill loss is halved.
+            subj_attn_norm_distill_loss_discount = 0.5 + 0.5 * (1 - self.mask_image_ratio)
             loss_prompt_mix_reg =   (loss_subj_attn_delta_distill + \
                                      loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_discount) * distill_subj_attn_weight + \
                                     loss_feat_distill      * distill_feat_weight 
