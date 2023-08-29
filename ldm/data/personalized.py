@@ -149,7 +149,9 @@ class PersonalizedBase(Dataset):
         if verbose:
             print("{} images and {} fg masks found in '{}'".format( \
                   len(self.image_paths), num_valid_fg_masks, self.data_root))
-              
+            if num_valid_fg_masks < len(self.image_paths):
+                print("WARNING: {} fg masks are missing!".format(len(self.image_paths) - num_valid_fg_masks))
+                
         self.num_images = len(self.image_paths)
         self._length = self.num_images 
         self.placeholder_string  = placeholder_string
