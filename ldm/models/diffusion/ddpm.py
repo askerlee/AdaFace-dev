@@ -1451,7 +1451,7 @@ class LatentDiffusion(DDPM):
 
                         total_training_steps = self.trainer.max_steps
                         INIT_CLS_EMB_SCALE  = 0.1
-                        FINAL_CLS_EMB_SCALE = 0.3
+                        FINAL_CLS_EMB_SCALE = 0.2
                         # Linearly increase the scale of the class embeddings from 0.1 to 0.3, i.e., 
                         # Linearly decrease the scale of the subject embeddings from 0.9 to 0.7, 
                         # so that the distillation keeps being effective. Otherwise the teacher 
