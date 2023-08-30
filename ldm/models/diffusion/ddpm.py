@@ -93,6 +93,7 @@ class DDPM(pl.LightningModule):
                  use_ada_embedding=False,
                  composition_regs_iter_gap=-1,
                  prompt_emb_delta_reg_weight=0.,
+                 subj_emb_diff_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_mask_align_loss_weight=0.,
@@ -120,6 +121,7 @@ class DDPM(pl.LightningModule):
 
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight     = prompt_emb_delta_reg_weight
+        self.subj_emb_diff_loss_weight       = subj_emb_diff_loss_weight
         self.mix_prompt_distill_weight       = mix_prompt_distill_weight
         self.fg_bg_complementary_loss_weight = fg_bg_complementary_loss_weight
         self.fg_bg_mask_align_loss_weight    = fg_bg_mask_align_loss_weight
@@ -2326,10 +2328,8 @@ class LatentDiffusion(DDPM):
             # Divide it by 2 to reduce the proportion of ada emb loss relative to 
             # static emb loss in the total loss.                
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            # Make subj_emb_diff_loss_weight very small so that it's ineffective. We only monitor the loss value.
-            subj_emb_diff_loss_weight = 1e-4
             loss_prompt_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss \
-                                    + subj_emb_diff_loss * subj_emb_diff_loss_weight
+                                    + subj_emb_diff_loss * self.subj_emb_diff_loss_weight
             loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
         
         if self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']:
