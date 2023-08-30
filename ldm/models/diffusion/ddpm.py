@@ -132,7 +132,7 @@ class DDPM(pl.LightningModule):
         # (actually harmful).
         self.use_fp_trick = False if self.use_conv_attn else use_fp_trick
         self.mask_image_ratio = 0
-        
+
         self.cached_inits_available          = False
         self.cached_inits                    = None
         self.init_iter_flags()
@@ -1190,18 +1190,24 @@ class LatentDiffusion(DDPM):
         # c = batch["caption"]
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
         x, c = self.get_input(batch, self.first_stage_key)
-        
+
+        # batch["mask_image_ratio"] is a batch of identical mask_image_ratio. We only need one.
+        self.mask_image_ratio = batch["mask_image_ratio"][0]
+
         if self.iter_flags['do_mix_prompt_distillation']:
             # Allow a small prob of using background token in mix reg iterations 
             # (Note Mix reg iterations are the same iterations as Ada delta reg iterations).
-            p_bg_token = 0.1
+            # If mask_image_ratio = 1, then p_bg_token = 0.05.
+            p_bg_token = 0.1 - 0.05 * self.mask_image_ratio
         else:
             # This iter is only doing recon on training images.
             # use_background_token is mainly for such cases. 
             if self.use_conv_attn:
-                p_bg_token = 0.9
+                # If mask_image_ratio = 1, then p_bg_token = 0.95.
+                p_bg_token = 0.9 + 0.05 * self.mask_image_ratio
             else:
-                p_bg_token = 0.8
+                # If mask_image_ratio = 1, then p_bg_token = 0.9.
+                p_bg_token = 0.8 + 0.1 * self.mask_image_ratio
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
@@ -1299,8 +1305,7 @@ class LatentDiffusion(DDPM):
         batch_have_fg_mask = batch['has_fg_mask']
         loss = self(x, c, delta_prompts, img_mask=img_mask, fg_mask=fg_mask, 
                     batch_have_fg_mask=batch_have_fg_mask, **kwargs)
-        # batch["mask_image_ratio"] is a batch of identical mask_image_ratio. We only need one.
-        self.mask_image_ratio = batch["mask_image_ratio"][0]
+
         return loss
 
     # LatentDiffusion.forward() is only called during training, by shared_step().
@@ -2354,6 +2359,8 @@ class LatentDiffusion(DDPM):
             distill_subj_attn_weight = 0.4
             # If mask_image_ratio = 1, i.e., all training images have corresponding masks, then 
             # loss_subj_attn_norm_distill = 0.5, and the norm distill loss is halved.
+            # If mask_image_ratio = 0, i.e., no training images have corresponding masks, then
+            # loss_subj_attn_norm_distill = 1, and the norm distill loss is not discounted.
             subj_attn_norm_distill_loss_discount = 0.5 + 0.5 * (1 - self.mask_image_ratio)
             loss_prompt_mix_reg =   (loss_subj_attn_delta_distill + \
                                      loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_discount) * distill_subj_attn_weight + \
@@ -2646,13 +2653,13 @@ class LatentDiffusion(DDPM):
                 loss_layer_fg_mask_align = calc_delta_loss(subj_attn, fg_mask2, 
                                                            batch_mask=batch_have_fg_mask,
                                                            exponent=2,    
-                                                           do_demean_first=False,
+                                                           do_demean_first=True,
                                                            first_n_dims_to_flatten=2, 
                                                            debug=False)
                 loss_layer_bg_mask_align = calc_delta_loss(bg_attn, 1 - fg_mask2,
                                                            batch_mask=batch_have_fg_mask,
                                                            exponent=2,    
-                                                           do_demean_first=False,
+                                                           do_demean_first=True,
                                                            first_n_dims_to_flatten=2, 
                                                            debug=False)
                 
