@@ -2484,6 +2484,11 @@ class LatentDiffusion(DDPM):
                 attn_loose_distill_layer_weight     = attn_loose_distill_layer_weights[unet_layer_idx]
                 attn_strict_distill_layer_weight    = attn_strict_distill_layer_weights[unet_layer_idx]
 
+                # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comp/subj_attn_mix_single. 
+                # Use this scaler to release the graph and avoid OOM.
+                subj_attn_mix_comp_gs   = mix_attn_grad_scaler(subj_attn_mix_comp)
+                subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
+
                 if attn_strict_distill_layer_weight > 0:
                     attn_subj_delta = subj_attn_subj_comp - subj_attn_subj_single
                     attn_mix_delta  = subj_attn_mix_comp  - subj_attn_mix_single
@@ -2505,10 +2510,6 @@ class LatentDiffusion(DDPM):
                     
                     loss_subj_attn_delta_distill  += loss_layer_subj_delta_attn * attn_loose_distill_layer_weight
                 
-                # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comp/subj_attn_mix_single. 
-                # Use this scaler to release the graph and avoid OOM.
-                subj_attn_mix_comp_gs   = mix_attn_grad_scaler(subj_attn_mix_comp)
-                subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
                 # Align the attention corresponding to each embedding individually.
                 loss_layer_subj_comp_attn_norm   = (subj_attn_subj_comp.mean(dim=2)   - subj_attn_mix_comp_gs.mean(dim=2)).abs().mean()
                 loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean(dim=2) - subj_attn_mix_single_gs.mean(dim=2)).abs().mean()
