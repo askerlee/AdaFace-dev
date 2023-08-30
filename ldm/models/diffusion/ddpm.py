@@ -2404,10 +2404,10 @@ class LatentDiffusion(DDPM):
                                        # 21: 0.25, 22: 0.25, 23: 0.25, 24: 0.25,  
                                      }
 
-        # direct distillation consists of pixel-wise direct loss. It's more strict and 
-        # could cause pollution of subject features with class features.
+        # strict distillation consists of pixel-wise direct loss and attn delta loss. 
+        # It's more strict and could cause pollution of subject features with class features.
         # so top layers layers 21, 22, 23, 24 are excluded by setting their weights to 0.
-        attn_direct_distill_layer_weights = { # 7:  1., 8: 1.,
+        attn_strict_distill_layer_weights = { # 7:  1., 8: 1.,
                                              12: 1.,
                                              16: 1., 17: 1.,
                                              18: 0.5, 
@@ -2429,7 +2429,7 @@ class LatentDiffusion(DDPM):
         # Normalize the weights above so that each set sum to 1.
         feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
         attn_loose_distill_layer_weights    = normalize_dict_values(attn_loose_distill_layer_weights)
-        attn_direct_distill_layer_weights   = normalize_dict_values(attn_direct_distill_layer_weights)
+        attn_strict_distill_layer_weights   = normalize_dict_values(attn_strict_distill_layer_weights)
 
         orig_placeholder_ind_B, orig_placeholder_ind_T = placeholder_indices
         # The class prompts are at the latter half of the batch.
@@ -2478,21 +2478,32 @@ class LatentDiffusion(DDPM):
             subj_attn_subj_single, subj_attn_subj_comp, subj_attn_mix_single,  subj_attn_mix_comp \
                 = subj_attn.chunk(4)
 
-            # attn_direct_distill_layer_weights is a subset of attn_loose_distill_layer_weights. 
+            # attn_strict_distill_layer_weights is a subset of attn_loose_distill_layer_weights. 
             # So here we only check attn_loose_distill_layer_weights.
             if unet_layer_idx in attn_loose_distill_layer_weights:
                 attn_loose_distill_layer_weight     = attn_loose_distill_layer_weights[unet_layer_idx]
-                attn_direct_distill_layer_weight    = attn_direct_distill_layer_weights[unet_layer_idx]
-                attn_subj_delta = subj_attn_subj_comp - subj_attn_subj_single
-                attn_mix_delta  = subj_attn_mix_comp  - subj_attn_mix_single
-                # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
-                # towards class embeddings, hurting authenticity.
-                loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
-                                                             exponent=3,
-                                                             first_n_dims_to_flatten=2, 
-                                                             ref_grad_scale=0.01)
-                
-                loss_subj_attn_delta_distill  += loss_layer_subj_delta_attn * attn_loose_distill_layer_weight
+                attn_strict_distill_layer_weight    = attn_strict_distill_layer_weights[unet_layer_idx]
+
+                if attn_strict_distill_layer_weight > 0:
+                    attn_subj_delta = subj_attn_subj_comp - subj_attn_subj_single
+                    attn_mix_delta  = subj_attn_mix_comp  - subj_attn_mix_single
+
+                    loss_layer_subj_comp_attn   = self.get_loss(subj_attn_subj_comp,   subj_attn_mix_comp_gs,   mean=True)
+                    loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
+                    # loss_subj_attn_direct_distill uses L2 loss, which tends to be in 
+                    # smaller magnitudes than the delta loss. 
+                    # So we scale it up by direct_attn_loss_scale = 2.
+                    loss_subj_attn_direct_distill += (loss_layer_subj_comp_attn + loss_layer_subj_single_attn) \
+                                                      * direct_attn_loss_scale * attn_strict_distill_layer_weight
+
+                    # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
+                    # towards class embeddings, hurting authenticity.
+                    loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
+                                                                 exponent=3,
+                                                                 first_n_dims_to_flatten=2, 
+                                                                 ref_grad_scale=0.01)
+                    
+                    loss_subj_attn_delta_distill  += loss_layer_subj_delta_attn * attn_loose_distill_layer_weight
                 
                 # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comp/subj_attn_mix_single. 
                 # Use this scaler to release the graph and avoid OOM.
@@ -2508,15 +2519,6 @@ class LatentDiffusion(DDPM):
                 # So we scale it up by attn_norm_loss_scale = 6.
                 loss_subj_attn_norm_distill   += ( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \
                                                  * attn_norm_loss_scale * attn_loose_distill_layer_weight
-
-                if attn_direct_distill_layer_weight > 0:
-                    loss_layer_subj_comp_attn   = self.get_loss(subj_attn_subj_comp,   subj_attn_mix_comp_gs,   mean=True)
-                    loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
-                    # loss_subj_attn_direct_distill uses L2 loss, which tends to be in 
-                    # smaller magnitudes than the delta loss. 
-                    # So we scale it up by direct_attn_loss_scale = 2.
-                    loss_subj_attn_direct_distill += (loss_layer_subj_comp_attn + loss_layer_subj_single_attn) \
-                                                      * direct_attn_loss_scale * attn_direct_distill_layer_weight
 
             if unet_layer_idx not in feat_distill_layer_weights:
                 continue
