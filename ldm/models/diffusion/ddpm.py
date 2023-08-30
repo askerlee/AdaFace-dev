@@ -2401,7 +2401,7 @@ class LatentDiffusion(DDPM):
                                        16: 1., 17: 1.,
                                        18: 0.5,
                                        19: 0.25, 20: 0.25, 
-                                       # 21: 0.25, 22: 0.25, 23: 0.25, 24: 0.25,  
+                                       21: 0.1, 22: 0.1, 23: 0.1, 24: 0.1,  
                                      }
 
         # strict distillation consists of pixel-wise direct loss and attn delta loss. 
@@ -2423,7 +2423,7 @@ class LatentDiffusion(DDPM):
                                             16: 1., 17: 1.,
                                             18: 0.5,
                                             19: 0.25, 20: 0.25, 
-                                            21: 0.25, 22: 0.25, 23: 0.25, 24: 0.25,                                       
+                                            21: 0.1, 22: 0.1, 23: 0.1, 24: 0.1,                                       
                                            }
 
         # Normalize the weights above so that each set sum to 1.
@@ -2615,8 +2615,8 @@ class LatentDiffusion(DDPM):
                                     12: 1.,
                                     16: 1., 17: 1., 
                                     18: 0.5,
-                                    19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25,
-                                    23: 0.1,  24: 0.1,
+                                    19: 0.25, 20: 0.25, 
+                                    21: 0.1, 22: 0.1, 23: 0.1,  24: 0.1,
                                    }
         
         # Normalize the weights above so that each set sum to 1.
@@ -2709,7 +2709,8 @@ class LatentDiffusion(DDPM):
                                  12: 1.,
                                  16: 1., 17: 1., 
                                  18: 0.5,
-                                 19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25, 23: 0.25, 24: 0.25,
+                                 19: 0.25, 20: 0.25, 
+                                 21: 0.1, 22: 0.1, 23: 0.1, 24: 0.1,
                                 }
         
         # Normalize the weights above so that each set sum to 1.
