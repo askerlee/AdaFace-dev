@@ -25,7 +25,8 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        count_params, instantiate_from_config, mix_embeddings, \
                        ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
-                       save_grid, chunk_list, patch_multi_embeddings, halve_token_indices
+                       save_grid, chunk_list, patch_multi_embeddings, halve_token_indices, \
+                       normalize_dict_values
 
 from ldm.modules.ema import LitEma
 from ldm.modules.sophia import SophiaG
@@ -2343,7 +2344,7 @@ class LatentDiffusion(DDPM):
             # subj_indices_2b is used here, as it's used to index subj single and subj comp embeddings.
             # The indices will be shifted along the batch dimension (size doubled) within calc_prompt_mix_loss()
             # to index all the 4 blocks.
-            loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_distill = \
+            loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_subj_attn_direct_distill, loss_feat_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
                                                           extra_info['subj_indices_2b'],
                                                           BLOCK_SIZE)
@@ -2351,6 +2352,7 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.mean().detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.mean().detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_subj_attn_direct_distill': loss_subj_attn_direct_distill.mean().detach()})
 
             # In a reused init iter, the denoise image may not look so authentic, so
             # it receives a smaller weight.
@@ -2362,9 +2364,10 @@ class LatentDiffusion(DDPM):
             # If mask_image_ratio = 0, i.e., no training images have corresponding masks, then
             # loss_subj_attn_norm_distill = 1, and the norm distill loss is not discounted.
             subj_attn_norm_distill_loss_discount = 0.5 + 0.5 * (1 - self.mask_image_ratio)
-            loss_prompt_mix_reg =   (loss_subj_attn_delta_distill + \
-                                     loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_discount) * distill_subj_attn_weight + \
-                                    loss_feat_distill      * distill_feat_weight 
+            loss_prompt_mix_reg =  (loss_subj_attn_delta_distill \
+                                      + (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) 
+                                        * subj_attn_norm_distill_loss_discount) * distill_subj_attn_weight \
+                                    + loss_feat_distill * distill_feat_weight 
             
             loss += self.mix_prompt_distill_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
             self.release_plosses_intermediates(locals())
@@ -2380,37 +2383,54 @@ class LatentDiffusion(DDPM):
         # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
         # F(subj_single_prompts) - F(cls_single_prompts)
 
-        delta_attn_loss_scale    = 1
-        direct_attn_loss_scale   = 2
+        direct_attn_loss_scale  = 2
         # The norm is actually the abs().mean(), so it has small magnitudes and should be scaled up.
-        direct_attn_norm_loss_scale = 6
+        attn_norm_loss_scale    = 6
 
-        # Discard top layers and the first few bottom layers from distillation.
+        # Avoid doing distillation on top layers (too detailed) and 
+        # the first few bottom layers (little difference).
         # distill_layer_weights: relative weight of each distillation layer. 
         # distill_layer_weights are normalized using distill_overall_weight.
-        # Conditioning layers are 7, 8, 12, 16, 17. All the 5 layers have 1280 channels.
+        # Most important conditioning layers are 7, 8, 12, 16, 17. All the 5 layers have 1280 channels.
         # But intermediate layers also contribute to distillation. They have small weights.
-        # Layer 16 has strong face semantics, so it is given a small weight.
+
+        # feature map distillation only uses delta loss on the features to reduce the 
+        # class polluting the subject features.
         feat_distill_layer_weights = { # 7:  1., 8: 1.,   
                                        12: 1.,
                                        16: 1., 17: 1.,
                                        18: 0.5,
-                                       19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25 #, 23: 0.25, 24: 0.25,  
+                                       19: 0.25, 20: 0.25, 
+                                       # 21: 0.25, 22: 0.25, 23: 0.25, 24: 0.25,  
                                      }
 
-        attn_distill_layer_weights = { # 7:  1., 8: 1.,
-                                       12: 1.,
-                                       16: 1., 17: 1.,
-                                       18: 0.5,
-                                       19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25 #, 23: 0.25, 24: 0.25,                                       
-                                     }
-        
+        # direct distillation consists of pixel-wise direct loss. It's more strict and 
+        # could cause pollution of subject features with class features.
+        # so top layers layers 21, 22, 23, 24 are excluded by setting their weights to 0.
+        attn_direct_distill_layer_weights = { # 7:  1., 8: 1.,
+                                             12: 1.,
+                                             16: 1., 17: 1.,
+                                             18: 0.5, 
+                                             19: 0.1, 20: 0.1,
+                                             # 21 ~ 24 are excluded.
+                                             21: 0., 22: 0., 23: 0., 24: 0.,                                       
+                                            }
+ 
+        # loose distillation consists of norm loss and delta loss. 
+        # loose distillation includes almost all conditioning layers.
+        attn_loose_distill_layer_weights = { # 7:  1., 8: 1.,
+                                            12: 1.,
+                                            16: 1., 17: 1.,
+                                            18: 0.5,
+                                            19: 0.25, 20: 0.25, 
+                                            21: 0.25, 22: 0.25, 23: 0.25, 24: 0.25,                                       
+                                           }
+
         # Normalize the weights above so that each set sum to 1.
-        feat_distill_layer_weight_sum = np.sum(list(feat_distill_layer_weights.values()))
-        feat_distill_layer_weights = { k: v / feat_distill_layer_weight_sum for k, v in feat_distill_layer_weights.items() }
-        attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
-        attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
-        
+        feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
+        attn_loose_distill_layer_weights    = normalize_dict_values(attn_loose_distill_layer_weights)
+        attn_direct_distill_layer_weights   = normalize_dict_values(attn_direct_distill_layer_weights)
+
         orig_placeholder_ind_B, orig_placeholder_ind_T = placeholder_indices
         # The class prompts are at the latter half of the batch.
         # So we need to add the batch indices of the subject prompts, to locate
@@ -2432,14 +2452,14 @@ class LatentDiffusion(DDPM):
         # Setting to 0 may prevent the graph from being released and OOM.
         mix_attn_grad_scale  = 0.01  
         mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
-        feat_is_intermediate = True
 
-        loss_subj_attn_delta_distill = 0
-        loss_subj_attn_norm_distill  = 0
+        loss_subj_attn_delta_distill    = 0
+        loss_subj_attn_norm_distill     = 0
+        loss_subj_attn_direct_distill   = 0
         loss_feat_distill = 0
 
         for unet_layer_idx, unet_feat in unet_feats.items():
-            if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_distill_layer_weights):
+            if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_loose_distill_layer_weights):
                 continue
 
             # each is [1, 1280, 16, 16]
@@ -2458,8 +2478,11 @@ class LatentDiffusion(DDPM):
             subj_attn_subj_single, subj_attn_subj_comp, subj_attn_mix_single,  subj_attn_mix_comp \
                 = subj_attn.chunk(4)
 
-            if (unet_layer_idx in attn_distill_layer_weights):
-                attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
+            # attn_direct_distill_layer_weights is a subset of attn_loose_distill_layer_weights. 
+            # So here we only check attn_loose_distill_layer_weights.
+            if unet_layer_idx in attn_loose_distill_layer_weights:
+                attn_loose_distill_layer_weight     = attn_loose_distill_layer_weights[unet_layer_idx]
+                attn_direct_distill_layer_weight    = attn_direct_distill_layer_weights[unet_layer_idx]
                 attn_subj_delta = subj_attn_subj_comp - subj_attn_subj_single
                 attn_mix_delta  = subj_attn_mix_comp  - subj_attn_mix_single
                 # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
@@ -2469,29 +2492,37 @@ class LatentDiffusion(DDPM):
                                                              first_n_dims_to_flatten=2, 
                                                              ref_grad_scale=0.01)
                 
+                loss_subj_attn_delta_distill  += loss_layer_subj_delta_attn * attn_loose_distill_layer_weight
+                
                 # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comp/subj_attn_mix_single. 
                 # Use this scaler to release the graph and avoid OOM.
                 subj_attn_mix_comp_gs   = mix_attn_grad_scaler(subj_attn_mix_comp)
                 subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
-                loss_layer_subj_comp_attn   = self.get_loss(subj_attn_subj_comp,   subj_attn_mix_comp_gs,   mean=True)
-                loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
-
                 # Align the attention corresponding to each embedding individually.
                 loss_layer_subj_comp_attn_norm   = (subj_attn_subj_comp.mean(dim=2)   - subj_attn_mix_comp_gs.mean(dim=2)).abs().mean()
                 loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean(dim=2) - subj_attn_mix_single_gs.mean(dim=2)).abs().mean()
                 # print(loss_layer_subj_comp_attn_norm, loss_layer_subj_single_attn_norm)
 
-                # loss_layer_subj_attn_distill = self.get_loss(attn_subj_delta, attn_mix_delta, mean=True)
-                # L2 loss tends to be smaller than delta loss. So we scale it up by 10.
-                loss_subj_attn_delta_distill += ( loss_layer_subj_delta_attn * delta_attn_loss_scale \
-                                                + (loss_layer_subj_comp_attn + loss_layer_subj_single_attn) * direct_attn_loss_scale \
-                                                ) * attn_distill_layer_weight
-                loss_subj_attn_norm_distill  += ( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) * direct_attn_norm_loss_scale * attn_distill_layer_weight
+                # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
+                # smaller magnitudes than the delta loss. 
+                # So we scale it up by attn_norm_loss_scale = 6.
+                loss_subj_attn_norm_distill   += ( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \
+                                                 * attn_norm_loss_scale * attn_loose_distill_layer_weight
+
+                if attn_direct_distill_layer_weight > 0:
+                    loss_layer_subj_comp_attn   = self.get_loss(subj_attn_subj_comp,   subj_attn_mix_comp_gs,   mean=True)
+                    loss_layer_subj_single_attn = self.get_loss(subj_attn_subj_single, subj_attn_mix_single_gs, mean=True)
+                    # loss_subj_attn_direct_distill uses L2 loss, which tends to be in 
+                    # smaller magnitudes than the delta loss. 
+                    # So we scale it up by direct_attn_loss_scale = 2.
+                    loss_subj_attn_direct_distill += (loss_layer_subj_comp_attn + loss_layer_subj_single_attn) \
+                                                      * direct_attn_loss_scale * attn_direct_distill_layer_weight
+
+            if unet_layer_idx not in feat_distill_layer_weights:
+                continue
 
             use_subj_attn_as_spatial_weights = True
             if use_subj_attn_as_spatial_weights:
-                if unet_layer_idx not in feat_distill_layer_weights:
-                    continue
                 feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
 
                 # feat_subj_single, ...: [1, 1280, 16, 16]
@@ -2568,29 +2599,26 @@ class LatentDiffusion(DDPM):
             # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
             loss_feat_distill += loss_layer_feat_distill * feat_distill_layer_weight
 
-        return loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_distill
+        return loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_subj_attn_direct_distill, loss_feat_distill
 
     def calc_fg_bg_complementary_loss(self, unet_attns, 
                                       placeholder_indices_fg, 
                                       placeholder_indices_bg, 
                                       BS, fg_grad_scale=0.05,
                                       fg_mask=None, batch_have_fg_mask=None):
-        # Discard top layers and the first few bottom layers from distillation.
-        # distill_layer_weights: relative weight of each distillation layer. 
-        # distill_layer_weights are normalized using distill_overall_weight.
-        # Conditioning layers are 7, 8, 12, 16, 17. All the 5 layers have 1280 channels.
-        # But intermediate layers also contribute to distillation. They have small weights.
-        # Layer 16 has strong face semantics, so it is given a small weight.
-        attn_distill_layer_weights = { #7:  1., 8: 1.,
-                                       12: 1.,
-                                       16: 1., 17: 1., 
-                                       18: 0.5,
-                                       19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25 #, 23: 0.25, 24: 0.25,
-                                     }
+        # Discard the first few bottom layers from alignment.
+        # attn_align_layer_weights: relative weight of each layer. 
+        attn_align_layer_weights = { #7:  1., 8: 1.,
+                                    12: 1.,
+                                    16: 1., 17: 1., 
+                                    18: 0.5,
+                                    19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25,
+                                    23: 0.1,  24: 0.1,
+                                   }
         
         # Normalize the weights above so that each set sum to 1.
-        attn_distill_layer_weight_sum = np.sum(list(attn_distill_layer_weights.values()))
-        attn_distill_layer_weights = { k: v / attn_distill_layer_weight_sum for k, v in attn_distill_layer_weights.items() }
+        attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
+
         # K_fg: 4, number of embeddings per subject token.
         K_fg = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
         # K_bg: 1 or 2, number of embeddings per background token.
@@ -2615,7 +2643,7 @@ class LatentDiffusion(DDPM):
         #fg_attn_grad_scaler = gen_gradient_scaler(fg_attn_grad_scale)
 
         for unet_layer_idx, unet_attn in unet_attns.items():
-            if (unet_layer_idx not in attn_distill_layer_weights):
+            if (unet_layer_idx not in attn_align_layer_weights):
                 continue
 
             # [2, 8, 256, 77] / [2, 8, 64, 77] =>
@@ -2628,7 +2656,7 @@ class LatentDiffusion(DDPM):
             # 8: 8 attention heads. Last dim 64: number of image tokens.
             bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).mean(dim=1)
 
-            attn_distill_layer_weight = attn_distill_layer_weights[unet_layer_idx]
+            attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
             # Align bg_attn with (1 - subj_attn), so that the two attention maps are complementary.
             # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
             # But we don't want to only focus on large activations. So set it to 2.
@@ -2642,7 +2670,7 @@ class LatentDiffusion(DDPM):
                                                       ref_grad_scale=fg_grad_scale,
                                                       debug=False)
             
-            loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_distill_layer_weight
+            loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_align_layer_weight
 
             if fg_mask is not None:
                 spatial_scale = np.sqrt(subj_attn.shape[-1] / fg_mask.shape[2:].numel())
@@ -2663,8 +2691,8 @@ class LatentDiffusion(DDPM):
                                                            first_n_dims_to_flatten=2, 
                                                            debug=False)
                 
-                loss_fg_mask_align += loss_layer_fg_mask_align * attn_distill_layer_weight
-                loss_bg_mask_align += loss_layer_bg_mask_align * attn_distill_layer_weight
+                loss_fg_mask_align += loss_layer_fg_mask_align * attn_align_layer_weight
+                loss_bg_mask_align += loss_layer_bg_mask_align * attn_align_layer_weight
         
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align
 
@@ -2673,22 +2701,16 @@ class LatentDiffusion(DDPM):
                                   placeholder_indices_bg, 
                                   BS):
 
-        # Discard top layers and the first few bottom layers from distillation.
-        # distill_layer_weights: relative weight of each distillation layer. 
-        # distill_layer_weights are normalized using distill_overall_weight.
-        # Conditioning layers are 7, 8, 12, 16, 17. All the 5 layers have 1280 channels.
-        # But intermediate layers also contribute to distillation. They have small weights.
-        # Layer 16 has strong face semantics, so it is given a small weight.
+        # Discard the first few bottom layers from the orthogonal loss.
         k_ortho_layer_weights = { #7:  1., 8: 1.,
                                  12: 1.,
                                  16: 1., 17: 1., 
                                  18: 0.5,
-                                 19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25, # 23: 0.25, 24: 0.25,
+                                 19: 0.25, 20: 0.25, 21: 0.25, 22: 0.25, 23: 0.25, 24: 0.25,
                                 }
         
         # Normalize the weights above so that each set sum to 1.
-        k_ortho_layer_weight_sum = np.sum(list(k_ortho_layer_weights.values()))
-        k_ortho_layer_weights = { k: v / k_ortho_layer_weight_sum for k, v in k_ortho_layer_weights.items() }
+        k_ortho_layer_weights = normalize_dict_values(k_ortho_layer_weights)
         # K_fg: 4, number of embeddings per subject token.
         K_fg = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
         # K_bg: 1 or 2, number of embeddings per background token.

@@ -703,3 +703,8 @@ def halve_token_indices(token_indices):
     token_indices_half_B  = token_indices[0].chunk(2)[0]
     token_indices_half_N  = token_indices[1].chunk(2)[0]
     return (token_indices_half_B, token_indices_half_N)
+
+def normalize_dict_values(d):
+    value_sum = np.sum(list(d.values()))
+    d = { k: v / value_sum for k, v in d.items() }
+    return d
