@@ -1646,14 +1646,14 @@ class EmbeddingManager(nn.Module):
 
             # These losses are only for the subject embeddings (instead of all embeddings).
             # So no need to use emb_mask.
-            subj_emb_diff_loss += calc_delta_loss(static_subj_single_emb[IND_B, :, IND_N], 
-                                                  static_cls_single_emb[IND_B, :, IND_N],
+            subj_emb_diff_loss += calc_delta_loss(static_subj_single_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True), 
+                                                  static_cls_single_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
                                                   exponent=2,    
                                                   do_demean_first=False,
                                                   first_n_dims_to_flatten=2)
             
-            subj_emb_diff_loss += calc_delta_loss(static_subj_comp_emb[IND_B, :, IND_N],
-                                                  static_cls_comp_emb[IND_B, :, IND_N],
+            subj_emb_diff_loss += calc_delta_loss(static_subj_comp_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
+                                                  static_cls_comp_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
                                                   exponent=2,
                                                   do_demean_first=False,
                                                   first_n_dims_to_flatten=2)
@@ -1664,8 +1664,8 @@ class EmbeddingManager(nn.Module):
                 # ada_subj_single_emb has a batch size of 2. But subj_indices only has a batch size of 1.
                 # So we miss the loss computation on the 2nd instance.
                 # static_cls_single_emb is the same as ada_cls_single_emb.
-                subj_emb_diff_loss += calc_delta_loss(ada_subj_single_emb[IND_B, :, IND_N],
-                                                      static_cls_single_emb[IND_B, :, IND_N],
+                subj_emb_diff_loss += calc_delta_loss(ada_subj_single_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
+                                                      static_cls_single_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
                                                       exponent=2,
                                                       do_demean_first=False,
                                                       first_n_dims_to_flatten=2)
@@ -1674,8 +1674,8 @@ class EmbeddingManager(nn.Module):
                 # Computing the delta loss between ada_subj_comp_emb and static_cls_comp_emb is meaningless.
                 if not is_twin_non_teachable:
                     # static_cls_comp_emb is the same as ada_cls_comp_emb.
-                    subj_emb_diff_loss += calc_delta_loss(ada_subj_comp_emb[IND_B, :, IND_N],
-                                                          static_cls_comp_emb[IND_B, :, IND_N],
+                    subj_emb_diff_loss += calc_delta_loss(ada_subj_comp_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
+                                                          static_cls_comp_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
                                                           exponent=2,
                                                           do_demean_first=False,
                                                           first_n_dims_to_flatten=2)
