@@ -351,9 +351,10 @@ def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
                     # Convert to a small (relative to the magnitude of positive elements) negative value.
                     # We don't need a larger negative value, since the purpose is to let the cosine loss
                     # push the corresponding elements in delta_i to the negative direction. 
-                    # If these values are too negative, the gradients will be too large 
-                    # so that it will be equivalent to demean. 
+                    # If these values are too negative, the gradients will be too large and the delta loss
+                    # pushes too aggressively to the negative direction, similar to what demean leads to. 
                     # Demean on masks has been verified to help composition but hurts subject authenticity too much.
+                    # Probably because demean is too aggressive towards the negative direction.
                     # If ref_delta is a segmentation mask, then the mean is 1, and RHS is -0.1.
                     ref_delta_i2[ref_delta_i == min_value] = ref_delta_i[ref_delta_i > min_value].mean() * -0.1
                 else:

@@ -2369,6 +2369,7 @@ class LatentDiffusion(DDPM):
                                         * subj_attn_norm_distill_loss_discount) * distill_subj_attn_weight \
                                     + loss_feat_distill * distill_feat_weight 
             
+            # distill_loss_scale gradually increases to 1 during warm-up. Then stays at 1.
             loss += self.mix_prompt_distill_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
             self.release_plosses_intermediates(locals())
 
@@ -2416,7 +2417,7 @@ class LatentDiffusion(DDPM):
                                              21: 0., 22: 0., 23: 0., 24: 0.,                                       
                                             }
  
-        # loose distillation consists of norm loss and delta loss. 
+        # loose distillation consists of norm loss. 
         # loose distillation includes almost all conditioning layers.
         attn_loose_distill_layer_weights = { # 7:  1., 8: 1.,
                                             12: 1.,
@@ -2508,7 +2509,7 @@ class LatentDiffusion(DDPM):
                                                                  first_n_dims_to_flatten=2, 
                                                                  ref_grad_scale=0.01)
                     
-                    loss_subj_attn_delta_distill  += loss_layer_subj_delta_attn * attn_loose_distill_layer_weight
+                    loss_subj_attn_delta_distill  += loss_layer_subj_delta_attn * attn_strict_distill_layer_weight
                 
                 # Align the attention corresponding to each embedding individually.
                 loss_layer_subj_comp_attn_norm   = (subj_attn_subj_comp.mean(dim=2)   - subj_attn_mix_comp_gs.mean(dim=2)).abs().mean()
