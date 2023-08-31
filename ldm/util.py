@@ -284,7 +284,7 @@ def demean(x):
 # emb_mask: [2, 77, 1]
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
 def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
-                    exponent=3, do_demean_first=True, 
+                    exponent=3, do_demean_first=True, repair_ref_bound_zeros=False,
                     first_n_dims_to_flatten=3,
                     ref_grad_scale=0, debug=False):
     B = delta.shape[0]
@@ -337,17 +337,42 @@ def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
             breakpoint()
 
         if do_demean_first:
-            delta_i     = demean(delta_i)
-            ref_delta_i = demean(ref_delta_i)
+            delta_i      = demean(delta_i)
+            ref_delta_i2 = demean(ref_delta_i)
+        # If do demean, then no need to repair_ref_bound_zeros. 
+        # Since after demean, boundary zeros have been converted to negative values (for lower bound zeros) 
+        # or positive values (for upper bound zeros).
+        elif repair_ref_bound_zeros:
+            min_value, max_value = ref_delta_i.min(), ref_delta_i.max()
+            # The lower bound is 0, i.e., non-zero values are all positive.
+            if min_value.abs() < 1e-6 or max_value.abs() < 1e-6:
+                ref_delta_i2 = ref_delta_i.clone()
+                if min_value.abs() < 1e-6:
+                    # Convert to a small (relative to the magnitude of positive elements) negative value.
+                    # We don't need a larger negative value, since the purpose is to let the cosine loss
+                    # push the corresponding elements in delta_i to the negative direction. 
+                    # If these values are too negative, the gradients will be too large 
+                    # so that it will be equivalent to demean. 
+                    # Demean on masks has been verified to help composition but hurts subject authenticity too much.
+                    # If ref_delta is a segmentation mask, then the mean is 1, and RHS is -0.1.
+                    ref_delta_i2[ref_delta_i == min_value] = ref_delta_i[ref_delta_i > min_value].mean() * -0.1
+                else:
+                    # Convert to a small (relative to the magnitude of negative elements) positive value.
+                    # mean() is negative, so RHS is positive.
+                    ref_delta_i2[ref_delta_i == max_value] = ref_delta_i[ref_delta_i < max_value].mean() * -0.1
+            else:
+                ref_delta_i2 = ref_delta_i
+        else:
+            ref_delta_i2 = ref_delta_i
 
         # x * x.abs.pow(exponent - 1) will keep the sign of x after pow(exponent).
         if ref_grad_scale == 0:
-            ref_delta_i = ref_delta_i.detach()
+            ref_delta_i2 = ref_delta_i2.detach()
         else:
             grad_scaler = GradientScaler(ref_grad_scale)
-            ref_delta_i = grad_scaler(ref_delta_i)
+            ref_delta_i2 = grad_scaler(ref_delta_i2)
 
-        ref_delta_i_pow = ref_delta_i * ref_delta_i.abs().pow(exponent - 1)
+        ref_delta_i_pow = ref_delta_i2 * ref_delta_i2.abs().pow(exponent - 1)
 
         loss_i = F.cosine_embedding_loss(delta_i, ref_delta_i_pow, 
                                          torch.ones_like(delta_i[:, 0]), 

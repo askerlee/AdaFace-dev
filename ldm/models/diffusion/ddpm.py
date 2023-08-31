@@ -2685,12 +2685,14 @@ class LatentDiffusion(DDPM):
                                                            batch_mask=batch_have_fg_mask,
                                                            exponent=2,    
                                                            do_demean_first=False,
+                                                           repair_ref_bound_zeros=True,
                                                            first_n_dims_to_flatten=2, 
                                                            debug=False)
                 loss_layer_bg_mask_align = calc_delta_loss(bg_attn, 1 - fg_mask2,
                                                            batch_mask=batch_have_fg_mask,
                                                            exponent=2,    
                                                            do_demean_first=False,
+                                                           repair_ref_bound_zeros=True,
                                                            first_n_dims_to_flatten=2, 
                                                            debug=False)
                 
