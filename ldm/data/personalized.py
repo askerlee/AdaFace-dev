@@ -251,8 +251,6 @@ class PersonalizedBase(Dataset):
         image_mask_obj  = Image.fromarray(image_mask)
 
         placeholder_string = self.placeholder_string
-        if self.placeholder_prefix is not None:
-            placeholder_string = self.placeholder_prefix + " " + placeholder_string
 
         background_string  = self.background_string
         cls_delta_token = random.choice(self.cls_delta_tokens)
@@ -261,6 +259,10 @@ class PersonalizedBase(Dataset):
         cls_bg_delta_token = random.choice(self.cls_bg_delta_tokens) if self.cls_bg_delta_tokens is not None \
                                else self.background_string
 
+        if self.placeholder_prefix is not None:
+            placeholder_string = self.placeholder_prefix + " " + placeholder_string
+            cls_delta_token    = self.placeholder_prefix + " " + cls_delta_token
+            
         # If num_vectors_per_token == 3:
         # "z"    => "z, , "
         # "girl" => "girl, , "

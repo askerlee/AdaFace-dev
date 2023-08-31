@@ -364,6 +364,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         # Therefore, the method is intercepted without modifying the implicit object "transformer".
         self.transformer.forward = transformer_forward.__get__(self.transformer)
 
+    # If randomize_clip_skip_weights, then use_as_dirichlet_weights=True.
     # NOTE: the last element is the weight of the last layer.
     def set_last_layers_skip_weights(self, weights, use_as_dirichlet_weights=False):
         if not use_as_dirichlet_weights:
