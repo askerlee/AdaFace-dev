@@ -122,6 +122,7 @@ class PersonalizedBase(Dataset):
                  set="train",
                  placeholder_string="z",
                  background_string=None,
+                 placeholder_prefix=None,
                  # cls token used to compute the delta loss.
                  cls_delta_token=None,  
                  # background tokens used to compute the delta loss.
@@ -158,6 +159,7 @@ class PersonalizedBase(Dataset):
         self._length = self.num_images 
         self.placeholder_string  = placeholder_string
         self.background_string   = background_string
+        self.placeholder_prefix  = placeholder_prefix
         self.broad_class = broad_class
 
         if cls_delta_token is None:
@@ -249,6 +251,9 @@ class PersonalizedBase(Dataset):
         image_mask_obj  = Image.fromarray(image_mask)
 
         placeholder_string = self.placeholder_string
+        if self.placeholder_prefix is not None:
+            placeholder_string = self.placeholder_prefix + " " + placeholder_string
+
         background_string  = self.background_string
         cls_delta_token = random.choice(self.cls_delta_tokens)
         # If background_string is None, then cls_bg_delta_tokens should be None as well, 

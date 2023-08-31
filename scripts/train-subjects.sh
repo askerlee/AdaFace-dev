@@ -140,7 +140,7 @@ for i in $indices
 
         # If $broad_classes are specified in subjfile, then use it. Otherwise, use the default value 1.
         set -q broad_classes; and set broad_class $broad_classes[$i]; or set broad_class 1
-
+        
         if not set -q _flag_maxiter
             # -1: use the default max_iters.
             set -q maxiters; and set max_iters $maxiters[(math $broad_class+1)]; or set max_iters -1
@@ -151,6 +151,15 @@ for i in $indices
 
         # Reset EXTRA_TRAIN_ARGS1 to EXTRA_TRAIN_ARGS0 each time. 
         set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS0
+
+        if set -q z_prefix_keys
+            # Look up the map z_prefix_keys:z_prefix_values, and find the corresponding 
+            # z_prefix for the current subject.
+            if set -l z_prefix_index (contains -i -- $subject $z_prefix_keys)
+                set z_prefix $z_prefix_values[$z_prefix_index]
+                set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --placeholder_prefix $z_prefix
+            end
+        end
 
         # cls_token: the class token used in delta loss computation.
         # If --cls_token_as_delta, and cls_tokens is provided in the subjfile, then use cls_token. 

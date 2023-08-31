@@ -193,7 +193,10 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--background_string", 
         type=str, default=None,
         help="Background string which will be used in prompts to denote the background in training images.")
-
+    parser.add_argument("--placeholder_prefix",
+        type=str, default=None,
+        help="Prefix of the placeholder string. Default: None.")
+    
     parser.add_argument("--init_words", 
         type=str, 
         help="Words used to initialize placeholder embedding")
@@ -715,8 +718,25 @@ if __name__ == "__main__":
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
         config.model.params.personalization_config.params.placeholder_strings = [opt.placeholder_string]
         config.model.params.personalization_config.params.num_vectors_per_token = { opt.placeholder_string: opt.num_vectors_per_token}
+
+        # placeholder_string
         config.data.params.train.params.placeholder_string       = opt.placeholder_string
         config.data.params.validation.params.placeholder_string  = opt.placeholder_string
+        # placeholder_prefix
+        config.data.params.train.params.placeholder_prefix       = opt.placeholder_prefix
+        config.data.params.validation.params.placeholder_prefix  = opt.placeholder_prefix
+        # broad_class
+        config.data.params.train.params.broad_class             = opt.broad_class
+        config.data.params.validation.params.broad_class        = opt.broad_class
+        # cls_delta_token
+        config.data.params.train.params.cls_delta_token         = opt.cls_delta_token
+        config.data.params.validation.params.cls_delta_token    = opt.cls_delta_token
+        # num_vectors_per_token
+        config.data.params.train.params.num_vectors_per_token           = opt.num_vectors_per_token
+        config.data.params.validation.params.num_vectors_per_token      = opt.num_vectors_per_token
+        # num_vectors_per_bg_token
+        config.data.params.train.params.num_vectors_per_bg_token        = opt.num_vectors_per_bg_token
+        config.data.params.validation.params.num_vectors_per_bg_token   = opt.num_vectors_per_bg_token
 
         # Currently, only supports one group of initial words and weights.
         if opt.init_words:
@@ -738,17 +758,6 @@ if __name__ == "__main__":
                 config.model.params.personalization_config.params.initializer_weights.append([1.0] * len(re.split("\s+", opt.bg_init_words)))
                 config.data.params.train.params.cls_bg_delta_tokens      = re.split(r"\s+", opt.bg_init_words)
                 config.data.params.validation.params.cls_bg_delta_tokens = re.split(r"\s+", opt.bg_init_words)
-
-        config.data.params.train.params.broad_class       = opt.broad_class
-        config.data.params.validation.params.broad_class  = opt.broad_class
-
-        config.data.params.train.params.cls_delta_token      = opt.cls_delta_token
-        config.data.params.validation.params.cls_delta_token = opt.cls_delta_token
-
-        config.data.params.train.params.num_vectors_per_token      = opt.num_vectors_per_token
-        config.data.params.validation.params.num_vectors_per_token = opt.num_vectors_per_token
-        config.data.params.train.params.num_vectors_per_bg_token      = opt.num_vectors_per_bg_token
-        config.data.params.validation.params.num_vectors_per_bg_token = opt.num_vectors_per_bg_token
 
         if opt.use_conv_attn:
             assert opt.num_vectors_per_token == 4 or opt.num_vectors_per_token == 9, \

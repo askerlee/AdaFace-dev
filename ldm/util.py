@@ -344,10 +344,14 @@ def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         # or positive values (for upper bound zeros).
         elif repair_ref_bound_zeros:
             min_value, max_value = ref_delta_i.min(), ref_delta_i.max()
-            # The lower bound is 0, i.e., non-zero values are all positive.
             if min_value.abs() < 1e-6 or max_value.abs() < 1e-6:
                 ref_delta_i2 = ref_delta_i.clone()
+                # zero_to_nonzero_scale: convert zero to the scale of the average of non-zero values.
+                zero_to_nonzero_scale = 0.03
+                # 0 is either the lower bound or the upper bound, i.e., 
+                # non-zero values are either all positive or all negative.
                 if min_value.abs() < 1e-6:
+                    # 0 is the lower bound. non-zero values are all positive.
                     # Convert to a small (relative to the magnitude of positive elements) negative value.
                     # We don't need a larger negative value, since the purpose is to let the cosine loss
                     # push the corresponding elements in delta_i to the negative direction. 
@@ -355,12 +359,15 @@ def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
                     # pushes too aggressively to the negative direction, similar to what demean leads to. 
                     # Demean on masks has been verified to help composition but hurts subject authenticity too much.
                     # Probably because demean is too aggressive towards the negative direction.
-                    # If ref_delta is a segmentation mask, then the mean is 1, and RHS is -0.1.
-                    ref_delta_i2[ref_delta_i == min_value] = ref_delta_i[ref_delta_i > min_value].mean() * -0.1
+                    # If ref_delta is a segmentation mask, then the mean is 1, and RHS is -0.03.
+                    ref_delta_i2[ref_delta_i == min_value] = ref_delta_i[ref_delta_i > min_value].mean() \
+                                                             * -zero_to_nonzero_scale
                 else:
+                    # max_value.abs() < 1e-6. non-zero values are all negative.
                     # Convert to a small (relative to the magnitude of negative elements) positive value.
                     # mean() is negative, so RHS is positive.
-                    ref_delta_i2[ref_delta_i == max_value] = ref_delta_i[ref_delta_i < max_value].mean() * -0.1
+                    ref_delta_i2[ref_delta_i == max_value] = ref_delta_i[ref_delta_i < max_value].mean() \
+                                                             * -zero_to_nonzero_scale
             else:
                 ref_delta_i2 = ref_delta_i
         else:
