@@ -137,7 +137,7 @@ if __name__ == "__main__":
     if hasattr(args, 'z_prefix'):
         # * 3 for 3 broad classes, i.e., all classes use the same args.z_prefix.
         z_prefixes = [args.z_prefix] * 3    
-    elif 'z_prefixes' in vars and args.prompt is None:
+    elif 'inf_z_prefixes' in vars and args.prompt is None:
         # Use inf_z_prefixes from the subject info file if it exists, 
         # but only if it's not manual prompt generation
         z_prefixes = vars['inf_z_prefixes']
