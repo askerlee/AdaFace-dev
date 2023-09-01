@@ -2632,6 +2632,7 @@ class LatentDiffusion(DDPM):
         loss_fg_bg_complementary = 0
         loss_fg_mask_align = 0
         loss_bg_mask_align = 0
+        attn_align_scale = 5
 
         # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
         # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
@@ -2694,24 +2695,24 @@ class LatentDiffusion(DDPM):
 
                 # Repeat 8 times to match the number of attention heads.
                 fg_mask2 = fg_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
-                fg_mask3 = torch.ones_like(fg_mask2)
+                fg_mask3 = torch.zeros_like(fg_mask2)
                 # Encourage subj_attn to be large at foreground locations (coeff = 1)
                 # Encourage subj_attn to be small at background locations (coeff = -0.1)
                 # Not to assign coeff -1 at background locations, as we don't want to 
                 # penalize subj_attn too hard at background locations.
-                fg_mask3[fg_mask2 <  1e-6] = -0.1
-                loss_layer_fg_mask_align = -(subj_attn * fg_mask3).mean()
+                fg_mask3[fg_mask2 <  1e-6] = 0.1
+                loss_layer_fg_mask_align = (subj_attn * fg_mask3).mean()
 
-                fg_mask4 = torch.ones_like(fg_mask2) * -1
+                fg_mask4 = torch.zeros_like(fg_mask2)
                 # Encourage bg_attn to be small at foreground locations (coeff = 0.1)
                 # Encourage bg_attn to be large at background locations (coeff = -1).
                 # Not to assign -1, as we don't want to penalize subj_attn too hard 
                 # at background locations.
                 fg_mask4[fg_mask2 >  1e-6] = 0.1
-                loss_layer_bg_mask_align = -(bg_attn * fg_mask4).mean()
+                loss_layer_bg_mask_align = (bg_attn * fg_mask4).mean()
 
-                loss_fg_mask_align += loss_layer_fg_mask_align * attn_align_layer_weight
-                loss_bg_mask_align += loss_layer_bg_mask_align * attn_align_layer_weight
+                loss_fg_mask_align += loss_layer_fg_mask_align * attn_align_layer_weight * attn_align_scale
+                loss_bg_mask_align += loss_layer_bg_mask_align * attn_align_layer_weight * attn_align_scale
         
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align
 
