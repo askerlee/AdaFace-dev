@@ -133,17 +133,20 @@ if __name__ == "__main__":
         assert args.num_vectors_per_token == 4 or args.num_vectors_per_token == 9, \
                 f"Only support 4 or 9 embeddings per token but got {args.num_vectors_per_token}. " \
                 "4 = 2*2 kernel, 9 = 3*3 kernel."
-            
+
+    z_prefixes_by_class     = [""] * 3
+    z_prefixes_by_subject   = None
     if hasattr(args, 'z_prefix'):
         # * 3 for 3 broad classes, i.e., all classes use the same args.z_prefix.
-        z_prefixes = [args.z_prefix] * 3    
-    elif 'inf_z_prefixes' in vars and args.prompt is None:
-        # Use inf_z_prefixes from the subject info file if it exists, 
-        # but only if it's not manual prompt generation
-        z_prefixes = vars['inf_z_prefixes']
-        assert len(z_prefixes) == 3
+        z_prefixes_by_class = [args.z_prefix] * 3    
     else:
-        z_prefixes = [""] * 3
+        if 'z_prefix_keys' in vars and args.prompt is None:
+            z_prefixes_by_subject = { k: vars['z_prefix_values'][i] for i, k in enumerate(vars['z_prefix_keys']) }
+        if 'inf_z_prefixes' in vars and args.prompt is None:
+            # Use inf_z_prefixes from the subject info file if it exists, 
+            # but only if it's not manual prompt generation
+            z_prefixes_by_class = vars['inf_z_prefixes']
+            assert len(z_prefixes_by_class) == 3
 
     if hasattr(args, 'is_face'):
         are_faces = [args.is_face] * len(subjects)
@@ -190,7 +193,14 @@ if __name__ == "__main__":
         broad_class         = broad_classes[subject_idx]
         is_face             = are_faces[subject_idx]
         class_long_token    = class_long_tokens[subject_idx]
-        z_prefix            = z_prefixes[broad_class]
+
+        # z_prefixes_by_subject is only for selected subjects. So in most cases,
+        # subject_name is not in z_prefixes_by_subject. 
+        # Then we resort to z_prefixes_by_class.
+        if z_prefixes_by_subject is not None and subject_name in z_prefixes_by_subject:
+            z_prefix = z_prefixes_by_subject[subject_name]
+        else:
+            z_prefix = z_prefixes_by_class[broad_class]
 
         print("Generating samples for subject: " + subject_name)
 
