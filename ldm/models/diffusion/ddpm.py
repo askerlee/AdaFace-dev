@@ -2685,6 +2685,9 @@ class LatentDiffusion(DDPM):
                 fg_mask2 = F.interpolate(fg_mask.float(), size=spatial_shape2, mode='nearest')
                 fg_mask3 = F.interpolate(fg_mask.float(), size=spatial_shape2, mode='bilinear', align_corners=False)
                 # Always keep larger mask sizes.
+                # When the subject only occupies a small portion of the image,
+                # 'nearest' mode usually keeps more non-zero pixels than 'bilinear' mode.
+                # In the extreme case, 'bilinear' mode may result in all-zero masks.
                 fg_mask2 = torch.maximum(fg_mask2, fg_mask3)
                 if (fg_mask2.sum(dim=(1,2,3)) == 0).any():
                     print("WARNING: fg_mask2 has all-zero masks.")
