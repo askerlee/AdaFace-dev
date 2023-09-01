@@ -2684,7 +2684,7 @@ class LatentDiffusion(DDPM):
                 # fg_mask: [2, 1, 64, 64] => fg_mask2: [2, 1, 8, 8].
                 fg_mask2 = F.interpolate(fg_mask.float(), size=spatial_shape2, mode='nearest')
                 fg_mask3 = F.interpolate(fg_mask.float(), size=spatial_shape2, mode='bilinear', align_corners=False)
-                # Always prefer larger mask sizes.
+                # Always keep larger mask sizes.
                 fg_mask2 = torch.maximum(fg_mask2, fg_mask3)
                 if (fg_mask2.sum(dim=(1,2,3)) == 0).any():
                     print("WARNING: fg_mask2 has all-zero masks.")
