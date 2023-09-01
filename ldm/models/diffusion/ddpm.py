@@ -2632,7 +2632,7 @@ class LatentDiffusion(DDPM):
         loss_fg_bg_complementary = 0
         loss_fg_mask_align = 0
         loss_bg_mask_align = 0
-        attn_align_scale = 5
+        attn_align_scale = 1
 
         # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
         # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
@@ -2700,16 +2700,16 @@ class LatentDiffusion(DDPM):
                 # Encourage subj_attn to be small at background locations (coeff = -0.1)
                 # Not to assign coeff -1 at background locations, as we don't want to 
                 # penalize subj_attn too hard at background locations.
-                fg_mask3[fg_mask2 <  1e-6] = 0.1
-                loss_layer_fg_mask_align = (subj_attn * fg_mask3).mean()
+                fg_mask3[fg_mask2 <  1e-6] = 1
+                loss_layer_fg_mask_align = (subj_attn * fg_mask3).sum() / fg_mask3.sum()
 
                 fg_mask4 = torch.zeros_like(fg_mask2)
                 # Encourage bg_attn to be small at foreground locations (coeff = 0.1)
                 # Encourage bg_attn to be large at background locations (coeff = -1).
                 # Not to assign -1, as we don't want to penalize subj_attn too hard 
                 # at background locations.
-                fg_mask4[fg_mask2 >  1e-6] = 0.1
-                loss_layer_bg_mask_align = (bg_attn * fg_mask4).mean()
+                fg_mask4[fg_mask2 >  1e-6] = 1
+                loss_layer_bg_mask_align = (bg_attn * fg_mask4).sum() / fg_mask4.sum()
 
                 loss_fg_mask_align += loss_layer_fg_mask_align * attn_align_layer_weight * attn_align_scale
                 loss_bg_mask_align += loss_layer_bg_mask_align * attn_align_layer_weight * attn_align_scale
