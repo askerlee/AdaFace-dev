@@ -2708,7 +2708,7 @@ class LatentDiffusion(DDPM):
                 # Not to assign -1, as we don't want to penalize subj_attn too hard 
                 # at background locations.
                 fg_mask4[fg_mask2 >  1e-6] = 0.1
-                loss_layer_bg_mask_align = (bg_attn * fg_mask4).mean()
+                loss_layer_bg_mask_align = -(bg_attn * fg_mask4).mean()
 
                 loss_fg_mask_align += loss_layer_fg_mask_align * attn_align_layer_weight
                 loss_bg_mask_align += loss_layer_bg_mask_align * attn_align_layer_weight
