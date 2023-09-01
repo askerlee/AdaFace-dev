@@ -2679,7 +2679,13 @@ class LatentDiffusion(DDPM):
             if fg_mask is not None:
                 spatial_scale = np.sqrt(subj_attn.shape[-1] / fg_mask.shape[2:].numel())
                 spatial_shape2 = (int(fg_mask.shape[2] * spatial_scale), int(fg_mask.shape[3] * spatial_scale))
-                fg_mask2 = F.interpolate(fg_mask.float(), size=spatial_shape2, mode='bilinear', align_corners=False)
+                # NOTE: avoid "bilinear" mode. If the object is too small in the mask, 
+                # it may result in all-zero masks.
+                # fg_mask: [2, 1, 64, 64] => fg_mask2: [2, 1, 8, 8].
+                fg_mask2 = F.interpolate(fg_mask.float(), size=spatial_shape2, mode='nearest')
+                if (fg_mask2.sum(dim=(1,2,3)) == 0).any():
+                    print("WARNING: fg_mask2 has all-zero masks.")
+
                 # Repeat 8 times to match the number of attention heads.
                 fg_mask2 = fg_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 loss_layer_fg_mask_align = calc_delta_loss(subj_attn, fg_mask2, 
@@ -2689,6 +2695,16 @@ class LatentDiffusion(DDPM):
                                                            repair_ref_bound_zeros=True,
                                                            first_n_dims_to_flatten=2, 
                                                            debug=False)
+                
+                if loss_layer_fg_mask_align.isnan():
+                    loss_layer_fg_mask_align = calc_delta_loss(subj_attn, fg_mask2, 
+                                                            batch_mask=batch_have_fg_mask,
+                                                            exponent=2,    
+                                                            do_demean_first=False,
+                                                            repair_ref_bound_zeros=True,
+                                                            first_n_dims_to_flatten=2, 
+                                                            debug=True)
+                
                 loss_layer_bg_mask_align = calc_delta_loss(bg_attn, 1 - fg_mask2,
                                                            batch_mask=batch_have_fg_mask,
                                                            exponent=2,    

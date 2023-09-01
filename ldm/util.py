@@ -350,7 +350,7 @@ def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
                 zero_to_nonzero_scale = 0.03
                 # 0 is either the lower bound or the upper bound, i.e., 
                 # non-zero values are either all positive or all negative.
-                if min_value.abs() < 1e-6:
+                if min_value.abs() < 1e-6 and (ref_delta_i > min_value).any():
                     # 0 is the lower bound. non-zero values are all positive.
                     # Convert to a small (relative to the magnitude of positive elements) negative value.
                     # We don't need a larger negative value, since the purpose is to let the cosine loss
@@ -362,8 +362,8 @@ def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
                     # If ref_delta is a segmentation mask, then the mean is 1, and RHS is -0.03.
                     ref_delta_i2[ref_delta_i == min_value] = ref_delta_i[ref_delta_i > min_value].mean() \
                                                              * -zero_to_nonzero_scale
-                else:
-                    # max_value.abs() < 1e-6. non-zero values are all negative.
+                # max_value.abs() < 1e-6. non-zero values are all negative.
+                elif max_value.abs() < 1e-6 and (ref_delta_i < max_value).any():
                     # Convert to a small (relative to the magnitude of negative elements) positive value.
                     # mean() is negative, so RHS is positive.
                     ref_delta_i2[ref_delta_i == max_value] = ref_delta_i[ref_delta_i < max_value].mean() \

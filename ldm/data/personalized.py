@@ -163,6 +163,7 @@ class PersonalizedBase(Dataset):
         self.broad_class = broad_class
 
         if cls_delta_token is None:
+            print("WARNING: default cls_delta_tokens are used!")
             self.cls_delta_tokens = default_cls_delta_tokens[self.broad_class]
         else:
             self.cls_delta_tokens = [ cls_delta_token ]
