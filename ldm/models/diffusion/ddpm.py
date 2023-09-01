@@ -2682,43 +2682,34 @@ class LatentDiffusion(DDPM):
                 # NOTE: avoid "bilinear" mode. If the object is too small in the mask, 
                 # it may result in all-zero masks.
                 # fg_mask: [2, 1, 64, 64] => fg_mask2: [2, 1, 8, 8].
-                fg_mask2 = F.interpolate(fg_mask.float(), size=spatial_shape2, mode='nearest')
-                fg_mask3 = F.interpolate(fg_mask.float(), size=spatial_shape2, mode='bilinear', align_corners=False)
+                fg_mask2_nearest  = F.interpolate(fg_mask.float(), size=spatial_shape2, mode='nearest')
+                fg_mask2_bilinear = F.interpolate(fg_mask.float(), size=spatial_shape2, mode='bilinear', align_corners=False)
                 # Always keep larger mask sizes.
                 # When the subject only occupies a small portion of the image,
                 # 'nearest' mode usually keeps more non-zero pixels than 'bilinear' mode.
                 # In the extreme case, 'bilinear' mode may result in all-zero masks.
-                fg_mask2 = torch.maximum(fg_mask2, fg_mask3)
+                fg_mask2 = torch.maximum(fg_mask2_nearest, fg_mask2_bilinear)
                 if (fg_mask2.sum(dim=(1,2,3)) == 0).any():
                     print("WARNING: fg_mask2 has all-zero masks.")
 
                 # Repeat 8 times to match the number of attention heads.
                 fg_mask2 = fg_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
-                loss_layer_fg_mask_align = calc_delta_loss(subj_attn, fg_mask2, 
-                                                           batch_mask=batch_have_fg_mask,
-                                                           exponent=2,    
-                                                           do_demean_first=False,
-                                                           repair_ref_bound_zeros=True,
-                                                           first_n_dims_to_flatten=2, 
-                                                           debug=False)
-                
-                if loss_layer_fg_mask_align.isnan():
-                    loss_layer_fg_mask_align = calc_delta_loss(subj_attn, fg_mask2, 
-                                                            batch_mask=batch_have_fg_mask,
-                                                            exponent=2,    
-                                                            do_demean_first=False,
-                                                            repair_ref_bound_zeros=True,
-                                                            first_n_dims_to_flatten=2, 
-                                                            debug=True)
-                
-                loss_layer_bg_mask_align = calc_delta_loss(bg_attn, 1 - fg_mask2,
-                                                           batch_mask=batch_have_fg_mask,
-                                                           exponent=2,    
-                                                           do_demean_first=False,
-                                                           repair_ref_bound_zeros=True,
-                                                           first_n_dims_to_flatten=2, 
-                                                           debug=False)
-                
+                fg_mask3 = torch.ones_like(fg_mask2)
+                # Encourage subj_attn to be large at foreground locations (coeff = 1)
+                # Encourage subj_attn to be small at background locations (coeff = -0.1)
+                # Not to assign coeff -1 at background locations, as we don't want to 
+                # penalize subj_attn too hard at background locations.
+                fg_mask3[fg_mask2 <  1e-6] = -0.1
+                loss_layer_fg_mask_align = -(subj_attn * fg_mask3).mean()
+
+                fg_mask4 = torch.ones_like(fg_mask2) * -1
+                # Encourage bg_attn to be small at foreground locations (coeff = 0.1)
+                # Encourage bg_attn to be large at background locations (coeff = -1).
+                # Not to assign -1, as we don't want to penalize subj_attn too hard 
+                # at background locations.
+                fg_mask4[fg_mask2 >  1e-6] = 0.1
+                loss_layer_bg_mask_align = (bg_attn * fg_mask4).mean()
+
                 loss_fg_mask_align += loss_layer_fg_mask_align * attn_align_layer_weight
                 loss_bg_mask_align += loss_layer_bg_mask_align * attn_align_layer_weight
         
