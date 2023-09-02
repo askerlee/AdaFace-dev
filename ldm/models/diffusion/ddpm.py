@@ -2616,9 +2616,9 @@ class LatentDiffusion(DDPM):
         attn_align_layer_weights = { #7:  1., 8: 1.,
                                     12: 1.,
                                     16: 1., 17: 1., 
-                                    18: 0.5,
-                                    19: 0.25, 20: 0.25, 
-                                    21: 0.1, 22: 0.1, 23: 0.1,  24: 0.1,
+                                    18: 1.,
+                                    19: 1., 20: 1., 
+                                    21: 1., 22: 1., 23: 1.,  24: 1.,
                                    }
         
         # Normalize the weights above so that each set sum to 1.
@@ -2633,9 +2633,10 @@ class LatentDiffusion(DDPM):
         loss_fg_bg_complementary = 0
         loss_fg_mask_align = 0
         loss_bg_mask_align = 0
-        attn_align_scale = 0.01
-        fg_bg_contrast_score_margin   = 1
-        subj_bg_contrast_score_margin = 0.5
+        
+        attn_align_scale   = 0.01
+        mf_mb_contrast_score_margin   = 0.8
+        subj_bg_contrast_score_margin = 0.4
 
         # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
         # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
@@ -2721,15 +2722,15 @@ class LatentDiffusion(DDPM):
                 avg_bg_score_at_mf   = (bg_score   * fg_mask3).sum()       / fg_mask3.sum()
                 avg_bg_score_at_mb   = (bg_score   * (1 - fg_mask3)).sum() / (1 - fg_mask3).sum()
                 # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations) 
-                # to be at least larger by fg_bg_contrast_score_margin = 1 than 
+                # to be at least larger by mf_mb_contrast_score_margin = 1 than 
                 # avg_subj_score_at_mb (subj_score averaged at background locations).
                 # If not, clip() > 0, incurring a loss.
-                loss_layer_subj_contrast            = torch.clip(avg_subj_score_at_mb + fg_bg_contrast_score_margin   - avg_subj_score_at_mf,   min=0)
+                loss_layer_subj_contrast            = torch.clip(avg_subj_score_at_mb + mf_mb_contrast_score_margin   - avg_subj_score_at_mf,   min=0)
                 # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
-                # to be at least larger by fg_bg_contrast_score_margin = 1 than
+                # to be at least larger by mf_mb_contrast_score_margin = 1 than
                 # avg_bg_score_at_mf (bg_score averaged at foreground locations).
                 # If not, clip() > 0, incurring a loss.
-                loss_layer_bg_contrast              = torch.clip(avg_bg_score_at_mf   + fg_bg_contrast_score_margin   - avg_bg_score_at_mb,     min=0)
+                loss_layer_bg_contrast              = torch.clip(avg_bg_score_at_mf   + mf_mb_contrast_score_margin   - avg_bg_score_at_mb,     min=0)
                 # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations)
                 # to be at least larger by subj_bg_contrast_score_margin = 0.5 than
                 # avg_bg_score_at_mf (bg_score averaged at foreground locations).
@@ -2740,6 +2741,8 @@ class LatentDiffusion(DDPM):
                 # to be at least larger by subj_bg_contrast_score_margin = 0.5 than
                 # avg_subj_score_at_mb (subj_score averaged at background locations).
                 loss_layer_subj_bg_contrast_at_mb   = torch.clip(avg_subj_score_at_mb   + subj_bg_contrast_score_margin - avg_bg_score_at_mb,   min=0)
+                # loss_layer_subj_bg_contrast_at_mf is usually 0, 
+                # so loss_fg_mask_align is much smaller than loss_bg_mask_align.
                 loss_fg_mask_align += (loss_layer_subj_contrast + loss_layer_subj_bg_contrast_at_mf) \
                                         * attn_align_layer_weight * attn_align_scale
                 loss_bg_mask_align += (loss_layer_bg_contrast   + loss_layer_subj_bg_contrast_at_mb) \
