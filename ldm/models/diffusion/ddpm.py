@@ -2020,6 +2020,7 @@ class LatentDiffusion(DDPM):
                 if self.fg_bg_complementary_loss_weight > 0:
                     loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align = \
                                 self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
+                                                                   cond[2]['unet_attnscores'],
                                                                    extra_info['subj_indices'],
                                                                    extra_info['bg_indices'],
                                                                    x_start.shape[0],
@@ -2605,7 +2606,7 @@ class LatentDiffusion(DDPM):
 
         return loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_subj_attn_direct_distill, loss_feat_distill
 
-    def calc_fg_bg_complementary_loss(self, unet_attns, 
+    def calc_fg_bg_complementary_loss(self, unet_attns, unet_attnscores,
                                       placeholder_indices_fg, 
                                       placeholder_indices_bg, 
                                       BS, fg_grad_scale=0.05,
@@ -2632,7 +2633,9 @@ class LatentDiffusion(DDPM):
         loss_fg_bg_complementary = 0
         loss_fg_mask_align = 0
         loss_bg_mask_align = 0
-        attn_align_scale = 1
+        attn_align_scale = 0.01
+        fg_bg_contrast_score_margin   = 1
+        subj_bg_contrast_score_margin = 0.5
 
         # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
         # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
@@ -2662,6 +2665,7 @@ class LatentDiffusion(DDPM):
             bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).mean(dim=1)
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
+            
             # Align bg_attn with (1 - subj_attn), so that the two attention maps are complementary.
             # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
             # But we don't want to only focus on large activations. So set it to 2.
@@ -2678,6 +2682,12 @@ class LatentDiffusion(DDPM):
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_align_layer_weight
 
             if fg_mask is not None:
+                score_mat = unet_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
+                # subj_score: [8, 8, 64] -> [2, 4, 8, 64] mean among K_fg embeddings -> [2, 8, 64]
+                subj_score = score_mat[placeholder_indices_fg].reshape(BS, K_fg, *score_mat.shape[2:]).mean(dim=1)
+                # bg_score:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
+                bg_score   = score_mat[placeholder_indices_bg].reshape(BS, K_bg, *score_mat.shape[2:]).mean(dim=1)
+
                 spatial_scale = np.sqrt(subj_attn.shape[-1] / fg_mask.shape[2:].numel())
                 spatial_shape2 = (int(fg_mask.shape[2] * spatial_scale), int(fg_mask.shape[3] * spatial_scale))
                 # NOTE: avoid "bilinear" mode. If the object is too small in the mask, 
@@ -2691,29 +2701,54 @@ class LatentDiffusion(DDPM):
                 # In the extreme case, 'bilinear' mode may result in all-zero masks.
                 fg_mask2 = torch.maximum(fg_mask2_nearest, fg_mask2_bilinear)
                 if (fg_mask2.sum(dim=(1,2,3)) == 0).any():
+                    # Very rare cases. Safe to skip.
                     print("WARNING: fg_mask2 has all-zero masks.")
+                    continue
 
                 # Repeat 8 times to match the number of attention heads.
                 fg_mask2 = fg_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 fg_mask3 = torch.zeros_like(fg_mask2)
-                # Encourage subj_attn to be large at foreground locations (coeff = 1)
-                # Encourage subj_attn to be small at background locations (coeff = -0.1)
-                # Not to assign coeff -1 at background locations, as we don't want to 
-                # penalize subj_attn too hard at background locations.
-                fg_mask3[fg_mask2 <  1e-6] = 1
-                loss_layer_fg_mask_align = (subj_attn * fg_mask3).sum() / fg_mask3.sum()
+                fg_mask3[fg_mask2 >  1e-6] = 1
+                if ((1 - fg_mask3).sum(dim=(1, 2)) == 0).any():
+                    # Very rare cases. Safe to skip.
+                    print("WARNING: fg_mask3 has all-one masks.")
+                    continue
 
-                fg_mask4 = torch.zeros_like(fg_mask2)
-                # Encourage bg_attn to be small at foreground locations (coeff = 0.1)
-                # Encourage bg_attn to be large at background locations (coeff = -1).
-                # Not to assign -1, as we don't want to penalize subj_attn too hard 
-                # at background locations.
-                fg_mask4[fg_mask2 >  1e-6] = 1
-                loss_layer_bg_mask_align = (bg_attn * fg_mask4).sum() / fg_mask4.sum()
+                # subj, bg: subject embedding,         background embedding.
+                # mf, mb:   mask foreground locations, mask background locations.
+                avg_subj_score_at_mf = (subj_score * fg_mask3).sum()       / fg_mask3.sum()
+                avg_subj_score_at_mb = (subj_score * (1 - fg_mask3)).sum() / (1 - fg_mask3).sum()
+                avg_bg_score_at_mf   = (bg_score   * fg_mask3).sum()       / fg_mask3.sum()
+                avg_bg_score_at_mb   = (bg_score   * (1 - fg_mask3)).sum() / (1 - fg_mask3).sum()
+                # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations) 
+                # to be at least larger by fg_bg_contrast_score_margin = 1 than 
+                # avg_subj_score_at_mb (subj_score averaged at background locations).
+                # If not, clip() > 0, incurring a loss.
+                loss_layer_subj_contrast            = torch.clip(avg_subj_score_at_mb + fg_bg_contrast_score_margin   - avg_subj_score_at_mf,   min=0)
+                # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
+                # to be at least larger by fg_bg_contrast_score_margin = 1 than
+                # avg_bg_score_at_mf (bg_score averaged at foreground locations).
+                # If not, clip() > 0, incurring a loss.
+                loss_layer_bg_contrast              = torch.clip(avg_bg_score_at_mf   + fg_bg_contrast_score_margin   - avg_bg_score_at_mb,     min=0)
+                # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations)
+                # to be at least larger by subj_bg_contrast_score_margin = 0.5 than
+                # avg_bg_score_at_mf (bg_score averaged at foreground locations).
+                # loss_layer_subj_bg_contrast_at_mf is usually 0, as avg_bg_score_at_mf 
+                # usually takes a much smaller value than avg_subj_score_at_mf.
+                loss_layer_subj_bg_contrast_at_mf   = torch.clip(avg_bg_score_at_mf    + subj_bg_contrast_score_margin - avg_subj_score_at_mf,  min=0)
+                # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
+                # to be at least larger by subj_bg_contrast_score_margin = 0.5 than
+                # avg_subj_score_at_mb (subj_score averaged at background locations).
+                loss_layer_subj_bg_contrast_at_mb   = torch.clip(avg_subj_score_at_mb   + subj_bg_contrast_score_margin - avg_bg_score_at_mb,   min=0)
+                loss_fg_mask_align += (loss_layer_subj_contrast + loss_layer_subj_bg_contrast_at_mf) \
+                                        * attn_align_layer_weight * attn_align_scale
+                loss_bg_mask_align += (loss_layer_bg_contrast   + loss_layer_subj_bg_contrast_at_mb) \
+                                        * attn_align_layer_weight * attn_align_scale
 
-                loss_fg_mask_align += loss_layer_fg_mask_align * attn_align_layer_weight * attn_align_scale
-                loss_bg_mask_align += loss_layer_bg_mask_align * attn_align_layer_weight * attn_align_scale
-        
+                #print(f'layer {unet_layer_idx}')
+                #print(f'subj_contrast: {loss_layer_subj_contrast:.4f}, subj_bg_contrast_at_mf: {loss_layer_subj_bg_contrast_at_mf:.4f},')
+                #print(f"bg_contrast:   {loss_layer_bg_contrast:.4f},   subj_bg_contrast_at_mb: {loss_layer_subj_bg_contrast_at_mb:.4f}")
+
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align
 
     def calc_fg_bg_key_ortho_loss(self, unet_ks, 
