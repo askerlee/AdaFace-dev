@@ -2364,7 +2364,7 @@ class LatentDiffusion(DDPM):
             # loss_subj_attn_norm_distill = 0.5, and the norm distill loss is halved.
             # If mask_image_ratio = 0, i.e., no training images have corresponding masks, then
             # loss_subj_attn_norm_distill = 1, and the norm distill loss is not discounted.
-            subj_attn_norm_distill_loss_discount = 0.5 + 0.5 * (1 - self.mask_image_ratio)
+            subj_attn_norm_distill_loss_discount = ( 0.5 + 0.5 * (1 - self.mask_image_ratio) ) * 0.5
             loss_prompt_mix_reg =  (loss_subj_attn_delta_distill \
                                       + (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) 
                                         * subj_attn_norm_distill_loss_discount) * distill_subj_attn_weight \
@@ -2614,9 +2614,9 @@ class LatentDiffusion(DDPM):
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
         attn_align_layer_weights = { #7:  1., 8: 1.,
-                                    12: 1.,
-                                    16: 1., 17: 1., 
-                                    18: 1.,
+                                    12: 0.25,
+                                    16: 0.5, 17: 0.5, 
+                                    18: 0.5,
                                     19: 1., 20: 1., 
                                     21: 1., 22: 1., 23: 1.,  24: 1.,
                                    }
