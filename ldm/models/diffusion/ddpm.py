@@ -1201,16 +1201,14 @@ class LatentDiffusion(DDPM):
             # Allow a small prob of using background token in mix reg iterations 
             # (Note Mix reg iterations are the same iterations as Ada delta reg iterations).
             # If mask_image_ratio = 1, then p_bg_token = 0.05.
+            # If mask_image_ratio = 0, then p_bg_token = 0.1.
             p_bg_token = 0.1 - 0.05 * self.mask_image_ratio
         else:
             # This iter is only doing recon on training images.
             # use_background_token is mainly for such cases. 
-            if self.use_conv_attn:
-                # If mask_image_ratio = 1, then p_bg_token = 0.95.
-                p_bg_token = 0.9 + 0.05 * self.mask_image_ratio
-            else:
-                # If mask_image_ratio = 1, then p_bg_token = 0.9.
-                p_bg_token = 0.8 + 0.1 * self.mask_image_ratio
+            # If mask_image_ratio = 1, then p_bg_token = 0.95.
+            # If mask_image_ratio = 0, then p_bg_token = 0.9.
+            p_bg_token = 0.9 + 0.05 * self.mask_image_ratio
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
@@ -2721,6 +2719,10 @@ class LatentDiffusion(DDPM):
                 avg_subj_score_at_mb = (subj_score * (1 - fg_mask3)).sum() / (1 - fg_mask3).sum()
                 avg_bg_score_at_mf   = (bg_score   * fg_mask3).sum()       / fg_mask3.sum()
                 avg_bg_score_at_mb   = (bg_score   * (1 - fg_mask3)).sum() / (1 - fg_mask3).sum()
+                #print(f'layer {unet_layer_idx}')
+                #print(f'avg_subj_score_at_mf: {avg_subj_score_at_mf:.4f}, avg_subj_score_at_mb: {avg_subj_score_at_mb:.4f}')
+                #print(f'avg_bg_score_at_mf:   {avg_bg_score_at_mf:.4f},   avg_bg_score_at_mb:   {avg_bg_score_at_mb:.4f}')
+                
                 # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations) 
                 # to be at least larger by mf_mb_contrast_score_margin = 1 than 
                 # avg_subj_score_at_mb (subj_score averaged at background locations).

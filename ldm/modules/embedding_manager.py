@@ -850,13 +850,15 @@ class EmbeddingManager(nn.Module):
 
                 
                 # Reserve 1 embedding to take both fg and cached-bg infeat. 
-                # Around half of the embeddings are fg embeddings, and the other half are bg embeddings.
+                # Half of the embeddings are fg embeddings, and (the other half - 1) are bg embeddings.
                 # If num_vectors_per_token == 1, then fg_emb_count = 0, bg_emb_count = 0.
                 # If num_vectors_per_token >= 2, then fg_emb_count = K//2, bg_emb_count = K - 1 - fg_emb_count.
+                # For example, if num_vectors_per_token = 2, then fg_emb_count = 1, bg_emb_count = 0.
+                # If num_vectors_per_token = 3, then fg_emb_count = 1, bg_emb_count = 1.
                 fg_emb_count = num_vectors_per_token // 2
                 bg_emb_count = num_vectors_per_token - 1 - fg_emb_count
 
-                use_cached_bg = (placeholder_string == self.background_string)
+                use_cached_bg = False #(placeholder_string == self.background_string)
 
                 token_ada_embedder  = AdaEmbedding(self.num_layers_per_embedder, 
                                                    num_vectors_per_token, 
