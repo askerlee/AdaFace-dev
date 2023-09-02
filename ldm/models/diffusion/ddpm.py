@@ -2016,7 +2016,7 @@ class LatentDiffusion(DDPM):
                 # extra_info['subj_indices'] and extra_info['bg_indices'] are used, instead of
                 # extra_info['subj_indices_1b'] and extra_info['bg_indices_1b']. 
                 if self.fg_bg_complementary_loss_weight > 0:
-                    loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align = \
+                    loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast = \
                                 self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
                                                                    cond[2]['unet_attnscores'],
                                                                    extra_info['subj_indices'],
@@ -2027,13 +2027,17 @@ class LatentDiffusion(DDPM):
                                                                    batch_have_fg_mask=batch_have_fg_mask
                                                                   )
                     loss += self.fg_bg_complementary_loss_weight * loss_fg_bg_complementary \
-                            + self.fg_bg_mask_align_loss_weight * (loss_fg_mask_align + loss_bg_mask_align)
+                            + self.fg_bg_mask_align_loss_weight * \
+                              (loss_fg_mask_align + loss_bg_mask_align + loss_fg_bg_contrast)
+                    
                     loss_dict.update({f'{prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach()})
                     # If fg_mask is None, then loss_fg_mask_align = loss_bg_mask_align = 0.
                     if loss_fg_mask_align > 0:
                         loss_dict.update({f'{prefix}/fg_mask_align': loss_fg_mask_align.mean().detach()})
                     if loss_bg_mask_align > 0:
                         loss_dict.update({f'{prefix}/bg_mask_align': loss_bg_mask_align.mean().detach()})
+                    if loss_fg_bg_contrast > 0:
+                        loss_dict.update({f'{prefix}/fg_bg_contrast': loss_fg_bg_contrast.mean().detach()})
 
                 # Release RAM.
                 del cond[2]['unet_attns'], cond[2]['unet_feats']
@@ -2631,8 +2635,10 @@ class LatentDiffusion(DDPM):
         loss_fg_bg_complementary = 0
         loss_fg_mask_align = 0
         loss_bg_mask_align = 0
-        
-        attn_align_scale   = 0.1
+        loss_fg_bg_contrast = 0
+
+        emb_mask_align_scale   = 0.01
+        emb_contrast_scale     = 0.1
         mf_mb_contrast_score_margin   = 0.8
         subj_bg_contrast_score_margin = 0.4
 
@@ -2748,15 +2754,16 @@ class LatentDiffusion(DDPM):
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, 
                 # so loss_fg_mask_align is much smaller than loss_bg_mask_align.
                 loss_fg_mask_align += (loss_layer_subj_contrast + loss_layer_subj_bg_contrast_at_mf) \
-                                        * attn_align_layer_weight * attn_align_scale
+                                        * attn_align_layer_weight * emb_mask_align_scale
                 loss_bg_mask_align += (loss_layer_bg_contrast   + loss_layer_subj_bg_contrast_at_mb) \
-                                        * attn_align_layer_weight * attn_align_scale
-
+                                        * attn_align_layer_weight * emb_mask_align_scale
+                loss_fg_bg_contrast += (loss_layer_subj_bg_contrast_at_mf + loss_layer_subj_bg_contrast_at_mb) \
+                                        * attn_align_layer_weight * emb_contrast_scale
                 #print(f'layer {unet_layer_idx}')
                 #print(f'subj_contrast: {loss_layer_subj_contrast:.4f}, subj_bg_contrast_at_mf: {loss_layer_subj_bg_contrast_at_mf:.4f},')
                 #print(f"bg_contrast:   {loss_layer_bg_contrast:.4f},   subj_bg_contrast_at_mb: {loss_layer_subj_bg_contrast_at_mb:.4f}")
 
-        return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align
+        return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast
 
     def calc_fg_bg_key_ortho_loss(self, unet_ks, 
                                   placeholder_indices_fg, 
