@@ -2719,9 +2719,11 @@ class LatentDiffusion(DDPM):
                 avg_subj_score_at_mb = (subj_score * (1 - fg_mask3)).sum() / (1 - fg_mask3).sum()
                 avg_bg_score_at_mf   = (bg_score   * fg_mask3).sum()       / fg_mask3.sum()
                 avg_bg_score_at_mb   = (bg_score   * (1 - fg_mask3)).sum() / (1 - fg_mask3).sum()
-                #print(f'layer {unet_layer_idx}')
-                #print(f'avg_subj_score_at_mf: {avg_subj_score_at_mf:.4f}, avg_subj_score_at_mb: {avg_subj_score_at_mb:.4f}')
-                #print(f'avg_bg_score_at_mf:   {avg_bg_score_at_mf:.4f},   avg_bg_score_at_mb:   {avg_bg_score_at_mb:.4f}')
+
+                if 'DEBUG' in os.environ:
+                    print(f'layer {unet_layer_idx}')
+                    print(f'avg_subj_score_at_mf: {avg_subj_score_at_mf:.4f}, avg_subj_score_at_mb: {avg_subj_score_at_mb:.4f}')
+                    print(f'avg_bg_score_at_mf:   {avg_bg_score_at_mf:.4f},   avg_bg_score_at_mb:   {avg_bg_score_at_mb:.4f}')
                 
                 # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations) 
                 # to be at least larger by mf_mb_contrast_score_margin = 1 than 

@@ -460,6 +460,9 @@ class AdaEmbedding(nn.Module):
             f"fg_emb_count={fg_emb_count} + bg_emb_count={bg_emb_count} > num_vectors_per_token={self.K}"
 
         self.use_cached_bg = use_cached_bg
+        if self.use_cached_bg:
+            self.cached_bg_weight = nn.Parameter(torch.tensor(0.5), requires_grad=True)
+
         # Only takes bg or fg features but not both.
         self.is_fg_only = (fg_emb_count == self.K) 
         self.is_bg_only = (bg_emb_count == self.K)
@@ -531,7 +534,7 @@ class AdaEmbedding(nn.Module):
             if self.use_attn_pooler:
                 pooler = AttentionalPooler(i, infeat_dim, out_emb_dim, infeat_grad_scale=0.5)
             else:
-                pooler = AvgPool1d() #MaskedAvgPool2d()
+                pooler = MaskedAvgPool1d() #MaskedAvgPool2d()
             poolers.append(pooler)
 
         self.poolers = nn.ModuleList(poolers)
@@ -647,8 +650,9 @@ class AdaEmbedding(nn.Module):
                     # infeat_fg, infeat_bg: [2, 320]
                     infeat_fg, infeat_bg = infeat_pooled
                     if self.use_cached_bg:
-                        # Discard infeat_bg obtained from the attn pooler, and use cached_infeat_bg instead.
-                        infeat_bg = cached_infeat_bg
+                        # Combine infeat_bg obtained from the attn pooler and cached_infeat_bg.
+                        # cached_bg_weight is initialized as 0.5, and updated through BP.
+                        infeat_bg = cached_infeat_bg * self.cached_bg_weight + infeat_bg * (1 - self.cached_bg_weight)
                     # infeat_fg_bg: [2, 640]
                     infeat_fg_bg = torch.cat([infeat_fg, infeat_bg], dim=-1)
                 else:
@@ -858,7 +862,7 @@ class EmbeddingManager(nn.Module):
                 fg_emb_count = num_vectors_per_token // 2
                 bg_emb_count = num_vectors_per_token - 1 - fg_emb_count
 
-                use_cached_bg = False #(placeholder_string == self.background_string)
+                use_cached_bg = (placeholder_string == self.background_string)
 
                 token_ada_embedder  = AdaEmbedding(self.num_layers_per_embedder, 
                                                    num_vectors_per_token, 
