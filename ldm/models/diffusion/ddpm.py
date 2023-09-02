@@ -2632,7 +2632,7 @@ class LatentDiffusion(DDPM):
         loss_fg_mask_align = 0
         loss_bg_mask_align = 0
         
-        attn_align_scale   = 0.01
+        attn_align_scale   = 0.1
         mf_mb_contrast_score_margin   = 0.8
         subj_bg_contrast_score_margin = 0.4
 
