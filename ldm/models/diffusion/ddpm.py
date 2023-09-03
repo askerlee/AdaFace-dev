@@ -2026,7 +2026,15 @@ class LatentDiffusion(DDPM):
                                                                    fg_mask=fg_mask,
                                                                    batch_have_fg_mask=batch_have_fg_mask
                                                                   )
-                    loss += self.fg_bg_complementary_loss_weight * loss_fg_bg_complementary \
+
+                    # If mask_image_ratio = 1, i.e., all training images have corresponding masks, then 
+                    # complementary_loss_discount = 0.25, and the complementary loss is made 1/4.
+                    # If mask_image_ratio = 0, i.e., no training images have corresponding masks, then
+                    # complementary_loss_discount = 1, and the complementary loss is not discounted.
+                    complementary_loss_discount = 0.25 + 0.75 * (1 - self.mask_image_ratio)
+
+                    loss += self.fg_bg_complementary_loss_weight * complementary_loss_discount \
+                            * loss_fg_bg_complementary \
                             + self.fg_bg_mask_align_loss_weight * \
                               (loss_fg_mask_align + loss_bg_mask_align + loss_fg_bg_contrast)
                     
@@ -2363,10 +2371,10 @@ class LatentDiffusion(DDPM):
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.4
             # If mask_image_ratio = 1, i.e., all training images have corresponding masks, then 
-            # loss_subj_attn_norm_distill = 0.5, and the norm distill loss is halved.
+            # loss_subj_attn_norm_distill = 0.25, and the norm distill loss is made 1/4.
             # If mask_image_ratio = 0, i.e., no training images have corresponding masks, then
             # loss_subj_attn_norm_distill = 1, and the norm distill loss is not discounted.
-            subj_attn_norm_distill_loss_discount = ( 0.5 + 0.5 * (1 - self.mask_image_ratio) ) * 0.5
+            subj_attn_norm_distill_loss_discount = 0.25 + 0.75 * (1 - self.mask_image_ratio)
             loss_prompt_mix_reg =  (loss_subj_attn_delta_distill \
                                       + (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) 
                                         * subj_attn_norm_distill_loss_discount) * distill_subj_attn_weight \
@@ -2686,7 +2694,7 @@ class LatentDiffusion(DDPM):
             
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_align_layer_weight
 
-            if fg_mask is not None:
+            if (fg_mask is not None) and (batch_have_fg_mask.sum() > 0):
                 score_mat = unet_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
                 # subj_score: [8, 8, 64] -> [2, 4, 8, 64] mean among K_fg embeddings -> [2, 8, 64]
                 subj_score = score_mat[placeholder_indices_fg].reshape(BS, K_fg, *score_mat.shape[2:]).mean(dim=1)
@@ -2720,16 +2728,18 @@ class LatentDiffusion(DDPM):
                     continue
 
                 # subj, bg: subject embedding,         background embedding.
-                # mf, mb:   mask foreground locations, mask background locations.
-                avg_subj_score_at_mf = (subj_score * fg_mask3).sum()       / fg_mask3.sum()
-                avg_subj_score_at_mb = (subj_score * (1 - fg_mask3)).sum() / (1 - fg_mask3).sum()
-                avg_bg_score_at_mf   = (bg_score   * fg_mask3).sum()       / fg_mask3.sum()
-                avg_bg_score_at_mb   = (bg_score   * (1 - fg_mask3)).sum() / (1 - fg_mask3).sum()
+                # mf,   mb: mask foreground locations, mask background locations.
+                # sum(dim=(1,2)): avoid summing across the batch dimension. 
+                # It's meaningless to average among the instances.
+                avg_subj_score_at_mf = (subj_score * fg_mask3).sum(dim=(1,2))       / fg_mask3.sum(dim=(1,2))
+                avg_subj_score_at_mb = (subj_score * (1 - fg_mask3)).sum(dim=(1,2)) / (1 - fg_mask3).sum(dim=(1,2))
+                avg_bg_score_at_mf   = (bg_score   * fg_mask3).sum(dim=(1,2))       / fg_mask3.sum(dim=(1,2))
+                avg_bg_score_at_mb   = (bg_score   * (1 - fg_mask3)).sum(dim=(1,2)) / (1 - fg_mask3).sum(dim=(1,2))
 
                 if 'DEBUG' in os.environ:
                     print(f'layer {unet_layer_idx}')
-                    print(f'avg_subj_score_at_mf: {avg_subj_score_at_mf:.4f}, avg_subj_score_at_mb: {avg_subj_score_at_mb:.4f}')
-                    print(f'avg_bg_score_at_mf:   {avg_bg_score_at_mf:.4f},   avg_bg_score_at_mb:   {avg_bg_score_at_mb:.4f}')
+                    print(f'avg_subj_score_at_mf: {avg_subj_score_at_mf.mean():.4f}, avg_subj_score_at_mb: {avg_subj_score_at_mb.mean():.4f}')
+                    print(f'avg_bg_score_at_mf:   {avg_bg_score_at_mf.mean():.4f},   avg_bg_score_at_mb:   {avg_bg_score_at_mb.mean():.4f}')
                 
                 # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations) 
                 # to be at least larger by mf_mb_contrast_score_margin = 1 than 
@@ -2753,15 +2763,22 @@ class LatentDiffusion(DDPM):
                 loss_layer_subj_bg_contrast_at_mb   = torch.clip(avg_subj_score_at_mb   + subj_bg_contrast_score_margin - avg_bg_score_at_mb,   min=0)
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, 
                 # so loss_fg_mask_align is much smaller than loss_bg_mask_align.
-                loss_fg_mask_align += (loss_layer_subj_contrast + loss_layer_subj_bg_contrast_at_mf) \
+                loss_fg_mask_align  += (loss_layer_subj_contrast + loss_layer_subj_bg_contrast_at_mf) \
                                         * attn_align_layer_weight * emb_mask_align_scale
-                loss_bg_mask_align += (loss_layer_bg_contrast   + loss_layer_subj_bg_contrast_at_mb) \
+                loss_bg_mask_align  += (loss_layer_bg_contrast   + loss_layer_subj_bg_contrast_at_mb) \
                                         * attn_align_layer_weight * emb_mask_align_scale
                 loss_fg_bg_contrast += (loss_layer_subj_bg_contrast_at_mf + loss_layer_subj_bg_contrast_at_mb) \
                                         * attn_align_layer_weight * emb_contrast_scale
                 #print(f'layer {unet_layer_idx}')
                 #print(f'subj_contrast: {loss_layer_subj_contrast:.4f}, subj_bg_contrast_at_mf: {loss_layer_subj_bg_contrast_at_mf:.4f},')
                 #print(f"bg_contrast:   {loss_layer_bg_contrast:.4f},   subj_bg_contrast_at_mb: {loss_layer_subj_bg_contrast_at_mb:.4f}")
+
+        if batch_have_fg_mask.sum() > 0:
+            loss_fg_mask_align  = (loss_fg_mask_align  * batch_have_fg_mask).sum() / batch_have_fg_mask.sum()
+            loss_bg_mask_align  = (loss_bg_mask_align  * batch_have_fg_mask).sum() / batch_have_fg_mask.sum()
+            loss_fg_bg_contrast = (loss_fg_bg_contrast * batch_have_fg_mask).sum() / batch_have_fg_mask.sum()
+        # Otherwise, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast are all initial 0.
+        # No need further processing.
 
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast
 
