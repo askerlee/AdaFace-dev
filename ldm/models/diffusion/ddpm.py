@@ -2031,7 +2031,7 @@ class LatentDiffusion(DDPM):
                     # complementary_loss_discount = 0.25, and the complementary loss is made 1/4.
                     # If mask_image_ratio = 0, i.e., no training images have corresponding masks, then
                     # complementary_loss_discount = 1, and the complementary loss is not discounted.
-                    complementary_loss_discount = 0.25 + 0.75 * (1 - self.mask_image_ratio)
+                    complementary_loss_discount = 1 #0.25 + 0.75 * (1 - self.mask_image_ratio)
 
                     loss += self.fg_bg_complementary_loss_weight * complementary_loss_discount \
                             * loss_fg_bg_complementary \
@@ -2645,7 +2645,7 @@ class LatentDiffusion(DDPM):
         loss_bg_mask_align = 0
         loss_fg_bg_contrast = 0
 
-        emb_mask_align_scale   = 0.01
+        emb_mask_align_scale   = 0.0
         emb_contrast_scale     = 0.1
         mf_mb_contrast_score_margin   = 0.8
         subj_bg_contrast_score_margin = 0.4
