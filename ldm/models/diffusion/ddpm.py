@@ -2721,7 +2721,7 @@ class LatentDiffusion(DDPM):
                 # Repeat 8 times to match the number of attention heads.
                 fg_mask2 = fg_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 fg_mask3 = torch.zeros_like(fg_mask2)
-                fg_mask3[fg_mask2 >  1e-6] = 1
+                fg_mask3[fg_mask2 >  1e-6] = 1.
                 if ((1 - fg_mask3).sum(dim=(1, 2)) == 0).any():
                     # Very rare cases. Safe to skip.
                     print("WARNING: fg_mask3 has all-one masks.")
@@ -2731,10 +2731,15 @@ class LatentDiffusion(DDPM):
                 # mf,   mb: mask foreground locations, mask background locations.
                 # sum(dim=(1,2)): avoid summing across the batch dimension. 
                 # It's meaningless to average among the instances.
-                avg_subj_score_at_mf = (subj_score * fg_mask3).sum(dim=(1,2))       / fg_mask3.sum(dim=(1,2))
-                avg_subj_score_at_mb = (subj_score * (1 - fg_mask3)).sum(dim=(1,2)) / (1 - fg_mask3).sum(dim=(1,2))
-                avg_bg_score_at_mf   = (bg_score   * fg_mask3).sum(dim=(1,2))       / fg_mask3.sum(dim=(1,2))
-                avg_bg_score_at_mb   = (bg_score   * (1 - fg_mask3)).sum(dim=(1,2)) / (1 - fg_mask3).sum(dim=(1,2))
+                subj_score_at_mf = subj_score * fg_mask3
+                subj_score_at_mb = subj_score * (1 - fg_mask3)
+                bg_score_at_mf   = bg_score   * fg_mask3
+                bg_score_at_mb   = bg_score   * (1 - fg_mask3)
+
+                avg_subj_score_at_mf = subj_score_at_mf.sum(dim=(1,2), keepdim=True)  / fg_mask3.sum(dim=(1,2), keepdim=True)
+                avg_subj_score_at_mb = subj_score_at_mb.sum(dim=(1,2), keepdim=True)  / (1 - fg_mask3).sum(dim=(1,2), keepdim=True)
+                avg_bg_score_at_mf   = bg_score_at_mf.sum(dim=(1,2), keepdim=True)    / fg_mask3.sum(dim=(1,2), keepdim=True)
+                avg_bg_score_at_mb   = bg_score_at_mb.sum(dim=(1,2), keepdim=True)    / (1 - fg_mask3).sum(dim=(1,2), keepdim=True)
 
                 if 'DEBUG' in os.environ:
                     print(f'layer {unet_layer_idx}')
@@ -2745,22 +2750,22 @@ class LatentDiffusion(DDPM):
                 # to be at least larger by mfmb_contrast_score_margin = 1 than 
                 # avg_subj_score_at_mb (subj_score averaged at background locations).
                 # If not, clip() > 0, incurring a loss.
-                loss_layer_subj_mfmb_contrast      = torch.clip(avg_subj_score_at_mb + mfmb_contrast_score_margin   - avg_subj_score_at_mf,   min=0)
+                loss_layer_subj_mfmb_contrast      = torch.clip(subj_score_at_mb + mfmb_contrast_score_margin   - avg_subj_score_at_mf,   min=0).mean()
                 # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
                 # to be at least larger by mfmb_contrast_score_margin = 1 than
                 # avg_bg_score_at_mf (bg_score averaged at foreground locations).
                 # If not, clip() > 0, incurring a loss.
-                loss_layer_bg_mfmb_contrast        = torch.clip(avg_bg_score_at_mf   + mfmb_contrast_score_margin   - avg_bg_score_at_mb,     min=0)
+                loss_layer_bg_mfmb_contrast        = torch.clip(bg_score_at_mf   + mfmb_contrast_score_margin   - avg_bg_score_at_mb,     min=0).mean()
                 # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations)
                 # to be at least larger by subj_bg_contrast_score_margin = 0.5 than
                 # avg_bg_score_at_mf (bg_score averaged at foreground locations).
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, as avg_bg_score_at_mf 
                 # usually takes a much smaller value than avg_subj_score_at_mf.
-                loss_layer_subj_bg_contrast_at_mf  = torch.clip(avg_bg_score_at_mf    + subj_bg_contrast_score_margin - avg_subj_score_at_mf,  min=0)
+                loss_layer_subj_bg_contrast_at_mf  = torch.clip(bg_score_at_mf    + subj_bg_contrast_score_margin - avg_subj_score_at_mf,  min=0).mean()
                 # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
                 # to be at least larger by subj_bg_contrast_score_margin = 0.5 than
                 # avg_subj_score_at_mb (subj_score averaged at background locations).
-                loss_layer_subj_bg_contrast_at_mb  = torch.clip(avg_subj_score_at_mb   + subj_bg_contrast_score_margin - avg_bg_score_at_mb,   min=0)
+                loss_layer_subj_bg_contrast_at_mb  = torch.clip(subj_score_at_mb   + subj_bg_contrast_score_margin - avg_bg_score_at_mb,   min=0).mean()
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, 
                 # so loss_fg_mask_align is much smaller than loss_bg_mask_align.
                 loss_fg_mask_align  += loss_layer_subj_mfmb_contrast \
