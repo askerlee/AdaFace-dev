@@ -629,7 +629,7 @@ def patch_multi_embeddings(text_embedding, placeholder_indices_N, divide_scheme=
     elif divide_scheme == 'none' or divide_scheme is None:
         D = 1
 
-    repl_text_embedding[:, placeholder_indices_N] = text_embedding[:, placeholder_indices_N0].repeat(1, M, 1) / 1
+    repl_text_embedding[:, placeholder_indices_N] = text_embedding[:, placeholder_indices_N0].repeat(1, M, 1) / D
 
     # Keep the embeddings at almost everywhere, but only replace the embeddings at placeholder_indices_N.
     # Directly replacing by slicing with placeholder_indices_N will cause errors.
