@@ -26,7 +26,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, halve_token_indices, \
-                       normalize_dict_values
+                       normalize_dict_values, mean_nonzero
 
 from ldm.modules.ema import LitEma
 from ldm.modules.sophia import SophiaG
@@ -2750,22 +2750,26 @@ class LatentDiffusion(DDPM):
                 # to be at least larger by mfmb_contrast_score_margin = 1 than 
                 # avg_subj_score_at_mb (subj_score averaged at background locations).
                 # If not, clip() > 0, incurring a loss.
-                loss_layer_subj_mfmb_contrast      = torch.clip(subj_score_at_mb + mfmb_contrast_score_margin   - avg_subj_score_at_mf,   min=0).mean()
+                loss_layer_subj_mfmb_contrast      = torch.clip(subj_score_at_mb + mfmb_contrast_score_margin   - avg_subj_score_at_mf,   min=0)
+                loss_layer_subj_mfmb_contrast      = mean_nonzero(loss_layer_subj_mfmb_contrast)
                 # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
                 # to be at least larger by mfmb_contrast_score_margin = 1 than
                 # avg_bg_score_at_mf (bg_score averaged at foreground locations).
                 # If not, clip() > 0, incurring a loss.
-                loss_layer_bg_mfmb_contrast        = torch.clip(bg_score_at_mf   + mfmb_contrast_score_margin   - avg_bg_score_at_mb,     min=0).mean()
+                loss_layer_bg_mfmb_contrast        = torch.clip(bg_score_at_mf   + mfmb_contrast_score_margin   - avg_bg_score_at_mb,     min=0)
+                loss_layer_bg_mfmb_contrast        = mean_nonzero(loss_layer_bg_mfmb_contrast)
                 # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations)
                 # to be at least larger by subj_bg_contrast_score_margin = 0.5 than
                 # avg_bg_score_at_mf (bg_score averaged at foreground locations).
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, as avg_bg_score_at_mf 
                 # usually takes a much smaller value than avg_subj_score_at_mf.
-                loss_layer_subj_bg_contrast_at_mf  = torch.clip(bg_score_at_mf    + subj_bg_contrast_score_margin - avg_subj_score_at_mf,  min=0).mean()
+                loss_layer_subj_bg_contrast_at_mf  = torch.clip(bg_score_at_mf    + subj_bg_contrast_score_margin - avg_subj_score_at_mf,  min=0)
+                loss_layer_subj_bg_contrast_at_mf  = mean_nonzero(loss_layer_subj_bg_contrast_at_mf)
                 # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
                 # to be at least larger by subj_bg_contrast_score_margin = 0.5 than
                 # avg_subj_score_at_mb (subj_score averaged at background locations).
-                loss_layer_subj_bg_contrast_at_mb  = torch.clip(subj_score_at_mb   + subj_bg_contrast_score_margin - avg_bg_score_at_mb,   min=0).mean()
+                loss_layer_subj_bg_contrast_at_mb  = torch.clip(subj_score_at_mb   + subj_bg_contrast_score_margin - avg_bg_score_at_mb,   min=0)
+                loss_layer_subj_bg_contrast_at_mb  = mean_nonzero(loss_layer_subj_bg_contrast_at_mb)
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, 
                 # so loss_fg_mask_align is much smaller than loss_bg_mask_align.
                 loss_fg_mask_align  += loss_layer_subj_mfmb_contrast \

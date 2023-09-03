@@ -741,3 +741,8 @@ def normalize_dict_values(d):
     value_sum = np.sum(list(d.values()))
     d = { k: v / value_sum for k, v in d.items() }
     return d
+
+def mean_nonzero(ts):
+    if ts[ts != 0].numel() == 0:
+        return 0
+    return ts[ts != 0].mean()
