@@ -1448,8 +1448,8 @@ class LatentDiffusion(DDPM):
                         # won't be mixed, but simply repeated.
 
                         total_training_steps = self.trainer.max_steps
-                        INIT_CLS_EMB_SCALE  = 0.1
-                        FINAL_CLS_EMB_SCALE = 0.2
+                        INIT_CLS_EMB_SCALE  = 0 # 0.1
+                        FINAL_CLS_EMB_SCALE = 0 # 0.2
                         # Linearly increase the scale of the class embeddings from 0.1 to 0.3, i.e., 
                         # Linearly decrease the scale of the subject embeddings from 0.9 to 0.7, 
                         # so that the distillation keeps being effective. Otherwise the teacher 
@@ -1457,24 +1457,29 @@ class LatentDiffusion(DDPM):
                         subj_emb_scale = 1 - INIT_CLS_EMB_SCALE \
                                          - (FINAL_CLS_EMB_SCALE - INIT_CLS_EMB_SCALE) * np.random.uniform(0.8, 1.3) \
                                             * self.global_step / total_training_steps
-                        # mix_embeddings('add'):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
-                        # where they are subj_comp_emb * subj_emb_scale + cls_comp_emb * (1 - subj_emb_scale).
-                        # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
-                        # Each is of a single instance. So only provides subj_indices_half_N 
-                        # (multiple token indices of the same instance).
-                        MIX_WHOLE_SEQ = False
-                        if MIX_WHOLE_SEQ:
-                            mix_indices = None
+
+                        if subj_emb_scale < 1:
+                            # mix_embeddings('add'):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
+                            # where they are subj_comp_emb * subj_emb_scale + cls_comp_emb * (1 - subj_emb_scale).
+                            # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
+                            # Each is of a single instance. So only provides subj_indices_half_N 
+                            # (multiple token indices of the same instance).
+                            MIX_WHOLE_SEQ = False
+                            if MIX_WHOLE_SEQ:
+                                mix_indices = None
+                            else:
+                                # Only mix at subject embeddings.
+                                mix_indices = subj_indices_half_N
+
+                            subj_comp_emb_v   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
+                                                                mix_indices, c1_subj_scale=subj_emb_scale)
+                            subj_single_emb_v = mix_embeddings('add', subj_single_emb, cls_single_emb,
+                                                                mix_indices, c1_subj_scale=subj_emb_scale)
                         else:
-                            # Only mix at subject embeddings.
-                            mix_indices = subj_indices_half_N
+                            subj_comp_emb_v   = subj_comp_emb
+                            subj_single_emb_v = subj_single_emb
 
-                        subj_comp_emb_v   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
-                                                            mix_indices, c1_subj_scale=subj_emb_scale)
-                        subj_single_emb_v = mix_embeddings('add', subj_single_emb, cls_single_emb,
-                                                            mix_indices, c1_subj_scale=subj_emb_scale)
-
-                        if random.random() < 1: #0.5:
+                        if random.random() < 0.8: #1: #0.5:
                             mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_v,   cls_comp_emb],   dim=1)
                             mix_single_emb_all_layers = torch.cat([subj_single_emb_v, cls_single_emb], dim=1)
                         else:
