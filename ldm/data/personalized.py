@@ -153,8 +153,6 @@ class PersonalizedBase(Dataset):
             if num_valid_fg_masks < len(self.image_paths):
                 print("WARNING: {} fg masks are missing!".format(len(self.image_paths) - num_valid_fg_masks))
         
-        self.mask_image_ratio = num_valid_fg_masks / len(self.image_paths)
-
         self.num_images = len(self.image_paths)
         self._length = self.num_images 
         self.placeholder_string  = placeholder_string
@@ -451,6 +449,5 @@ class PersonalizedBase(Dataset):
         # If no fg_mask is loaded from file. 'fg_mask' is all-1, and 'has_fg_mask' is set to False.
         # 'fg_mask' has to be present in all examples, otherwise collation will cause exceptions.
         example["fg_mask"]      = fg_mask / 255
-        example["mask_image_ratio"] = self.mask_image_ratio
         
         return example

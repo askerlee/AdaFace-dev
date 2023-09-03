@@ -134,7 +134,7 @@ class DDPM(pl.LightningModule):
         # If use_conv_attn, the subject is well expressed, and use_fp_trick is unnecessary 
         # (actually harmful).
         self.use_fp_trick = False if self.use_conv_attn else use_fp_trick
-        self.mask_image_ratio = 0
+        self.mask_avail_ratio = 0
 
         self.cached_inits_available          = False
         self.cached_inits                    = None
@@ -1194,21 +1194,22 @@ class LatentDiffusion(DDPM):
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
         x, c = self.get_input(batch, self.first_stage_key)
 
-        # batch["mask_image_ratio"] is a batch of identical mask_image_ratio. We only need one.
-        self.mask_image_ratio = batch["mask_image_ratio"][0]
+        batch_have_fg_mask = batch['has_fg_mask']
+
+        self.mask_avail_ratio = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
 
         if self.iter_flags['do_mix_prompt_distillation']:
             # Allow a small prob of using background token in mix reg iterations 
             # (Note Mix reg iterations are the same iterations as Ada delta reg iterations).
-            # If mask_image_ratio = 1, then p_bg_token = 0.05.
-            # If mask_image_ratio = 0, then p_bg_token = 0.1.
-            p_bg_token = 0.1 - 0.05 * self.mask_image_ratio
+            # If mask_avail_ratio = 1, then p_bg_token = 0.05.
+            # If mask_avail_ratio = 0, then p_bg_token = 0.1.
+            p_bg_token = 0.1 - 0.05 * self.mask_avail_ratio
         else:
             # This iter is only doing recon on training images.
             # use_background_token is mainly for such cases. 
-            # If mask_image_ratio = 1, then p_bg_token = 0.95.
-            # If mask_image_ratio = 0, then p_bg_token = 0.9.
-            p_bg_token = 0.9 + 0.05 * self.mask_image_ratio
+            # If mask_avail_ratio = 1, then p_bg_token = 0.95.
+            # If mask_avail_ratio = 0, then p_bg_token = 0.9.
+            p_bg_token = 0.9 + 0.05 * self.mask_avail_ratio
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
@@ -1303,7 +1304,6 @@ class LatentDiffusion(DDPM):
         else:
             fg_mask = None
 
-        batch_have_fg_mask = batch['has_fg_mask']
         loss = self(x, c, delta_prompts, img_mask=img_mask, fg_mask=fg_mask, 
                     batch_have_fg_mask=batch_have_fg_mask, **kwargs)
 
@@ -1448,8 +1448,12 @@ class LatentDiffusion(DDPM):
                         # won't be mixed, but simply repeated.
 
                         total_training_steps = self.trainer.max_steps
-                        INIT_CLS_EMB_SCALE  = 0 # 0.1
-                        FINAL_CLS_EMB_SCALE = 0 # 0.2
+                        # If mask_avail_ratio = 1, then INIT_CLS_EMB_SCALE = 0, FINAL_CLS_EMB_SCALE = 0.
+                        # i.e., no cls_single_emb / cls_comp_emb will be mixed into 
+                        # subj_single_emb / subj_comp_emb to form subj_single_emb_v / subj_comp_emb_v.
+                        # If mask_avail_ratio = 0, then INIT_CLS_EMB_SCALE = 0.1, FINAL_CLS_EMB_SCALE = 0.2.
+                        INIT_CLS_EMB_SCALE  = 0.1 * (1 - self.mask_avail_ratio)
+                        FINAL_CLS_EMB_SCALE = 0.2 * (1 - self.mask_avail_ratio)
                         # Linearly increase the scale of the class embeddings from 0.1 to 0.3, i.e., 
                         # Linearly decrease the scale of the subject embeddings from 0.9 to 0.7, 
                         # so that the distillation keeps being effective. Otherwise the teacher 
@@ -2032,11 +2036,11 @@ class LatentDiffusion(DDPM):
                                                                    batch_have_fg_mask=batch_have_fg_mask
                                                                   )
 
-                    # If mask_image_ratio = 1, i.e., all training images have corresponding masks, then 
+                    # If mask_avail_ratio = 1, i.e., all training images have corresponding masks, then 
                     # complementary_loss_discount = 0.25, and the complementary loss is made 1/4.
-                    # If mask_image_ratio = 0, i.e., no training images have corresponding masks, then
+                    # If mask_avail_ratio = 0, i.e., no training images have corresponding masks, then
                     # complementary_loss_discount = 1, and the complementary loss is not discounted.
-                    complementary_loss_discount = 1 #0.25 + 0.75 * (1 - self.mask_image_ratio)
+                    complementary_loss_discount = 1 #0.25 + 0.75 * (1 - self.mask_avail_ratio)
 
                     loss += self.fg_bg_complementary_loss_weight * complementary_loss_discount \
                             * loss_fg_bg_complementary \
@@ -2375,11 +2379,11 @@ class LatentDiffusion(DDPM):
             distill_feat_weight      = 0.5 if (not self.iter_flags['reuse_init_conds']) else 0.3
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.4
-            # If mask_image_ratio = 1, i.e., all training images have corresponding masks, then 
+            # If mask_avail_ratio = 1, i.e., all training images have corresponding masks, then 
             # loss_subj_attn_norm_distill = 0.25, and the norm distill loss is made 1/4.
-            # If mask_image_ratio = 0, i.e., no training images have corresponding masks, then
+            # If mask_avail_ratio = 0, i.e., no training images have corresponding masks, then
             # loss_subj_attn_norm_distill = 1, and the norm distill loss is not discounted.
-            subj_attn_norm_distill_loss_discount = 0.25 + 0.75 * (1 - self.mask_image_ratio)
+            subj_attn_norm_distill_loss_discount = 0.25 + 0.75 * (1 - self.mask_avail_ratio)
             loss_prompt_mix_reg =  (loss_subj_attn_delta_distill \
                                       + (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) 
                                         * subj_attn_norm_distill_loss_discount) * distill_subj_attn_weight \
