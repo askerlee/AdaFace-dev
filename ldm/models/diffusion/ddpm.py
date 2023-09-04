@@ -2103,7 +2103,7 @@ class LatentDiffusion(DDPM):
             loss += self.l_simple_weight * loss_simple
 
             loss_vlb_pixels = self.get_loss(model_output, target, mean=False)
-            loss_vlb_pixels = (self.lvlb_weights[t] * loss_vlb_pixels)
+            loss_vlb_pixels = self.lvlb_weights[t].reshape(-1, 1, 1, 1) * loss_vlb_pixels
 
             if self.iter_flags['use_background_token']:
                 loss_vlb = loss_vlb_pixels.mean()
