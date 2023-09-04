@@ -748,5 +748,5 @@ def masked_mean(ts, mask):
     if mask.sum() == 0:
         return 0
     
-    return (ts * mask) / mask.sum()
+    return (ts * mask).sum() / mask.sum()
 
