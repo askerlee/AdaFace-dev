@@ -2655,7 +2655,7 @@ class LatentDiffusion(DDPM):
         loss_fg_bg_contrast = 0
 
         emb_mfmb_contrast_scale         = 0.01
-        fgbg_emb_contrast_scale         = 0.02
+        fgbg_emb_contrast_scale         = 0.05
         mfmb_contrast_score_margin      = 0.25
         subj_bg_contrast_score_margin   = 0.25
 
@@ -2760,6 +2760,8 @@ class LatentDiffusion(DDPM):
                 # avg_subj_score_at_mb (subj_score averaged at background locations).
                 # If not, clip() > 0, incurring a loss.
                 loss_layer_subj_mfmb_contrast      = torch.clip(subj_score_at_mb + mfmb_contrast_score_margin   - avg_subj_score_at_mf,   min=0)
+                # Compared to mean_nonzero(), mean() is like dynamically reducing the loss weight when more and more 
+                # activations conform to the margin restrictions.
                 loss_layer_subj_mfmb_contrast      = loss_layer_subj_mfmb_contrast.mean()
                 # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
                 # to be at least larger by mfmb_contrast_score_margin = 1 than
