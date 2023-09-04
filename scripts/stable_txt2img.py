@@ -35,6 +35,13 @@ def parse_args():
         help="the prompt to render"
     )
     parser.add_argument(
+        "--neg_prompt",
+        type=str,
+        nargs="?",
+        default="",
+        help="the prompt to render"
+    )    
+    parser.add_argument(
         "--outdir",
         type=str,
         nargs="?",
@@ -489,7 +496,7 @@ def main(opt):
 
                         if opt.scale != 1.0:
                             try:
-                                uc = model.get_learned_conditioning(batch_size * [""])
+                                uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt])
                             except:
                                 breakpoint()
 
