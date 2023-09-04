@@ -26,6 +26,9 @@ def parse_args():
                         type=int, default=argparse.SUPPRESS,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
 
+    parser.add_argument("--include_bg_string", 
+                        action="store_true", 
+                        help="Whether to include the background string in the prompts. Only valid if --background_string is specified.")
     parser.add_argument("--background_string", 
                         type=str, default=argparse.SUPPRESS,
                         help="Background string which will be used in prompts to denote the background in training images.")
@@ -42,6 +45,9 @@ def parse_args():
     
     parser.add_argument("--prompt", type=str, default=None,
                         help="Prompt to use for generating samples, using {} for placeholder (default: None)")
+    parser.add_argument("--neg_prompt", type=str, default=argparse.SUPPRESS,
+                        help="Negative prompt to use for generating samples (default: None)")
+    
     # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.
     parser.add_argument("--z_suffix_type", default=argparse.SUPPRESS, 
                         help="Append this string to the subject placeholder token during inference "
@@ -306,7 +312,7 @@ if __name__ == "__main__":
         outdir = args.out_dir_tmpl + "-" + args.method
         os.makedirs(outdir, exist_ok=True)
 
-        if hasattr(args, "background_string"):
+        if hasattr(args, "background_string") and args.include_bg_string:
             background_string = "with background " + args.background_string + ", " * (args.num_vectors_per_bg_token - 1)
         else:
             background_string = ""
@@ -413,6 +419,9 @@ if __name__ == "__main__":
         if hasattr(args, 'background_string'):
             command_line += f" --background_string {args.background_string}"
 
+        if hasattr(args, 'neg_prompt'):
+            command_line += f" --neg_prompt \"{args.neg_prompt}\""
+            
         if args.compare_with_pardir:
             # Do evaluation on authenticity/composition.
             subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)

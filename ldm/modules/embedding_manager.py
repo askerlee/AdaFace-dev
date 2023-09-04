@@ -897,7 +897,7 @@ class EmbeddingManager(nn.Module):
             else:
                 self.initial_embeddings[placeholder_string] = None
 
-        self.static_subj_embs_dict = None
+        self.static_subj_embs_dict = {}
         self.clear_ada_layer_temp_info()
         self.clear_delta_loss_emb_mask()
         self.img_mask = None
@@ -960,7 +960,8 @@ class EmbeddingManager(nn.Module):
                                                       self.string_to_param_dict,
                                                       B, N, self.num_unet_layers, device)
             # Cache the static embeddings to be used in ada embedding computation later.
-            self.static_subj_embs_dict = static_subj_embs_dict
+            for k in static_subj_embs_dict:
+                self.static_subj_embs_dict[k] = static_subj_embs_dict[k]
 
             return static_embeddings
     
