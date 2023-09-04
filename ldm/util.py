@@ -742,7 +742,11 @@ def normalize_dict_values(d):
     d = { k: v / value_sum for k, v in d.items() }
     return d
 
-def mean_nonzero(ts):
-    if ts[ts != 0].numel() == 0:
+def masked_mean(ts, mask):
+    if mask is None:
+        return ts.mean()
+    if mask.sum() == 0:
         return 0
-    return ts[ts != 0].mean()
+    
+    return (ts * mask) / mask.sum()
+

@@ -26,7 +26,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, halve_token_indices, \
-                       normalize_dict_values, mean_nonzero
+                       normalize_dict_values, masked_mean
 
 from ldm.modules.ema import LitEma
 from ldm.modules.sophia import SophiaG
@@ -2080,7 +2080,7 @@ class LatentDiffusion(DDPM):
                 loss_simple = loss_simple_pixels.mean()
             else:
                 # recon loss only on the foreground pixels.
-                loss_simple = mean_nonzero(loss_simple_pixels * fg_mask)
+                loss_simple = masked_mean(loss_simple_pixels, fg_mask)
 
             loss_dict.update({f'{prefix}/loss_simple': loss_simple.detach()})
 
@@ -2093,7 +2093,7 @@ class LatentDiffusion(DDPM):
                 loss_simple = loss_simple_pixels.mean()
             else:
                 # Only evaluate recon loss on the foreground pixels.
-                loss_simple = mean_nonzero(loss_simple_pixels * fg_mask)
+                loss_simple = masked_mean(loss_simple_pixels, fg_mask)
 
             # loss = loss_simple / torch.exp(self.logvar) + self.logvar
             if self.learn_logvar:
@@ -2109,7 +2109,7 @@ class LatentDiffusion(DDPM):
                 loss_vlb = loss_vlb_pixels.mean()
             else:
                 # Only evaluate loss_vlb on the foreground pixels.
-                loss_vlb = mean_nonzero(loss_vlb_pixels * fg_mask)
+                loss_vlb = masked_mean(loss_vlb_pixels, fg_mask)
 
             loss_dict.update({f'{prefix}/loss_vlb': loss_vlb.detach()})
             # original_elbo_weight = 0, so that loss_vlb is disabled.
@@ -2678,9 +2678,9 @@ class LatentDiffusion(DDPM):
         loss_fg_bg_contrast = 0
 
         emb_mfmb_contrast_scale         = 0.01
-        fgbg_emb_contrast_scale         = 0.05
-        mfmb_contrast_score_margin      = 0.25
-        subj_bg_contrast_score_margin   = 0.25
+        fgbg_emb_contrast_scale         = 0.1
+        mfmb_contrast_score_margin      = 0.2
+        subj_bg_contrast_score_margin   = 0.2
 
         # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
         # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
@@ -2783,7 +2783,7 @@ class LatentDiffusion(DDPM):
                 # avg_subj_score_at_mb (subj_score averaged at background locations).
                 # If not, clip() > 0, incurring a loss.
                 loss_layer_subj_mfmb_contrast      = torch.clip(subj_score_at_mb + mfmb_contrast_score_margin   - avg_subj_score_at_mf,   min=0)
-                # Compared to mean_nonzero(), mean() is like dynamically reducing the loss weight when more and more 
+                # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
                 # activations conform to the margin restrictions.
                 loss_layer_subj_mfmb_contrast      = loss_layer_subj_mfmb_contrast.mean()
                 # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
