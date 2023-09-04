@@ -2076,33 +2076,42 @@ class LatentDiffusion(DDPM):
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_simple_pixels = self.get_loss(model_output, target, mean=False)
             if self.iter_flags['use_background_token']:
+                # recon loss on the whole image.
+                loss_simple = loss_simple_pixels.mean()
+            else:
+                # recon loss only on the foreground pixels.
+                loss_simple = mean_nonzero(loss_simple_pixels * fg_mask)
+
+            loss_dict.update({f'{prefix}/loss_simple': loss_simple.detach()})
+
+            logvar_t = self.logvar.to(self.device)[t].reshape(-1, 1, 1, 1)
+            # In theory, the loss can be weighted according to t. However in practice,
+            # all the weights are the same, so this step is useless.
+            loss_simple_pixels = loss_simple_pixels / torch.exp(logvar_t) + logvar_t
+
+            if self.iter_flags['use_background_token']:
                 loss_simple = loss_simple_pixels.mean()
             else:
                 # Only evaluate recon loss on the foreground pixels.
                 loss_simple = mean_nonzero(loss_simple_pixels * fg_mask)
 
-            loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean().detach()})
-
-            logvar_t = self.logvar.to(self.device)[t]
-            # In theory, the loss can be weighted according to t. However in practice,
-            # all the weights are the same, so this step is useless.
-            loss_simple = loss_simple / torch.exp(logvar_t) + logvar_t
             # loss = loss_simple / torch.exp(self.logvar) + self.logvar
             if self.learn_logvar:
-                loss_dict.update({f'{prefix}/loss_gamma': loss_simple.mean().detach()})
+                loss_dict.update({f'{prefix}/loss_gamma': loss_simple.detach()})
                 loss_dict.update({'logvar': self.logvar.data.mean().detach()})
 
             loss += self.l_simple_weight * loss_simple
 
             loss_vlb_pixels = self.get_loss(model_output, target, mean=False)
+            loss_vlb_pixels = (self.lvlb_weights[t] * loss_vlb_pixels)
+
             if self.iter_flags['use_background_token']:
                 loss_vlb = loss_vlb_pixels.mean()
             else:
                 # Only evaluate loss_vlb on the foreground pixels.
                 loss_vlb = mean_nonzero(loss_vlb_pixels * fg_mask)
 
-            loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
-            loss_dict.update({f'{prefix}/loss_vlb': loss_vlb.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_vlb': loss_vlb.detach()})
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
 
