@@ -1203,7 +1203,7 @@ class LatentDiffusion(DDPM):
             # (Note Mix reg iterations are the same iterations as Ada delta reg iterations).
             # If mask_avail_ratio = 0, then p_bg_token = 0.1.
             # If mask_avail_ratio = 1, then p_bg_token = 0.05.
-            p_bg_token = 0.1 - 0.05 * self.mask_avail_ratio
+            p_bg_token = 0
         else:
             # This iter is only doing recon on training images.
             # use_background_token is mainly for such cases. 
@@ -1211,7 +1211,7 @@ class LatentDiffusion(DDPM):
             # If mask_avail_ratio = 1, then p_bg_token = 0.8.
             # In other worse, with prob 0.2, no background token in the prompt, 
             # and we only evaluate recon loss on the foreground areas.
-            p_bg_token = 0.9 - 0.1 * self.mask_avail_ratio
+            p_bg_token = 0.9
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
@@ -1454,8 +1454,8 @@ class LatentDiffusion(DDPM):
                         # i.e., no cls_single_emb / cls_comp_emb will be mixed into 
                         # subj_single_emb / subj_comp_emb to form subj_single_emb_v / subj_comp_emb_v.
                         # If mask_avail_ratio = 0, then INIT_CLS_EMB_SCALE = 0.1, FINAL_CLS_EMB_SCALE = 0.2.
-                        INIT_CLS_EMB_SCALE  = 0.1 * (1 - self.mask_avail_ratio)
-                        FINAL_CLS_EMB_SCALE = 0.2 * (1 - self.mask_avail_ratio)
+                        INIT_CLS_EMB_SCALE  = 0 #0.1 * (1 - self.mask_avail_ratio)
+                        FINAL_CLS_EMB_SCALE = 0 #0.2 * (1 - self.mask_avail_ratio)
                         # Linearly increase the scale of the class embeddings from 0.1 to 0.3, i.e., 
                         # Linearly decrease the scale of the subject embeddings from 0.9 to 0.7, 
                         # so that the distillation keeps being effective. Otherwise the teacher 
@@ -1485,7 +1485,7 @@ class LatentDiffusion(DDPM):
                             subj_comp_emb_v   = subj_comp_emb
                             subj_single_emb_v = subj_single_emb
 
-                        if random.random() < 0.8: #1: #0.5:
+                        if random.random() < 1: # < 0.8:
                             mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_v,   cls_comp_emb],   dim=1)
                             mix_single_emb_all_layers = torch.cat([subj_single_emb_v, cls_single_emb], dim=1)
                         else:
@@ -2678,7 +2678,7 @@ class LatentDiffusion(DDPM):
         loss_fg_bg_contrast = 0
 
         emb_mfmb_contrast_scale         = 0.01
-        fgbg_emb_contrast_scale         = 0.1
+        fgbg_emb_contrast_scale         = 0.05
         mfmb_contrast_score_margin      = 0.2
         subj_bg_contrast_score_margin   = 0.2
 
