@@ -1201,15 +1201,17 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_mix_prompt_distillation']:
             # Allow a small prob of using background token in mix reg iterations 
             # (Note Mix reg iterations are the same iterations as Ada delta reg iterations).
-            # If mask_avail_ratio = 1, then p_bg_token = 0.05.
             # If mask_avail_ratio = 0, then p_bg_token = 0.1.
+            # If mask_avail_ratio = 1, then p_bg_token = 0.05.
             p_bg_token = 0.1 - 0.05 * self.mask_avail_ratio
         else:
             # This iter is only doing recon on training images.
             # use_background_token is mainly for such cases. 
-            # If mask_avail_ratio = 1, then p_bg_token = 0.95.
             # If mask_avail_ratio = 0, then p_bg_token = 0.9.
-            p_bg_token = 0.9 + 0.05 * self.mask_avail_ratio
+            # If mask_avail_ratio = 1, then p_bg_token = 0.8.
+            # In other worse, with prob 0.2, no background token in the prompt, 
+            # and we only evaluate recon loss on the foreground areas.
+            p_bg_token = 0.9 - 0.1 * self.mask_avail_ratio
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
@@ -2072,7 +2074,13 @@ class LatentDiffusion(DDPM):
                 del cond[2]['unet_ks']
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-            loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
+            loss_simple_pixels = self.get_loss(model_output, target, mean=False)
+            if self.iter_flags['use_background_token']:
+                loss_simple = loss_simple_pixels.mean()
+            else:
+                # Only evaluate recon loss on the foreground pixels.
+                loss_simple = mean_nonzero(loss_simple_pixels * fg_mask)
+
             loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean().detach()})
 
             logvar_t = self.logvar.to(self.device)[t]
@@ -2084,9 +2092,15 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/loss_gamma': loss_simple.mean().detach()})
                 loss_dict.update({'logvar': self.logvar.data.mean().detach()})
 
-            loss += self.l_simple_weight * loss_simple.mean()
+            loss += self.l_simple_weight * loss_simple
 
-            loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
+            loss_vlb_pixels = self.get_loss(model_output, target, mean=False)
+            if self.iter_flags['use_background_token']:
+                loss_vlb = loss_vlb_pixels.mean()
+            else:
+                # Only evaluate loss_vlb on the foreground pixels.
+                loss_vlb = mean_nonzero(loss_vlb_pixels * fg_mask)
+
             loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
             loss_dict.update({f'{prefix}/loss_vlb': loss_vlb.mean().detach()})
             # original_elbo_weight = 0, so that loss_vlb is disabled.

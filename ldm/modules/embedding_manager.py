@@ -623,7 +623,9 @@ class AdaEmbedding(nn.Module):
         # updated during BP and become nonzero. 
         self.mask_layer_map_weights(emb_idx)
         if not self.is_fg_only and self.use_cached_bg:
-            assert cached_infeat_bg is not None, "cached_infeat_bg must be provided when use_cached_bg."
+            # cached_infeat_bg must be provided when use_cached_bg.
+            if cached_infeat_bg is None:
+                breakpoint()
         
         if self.debug:
             breakpoint()
@@ -1234,8 +1236,8 @@ class EmbeddingManager(nn.Module):
             if num_vectors_per_token is None:
                 num_vectors_per_token = 1
 
-            # During inference, placeholder_strings is None. So we use string_to_token_dict 
-            # loaded from the ckpt.
+            # During inference, placeholder_strings might be None. 
+            # In that case, we use string_to_token_dict loaded from the ckpt.
             if placeholder_strings is None:
                 placeholder_strings = self.string_to_token_dict.keys()
             for k in placeholder_strings:

@@ -225,7 +225,10 @@ def parse_args():
     parser.add_argument("--placeholder_string", 
                         type=str, default="z",
                         help="Placeholder string which will be used in prompts to denote the concept.")
-    
+    parser.add_argument("--background_string", 
+                        type=str, default=None,
+                        help="Background string which will be used in prompts to denote the background in training images.")
+                    
     parser.add_argument("--num_vectors_per_token",
                         type=int, default=argparse.SUPPRESS,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
@@ -331,7 +334,9 @@ def main(opt):
 
     if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
         model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
-    
+    if opt.background_string is not None:
+        model.embedding_manager.background_string = opt.background_string
+        
     # No GPUs detected. Use CPU instead.
     if not torch.cuda.is_available():
         opt.gpu = -1

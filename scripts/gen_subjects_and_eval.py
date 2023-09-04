@@ -25,6 +25,14 @@ def parse_args():
     parser.add_argument("--num_vectors_per_token",
                         type=int, default=argparse.SUPPRESS,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
+
+    parser.add_argument("--background_string", 
+                        type=str, default=argparse.SUPPRESS,
+                        help="Background string which will be used in prompts to denote the background in training images.")
+    parser.add_argument("--num_vectors_per_bg_token",
+                        type=int, default=1,
+                        help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
+                                
     parser.add_argument("--use_conv_attn",
                         action="store_true", 
                         help="Use convolutional attention at subject tokens")
@@ -298,6 +306,11 @@ if __name__ == "__main__":
         outdir = args.out_dir_tmpl + "-" + args.method
         os.makedirs(outdir, exist_ok=True)
 
+        if hasattr(args, "background_string"):
+            background_string = "with background " + args.background_string + ", " * (args.num_vectors_per_bg_token - 1)
+        else:
+            background_string = ""
+
         if args.prompt is None:
             if args.n_samples == -1:
                 args.n_samples = 4
@@ -305,8 +318,9 @@ if __name__ == "__main__":
                 args.bs = 4
             # E.g., get_prompt_list(placeholder="z", z_suffix="cat", class_long_token="tabby cat", broad_class=1)
             prompt_list, class_short_prompt_list, class_long_prompt_list = \
-                get_prompt_list(args.placeholder, z_prefix, z_suffix, class_token, class_long_token, 
-                               broad_class, args.prompt_set)
+                get_prompt_list(args.placeholder, z_prefix, z_suffix, background_string, 
+                                class_token, class_long_token, 
+                                broad_class, args.prompt_set)
             prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set}.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
@@ -325,6 +339,11 @@ if __name__ == "__main__":
             prompt = prompt_tmpl.format(placeholder + z_suffix)
             class_long_prompt = prompt_tmpl.format(class_long_token + z_suffix)
             class_short_prompt = prompt_tmpl.format(class_token + z_suffix)
+            # If --background_string is not specified, background_string is "".
+            # Only add the background_string to prompt used for image generation,
+            # not to class_long_prompt/class_short_prompt used for CLIP text/image similarity evaluation.
+            prompt = prompt + background_string
+
             prompt_list             = [ prompt ]
             class_short_prompt_list = [ class_short_prompt ]
             class_long_prompt_list  = [ class_long_prompt ]
@@ -390,7 +409,10 @@ if __name__ == "__main__":
             command_line += f" --placeholder_string {args.orig_placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
         if args.use_conv_attn:
             command_line += f" --use_conv_attn"
-            
+        
+        if hasattr(args, 'background_string'):
+            command_line += f" --background_string {args.background_string}"
+
         if args.compare_with_pardir:
             # Do evaluation on authenticity/composition.
             subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)
