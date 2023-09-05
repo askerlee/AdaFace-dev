@@ -193,14 +193,25 @@ class AttnBlock(nn.Module):
         w_ = w_ * (int(c)**(-0.5))
 
         if mask is not None:
-            # x: [2, 512, 64, 64]
-            # mask: [2, 1, 512, 512] => [2, 1, 64, 64]
-            mask = F.interpolate(mask, size=x.shape[-2:], mode='nearest').bool()
-            # mask: [2, 1, 64, 64] => [2, 1, 4096]
+            # x:    [2, 512, 64,  64]
+            # mask: [2, 1,   512, 512] => [2, 1, 64, 64]
+            mask = F.interpolate(mask, size=x.shape[-2:], mode='nearest')
+            # mask: [2, 1,   64,  64]  => [2, 1, 4096]
             mask = rearrange(mask, 'b ... -> b () (...)')
+            # mask(subj_i1, subj_i2) = True. mask(subj_i1, bg_i2) = False. 
+            # mask(bg_i1, bg_i2)     = False.
+            mask_sqr    = torch.matmul(mask, mask.transpose(-1, -2)).bool()
+            # mask(bg_i1, bg_i2)     = True. mask(subj_i1, subj_i2) = False.
+            # mask(bg_i1, subj_i2)   = False.
+            neg_mask_sqr = torch.matmul((1 - mask), (1 - mask).transpose(-1, -2)).bool()
+            # mask_homo: whether pixels i,j are homogeneous, i.e., 
+            # both are subject areas or both are background areas.
+            # mask_homo(subj_i1, subj_i2) = True, mask_homo(bg_i1, bg_i2) = True.
+            mask_homo    = mask_sqr | neg_mask_sqr
             max_neg_value = -torch.finfo(w_.dtype).max
-            # masked_fill_: fill max_neg_value where ~mask is True, i.e., when mask is False.
-            w_.masked_fill_(~mask, max_neg_value)
+            # masked_fill_: fill max_neg_value where ~mask_homo is True, 
+            # i.e., when mask_homo is False.
+            w_.masked_fill_(~mask_homo, max_neg_value)
 
         w_ = torch.nn.functional.softmax(w_, dim=2)
 
