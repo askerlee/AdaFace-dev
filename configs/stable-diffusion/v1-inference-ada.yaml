@@ -69,7 +69,7 @@ model:
           num_res_blocks: 2
           attn_resolutions: []
           dropout: 0.0
-          attn_type: 'none'
+          #attn_type: 'none'
 
         lossconfig:
           target: torch.nn.Identity

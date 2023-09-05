@@ -321,8 +321,8 @@ class AutoencoderKL(pl.LightningModule):
         self.load_state_dict(sd, strict=False)
         print(f"Restored from {path}")
 
-    def encode(self, x):
-        h = self.encoder(x)
+    def encode(self, x, mask=None):
+        h = self.encoder(x, mask)
         moments = self.quant_conv(h)
         posterior = DiagonalGaussianDistribution(moments)
         return posterior
@@ -332,8 +332,8 @@ class AutoencoderKL(pl.LightningModule):
         dec = self.decoder(z)
         return dec
 
-    def forward(self, input, sample_posterior=True):
-        posterior = self.encode(input)
+    def forward(self, input, sample_posterior=True, mask=None):
+        posterior = self.encode(input, mask)
         if sample_posterior:
             z = posterior.sample()
         else:

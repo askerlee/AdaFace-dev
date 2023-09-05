@@ -958,7 +958,15 @@ class LatentDiffusion(DDPM):
         if bs is not None:
             x = x[:bs]
         x = x.to(self.device)
-        encoder_posterior = self.encode_first_stage(x)
+
+        if 'fg_mask' in batch:
+            fg_mask = batch['fg_mask']
+            fg_mask = fg_mask.unsqueeze(1).to(x.device)
+            #fg_mask = F.interpolate(fg_mask, size=x.shape[-2:], mode='nearest')
+        else:
+            fg_mask = None
+
+        encoder_posterior = self.encode_first_stage(x, fg_mask)
         z = self.get_first_stage_encoding(encoder_posterior).detach()
 
         # conditioning_key: 'crossattn'.
@@ -1135,8 +1143,8 @@ class LatentDiffusion(DDPM):
                 return self.first_stage_model.decode(z)
 
     @torch.no_grad()
-    def encode_first_stage(self, x):
-        if hasattr(self, "split_input_params"):
+    def encode_first_stage(self, x, mask=None):
+        if hasattr(self, "split_input_params"):     # False
             if self.split_input_params["patch_distributed_vq"]:
                 ks = self.split_input_params["ks"]  # eg. (128, 128)
                 stride = self.split_input_params["stride"]  # eg. (64, 64)
@@ -1156,7 +1164,7 @@ class LatentDiffusion(DDPM):
                 # Reshape to img shape
                 z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
 
-                output_list = [self.first_stage_model.encode(z[:, :, :, :, i])
+                output_list = [self.first_stage_model.encode(z[:, :, :, :, i], mask)
                                for i in range(z.shape[-1])]
 
                 o = torch.stack(output_list, axis=-1)
@@ -1170,9 +1178,10 @@ class LatentDiffusion(DDPM):
                 return decoded
 
             else:
-                return self.first_stage_model.encode(x)
+                return self.first_stage_model.encode(x, mask)
         else:
-            return self.first_stage_model.encode(x)
+            # Execute this statement only.
+            return self.first_stage_model.encode(x, mask)
 
     # LatentDiffusion.shared_step() overloads DDPM.shared_step().
     # shared_step() is called in training_step() and (no_grad) validation_step().

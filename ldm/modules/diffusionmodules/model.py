@@ -2,8 +2,9 @@
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
-from einops import rearrange
+from einops import rearrange, repeat
 
 from ldm.util import instantiate_from_config
 from ldm.modules.attention import LinearAttention
@@ -175,7 +176,7 @@ class AttnBlock(nn.Module):
                                         padding=0)
 
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         h_ = x
         h_ = self.norm(h_)
         q = self.q(h_)
@@ -188,7 +189,19 @@ class AttnBlock(nn.Module):
         q = q.permute(0,2,1)   # b,hw,c
         k = k.reshape(b,c,h*w) # b,c,hw
         w_ = torch.bmm(q,k)     # b,hw,hw    w[b,i,j]=sum_c q[b,i,c]k[b,c,j]
+        # w_: [2, 4096, 4096]
         w_ = w_ * (int(c)**(-0.5))
+
+        if mask is not None:
+            # x: [2, 512, 64, 64]
+            # mask: [2, 1, 512, 512] => [2, 1, 64, 64]
+            mask = F.interpolate(mask, size=x.shape[-2:], mode='nearest').bool()
+            # mask: [2, 1, 64, 64] => [2, 1, 4096]
+            mask = rearrange(mask, 'b ... -> b () (...)')
+            max_neg_value = -torch.finfo(w_.dtype).max
+            # masked_fill_: fill max_neg_value where ~mask is True, i.e., when mask is False.
+            w_.masked_fill_(~mask, max_neg_value)
+
         w_ = torch.nn.functional.softmax(w_, dim=2)
 
         # attend to values
@@ -431,7 +444,7 @@ class Encoder(nn.Module):
                                         stride=1,
                                         padding=1)
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         # timestep embedding
         temb = None
 
@@ -441,7 +454,7 @@ class Encoder(nn.Module):
             for i_block in range(self.num_res_blocks):
                 h = self.down[i_level].block[i_block](hs[-1], temb)
                 if len(self.down[i_level].attn) > 0:
-                    h = self.down[i_level].attn[i_block](h)
+                    h = self.down[i_level].attn[i_block](h, mask)
                 hs.append(h)
             if i_level != self.num_resolutions-1:
                 hs.append(self.down[i_level].downsample(hs[-1]))
@@ -449,7 +462,7 @@ class Encoder(nn.Module):
         # middle
         h = hs[-1]
         h = self.mid.block_1(h, temb)
-        h = self.mid.attn_1(h)
+        h = self.mid.attn_1(h, mask)
         h = self.mid.block_2(h, temb)
 
         # end
