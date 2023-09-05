@@ -200,18 +200,18 @@ class AttnBlock(nn.Module):
             mask = rearrange(mask, 'b ... -> b () (...)')
             # mask(subj_i1, subj_i2) = True. mask(subj_i1, bg_i2) = False. 
             # mask(bg_i1, bg_i2)     = False.
-            mask_sqr    = torch.matmul(mask, mask.transpose(-1, -2)).bool()
+            mask_pairwise     = torch.matmul(mask, mask.transpose(-1, -2)).bool()
             # mask(bg_i1, bg_i2)     = True. mask(subj_i1, subj_i2) = False.
             # mask(bg_i1, subj_i2)   = False.
-            neg_mask_sqr = torch.matmul((1 - mask), (1 - mask).transpose(-1, -2)).bool()
-            # mask_homo: whether pixels i,j are homogeneous, i.e., 
-            # both are subject areas or both are background areas.
-            # mask_homo(subj_i1, subj_i2) = True, mask_homo(bg_i1, bg_i2) = True.
-            mask_homo    = mask_sqr | neg_mask_sqr
+            neg_mask_pairwise = torch.matmul((1 - mask), (1 - mask).transpose(-1, -2)).bool()
+            # mask_pair_hetero: whether each pixel pairs (i,j) are heterogeneous, i.e., 
+            # one is in subject areas and the other in background areas.
+            # mask_pair_hetero(subj_i1, subj_i2) = False, mask_pair_hetero(bg_i1, bg_i2) = False.
+            mask_pair_hetero  = ~mask_pairwise & ~neg_mask_pairwise
             max_neg_value = -torch.finfo(w_.dtype).max
-            # masked_fill_: fill max_neg_value where ~mask_homo is True, 
-            # i.e., when mask_homo is False.
-            w_.masked_fill_(~mask_homo, max_neg_value)
+            # masked_fill_: fill max_neg_value when mask_pair_hetero is True, 
+            # i.e., when pixel pairs (i,j) are from different types of areas.
+            w_.masked_fill_(mask_pair_hetero, max_neg_value)
 
         w_ = torch.nn.functional.softmax(w_, dim=2)
 

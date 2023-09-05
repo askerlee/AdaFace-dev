@@ -1220,7 +1220,7 @@ class LatentDiffusion(DDPM):
             # If mask_avail_ratio = 1, then p_bg_token = 0.8.
             # In other worse, with prob 0.2, no background token in the prompt, 
             # and we only evaluate recon loss on the foreground areas.
-            p_bg_token = 0.9
+            p_bg_token = 0.8
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
@@ -2688,8 +2688,8 @@ class LatentDiffusion(DDPM):
 
         emb_mfmb_contrast_scale         = 0.01
         fgbg_emb_contrast_scale         = 0.05
-        mfmb_contrast_score_margin      = 0.2
-        subj_bg_contrast_score_margin   = 0.2
+        mfmb_contrast_score_margin      = 0.4
+        subj_bg_contrast_score_margin   = 0.4
 
         # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
         # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
