@@ -2424,7 +2424,7 @@ class LatentDiffusion(DDPM):
             # loss_subj_attn_norm_distill = 0.25, and the norm distill loss is made 1/4.
             # If mask_avail_ratio = 0, i.e., no training images have corresponding masks, then
             # loss_subj_attn_norm_distill = 1, and the norm distill loss is not discounted.
-            subj_attn_norm_distill_loss_discount = 0.25 + 0.75 * (1 - self.mask_avail_ratio)
+            subj_attn_norm_distill_loss_discount = 0.1 #25 + 0.75 * (1 - self.mask_avail_ratio)
             loss_prompt_mix_reg =  (loss_subj_attn_delta_distill \
                                       + (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) 
                                         * subj_attn_norm_distill_loss_discount) * distill_subj_attn_weight \
@@ -2695,8 +2695,8 @@ class LatentDiffusion(DDPM):
         loss_bg_mask_align = 0
         loss_fg_bg_contrast = 0
 
-        emb_mfmb_contrast_scale         = 0.02
-        fgbg_emb_contrast_scale         = 0.1
+        emb_mfmb_contrast_scale         = 0.01
+        fgbg_emb_contrast_scale         = 0.05
         mfmb_contrast_score_margin      = 0.4
         subj_bg_contrast_score_margin   = 0.4
 
