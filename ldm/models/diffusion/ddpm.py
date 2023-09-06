@@ -97,7 +97,6 @@ class DDPM(pl.LightningModule):
                  mix_prompt_distill_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_mask_align_loss_weight=0.,
-                 fg_bg_key_ortho_loss_weight=0.,
                  do_clip_teacher_filtering=False,
                  use_background_token=False,
                  use_conv_attn=False,
@@ -125,7 +124,6 @@ class DDPM(pl.LightningModule):
         self.mix_prompt_distill_weight       = mix_prompt_distill_weight
         self.fg_bg_complementary_loss_weight = fg_bg_complementary_loss_weight
         self.fg_bg_mask_align_loss_weight    = fg_bg_mask_align_loss_weight
-        self.fg_bg_key_ortho_loss_weight     = fg_bg_key_ortho_loss_weight
         self.do_clip_teacher_filtering       = do_clip_teacher_filtering
         self.prompt_mix_scheme               = 'mix_hijk'
 
@@ -2080,19 +2078,7 @@ class LatentDiffusion(DDPM):
                         loss_dict.update({f'{prefix}/fg_bg_contrast': loss_fg_bg_contrast.mean().detach()})
 
                 # Release RAM.
-                del cond[2]['unet_attns'], cond[2]['unet_feats']
-
-                if self.fg_bg_key_ortho_loss_weight > 0:
-                    fg_bg_key_ortho_loss = \
-                        self.calc_fg_bg_key_ortho_loss(cond[2]['unet_ks'], 
-                                                       extra_info['subj_indices'],
-                                                       extra_info['bg_indices'],
-                                                       x_start.shape[0])
-                    loss += self.fg_bg_key_ortho_loss_weight * fg_bg_key_ortho_loss
-                    loss_dict.update({f'{prefix}/fg_bg_key_ortho': fg_bg_key_ortho_loss.mean().detach()})
-                
-                # Release RAM.
-                del cond[2]['unet_ks']
+                del cond[2]['unet_attns'], cond[2]['unet_feats'], cond[2]['unet_ks']
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_simple_pixels = self.get_loss(model_output, target, mean=False)
