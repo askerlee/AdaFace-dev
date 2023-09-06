@@ -193,21 +193,27 @@ class AttnBlock(nn.Module):
         w_ = w_ * (int(c)**(-0.5))
 
         if mask is not None:
+            aug_mask = mask['aug_mask'] if 'aug_mask' in mask else torch.ones_like(x)
+            fg_mask  = mask['fg_mask']  if 'fg_mask'  in mask else torch.ones_like(x)
+
             # x:    [2, 512, 64,  64]
             # mask: [2, 1,   512, 512] => [2, 1, 64, 64]
-            mask = F.interpolate(mask, size=x.shape[-2:], mode='nearest')
+            aug_mask, fg_mask = [ F.interpolate(mask, size=x.shape[-2:], mode='nearest') for mask in [aug_mask, fg_mask] ]
             # mask: [2, 1,   64,  64]  => [2, 1, 4096]
-            mask = rearrange(mask, 'b ... -> b () (...)')
+            aug_mask, fg_mask = [ rearrange(mask, 'b ... -> b () (...)') for mask in [aug_mask, fg_mask] ]
+            fg_mask2 = fg_mask       * aug_mask
+            bg_mask2 = (1 - fg_mask) * aug_mask
+
             # mask_pair_homo(subj_i1, subj_i2) = True.      mask_pair_homo(subj_i1, bg_i2) = False. 
             # mask_pair_homo(bg_i1, bg_i2)     = False.
-            mask_pair_homo     = torch.matmul(mask, mask.transpose(-1, -2)).bool()
+            fg_mask_pair_homo = torch.matmul(fg_mask2, fg_mask2.transpose(-1, -2)).bool()
             # neg_mask_pair_homo(bg_i1, bg_i2)     = True.  neg_mask_pair_homo(subj_i1, subj_i2) = False.
             # neg_mask_pair_homo(bg_i1, subj_i2)   = False.
-            neg_mask_pair_homo = torch.matmul((1 - mask), (1 - mask).transpose(-1, -2)).bool()
+            bg_mask_pair_homo = torch.matmul(bg_mask2, bg_mask2.transpose(-1, -2)).bool()
             # mask_pair_hetero: whether each pixel pairs (i,j) are heterogeneous, i.e., 
             # one is in subject areas and the other in background areas.
             # mask_pair_hetero(subj_i1, subj_i2) = False, mask_pair_hetero(bg_i1, bg_i2) = False.
-            mask_pair_hetero   = ~ (mask_pair_homo | neg_mask_pair_homo)
+            mask_pair_hetero   = ~ (fg_mask_pair_homo | bg_mask_pair_homo)
             max_neg_value = -torch.finfo(w_.dtype).max
             # masked_fill_: fill max_neg_value when mask_pair_hetero is True, 
             # i.e., when pixel pairs (i,j) are from different types of areas.

@@ -966,7 +966,16 @@ class LatentDiffusion(DDPM):
         else:
             fg_mask = None
 
-        encoder_posterior = self.encode_first_stage(x, fg_mask)
+        if 'aug_mask' in batch:
+            aug_mask = batch['aug_mask']
+            aug_mask = aug_mask.unsqueeze(1).to(x.device)
+            #img_mask = F.interpolate(img_mask, size=x.shape[-2:], mode='nearest')
+        else:
+            aug_mask = None
+
+        mask_dict = {'fg_mask': fg_mask, 'aug_mask': aug_mask}
+
+        encoder_posterior = self.encode_first_stage(x, mask_dict)
         z = self.get_first_stage_encoding(encoder_posterior).detach()
 
         # conditioning_key: 'crossattn'.
@@ -1220,7 +1229,7 @@ class LatentDiffusion(DDPM):
             # If mask_avail_ratio = 1, then p_bg_token = 0.8.
             # In other worse, with prob 0.2, no background token in the prompt, 
             # and we only evaluate recon loss on the foreground areas.
-            p_bg_token = 0.8
+            p_bg_token = 0.85
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
@@ -2686,8 +2695,8 @@ class LatentDiffusion(DDPM):
         loss_bg_mask_align = 0
         loss_fg_bg_contrast = 0
 
-        emb_mfmb_contrast_scale         = 0.01
-        fgbg_emb_contrast_scale         = 0.05
+        emb_mfmb_contrast_scale         = 0.02
+        fgbg_emb_contrast_scale         = 0.1
         mfmb_contrast_score_margin      = 0.4
         subj_bg_contrast_score_margin   = 0.4
 
