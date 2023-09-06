@@ -2682,8 +2682,9 @@ class LatentDiffusion(DDPM):
 
         emb_mfmb_contrast_scale         = 0.01
         fgbg_emb_contrast_scale         = 0.05
-        mfmb_contrast_score_margin      = 0.4
-        subj_bg_contrast_score_margin   = 0.8
+        mfmb_contrast_score_margin            = 0.4
+        subj_bg_contrast_at_mf_score_margin   = 0.4 * K_fg / K_bg     # 0.8
+        bg_subj_contrast_at_mb_score_margin   = 0.4 * K_bg / K_fg     # 0.2
 
         # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
         # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
@@ -2796,24 +2797,24 @@ class LatentDiffusion(DDPM):
                 loss_layer_bg_mfmb_contrast        = torch.clip(bg_score_at_mf   + mfmb_contrast_score_margin   - avg_bg_score_at_mb,     min=0)
                 loss_layer_bg_mfmb_contrast        = loss_layer_bg_mfmb_contrast.mean()
                 # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations)
-                # to be at least larger by subj_bg_contrast_score_margin = 0.5 than
+                # to be at least larger by subj_bg_contrast_at_mf_score_margin = 0.8 than
                 # avg_bg_score_at_mf (bg_score averaged at foreground locations).
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, as avg_bg_score_at_mf 
                 # usually takes a much smaller value than avg_subj_score_at_mf.
-                loss_layer_subj_bg_contrast_at_mf  = torch.clip(bg_score_at_mf    + subj_bg_contrast_score_margin - avg_subj_score_at_mf,  min=0)
+                loss_layer_subj_bg_contrast_at_mf  = torch.clip(bg_score_at_mf    + subj_bg_contrast_at_mf_score_margin - avg_subj_score_at_mf,  min=0)
                 loss_layer_subj_bg_contrast_at_mf  = loss_layer_subj_bg_contrast_at_mf.mean()
                 # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
-                # to be at least larger by subj_bg_contrast_score_margin = 0.5 than
+                # to be at least larger by subj_bg_contrast_at_mf_score_margin = 0.2 than
                 # avg_subj_score_at_mb (subj_score averaged at background locations).
-                loss_layer_subj_bg_contrast_at_mb  = torch.clip(subj_score_at_mb   + subj_bg_contrast_score_margin - avg_bg_score_at_mb,   min=0)
-                loss_layer_subj_bg_contrast_at_mb  = loss_layer_subj_bg_contrast_at_mb.mean()
+                loss_layer_bg_subj_contrast_at_mb  = torch.clip(subj_score_at_mb   + bg_subj_contrast_at_mb_score_margin - avg_bg_score_at_mb,   min=0)
+                loss_layer_bg_subj_contrast_at_mb  = loss_layer_bg_subj_contrast_at_mb.mean()
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, 
                 # so loss_fg_mask_align is much smaller than loss_bg_mask_align.
                 loss_fg_mask_align  += loss_layer_subj_mfmb_contrast \
                                         * attn_align_layer_weight * emb_mfmb_contrast_scale
                 loss_bg_mask_align  += loss_layer_bg_mfmb_contrast \
                                         * attn_align_layer_weight * emb_mfmb_contrast_scale
-                loss_fg_bg_contrast += (loss_layer_subj_bg_contrast_at_mf + loss_layer_subj_bg_contrast_at_mb) \
+                loss_fg_bg_contrast += (loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
                                         * attn_align_layer_weight * fgbg_emb_contrast_scale
                 #print(f'layer {unet_layer_idx}')
                 #print(f'subj_contrast: {loss_layer_subj_contrast:.4f}, subj_bg_contrast_at_mf: {loss_layer_subj_bg_contrast_at_mf:.4f},')
