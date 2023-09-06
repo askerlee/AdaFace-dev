@@ -2409,7 +2409,7 @@ class LatentDiffusion(DDPM):
             distill_feat_weight      = 0.5 if (not self.iter_flags['reuse_init_conds']) else 0.3
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.4
-            subj_attn_norm_distill_loss_scale = 2
+            subj_attn_norm_distill_loss_scale = 4
             loss_prompt_mix_reg =  (loss_subj_attn_delta_distill \
                                       + (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) 
                                         * subj_attn_norm_distill_loss_scale) * distill_subj_attn_weight \
