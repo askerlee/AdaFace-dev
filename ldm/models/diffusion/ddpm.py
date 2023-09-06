@@ -973,7 +973,10 @@ class LatentDiffusion(DDPM):
         else:
             aug_mask = None
 
-        mask_dict = {'fg_mask': fg_mask, 'aug_mask': aug_mask}
+        if fg_mask is not None or aug_mask is not None:
+            mask_dict = {'fg_mask': fg_mask, 'aug_mask': aug_mask}
+        else:
+            mask_dict = None
 
         encoder_posterior = self.encode_first_stage(x, mask_dict)
         z = self.get_first_stage_encoding(encoder_posterior).detach()
