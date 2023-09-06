@@ -2409,7 +2409,7 @@ class LatentDiffusion(DDPM):
             distill_feat_weight      = 0.5 if (not self.iter_flags['reuse_init_conds']) else 0.3
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.4
-            subj_attn_norm_distill_loss_scale = 4
+            subj_attn_norm_distill_loss_scale = 2
             loss_prompt_mix_reg =  (loss_subj_attn_delta_distill \
                                       + (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) 
                                         * subj_attn_norm_distill_loss_scale) * distill_subj_attn_weight \
@@ -2683,7 +2683,7 @@ class LatentDiffusion(DDPM):
         emb_mfmb_contrast_scale         = 0.01
         fgbg_emb_contrast_scale         = 0.05
         mfmb_contrast_score_margin      = 0.4
-        subj_bg_contrast_score_margin   = 0.4
+        subj_bg_contrast_score_margin   = 0.8
 
         # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
         # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
@@ -2705,12 +2705,12 @@ class LatentDiffusion(DDPM):
             # [2, 8, 256, 77] / [2, 8, 64, 77] =>
             # [2, 77, 8, 256] / [2, 77, 8, 64]
             attn_mat = unet_attn.permute(0, 3, 1, 2)
-            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] mean among K_fg embeddings -> [2, 8, 64]
-            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat.shape[2:]).mean(dim=1)
+            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
+            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat.shape[2:]).sum(dim=1)
 
-            # bg_attn:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
+            # bg_attn:   [4, 8, 64] -> [2, 2, 8, 64] sum among K_bg embeddings -> [2, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
-            bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).mean(dim=1)
+            bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).sum(dim=1)
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
             
@@ -2827,7 +2827,8 @@ class LatentDiffusion(DDPM):
         # No need further processing.
 
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast
-
+    
+    """ 
     def calc_fg_bg_key_ortho_loss(self, unet_ks, 
                                   placeholder_indices_fg, 
                                   placeholder_indices_bg, 
@@ -2891,6 +2892,7 @@ class LatentDiffusion(DDPM):
             loss_fg_bg_key_ortho += loss_layer_fg_bg_key_ortho * k_ortho_layer_weight
 
         return loss_fg_bg_key_ortho
+    """
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):
