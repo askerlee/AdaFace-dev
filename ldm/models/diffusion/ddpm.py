@@ -1862,7 +1862,7 @@ class LatentDiffusion(DDPM):
                 pred_noise = model_output * cfg_scales - model_output_uncond * (cfg_scales - 1)
             else:
                 pred_noise = model_output
-                
+
             x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=pred_noise)
         else:
             x_recon = None
@@ -1933,7 +1933,7 @@ class LatentDiffusion(DDPM):
                 # so that the noise level is sufficiently different.
                 t = torch.minimum(t_mid, t_upperbound)
                 # Inject smaller amount of noises, to retain more semantics from the previous denoising step.
-                inj_noise_t = t // 2
+                inj_noise_t = (t * 0.8).int()
 
             else:
                 # Fresh compositional iter.
