@@ -1841,17 +1841,22 @@ class LatentDiffusion(DDPM):
         # Get model output conditioned on uncond.
         # Unconditional prompts and reconstructed images are never involved in optimization.
         if do_recon:
+            if inj_noise_t is not None:
+                t_ = inj_noise_t
+            else:
+                t_ = t
+
             with torch.no_grad():
                 x_start_ = x_start.chunk(2)[0]
                 noise_   = noise.chunk(2)[0]
-                t_       = t.chunk(2)[0]
+                t_       = t_.chunk(2)[0]
                 # For efficiency, x_start_, noise_ and t_ are of half-batch size,
                 # and only compute model_output_uncond on half of the batch, 
                 # as the second half (mix single, mix comp) is generated under the same initial conditions 
                 # (only differ on prompts, but uncond means no prompts).
                 x_noisy_ = self.q_sample(x_start=x_start_, t=t_, noise=noise_)
                 # self.uncond: precomputed unconditional embeddings.
-                model_output_uncond = self.apply_model(x_noisy_, t_, self.uncond)
+                model_output_uncond = self.apply_model(x_noisy_, t, self.uncond)
                 # model_output_uncond: [2, 4, 64, 64] -> [4, 4, 64, 64]
                 model_output_uncond = model_output_uncond.repeat(2, 1, 1, 1)
                 
@@ -1862,7 +1867,7 @@ class LatentDiffusion(DDPM):
                 pred_noise = model_output * cfg_scales - model_output_uncond * (cfg_scales - 1)
             else:
                 pred_noise = model_output
-            x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=pred_noise)
+            x_recon = self.predict_start_from_noise(x_noisy, t=t_, noise=pred_noise)
         else:
             x_recon = None
         
