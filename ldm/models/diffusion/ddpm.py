@@ -1854,7 +1854,7 @@ class LatentDiffusion(DDPM):
                 # (only differ on prompts, but uncond means no prompts).
                 x_noisy_ = self.q_sample(x_start=x_start_, t=t_, noise=noise_)
                 # self.uncond: precomputed unconditional embeddings.
-                model_output_uncond = self.apply_model(x_noisy_, t, self.uncond)
+                model_output_uncond = self.apply_model(x_noisy_, t_, self.uncond)
                 # model_output_uncond: [2, 4, 64, 64] -> [4, 4, 64, 64]
                 model_output_uncond = model_output_uncond.repeat(2, 1, 1, 1)
                 
