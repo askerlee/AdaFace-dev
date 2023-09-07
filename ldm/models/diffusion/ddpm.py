@@ -1933,7 +1933,7 @@ class LatentDiffusion(DDPM):
                 # so that the noise level is sufficiently different.
                 t = torch.minimum(t_mid, t_upperbound)
                 # Inject smaller amount of noises, to retain more semantics from the previous denoising step.
-                inj_noise_t = (t * 0.8).int()
+                inj_noise_t = (t * 0.8).type(t.dtype)
 
             else:
                 # Fresh compositional iter.
