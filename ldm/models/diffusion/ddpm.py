@@ -454,6 +454,8 @@ class DDPM(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         self.init_iter_flags()
 
+        self.training_percent = self.global_step / self.trainer.max_steps
+
         # How many regularizations are done intermittently during the training iterations?
         cand_reg_types = []
         cand_reg_probs = []
@@ -1468,7 +1470,6 @@ class LatentDiffusion(DDPM):
                         # This is only for static embeddings. The dynamically generated ada embeddings 
                         # won't be mixed, but simply repeated.
 
-                        total_training_steps = self.trainer.max_steps
                         # If mask_avail_ratio = 1, then INIT_CLS_EMB_SCALE = 0, FINAL_CLS_EMB_SCALE = 0.
                         # i.e., no cls_single_emb / cls_comp_emb will be mixed into 
                         # subj_single_emb / subj_comp_emb to form subj_single_emb_v / subj_comp_emb_v.
@@ -1481,7 +1482,7 @@ class LatentDiffusion(DDPM):
                         # will gradually become very similar to the student in the end.
                         subj_emb_scale = 1 - INIT_CLS_EMB_SCALE \
                                          - (FINAL_CLS_EMB_SCALE - INIT_CLS_EMB_SCALE) * np.random.uniform(0.8, 1.3) \
-                                            * self.global_step / total_training_steps
+                                            * self.training_percent
 
                         if subj_emb_scale < 1:
                             # mix_embeddings('add'):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
@@ -2023,7 +2024,9 @@ class LatentDiffusion(DDPM):
             # Slightly more noises added.
             inj_noise_t = t.clone()
             for i, ti in enumerate(t):
-                ti_upperbound = min(int(ti * 1.2) + 1, self.num_timesteps)
+                # Gradually reduce the T_BOOST_RATIO, i.e., decrease the extra amount of noise added.
+                T_BOOST_RATIO = 1.2 - 0.2 * self.training_percent
+                ti_upperbound = min(int(ti * T_BOOST_RATIO) + 1, self.num_timesteps)
                 inj_noise_t[i] = np.random.randint(int(ti), ti_upperbound)
 
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
