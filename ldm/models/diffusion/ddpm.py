@@ -2024,7 +2024,7 @@ class LatentDiffusion(DDPM):
             inj_noise_t = t.clone()
             for i, ti in enumerate(t):
                 ti_upperbound = min(int(ti * 1.2) + 1, self.num_timesteps)
-                inj_noise_t[i] = np.random.randint(ti, ti_upperbound)
+                inj_noise_t[i] = np.random.randint(int(ti), ti_upperbound)
 
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
         # then cond[2]['use_conv_attn'] = True, it will inform U-Net to do conv attn.
