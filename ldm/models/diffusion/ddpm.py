@@ -2009,6 +2009,8 @@ class LatentDiffusion(DDPM):
                     # But noise and t are not. So we still need to make them 4-fold repeated.
                     noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
                     t       = t[:BLOCK_SIZE].repeat(4)
+                    if inj_noise_t is not None:
+                        inj_noise_t = inj_noise_t[:BLOCK_SIZE].repeat(4)
                     # use cached x_start and cond. cond already has the 4-type structure. 
                     # No change to cond here.
                     # NOTE cond is mainly determined by the prompts c_in. Since c_in is inherited from
