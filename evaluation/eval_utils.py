@@ -462,7 +462,9 @@ def get_prompt_list(placeholder, z_prefix, z_suffix, background_string,
     if len(z_prefix) > 0:
         placeholder      = z_prefix + " " + placeholder
         class_token      = z_prefix + " " + class_token
-        class_long_token = z_prefix + " " + class_long_token
+        # If z_prefix is not part of class_long_token, then add it.
+        if re.search(r'\b' + z_prefix + r'\b', class_long_token) is None:
+            class_long_token = z_prefix + " " + class_long_token
     
     prompt_list            = [ prompt.format(placeholder, z_suffix, class_long_token=class_long_token2) for prompt in orig_prompt_list ]
     orig_short_prompt_list = [ prompt.format("", class_token, class_long_token="")       for prompt in orig_prompt_list ]
