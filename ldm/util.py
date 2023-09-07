@@ -524,7 +524,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
         subj_q = q[index_b]
         # subj_q_2d: [8, 4096, 40] => [8, 40, 4096] => [1, 320, 64, 64]
         subj_q_2d = subj_q.permute(0, 2, 1).reshape(1, H * C, *infeat_size)
-        # subj_q_padded: [1, 320, 65, 65].
+        # subj_q_padded: [1, 320, 65, 65] (ks=2) or [1, 320, 66, 66] (ks=3).
         subj_q_padded = padder(subj_q_2d)
 
         # indices_b: [0, 0, 0, 0]. indices_n: [6, 7, 8, 9].
@@ -533,6 +533,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
         if (indices_b != index_b).any():
             breakpoint()
         # subj_k: k[[0], :, [6,7,8,9]], shape [4, 8, 40] => [8, 40, 4], [H, C, M].
+        # select the 4 subject embeddings (s1, s2, s3, s4) from k into subj_k.
         subj_k = k[indices_b, :, indices_n].permute(1, 2, 0)
 
         # subj_k -> conv weight: [8, 40, 2, 2]. First 2 is height (y), second 2 is width (x).

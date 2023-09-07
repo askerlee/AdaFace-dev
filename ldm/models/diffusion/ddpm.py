@@ -1801,10 +1801,15 @@ class LatentDiffusion(DDPM):
     # if do_recon and cfg_scale > 1, apply classifier-free guidance. 
     # unet_has_grad: when returning do_recon (e.g. to select the better instance by smaller clip loss), 
     # to speed up, no BP is done on these instances, so unet_has_grad=False.
-    def guided_denoise(self, x_start, noise, t, cond, unet_has_grad=True, 
+    def guided_denoise(self, x_start, noise, t, cond, inj_noise_t=None, unet_has_grad=True, 
                        crossattn_force_grad=False, 
                        do_recon=False, cfg_scales=None):
-        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        
+        if inj_noise_t is not None:
+            # We can choose to add amount of noises different from t.
+            x_noisy = self.q_sample(x_start=x_start, t=inj_noise_t, noise=noise)
+        else:
+            x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
         if unet_has_grad:
             # No need to force grad on cross attention layers, as the whole U-Net has grad.
@@ -1894,6 +1899,7 @@ class LatentDiffusion(DDPM):
 
         cfg_scales_for_clip_loss = None
         c_static_emb, c_in, extra_info = cond
+        inj_noise_t = None
 
         if self.iter_flags['is_compos_iter']:
             # Only reuse_init_conds if do_mix_prompt_distillation.
@@ -1925,6 +1931,8 @@ class LatentDiffusion(DDPM):
                 # t should be at least 150 steps away from the previous t, 
                 # so that the noise level is sufficiently different.
                 t = torch.minimum(t_mid, t_upperbound)
+                # Inject smaller amount of noises, to retain more semantics from the previous denoising step.
+                inj_noise_t = t // 2
 
             else:
                 # Fresh compositional iter.
@@ -2016,7 +2024,7 @@ class LatentDiffusion(DDPM):
         # although ada_bp_to_unet = False for recon iters.
         # (probably because gradients of static embeddings still need to go through UNet)
         model_output, x_recon, ada_embeddings = \
-            self.guided_denoise(x_start, noise, t, cond, 
+            self.guided_denoise(x_start, noise, t, cond, inj_noise_t,
                                 unet_has_grad=not self.iter_flags['do_teacher_filter'], 
                                 crossattn_force_grad=False,
                                 do_recon=self.iter_flags['calc_clip_loss'],
