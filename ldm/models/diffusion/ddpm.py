@@ -1945,7 +1945,7 @@ class LatentDiffusion(DDPM):
                 # This may help the model ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
 
-                if flip_coin_annealed(self.training_percent, true_prob_range=(0.6, 0.9)):
+                if flip_coin_annealed(self.training_percent, final_percent=0.5, true_prob_range=(0.6, 0.9)):
                     x_start.normal_()
                 else:
                     # The probability of this branch is annealed from 0.4 to 0.1.

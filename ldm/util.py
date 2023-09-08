@@ -754,17 +754,20 @@ def masked_mean(ts, mask):
 
 # true_prob_range = (p_init, p_final). 
 # The prob of flipping true is gradually annealed from p_init to p_final.
-def flip_coin_annealed(training_percent, true_prob_range):
+def flip_coin_annealed(training_percent, final_percent, true_prob_range):
     assert 0 - 1e-6 <= training_percent <= 1 + 1e-6
     p_init, p_final = true_prob_range
     # Gradually decrease the chance of flipping from the upperbound to lowerbound.
-    true_p_annealed = p_init + (p_final - p_init) * training_percent
+    if training_percent < final_percent:
+        true_p_annealed = p_init + (p_final - p_init) * training_percent
+    else:
+        true_p_annealed = p_final
     return random.random() < true_p_annealed
 
 def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0, 0.5)):
     t_anneal = t.clone()
     # Gradually increase the chance of keeping the original t from 0 to 0.5.
-    do_keep = flip_coin_annealed(training_percent, true_prob_range=keep_prob_range)
+    do_keep = flip_coin_annealed(training_percent, final_percent=1., true_prob_range=keep_prob_range)
     if do_keep:
         return t_anneal
     
