@@ -1933,8 +1933,8 @@ class LatentDiffusion(DDPM):
                 # t should be at least 150 steps away from the previous t, 
                 # so that the noise level is sufficiently different.
                 t = torch.minimum(t_mid, t_upperbound)
-                # Anneal t to increase robustness.
-                inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.1))
+                # Anneal t (decrease t to decrease noise amount) to increase robustness.
+                inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0))
 
             else:
                 # Fresh compositional iter.
@@ -2021,8 +2021,8 @@ class LatentDiffusion(DDPM):
         # Otherwise, it's a recon iter (attentional or unweighted).
         else:
             assert self.iter_flags['do_normal_recon']
-            # Anneal t to increase robustness.
-            inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.9, 1.2))
+            # Anneal t (increase t to increase noise amount) to increase robustness.
+            inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.2))
 
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
         # then cond[2]['use_conv_attn'] = True, it will inform U-Net to do conv attn.

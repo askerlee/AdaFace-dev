@@ -15,6 +15,7 @@ from queue import Queue
 from inspect import isfunction
 from PIL import Image, ImageDraw, ImageFont
 from torchvision.utils import make_grid, draw_bounding_boxes
+import random
 
 def log_txt_as_img(wh, xc, size=10):
     # wh a tuple of (width, height)
@@ -751,8 +752,11 @@ def masked_mean(ts, mask):
     
     return (ts * mask).sum() / mask.sum()
 
-def anneal_t(t, training_percent, num_timesteps, ratio_range):
+def anneal_t(t, training_percent, num_timesteps, ratio_range, unchanged_prob=0.5):
     t_anneal = t.clone()
+    if random.random() < unchanged_prob:
+        return t_anneal
+    
     ratio_lb, ratio_ub = ratio_range
     
     for i, ti in enumerate(t):
