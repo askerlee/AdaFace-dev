@@ -1945,14 +1945,17 @@ class LatentDiffusion(DDPM):
                 # This may help the model ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
 
-                if flip_coin_annealed(self.training_percent, true_prob_range=(0.6, 1)):
+                if flip_coin_annealed(self.training_percent, true_prob_range=(0.6, 0.9)):
                     x_start.normal_()
                 else:
+                    # The probability of this branch is annealed from 0.4 to 0.1.
                     if fg_mask is not None:
-                        # At foreground, keep the original x_start values. 
-                        # At background, fill with random values.
+                        # At foreground, keep 30% of the original x_start values and add 70% noise. 
+                        # At background, fill with random values (100% noise).
                         x_start = torch.where(fg_mask.bool(), x_start, torch.randn_like(x_start))
+                        x_start = torch.randn_like(x_start) * 0.7 + x_start * 0.3
                     else:
+                        # No fg_mask. Add 90% noise to x_start.
                         x_start = torch.randn_like(x_start) * 0.9 + x_start * 0.1
 
                 # Randomly choose t from the largest 150 timesteps, so as to match the completely noisy x_start.
