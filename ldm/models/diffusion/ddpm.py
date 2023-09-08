@@ -1933,7 +1933,7 @@ class LatentDiffusion(DDPM):
                 # t should be at least 150 steps away from the previous t, 
                 # so that the noise level is sufficiently different.
                 t = torch.minimum(t_mid, t_upperbound)
-                # Anneal t (decrease t to decrease noise amount) to increase robustness.
+                # Decrease t slightly to decrease noise amount and preserve more semantics.
                 inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0))
 
             else:
@@ -2021,7 +2021,7 @@ class LatentDiffusion(DDPM):
         # Otherwise, it's a recon iter (attentional or unweighted).
         else:
             assert self.iter_flags['do_normal_recon']
-            # Anneal t (increase t to increase noise amount) to increase robustness.
+            # Increase t slightly to increase noise amount and increase robustness.
             inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.2))
 
         # There are always some subj prompts in this batch. So if self.use_conv_attn,

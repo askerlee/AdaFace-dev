@@ -754,6 +754,7 @@ def masked_mean(ts, mask):
 
 def anneal_t(t, training_percent, num_timesteps, ratio_range, unchanged_prob=0.5):
     t_anneal = t.clone()
+    # At half of the chance, original t will be preserved.
     if random.random() < unchanged_prob:
         return t_anneal
     
