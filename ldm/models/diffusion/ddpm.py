@@ -26,7 +26,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, halve_token_indices, \
-                       normalize_dict_values, masked_mean, anneal_t
+                       normalize_dict_values, masked_mean, anneal_t, flip_coin_annealed
 
 from ldm.modules.ema import LitEma
 from ldm.modules.sophia import SophiaG
@@ -1944,7 +1944,8 @@ class LatentDiffusion(DDPM):
                 # At 40% of the chance, use a noisy x_start based on the training images. 
                 # This may help the model ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
-                if random.random() < 0.6:
+
+                if flip_coin_annealed(self.training_percent, true_prob_range=(0.6, 1)):
                     x_start.normal_()
                 else:
                     if fg_mask is not None:
