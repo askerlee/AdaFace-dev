@@ -26,7 +26,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, halve_token_indices, \
-                       normalize_dict_values, masked_mean
+                       normalize_dict_values, masked_mean, anneal_t
 
 from ldm.modules.ema import LitEma
 from ldm.modules.sophia import SophiaG
@@ -1933,8 +1933,8 @@ class LatentDiffusion(DDPM):
                 # t should be at least 150 steps away from the previous t, 
                 # so that the noise level is sufficiently different.
                 t = torch.minimum(t_mid, t_upperbound)
-                # Inject smaller amount of noises, to retain more semantics from the previous denoising step.
-                inj_noise_t = (t * np.random.uniform(0.8, 1)).type(t.dtype)
+                # Anneal t to increase robustness.
+                inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.1))
 
             else:
                 # Fresh compositional iter.
@@ -2021,13 +2021,8 @@ class LatentDiffusion(DDPM):
         # Otherwise, it's a recon iter (attentional or unweighted).
         else:
             assert self.iter_flags['do_normal_recon']
-            # Slightly more noises added.
-            inj_noise_t = t.clone()
-            for i, ti in enumerate(t):
-                # Gradually reduce the T_BOOST_RATIO, i.e., decrease the extra amount of noise added.
-                T_BOOST_RATIO = 1.2 - 0.2 * self.training_percent
-                ti_upperbound = min(int(ti * T_BOOST_RATIO) + 1, self.num_timesteps)
-                inj_noise_t[i] = np.random.randint(int(ti), ti_upperbound)
+            # Anneal t to increase robustness.
+            inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.9, 1.2))
 
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
         # then cond[2]['use_conv_attn'] = True, it will inform U-Net to do conv attn.
