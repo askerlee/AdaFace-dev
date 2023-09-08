@@ -1950,7 +1950,7 @@ class LatentDiffusion(DDPM):
                     if fg_mask is not None:
                         # At foreground, keep the original x_start values. 
                         # At background, fill with random values.
-                        x_start = torch.where(fg_mask, x_start, torch.randn_like(x_start))
+                        x_start = torch.where(fg_mask.bool(), x_start, torch.randn_like(x_start))
                     else:
                         x_start = torch.randn_like(x_start) * 0.9 + x_start * 0.1
 
