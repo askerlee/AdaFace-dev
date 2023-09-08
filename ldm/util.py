@@ -752,22 +752,18 @@ def masked_mean(ts, mask):
     
     return (ts * mask).sum() / mask.sum()
 
-def anneal_t(t, training_percent, num_timesteps, ratio_range, unchanged_prob=0.5):
+def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0, 0.5)):
     t_anneal = t.clone()
-    # At half of the chance, original t will be preserved.
-    if random.random() < unchanged_prob:
+    # Gradually increase the chance of keeping the original t from the lowerbound to upperbound.
+    keep_prob_lb, keep_prob_ub = keep_prob_range
+    keep_prob = keep_prob_lb + (keep_prob_ub - keep_prob_lb) * training_percent
+    # With keep_prob, original t will be preserved.
+    if random.random() < keep_prob:
         return t_anneal
     
     ratio_lb, ratio_ub = ratio_range
     
     for i, ti in enumerate(t):
-        # Gradually reduce the T_BOOST_RATIO, i.e., decrease the extra amount of noise added.
-        # If ratio_range = (0.9, 1.2), then
-        # 1.2 -> 1.0
-        T_BOOST_RATIO_UB = ratio_ub - (ratio_ub - 1) * training_percent
-        # If ratio_range = (0.9, 1.2), then
-        # 0.9 -> 1.0
-        T_BOOST_RATIO_LB = ratio_lb + (1 - ratio_lb) * training_percent
-        ti_upperbound = min(int(ti * T_BOOST_RATIO_UB) + 1, num_timesteps)
-        ti_lowerbound = max(int(ti * T_BOOST_RATIO_LB), 0)
+        ti_upperbound = min(int(ti * ratio_ub) + 1, num_timesteps)
+        ti_lowerbound = max(int(ti * ratio_lb), 0)
         t_anneal[i] = np.random.randint(ti_lowerbound, ti_upperbound)

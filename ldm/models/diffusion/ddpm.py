@@ -2071,14 +2071,8 @@ class LatentDiffusion(DDPM):
                                                                    batch_have_fg_mask=batch_have_fg_mask
                                                                   )
 
-                    # If mask_avail_ratio = 1, i.e., all training images have corresponding masks, then 
-                    # complementary_loss_discount = 0.25, and the complementary loss is made 1/4.
-                    # If mask_avail_ratio = 0, i.e., no training images have corresponding masks, then
-                    # complementary_loss_discount = 1, and the complementary loss is not discounted.
-                    complementary_loss_discount = 1 #0.25 + 0.75 * (1 - self.mask_avail_ratio)
 
-                    loss += self.fg_bg_complementary_loss_weight * complementary_loss_discount \
-                            * loss_fg_bg_complementary \
+                    loss += self.fg_bg_complementary_loss_weight * loss_fg_bg_complementary \
                             + self.fg_bg_mask_align_loss_weight * \
                               (loss_fg_mask_align + loss_bg_mask_align + loss_fg_bg_contrast)
                     
