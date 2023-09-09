@@ -1583,13 +1583,13 @@ class EmbeddingManager(nn.Module):
             delta_loss_emb_mask = delta_loss_emb_mask.pow(2) / 4
 
             # The tokens that only appear in comp prompts (the extra compositional part).
-            # extra_comp_emb_mask: [1, 1, 77, 1].
-            extra_comp_emb_mask = subj_comp_mask - subj_single_mask
-            extra_comp_emb_indices = torch.where(extra_comp_emb_mask[:, 0, :, 0] > 0)
+            # comp_extra_emb_mask: [1, 1, 77, 1].
+            comp_extra_emb_mask = subj_comp_mask - subj_single_mask
+            comp_extra_emb_indices = torch.where(comp_extra_emb_mask[:, 0, :, 0] > 0)
 
         else:
             delta_loss_emb_mask = None
-            extra_comp_emb_indices = None
+            comp_extra_emb_indices = None
 
         use_ortho_subtract = True
         # cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
@@ -1703,22 +1703,24 @@ class EmbeddingManager(nn.Module):
 
             # subj_comp_ortho_loss: to what degree subj embs are orthogonal to extra comp emb.
             subj_comp_ortho_loss = 0
-            if extra_comp_emb_indices is not None:
-                IND_B_extra, IND_N_extra = extra_comp_emb_indices
+            if comp_extra_emb_indices is not None:
+                IND_B_extra, IND_N_extra = comp_extra_emb_indices
                 # static_subj_emb: [16, 768]. Averaged over M embeddings.
                 static_subj_emb = static_subj_comp_emb[IND_B, :, IND_N].mean(dim=0)
-                # static_comp_emb: [16, 768]. Averaged over all extra compositional embeddings.
-                static_comp_emb = static_subj_comp_emb[IND_B_extra, :, IND_N_extra].mean(dim=0)
-                # Encourage static_subj_emb and static_comp_emb to be orthogonal (dot product -> 0).
-                subj_comp_ortho_loss += calc_delta_loss(static_subj_emb, static_comp_emb, exponent=2,
-                                                        do_demean_first=True, first_n_dims_to_flatten=1)
+                # static_comp_extra_emb: [16, 768]. Averaged over all extra compositional embeddings.
+                static_comp_extra_emb = static_subj_comp_emb[IND_B_extra, :, IND_N_extra].mean(dim=0)
+                # Encourage static_subj_emb and static_comp_extra_emb to be orthogonal (dot product -> 0).
+                subj_comp_ortho_loss += calc_delta_loss(static_subj_emb, static_comp_extra_emb, exponent=2,
+                                                        do_demean_first=True, first_n_dims_to_flatten=1,
+                                                        is_to_align=False)
 
                 if do_ada_prompt_delta_reg and ada_embeddings is not None:
                     ada_subj_emb = ada_subj_comp_emb[IND_B, :, IND_N].mean(dim=0)
-                    ada_comp_emb = ada_subj_comp_emb[IND_B_extra, :, IND_N_extra].mean(dim=0)
-                    # Encourage ada_subj_emb and ada_comp_emb to be orthogonal (dot product -> 0).
-                    subj_comp_ortho_loss += calc_delta_loss(ada_subj_emb, ada_comp_emb, exponent=2,
-                                                            do_demean_first=True, first_n_dims_to_flatten=1)
+                    ada_comp_extra_emb = ada_subj_comp_emb[IND_B_extra, :, IND_N_extra].mean(dim=0)
+                    # Encourage ada_subj_emb and ada_comp_extra_emb to be orthogonal (dot product -> 0).
+                    subj_comp_ortho_loss += calc_delta_loss(ada_subj_emb, ada_comp_extra_emb, exponent=2,
+                                                            do_demean_first=True, first_n_dims_to_flatten=1,
+                                                            is_to_align=False)
                     subj_comp_ortho_loss /= 2
         else:
             subj_emb_diff_loss = 0
