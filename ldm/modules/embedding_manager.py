@@ -1712,7 +1712,7 @@ class EmbeddingManager(nn.Module):
                 # Encourage static_subj_emb and static_comp_extra_emb to be orthogonal (dot product -> 0).
                 subj_comp_ortho_loss += calc_delta_loss(static_subj_emb, static_comp_extra_emb, exponent=2,
                                                         do_demean_first=False, first_n_dims_to_flatten=1,
-                                                        aim_to_align=False, ref_grad_scale=0.05)
+                                                        ref_grad_scale=0, aim_to_align=False)
 
                 if do_ada_prompt_delta_reg and ada_embeddings is not None:
                     ada_subj_emb = ada_subj_comp_emb[IND_B, :, IND_N].mean(dim=0)
@@ -1720,7 +1720,7 @@ class EmbeddingManager(nn.Module):
                     # Encourage ada_subj_emb and ada_comp_extra_emb to be orthogonal (dot product -> 0).
                     subj_comp_ortho_loss += calc_delta_loss(ada_subj_emb, ada_comp_extra_emb, exponent=2,
                                                             do_demean_first=False, first_n_dims_to_flatten=1,
-                                                            aim_to_align=False, ref_grad_scale=0.05)
+                                                            ref_grad_scale=0, aim_to_align=False)
                     subj_comp_ortho_loss /= 2
         else:
             subj_emb_diff_loss = 0
