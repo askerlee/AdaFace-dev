@@ -94,6 +94,7 @@ class DDPM(pl.LightningModule):
                  composition_regs_iter_gap=-1,
                  prompt_emb_delta_reg_weight=0.,
                  subj_emb_diff_loss_weight=0.,
+                 subj_comp_ortho_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_mask_align_loss_weight=0.,
@@ -121,6 +122,7 @@ class DDPM(pl.LightningModule):
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight     = prompt_emb_delta_reg_weight
         self.subj_emb_diff_loss_weight       = subj_emb_diff_loss_weight
+        self.subj_comp_ortho_loss_weight     = subj_comp_ortho_loss_weight
         self.mix_prompt_distill_weight       = mix_prompt_distill_weight
         self.fg_bg_complementary_loss_weight = fg_bg_complementary_loss_weight
         self.fg_bg_mask_align_loss_weight    = fg_bg_mask_align_loss_weight
@@ -2377,8 +2379,8 @@ class LatentDiffusion(DDPM):
             # do_ada_emb_delta_reg controls whether to do ada comp delta reg here.
             # Use subj_indices_1b here, since this index is used to extract 
             # subject embeddings from each block, and compare two such blocks.
-            static_delta_loss, ada_delta_loss, subj_emb_diff_loss = \
-                self.embedding_manager.calc_prompt_emb_delta_loss( 
+            static_delta_loss, ada_delta_loss, subj_emb_diff_loss, subj_comp_ortho_loss \
+                = self.embedding_manager.calc_prompt_emb_delta_loss( 
                                         self.c_static_emb, ada_embeddings,
                                         self.iter_flags['do_ada_emb_delta_reg'],
                                         extra_info['subj_indices_1b']
@@ -2389,6 +2391,8 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
             if subj_emb_diff_loss != 0:
                 loss_dict.update({f'{prefix}/subj_emb_diff_loss': subj_emb_diff_loss.mean().detach()})
+            if subj_comp_ortho_loss != 0:
+                loss_dict.update({f'{prefix}/subj_comp_ortho_loss': subj_comp_ortho_loss.mean().detach()})
 
             # The prompt delta loss for ada embeddings is only applied 
             # every self.composition_regs_iter_gap iterations. So the ada loss 
@@ -2397,7 +2401,9 @@ class LatentDiffusion(DDPM):
             # static emb loss in the total loss.                
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
             loss_prompt_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss \
-                                    + subj_emb_diff_loss * self.subj_emb_diff_loss_weight
+                                    + subj_emb_diff_loss * self.subj_emb_diff_loss_weight \
+                                    + subj_comp_ortho_loss * self.subj_comp_ortho_loss_weight
+            
             loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
         
         if self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']:

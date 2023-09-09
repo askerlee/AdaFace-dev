@@ -282,7 +282,7 @@ def demean(x):
 
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
-# emb_mask: [2, 77, 1]
+# emb_mask: [2, 77, 1]. Could be fractional, e.g., 0.5, to discount some tokens.
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
 def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
                     exponent=3, do_demean_first=True, repair_ref_bound_zeros=False,
@@ -761,7 +761,10 @@ def flip_coin_annealed(training_percent, final_percent, true_prob_range):
     if training_percent < final_percent:
         true_p_annealed = p_init + (p_final - p_init) * training_percent
     else:
+        # Stop at p_final.
         true_p_annealed = p_final
+
+    # Flip a coin, with prob of true being true_p_annealed.    
     return random.random() < true_p_annealed
 
 def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0, 0.5)):

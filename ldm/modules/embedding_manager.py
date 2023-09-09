@@ -1581,8 +1581,15 @@ class EmbeddingManager(nn.Module):
             # the mask value is 1. Convert to 0.25.
             # If a token is useless (z suffix or padding), the mask value is 0. Convert to 0.
             delta_loss_emb_mask = delta_loss_emb_mask.pow(2) / 4
+
+            # The tokens that only appear in comp prompts (the extra compositional part).
+            # extra_comp_emb_mask: [1, 1, 77, 1].
+            extra_comp_emb_mask = subj_comp_mask - subj_single_mask
+            extra_comp_emb_indices = torch.where(extra_comp_emb_mask[:, 0, :, 0] > 0)
+
         else:
             delta_loss_emb_mask = None
+            extra_comp_emb_indices = None
 
         use_ortho_subtract = True
         # cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
@@ -1693,13 +1700,32 @@ class EmbeddingManager(nn.Module):
                 # ada_subj_comp_emb has no grad. 
                 # So no need to compute its subj emb diff loss.
             subj_emb_diff_loss /= subj_emb_diff_count
+
+            # subj_comp_ortho_loss: to what degree subj embs are orthogonal to extra comp emb.
+            subj_comp_ortho_loss = 0
+            if extra_comp_emb_indices is not None:
+                IND_B_extra, IND_N_extra = extra_comp_emb_indices
+                # static_subj_emb: [16, 768]. Averaged over M embeddings.
+                static_subj_emb = static_subj_comp_emb[IND_B, :, IND_N].mean(dim=0)
+                # static_comp_emb: [16, 768]. Averaged over all extra compositional embeddings.
+                static_comp_emb = static_subj_comp_emb[IND_B_extra, :, IND_N_extra].mean(dim=0)
+                # Encourage static_subj_emb and static_comp_emb to be orthogonal (dot product -> 0).
+                subj_comp_ortho_loss += calc_delta_loss(static_subj_emb, static_comp_emb, exponent=2,
+                                                        do_demean_first=True, first_n_dims_to_flatten=1)
+
+                ada_subj_emb = ada_subj_comp_emb[IND_B, :, IND_N].mean(dim=0)
+                ada_comp_emb = ada_subj_comp_emb[IND_B_extra, :, IND_N_extra].mean(dim=0)
+                # Encourage ada_subj_emb and ada_comp_emb to be orthogonal (dot product -> 0).
+                subj_comp_ortho_loss += calc_delta_loss(ada_subj_emb, ada_comp_emb, exponent=2,
+                                                        do_demean_first=True, first_n_dims_to_flatten=1)
         else:
             subj_emb_diff_loss = 0
+            subj_comp_ortho_loss = 0
 
         # self.clear_delta_loss_emb_mask()
         # delta_loss = static_delta_loss + ada_delta_loss * ada_comp_loss_boost_ratio \
         #               + subj_emb_diff_loss * subj_emb_diff_loss_boost_ratio
-        return static_delta_loss, ada_delta_loss, subj_emb_diff_loss
+        return static_delta_loss, ada_delta_loss, subj_emb_diff_loss, subj_comp_ortho_loss
 
 if __name__ == '__main__':
     # The example code below is obsolete.    
