@@ -1716,7 +1716,7 @@ class EmbeddingManager(nn.Module):
                 # Encourage static_subj_subj_emb and static_subj_comp_extra_emb to be orthogonal (dot product -> 0).
                 #subj_comp_ortho_loss += calc_delta_loss(static_subj_subj_emb, static_subj_comp_extra_emb, exponent=2,
                 subj_comp_ortho_loss += calc_delta_loss(static_subj_comp_emb_diff, static_cls_comp_emb_diff, exponent=2,
-                                                        do_demean_first=False, first_n_dims_to_flatten=1,
+                                                        do_demean_first=True, first_n_dims_to_flatten=1,
                                                         ref_grad_scale=0, aim_to_align=True)
 
                 if do_ada_prompt_delta_reg and (ada_embeddings is not None) and (not is_twin_non_teachable):
@@ -1726,7 +1726,7 @@ class EmbeddingManager(nn.Module):
                     # Encourage ada_subj_subj_emb and ada_subj_comp_extra_emb to be orthogonal (dot product -> 0).
                     #subj_comp_ortho_loss += calc_delta_loss(ada_subj_subj_emb, ada_subj_comp_extra_emb, exponent=2,
                     subj_comp_ortho_loss += calc_delta_loss(ada_subj_comp_emb_diff, static_cls_comp_emb_diff, exponent=2,
-                                                            do_demean_first=False, first_n_dims_to_flatten=1,
+                                                            do_demean_first=True, first_n_dims_to_flatten=1,
                                                             ref_grad_scale=0, aim_to_align=True)
                     subj_comp_ortho_loss /= 2
         else:
