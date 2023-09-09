@@ -287,7 +287,7 @@ def demean(x):
 def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
                     exponent=3, do_demean_first=True, repair_ref_bound_zeros=False,
                     first_n_dims_to_flatten=3,
-                    ref_grad_scale=0, is_to_align=True, debug=False):
+                    ref_grad_scale=0, aim_to_align=True, debug=False):
     B = delta.shape[0]
     loss = 0
     if batch_mask is not None:
@@ -383,9 +383,9 @@ def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 
         ref_delta_i_pow = ref_delta_i2 * ref_delta_i2.abs().pow(exponent - 1)
 
-        # If not to align, then cosine_label = -1, i.e., the cosine loss will 
+        # If not aim_to_align, then cosine_label = -1, i.e., the cosine loss will 
         # push delta_i to be orthogonal with ref_delta_i.
-        cosine_label = 1 if is_to_align else -1
+        cosine_label = 1 if aim_to_align else -1
         loss_i = F.cosine_embedding_loss(delta_i, ref_delta_i_pow, 
                                          torch.ones_like(delta_i[:, 0]) * cosine_label, 
                                          reduction='none')
