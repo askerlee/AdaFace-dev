@@ -1476,17 +1476,18 @@ class LatentDiffusion(DDPM):
                         # i.e., no cls_single_emb / cls_comp_emb will be mixed into 
                         # subj_single_emb / subj_comp_emb to form subj_single_emb_v / subj_comp_emb_v.
                         # If mask_avail_ratio = 0, then INIT_CLS_EMB_V_SCALE = 0.1, FINAL_CLS_EMB_V_SCALE = 0.2.
-                        INIT_CLS_EMB_V_SCALE  = 0.3
-                        FINAL_CLS_EMB_V_SCALE = 0.3
-                        # Linearly increase the scale of the class embeddings from 0.1 to 0.3, i.e., 
-                        # Linearly decrease the scale of the subject embeddings from 0.9 to 0.7, 
-                        # so that the distillation keeps being effective. Otherwise the teacher 
-                        # will gradually become very similar to the student in the end.
-                        subj_emb_scale = 1 - INIT_CLS_EMB_V_SCALE \
-                                         - (FINAL_CLS_EMB_V_SCALE - INIT_CLS_EMB_V_SCALE) * np.random.uniform(0.8, 1.2) \
-                                            * self.training_percent
+                        FIRST_LAYER_CLS_ESCALE  = 0.5
+                        FINAL_LAYER_CLS_E_SCALE = 0.1
+                        if N_LAYERS > 1:
+                            SCALE_STEP = (FINAL_LAYER_CLS_E_SCALE - FIRST_LAYER_CLS_ESCALE) / (N_LAYERS - 1)
+                            # Linearly decrease the scale of the class   embeddings from 0.5 to 0.1, i.e., 
+                            # Linearly increase the scale of the subject embeddings from 0.5 to 0.9.
+                            subj_emb_scale = 1 - torch.arange(FIRST_LAYER_CLS_ESCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
+                                                              step=SCALE_STEP, device=subj_comp_emb.device)
+                        else:
+                            subj_emb_scale = 1 - (FIRST_LAYER_CLS_ESCALE + FINAL_LAYER_CLS_E_SCALE) / 2
 
-                        if subj_emb_scale < 1:
+                        if FINAL_LAYER_CLS_E_SCALE < 1:
                             # mix_embeddings('add'):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
                             # where they are subj_comp_emb * subj_emb_scale + cls_comp_emb * (1 - subj_emb_scale).
                             # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].

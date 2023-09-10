@@ -232,6 +232,15 @@ def mix_embeddings(mix_scheme, c1, c2, placeholder_indices_N=None,
     if mix_scheme == 'add':
         if placeholder_indices_N is not None:
             scale_mask = torch.ones_like(c1)
+
+            if type(c1_subj_scale) == torch.Tensor:
+                if len(c1_subj_scale) < len(scale_mask):
+                    assert len(scale_mask) % len(c1_subj_scale) == 0
+                    BS = len(scale_mask) // len(c1_subj_scale)
+                    # c1_subj_scale is a scalar, so expand it to the same shape as scale_mask.
+                    c1_subj_scale = c1_subj_scale.repeat(BS)
+                c1_subj_scale = c1_subj_scale.unsqueeze(-1).unsqueeze(-1)
+
             scale_mask[:, placeholder_indices_N] = c1_subj_scale
             # 1 - scale_mask: almost 0 everywhere, except those corresponding to the placeholder tokens 
             # being 1 - c1_subj_scale.
