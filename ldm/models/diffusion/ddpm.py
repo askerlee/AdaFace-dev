@@ -2435,20 +2435,16 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_direct_distill': loss_subj_attn_direct_distill.mean().detach()})
 
-            # In a reused init iter, the denoise image may not look so authentic, so
-            # it receives a smaller weight.
-            distill_feat_weight      = 0.5 if (not self.iter_flags['reuse_init_conds']) else 0.3
-            # Set to 0 to disable distillation on attention weights of the subject.
-            distill_subj_attn_weight = 0.4
-            subj_attn_norm_distill_loss_scale = 2
+            subj_attn_norm_distill_loss_scale = 5
             # (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) * subj_attn_norm_distill_loss_scale
-            loss_prompt_mix_reg =  (loss_subj_attn_delta_distill \
-                                      + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale) * distill_subj_attn_weight \
-                                    + loss_feat_distill * distill_feat_weight \
-                                    + subj_comp_key_ortho_loss * self.subj_comp_key_ortho_loss_weight
+            loss_prompt_mix_reg =  loss_subj_attn_delta_distill \
+                                    + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
+                                    + loss_feat_distill
             
             # distill_loss_scale gradually increases to 1 during warm-up. Then stays at 1.
-            loss += self.mix_prompt_distill_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
+            loss += self.mix_prompt_distill_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount \
+                     + subj_comp_key_ortho_loss * self.subj_comp_key_ortho_loss_weight
+            
             self.release_plosses_intermediates(locals())
 
         loss_dict.update({f'{prefix}/loss': loss.mean().detach()})
