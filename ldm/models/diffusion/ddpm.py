@@ -1472,18 +1472,18 @@ class LatentDiffusion(DDPM):
                         # This is only for static embeddings. The dynamically generated ada embeddings 
                         # won't be mixed, but simply repeated.
 
-                        # If mask_avail_ratio = 1, then INIT_CLS_EMB_SCALE = 0, FINAL_CLS_EMB_SCALE = 0.
+                        # If mask_avail_ratio = 1, then INIT_CLS_EMB_V_SCALE = 0, FINAL_CLS_EMB_V_SCALE = 0.
                         # i.e., no cls_single_emb / cls_comp_emb will be mixed into 
                         # subj_single_emb / subj_comp_emb to form subj_single_emb_v / subj_comp_emb_v.
-                        # If mask_avail_ratio = 0, then INIT_CLS_EMB_SCALE = 0.1, FINAL_CLS_EMB_SCALE = 0.2.
-                        INIT_CLS_EMB_SCALE  = 0.1
-                        FINAL_CLS_EMB_SCALE = 0.1 #0.3
+                        # If mask_avail_ratio = 0, then INIT_CLS_EMB_V_SCALE = 0.1, FINAL_CLS_EMB_V_SCALE = 0.2.
+                        INIT_CLS_EMB_V_SCALE  = 0.3
+                        FINAL_CLS_EMB_V_SCALE = 0.3
                         # Linearly increase the scale of the class embeddings from 0.1 to 0.3, i.e., 
                         # Linearly decrease the scale of the subject embeddings from 0.9 to 0.7, 
                         # so that the distillation keeps being effective. Otherwise the teacher 
                         # will gradually become very similar to the student in the end.
-                        subj_emb_scale = 1 - INIT_CLS_EMB_SCALE \
-                                         - (FINAL_CLS_EMB_SCALE - INIT_CLS_EMB_SCALE) * np.random.uniform(0.8, 1.2) \
+                        subj_emb_scale = 1 - INIT_CLS_EMB_V_SCALE \
+                                         - (FINAL_CLS_EMB_V_SCALE - INIT_CLS_EMB_V_SCALE) * np.random.uniform(0.8, 1.2) \
                                             * self.training_percent
 
                         if subj_emb_scale < 1:
@@ -2441,9 +2441,9 @@ class LatentDiffusion(DDPM):
             # Set to 0 to disable distillation on attention weights of the subject.
             distill_subj_attn_weight = 0.4
             subj_attn_norm_distill_loss_scale = 2
+            # (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) * subj_attn_norm_distill_loss_scale
             loss_prompt_mix_reg =  (loss_subj_attn_delta_distill \
-                                      + (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) 
-                                        * subj_attn_norm_distill_loss_scale) * distill_subj_attn_weight \
+                                      + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale) * distill_subj_attn_weight \
                                     + loss_feat_distill * distill_feat_weight \
                                     + subj_comp_key_ortho_loss * self.subj_comp_key_ortho_loss_weight
             
