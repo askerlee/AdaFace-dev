@@ -94,7 +94,7 @@ class DDPM(pl.LightningModule):
                  composition_regs_iter_gap=-1,
                  prompt_emb_delta_reg_weight=0.,
                  subj_emb_diff_loss_weight=0.,
-                 subj_comp_ortho_loss_weight=0.,
+                 subj_comp_key_ortho_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_mask_align_loss_weight=0.,
@@ -122,7 +122,7 @@ class DDPM(pl.LightningModule):
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight     = prompt_emb_delta_reg_weight
         self.subj_emb_diff_loss_weight       = subj_emb_diff_loss_weight
-        self.subj_comp_ortho_loss_weight     = subj_comp_ortho_loss_weight
+        self.subj_comp_key_ortho_loss_weight = subj_comp_key_ortho_loss_weight
         self.mix_prompt_distill_weight       = mix_prompt_distill_weight
         self.fg_bg_complementary_loss_weight = fg_bg_complementary_loss_weight
         self.fg_bg_mask_align_loss_weight    = fg_bg_mask_align_loss_weight
@@ -2379,7 +2379,7 @@ class LatentDiffusion(DDPM):
             # do_ada_emb_delta_reg controls whether to do ada comp delta reg here.
             # Use subj_indices_1b here, since this index is used to extract 
             # subject embeddings from each block, and compare two such blocks.
-            static_delta_loss, ada_delta_loss, subj_emb_diff_loss, subj_comp_ortho_loss \
+            static_delta_loss, ada_delta_loss, subj_emb_diff_loss \
                 = self.embedding_manager.calc_prompt_emb_delta_loss( 
                                         self.c_static_emb, ada_embeddings,
                                         self.iter_flags['do_ada_emb_delta_reg'],
@@ -2391,8 +2391,6 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
             if subj_emb_diff_loss != 0:
                 loss_dict.update({f'{prefix}/subj_emb_diff_loss': subj_emb_diff_loss.mean().detach()})
-            if subj_comp_ortho_loss != 0:
-                loss_dict.update({f'{prefix}/subj_comp_ortho_loss': subj_comp_ortho_loss.mean().detach()})
 
             # The prompt delta loss for ada embeddings is only applied 
             # every self.composition_regs_iter_gap iterations. So the ada loss 
@@ -2401,8 +2399,7 @@ class LatentDiffusion(DDPM):
             # static emb loss in the total loss.                
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
             loss_prompt_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss \
-                                    + subj_emb_diff_loss * self.subj_emb_diff_loss_weight \
-                                    + subj_comp_ortho_loss * self.subj_comp_ortho_loss_weight
+                                    + subj_emb_diff_loss * self.subj_emb_diff_loss_weight
             
             loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
         
@@ -2423,6 +2420,16 @@ class LatentDiffusion(DDPM):
                                                           extra_info['subj_indices_2b'],
                                                           BLOCK_SIZE)
 
+            subj_comp_key_ortho_loss = 0
+            if self.subj_comp_key_ortho_loss_weight > 0:
+                subj_comp_key_ortho_loss = self.calc_subj_comp_key_ortho_loss(cond[2]['unet_ks'],
+                                                                              extra_info['subj_indices_2b'],
+                                                                              self.embedding_manager.delta_loss_emb_mask,
+                                                                              BLOCK_SIZE)
+
+                if subj_comp_key_ortho_loss != 0:
+                    loss_dict.update({f'{prefix}/subj_comp_key_ortho_loss': subj_comp_key_ortho_loss.mean().detach()})
+
             loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.mean().detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.mean().detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach()})
@@ -2437,7 +2444,8 @@ class LatentDiffusion(DDPM):
             loss_prompt_mix_reg =  (loss_subj_attn_delta_distill \
                                       + (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) 
                                         * subj_attn_norm_distill_loss_scale) * distill_subj_attn_weight \
-                                    + loss_feat_distill * distill_feat_weight 
+                                    + loss_feat_distill * distill_feat_weight \
+                                    + subj_comp_key_ortho_loss * self.subj_comp_key_ortho_loss_weight
             
             # distill_loss_scale gradually increases to 1 during warm-up. Then stays at 1.
             loss += self.mix_prompt_distill_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount
@@ -2853,11 +2861,10 @@ class LatentDiffusion(DDPM):
 
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast
     
-    """ 
-    def calc_fg_bg_key_ortho_loss(self, unet_ks, 
-                                  placeholder_indices_fg, 
-                                  placeholder_indices_bg, 
-                                  BS):
+    def calc_subj_comp_key_ortho_loss(self, unet_ks, 
+                                      subj_indices, 
+                                      delta_loss_emb_mask, 
+                                      BS):
 
         # Discard the first few bottom layers from the orthogonal loss.
         k_ortho_layer_weights = { #7:  1., 8: 1.,
@@ -2870,27 +2877,34 @@ class LatentDiffusion(DDPM):
         
         # Normalize the weights above so that each set sum to 1.
         k_ortho_layer_weights = normalize_dict_values(k_ortho_layer_weights)
+
+        subj_single_mask, subj_comp_mask, cls_single_mask, cls_comp_mask = \
+                delta_loss_emb_mask.chunk(4)
+        # The tokens that only appear in comp prompts (the extra compositional part).
+        subj_comp_emb_mask    = subj_comp_mask - subj_single_mask
+        # subj_comp_emb_indices: ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 
+        #                         [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21])
+        subj_comp_emb_indices = torch.where(subj_comp_emb_mask[:, 0, :, 0] > 0)
+
         # K_fg: 4, number of embeddings per subject token.
-        K_fg = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
-        # K_bg: 1 or 2, number of embeddings per background token.
-        K_bg = len(placeholder_indices_bg[0]) // len(torch.unique(placeholder_indices_bg[0]))
-        assert self.num_vectors_per_token == K_fg
+        K_fg   = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
+        K_comp = len(subj_comp_emb_indices[0]) // len(torch.unique(subj_comp_emb_indices[0]))
 
-        loss_fg_bg_key_ortho = 0
-
-        # The fg embeddings should change more slowly than the bg embeddings.
-        fg_ks_grad_scale  = 1
-        fg_ks_grad_scaler = gen_gradient_scaler(fg_ks_grad_scale)
-
-        # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
-        # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
+        # In each instance, subj_indices has K_fg times as many elements as placeholder_indices_bg.
+        # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
         # placeholder_indices_bg: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
         # BS = 2, so we only keep instances indexed by [0, 1].
-        # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
-        ind_fg_B, ind_fg_N = placeholder_indices_fg[0][:BS*K_fg], placeholder_indices_fg[1][:BS*K_fg]
-        # placeholder_indices_bg: ([0, 1], [11, 12]).
-        ind_bg_B, ind_bg_N = placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg]
+        # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
+        # Shift batch indices by BS, so that it points to subj comp embeddings.
+        ind_subj_subj_B, ind_subj_subj_N = subj_indices[0][:BS*K_fg] + BS, subj_indices[1][:BS*K_fg]
+        # Shift ind_subj_subj_B by 2 * BS, so that it points to cls comp embeddings.
+        ind_cls_subj_B,  ind_cls_subj_N  = ind_subj_subj_B + 2 * BS, ind_subj_subj_N
+        # subj_comp_emb_indices: ([0, 1], [11, 12]).
+        ind_subj_comp_B, ind_subj_comp_N = subj_comp_emb_indices[0] + BS, subj_comp_emb_indices[1]
+        ind_cls_comp_B,  ind_cls_comp_N  = ind_subj_comp_B + 2 * BS, ind_subj_comp_N
+
+        loss_subj_comp_key_ortho = 0
 
         for unet_layer_idx, unet_seq_k in unet_ks.items():
             if (unet_layer_idx not in k_ortho_layer_weights):
@@ -2904,20 +2918,31 @@ class LatentDiffusion(DDPM):
             # The ortho losses on different "instances" are computed separately 
             # and there's no interaction among them.
             # Head is merged into batch, since different heads shouldn't have interactions as well.
-            subj_ks = unet_seq_k[ind_fg_B, :, ind_fg_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3).reshape(BS * H, K_fg, D)
-            # bg_attn:   [4, 8, 160] => [2, 2, 8, 160] => [2, 8, 2, 160] => [16, 2, 160]
-            bg_ks   = unet_seq_k[ind_bg_B, :, ind_bg_N].reshape(BS, K_bg, H, D).permute(0, 2, 1, 3).reshape(BS * H, K_bg, D)
+            subj_subj_ks = unet_seq_k[ind_subj_subj_B, :, ind_subj_subj_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3).reshape(BS * H, K_fg, D)
+            cls_subj_ks  = unet_seq_k[ind_cls_subj_B,  :, ind_cls_subj_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3).reshape(BS * H, K_fg, D)
+            # subj_comp_ks, cls_comp_ks: [11, 16, 160] => [1, 11, 16, 160] => [1, 16, 11, 160] => [16, 11, 160]
+            subj_comp_ks = unet_seq_k[ind_subj_comp_B, :, ind_subj_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3).reshape(BS * H, K_comp, D)
+            cls_comp_ks  = unet_seq_k[ind_cls_comp_B,  :, ind_cls_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3).reshape(BS * H, K_comp, D)
 
-            subj_ks_gs = fg_ks_grad_scaler(subj_ks)
-            # Only penalize positive correlations, and ignore negative values. 
-            # Use matmul() instead of mm(), since mm() is only for two 2-D tensors.
-            loss_layer_fg_bg_key_ortho = torch.clip(torch.matmul(subj_ks_gs, bg_ks.transpose(1, 2)), min=0).mean()
+            # subj_subj_ks_mean: [16, 160]. Averaged over 4 subject embeddings.
+            subj_subj_ks_mean = subj_subj_ks.mean(dim=1)
+            # subj_comp_ks_mean: [16, 160]. Averaged over all extra 11 compositional embeddings.
+            subj_comp_ks_mean = subj_comp_ks.mean(dim=1)
+            cls_subj_ks_mean  = cls_subj_ks.mean(dim=1)
+            cls_comp_ks_mean  = cls_comp_ks.mean(dim=1)
+
+            subj_comp_emb_diff = ortho_subtract(subj_subj_ks_mean, subj_comp_ks_mean)
+            cls_comp_emb_diff  = ortho_subtract(cls_subj_ks_mean,  cls_comp_ks_mean)
+            # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
+            #subj_comp_ortho_loss += calc_delta_loss(static_subj_subj_emb, static_subj_comp_extra_emb, exponent=2,
+            loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_diff, cls_comp_emb_diff, exponent=2,
+                                                             do_demean_first=True, first_n_dims_to_flatten=1,
+                                                             ref_grad_scale=0, aim_to_align=True)
             
             k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
-            loss_fg_bg_key_ortho += loss_layer_fg_bg_key_ortho * k_ortho_layer_weight
+            loss_subj_comp_key_ortho += loss_layer_subj_comp_key_ortho * k_ortho_layer_weight
 
-        return loss_fg_bg_key_ortho
-    """
+        return loss_subj_comp_key_ortho
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):

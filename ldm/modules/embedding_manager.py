@@ -1582,11 +1582,6 @@ class EmbeddingManager(nn.Module):
             # If a token is useless (z suffix or padding), the mask value is 0. Convert to 0.
             delta_loss_emb_mask = delta_loss_emb_mask.pow(2) / 4
 
-            # The tokens that only appear in comp prompts (the extra compositional part).
-            # comp_extra_emb_mask: [1, 1, 77, 1].
-            comp_extra_emb_mask = subj_comp_mask - subj_single_mask
-            comp_extra_emb_indices = torch.where(comp_extra_emb_mask[:, 0, :, 0] > 0)
-
         else:
             delta_loss_emb_mask = None
             comp_extra_emb_indices = None
@@ -1700,43 +1695,13 @@ class EmbeddingManager(nn.Module):
                 # ada_subj_comp_emb has no grad. 
                 # So no need to compute its subj emb diff loss.
             subj_emb_diff_loss /= subj_emb_diff_count
-
-            # subj_comp_ortho_loss: to what degree subj embs are orthogonal to extra comp emb.
-            subj_comp_ortho_loss = 0
-            if comp_extra_emb_indices is not None:
-                IND_B_extra, IND_N_extra = comp_extra_emb_indices
-                # static_subj_subj_emb: [16, 768]. Averaged over M embeddings.
-                static_subj_subj_emb = static_subj_comp_emb[IND_B, :, IND_N].mean(dim=0)
-                static_cls_subj_emb  = static_cls_comp_emb[IND_B, :, IND_N].mean(dim=0)
-                # static_subj_comp_extra_emb: [16, 768]. Averaged over all extra compositional embeddings.
-                static_subj_comp_extra_emb = static_subj_comp_emb[IND_B_extra, :, IND_N_extra].mean(dim=0)
-                static_cls_comp_extra_emb  = static_cls_comp_emb[IND_B_extra, :, IND_N_extra].mean(dim=0)
-                static_subj_comp_emb_diff = ortho_subtract(static_subj_subj_emb, static_subj_comp_extra_emb)
-                static_cls_comp_emb_diff  = ortho_subtract(static_cls_subj_emb,  static_cls_comp_extra_emb)
-                # Encourage static_subj_subj_emb and static_subj_comp_extra_emb to be orthogonal (dot product -> 0).
-                #subj_comp_ortho_loss += calc_delta_loss(static_subj_subj_emb, static_subj_comp_extra_emb, exponent=2,
-                subj_comp_ortho_loss += calc_delta_loss(static_subj_comp_emb_diff, static_cls_comp_emb_diff, exponent=2,
-                                                        do_demean_first=True, first_n_dims_to_flatten=1,
-                                                        ref_grad_scale=0, aim_to_align=True)
-
-                if do_ada_prompt_delta_reg and (ada_embeddings is not None) and (not is_twin_non_teachable):
-                    ada_subj_subj_emb = ada_subj_comp_emb[IND_B, :, IND_N].mean(dim=0)
-                    ada_subj_comp_extra_emb = ada_subj_comp_emb[IND_B_extra, :, IND_N_extra].mean(dim=0)
-                    ada_subj_comp_emb_diff = ortho_subtract(ada_subj_subj_emb, ada_subj_comp_extra_emb)
-                    # Encourage ada_subj_subj_emb and ada_subj_comp_extra_emb to be orthogonal (dot product -> 0).
-                    #subj_comp_ortho_loss += calc_delta_loss(ada_subj_subj_emb, ada_subj_comp_extra_emb, exponent=2,
-                    subj_comp_ortho_loss += calc_delta_loss(ada_subj_comp_emb_diff, static_cls_comp_emb_diff, exponent=2,
-                                                            do_demean_first=True, first_n_dims_to_flatten=1,
-                                                            ref_grad_scale=0, aim_to_align=True)
-                    subj_comp_ortho_loss /= 2
         else:
             subj_emb_diff_loss = 0
-            subj_comp_ortho_loss = 0
 
         # self.clear_delta_loss_emb_mask()
         # delta_loss = static_delta_loss + ada_delta_loss * ada_comp_loss_boost_ratio \
         #               + subj_emb_diff_loss * subj_emb_diff_loss_boost_ratio
-        return static_delta_loss, ada_delta_loss, subj_emb_diff_loss, subj_comp_ortho_loss
+        return static_delta_loss, ada_delta_loss, subj_emb_diff_loss
 
 if __name__ == '__main__':
     # The example code below is obsolete.    
