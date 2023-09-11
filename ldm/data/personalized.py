@@ -299,13 +299,19 @@ class PersonalizedBase(Dataset):
 
         subj_prompt_comps = []
         cls_prompt_comps  = []
+        comps_are_dresses = []
 
         for _ in range(self.num_compositions_per_image):
-            composition_partial = sample_compositions(1, self.is_animal, is_training=True)[0]
+            compositions_partial, are_dresses = sample_compositions(1, self.is_animal, is_training=True)
+            # Only sampled one instance, so compositions_partial and are_dresses are lists of length 1.
+            composition_partial = compositions_partial[0]
+            comp_is_dress       = are_dresses[0]
             subj_prompt_comp    = subj_prompt_single + " " + composition_partial
             cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
             subj_prompt_comps.append(subj_prompt_comp)
             cls_prompt_comps.append(cls_prompt_comp)
+            comps_are_dresses.append(comp_is_dress)
+
             if self.broad_class == 1:
                 subj_prompt_comp_fp = subj_prompt_single_fp + " " + composition_partial
                 cls_prompt_comp_fp  = cls_prompt_single_fp  + " " + composition_partial
@@ -320,6 +326,9 @@ class PersonalizedBase(Dataset):
         cls_prompt_comp  = "|".join([ cls_prompt_comp.format(cls_delta_token)     for cls_prompt_comp  in cls_prompt_comps])
         example["subj_prompt_comp"]     = subj_prompt_comp
         example["cls_prompt_comp"]      = cls_prompt_comp
+        # comps_are_dresses is a list of length num_compositions_per_image. So in the collated batch, 
+        # "comps_are_dresses" is a list of lists and needs concat.
+        example["comps_are_dresses"]    = comps_are_dresses
 
         if bg_suffix:
             example["subj_prompt_single_bg"] = subj_prompt_single.format(placeholder_string_with_bg)

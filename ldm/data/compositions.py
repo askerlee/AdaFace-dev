@@ -1,8 +1,8 @@
 import exrex
 import numpy as np
 
-# dynamic compositions are used by humans/animals only
-dynamic_composition_regexs = \
+# animal compositions are used by humans/animals only
+animal_action_regexs = \
 [ "lifting a (rock|box|barbell|cat|dog)",
   "doing (makeup|housekeeping|gardening|exercise)",
   "carrying a (bag|backpack|luggage|laptop|book|briefcase|purse|suitcase|bouquet|baby|cat|dog|teddy bear)",
@@ -26,16 +26,12 @@ dynamic_composition_regexs = \
   "opening a (door|window|book|bottle|jar|box|envelope|bag|pouch|wallet|suitcase)",
   "pointing at (the sky|the sun|the beach|the mountains|the forest)",
   "looking at (a book|a mobile phone|the screen|the sky|the sun|the beach|a UFO|a map|a painting|a photo|a clock|a mirror|a telescope|a microscope)",
-  "wearing a (tshirt|stormtrooper costume|superman costume|ironman armor|ski outfit|astronaut outfit|medal|suit|tie|baseball cap)",
   "drinking (a bottle of water|a cup of wine|a can of beer|a glass of juice|a cup of tea|a bottle of milk)",
   "eating (a sandwich|an ice cream|barbecue|a pizza|a burger|a bowl of pasta|a piece of cake|a sushi roll|a bowl of soup|a plate of tacos)",
-  "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt|aikido training clothes|green robe)",
-  # This is kind of static but only for humans/animals. So we put it here.
-  "in a (chef outfit|firefighter outfit|police outfit|a purple wizard outfit|dress|suit|tshirt|stormtrooper costume|superman costume)",
 ]
 
 # static compositions are used by both humans/animals and objects
-static_composition_regexs = \
+static_action_regexs = \
 [ 
   "leaning (against a wall|against a tree|against a table|on a chair|on top of a car)",
   "flying (in the sky|under the sunset|in the outer space|over water|over a building)",
@@ -48,18 +44,31 @@ static_composition_regexs = \
   #LINK - https://github.com/google/dreambooth/blob/main/dataset/prompts_and_classes.txt
   "(in the jungle|in the snow|on a cobblestone street|floating on top of water|floating in an ocean of milk)",
   "on top of (pink fabric|a wooden floor|green grass with sunflowers around it|a mirror|the sidewalk in a crowded street|a dirt road|a white rug|a purple rug in a forest)",
+]
+
+animal_dresses = [
+  "wearing a (tshirt|stormtrooper costume|superman costume|ironman armor|ski outfit|astronaut outfit|medal|suit|tie|baseball cap)",
+  "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt|aikido training clothes|green robe)",
+  # This is kind of static but only for humans/animals. So we put it here.
+  "in a (chef outfit|firefighter outfit|police outfit|a purple wizard outfit|dress|suit|tshirt|stormtrooper costume|superman costume)",
+]
+
+static_dresses = [
   # To avoid misalignment issues, we don't use "a red/purple z" as prompts.
   "that is (red|purple|shiny|cube|wet)",
 ]
 
-all_composition_regexs = static_composition_regexs + dynamic_composition_regexs
+all_action_regexs = static_action_regexs + animal_action_regexs
+all_dress_regexs  = static_dresses + animal_dresses
+all_composition_regexs    = all_action_regexs    + all_dress_regexs
+static_composition_regexs = static_action_regexs + static_dresses
 
 # Prompt with locations will be combined with a common animal/human.
 # E.g. "a z at the left, a dog in the center"
 all_locations = [ "at the left", "at the right", "at the top", "at the bottom", 
                   "in the center", "in the middle", "at the upper left", "at the upper right",
                   "at the lower left", "at the lower right", "in the background", 
-                  ]
+                ]
 
 coexist_objects = [ "person", "man",  "woman",   "girl",    "boy",   "baby",       "crowd", "villager", 
                      "cat",   "dog",  "bird",    "panda",  "monkey", "chimpanzee", "gorilla", "bear",  
@@ -112,16 +121,24 @@ all_backgrounds = ["a beach", "a table", "a park", "a concert", "a gym", "a libr
 
 def sample_compositions(N, is_animal, is_training=False):
     compositions = []
+    are_dresses  = []
+
     if is_animal:
         composition_regexs = all_composition_regexs
+        dress_start_idx = len(all_action_regexs)
     else:
         composition_regexs = static_composition_regexs
+        dress_start_idx = len(static_action_regexs)
         
     K = len(composition_regexs)
 
     if is_training:
         # Lower variations during training, to focus on the main semantics.
+        # 0.75: option 0 (without certain components), 
+        # 0.25: option 1 (with    certain components).
         option_probs     = [0.75, 0.25]
+        # 0.4:  option 0 (without background),
+        # 0.6:  option 1 (with    background).
         background_probs = [0.4,  0.6]
     else:
         option_probs = [0.3, 0.7]
@@ -129,6 +146,8 @@ def sample_compositions(N, is_animal, is_training=False):
 
     for i in range(N):
         idx = np.random.choice(K)
+        is_dress = (idx >= dress_start_idx)
+
         composition = exrex.getone(composition_regexs[idx])
         # Disable another object in the image for non-animal subjects,
         # to avoid the spotlight of the non-animal subject being stolen by the other object.
@@ -202,8 +221,9 @@ def sample_compositions(N, is_animal, is_training=False):
                 composition = composition[2:]
         
         compositions.append(composition)
-
-    return compositions
+        are_dresses.append(is_dress)
+        
+    return compositions, are_dresses
 
 if __name__ == "__main__":
     print("Test:")

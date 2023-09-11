@@ -93,7 +93,6 @@ class DDPM(pl.LightningModule):
                  use_ada_embedding=False,
                  composition_regs_iter_gap=-1,
                  prompt_emb_delta_reg_weight=0.,
-                 subj_emb_diff_loss_weight=0.,
                  subj_comp_key_ortho_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
@@ -121,7 +120,6 @@ class DDPM(pl.LightningModule):
 
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight     = prompt_emb_delta_reg_weight
-        self.subj_emb_diff_loss_weight       = subj_emb_diff_loss_weight
         self.subj_comp_key_ortho_loss_weight = subj_comp_key_ortho_loss_weight
         self.mix_prompt_distill_weight       = mix_prompt_distill_weight
         self.fg_bg_complementary_loss_weight = fg_bg_complementary_loss_weight
@@ -169,7 +167,6 @@ class DDPM(pl.LightningModule):
         self.original_elbo_weight = original_elbo_weight
         self.l_simple_weight = l_simple_weight
         self.embedding_reg_weight = embedding_reg_weight
-        self.distill_loss_scale = 0
 
         self.unfreeze_model = unfreeze_model
         self.model_lr = model_lr
@@ -504,15 +501,6 @@ class DDPM(pl.LightningModule):
             # This is to monitor how well the model performs on compositionality.
             self.iter_flags['calc_clip_loss'] = True
             self.iter_flags['do_normal_recon']    = False
-
-        # Borrow the LR LambdaWarmUpCosineScheduler to control the mix weight.
-        if self.scheduler is not None:
-            lr_scale = self.scheduler.get_last_lr()[0] / self.scheduler.base_lrs[0]
-            # distill_loss_scale only increases. Once it reaches 1 after LR warm-up, it stays at 1.
-            self.distill_loss_scale = max(self.distill_loss_scale, lr_scale)
-            # print(f'lr_lambda: {lr_lambda}')
-        else:
-            self.distill_loss_scale = 1.0
 
         if self.is_dreambooth:
             # DreamBooth uses ConcatDataset to make batch a tuple of train_batch and reg_batch.
@@ -1329,19 +1317,32 @@ class LatentDiffusion(DDPM):
         else:
             fg_mask = None
 
-        loss = self(x, c, delta_prompts, img_mask=img_mask, fg_mask=fg_mask, 
-                    batch_have_fg_mask=batch_have_fg_mask, **kwargs)
+        if 'comps_are_dresses' in batch:
+            # in personalized.py, comps_are_dresses is a list of length num_compositions_per_image. 
+            # So in the collated batch, "comps_are_dresses" is a list of lists and needs concat.
+            comps_are_dresses = torch.concat(batch['comps_are_dresses'])
+        else:
+            comps_are_dresses = None
+
+        self.iter_flags['img_mask'] = img_mask
+        self.iter_flags['fg_mask']  = fg_mask
+        self.iter_flags['batch_have_fg_mask']   = batch_have_fg_mask
+        self.iter_flags['comps_are_dresses']    = comps_are_dresses
+        self.iter_flags['delta_prompts']        = delta_prompts
+
+        loss = self(x, c, **kwargs)
 
         return loss
 
     # LatentDiffusion.forward() is only called during training, by shared_step().
     #LINK #shared_step
-    def forward(self, x, c, delta_prompts=None, img_mask=None, fg_mask=None, 
-                batch_have_fg_mask=None, *args, **kwargs):
+    def forward(self, x, c, *args, **kwargs):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         # If cached_inits_available, cached_inits are only used if do_mix_prompt_distillation = True.
         self.iter_flags['reuse_init_conds']     = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
                                                    and self.cached_inits_available)
+        delta_prompts = self.iter_flags['delta_prompts']
+        img_mask      = self.iter_flags['img_mask']
 
         if self.model.conditioning_key is not None:
             assert c is not None
@@ -1362,6 +1363,7 @@ class LatentDiffusion(DDPM):
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             chunk_list(self.cached_inits['delta_prompts'], 4)
                         self.iter_flags['use_background_token'] = self.cached_inits['use_background_token']
+                        self.iter_flags['comps_are_dresses']    = self.cached_inits['comps_are_dresses']
                         # cached_inits will be used in p_losses(), so don't turn off cached_inits_available yet.
 
                     #if self.iter_flags['use_background_token']:
@@ -1372,12 +1374,20 @@ class LatentDiffusion(DDPM):
                     N_EMBEDS = ORIG_BS * N_LAYERS
                     
                     if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_emb_delta_reg']:
+                        # In distillation iterations, the full batch size cannot fit in the RAM.
+                        # So we have to halve the batch size. 
                         # BLOCK_SIZE is at least 1. So if ORIG_BS == 1, then BLOCK_SIZE = 1.
                         BLOCK_SIZE  = max(ORIG_BS // 2, 1)
                         # Only keep the first half of batched prompts to save RAM.
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
                             cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE]
+
+                        #self.iter_flags['img_mask'] = self.iter_flags['img_mask'][:BLOCK_SIZE]
+                        #self.iter_flags['fg_mask']  = self.iter_flags['fg_mask'][:BLOCK_SIZE]                        
+                        #self.iter_flags['batch_have_fg_mask'] = self.iter_flags['batch_have_fg_mask'][:BLOCK_SIZE]
+                        self.iter_flags['comps_are_dresses']  = self.iter_flags['comps_are_dresses'][:BLOCK_SIZE]
+
                     # Otherwise, do_static_prompt_delta_reg but not do_ada_emb_delta_reg.
                     # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 2.
                     # 8 prompts will be fed into get_learned_conditioning().
@@ -1662,8 +1672,7 @@ class LatentDiffusion(DDPM):
 
         # self.model (UNetModel) is called in p_losses().
         #LINK #p_losses
-        return self.p_losses(x, c, t, img_mask=img_mask, fg_mask=fg_mask, 
-                             batch_have_fg_mask=batch_have_fg_mask, *args, **kwargs)
+        return self.p_losses(x, c, t, *args, **kwargs)
 
     def _rescale_annotations(self, bboxes, crop_coordinates):  # TODO: move to dataset
         def rescale_bbox(bbox):
@@ -1889,7 +1898,7 @@ class LatentDiffusion(DDPM):
     # extra_info: a dict that contains 'ada_embedder' and other fields. 
     # ada_embedder: a function to convert c_in to ada embeddings.
     # ANCHOR[id=p_losses]
-    def p_losses(self, x_start, cond, t, noise=None, img_mask=None, fg_mask=None, batch_have_fg_mask=None):
+    def p_losses(self, x_start, cond, t, noise=None):
         # If noise is not None, then use the provided noise.
         # Otherwise, generate noise randomly.
         noise = default(noise, lambda: torch.randn_like(x_start))
@@ -1901,6 +1910,11 @@ class LatentDiffusion(DDPM):
         # do_teacher_filtering and reuse_init_conds are mutually exclusive.
         self.iter_flags['do_teacher_filter'] = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
                                                 and not self.iter_flags['reuse_init_conds'])
+
+        img_mask            = self.iter_flags['img_mask']
+        fg_mask             = self.iter_flags['fg_mask']
+        batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
+        comps_are_dresses   = self.iter_flags['comps_are_dresses']
 
         cfg_scales_for_clip_loss = None
         c_static_emb, c_in, extra_info = cond
@@ -1922,8 +1936,9 @@ class LatentDiffusion(DDPM):
                 # a particular scale tend to make the cfg-denoised mixed images more dissimilar 
                 # to the subject images than in the first denoising step. 
 
-                # If reuse_init_conds, ORIG_BS is already doubled in the previous 
-                # compositional iteration. So divide by 4.
+                # x_start is like (x1, x2, x1, x2) (x1, x2 repeated in the previous distillation iter).
+                # x1, x2 are different, but they are generated with the same initial noise in the 
+                # previous reconstruction. This is desired as a simulation of a multi-step inference process.
                 BLOCK_SIZE  = max(x_start.shape[0] // 4, 1)
                 # Randomly choose t from the middle 300-600 timesteps, 
                 # so as to match the once-denoised x_start.
@@ -1988,7 +2003,8 @@ class LatentDiffusion(DDPM):
                 cfg_scales_for_clip_loss = torch.cat([cfg_scales_for_student, cfg_scales_for_teacher], dim=0)
 
                 # First iteration of a two-iteration do_mix_prompt_distillation.
-                # Generate a batch of 4 instances in two sets, each set with the same initial x_start, noise and t.
+                # Generate a batch of 4 instances in *two* sets, each set with the *2* instances 
+                # of the same initial x_start, noise and t.
                 # Then filter, find the best teachable set (if any) and pass to the recursive iteration.
                 # If no teachable set is found, skip recursion and the prompt mix reg.
                 # Note x_start[0] = x_start[2] != x_start[1] = x_start[3].
@@ -1997,6 +2013,7 @@ class LatentDiffusion(DDPM):
                 # This doubles the batch size to 4, if bs=2.
                 if self.iter_flags['do_teacher_filter']:
                     x_start = x_start.repeat(2, 1, 1, 1)
+                    # noise is repeated in the same way as x_start.
                     noise   = noise.repeat(2, 1, 1, 1)
                     t       = t.repeat(2)
 
@@ -2016,10 +2033,13 @@ class LatentDiffusion(DDPM):
                     # Replace cond with the cond for twin comp sets.
                     cond = (c_static_emb2, c_in2, extra_info)
                 # Not self.iter_flags['do_teacher_filter']. This branch is do_mix_prompt_distillation.
-                # So it's either reuse_init_conds, or not do_clip_teacher_filtering.
+                # So it's either reuse_init_conds, or not do_clip_teacher_filtering (globally).
                 # In any case, we do not need to change the prompts and static embeddings 
                 # and simply do mix reg.
                 else:
+                    if (not self.do_clip_teacher_filtering) and (not self.iter_flags['reuse_init_conds']):
+                        x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
+
                     # If reuse_init_conds, x_start and prev_t is already 4-fold repeated.
                     # But noise and t are not. So we still need to make them 4-fold repeated.
                     noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
@@ -2115,20 +2135,20 @@ class LatentDiffusion(DDPM):
             logvar_t = self.logvar.to(self.device)[t].reshape(-1, 1, 1, 1)
             # In theory, the loss can be weighted according to t. However in practice,
             # all the weights are the same, so this step is useless.
-            loss_simple_pixels = loss_simple_pixels / torch.exp(logvar_t) + logvar_t
+            loss_gamma_pixels = loss_simple_pixels / torch.exp(logvar_t) + logvar_t
 
             if self.iter_flags['use_background_token']:
-                loss_simple = loss_simple_pixels.mean()
+                loss_gamma = loss_gamma_pixels.mean()
             else:
                 # Only evaluate recon loss on the foreground pixels.
-                loss_simple = masked_mean(loss_simple_pixels, fg_mask)
+                loss_gamma = masked_mean(loss_gamma_pixels, fg_mask)
 
             # loss = loss_simple / torch.exp(self.logvar) + self.logvar
             if self.learn_logvar:
-                loss_dict.update({f'{prefix}/loss_gamma': loss_simple.detach()})
+                loss_dict.update({f'{prefix}/loss_gamma': loss_gamma.detach()})
                 loss_dict.update({'logvar': self.logvar.data.mean().detach()})
 
-            loss += self.l_simple_weight * loss_simple
+            loss += self.l_simple_weight * loss_gamma
 
             loss_vlb_pixels = self.get_loss(model_output, target, mean=False)
             loss_vlb_pixels = self.lvlb_weights[t].reshape(-1, 1, 1, 1) * loss_vlb_pixels
@@ -2156,10 +2176,11 @@ class LatentDiffusion(DDPM):
                 # 4 sets of cls_comp_prompts for (subj comp 1, subj comp 2, mix comp 1, mix comp 2).                
                 clip_prompts_comp = cond[2]['cls_comp_prompts'] * 4            
             else:
-                # Either self.iter_flags['reuse_init_conds'], or an ada delta loss iter.
+                # Either self.iter_flags['reuse_init_conds'], or a pure ada delta loss iter.
                 # A batch of either type has the (subj_single, subj_comp, mix_single, mix_comp) structure.
                 # Only evaluate the CLIP loss on the comp images. 
                 # So the batch size of clip_images_code is halved.
+                # If teachable, the whole batch of x_recon is still used for distillation.
                 x_recon_subj_single, x_recon_subj_comp, x_recon_mix_single, x_recon_mix_comp = \
                     x_recon.chunk(4)
                 clip_images_code = torch.cat([x_recon_subj_comp, x_recon_mix_comp], dim=0)
@@ -2246,12 +2267,6 @@ class LatentDiffusion(DDPM):
                     better_cand_idx = torch.argmax(loss_diffs_subj_mix)
                     loss_clip_subj_comp = losses_clip_subj_comp[better_cand_idx]
                     loss_diff_subj_mix  = loss_diffs_subj_mix[better_cand_idx]
-                    # If loss_clip_subj_comp <= clip_loss_thres, then distill_loss_clip_discount = exp(0) = 1.
-                    # If loss_clip_subj_comp = 0.35, distill_loss_clip_discount = exp(-2)   = 0.14.
-                    #                          0.34                               exp(-0.1) = 0.37.
-                    self.distill_loss_clip_discount = 1 / np.exp( max(loss_clip_subj_comp.cpu().item() - clip_loss_thres_base, 0) / 0.01 
-                                                                  +
-                                                                  max(cls_subj_clip_margin_base - loss_diff_subj_mix.cpu().item(), 0) / 0.001 )
 
                     # Choose the x_start, noise, and t of the better candidate. 
                     # Repeat 4 times and use them as the condition to do denoising again.
@@ -2284,10 +2299,12 @@ class LatentDiffusion(DDPM):
                     x_start_reuse = x_recon.detach().chunk(2)[1].repeat(2, 1, 1, 1)
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but under some settings, maybe mix comp = subj comp.
+                    # cached_inits['x_start'] has a BS of 4.
                     self.cached_inits = { 'x_start':                x_start_reuse, 
                                           'delta_prompts':          cond_orig[2]['delta_prompts'],
                                           't':                      t,
-                                          'use_background_token':   self.iter_flags['use_background_token'], }
+                                          'use_background_token':   self.iter_flags['use_background_token'],
+                                          'comps_are_dresses':      self.iter_flags['comps_are_dresses'] }
                     
                     # Do not put cached_inits_available on self.iter_flags, as iter_flags will be reset
                     # in the beginning of the next iteration.
@@ -2360,7 +2377,6 @@ class LatentDiffusion(DDPM):
                 # So only one possibility: not do_clip_teacher_filtering.
                 # The teacher instance is always teachable as teacher filtering is disabled.
                 self.iter_flags['is_teachable'] = True
-                self.distill_loss_clip_discount = 1
                 # Since not self.iter_flags['do_teacher_filter']/reuse_init_conds, log_image_colors are all 0,
                 # i.e., no box to be drawn on the images in cache_and_log_generations().
                 log_image_colors = torch.zeros(clip_images.shape[0], device=x_start.device)
@@ -2380,18 +2396,15 @@ class LatentDiffusion(DDPM):
             # do_ada_emb_delta_reg controls whether to do ada comp delta reg here.
             # Use subj_indices_1b here, since this index is used to extract 
             # subject embeddings from each block, and compare two such blocks.
-            static_delta_loss, ada_delta_loss, subj_emb_diff_loss \
+            static_delta_loss, ada_delta_loss \
                 = self.embedding_manager.calc_prompt_emb_delta_loss( 
                                         self.c_static_emb, ada_embeddings,
-                                        self.iter_flags['do_ada_emb_delta_reg'],
-                                        extra_info['subj_indices_1b']
+                                        self.iter_flags['do_ada_emb_delta_reg']
                                        )
             
             loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
             if ada_delta_loss != 0:
                 loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
-            if subj_emb_diff_loss != 0:
-                loss_dict.update({f'{prefix}/subj_emb_diff_loss': subj_emb_diff_loss.mean().detach()})
 
             # The prompt delta loss for ada embeddings is only applied 
             # every self.composition_regs_iter_gap iterations. So the ada loss 
@@ -2399,8 +2412,7 @@ class LatentDiffusion(DDPM):
             # Divide it by 2 to reduce the proportion of ada emb loss relative to 
             # static emb loss in the total loss.                
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            loss_prompt_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss \
-                                    + subj_emb_diff_loss * self.subj_emb_diff_loss_weight
+            loss_prompt_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
             
             loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
         
@@ -2426,24 +2438,25 @@ class LatentDiffusion(DDPM):
                 subj_comp_key_ortho_loss = self.calc_subj_comp_key_ortho_loss(cond[2]['unet_ks'],
                                                                               extra_info['subj_indices_2b'],
                                                                               self.embedding_manager.delta_loss_emb_mask,
-                                                                              BLOCK_SIZE)
+                                                                              BLOCK_SIZE, comps_are_dresses)
 
                 if subj_comp_key_ortho_loss != 0:
                     loss_dict.update({f'{prefix}/subj_comp_key_ortho_loss': subj_comp_key_ortho_loss.mean().detach()})
-
-            loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.mean().detach()})
-            loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.mean().detach()})
-            loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach()})
-            loss_dict.update({f'{prefix}/loss_subj_attn_direct_distill': loss_subj_attn_direct_distill.mean().detach()})
 
             subj_attn_norm_distill_loss_scale = 5
             # (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) * subj_attn_norm_distill_loss_scale
             loss_prompt_mix_reg =  loss_subj_attn_delta_distill \
                                     + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                     + loss_feat_distill
+
+            loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_subj_attn_direct_distill': loss_subj_attn_direct_distill.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_prompt_mix_reg.mean().detach()})
             
-            # distill_loss_scale gradually increases to 1 during warm-up. Then stays at 1.
-            loss += self.mix_prompt_distill_weight * loss_prompt_mix_reg * self.distill_loss_scale * self.distill_loss_clip_discount \
+            # mix_prompt_distill_weight: 4e-4.
+            loss += self.mix_prompt_distill_weight * loss_prompt_mix_reg \
                      + subj_comp_key_ortho_loss * self.subj_comp_key_ortho_loss_weight
             
             self.release_plosses_intermediates(locals())
@@ -2861,7 +2874,7 @@ class LatentDiffusion(DDPM):
     def calc_subj_comp_key_ortho_loss(self, unet_ks, 
                                       subj_indices, 
                                       delta_loss_emb_mask, 
-                                      BS):
+                                      BS, comps_are_dresses):
 
         # Discard the first few bottom layers from the orthogonal loss.
         k_ortho_layer_weights = { #7:  1., 8: 1.,
@@ -2910,30 +2923,36 @@ class LatentDiffusion(DDPM):
             # unet_seq_k: [B, H, N, D] = [2, 8, 77, 160].
             # H = 8, number of attention heads. D: 160, number of image tokens.
             H, D = unet_seq_k.shape[1], unet_seq_k.shape[-1]
-            # subj_attn [8, 8, 160] => [2, 4, 8, 160] => [2, 8, 4, 160] => [16, 4, 160]
+            # subj_subj_ks, cls_subj_ks: [4,  8, 160] => [1, 4,  8, 160] => [1, 8, 4, 160].
+            # subj_comp_ks, cls_comp_ks: [15, 8, 160] => [1, 15, 8, 160] => [1, 8, 15, 160].
             # Put the 4 subject embeddings in the 2nd to last dimension for torch.mm().
             # The ortho losses on different "instances" are computed separately 
             # and there's no interaction among them.
-            # Head is merged into batch, since different heads shouldn't have interactions as well.
-            subj_subj_ks = unet_seq_k[ind_subj_subj_B, :, ind_subj_subj_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3).reshape(BS * H, K_fg, D)
-            cls_subj_ks  = unet_seq_k[ind_cls_subj_B,  :, ind_cls_subj_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3).reshape(BS * H, K_fg, D)
+            subj_subj_ks = unet_seq_k[ind_subj_subj_B, :, ind_subj_subj_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3)
+            cls_subj_ks  = unet_seq_k[ind_cls_subj_B,  :, ind_cls_subj_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3)
             # subj_comp_ks, cls_comp_ks: [11, 16, 160] => [1, 11, 16, 160] => [1, 16, 11, 160] => [16, 11, 160]
-            subj_comp_ks = unet_seq_k[ind_subj_comp_B, :, ind_subj_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3).reshape(BS * H, K_comp, D)
-            cls_comp_ks  = unet_seq_k[ind_cls_comp_B,  :, ind_cls_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3).reshape(BS * H, K_comp, D)
+            subj_comp_ks = unet_seq_k[ind_subj_comp_B, :, ind_subj_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
+            cls_comp_ks  = unet_seq_k[ind_cls_comp_B,  :, ind_cls_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
 
-            # subj_subj_ks_mean: [16, 160]. Averaged over 4 subject embeddings.
-            subj_subj_ks_mean = subj_subj_ks.mean(dim=1)
-            # subj_comp_ks_mean: [16, 160]. Averaged over all extra 11 compositional embeddings.
-            subj_comp_ks_mean = subj_comp_ks.mean(dim=1)
-            cls_subj_ks_mean  = cls_subj_ks.mean(dim=1)
-            cls_comp_ks_mean  = cls_comp_ks.mean(dim=1)
+            # subj_subj_ks_mean: [1, 8, 160]. Averaged over 4 subject embeddings.
+            subj_subj_ks_mean = subj_subj_ks.mean(dim=2)
+            # subj_comp_ks_mean: [1, 8, 160]. Averaged over all extra 11 compositional embeddings.
+            subj_comp_ks_mean = subj_comp_ks.mean(dim=2)
+            cls_subj_ks_mean  = cls_subj_ks.mean(dim=2)
+            cls_comp_ks_mean  = cls_comp_ks.mean(dim=2)
 
             subj_comp_emb_diff = ortho_subtract(subj_subj_ks_mean, subj_comp_ks_mean)
             cls_comp_emb_diff  = ortho_subtract(cls_subj_ks_mean,  cls_comp_ks_mean)
+            # Don't compute the ortho loss on dress-type compositions, 
+            # such as "z wearing a santa hat / z that is red", because the attended areas 
+            # largely overlap with the subject, and making them orthogonal will 
+            # hurt their expression in the image (e.g., push the attributes to the background).
+            batch_mask = ~comps_are_dresses if comps_are_dresses is not None else None
             # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
             #subj_comp_ortho_loss += calc_delta_loss(static_subj_subj_emb, static_subj_comp_extra_emb, exponent=2,
-            loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_diff, cls_comp_emb_diff, exponent=2,
-                                                             do_demean_first=True, first_n_dims_to_flatten=1,
+            loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
+                                                             batch_mask=batch_mask, exponent=2,
+                                                             do_demean_first=True, first_n_dims_to_flatten=2,
                                                              ref_grad_scale=0, aim_to_align=True)
             
             k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]

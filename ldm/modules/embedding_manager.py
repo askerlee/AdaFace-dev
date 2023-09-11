@@ -1547,8 +1547,7 @@ class EmbeddingManager(nn.Module):
     # Textual inversion is supported, where static_embeddings is only one embedding.
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
-    def calc_prompt_emb_delta_loss(self, static_embeddings, ada_embeddings, do_ada_prompt_delta_reg,
-                               subj_indices=None):
+    def calc_prompt_emb_delta_loss(self, static_embeddings, ada_embeddings, do_ada_prompt_delta_reg):
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_layers
         else:
@@ -1584,7 +1583,6 @@ class EmbeddingManager(nn.Module):
 
         else:
             delta_loss_emb_mask = None
-            comp_extra_emb_indices = None
 
         use_ortho_subtract = True
         # cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
@@ -1606,7 +1604,6 @@ class EmbeddingManager(nn.Module):
             # ada_embeddings: [4, 16, 77, 768]
             if isinstance(ada_embeddings, (list, tuple)):
                 # ada_embeddings contains twin embeddings, both of which are non-teachable.
-                is_twin_non_teachable = True
                 # twin_single_ada_embeddings: [2, 16, 77, 768]
                 # twin_comp_ada_embeddings:   [4, 16, 77, 768]
                 # twin_single_ada_embeddings correspond to 2 subj single instances,
@@ -1627,7 +1624,6 @@ class EmbeddingManager(nn.Module):
                 cls_delta = cls_delta.repeat(2, 1, 1, 1)
                 delta_loss_emb_mask2 = delta_loss_emb_mask.repeat(2, 1, 1, 1)
             else:
-                is_twin_non_teachable = False
                 # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
                 # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
                 # the subject token.
@@ -1646,62 +1642,7 @@ class EmbeddingManager(nn.Module):
         else:
             ada_delta_loss = 0
 
-        if subj_indices is not None:
-            IND_B, IND_N = subj_indices
-            subj_emb_diff_loss = 0
-            # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
-            # Each is [1, 16, 77, 768]
-            # static_cls_single_emb and static_cls_comp_emb should have been patched at subj_indices.
-            # static_subj_single_emb[IND_B, :, IND_N]: [1, 16, 768]
-            # static_cls_single_emb[IND_B, :, IND_N]:  [1, 16, 768]
-
-            # These losses are only for the subject embeddings (instead of all embeddings).
-            # So no need to use emb_mask.
-            subj_emb_diff_loss += calc_delta_loss(static_subj_single_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True), 
-                                                  static_cls_single_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
-                                                  exponent=2,    
-                                                  do_demean_first=False,
-                                                  first_n_dims_to_flatten=2)
-            
-            subj_emb_diff_loss += calc_delta_loss(static_subj_comp_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
-                                                  static_cls_comp_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
-                                                  exponent=2,
-                                                  do_demean_first=False,
-                                                  first_n_dims_to_flatten=2)
-            subj_emb_diff_count = 2
-
-            if ada_delta_loss > 0:
-                # TODO 
-                # ada_subj_single_emb has a batch size of 2. But subj_indices only has a batch size of 1.
-                # So we miss the loss computation on the 2nd instance.
-                # static_cls_single_emb is the same as ada_cls_single_emb.
-                subj_emb_diff_loss += calc_delta_loss(ada_subj_single_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
-                                                      static_cls_single_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
-                                                      exponent=2,
-                                                      do_demean_first=False,
-                                                      first_n_dims_to_flatten=2)
-                subj_emb_diff_count += 1
-                # If is_twin_non_teachable, then ada_subj_comp_emb has no grad. 
-                # Computing the delta loss between ada_subj_comp_emb and static_cls_comp_emb is meaningless.
-                if not is_twin_non_teachable:
-                    # static_cls_comp_emb is the same as ada_cls_comp_emb.
-                    subj_emb_diff_loss += calc_delta_loss(ada_subj_comp_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
-                                                          static_cls_comp_emb[IND_B, :, IND_N].mean(dim=0, keepdim=True),
-                                                          exponent=2,
-                                                          do_demean_first=False,
-                                                          first_n_dims_to_flatten=2)
-                    subj_emb_diff_count += 1
-                # Otherwise, it's an is_twin_non_teachable iteration. 
-                # ada_subj_comp_emb has no grad. 
-                # So no need to compute its subj emb diff loss.
-            subj_emb_diff_loss /= subj_emb_diff_count
-        else:
-            subj_emb_diff_loss = 0
-
-        # self.clear_delta_loss_emb_mask()
-        # delta_loss = static_delta_loss + ada_delta_loss * ada_comp_loss_boost_ratio \
-        #               + subj_emb_diff_loss * subj_emb_diff_loss_boost_ratio
-        return static_delta_loss, ada_delta_loss, subj_emb_diff_loss
+        return static_delta_loss, ada_delta_loss
 
 if __name__ == '__main__':
     # The example code below is obsolete.    
