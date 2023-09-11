@@ -1485,20 +1485,24 @@ class LatentDiffusion(DDPM):
                         # i.e., no cls_single_emb / cls_comp_emb will be mixed into 
                         # subj_single_emb / subj_comp_emb to form subj_single_emb_v / subj_comp_emb_v.
                         # If mask_avail_ratio = 0, then INIT_CLS_EMB_V_SCALE = 0.1, FINAL_CLS_EMB_V_SCALE = 0.2.
-                        FIRST_LAYER_CLS_E_SCALE  = 0.5
+                        FIRST_LAYER_CLS_E_SCALE = 0.7
                         FINAL_LAYER_CLS_E_SCALE = 0.1
-                        if N_LAYERS > 1:
-                            SCALE_STEP = (FINAL_LAYER_CLS_E_SCALE - FIRST_LAYER_CLS_E_SCALE) / (N_LAYERS - 1)
+                        sync_layer_indices = [4, 5, 6, 7, 8, 9, 10] #, 11, 12, 13]
+                        
+                        if self.use_layerwise_embedding:
+                            SCALE_STEP = (FINAL_LAYER_CLS_E_SCALE - FIRST_LAYER_CLS_E_SCALE) / (len(sync_layer_indices) - 1)
                             # Linearly decrease the scale of the class   embeddings from 0.5 to 0.1, 
                             # i.e., 
                             # Linearly increase the scale of the subject embeddings from 0.5 to 0.9.
                             # subj_emb_scale = [0.5000, 0.5267, 0.5533, 0.5800, 0.6067, 0.6333, 
                             #                   0.6600, 0.6867, 0.7133, 0.7400, 0.7667, 0.7933, 
                             #                   0.8200, 0.8467, 0.8733, 0.9000]
-                            subj_emb_scale = 1 - torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
-                                                              step=SCALE_STEP, device=subj_comp_emb.device)
+                            subj_emb_scale = torch.ones(N_LAYERS, device=subj_comp_emb.device) 
+                            subj_emb_scale[sync_layer_indices] = \
+                                1 - torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
+                                                 step=SCALE_STEP, device=subj_comp_emb.device)
                         else:
-                            # subj_emb_scale = 0.3.
+                            # subj_emb_scale = 0.6.
                             subj_emb_scale = 1 - (FIRST_LAYER_CLS_E_SCALE + FINAL_LAYER_CLS_E_SCALE) / 2
 
                         # Part of cls embedding is mixed into subject v embedding.
@@ -1541,9 +1545,9 @@ class LatentDiffusion(DDPM):
                         mix_single_emb_all_layers = grad_scaler(mix_single_emb_all_layers)
 
                         if self.use_layerwise_embedding:
-                            # 4, 5, 6, 7, 8, 9 correspond to original layer indices 7, 8, 12, 16, 17, 18.
+                            # sync_layer_indices = [4, 5, 6, 7, 8, 9, 10] #, 11, 12, 13]
+                            # 4, 5, 6, 7, 8, 9, 10 correspond to original layer indices 7, 8, 12, 16, 17, 18, 19.
                             # (same as used in computing mixing loss)
-                            sync_layer_indices = [4, 5, 6, 7, 8, 9] #, 10, 11, 12, 13]
                             layer_mask = torch.zeros_like(mix_comp_emb_all_layers).reshape(-1, N_LAYERS, *mix_comp_emb_all_layers.shape[1:])
                             layer_mask[:, sync_layer_indices] = 1
                             layer_mask = layer_mask.reshape(-1, *mix_comp_emb_all_layers.shape[1:])
