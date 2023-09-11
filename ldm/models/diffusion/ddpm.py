@@ -1383,9 +1383,8 @@ class LatentDiffusion(DDPM):
                             subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
                             cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE]
 
-                        #self.iter_flags['img_mask'] = self.iter_flags['img_mask'][:BLOCK_SIZE]
-                        #self.iter_flags['fg_mask']  = self.iter_flags['fg_mask'][:BLOCK_SIZE]                        
-                        #self.iter_flags['batch_have_fg_mask'] = self.iter_flags['batch_have_fg_mask'][:BLOCK_SIZE]
+                        # comps_are_dresses should be of the size BLOCK_SIZE, since it's applied to
+                        # a compositional block only. So we abandon the second half of comps_are_dresses.
                         self.iter_flags['comps_are_dresses']  = self.iter_flags['comps_are_dresses'][:BLOCK_SIZE]
 
                     # Otherwise, do_static_prompt_delta_reg but not do_ada_emb_delta_reg.
@@ -1486,30 +1485,32 @@ class LatentDiffusion(DDPM):
                         # i.e., no cls_single_emb / cls_comp_emb will be mixed into 
                         # subj_single_emb / subj_comp_emb to form subj_single_emb_v / subj_comp_emb_v.
                         # If mask_avail_ratio = 0, then INIT_CLS_EMB_V_SCALE = 0.1, FINAL_CLS_EMB_V_SCALE = 0.2.
-                        FIRST_LAYER_CLS_ESCALE  = 0.5
+                        FIRST_LAYER_CLS_E_SCALE  = 0.5
                         FINAL_LAYER_CLS_E_SCALE = 0.1
                         if N_LAYERS > 1:
-                            SCALE_STEP = (FINAL_LAYER_CLS_E_SCALE - FIRST_LAYER_CLS_ESCALE) / (N_LAYERS - 1)
-                            # Linearly decrease the scale of the class   embeddings from 0.5 to 0.1, i.e., 
+                            SCALE_STEP = (FINAL_LAYER_CLS_E_SCALE - FIRST_LAYER_CLS_E_SCALE) / (N_LAYERS - 1)
+                            # Linearly decrease the scale of the class   embeddings from 0.5 to 0.1, 
+                            # i.e., 
                             # Linearly increase the scale of the subject embeddings from 0.5 to 0.9.
-                            subj_emb_scale = 1 - torch.arange(FIRST_LAYER_CLS_ESCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
+                            # subj_emb_scale = [0.5000, 0.5267, 0.5533, 0.5800, 0.6067, 0.6333, 
+                            #                   0.6600, 0.6867, 0.7133, 0.7400, 0.7667, 0.7933, 
+                            #                   0.8200, 0.8467, 0.8733, 0.9000]
+                            subj_emb_scale = 1 - torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
                                                               step=SCALE_STEP, device=subj_comp_emb.device)
                         else:
-                            subj_emb_scale = 1 - (FIRST_LAYER_CLS_ESCALE + FINAL_LAYER_CLS_E_SCALE) / 2
+                            # subj_emb_scale = 0.3.
+                            subj_emb_scale = 1 - (FIRST_LAYER_CLS_E_SCALE + FINAL_LAYER_CLS_E_SCALE) / 2
 
+                        # Part of cls embedding is mixed into subject v embedding.
                         if FINAL_LAYER_CLS_E_SCALE < 1:
-                            # mix_embeddings('add'):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
+                            # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
                             # where they are subj_comp_emb * subj_emb_scale + cls_comp_emb * (1 - subj_emb_scale).
                             # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
                             # Each is of a single instance. So only provides subj_indices_half_N 
                             # (multiple token indices of the same instance).
-                            MIX_WHOLE_SEQ = False
-                            if MIX_WHOLE_SEQ:
-                                mix_indices = None
-                            else:
-                                # Only mix at subject embeddings.
-                                mix_indices = subj_indices_half_N
 
+                            # Only mix at subject embeddings.
+                            mix_indices = subj_indices_half_N
                             subj_comp_emb_v   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
                                                                 mix_indices, c1_subj_scale=subj_emb_scale)
                             subj_single_emb_v = mix_embeddings('add', subj_single_emb, cls_single_emb,
@@ -1535,13 +1536,9 @@ class LatentDiffusion(DDPM):
                         # so that mix_comp_emb will produce images similar as subj_comp_emb2 does.
                         # Stopping the gradient will improve compositionality but reduce face similarity.
                         PROMPT_MIX_GRAD_SCALE = 0.01
-                        if PROMPT_MIX_GRAD_SCALE == 0:
-                            mix_comp_emb_all_layers   = mix_comp_emb_all_layers.detach()
-                            mix_single_emb_all_layers = mix_single_emb_all_layers.detach()
-                        else:
-                            grad_scaler = gen_gradient_scaler(PROMPT_MIX_GRAD_SCALE)
-                            mix_comp_emb_all_layers   = grad_scaler(mix_comp_emb_all_layers)
-                            mix_single_emb_all_layers = grad_scaler(mix_single_emb_all_layers)
+                        grad_scaler = gen_gradient_scaler(PROMPT_MIX_GRAD_SCALE)
+                        mix_comp_emb_all_layers   = grad_scaler(mix_comp_emb_all_layers)
+                        mix_single_emb_all_layers = grad_scaler(mix_single_emb_all_layers)
 
                         if self.use_layerwise_embedding:
                             # 4, 5, 6, 7, 8, 9 correspond to original layer indices 7, 8, 12, 16, 17, 18.
@@ -2038,6 +2035,7 @@ class LatentDiffusion(DDPM):
                 # and simply do mix reg.
                 else:
                     if (not self.do_clip_teacher_filtering) and (not self.iter_flags['reuse_init_conds']):
+                        # Usually we shouldn't go here, as do_clip_teacher_filtering is always True.
                         x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
 
                     # If reuse_init_conds, x_start and prev_t is already 4-fold repeated.
@@ -2435,28 +2433,28 @@ class LatentDiffusion(DDPM):
 
             subj_comp_key_ortho_loss = 0
             if self.subj_comp_key_ortho_loss_weight > 0:
-                subj_comp_key_ortho_loss = self.calc_subj_comp_key_ortho_loss(cond[2]['unet_ks'],
-                                                                              extra_info['subj_indices_2b'],
-                                                                              self.embedding_manager.delta_loss_emb_mask,
-                                                                              BLOCK_SIZE, comps_are_dresses)
+                subj_comp_key_ortho_loss = \
+                    self.calc_subj_comp_key_ortho_loss(cond[2]['unet_ks'],
+                                                       extra_info['subj_indices_2b'],
+                                                       self.embedding_manager.delta_loss_emb_mask,
+                                                       BLOCK_SIZE, comps_are_dresses)
 
                 if subj_comp_key_ortho_loss != 0:
                     loss_dict.update({f'{prefix}/subj_comp_key_ortho_loss': subj_comp_key_ortho_loss.mean().detach()})
 
             subj_attn_norm_distill_loss_scale = 5
-            # (loss_subj_attn_norm_distill + loss_subj_attn_direct_distill) * subj_attn_norm_distill_loss_scale
-            loss_prompt_mix_reg =  loss_subj_attn_delta_distill \
-                                    + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
-                                    + loss_feat_distill
+            loss_mix_prompt_distill =  loss_subj_attn_delta_distill \
+                                        + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
+                                        + loss_feat_distill
 
-            loss_dict.update({f'{prefix}/loss_feat_distill': loss_feat_distill.mean().detach()})
-            loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill': loss_subj_attn_delta_distill.mean().detach()})
-            loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_feat_distill':             loss_feat_distill.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill':  loss_subj_attn_delta_distill.mean().detach()})
+            loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
             loss_dict.update({f'{prefix}/loss_subj_attn_direct_distill': loss_subj_attn_direct_distill.mean().detach()})
-            loss_dict.update({f'{prefix}/loss_prompt_mix_reg': loss_prompt_mix_reg.mean().detach()})
-            
+            loss_dict.update({f'{prefix}/loss_mix_prompt_distill':       loss_mix_prompt_distill.mean().detach()})
+
             # mix_prompt_distill_weight: 4e-4.
-            loss += self.mix_prompt_distill_weight * loss_prompt_mix_reg \
+            loss += self.mix_prompt_distill_weight * loss_mix_prompt_distill \
                      + subj_comp_key_ortho_loss * self.subj_comp_key_ortho_loss_weight
             
             self.release_plosses_intermediates(locals())
