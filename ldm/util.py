@@ -793,3 +793,30 @@ def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0
         ti_lowerbound = max(int(ti * ratio_lb), 0)
         ti_upperbound = min(int(ti * ratio_ub) + 1, num_timesteps)
         t_anneal[i] = np.random.randint(ti_lowerbound, ti_upperbound)
+
+# flat_attn: geometrical dimensions (H, W) have been flatten to 1D (last dim).
+# mask:      still 4D.
+# mode: either "nearest" or "nearest|bilinear". Other modes will be ignored.
+def scale_mask_for_attn(flat_attn, mask, mask_name, mode="nearest"):
+    spatial_scale = np.sqrt(flat_attn.shape[-1] / mask.shape[2:].numel())
+    spatial_shape2 = (int(mask.shape[2] * spatial_scale), int(mask.shape[3] * spatial_scale))
+
+    # NOTE: avoid "bilinear" mode. If the object is too small in the mask, 
+    # it may result in all-zero masks.
+    # mask: [2, 1, 64, 64] => mask2: [2, 1, 8, 8].
+    mask2_nearest  = F.interpolate(mask.float(), size=spatial_shape2, mode='nearest')
+    if mode == "nearest|bilinear":
+        mask2_bilinear = F.interpolate(mask.float(), size=spatial_shape2, mode='bilinear', align_corners=False)
+        # Always keep larger mask sizes.
+        # When the subject only occupies a small portion of the image,
+        # 'nearest' mode usually keeps more non-zero pixels than 'bilinear' mode.
+        # In the extreme case, 'bilinear' mode may result in all-zero masks.
+        mask2 = torch.maximum(mask2_nearest, mask2_bilinear)
+    else:
+        mask2 = mask2_nearest
+
+    if (mask2.sum(dim=(1,2,3)) == 0).any():
+        # Very rare cases. Safe to skip.
+        print(f"WARNING: {mask_name} has all-zero masks.")
+    
+    return mask2

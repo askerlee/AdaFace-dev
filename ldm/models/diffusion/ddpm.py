@@ -26,7 +26,8 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, halve_token_indices, \
-                       normalize_dict_values, masked_mean, anneal_t, flip_coin_annealed
+                       normalize_dict_values, masked_mean, anneal_t, flip_coin_annealed, \
+                       scale_mask_for_attn
 
 from ldm.modules.ema import LitEma
 from ldm.modules.sophia import SophiaG
@@ -2104,6 +2105,7 @@ class LatentDiffusion(DDPM):
                                                                    extra_info['subj_indices'],
                                                                    extra_info['bg_indices'],
                                                                    x_start.shape[0],
+                                                                   img_mask,
                                                                    fg_grad_scale=0.05,
                                                                    fg_mask=fg_mask,
                                                                    batch_have_fg_mask=batch_have_fg_mask
@@ -2441,7 +2443,7 @@ class LatentDiffusion(DDPM):
             subj_comp_key_ortho_loss = 0
             if self.subj_comp_key_ortho_loss_weight > 0:
                 subj_comp_key_ortho_loss = \
-                    self.calc_subj_comp_key_ortho_loss(cond[2]['unet_ks'],
+                    self.calc_subj_comp_key_ortho_loss(cond[2]['unet_ks'], 
                                                        extra_info['subj_indices_2b'],
                                                        self.embedding_manager.delta_loss_emb_mask,
                                                        BLOCK_SIZE, comps_are_dresses)
@@ -2701,7 +2703,7 @@ class LatentDiffusion(DDPM):
     def calc_fg_bg_complementary_loss(self, unet_attns, unet_attnscores,
                                       placeholder_indices_fg, 
                                       placeholder_indices_bg, 
-                                      BS, fg_grad_scale=0.05,
+                                      BS, img_mask, fg_grad_scale=0.05,
                                       fg_mask=None, batch_have_fg_mask=None):
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
@@ -2762,6 +2764,13 @@ class LatentDiffusion(DDPM):
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
             
+            if img_mask is not None:
+                img_mask2 = scale_mask_for_attn(subj_attn, img_mask, "img_mask")
+                bg_attn   = bg_attn   * img_mask2
+                subj_attn = subj_attn * img_mask2
+            else:
+                img_mask2 = torch.ones_like(subj_attn)
+
             # Align bg_attn with (1 - subj_attn), so that the two attention maps are complementary.
             # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
             # But we don't want to only focus on large activations. So set it to 2.
@@ -2784,23 +2793,7 @@ class LatentDiffusion(DDPM):
                 # bg_score:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
                 bg_score   = score_mat[placeholder_indices_bg].reshape(BS, K_bg, *score_mat.shape[2:]).mean(dim=1)
 
-                spatial_scale = np.sqrt(subj_attn.shape[-1] / fg_mask.shape[2:].numel())
-                spatial_shape2 = (int(fg_mask.shape[2] * spatial_scale), int(fg_mask.shape[3] * spatial_scale))
-                # NOTE: avoid "bilinear" mode. If the object is too small in the mask, 
-                # it may result in all-zero masks.
-                # fg_mask: [2, 1, 64, 64] => fg_mask2: [2, 1, 8, 8].
-                fg_mask2_nearest  = F.interpolate(fg_mask.float(), size=spatial_shape2, mode='nearest')
-                fg_mask2_bilinear = F.interpolate(fg_mask.float(), size=spatial_shape2, mode='bilinear', align_corners=False)
-                # Always keep larger mask sizes.
-                # When the subject only occupies a small portion of the image,
-                # 'nearest' mode usually keeps more non-zero pixels than 'bilinear' mode.
-                # In the extreme case, 'bilinear' mode may result in all-zero masks.
-                fg_mask2 = torch.maximum(fg_mask2_nearest, fg_mask2_bilinear)
-                if (fg_mask2.sum(dim=(1,2,3)) == 0).any():
-                    # Very rare cases. Safe to skip.
-                    print("WARNING: fg_mask2 has all-zero masks.")
-                    continue
-
+                fg_mask2 = scale_mask_for_attn(subj_attn, fg_mask, "fg_mask")
                 # Repeat 8 times to match the number of attention heads.
                 fg_mask2 = fg_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 fg_mask3 = torch.zeros_like(fg_mask2)
@@ -2810,19 +2803,21 @@ class LatentDiffusion(DDPM):
                     print("WARNING: fg_mask3 has all-one masks.")
                     continue
 
+                bg_mask3 = (1 - fg_mask3) * img_mask2
+
                 # subj, bg: subject embedding,         background embedding.
                 # mf,   mb: mask foreground locations, mask background locations.
                 # sum(dim=(1,2)): avoid summing across the batch dimension. 
                 # It's meaningless to average among the instances.
                 subj_score_at_mf = subj_score * fg_mask3
-                subj_score_at_mb = subj_score * (1 - fg_mask3)
+                subj_score_at_mb = subj_score * bg_mask3
                 bg_score_at_mf   = bg_score   * fg_mask3
-                bg_score_at_mb   = bg_score   * (1 - fg_mask3)
+                bg_score_at_mb   = bg_score   * bg_mask3
 
                 avg_subj_score_at_mf = subj_score_at_mf.sum(dim=(1,2), keepdim=True)  / fg_mask3.sum(dim=(1,2), keepdim=True)
-                avg_subj_score_at_mb = subj_score_at_mb.sum(dim=(1,2), keepdim=True)  / (1 - fg_mask3).sum(dim=(1,2), keepdim=True)
+                avg_subj_score_at_mb = subj_score_at_mb.sum(dim=(1,2), keepdim=True)  / bg_mask3.sum(dim=(1,2), keepdim=True)
                 avg_bg_score_at_mf   = bg_score_at_mf.sum(dim=(1,2), keepdim=True)    / fg_mask3.sum(dim=(1,2), keepdim=True)
-                avg_bg_score_at_mb   = bg_score_at_mb.sum(dim=(1,2), keepdim=True)    / (1 - fg_mask3).sum(dim=(1,2), keepdim=True)
+                avg_bg_score_at_mb   = bg_score_at_mb.sum(dim=(1,2), keepdim=True)    / bg_mask3.sum(dim=(1,2), keepdim=True)
 
                 if 'DEBUG' in os.environ:
                     print(f'layer {unet_layer_idx}')
@@ -2877,8 +2872,7 @@ class LatentDiffusion(DDPM):
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast
     
     def calc_subj_comp_key_ortho_loss(self, unet_ks, 
-                                      subj_indices, 
-                                      delta_loss_emb_mask, 
+                                      subj_indices, delta_loss_emb_mask, 
                                       BS, comps_are_dresses):
 
         # Discard the first few bottom layers from the orthogonal loss.
