@@ -1502,9 +1502,15 @@ class LatentDiffusion(DDPM):
                         FINAL_LAYER_CLS_E_SCALE = 0.2
                         sync_layer_indices = [4, 5, 6, 7, 8, 9, 10] #, 11, 12, 13]
                         
-                        subj_emb_ema = self.cond_stage_model.encode(subj_single_prompts + subj_comp_prompts, 
-                                                                    embedding_manager=self.embedding_manager_ema)
-                        sub_single_emb_ema, subj_comp_emb_ema = subj_emb_ema.chunk(2)
+                        if self.global_step > 100:
+                            # EMA embeddings. Only after 100 iters, i.e., the embedding manager 
+                            # is no longer random.
+                            subj_emb_ema = self.cond_stage_model.encode(subj_single_prompts + subj_comp_prompts, 
+                                                                        embedding_manager=self.embedding_manager_ema)
+                            subj_single_emb_ema, subj_comp_emb_ema = subj_emb_ema.chunk(2)
+                        else:
+                            # Non-ema embeddings.
+                            subj_single_emb_ema, subj_comp_emb_ema = subj_single_emb, subj_comp_emb
 
                         if self.use_layerwise_embedding:
                             SCALE_STEP = (FINAL_LAYER_CLS_E_SCALE - FIRST_LAYER_CLS_E_SCALE) / (len(sync_layer_indices) - 1)
@@ -1531,9 +1537,9 @@ class LatentDiffusion(DDPM):
 
                             # Only mix at subject embeddings.
                             mix_indices = subj_indices_half_N
-                            subj_comp_emb_v   = mix_embeddings('add', subj_comp_emb_ema, cls_comp_emb,
+                            subj_comp_emb_v   = mix_embeddings('add', subj_comp_emb_ema,   cls_comp_emb,
                                                                 mix_indices, c1_subj_scale=subj_emb_scale)
-                            subj_single_emb_v = mix_embeddings('add', sub_single_emb_ema, cls_single_emb,
+                            subj_single_emb_v = mix_embeddings('add', subj_single_emb_ema, cls_single_emb,
                                                                 mix_indices, c1_subj_scale=subj_emb_scale)
                         else:
                             subj_comp_emb_v   = subj_comp_emb
@@ -2786,7 +2792,7 @@ class LatentDiffusion(DDPM):
             
             if img_mask is not None:
                 # img_mask: [2, 1, 64, 64] -> [2, 1, 8, 8]. subj_attn: [2, 8, 64]
-                img_mask2 = scale_mask_for_attn(subj_attn, img_mask, "img_mask")
+                img_mask2 = scale_mask_for_attn(subj_attn, img_mask, "img_mask", mode="nearest|bilinear")
                 # img_mask2: [2, 1, 8, 8] -> [2, 1, 64] -> [2, 8, 64].
                 img_mask2 = img_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 bg_attn   = bg_attn   * img_mask2
