@@ -797,7 +797,7 @@ def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0
 # flat_attn: geometrical dimensions (H, W) have been flatten to 1D (last dim).
 # mask:      still 4D.
 # mode: either "nearest" or "nearest|bilinear". Other modes will be ignored.
-def scale_mask_for_attn(flat_attn, mask, mask_name, mode="nearest"):
+def scale_mask_for_attn(flat_attn, mask, mask_name, mode="nearest|bilinear"):
     spatial_scale = np.sqrt(flat_attn.shape[-1] / mask.shape[2:].numel())
     spatial_shape2 = (int(mask.shape[2] * spatial_scale), int(mask.shape[3] * spatial_scale))
 
