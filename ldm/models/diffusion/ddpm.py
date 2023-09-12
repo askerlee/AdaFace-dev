@@ -2765,7 +2765,10 @@ class LatentDiffusion(DDPM):
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
             
             if img_mask is not None:
+                # img_mask: [2, 1, 64, 64] -> [2, 1, 8, 8]. subj_attn: [2, 8, 64]
                 img_mask2 = scale_mask_for_attn(subj_attn, img_mask, "img_mask")
+                # img_mask2: [2, 1, 8, 8] -> [2, 1, 64] -> [2, 8, 64].
+                img_mask2 = img_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 bg_attn   = bg_attn   * img_mask2
                 subj_attn = subj_attn * img_mask2
             else:
