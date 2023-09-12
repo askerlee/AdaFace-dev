@@ -2809,6 +2809,9 @@ class LatentDiffusion(DDPM):
 
                 bg_mask3 = (1 - fg_mask3) * img_mask2
 
+                if (fg_mask3.sum(dim=(1, 2)) == 0).any() or (bg_mask3.sum(dim=(1, 2)) == 0).any():
+                    breakpoint()
+
                 # subj, bg: subject embedding,         background embedding.
                 # mf,   mb: mask foreground locations, mask background locations.
                 # sum(dim=(1,2)): avoid summing across the batch dimension. 
