@@ -30,7 +30,6 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        scale_mask_for_attn
 
 from ldm.modules.ema import LitEma
-from ldm.modules.sophia import SophiaG
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
@@ -2497,7 +2496,8 @@ class LatentDiffusion(DDPM):
                                        16: 1., 17: 1.,
                                        18: 0.5,
                                        19: 0.25, 20: 0.25, 
-                                       21: 0.1, 22: 0.1, 23: 0.1, 24: 0.1,  
+                                       21: 0.12, 22: 0.12, 
+                                       23: 0.06, 24: 0.06,
                                      }
 
         # strict distillation consists of pixel-wise direct loss and attn delta loss. 
@@ -2519,7 +2519,8 @@ class LatentDiffusion(DDPM):
                                             16: 1., 17: 1.,
                                             18: 0.5,
                                             19: 0.25, 20: 0.25, 
-                                            21: 0.1, 22: 0.1, 23: 0.1, 24: 0.1,                                       
+                                            21: 0.12, 22: 0.12, 
+                                            23: 0.06, 24: 0.06,                                   
                                            }
 
         # Normalize the weights above so that each set sum to 1.
@@ -2884,7 +2885,8 @@ class LatentDiffusion(DDPM):
                                  16: 1., 17: 1., 
                                  18: 0.5,
                                  19: 0.25, 20: 0.25, 
-                                 21: 0.1, 22: 0.1, 23: 0.1, 24: 0.1,
+                                 21: 0.12, 22: 0.12, 
+                                 23: 0.06, 24: 0.06,
                                 }
         
         # Normalize the weights above so that each set sum to 1.
@@ -3316,12 +3318,7 @@ class LatentDiffusion(DDPM):
         model_lr = self.model_lr
         weight_decay = self.weight_decay
 
-        if self.optimizer_type == 'sophia':
-            lr = lr / 2
-            model_lr = model_lr / 2
-            OptimizerClass = SophiaG
-        else:
-            OptimizerClass = torch.optim.AdamW
+        OptimizerClass = torch.optim.AdamW
 
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 

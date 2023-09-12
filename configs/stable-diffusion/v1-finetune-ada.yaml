@@ -29,13 +29,13 @@ model:
     use_ada_embedding: True
     do_clip_teacher_filtering: True
     use_fp_trick:              True
-    # typical loss_embedding_reg is ~0.04, * weight -> 4e-4.
-    embedding_reg_weight:               0.01
+    # typical loss_embedding_reg is ~0.03, * weight -> 6e-4.
+    embedding_reg_weight:               0.02
     # composition_regs does composition_prompt_mix_reg, which always comes with prompt_delta_reg.
     composition_regs_iter_gap:          3
     # typical delta reg loss: 0.75, * weight -> 1.5e-4
     prompt_emb_delta_reg_weight:        2e-4
-    subj_comp_key_ortho_loss_weight:    2e-6
+    subj_comp_key_ortho_loss_weight:    5e-6
     # typical prompt mix reg loss: 2~3, * weight -> 4~6e-4.
     mix_prompt_distill_weight:          2e-4
     fg_bg_complementary_loss_weight:    5e-4
