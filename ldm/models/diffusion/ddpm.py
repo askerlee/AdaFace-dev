@@ -1355,7 +1355,7 @@ class LatentDiffusion(DDPM):
         delta_prompts = self.iter_flags['delta_prompts']
         img_mask      = self.iter_flags['img_mask']
 
-        if self.global_step == self.EMB_MAN_EMA_START_ITER:
+        if self.global_step >= self.EMB_MAN_EMA_START_ITER:
             # Change decay to a normal value (when < EMB_MAN_EMA_START_ITER, decay = 0, 
             # i.e., completely update).
             # decay is initialized as a tensor scalar, so use copy_() to change its value.
