@@ -2805,7 +2805,7 @@ class LatentDiffusion(DDPM):
 
                 # The 1s in fg_mask should always be a subset of 1s in img_mask. 
                 # So it should be fg_mask3 == fg_mask3 * img_mask2.
-                if fg_mask3 != fg_mask3 * img_mask2:
+                if (fg_mask3 != fg_mask3 * img_mask2).any():
                     breakpoint()
 
                 bg_mask3 = (1 - fg_mask3) * img_mask2
