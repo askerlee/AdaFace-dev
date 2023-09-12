@@ -101,7 +101,8 @@ class DDPM(pl.LightningModule):
                  use_background_token=False,
                  use_conv_attn=False,
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
-                 use_fp_trick=True,       
+                 use_fp_trick=True,      
+                 emb_man_ema_start_iter=-1, 
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -132,6 +133,7 @@ class DDPM(pl.LightningModule):
         # If use_conv_attn, the subject is well expressed, and use_fp_trick is unnecessary 
         # (actually harmful).
         self.use_fp_trick = False if self.use_conv_attn else use_fp_trick
+        self.EMB_MAN_EMA_START_ITER          = emb_man_ema_start_iter
         self.mask_avail_ratio = 0
 
         self.cached_inits_available          = False
@@ -671,8 +673,6 @@ class LatentDiffusion(DDPM):
             # to be mixed with class embeddings, which serve as a reference and 
             # are not the major objective for update.
             self.embedding_manager_ema          = copy.deepcopy(self.embedding_manager)
-            # Keep embedding_manager_ema up-to-date with embedding_manager.
-            self.embedding_manager_ema_updater  = LitEma(self.embedding_manager, decay=0.99)
 
             # embedding_manager.optimized_parameters(): string_to_param_dict, 
             # which maps custom tokens to embeddings
@@ -1353,7 +1353,10 @@ class LatentDiffusion(DDPM):
         delta_prompts = self.iter_flags['delta_prompts']
         img_mask      = self.iter_flags['img_mask']
 
-        if self.global_step > 0:
+        if self.global_step == self.EMB_MAN_EMA_START_ITER:
+            # Keep embedding_manager_ema up-to-date with embedding_manager.
+            self.embedding_manager_ema_updater  = LitEma(self.embedding_manager, decay=0.99)
+        if self.EMB_MAN_EMA_START_ITER > 0 and self.global_step > self.EMB_MAN_EMA_START_ITER:
             self.embedding_manager_ema_updater(self.embedding_manager)
             self.embedding_manager_ema_updater.copy_to(self.embedding_manager_ema)
 
@@ -1502,7 +1505,7 @@ class LatentDiffusion(DDPM):
                         FINAL_LAYER_CLS_E_SCALE = 0.2
                         sync_layer_indices = [4, 5, 6, 7, 8, 9, 10] #, 11, 12, 13]
                         
-                        if self.global_step > 100:
+                        if self.EMB_MAN_EMA_START_ITER > 0 and self.global_step > self.EMB_MAN_EMA_START_ITER:
                             # EMA embeddings. Only after 100 iters, i.e., the embedding manager 
                             # is no longer random.
                             subj_emb_ema = self.cond_stage_model.encode(subj_single_prompts + subj_comp_prompts, 
