@@ -673,7 +673,9 @@ class LatentDiffusion(DDPM):
             # to be mixed with class embeddings, which serve as a reference and 
             # are not the major objective for update.
             self.embedding_manager_ema          = copy.deepcopy(self.embedding_manager)
-
+            # decay = 0: each update will completely replace the previous value with the new value.
+            # will change to a normal decay value after warm-up iterations for embedding_manager.
+            self.embedding_manager_ema_updater  = LitEma(self.embedding_manager, decay=0)
             # embedding_manager.optimized_parameters(): string_to_param_dict, 
             # which maps custom tokens to embeddings
             for param in self.embedding_manager.optimized_parameters():
@@ -1354,9 +1356,12 @@ class LatentDiffusion(DDPM):
         img_mask      = self.iter_flags['img_mask']
 
         if self.global_step == self.EMB_MAN_EMA_START_ITER:
-            # Keep embedding_manager_ema up-to-date with embedding_manager.
-            self.embedding_manager_ema_updater  = LitEma(self.embedding_manager, decay=0.99)
-        if self.EMB_MAN_EMA_START_ITER > 0 and self.global_step > self.EMB_MAN_EMA_START_ITER:
+            # Change decay to a normal value (when < EMB_MAN_EMA_START_ITER, decay = 0, 
+            # i.e., completely update).
+            # decay is initialized as a tensor scalar, so use copy_() to change its value.
+            self.embedding_manager_ema_updater.decay.copy_(0.99)
+
+        if self.global_step > 0:
             self.embedding_manager_ema_updater(self.embedding_manager)
             self.embedding_manager_ema_updater.copy_to(self.embedding_manager_ema)
 
@@ -1505,15 +1510,12 @@ class LatentDiffusion(DDPM):
                         FINAL_LAYER_CLS_E_SCALE = 0.2
                         sync_layer_indices = [4, 5, 6, 7, 8, 9, 10] #, 11, 12, 13]
                         
-                        if self.EMB_MAN_EMA_START_ITER > 0 and self.global_step > self.EMB_MAN_EMA_START_ITER:
-                            # EMA embeddings. Only after 100 iters, i.e., the embedding manager 
-                            # is no longer random.
-                            subj_emb_ema = self.cond_stage_model.encode(subj_single_prompts + subj_comp_prompts, 
-                                                                        embedding_manager=self.embedding_manager_ema)
-                            subj_single_emb_ema, subj_comp_emb_ema = subj_emb_ema.chunk(2)
-                        else:
-                            # Non-ema embeddings.
-                            subj_single_emb_ema, subj_comp_emb_ema = subj_single_emb, subj_comp_emb
+                        # EMA embeddings. This is effective only after 100 iters, i.e., the embedding manager 
+                        # is no longer random. Before that, embedding_manager_ema has the same parameters as
+                        # embedding_manager, since decay = 0 in embedding_manager_ema_updater.
+                        subj_emb_ema = self.cond_stage_model.encode(subj_single_prompts + subj_comp_prompts, 
+                                                                    embedding_manager=self.embedding_manager_ema)
+                        subj_single_emb_ema, subj_comp_emb_ema = subj_emb_ema.chunk(2)
 
                         if self.use_layerwise_embedding:
                             SCALE_STEP = (FINAL_LAYER_CLS_E_SCALE - FIRST_LAYER_CLS_E_SCALE) / (len(sync_layer_indices) - 1)
