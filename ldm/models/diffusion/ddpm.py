@@ -666,6 +666,14 @@ class LatentDiffusion(DDPM):
         self.db_reg_weight  = 1.
         if not is_dreambooth:
             self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
+            # embedding_manager_ema: a shadow copy of embedding_manager. Used for distillation.
+            # No need to enable gradient for embedding_manager_ema, as it's used to generate subject embeddings
+            # to be mixed with class embeddings, which serve as a reference and 
+            # are not the major objective for update.
+            self.embedding_manager_ema          = copy.deepcopy(self.embedding_manager)
+            # Keep embedding_manager_ema up-to-date with embedding_manager.
+            self.embedding_manager_ema_updater  = LitEma(self.embedding_manager, decay=0.99)
+
             # embedding_manager.optimized_parameters(): string_to_param_dict, 
             # which maps custom tokens to embeddings
             for param in self.embedding_manager.optimized_parameters():
@@ -780,16 +788,19 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
-    def get_learned_conditioning(self, cond_in, img_mask=None):
+    def get_learned_conditioning(self, cond_in, img_mask=None, randomize_clip_weights=True):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
                 # each prompt in c is encoded as [1, 77, 768].
                 # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
                 c_in = copy.copy(cond_in)
+                if randomize_clip_weights:
+                    self.cond_stage_model.sample_last_layers_skip_weights()
+
                 # c: [128, 77, 768]
-                self.cond_stage_model.sample_last_layers_skip_weights()
                 c = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
+                # c is tensor. So the following statement is False.
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
                 
@@ -1342,6 +1353,10 @@ class LatentDiffusion(DDPM):
         delta_prompts = self.iter_flags['delta_prompts']
         img_mask      = self.iter_flags['img_mask']
 
+        if self.global_step > 0:
+            self.embedding_manager_ema_updater(self.embedding_manager)
+            self.embedding_manager_ema_updater.copy_to(self.embedding_manager_ema)
+
         if self.model.conditioning_key is not None:
             assert c is not None
             # c: condition, a prompt template. 
@@ -1483,10 +1498,14 @@ class LatentDiffusion(DDPM):
                         # i.e., no cls_single_emb / cls_comp_emb will be mixed into 
                         # subj_single_emb / subj_comp_emb to form subj_single_emb_v / subj_comp_emb_v.
                         # If mask_avail_ratio = 0, then INIT_CLS_EMB_V_SCALE = 0.1, FINAL_CLS_EMB_V_SCALE = 0.2.
-                        FIRST_LAYER_CLS_E_SCALE = 0.7
-                        FINAL_LAYER_CLS_E_SCALE = 0.1
+                        FIRST_LAYER_CLS_E_SCALE = 0.8
+                        FINAL_LAYER_CLS_E_SCALE = 0.2
                         sync_layer_indices = [4, 5, 6, 7, 8, 9, 10] #, 11, 12, 13]
                         
+                        subj_emb_ema = self.cond_stage_model.encode(subj_single_prompts + subj_comp_prompts, 
+                                                                    embedding_manager=self.embedding_manager_ema)
+                        sub_single_emb_ema, subj_comp_emb_ema = subj_emb_ema.chunk(2)
+
                         if self.use_layerwise_embedding:
                             SCALE_STEP = (FINAL_LAYER_CLS_E_SCALE - FIRST_LAYER_CLS_E_SCALE) / (len(sync_layer_indices) - 1)
                             # Linearly decrease the scale of the class   embeddings from 0.5 to 0.1, 
@@ -1512,9 +1531,9 @@ class LatentDiffusion(DDPM):
 
                             # Only mix at subject embeddings.
                             mix_indices = subj_indices_half_N
-                            subj_comp_emb_v   = mix_embeddings('add', subj_comp_emb, cls_comp_emb,
+                            subj_comp_emb_v   = mix_embeddings('add', subj_comp_emb_ema, cls_comp_emb,
                                                                 mix_indices, c1_subj_scale=subj_emb_scale)
-                            subj_single_emb_v = mix_embeddings('add', subj_single_emb, cls_single_emb,
+                            subj_single_emb_v = mix_embeddings('add', sub_single_emb_ema, cls_single_emb,
                                                                 mix_indices, c1_subj_scale=subj_emb_scale)
                         else:
                             subj_comp_emb_v   = subj_comp_emb

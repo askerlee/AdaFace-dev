@@ -22,7 +22,7 @@ class LitEma(nn.Module):
 
         self.collected_params = []
 
-    def forward(self,model):
+    def forward(self, model):
         decay = self.decay
 
         if self.num_updates >= 0:
@@ -39,10 +39,12 @@ class LitEma(nn.Module):
                 if m_param[key].requires_grad:
                     sname = self.m_name2s_name[key]
                     shadow_params[sname] = shadow_params[sname].type_as(m_param[key])
+                    # old - [ old * (1 - decay) + new * (1 - decay) ] = old * decay + new * (1 - decay)
                     shadow_params[sname].sub_(one_minus_decay * (shadow_params[sname] - m_param[key]))
                 else:
                     assert not key in self.m_name2s_name
 
+    # copy EMA parameters to model.
     def copy_to(self, model):
         m_param = dict(model.named_parameters())
         shadow_params = dict(self.named_buffers())
