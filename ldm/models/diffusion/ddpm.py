@@ -436,7 +436,7 @@ class DDPM(pl.LightningModule):
                             'do_normal_recon':              True,
                             'is_compos_iter':               False,
                             'do_mix_prompt_distillation':   False,
-                            'do_ada_emb_delta_reg':      False,
+                            'do_ada_emb_delta_reg':         False,
                             # 'do_teacher_filter':        False,
                             # 'is_teachable':             False,
                             'use_background_token':         False,
@@ -816,9 +816,7 @@ class LatentDiffusion(DDPM):
                     self.embedding_manager.reset_ada_embedding_cache()
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
                     # Do not consider mask on compositional reg iterations.
-                    if img_mask is not None and \
-                        (   self.iter_flags['do_mix_prompt_distillation'] \
-                         or self.iter_flags['do_ada_emb_delta_reg']):
+                    if self.iter_flags['is_compos_iter']:
                         img_mask = None
 
                     # img_mask is used by the ada embedding generator. 
@@ -1494,9 +1492,8 @@ class LatentDiffusion(DDPM):
                             # Linearly decrease the scale of the class   embeddings from 0.5 to 0.1, 
                             # i.e., 
                             # Linearly increase the scale of the subject embeddings from 0.5 to 0.9.
-                            # subj_emb_scale = [0.5000, 0.5267, 0.5533, 0.5800, 0.6067, 0.6333, 
-                            #                   0.6600, 0.6867, 0.7133, 0.7400, 0.7667, 0.7933, 
-                            #                   0.8200, 0.8467, 0.8733, 0.9000]
+                            # subj_emb_scale = [1.0, 1.0, 1.0, 1.0, 0.3, 0.4, 0.5, 0.6, 
+                            #                   0.7, 0.8, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0000]
                             subj_emb_scale = torch.ones(N_LAYERS, device=subj_comp_emb.device) 
                             subj_emb_scale[sync_layer_indices] = \
                                 1 - torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
@@ -1539,7 +1536,7 @@ class LatentDiffusion(DDPM):
                         # then chance is that mix_comp_emb might be dominated by subj_comp_emb2,
                         # so that mix_comp_emb will produce images similar as subj_comp_emb2 does.
                         # Stopping the gradient will improve compositionality but reduce face similarity.
-                        PROMPT_MIX_GRAD_SCALE = 0.01
+                        PROMPT_MIX_GRAD_SCALE = 0.05
                         grad_scaler = gen_gradient_scaler(PROMPT_MIX_GRAD_SCALE)
                         mix_comp_emb_all_layers   = grad_scaler(mix_comp_emb_all_layers)
                         mix_single_emb_all_layers = grad_scaler(mix_single_emb_all_layers)
@@ -1815,8 +1812,8 @@ class LatentDiffusion(DDPM):
     # if do_recon and cfg_scale > 1, apply classifier-free guidance. 
     # unet_has_grad: when returning do_recon (e.g. to select the better instance by smaller clip loss), 
     # to speed up, no BP is done on these instances, so unet_has_grad=False.
-    def guided_denoise(self, x_start, noise, t, cond, inj_noise_t=None, unet_has_grad=True, 
-                       crossattn_force_grad=False, 
+    def guided_denoise(self, x_start, noise, t, cond, inj_noise_t=None, 
+                       unet_has_grad=True, crossattn_force_grad=False, 
                        do_recon=False, cfg_scales=None):
         
         if inj_noise_t is not None:
@@ -1912,13 +1909,19 @@ class LatentDiffusion(DDPM):
         self.iter_flags['do_teacher_filter'] = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
                                                 and not self.iter_flags['reuse_init_conds'])
 
-        img_mask            = self.iter_flags['img_mask']
-        fg_mask             = self.iter_flags['fg_mask']
-        batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
-        comps_are_dresses   = self.iter_flags['comps_are_dresses']
+        img_mask                = self.iter_flags['img_mask']
+        fg_mask                 = self.iter_flags['fg_mask']
+        batch_have_fg_mask      = self.iter_flags['batch_have_fg_mask']
+        comps_are_dresses       = self.iter_flags['comps_are_dresses']
 
         cfg_scales_for_clip_loss = None
         c_static_emb, c_in, extra_info = cond
+
+        # Don't consider img_mask in compositional iterations. Because in compositional iterations,
+        # the original images don't play a role (even if we use the original image to initialize x_start,
+        # we still don't consider the actual pixels other than the subject areas, so img_mask doesn't matter).
+        extra_info['img_mask']  = img_mask if not self.iter_flags['is_compos_iter'] else None
+
         inj_noise_t = None
 
         if self.iter_flags['is_compos_iter']:
@@ -2539,9 +2542,9 @@ class LatentDiffusion(DDPM):
 
         mix_feat_grad_scale = 0.1
         mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
-        # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to teacher attn. 
+        # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to teacher attn. 
         # Setting to 0 may prevent the graph from being released and OOM.
-        mix_attn_grad_scale  = 0.01  
+        mix_attn_grad_scale  = 0.05  
         mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
 
         loss_subj_attn_delta_distill    = 0
@@ -2575,7 +2578,7 @@ class LatentDiffusion(DDPM):
                 attn_loose_distill_layer_weight     = attn_loose_distill_layer_weights[unet_layer_idx]
                 attn_strict_distill_layer_weight    = attn_strict_distill_layer_weights[unet_layer_idx]
 
-                # mix_attn_grad_scale = 0.01, almost zero, effectively no grad to subj_attn_mix_comp/subj_attn_mix_single. 
+                # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to subj_attn_mix_comp/subj_attn_mix_single. 
                 # Use this scaler to release the graph and avoid OOM.
                 subj_attn_mix_comp_gs   = mix_attn_grad_scaler(subj_attn_mix_comp)
                 subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
@@ -2597,7 +2600,7 @@ class LatentDiffusion(DDPM):
                     loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
                                                                  exponent=3,
                                                                  first_n_dims_to_flatten=2, 
-                                                                 ref_grad_scale=0.01)
+                                                                 ref_grad_scale=0.05)
                     
                     loss_subj_attn_delta_distill  += loss_layer_subj_delta_attn * attn_strict_distill_layer_weight
                 

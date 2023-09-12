@@ -78,14 +78,14 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
-    def forward(self, x, emb, context=None):
+    def forward(self, x, emb, context=None, mask=None):
         for layer in self:
             # TimestepBlock: often ResBlock layers, which take time embedding as an input.
             if isinstance(layer, TimestepBlock):
                 x = layer(x, emb)
             # SpatialTransformer layers take text embedding as an input.
             elif isinstance(layer, SpatialTransformer):
-                x = layer(x, context)
+                x = layer(x, context, mask=mask)
             else:
                 x = layer(x)
         return x
@@ -786,6 +786,7 @@ class UNetModel(nn.Module):
         bg_indices            = extra_info.get('bg_indices', None)             if extra_info is not None else None
         crossattn_force_grad  = extra_info.get('crossattn_force_grad', False)  if extra_info is not None else False
         debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
+        img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
 
         ca_old_flags = self.set_cross_attn_flags({'use_conv_attn': use_conv_attn})
 
@@ -942,7 +943,7 @@ class UNetModel(nn.Module):
             get_layer_idx_context = partial(get_layer_context, layer_idx)
             # layer_context: [2, 77, 768], conditioning embedding.
             # emb: [2, 1280], time embedding.
-            h = module(h, emb, get_layer_idx_context)
+            h = module(h, emb, get_layer_idx_context, mask=img_mask)
             hs.append(h)
             if layer_idx in distill_layer_indices:
                     distill_attns[layer_idx]        = module[1].transformer_blocks[0].attn2.cached_attn_mat 
@@ -955,7 +956,7 @@ class UNetModel(nn.Module):
         get_layer_idx_context = partial(get_layer_context, layer_idx)
 
         # 13 [2, 1280, 8, 8]
-        h = self.middle_block(h, emb, get_layer_idx_context)
+        h = self.middle_block(h, emb, get_layer_idx_context, mask=img_mask)
         if layer_idx in distill_layer_indices:
                 distill_attns[layer_idx]        = self.middle_block[1].transformer_blocks[0].attn2.cached_attn_mat 
                 distill_attnscores[layer_idx]   = self.middle_block[1].transformer_blocks[0].attn2.cached_attn_scores
@@ -982,7 +983,7 @@ class UNetModel(nn.Module):
             h = th.cat([h, hs.pop()], dim=1)
 
             # layer_context: [2, 77, 768], emb: [2, 1280].
-            h = module(h, emb, get_layer_idx_context)
+            h = module(h, emb, get_layer_idx_context, mask=img_mask)
             if layer_idx in distill_layer_indices:
                     distill_attns[layer_idx]        = module[1].transformer_blocks[0].attn2.cached_attn_mat 
                     distill_attnscores[layer_idx]   = module[1].transformer_blocks[0].attn2.cached_attn_scores

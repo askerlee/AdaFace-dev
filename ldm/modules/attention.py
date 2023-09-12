@@ -185,7 +185,13 @@ class CrossAttention(nn.Module):
         
         # x, q: [4, 4096, 320]
         q = self.to_q(x)
-        context = default(context, x)
+
+        if exists(context):
+            context_provided = True
+        else:
+            context_provided = False
+            context = x
+
         if callable(context):
             # Pass (x, ...) to context() to get the real context.
             # If uncond (null condition) is active, then returned subj_indices = None.
@@ -211,15 +217,20 @@ class CrossAttention(nn.Module):
         # by attention scores computed with a convolutional attention mechanism.
         # If uncond (null condition) is active, then returned subj_indices = None.
         # Don't do conv attn if uncond is active.
-        if self.use_conv_attn:
-            if subj_indices is not None:
-                # infeat_size is set in SpatialTransformer.forward().
-                sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, h, self.scale)
+        if context_provided and self.use_conv_attn and subj_indices is not None:
+            # infeat_size is set in SpatialTransformer.forward().
+            sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, h, self.scale)
 
+        # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
+        # Otherwise, it's self attention, sim: [16, 4096, 4096].
+        # img_mask should only be provided and applied if not context_provided. 
+        # Otherwise, the whole column of 77 sim values will all be max_neg_value, 
+        # which lead to nan after softmax.
         if exists(mask):
+            # mask: [2, 1, 64, 64] -> [16, 1, 4096]
             mask = rearrange(mask, 'b ... -> b (...)')
             max_neg_value = -torch.finfo(sim.dtype).max
-            mask = repeat(mask, 'b j -> (b h) () j', h=h)
+            mask = repeat(mask.bool(), 'b j -> (b h) () j', h=h)
             sim.masked_fill_(~mask, max_neg_value)
 
         # attention, what we cannot get enough of
@@ -258,15 +269,17 @@ class BasicTransformerBlock(nn.Module):
         self.norm3 = nn.LayerNorm(dim)
         self.checkpoint = checkpoint
 
-    def forward(self, x, context=None):
-        return checkpoint(self._forward, (x, context), self.parameters(), self.checkpoint)
+    def forward(self, x, context=None, mask=None):
+        return checkpoint(self._forward, (x, context, mask), self.parameters(), self.checkpoint)
 
-    def _forward(self, x, context=None):
-        x = self.attn1(self.norm1(x)) + x
+    def _forward(self, x, context=None, mask=None):
+        x = self.attn1(self.norm1(x), mask=mask) + x
+        # The mask is of the key (context). 
+        # If key is text prompt, then we shouldn't provide img_mask.
+        # Otherwise nan will occur.
         x = self.attn2(self.norm2(x), context=context) + x
         x = self.ff(self.norm3(x)) + x
         return x
-
 
 class SpatialTransformer(nn.Module):
     """
@@ -302,16 +315,20 @@ class SpatialTransformer(nn.Module):
 
         self.save_feat = False
 
-    def forward(self, x, context=None):
+    def forward(self, x, context=None, mask=None):
         # note: if no context is given, cross-attention defaults to self-attention
         b, c, h, w = x.shape
         x_in = x
         x = self.norm(x)
         x = self.proj_in(x)
         x = rearrange(x, 'b c h w -> b (h w) c')
+        # Each block is BasicTransformerBlock.
         for block in self.transformer_blocks:
             block.attn2.infeat_size = (h, w)
-            x = block(x, context=context)
+            # mask: [2, 1, 64, 64]
+            mask2 = F.interpolate(mask, size=(h, w), mode='nearest') if exists(mask) else None
+            x = block(x, context=context, mask=mask2)
+
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
         
         if self.save_feat:
