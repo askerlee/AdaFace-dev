@@ -2803,10 +2803,11 @@ class LatentDiffusion(DDPM):
                 fg_mask3 = torch.zeros_like(fg_mask2)
                 fg_mask3[fg_mask2 >  1e-6] = 1.
 
-                # The 1s in fg_mask should always be a subset of 1s in img_mask. 
-                # So it should be fg_mask3 == fg_mask3 * img_mask2.
-                if (fg_mask3 != fg_mask3 * img_mask2).any():
-                    breakpoint()
+                # The ones in fg_mask should always be a subset of ones in img_mask. 
+                # However, it's possible that after scale, some elements in img_mask2 become 0.5.
+                # So this equality doesn't always hold: fg_mask3 == fg_mask3 * img_mask2.
+                #if (fg_mask3 != fg_mask3 * img_mask2).any():
+                #    breakpoint()
 
                 bg_mask3 = (1 - fg_mask3) * img_mask2
 
