@@ -759,10 +759,10 @@ def normalize_dict_values(d):
 def masked_mean(ts, mask, dim=None):
     if mask is None:
         return ts.mean()
-    if mask.sum() == 0:
-        return 0
     
-    return (ts * mask).sum(dim=dim) / mask.sum(dim=dim)
+    mask_sum = mask.sum(dim=dim)
+    mask_sum = torch.maximum( mask_sum, torch.ones_like(mask_sum) * 1e-6 )
+    return (ts * mask).sum(dim=dim) / mask_sum
 
 # true_prob_range = (p_init, p_final). 
 # The prob of flipping true is gradually annealed from p_init to p_final.

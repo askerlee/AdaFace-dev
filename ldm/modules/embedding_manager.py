@@ -1097,8 +1097,16 @@ class EmbeddingManager(nn.Module):
         # There are more static prompts more than ada prompts.
         if layer_static_embs.shape[0] < emb_mask.shape[0]:
             emb_mask = emb_mask[:layer_static_embs.shape[0]]
+        elif layer_static_embs.shape[0] > emb_mask.shape[0]:
+            # This should only happen during inference, where the cond and uncond 
+            # static embeddings are combined as input, but emb_mask is only the 
+            # mask of the cond embeddings. 
+            # The batch structure is [4*cond, 4*uncond]. So we append 
+            # a zero tensor of size 4 to emb_mask to match the uncond embeddings.
+            emb_mask = torch.cat([emb_mask, torch.zeros_like(emb_mask)], dim=0)
+            
         layer_static_emb_mean   = masked_mean(layer_static_embs, emb_mask, dim=1)
-
+        
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
         # This order ensures that the background Ada embedder can always use 

@@ -467,6 +467,14 @@ def main(opt):
     else:
         prompt_mix_weight = 0
 
+    if opt.scale != 1.0:
+        try:
+            uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt])
+        except:
+            breakpoint()
+    else:
+        uc = None
+        
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     with torch.no_grad():
         with precision_scope("cuda"):
@@ -481,7 +489,6 @@ def main(opt):
                     # prompts in a batch are just repetitions of the same prompt.
                     for p_i, prompts in enumerate(tqdm(batched_prompts, desc="prompts")):
                         print(f"\n{p_i+1}/{prompt_block_count}", prompts[0])
-                        uc = None
 
                         if prompt_mix_weight != 0:
                             # If ref_prompt is None (default), then ref_c is None, i.e., no mixing.
@@ -495,11 +502,6 @@ def main(opt):
                             ref_c = None
 
                         if opt.scale != 1.0:
-                            try:
-                                uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt])
-                            except:
-                                breakpoint()
-
                             # ref_prompt_mix doubles the number of channels of conditioning embeddings.
                             # So we need to repeat uc by 2.
                             if ref_c is not None:
