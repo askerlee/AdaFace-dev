@@ -8,6 +8,7 @@ import numpy as np
 from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler, masked_mean
 from functools import partial
 from collections import OrderedDict
+import random
 
 # When debugging, make the printed tensors less messy.
 torch.set_printoptions(precision=4, sci_mode=False)
@@ -1088,14 +1089,15 @@ class EmbeddingManager(nn.Module):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
+        
         layer_static_embs       = layer_attn_components[-1]
         layer_attn_components   = layer_attn_components[:-1]
         # layer_static_embs: [4, 77, 768]. 
         # delta_loss_emb_mask: [4, 1, 77, 1] => [4, 77, 1].
         emb_mask = self.delta_loss_emb_mask.squeeze(1)
-        # Teacher filtering for prompt distillation. 
-        # There are more static prompts more than ada prompts.
         if layer_static_embs.shape[0] < emb_mask.shape[0]:
+            # Teacher filtering for prompt distillation. 
+            # There are more static prompts more than ada prompts.
             emb_mask = emb_mask[:layer_static_embs.shape[0]]
         elif layer_static_embs.shape[0] > emb_mask.shape[0]:
             # This should only happen during inference, where the cond and uncond 
@@ -1106,7 +1108,10 @@ class EmbeddingManager(nn.Module):
             emb_mask = torch.cat([emb_mask, torch.zeros_like(emb_mask)], dim=0)
             
         layer_static_emb_mean   = masked_mean(layer_static_embs, emb_mask, dim=1)
-        
+        # Drop out the static embedding mean features with a probability of 0.2.
+        if self.training and random.random() < 0.2:
+            layer_static_emb_mean.zero_()
+
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
         # This order ensures that the background Ada embedder can always use 
