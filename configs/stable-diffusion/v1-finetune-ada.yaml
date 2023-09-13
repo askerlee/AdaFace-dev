@@ -30,9 +30,9 @@ model:
     do_clip_teacher_filtering: True
     use_fp_trick:              True
     # typical loss_embedding_reg is ~0.03, * weight -> 6e-4.
-    embedding_reg_weight:               0.02
+    embedding_reg_weight:               0.01
     # composition_regs does composition_prompt_mix_reg, which always comes with prompt_delta_reg.
-    composition_regs_iter_gap:          3
+    composition_regs_iter_gap:          2
     # typical delta reg loss: 0.75, * weight -> 1.5e-4
     prompt_emb_delta_reg_weight:        2e-4
     subj_comp_key_ortho_loss_weight:    5e-6
@@ -43,7 +43,7 @@ model:
     # Same as warm_up_steps in scheduler_config.
     emb_man_ema_start_iter:             500
     emb_man_ema_decay:                  0.995
-    
+
     optimizer_type: AdamW     # sophia
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
