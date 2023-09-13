@@ -5,7 +5,7 @@ from einops import rearrange, repeat
 import torch.nn.functional as F
 import numpy as np
 
-from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler
+from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler, masked_mean
 from functools import partial
 from collections import OrderedDict
 
@@ -71,17 +71,23 @@ def calc_stats(emb_name, embeddings):
     print("L1: %.4f, L2: %.4f" %(l1_loss.item(), l2_loss.item()))
     print("Norms: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(norms.min(), norms.max(), norms.mean(), norms.std()))
 
-class LNCat2(nn.Module):
-    def __init__(self, chan1, chan2, dim=1):
+# LNCat3 can be used on 2 or 3 input tensors.
+class LNCat3(nn.Module):
+    def __init__(self, chan1, chan2, chan3, dim=1):
         super().__init__()
         self.ln1 = nn.LayerNorm(chan1, elementwise_affine=True)
         self.ln2 = nn.LayerNorm(chan2, elementwise_affine=True)
+        self.ln3 = nn.LayerNorm(chan3, elementwise_affine=True)
         self.dim = dim
 
-    def forward(self, x1, x2):
+    def forward(self, x1, x2, x3):
         x1 = self.ln1(x1)
         x2 = self.ln2(x2)
-        return torch.cat([x1, x2], dim=self.dim)
+        if x3 is None:
+            return torch.cat([x1, x2], dim=self.dim)
+        
+        x3 = self.ln3(x3)
+        return torch.cat([x1, x2, x3], dim=self.dim)
 
 class MaskedAvgPool2d(nn.Module):
     def __init__(self):
@@ -541,8 +547,8 @@ class AdaEmbedding(nn.Module):
 
         layer_maps = []
         layers_out_lns  = []
-        # lncat2s: multiple cat(LN(infeat), LN(time_emb)).
-        layer_lncat2s = []
+        # LNCat3s: multiple cat(LN(infeat), LN(time_emb), LN(static_emb)).
+        layer_lncat3s = []
         self.TDs = []
 
         for i in range(num_layers):
@@ -555,15 +561,16 @@ class AdaEmbedding(nn.Module):
             # output dim: r * K, will be reshaped to [K, r].
             # This Linear outputs K sets of r-dim vectors, 
             # each set being the coefficients of the r basis vectors. 
-            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD, r * self.K, bias=True) )
-            layer_lncat2s.append(LNCat2(self.attn_infeat_dims[i] * H, TD))
+            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD + out_emb_dim, 
+                                         r * self.K, bias=True) )
+            layer_lncat3s.append(LNCat3(self.attn_infeat_dims[i] * H, TD, out_emb_dim))
             # A specific LayerNorm is applied on each of the K embeddings in each layer.
             layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
             layers_out_lns.append(layer_out_lns)
 
         self.layer_maps     = nn.ModuleList(layer_maps)
         self.layers_out_lns = nn.ModuleList(layers_out_lns)
-        self.layer_lncat2s  = nn.ModuleList(layer_lncat2s)
+        self.layer_lncat3s  = nn.ModuleList(layer_lncat3s)
         self.mask_layer_map_weights()
 
         self.has_bias = has_bias
@@ -592,15 +599,17 @@ class AdaEmbedding(nn.Module):
         for layer_idx in layer_range:
             SINGLE_D = self.attn_infeat_dims[layer_idx]
             TD       = self.TDs[layer_idx]
-            assert self.layer_maps[layer_idx].in_features == SINGLE_D * 2 + TD
+            assert self.layer_maps[layer_idx].in_features == SINGLE_D * 2 + TD + self.out_emb_dim
             layer_map_weight = self.layer_maps[layer_idx].weight.data
             # The weight of Linear has shape [out_features, in_features]. 
             # Split the first dim, out_features => [K, r].
             layer_map_weight_embs = layer_map_weight.view(self.K, self.r, -1)
 
-            cand_fg_bg_masks = [ torch.cat([ torch.ones(SINGLE_D),  torch.zeros(SINGLE_D), torch.ones(TD) ]),
-                                 torch.cat([ torch.zeros(SINGLE_D), torch.ones(SINGLE_D),  torch.ones(TD) ]),
-                                 torch.ones(SINGLE_D * 2 + TD) ]
+            EXTRA = TD + self.out_emb_dim
+            # cand_fg_bg_masks is applied is on the input features.
+            cand_fg_bg_masks = [ torch.cat([ torch.ones(SINGLE_D),  torch.zeros(SINGLE_D), torch.ones(EXTRA) ]),
+                                 torch.cat([ torch.zeros(SINGLE_D), torch.ones(SINGLE_D),  torch.ones(EXTRA) ]),
+                                 torch.ones(SINGLE_D * 2 + EXTRA) ]
             
             # fg_bg_mask: [K, in_features]. Mask part of the input features.
             fg_bg_mask = torch.stack([ cand_fg_bg_masks[emb_infeat_type] for emb_infeat_type in self.emb_infeat_types ], dim=0)
@@ -614,7 +623,8 @@ class AdaEmbedding(nn.Module):
     # layer_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
     # time_emb: [B, 1280].
-    def forward(self, layer_idx, layer_attn_components, time_emb, static_subj_layer_emb, 
+    def forward(self, layer_idx, layer_attn_components, time_emb, 
+                layer_static_emb_mean, static_subj_layer_emb, 
                 img_mask=None, bp_to_unet=False, cached_infeat_bg=None):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
         pooler  = self.poolers[emb_idx]
@@ -685,12 +695,13 @@ class AdaEmbedding(nn.Module):
             else:
                 time_feat = time_emb[:, :TD]
 
-            # cat(ln(infeat_pooled), ln(time_emb)) as the input features.
-            infeat_time      = self.layer_lncat2s[emb_idx](infeat_pooled, time_feat)
+            # cat(ln(infeat_pooled), ln(time_emb), ln(static_emb_mean)) as the input features.
+            # infeat_time_semb: infeat + time_emb + static_emb_mean.
+            infeat_time_semb    = self.layer_lncat3s[emb_idx](infeat_pooled, time_feat, layer_static_emb_mean)
 
             # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
             # Consider the last dim. 
-            basis_dyn_coeffs = self.layer_maps[emb_idx](infeat_time).reshape(-1, self.K, self.r)
+            basis_dyn_coeffs = self.layer_maps[emb_idx](infeat_time_semb).reshape(-1, self.K, self.r)
             # bias: [1, K, 768]
             bias = self.bias[emb_idx].unsqueeze(0)
 
@@ -1077,6 +1088,16 @@ class EmbeddingManager(nn.Module):
         emb_idx = self.layer_idx2emb_idx[layer_idx]
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
+        layer_static_embs       = layer_attn_components[-1]
+        layer_attn_components   = layer_attn_components[:-1]
+        # layer_static_embs: [4, 77, 768]. 
+        # delta_loss_emb_mask: [4, 1, 77, 1] => [4, 77, 1].
+        emb_mask = self.delta_loss_emb_mask.squeeze(1)
+        # Teacher filtering for prompt distillation. 
+        # There are more static prompts more than ada prompts.
+        if layer_static_embs.shape[0] < emb_mask.shape[0]:
+            emb_mask = emb_mask[:layer_static_embs.shape[0]]
+        layer_static_emb_mean   = masked_mean(layer_static_embs, emb_mask, dim=1)
 
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
@@ -1110,7 +1131,7 @@ class EmbeddingManager(nn.Module):
             # static_subj_embs_dict[placeholder_string]: static_subj_embeddings, [16, K, 768].
             # If K > 1, only take the first embedding out of the K embeddings.
             # static_subj_layer_emb: [768].
-            static_subj_layer_emb = static_subj_embs_dict[placeholder_string][emb_idx, 0]
+            static_subj_layer_emb = static_subj_embs_dict[placeholder_string][emb_idx].mean(dim=0)
 
             # Generate the actual placeholder_embeddings on the fly.
             # placeholder_embeddings: [B, K, 768]. B: 2 or 4 (regularization batches).
@@ -1122,6 +1143,7 @@ class EmbeddingManager(nn.Module):
             # use_cached_bg. Otherwise, it's ignored.
             placeholder_embeddings, infeat_bg = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
+                                     layer_static_emb_mean, 
                                      static_subj_layer_emb,
                                      self.img_mask, ada_bp_to_unet, 
                                      self.cached_infeat_bg[layer_idx])

@@ -756,13 +756,13 @@ def normalize_dict_values(d):
     d = { k: v / value_sum for k, v in d.items() }
     return d
 
-def masked_mean(ts, mask):
+def masked_mean(ts, mask, dim=None):
     if mask is None:
         return ts.mean()
     if mask.sum() == 0:
         return 0
     
-    return (ts * mask).sum() / mask.sum()
+    return (ts * mask).sum(dim=dim) / mask.sum(dim=dim)
 
 # true_prob_range = (p_init, p_final). 
 # The prob of flipping true is gradually annealed from p_init to p_final.

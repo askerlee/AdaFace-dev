@@ -844,9 +844,16 @@ class UNetModel(nn.Module):
             layer_static_context = context[emb_idx]
             hijk_layer_indices = [7, 8, 12, 16, 17, 18]
 
+            if iter_type.startswith("mix_"):
+                layer_static_value_context, layer_static_key_context = \
+                            layer_static_context.chunk(2, dim=1)
+            else:
+                layer_static_value_context = layer_static_context
+
             if use_ada_context:
                 ada_embedder   = extra_info['ada_embedder']
                 ada_bp_to_unet = extra_info.get('ada_bp_to_unet', False)
+                layer_attn_components = layer_attn_components + (layer_static_value_context,)
                 # emb: time embedding. h: features from the previous layer.
                 # context_in: ['an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
                 #              'an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
