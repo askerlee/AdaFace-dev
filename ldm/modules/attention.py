@@ -201,13 +201,12 @@ class CrossAttention(nn.Module):
             subj_indices = None
 
         if type(context) == tuple:
-            context, hijk_context = context
-            k = self.to_k(hijk_context)
+            v_context, k_context  = context
         else:
-            hijk_context = None
-            k = self.to_k(context)
-            
-        v = self.to_v(context)
+            v_context = k_context = context
+
+        k = self.to_k(k_context)            
+        v = self.to_v(v_context)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
 

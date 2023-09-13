@@ -50,8 +50,9 @@ model:
       params:
         verbosity_interval: 0
         warm_up_steps: 500
-        # max_decay_steps = max_steps = 4000. The final LR is 0.2*base_lr.
-        max_decay_steps: 4000
+        # max_decay_steps = max_steps = 3500. The final LR is 0.2*base_lr.
+        # max_decay_steps and max_steps will be customized in main.py accordingly.
+        max_decay_steps: 3500
         lr_start: 0.01
         lr_max:   1.0
         lr_min:   0.25
@@ -144,13 +145,14 @@ lightning:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 8000     # 8000 > max_steps = 4000, effectively disabling image logger.
+        batch_frequency: 8000     # 8000 > max_steps = 3500, effectively disabling image logger.
         max_images: 8
         increase_log_steps: False
 
   trainer:
     benchmark: True
-    max_steps: 4000
+    # max_decay_steps and max_steps will be customized in main.py accordingly.
+    max_steps: 3500
     limit_val_batches: 0.0
     grad_clip: 1
     

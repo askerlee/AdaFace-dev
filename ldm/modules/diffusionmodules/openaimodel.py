@@ -897,10 +897,11 @@ class UNetModel(nn.Module):
                 layer_agg_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
 
                 if ((iter_type == 'mix_hijk' or iter_type == 'mix_recon') and layer_idx in hijk_layer_indices):
+                    layer_v_context   = layer_agg_context
                     # Replace layer_static_context with layer_static_key_context.
                     layer_key_context = layer_static_key_context * static_emb_weight + layer_ada_context * ada_emb_weight
                     # Pass both embeddings for hijacking the key of layer_agg_context by layer_key_context.
-                    layer_context = (layer_agg_context, layer_key_context)
+                    layer_context = (layer_v_context, layer_key_context)
                 else:
                     layer_context = layer_agg_context
                 # Otherwise, iter_type == 'mix_hijk' but layer_idx not in hijk_layer_indices.
