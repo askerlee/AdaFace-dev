@@ -1360,7 +1360,7 @@ class LatentDiffusion(DDPM):
         # Use >=, i.e., assign decay in all iterations after the first 100.
         # This is in case there are skips of iterations of global_step 
         # (shouldn't happen but just in case).
-        if self.global_step >= self.EMB_MAN_EMA_START_ITER:
+        if self.EMB_MAN_EMA_START_ITER > 0 and self.global_step >= self.EMB_MAN_EMA_START_ITER:
             # Change decay to a normal value (when global_step < EMB_MAN_EMA_START_ITER, 
             # decay = 0, i.e., completely update).
             # decay is initialized as a tensor scalar, so use copy_() to change its value.
@@ -1368,7 +1368,7 @@ class LatentDiffusion(DDPM):
 
         # When global_step < EMB_MAN_EMA_START_ITER,  decay = 0, i.e., completely update.
         # When global_step >= EMB_MAN_EMA_START_ITER, decay = 0.99, i.e., update slowly.
-        if self.global_step > 0:
+        if self.EMB_MAN_EMA_START_ITER > 0 and self.global_step > 0:
             self.embedding_manager_ema_updater(self.embedding_manager)
             self.embedding_manager_ema_updater.copy_to(self.embedding_manager_ema)
 
@@ -1540,15 +1540,18 @@ class LatentDiffusion(DDPM):
                             # Each is of a single instance. So only provides subj_indices_half_N 
                             # (multiple token indices of the same instance).
 
-                            # Use embedding_manager_ema to generate EMA embeddings. 
-                            # This is in effect only after the first EMB_MAN_EMA_START_ITER (500) iters, 
-                            # i.e., the embedding manager is not random. 
-                            # Before that, embedding_manager_ema has the same parameters as
-                            # embedding_manager, because decay = 0 in embedding_manager_ema_updater.
-                            subj_emb_ema = self.cond_stage_model.encode(subj_single_prompts + subj_comp_prompts, 
-                                                                        embedding_manager=self.embedding_manager_ema)
-                            subj_single_emb_ema, subj_comp_emb_ema = subj_emb_ema.chunk(2)
-
+                            if self.EMB_MAN_EMA_START_ITER > 0:
+                                # Use embedding_manager_ema to generate EMA embeddings. 
+                                # This is in effect only after the first EMB_MAN_EMA_START_ITER (500) iters, 
+                                # i.e., the embedding manager is not random. 
+                                # Before that, embedding_manager_ema has the same parameters as
+                                # embedding_manager, because decay = 0 in embedding_manager_ema_updater.
+                                subj_emb_ema = self.cond_stage_model.encode(subj_single_prompts + subj_comp_prompts, 
+                                                                            embedding_manager=self.embedding_manager_ema)
+                                subj_single_emb_ema, subj_comp_emb_ema = subj_emb_ema.chunk(2)
+                            else:
+                                subj_single_emb_ema, subj_comp_emb_ema = subj_single_emb, subj_comp_emb
+                                
                             # Only mix at subject embeddings.
                             mix_indices = subj_indices_half_N
                             emb_mixer = partial(mix_embeddings, 'add', mix_indices=mix_indices)
