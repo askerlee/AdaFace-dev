@@ -136,26 +136,22 @@ class AttentionalPooler(nn.Module):
         # All CrossAttention layers in UNet have 8 heads.
         self.n_heads = 8    
         self.layer_inner_dim = feat_dim
-        
-        if lora_dim > 0:
-            self.use_lora = True    # default
-            self.lora_attn_score_scale = lora_dim ** -0.5
-            self.lora_ln_q  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
-            self.lora_ln_k  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
-            if self.n_heads > 1:
-                self.lora_to_k  = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
-                self.lora_to_q  = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
-            else:
-                self.lora_to_k  = nn.Linear(self.layer_inner_dim, lora_dim, bias=False)
-                self.lora_to_q  = nn.Linear(self.layer_inner_dim, lora_dim, bias=False)
-        else:
-            self.use_lora = False
+        self.lora_attn_score_scale = lora_dim ** -0.5
 
-        self.ln_x = nn.LayerNorm(feat_dim,      elementwise_affine=True)
-        self.ln_k = nn.LayerNorm(feat_dim,      elementwise_affine=True)
-        self.ln_q = nn.LayerNorm(token_emb_dim, elementwise_affine=True)
-        self.ln_fg_out = nn.LayerNorm(feat_dim, elementwise_affine=True)
-        self.ln_bg_out = nn.LayerNorm(feat_dim, elementwise_affine=True)
+        self.lora_ln_fg_q  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
+        self.lora_ln_bg_q  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
+        self.lora_ln_k     = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
+
+        self.lora_to_k     = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
+        self.lora_to_fg_q  = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
+        self.lora_to_bg_q  = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
+
+        self.ln_x       = nn.LayerNorm(feat_dim,      elementwise_affine=True)
+        self.ln_k       = nn.LayerNorm(feat_dim,      elementwise_affine=True)
+        self.ln_fg_q    = nn.LayerNorm(token_emb_dim, elementwise_affine=True)
+        self.ln_bg_q    = nn.LayerNorm(token_emb_dim, elementwise_affine=True)
+        self.ln_fg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
+        self.ln_bg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
         self.layer_idx = layer_idx
 
@@ -169,10 +165,10 @@ class AttentionalPooler(nn.Module):
         self.v_pooler = MaskedAvgPool1d(dim=1, keepdim=True)
 
     # k: query in the UNet attention layer. Used as key here.
-    # token_q_emb: [768,] static subject embedding of this layer. Used as query here.
+    # fg_q_emb: [768,] static subject embedding of this layer. Used as query here.
     # Use UNet feature query as k, and subject token as q, to compute the attention, 
     # which aggregates the original UNet layer input features x.
-    def forward(self, layer_attn_components, token_q_emb, mask=None, bp_to_unet=False):
+    def forward(self, layer_attn_components, fg_q_emb, bg_q_emb=None, mask=None, bp_to_unet=False):
         layer_infeat, layer_inquery, layer_to_k, layer_infeat_size, \
             attn_score_scale = layer_attn_components['x'], layer_attn_components['q'], \
                                 layer_attn_components['to_k'], layer_attn_components['infeat_size'], \
@@ -196,61 +192,72 @@ class AttentionalPooler(nn.Module):
 
         x = layer_infeat_gs
         k = layer_inquery_gs
-        # Use to_k of the UNet attention layer as to_q here, 
-        # as the subject embedding is used as the key in UNet.
-        to_q = layer_to_k
-        token_q_emb = token_q_emb.unsqueeze(0)
-
-        # to_q is actually to_k in the UNet attention layer, 
-        # as the subject embedding is used as the key in UNet.
-        # After applying to_q on token_q_emb, q consists of 8 heads.
-        q = to_q(self.ln_q(token_q_emb))
-        # q: [1, 320] -> [N, 1, 320]
-        q = repeat(q, 'n d -> b n d', b=x.shape[0])
-
         # k: query from the UNet attention layer. Used as key here.
         # No need to go through to_k() here, as it's already the query from the UNet attention layer.
         k = self.ln_k(k)
         # v: simply normalized x (layer_infeat).
         v = self.ln_x(x)
 
-        # q: [B, 1, 320], k: [B, 4096, 320], v: [B, 4096, 320]. 
+        # Use to_k of the UNet attention layer as to_q here, 
+        # as the subject embedding is used as the key in UNet.
+        to_q = layer_to_k
+        # Simplify the flow by avoiding checking whether bg_q_emb is None later.
+
+        # fg_q_emb: [768] => [1, 768].
+        fg_q_emb = fg_q_emb.unsqueeze(0)
+
+        # to_q is actually to_k in the UNet attention layer, 
+        # as the subject embedding is used as the key in UNet.
+        # After applying to_q on fg_q_emb, fg_q consists of 8 heads.
+        # fg_q: [1, 768] -> [1, 320].
+        fg_q = to_q(self.ln_fg_q(fg_q_emb))
+        # fg_q: [1, 320] -> [N, 1, 320]
+        fg_q = repeat(fg_q, 'n d -> b n d', b=x.shape[0])
+
+        if bg_q_emb is None:
+            bg_q_emb_absent = True
+            # bg_q: [N, 1, 320]
+            bg_q = torch.zeros_like(fg_q)
+        else:
+            bg_q_emb_absent = False
+            # bg_q_emb: [N, 768] -> [N, 1, 768].
+            bg_q_emb = bg_q_emb.unsqueeze(1)
+            # bg_q: [N, 1, 768] -> [N, 1, 320].
+            bg_q = to_q(self.ln_bg_q(bg_q_emb))
+
+        # fg_q: [B, 1, 320], k: [B, 4096, 320], v: [B, 4096, 320]. 
         # The 320 dims of q,k consist of 8 heads, each head having 40 dims.
         #breakpoint()
 
-        if self.use_lora:
-            q_ln = self.lora_ln_q(q)
-            k_ln = self.lora_ln_k(k)
+        fg_q_ln = self.lora_ln_fg_q(fg_q)
+        bg_q_ln = self.lora_ln_bg_q(bg_q)
+        k_ln    = self.lora_ln_k(k)
 
-            if self.n_heads > 1:
-                # q: [B, 1, 320]    -> [B, 320, 1]
-                # k: [B, 4096, 320] -> [B, 320, 4096]
-                q_ln, k_ln = map(lambda t: t.permute(0, 2, 1), (q_ln, k_ln))
+        # q: [B, 1, 320]    -> [B, 320, 1]
+        # k: [B, 4096, 320] -> [B, 320, 4096]
+        fg_q_ln, bg_q_ln, k_ln = map(lambda t: t.permute(0, 2, 1), (fg_q_ln, bg_q_ln, k_ln))
 
-            # lora_q: [B, 320, 1] -> [B, 128, 1].
-            # NOTE: 320 and 128 are multi-head concatenated, 8*40 and 8*16.
-            lora_q = self.lora_to_q(q_ln)
-            # lora_k: [B, 320, 4096] -> [B, 128, 4096].
-            lora_k = self.lora_to_k(k_ln)
+        # lora_q: [B, 320, 1] -> [B, 128, 1].
+        # NOTE: 320 and 128 are multi-head concatenated, 8*40 and 8*16.
+        lora_fg_q = self.lora_to_fg_q(fg_q_ln)
+        lora_bg_q = self.lora_to_bg_q(bg_q_ln)
+        # lora_k: [B, 320, 4096] -> [B, 128, 4096].
+        lora_k = self.lora_to_k(k_ln)
 
-            if self.n_heads > 1:
-                # lora_q: [B, 128, 1]    -> [B, 1, 128]
-                # lora_k: [8, 128, 4096] -> [8, 4096, 128]
-                lora_q, lora_k = map(lambda t: t.permute(0, 2, 1), (lora_q, lora_k))
+        # lora_fg_q, lora_bg_q: [B, 128, 1]    -> [B, 1, 128]
+        # lora_k:               [8, 128, 4096] -> [8, 4096, 128]
+        lora_fg_q, lora_bg_q, lora_k = map(lambda t: t.permute(0, 2, 1), (lora_fg_q, lora_bg_q, lora_k))
+        # lora_q: [B, 2, 128].
+        lora_q = torch.cat([lora_fg_q, lora_bg_q], dim=1)
 
-            # Dot product of the last dim. lora_scores: [B, 1, 4096].
-            lora_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) * self.lora_attn_score_scale
-            sim_scores  = lora_scores
-
-        else:
-            # sim_scores: [8, 1, 256].
-            sim_scores = einsum('b i d, b j d -> b i j', q, k) * attn_score_scale
+        # Dot product of the last dim. sim_scores: [B, 2, 4096].
+        sim_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) * self.lora_attn_score_scale
 
         if mask is not None:
-            # mask: [2, 1, 64, 64] 
+            # mask: [B, 1, 64, 64] 
             mask = F.interpolate(mask, size=layer_infeat_size, mode='nearest')
             # N, 1, H, W -> N, 1, L=H*W
-            # => [2, 1, 4096]
+            # => [B, 1, 4096]
             mask = rearrange(mask, 'b ... -> b 1 (...)')
             # float_tensor.bool() converts 0.1/0.2... to True.
             mask = mask.bool()
@@ -260,20 +267,22 @@ class AttentionalPooler(nn.Module):
             # Prepare to be used by v_pooler.
             mask = mask.permute(0, 2, 1)
 
-        # attn: [B, 1, 4096]
+        # attn: [B, 2, 4096]
         attn = sim_scores.softmax(dim=-1)
+        attn_fg, attn_bg = attn.split(1, dim=1)
 
         # fg_out: [B, 1, 320]. 320: feature dimension. 
-        fg_out = einsum('b i j, b j d -> b i d', attn, v)
-        # v: [B, 4096, 320]. 
-        # The residual of the mean input features subtracted by fg_out.
-        if 'v_pooler' in self.__dict__:
+        fg_out = einsum('b i j, b j d -> b i d', attn_fg, v)
+        fg_out = self.ln_fg_out(fg_out)
+
+        if bg_q_emb_absent:
+            # v: [B, 4096, 320]. 
+            # Use the residual of the mean input features subtracted by fg_out as bg_out.
             bg_out = self.v_pooler(v, mask) - fg_out
         else:
-            # Compatible with older code
-            bg_out = v.mean(dim=1, keepdim=True) - fg_out
+            # bg_out: [B, 1, 320], similarly computed as fg_out.
+            bg_out = einsum('b i j, b j d -> b i d', attn_bg, v)
 
-        fg_out = self.ln_fg_out(fg_out)
         bg_out = self.ln_bg_out(bg_out)
         # out: [2, 1, 768], [2, 1, 768] => [2, 1, 1536] => [2, 1536].
         # out = torch.cat([fg_out, bg_out], dim=-1)
@@ -660,7 +669,8 @@ class AdaEmbedding(nn.Module):
             else:
                 # static_subj_layer_emb should be quite similar to the ada embedding at this layer.
                 # Use static_subj_layer_emb as the query to do the attention-based pooling.
-                infeat_pooled    = pooler(layer_attn_components, static_subj_layer_emb, img_mask, bp_to_unet)
+                infeat_pooled    = pooler(layer_attn_components, static_subj_layer_emb, layer_static_emb_mean,
+                                          img_mask, bp_to_unet)
                 if self.use_attn_pooler:
                     # infeat_fg, infeat_bg: [2, 320]
                     infeat_fg, infeat_bg = infeat_pooled
@@ -1529,7 +1539,8 @@ class EmbeddingManager(nn.Module):
                     if self.ada_use_attn_pooler:
                         for i, pooler in enumerate(embobj.poolers):
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_k.weight, loss_type=euc_loss_type)
-                            loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_q.weight, loss_type=euc_loss_type)
+                            loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_fg_q.weight, loss_type=euc_loss_type)
+                            loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_bg_q.weight, loss_type=euc_loss_type)
                             
                 if type(loss_bias) == int:
                     breakpoint()
