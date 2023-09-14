@@ -1522,20 +1522,20 @@ class LatentDiffusion(DDPM):
                             # Linearly decrease the scale of the class   embeddings from 0.5 to 0.1, 
                             # i.e., 
                             # Linearly increase the scale of the subject embeddings from 0.5 to 0.9.
-                            # subj_emb_scale = [1.0, 1.0, 1.0, 1.0, 0.3, 0.4, 0.5, 0.6, 
+                            # subj_emb_layerwise_scale = [1.0, 1.0, 1.0, 1.0, 0.3, 0.4, 0.5, 0.6, 
                             #                   0.7, 0.8, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0000]
-                            subj_emb_scale = torch.ones(N_LAYERS, device=subj_comp_emb.device) 
-                            subj_emb_scale[sync_layer_indices] = \
+                            subj_emb_layerwise_scale = torch.ones(N_LAYERS, device=subj_comp_emb.device) 
+                            subj_emb_layerwise_scale[sync_layer_indices] = \
                                 1 - torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
                                                  step=SCALE_STEP, device=subj_comp_emb.device)
                         else:
-                            # subj_emb_scale = 0.6.
-                            subj_emb_scale = 1 - (FIRST_LAYER_CLS_E_SCALE + FINAL_LAYER_CLS_E_SCALE) / 2
+                            # subj_emb_layerwise_scale = 0.6.
+                            subj_emb_layerwise_scale = 1 - (FIRST_LAYER_CLS_E_SCALE + FINAL_LAYER_CLS_E_SCALE) / 2
 
                         # Part of cls embedding is mixed into subject v embedding.
                         if FIRST_LAYER_CLS_E_SCALE < 1 or FINAL_LAYER_CLS_E_SCALE < 1:
                             # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
-                            # where they are subj_comp_emb * subj_emb_scale + cls_comp_emb * (1 - subj_emb_scale).
+                            # where they are subj_comp_emb * subj_emb_layerwise_scale + cls_comp_emb * (1 - subj_emb_layerwise_scale).
                             # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
                             # Each is of a single instance. So only provides subj_indices_half_N 
                             # (multiple token indices of the same instance).
@@ -1551,10 +1551,13 @@ class LatentDiffusion(DDPM):
 
                             # Only mix at subject embeddings.
                             mix_indices = subj_indices_half_N
-                            subj_comp_emb_v   = mix_embeddings('add', subj_comp_emb_ema,   cls_comp_emb,
-                                                                mix_indices, c1_subj_scale=subj_emb_scale)
-                            subj_single_emb_v = mix_embeddings('add', subj_single_emb_ema, cls_single_emb,
-                                                                mix_indices, c1_subj_scale=subj_emb_scale)
+                            emb_mixer = partial(mix_embeddings, 'add', mix_indices=mix_indices)
+                            subj_comp_emb_v   = emb_mixer(subj_comp_emb_ema,   cls_comp_emb,   c1_mix_scale=subj_emb_layerwise_scale)
+                            subj_single_emb_v = emb_mixer(subj_single_emb_ema, cls_single_emb, c1_mix_scale=subj_emb_layerwise_scale)
+                            # emb_mixer will be used later to mix ada embeddings in UNet.
+                            extra_info['emb_mixer']                 = emb_mixer
+                            extra_info['subj_emb_layerwise_scale']  = subj_emb_layerwise_scale
+
                         else:
                             subj_comp_emb_v   = subj_comp_emb
                             subj_single_emb_v = subj_single_emb
@@ -2944,6 +2947,7 @@ class LatentDiffusion(DDPM):
 
         subj_single_mask, subj_comp_mask, cls_single_mask, cls_comp_mask = \
                 delta_loss_emb_mask.chunk(4)
+        # subj_comp_mask == cls_comp_mask, subj_single_mask == cls_single_mask.
         # The tokens that only appear in comp prompts (the extra compositional part).
         subj_comp_emb_mask    = subj_comp_mask - subj_single_mask
         # subj_comp_emb_indices: ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 

@@ -214,11 +214,11 @@ def ortho_subtract(a, b):
     w_optimal = dot_a_b / dot_b_b
     return a - b * w_optimal.unsqueeze(-1)
 
-# c1, c2: [32, 77, 768].
+# c1, c2: [32, 77, 768]. mix_indices: 1D index tensor.
 # mix_scheme: 'add', 'concat', 'sdeltaconcat', 'adeltaconcat'.
 # The masked tokens will have the same embeddings after mixing.
-def mix_embeddings(mix_scheme, c1, c2, placeholder_indices_N=None, 
-                   c1_subj_scale=1., c2_mix_weight=None,
+def mix_embeddings(mix_scheme, c1, c2, mix_indices=None, 
+                   c1_mix_scale=1., c2_mix_weight=None,
                    use_ortho_subtract=True):
 
     assert c1 is not None
@@ -230,26 +230,28 @@ def mix_embeddings(mix_scheme, c1, c2, placeholder_indices_N=None,
         c2_mix_weight = 1.
         
     if mix_scheme == 'add':
-        if placeholder_indices_N is not None:
+        if mix_indices is not None:
             scale_mask = torch.ones_like(c1)
 
-            if type(c1_subj_scale) == torch.Tensor:
-                if len(c1_subj_scale) < len(scale_mask):
-                    assert len(scale_mask) % len(c1_subj_scale) == 0
-                    BS = len(scale_mask) // len(c1_subj_scale)
-                    # c1_subj_scale is a scalar, so expand it to the same shape as scale_mask.
-                    c1_subj_scale = c1_subj_scale.repeat(BS)
-                c1_subj_scale = c1_subj_scale.unsqueeze(-1).unsqueeze(-1)
+            if type(c1_mix_scale) == torch.Tensor:
+                # c1_mix_scale is only for one instance. Repeat it for all instances in the batch.
+                if len(c1_mix_scale) < len(scale_mask):
+                    assert len(scale_mask) % len(c1_mix_scale) == 0
+                    BS = len(scale_mask) // len(c1_mix_scale)
+                    c1_mix_scale = c1_mix_scale.repeat(BS)
+                # c1_mix_scale should be a 1D or 2D tensor. Extend it to 3D.
+                for _ in range(3 - c1_mix_scale.ndim):
+                    c1_mix_scale = c1_mix_scale.unsqueeze(-1)
 
-            scale_mask[:, placeholder_indices_N] = c1_subj_scale
+            scale_mask[:, mix_indices] = c1_mix_scale
             # 1 - scale_mask: almost 0 everywhere, except those corresponding to the placeholder tokens 
-            # being 1 - c1_subj_scale.
+            # being 1 - c1_mix_scale.
             # c1, c2: [16, 77, 768].
             # Each is of a single instance. So only provides subj_indices_N 
             # (multiple token indices of the same instance).
             c_mix = c1 * scale_mask + c2 * (1 - scale_mask)
         else:
-            c_mix = c1 * c1_subj_scale + c2 * (1 - c1_subj_scale)
+            c_mix = c1 * c1_mix_scale + c2 * (1 - c1_mix_scale)
 
     elif mix_scheme == 'concat':
         c_mix = torch.cat([ c1, c2 * c2_mix_weight ], dim=1)
@@ -258,19 +260,19 @@ def mix_embeddings(mix_scheme, c1, c2, placeholder_indices_N=None,
 
     # sdeltaconcat: subject-delta concat. Requires placeholder_indices.
     elif mix_scheme == 'sdeltaconcat':
-        assert placeholder_indices_N is not None
+        assert mix_indices is not None
         # delta_embedding is the difference between the subject embedding and the class embedding.
         if use_ortho_subtract:
             delta_embedding = ortho_subtract(c2, c1)
         else:
             delta_embedding = c2 - c1
             
-        delta_embedding = delta_embedding[:, placeholder_indices_N]
+        delta_embedding = delta_embedding[:, mix_indices]
         assert delta_embedding.shape[0] == c1.shape[0]
 
         c2_delta = c1.clone()
         # c2_mix_weight only boosts the delta embedding, and other tokens in c2 always have weight 1.
-        c2_delta[:, placeholder_indices_N] = delta_embedding
+        c2_delta[:, mix_indices] = delta_embedding
         c_mix = torch.cat([ c1, c2_delta * c2_mix_weight ], dim=1)
 
     # adeltaconcat: all-delta concat.

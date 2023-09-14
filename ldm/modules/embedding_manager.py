@@ -174,7 +174,9 @@ class AttentionalPooler(nn.Module):
     # which aggregates the original UNet layer input features x.
     def forward(self, layer_attn_components, token_q_emb, mask=None, bp_to_unet=False):
         layer_infeat, layer_inquery, layer_to_k, layer_infeat_size, \
-            attn_score_scale = layer_attn_components
+            attn_score_scale = layer_attn_components['x'], layer_attn_components['q'], \
+                                layer_attn_components['to_k'], layer_attn_components['infeat_size'], \
+                                layer_attn_components['scale']
 
         if bp_to_unet:
             if self.infeat_grad_scale < 1:
@@ -1090,11 +1092,13 @@ class EmbeddingManager(nn.Module):
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
         
-        layer_static_embs       = layer_attn_components[-1]
-        layer_attn_components   = layer_attn_components[:-1]
+        layer_static_embs       = layer_attn_components['static_embeddings']
         # layer_static_embs: [4, 77, 768]. 
         # delta_loss_emb_mask: [4, 1, 77, 1] => [4, 77, 1].
-        emb_mask = self.delta_loss_emb_mask.squeeze(1)
+        emb_mask = self.delta_loss_emb_mask.squeeze(1).clone()
+        # Mask out the foreground embeddings.
+        emb_mask[self.placeholder_indices_fg] = 0
+        
         if layer_static_embs.shape[0] < emb_mask.shape[0]:
             # Teacher filtering for prompt distillation. 
             # There are more static prompts more than ada prompts.

@@ -787,6 +787,8 @@ class UNetModel(nn.Module):
         crossattn_force_grad  = extra_info.get('crossattn_force_grad', False)  if extra_info is not None else False
         debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
+        emb_mixer             = extra_info.get('emb_mixer', None)              if extra_info is not None else None
+        subj_emb_layerwise_scale = extra_info.get('subj_emb_layerwise_scale', None)  if extra_info is not None else None
 
         ca_old_flags = self.set_cross_attn_flags({'use_conv_attn': use_conv_attn})
 
@@ -853,7 +855,7 @@ class UNetModel(nn.Module):
             if use_ada_context:
                 ada_embedder   = extra_info['ada_embedder']
                 ada_bp_to_unet = extra_info.get('ada_bp_to_unet', False)
-                layer_attn_components = layer_attn_components + (layer_static_value_context,)
+                layer_attn_components['static_embeddings'] = layer_static_value_context
                 # emb: time embedding. h: features from the previous layer.
                 # context_in: ['an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
                 #              'an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
@@ -895,6 +897,12 @@ class UNetModel(nn.Module):
                                                                            subj_indices_N)
                             mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
                                                                            bg_indices_N)
+                            if emb_mixer is not None:
+                                # Mix subj ada emb into mix ada emb, in the same way as to static embeddings.
+                                subj_emb_scale = subj_emb_layerwise_scale[[emb_idx]]
+                                mix_layer_ada_context = emb_mixer(subj_layer_ada_context, mix_layer_ada_context,
+                                                                  c1_mix_scale=subj_emb_scale)
+
                             layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
                         # otherwise, iter_type == 'mix_recon'. The two instances in the batch are 
                         # both subject single prompts. No need to patch_multi_embeddings().

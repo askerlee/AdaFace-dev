@@ -196,7 +196,9 @@ class CrossAttention(nn.Module):
             # Pass (x, ...) to context() to get the real context.
             # If uncond (null condition) is active, then returned subj_indices = None.
             # Don't do conv attn if uncond is active.
-            context, subj_indices = context((x, q, self.to_k, self.infeat_size, self.scale))
+            layer_attn_components = { 'x': x, 'q': q, 'to_k': self.to_k, 
+                                      'infeat_size': self.infeat_size, 'scale': self.scale }
+            context, subj_indices = context(layer_attn_components)
         else:
             subj_indices = None
 
