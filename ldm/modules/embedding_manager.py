@@ -78,13 +78,18 @@ class LNCat3(nn.Module):
         super().__init__()
         self.ln1 = nn.LayerNorm(chan1, elementwise_affine=True)
         self.ln2 = nn.LayerNorm(chan2, elementwise_affine=True)
-        self.ln3 = nn.LayerNorm(chan3, elementwise_affine=True)
+
+        if chan3 > 0:
+            self.ln3 = nn.LayerNorm(chan3, elementwise_affine=True)
+        else:
+            self.ln3 = None
+
         self.dim = dim
 
     def forward(self, x1, x2, x3):
         x1 = self.ln1(x1)
         x2 = self.ln2(x2)
-        if x3 is None:
+        if (x3 is None) or (self.ln3 is None):
             return torch.cat([x1, x2], dim=self.dim)
         
         x3 = self.ln3(x3)
@@ -471,6 +476,7 @@ class AdaEmbedding(nn.Module):
         assert num_layers == len(layer_idx2emb_idx), f"num_layers={num_layers} != len(layer_idx2emb_idx)={len(layer_idx2emb_idx)}"
         self.num_layers = num_layers
         self.out_emb_dim = out_emb_dim
+        self.in_static_emb_dim = 0 #out_emb_dim
         self.K = num_vectors_per_token
         self.fg_emb_count = fg_emb_count
         self.bg_emb_count = bg_emb_count
@@ -560,6 +566,7 @@ class AdaEmbedding(nn.Module):
         layer_maps = []
         layers_out_lns  = []
         # LNCat3s: multiple cat(LN(infeat), LN(time_emb), LN(static_emb)).
+        # If self.in_static_emb_dim == 0, then static_emb is not used as input to the Linear.
         layer_lncat3s = []
         self.TDs = []
 
@@ -573,9 +580,9 @@ class AdaEmbedding(nn.Module):
             # output dim: r * K, will be reshaped to [K, r].
             # This Linear outputs K sets of r-dim vectors, 
             # each set being the coefficients of the r basis vectors. 
-            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD + out_emb_dim, 
+            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD + self.in_static_emb_dim, 
                                          r * self.K, bias=True) )
-            layer_lncat3s.append(LNCat3(self.attn_infeat_dims[i] * H, TD, out_emb_dim))
+            layer_lncat3s.append(LNCat3(self.attn_infeat_dims[i] * H, TD, self.in_static_emb_dim))
             # A specific LayerNorm is applied on each of the K embeddings in each layer.
             layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
             layers_out_lns.append(layer_out_lns)
@@ -611,13 +618,13 @@ class AdaEmbedding(nn.Module):
         for layer_idx in layer_range:
             SINGLE_D = self.attn_infeat_dims[layer_idx]
             TD       = self.TDs[layer_idx]
-            assert self.layer_maps[layer_idx].in_features == SINGLE_D * 2 + TD + self.out_emb_dim
+            assert self.layer_maps[layer_idx].in_features == SINGLE_D * 2 + TD + self.in_static_emb_dim
             layer_map_weight = self.layer_maps[layer_idx].weight.data
             # The weight of Linear has shape [out_features, in_features]. 
             # Split the first dim, out_features => [K, r].
             layer_map_weight_embs = layer_map_weight.view(self.K, self.r, -1)
 
-            EXTRA = TD + self.out_emb_dim
+            EXTRA = TD + self.in_static_emb_dim
             # cand_fg_bg_masks is applied is on the input features.
             cand_fg_bg_masks = [ torch.cat([ torch.ones(SINGLE_D),  torch.zeros(SINGLE_D), torch.ones(EXTRA) ]),
                                  torch.cat([ torch.zeros(SINGLE_D), torch.ones(SINGLE_D),  torch.ones(EXTRA) ]),
@@ -708,8 +715,9 @@ class AdaEmbedding(nn.Module):
             else:
                 time_feat = time_emb[:, :TD]
 
-            # cat(ln(infeat_pooled), ln(time_emb), ln(static_emb_mean)) as the input features.
-            # infeat_time_semb: infeat + time_emb + static_emb_mean.
+            # infeat_time_semb: cat(ln(infeat_pooled), ln(time_emb), ln(static_emb_mean)) as the input features.
+            # If self.in_static_emb_dim == 0, then layer_static_emb_mean is ignored, i.e.,
+            # infeat_time_semb = cat(ln(infeat_pooled), ln(time_emb)).
             infeat_time_semb    = self.layer_lncat3s[emb_idx](infeat_pooled, time_feat, layer_static_emb_mean)
 
             # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
