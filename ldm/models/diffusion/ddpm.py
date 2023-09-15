@@ -2482,18 +2482,6 @@ class LatentDiffusion(DDPM):
             # The indices will be shifted along the batch dimension (size doubled) within calc_prompt_mix_loss()
             # to index all the 4 blocks.
 
-
-            # delta_loss_emb_mask: [4, 1, 77, 1] => [4, 77]
-            comp_extra_emb_mask = self.embedding_manager.delta_loss_emb_mask[:, 0, :, 0].clone()
-            # Mask out the foreground embeddings.
-            comp_extra_emb_mask[extra_info['subj_indices_2b']] = 0
-            # comp_extra_emb_mask: subj single, subj comp, cls single, cls comp extra emb mask.
-            # subj_comp_extra_emb_mask: [1, 77].
-            subj_comp_extra_emb_mask = comp_extra_emb_mask.chunk(4)[1]
-            # subj_comp_extra_emb_indices: ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 
-            #                               [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21])
-            subj_comp_extra_emb_indices = torch.where(subj_comp_extra_emb_mask > 0)
-
             loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_subj_attn_direct_distill, loss_feat_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
                                                           extra_info['subj_indices_2b'],
@@ -2501,6 +2489,17 @@ class LatentDiffusion(DDPM):
 
             loss_subj_comp_key_ortho = 0
             if self.subj_comp_key_ortho_loss_weight > 0:
+                # delta_loss_emb_mask: [4, 1, 77, 1] => [4, 77]
+                comp_extra_emb_mask = self.embedding_manager.delta_loss_emb_mask[:, 0, :, 0].clone()
+                # Mask out the foreground embeddings.
+                comp_extra_emb_mask[extra_info['subj_indices_2b']] = 0
+                # comp_extra_emb_mask: subj single, subj comp, cls single, cls comp extra emb mask.
+                # subj_comp_extra_emb_mask: [1, 77].
+                subj_comp_extra_emb_mask = comp_extra_emb_mask.chunk(4)[1]
+                # subj_comp_extra_emb_indices: ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 
+                #                               [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21])
+                subj_comp_extra_emb_indices = torch.where(subj_comp_extra_emb_mask > 0)
+
                 # It's easier to implement attention complementary loss in calc_subj_comp_ortho_loss(),
                 # instead of reusing calc_fg_bg_complementary_loss().
                 loss_subj_comp_key_ortho, loss_subj_comp_attn_comple = \
