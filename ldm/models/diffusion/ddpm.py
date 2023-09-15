@@ -2489,25 +2489,15 @@ class LatentDiffusion(DDPM):
 
             loss_subj_comp_key_ortho = 0
             if self.subj_comp_key_ortho_loss_weight > 0:
-                # delta_loss_emb_mask: [4, 1, 77, 1] => [4, 77]
-                comp_extra_emb_mask = self.embedding_manager.delta_loss_emb_mask[:, 0, :, 0].clone()
-                # Mask out the foreground embeddings.
-                comp_extra_emb_mask[extra_info['subj_indices_2b']] = 0
-                # comp_extra_emb_mask: subj single, subj comp, cls single, cls comp extra emb mask.
-                # subj_comp_extra_emb_mask: [1, 77].
-                subj_comp_extra_emb_mask = comp_extra_emb_mask.chunk(4)[1]
-                # subj_comp_extra_emb_indices: ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 
-                #                               [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21])
-                subj_comp_extra_emb_indices = torch.where(subj_comp_extra_emb_mask > 0)
 
                 # It's easier to implement attention complementary loss in calc_subj_comp_ortho_loss(),
                 # instead of reusing calc_fg_bg_complementary_loss().
                 loss_subj_comp_key_ortho, loss_subj_comp_attn_comple = \
                     self.calc_subj_comp_ortho_loss(cond[2]['unet_ks'], unet_attns,
                                                    extra_info['subj_indices_2b'],
-                                                   subj_comp_extra_emb_indices,
+                                                   self.embedding_manager.delta_loss_emb_mask,
                                                    BLOCK_SIZE, comps_are_dresses,
-                                                   fg_grad_scale=0.05)
+                                                   cls_grad_scale=0.05)
 
                 if loss_subj_comp_key_ortho != 0:
                     loss_dict.update({f'{prefix}/loss_subj_comp_key_ortho': loss_subj_comp_key_ortho.mean().detach()})
@@ -2953,9 +2943,9 @@ class LatentDiffusion(DDPM):
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast
     
     def calc_subj_comp_ortho_loss(self, unet_ks, unet_attns,
-                                  subj_indices, subj_comp_extra_emb_indices, 
+                                  subj_indices, delta_loss_emb_mask, 
                                   BS, comps_are_dresses,
-                                  fg_grad_scale=0.05):
+                                  cls_grad_scale=0.05):
 
         # Discard the first few bottom layers from the orthogonal loss.
         k_ortho_layer_weights = { #7:  1., 8: 1.,
@@ -2980,6 +2970,17 @@ class LatentDiffusion(DDPM):
         ind_subj_subj_B, ind_subj_subj_N = subj_indices[0][:BS*K_fg] + BS, subj_indices[1][:BS*K_fg]
         # Shift ind_subj_subj_B by 2 * BS, so that it points to cls comp embeddings.
         ind_cls_subj_B,  ind_cls_subj_N  = ind_subj_subj_B + 2 * BS, ind_subj_subj_N
+
+        # delta_loss_emb_mask: [4, 1, 77, 1] => [4, 77]
+        comp_extra_emb_mask = delta_loss_emb_mask[:, 0, :, 0].clone()
+        # Mask out the foreground embeddings.
+        comp_extra_emb_mask[subj_indices] = 0
+        # comp_extra_emb_mask: subj single, subj comp, cls single, cls comp extra emb mask.
+        # subj_comp_extra_emb_mask: [1, 77].
+        subj_comp_extra_emb_mask = comp_extra_emb_mask.chunk(4)[1]
+        # subj_comp_extra_emb_indices: ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 
+        #                               [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21])
+        subj_comp_extra_emb_indices = torch.where(subj_comp_extra_emb_mask > 0)
 
         # K_comp: 18.
         K_comp = len(subj_comp_extra_emb_indices[0]) // len(torch.unique(subj_comp_extra_emb_indices[0]))
@@ -3029,8 +3030,8 @@ class LatentDiffusion(DDPM):
             subj_comp_emb_diff = ortho_subtract(subj_subj_ks_mean, subj_comp_ks_mean)
             # The orthogonal projection of cls_subj_ks_mean against cls_comp_ks_mean.
             cls_comp_emb_diff  = ortho_subtract(cls_subj_ks_mean,  cls_comp_ks_mean)
-            # The two orthogonal projections should be aligned. That is, subj_subj_ks_mean is allowed to have
-            # flexibility only along the direction of the orthogonal projections of class embeddings.
+            # The two orthogonal projections should be aligned. That is, subj_subj_ks_mean is allowed to
+            # vary only along the direction of the orthogonal projections of class embeddings.
 
             # Don't compute the ortho loss on dress-type compositions, 
             # such as "z wearing a santa hat / z that is red", because the attended areas 
@@ -3038,11 +3039,10 @@ class LatentDiffusion(DDPM):
             # hurt their expression in the image (e.g., push the attributes to the background).
             batch_mask = ~comps_are_dresses if comps_are_dresses is not None else None
             # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
-            #subj_comp_ortho_loss += calc_delta_loss(static_subj_subj_emb, static_subj_comp_extra_emb, exponent=2,
             loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
                                                              batch_mask=batch_mask, exponent=2,
                                                              do_demean_first=True, first_n_dims_to_flatten=2,
-                                                             ref_grad_scale=0, aim_to_align=True)
+                                                             ref_grad_scale=cls_grad_scale)
             
             k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
             loss_subj_comp_key_ortho += loss_layer_subj_comp_key_ortho * k_ortho_layer_weight
@@ -3050,12 +3050,19 @@ class LatentDiffusion(DDPM):
             ###########   loss_subj_comp_attn_comple   ###########
             # attn_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
             attn_mat = unet_attn.permute(0, 3, 1, 2)
-            # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]   sum among K_fg embeddings -> [1, 8, 64]
+            # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]   sum among K_fg embeddings   -> [1, 8, 64]
             subj_subj_attn = attn_mat[ind_subj_subj_B, ind_subj_subj_N].reshape(BS, K_fg, *attn_mat.shape[2:]).sum(dim=1)
-
-            # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_bg embeddings -> [1, 8, 64]
+            # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
             subj_comp_attn = attn_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attn_mat.shape[2:]).sum(dim=1)
+            cls_subj_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS, K_fg, *attn_mat.shape[2:]).sum(dim=1)
+            cls_comp_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS, K_comp, *attn_mat.shape[2:]).sum(dim=1)
+            # The orthogonal projection of subj_subj_attn against subj_comp_attn.
+            subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn)
+            # The orthogonal projection of cls_subj_attn against cls_comp_attn.
+            cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn)
+            # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
+            # vary only along the direction of the orthogonal projections of class attention.
             
             # Align bg_attn with (1 - subj_attn), so that the two attention maps are complementary.
             # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
@@ -3063,12 +3070,11 @@ class LatentDiffusion(DDPM):
             # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
             # to make the two attention maps more complementary (expect the loss pushes the 
             # subject embedding to a more accurate point).
-            loss_layer_comp_attn_comple = calc_delta_loss(subj_comp_attn, -subj_subj_attn, 
+            loss_layer_comp_attn_comple = calc_delta_loss(subj_comp_attn_diff, cls_comp_attn_diff, 
                                                           exponent=2,    
                                                           do_demean_first=False,
                                                           first_n_dims_to_flatten=2, 
-                                                          ref_grad_scale=fg_grad_scale,
-                                                          debug=False)
+                                                          ref_grad_scale=cls_grad_scale)
             
             loss_subj_comp_attn_comple += loss_layer_comp_attn_comple * k_ortho_layer_weight   
 
