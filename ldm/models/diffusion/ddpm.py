@@ -103,8 +103,6 @@ class DDPM(pl.LightningModule):
                  use_conv_attn=False,
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
                  use_fp_trick=True,      
-                 emb_man_ema_start_iter=-1, 
-                 emb_man_ema_decay=0.995,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -136,11 +134,6 @@ class DDPM(pl.LightningModule):
         # If use_conv_attn, the subject is well expressed, and use_fp_trick is unnecessary 
         # (actually harmful).
         self.use_fp_trick = False if self.use_conv_attn else use_fp_trick
-        self.EMB_MAN_EMA_START_ITER          = emb_man_ema_start_iter
-        if emb_man_ema_start_iter == -1:
-            print(f"{self.__class__.__name__}: No EMA for embedding manager.")
-            
-        self.emb_man_ema_decay               = emb_man_ema_decay
         self.mask_avail_ratio = 0
 
         self.cached_inits_available          = False
@@ -675,14 +668,6 @@ class LatentDiffusion(DDPM):
         self.db_reg_weight  = 1.
         if not is_dreambooth:
             self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
-            # embedding_manager_ema: a shadow copy of embedding_manager. Used for distillation.
-            # No need to enable gradient for embedding_manager_ema, as it's used to generate subject embeddings
-            # to be mixed with class embeddings, which serve as a reference and 
-            # are not the major objective for update.
-            self.embedding_manager_ema          = copy.deepcopy(self.embedding_manager)
-            # decay = 0: each update will completely replace the previous value with the new value.
-            # will change to a normal decay value after warm-up iterations for embedding_manager.
-            self.embedding_manager_ema_updater  = LitEma(self.embedding_manager, decay=0)
             # embedding_manager.optimized_parameters(): string_to_param_dict, 
             # which maps custom tokens to embeddings
             for param in self.embedding_manager.optimized_parameters():
@@ -1365,17 +1350,6 @@ class LatentDiffusion(DDPM):
         # Use >=, i.e., assign decay in all iterations after the first 100.
         # This is in case there are skips of iterations of global_step 
         # (shouldn't happen but just in case).
-        if self.EMB_MAN_EMA_START_ITER > 0 and self.global_step >= self.EMB_MAN_EMA_START_ITER:
-            # Change decay to a normal value (when global_step < EMB_MAN_EMA_START_ITER, 
-            # decay = 0, i.e., completely update).
-            # decay is initialized as a tensor scalar, so use copy_() to change its value.
-            self.embedding_manager_ema_updater.decay.copy_(self.emb_man_ema_decay)
-
-        # When global_step < EMB_MAN_EMA_START_ITER,  decay = 0, i.e., completely update.
-        # When global_step >= EMB_MAN_EMA_START_ITER, decay = 0.99, i.e., update slowly.
-        if self.EMB_MAN_EMA_START_ITER > 0 and self.global_step > 0:
-            self.embedding_manager_ema_updater(self.embedding_manager)
-            self.embedding_manager_ema_updater.copy_to(self.embedding_manager_ema)
 
         if self.model.conditioning_key is not None:
             assert c is not None
@@ -1544,24 +1518,12 @@ class LatentDiffusion(DDPM):
                             # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
                             # Each is of a single instance. So only provides subj_indices_half_N 
                             # (multiple token indices of the same instance).
-
-                            if self.EMB_MAN_EMA_START_ITER > 0:
-                                # Use embedding_manager_ema to generate EMA embeddings. 
-                                # This is in effect only after the first EMB_MAN_EMA_START_ITER (500) iters, 
-                                # i.e., the embedding manager is not random. 
-                                # Before that, embedding_manager_ema has the same parameters as
-                                # embedding_manager, because decay = 0 in embedding_manager_ema_updater.
-                                subj_emb_ema = self.cond_stage_model.encode(subj_single_prompts + subj_comp_prompts, 
-                                                                            embedding_manager=self.embedding_manager_ema)
-                                subj_single_emb_ema, subj_comp_emb_ema = subj_emb_ema.chunk(2)
-                            else:
-                                subj_single_emb_ema, subj_comp_emb_ema = subj_single_emb, subj_comp_emb
                                 
                             # Only mix at subject embeddings.
                             mix_indices = subj_indices_half_N
                             emb_mixer = partial(mix_embeddings, 'add', mix_indices=mix_indices)
-                            subj_comp_emb_v   = emb_mixer(subj_comp_emb_ema,   cls_comp_emb,   c1_mix_scale=subj_emb_layerwise_scale)
-                            subj_single_emb_v = emb_mixer(subj_single_emb_ema, cls_single_emb, c1_mix_scale=subj_emb_layerwise_scale)
+                            subj_comp_emb_v   = emb_mixer(subj_comp_emb,   cls_comp_emb,   c1_mix_scale=subj_emb_layerwise_scale)
+                            subj_single_emb_v = emb_mixer(subj_single_emb, cls_single_emb, c1_mix_scale=subj_emb_layerwise_scale)
                             # emb_mixer will be used later to mix ada embeddings in UNet.
                             extra_info['emb_mixer']                 = emb_mixer
                             extra_info['subj_emb_layerwise_scale']  = subj_emb_layerwise_scale
@@ -2509,7 +2471,7 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/loss_subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
 
             subj_attn_delta_distill_loss_scale = 0.5
-            subj_attn_norm_distill_loss_scale = 5
+            subj_attn_norm_distill_loss_scale  = 5
             loss_mix_prompt_distill =  loss_subj_attn_delta_distill * subj_attn_delta_distill_loss_scale \
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                         + loss_feat_distill
@@ -2523,7 +2485,7 @@ class LatentDiffusion(DDPM):
             if loss_mix_prompt_distill > 0:
                 loss_dict.update({f'{prefix}/loss_mix_prompt_distill':       loss_mix_prompt_distill.mean().detach()})
 
-            # mix_prompt_distill_weight: 4e-4.
+            # mix_prompt_distill_weight: 2e-4.
             loss += loss_mix_prompt_distill       * self.mix_prompt_distill_weight \
                      + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
                      + loss_subj_comp_attn_comple * self.subj_comp_attn_complementary_loss_weight
