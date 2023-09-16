@@ -2513,10 +2513,14 @@ class LatentDiffusion(DDPM):
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                         + loss_feat_distill
 
-            loss_dict.update({f'{prefix}/loss_feat_distill':             loss_feat_distill.mean().detach()})
-            loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill':  loss_subj_attn_delta_distill.mean().detach()})
-            loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
-            loss_dict.update({f'{prefix}/loss_mix_prompt_distill':       loss_mix_prompt_distill.mean().detach()})
+            if loss_feat_distill > 0:
+                loss_dict.update({f'{prefix}/loss_feat_distill':             loss_feat_distill.mean().detach()})
+            if loss_subj_attn_delta_distill > 0:
+                loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill':  loss_subj_attn_delta_distill.mean().detach()})
+            if loss_subj_attn_norm_distill > 0:
+                loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
+            if loss_mix_prompt_distill > 0:
+                loss_dict.update({f'{prefix}/loss_mix_prompt_distill':       loss_mix_prompt_distill.mean().detach()})
 
             # mix_prompt_distill_weight: 4e-4.
             loss += loss_mix_prompt_distill       * self.mix_prompt_distill_weight \
