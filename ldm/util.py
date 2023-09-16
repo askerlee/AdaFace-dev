@@ -230,6 +230,14 @@ def mix_embeddings(mix_scheme, c1, c2, mix_indices=None,
         c2_mix_weight = 1.
         
     if mix_scheme == 'add':
+        # c1_mix_scale is an all-one tensor. No need to mix.
+        if type(c1_mix_scale) == torch.Tensor:
+            if (c1_mix_scale == 1).all():
+                return c1
+        # c1_mix_scale = 1. No need to mix.
+        elif c1_mix_scale == 1:
+            return c1
+
         if mix_indices is not None:
             scale_mask = torch.ones_like(c1)
 
@@ -251,6 +259,7 @@ def mix_embeddings(mix_scheme, c1, c2, mix_indices=None,
             # (multiple token indices of the same instance).
             c_mix = c1 * scale_mask + c2 * (1 - scale_mask)
         else:
+            # Mix the whole sequence.
             c_mix = c1 * c1_mix_scale + c2 * (1 - c1_mix_scale)
 
     elif mix_scheme == 'concat':

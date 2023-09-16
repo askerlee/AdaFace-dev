@@ -787,8 +787,8 @@ class UNetModel(nn.Module):
         crossattn_force_grad  = extra_info.get('crossattn_force_grad', False)  if extra_info is not None else False
         debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
-        emb_mixer             = extra_info.get('emb_mixer', None)              if extra_info is not None else None
-        subj_emb_layerwise_scale = extra_info.get('subj_emb_layerwise_scale', None)  if extra_info is not None else None
+        emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
+        subj_emb_v_layers_mix_scales = extra_info.get('subj_emb_v_layers_mix_scales', None)  if extra_info is not None else None
 
         ca_old_flags = self.set_cross_attn_flags({'use_conv_attn': use_conv_attn})
 
@@ -884,41 +884,43 @@ class UNetModel(nn.Module):
                         if iter_type == 'mix_hijk':
                             # The second half of a mix_hijk batch is always the mix instances,
                             # even for twin comp sets.                        
-                            subj_layer_ada_context, mix_layer_ada_context = layer_ada_context.chunk(2)
+                            subj_layer_ada_context, cls_layer_ada_context = layer_ada_context.chunk(2)
                             # In ddpm, patch_multi_embeddings() is applied on a text embedding whose 1st dim is the 16 layers.
-                            # Here, the 1st dim of mix_layer_ada_context is the batch.
+                            # Here, the 1st dim of cls_layer_ada_context is the batch.
                             # But we can still use patch_multi_embeddings() without specially processing, since patch_multi_embeddings
                             # in both cases, the 2nd dim is the token dim, so patch_multi_embeddings() works in both cases.
                             # subj_indices_N:      subject token indices within the subject single prompt (BS=1).
                             # len(subj_indices_N): embedding number of the subject token.
-                            # mix_layer_ada_context: [2, 77, 768]. subj_indices_N: [6, 7, 8, 9, 6, 7, 8, 9]. 
+                            # cls_layer_ada_context: [2, 77, 768]. subj_indices_N: [6, 7, 8, 9, 6, 7, 8, 9]. 
                             # Four embeddings (6,7,8,9) for each token.
-                            mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
+                            cls_layer_ada_context = patch_multi_embeddings(cls_layer_ada_context, 
                                                                            subj_indices_N)
-                            mix_layer_ada_context = patch_multi_embeddings(mix_layer_ada_context, 
+                            cls_layer_ada_context = patch_multi_embeddings(cls_layer_ada_context, 
                                                                            bg_indices_N)
-                            if emb_mixer is not None:
+                            if emb_v_mixer is not None:
                                 # Mix subj ada emb into mix ada emb, in the same way as to static embeddings.
-                                subj_emb_scale = subj_emb_layerwise_scale[[emb_idx]]
-                                mix_layer_ada_context = emb_mixer(subj_layer_ada_context, mix_layer_ada_context,
-                                                                  c1_mix_scale=subj_emb_scale)
-
+                                subj_emb_v_mix_scale  = subj_emb_v_layers_mix_scales[[emb_idx]]
+                                mix_layer_ada_context = emb_v_mixer(subj_layer_ada_context, cls_layer_ada_context,
+                                                                    c1_mix_scale=subj_emb_v_mix_scale)
+                            else:
+                                mix_layer_ada_context = cls_layer_ada_context
+                                
                             layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
                         # otherwise, iter_type == 'mix_recon'. The two instances in the batch are 
                         # both subject single prompts. No need to patch_multi_embeddings().
 
                 # layer_static_context, layer_ada_context: [2, 77, 768]
-                # layer_agg_context: aggregated (static and ada) layer context fed to the current UNet layer, [2, 77, 768]
-                layer_agg_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
+                # layer_agg_v_context: aggregated (static and ada) layer context fed to the current UNet layer, [2, 77, 768]
+                layer_agg_v_context = layer_static_context * static_emb_weight + layer_ada_context * ada_emb_weight
 
                 if ((iter_type == 'mix_hijk' or iter_type == 'mix_recon') and layer_idx in hijk_layer_indices):
-                    layer_v_context   = layer_agg_context
                     # Replace layer_static_context with layer_static_key_context.
                     layer_key_context = layer_static_key_context * static_emb_weight + layer_ada_context * ada_emb_weight
-                    # Pass both embeddings for hijacking the key of layer_agg_context by layer_key_context.
-                    layer_context = (layer_v_context, layer_key_context)
+                    # Pass both embeddings for hijacking the key of layer_agg_v_context by layer_key_context.
+                    layer_context = (layer_agg_v_context, layer_key_context)
                 else:
-                    layer_context = layer_agg_context
+                    # Both the key and the value are layer_agg_v_context.
+                    layer_context = layer_agg_v_context
                 # Otherwise, iter_type == 'mix_hijk' but layer_idx not in hijk_layer_indices.
                 # i.e., this layer is not mixed. In that case, 
                 # layer_key_context == layer_static_context, and we just discard layer_key_context.

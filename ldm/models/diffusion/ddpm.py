@@ -1461,36 +1461,17 @@ class LatentDiffusion(DDPM):
                     # may be True or False, depending whether mix reg is enabled.
                     if self.iter_flags['do_mix_prompt_distillation']:
                         # c_in2 is used to generate ada embeddings.
-                        # Arrange c_in2 in the same layout as the static embeddings.
-                        # The mix_single_prompts within c_in2 will only be used to generate ordinary 
-                        # prompt embeddings, i.e., 
-                        # it doesn't contain subject token, and no ada embedding will be injected.
-                        # despite the fact that subj_single_emb, cls_single_emb are mixed into 
-                        # the corresponding static embeddings.
-                        # Tried to use subj_single_prompts as mix_single_prompts, leading to worse performance.
-                        mix_single_prompts = cls_single_prompts
-                        # The last set corresponds the mixed embeddings of (subj_comp_prompts, cls_comp_prompts). 
-                        # Using subj_comp_prompts as mix_comp_prompts will enhance authenticity but hurt compositionality.
-                        # Using cls_comp_prompts  as mix_comp_prompts will enhance compositionality but hurt authenticity.
-                        #mix_comp_prompts = subj_comp_prompts
-                        mix_comp_prompts = cls_comp_prompts
-
-                        c_in2 = subj_single_prompts + subj_comp_prompts + mix_single_prompts + mix_comp_prompts
-
-                        # The static embeddings of subj_comp_prompts and cls_comp_prompts,
-                        # i.e., subj_comp_emb and cls_comp_emb will be mixed.
-                        # In subj_comp_emb_v_mix, subj_single_emb_v_mix, the K subject embeddings are scaled down by 0.5,
-                        # /* and added with 0.5 * class embeddings */, 
-                        # so that other components will express more during guidance. 
-                        # and the token number will be the double of subj_comp_emb.
-                        # The first half of the embeddings will be used as the q/v in cross attention layers.
-                        # The second half of the embeddings will be used as the k in cross attention layers.
-                        # This is only for static embeddings. The dynamically generated ada embeddings 
-                        # won't be mixed, but simply repeated.
+                        # c_in2: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
+                        # The cls_single_prompts/cls_comp_prompts within c_in2 will only be used to 
+                        # generate ordinary prompt embeddings, i.e., 
+                        # it doesn't contain subject token, and no ada embedding will be injected by embedding manager.
+                        # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
+                        # are manually mixed into their embeddings.
+                        c_in2 = delta_prompts
 
                         # If mask_avail_ratio = 1, then INIT_CLS_EMB_V_SCALE = 0, FINAL_CLS_EMB_V_SCALE = 0.
                         # i.e., no cls_single_emb / cls_comp_emb will be mixed into 
-                        # subj_single_emb / subj_comp_emb to form subj_single_emb_v / subj_comp_emb_v.
+                        # subj_single_emb / subj_comp_emb to form mix_single_emb_v / mix_comp_emb_v.
                         # If mask_avail_ratio = 0, then INIT_CLS_EMB_V_SCALE = 0.1, FINAL_CLS_EMB_V_SCALE = 0.2.
                         FIRST_LAYER_CLS_E_SCALE = 0.8
                         FINAL_LAYER_CLS_E_SCALE = 0.2
@@ -1501,53 +1482,42 @@ class LatentDiffusion(DDPM):
                             # Linearly decrease the scale of the class   embeddings from 0.5 to 0.1, 
                             # i.e., 
                             # Linearly increase the scale of the subject embeddings from 0.5 to 0.9.
-                            # subj_emb_layerwise_scale = [1.0, 1.0, 1.0, 1.0, 0.3, 0.4, 0.5, 0.6, 
-                            #                   0.7, 0.8, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0000]
-                            subj_emb_layerwise_scale = torch.ones(N_LAYERS, device=subj_comp_emb.device) 
-                            subj_emb_layerwise_scale[sync_layer_indices] = \
+                            # subj_emb_v_layers_mix_scales = [1.0, 1.0, 1.0, 1.0, 0.3, 0.4, 0.5, 0.6, 
+                            #                                 0.7, 0.8, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0000]
+                            subj_emb_v_layers_mix_scales = torch.ones(N_LAYERS, device=subj_comp_emb.device) 
+                            subj_emb_v_layers_mix_scales[sync_layer_indices] = \
                                 1 - torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
                                                  step=SCALE_STEP, device=subj_comp_emb.device)
                         else:
-                            # subj_emb_layerwise_scale = 0.6.
-                            subj_emb_layerwise_scale = 1 - (FIRST_LAYER_CLS_E_SCALE + FINAL_LAYER_CLS_E_SCALE) / 2
+                            # Same scale for all layers.
+                            # subj_emb_v_layers_mix_scales = [0.5, 0.5, ..., 0.5].
+                            subj_emb_v_layers_mix_scales = 1 - torch.ones(N_LAYERS, device=subj_comp_emb.device) \
+                                                           * (FIRST_LAYER_CLS_E_SCALE + FINAL_LAYER_CLS_E_SCALE) / 2
 
+                        # First mix the static embeddings.
+                        # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
+                        # where they are subj_comp_emb * subj_emb_v_layers_mix_scales + cls_comp_emb * (1 - subj_emb_v_layers_mix_scales).
+                        # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
+                        # Each is of a single instance. So only provides subj_indices_half_N 
+                        # (multiple token indices of the same instance).
+                        emb_v_mixer = partial(mix_embeddings, 'add', mix_indices=subj_indices_half_N)
+                        mix_single_emb_v = emb_v_mixer(subj_single_emb, cls_single_emb, c1_mix_scale=subj_emb_v_layers_mix_scales)
+                        mix_comp_emb_v   = emb_v_mixer(subj_comp_emb,   cls_comp_emb,   c1_mix_scale=subj_emb_v_layers_mix_scales)
                         # Part of cls embedding is mixed into subject v embedding.
-                        if FIRST_LAYER_CLS_E_SCALE < 1 or FINAL_LAYER_CLS_E_SCALE < 1:
-                            # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
-                            # where they are subj_comp_emb * subj_emb_layerwise_scale + cls_comp_emb * (1 - subj_emb_layerwise_scale).
-                            # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
-                            # Each is of a single instance. So only provides subj_indices_half_N 
-                            # (multiple token indices of the same instance).
-                                
-                            # Only mix at subject embeddings.
-                            mix_indices = subj_indices_half_N
-                            emb_mixer = partial(mix_embeddings, 'add', mix_indices=mix_indices)
-                            subj_comp_emb_v   = emb_mixer(subj_comp_emb,   cls_comp_emb,   c1_mix_scale=subj_emb_layerwise_scale)
-                            subj_single_emb_v = emb_mixer(subj_single_emb, cls_single_emb, c1_mix_scale=subj_emb_layerwise_scale)
-                            # emb_mixer will be used later to mix ada embeddings in UNet.
-                            extra_info['emb_mixer']                 = emb_mixer
-                            extra_info['subj_emb_layerwise_scale']  = subj_emb_layerwise_scale
+                        # emb_v_mixer will be used later to mix ada embeddings in UNet.
+                        extra_info['emb_v_mixer']                   = emb_v_mixer
+                        extra_info['subj_emb_v_layers_mix_scales']  = subj_emb_v_layers_mix_scales
 
-                        else:
-                            subj_comp_emb_v   = subj_comp_emb
-                            subj_single_emb_v = subj_single_emb
+                        # The first  half of the embeddings, mix_*_emb_v, will be used as V in cross attention layers.
+                        # The second half of the embeddings, cls_*_emb  , will be used as K in cross attention layers.
+                        mix_comp_emb_all_layers   = torch.cat([mix_comp_emb_v,   cls_comp_emb],   dim=1)
+                        mix_single_emb_all_layers = torch.cat([mix_single_emb_v, cls_single_emb], dim=1)
 
-                        if random.random() < 1: # < 0.8:
-                            mix_comp_emb_all_layers   = torch.cat([subj_comp_emb_v,   cls_comp_emb],   dim=1)
-                            mix_single_emb_all_layers = torch.cat([subj_single_emb_v, cls_single_emb], dim=1)
-                        else:
-                            # Swap embeddings that produce q and v.
-                            mix_comp_emb_all_layers   = torch.cat([cls_comp_emb,   subj_comp_emb_v],   dim=1)
-                            mix_single_emb_all_layers = torch.cat([cls_single_emb, subj_single_emb_v], dim=1)
-
-                        #mix_comp_emb_all_layers  = cls_comp_emb
-                        #mix_single_emb_all_layers = cls_single_emb
-                        # If PROMPT_MIX_GRAD_SCALE == 0, stop gradient on mix_comp_emb, 
-                        # since it serves as the reference.
-                        # If we don't stop gradient on mix_comp_emb, 
-                        # then chance is that mix_comp_emb might be dominated by subj_comp_emb2,
-                        # so that mix_comp_emb will produce images similar as subj_comp_emb2 does.
-                        # Stopping the gradient will improve compositionality but reduce face similarity.
+                        # mix_comp_emb receives smaller grad, since it only serves as the reference.
+                        # If we don't scale gradient on mix_comp_emb, chance is mix_comp_emb might be 
+                        # dominated by subj_comp_emb,
+                        # so that mix_comp_emb will produce images similar as subj_comp_emb does.
+                        # Scaling the gradient will improve compositionality but reduce face similarity.
                         PROMPT_MIX_GRAD_SCALE = 0.05
                         grad_scaler = gen_gradient_scaler(PROMPT_MIX_GRAD_SCALE)
                         mix_comp_emb_all_layers   = grad_scaler(mix_comp_emb_all_layers)
@@ -1614,22 +1584,21 @@ class LatentDiffusion(DDPM):
                         c_in2         = c_in
                         # c_in2 consists of four types of prompts: 
                         # subj_single, subj_comp, cls_single, cls_comp.
-                        extra_info['iter_type']      = 'do_ada_emb_delta_reg'
+                        extra_info['iter_type']     = 'do_ada_emb_delta_reg'
                         # The prompts are either (subj single, subj comp, cls single, cls comp) or
                         # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
                         # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
-                        extra_info['subj_indices'] = extra_info['subj_indices_2b']
-                        extra_info['bg_indices']   = extra_info['bg_indices_2b']    
+                        extra_info['subj_indices']  = extra_info['subj_indices_2b']
+                        extra_info['bg_indices']    = extra_info['bg_indices_2b']    
                                                 
                     else:
-                        # The original scheme. Use the original subj_single_prompts embeddings and prompts.
+                        # do_normal_recon. The original scheme. 
+                        extra_info['iter_type']      = 'normal_recon'
+                        # Use the original subj_single_prompts embeddings and prompts.
                         # When num_compositions_per_image > 1, subj_single_prompts contains repeated prompts,
                         # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
                         c_in2         = subj_single_prompts[:ORIG_BS]
                         c_static_emb2 = subj_single_emb[:N_EMBEDS]
-
-                        assert self.iter_flags['do_normal_recon']
-                        extra_info['iter_type']      = 'normal_recon'
 
                         # The prompts used to compute the static embeddings are 
                         # (subj single, subj comp, cls single, cls comp).
@@ -2043,9 +2012,9 @@ class LatentDiffusion(DDPM):
                     c_static_emb2 = torch.cat([ subj_comp_emb, subj_comp_emb, 
                                                 mix_comp_emb,  mix_comp_emb ], dim=0)
                     
-                    subj_single_prompts, subj_comp_prompts, mix_single_prompts, mix_comp_prompts = \
+                    subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                         chunk_list(c_in, 4)
-                    c_in2 = subj_comp_prompts + subj_comp_prompts + mix_comp_prompts + mix_comp_prompts
+                    c_in2 = subj_comp_prompts + subj_comp_prompts + cls_comp_prompts + cls_comp_prompts
                     cond_orig = cond
                     # Replace cond with the cond for twin comp sets.
                     cond = (c_static_emb2, c_in2, extra_info)
@@ -2184,7 +2153,7 @@ class LatentDiffusion(DDPM):
 
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
         if self.iter_flags['is_compos_iter'] and self.iter_flags['calc_clip_loss']:
-            # Images generated both under subj_comp_prompts and mix_comp_prompts 
+            # Images generated both under subj_comp_prompts and cls_comp_prompts 
             # are subject to the CLIP text-image matching evaluation.
             # If self.iter_flags['do_teacher_filter'] (implying do_mix_prompt_distillation), 
             # the batch is (subj_comp_emb, subj_comp_emb, mix_comp_emb,  mix_comp_emb).
