@@ -22,12 +22,12 @@ from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
-                       count_params, instantiate_from_config, mix_embeddings, \
+                       count_params, instantiate_from_config, \
                        ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, halve_token_indices, \
                        normalize_dict_values, masked_mean, anneal_t, flip_coin_annealed, \
-                       scale_mask_for_attn
+                       scale_mask_for_attn, mix_static_qv_embeddings
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -788,7 +788,6 @@ class LatentDiffusion(DDPM):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
                 # each prompt in c is encoded as [1, 77, 768].
                 # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
-                c_in = copy.copy(cond_in)
                 if randomize_clip_weights:
                     self.cond_stage_model.sample_last_layers_skip_weights()
 
@@ -829,7 +828,7 @@ class LatentDiffusion(DDPM):
                     self.embedding_manager.set_img_mask(img_mask)
                     extra_info['ada_embedder'] = ada_embedder
 
-                c = (c, c_in, extra_info)
+                c = (c, cond_in, extra_info)
             else:
                 c = self.cond_stage_model(cond_in)
         else:
@@ -1376,9 +1375,9 @@ class LatentDiffusion(DDPM):
                     #if self.iter_flags['use_background_token']:
                     #    print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
-                    N_LAYERS = 16 if self.use_layerwise_embedding else 1
+                    self.N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     ORIG_BS  = len(x)
-                    N_EMBEDS = ORIG_BS * N_LAYERS
+                    N_EMBEDS = ORIG_BS * self.N_LAYERS
                     
                     if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_emb_delta_reg']:
                         # In distillation iterations, the full batch size cannot fit in the RAM.
@@ -1408,10 +1407,10 @@ class LatentDiffusion(DDPM):
                     # c_static_emb: the static embeddings [4 * N_EMBEDS, 77, 768], 
                     # 4 * N_EMBEDS = 4 * ORIG_BS * N_LAYERS,
                     # whose layer dimension (N_LAYERS) is tucked into the batch dimension. 
-                    # c_in: a copy of delta_prompts, the concatenation of
+                    # delta_prompts: the concatenation of
                     # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
                     # extra_info: a dict that contains extra info.
-                    c_static_emb, c_in, extra_info = self.get_learned_conditioning(delta_prompts, img_mask=img_mask)
+                    c_static_emb, _, extra_info = self.get_learned_conditioning(delta_prompts, img_mask=img_mask)
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
 
@@ -1457,10 +1456,15 @@ class LatentDiffusion(DDPM):
                         extra_info['bg_indices_2b'] = None
                         extra_info['bg_indices_1b'] = None
 
+                    # These embeddings are patched. So combine them back into c_static_emb.
+                    c_static_emb = torch.cat([subj_single_emb, subj_comp_emb, 
+                                              cls_single_emb, cls_comp_emb], dim=0)
+                    extra_info['c_static_emb_4b'] = c_static_emb
+
                     # if do_ada_emb_delta_reg, then do_mix_prompt_distillation 
                     # may be True or False, depending whether mix reg is enabled.
                     if self.iter_flags['do_mix_prompt_distillation']:
-                        # c_in2 is used to generate ada embeddings.
+                        # c_in2 = delta_prompts is used to generate ada embeddings.
                         # c_in2: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
                         # The cls_single_prompts/cls_comp_prompts within c_in2 will only be used to 
                         # generate ordinary prompt embeddings, i.e., 
@@ -1468,99 +1472,6 @@ class LatentDiffusion(DDPM):
                         # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
                         # are manually mixed into their embeddings.
                         c_in2 = delta_prompts
-
-                        # If mask_avail_ratio = 1, then INIT_CLS_EMB_V_SCALE = 0, FINAL_CLS_EMB_V_SCALE = 0.
-                        # i.e., no cls_single_emb / cls_comp_emb will be mixed into 
-                        # subj_single_emb / subj_comp_emb to form mix_single_emb_v / mix_comp_emb_v.
-                        # If mask_avail_ratio = 0, then INIT_CLS_EMB_V_SCALE = 0.1, FINAL_CLS_EMB_V_SCALE = 0.2.
-                        FIRST_LAYER_CLS_E_SCALE = 0.8
-                        FINAL_LAYER_CLS_E_SCALE = 0.2
-                        sync_layer_indices = [4, 5, 6, 7, 8, 9, 10] #, 11, 12, 13]
-                        
-                        if self.use_layerwise_embedding:
-                            SCALE_STEP = (FINAL_LAYER_CLS_E_SCALE - FIRST_LAYER_CLS_E_SCALE) / (len(sync_layer_indices) - 1)
-                            # Linearly decrease the scale of the class   embeddings from 0.5 to 0.1, 
-                            # i.e., 
-                            # Linearly increase the scale of the subject embeddings from 0.5 to 0.9.
-                            # subj_emb_v_layers_mix_scales = [1.0, 1.0, 1.0, 1.0, 0.3, 0.4, 0.5, 0.6, 
-                            #                                 0.7, 0.8, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0000]
-                            subj_emb_v_layers_mix_scales = torch.ones(N_LAYERS, device=subj_comp_emb.device) 
-                            subj_emb_v_layers_mix_scales[sync_layer_indices] = \
-                                1 - torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
-                                                 step=SCALE_STEP, device=subj_comp_emb.device)
-                        else:
-                            # Same scale for all layers.
-                            # subj_emb_v_layers_mix_scales = [0.5, 0.5, ..., 0.5].
-                            subj_emb_v_layers_mix_scales = 1 - torch.ones(N_LAYERS, device=subj_comp_emb.device) \
-                                                           * (FIRST_LAYER_CLS_E_SCALE + FINAL_LAYER_CLS_E_SCALE) / 2
-
-                        # First mix the static embeddings.
-                        # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
-                        # where they are subj_comp_emb * subj_emb_v_layers_mix_scales + cls_comp_emb * (1 - subj_emb_v_layers_mix_scales).
-                        # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
-                        # Each is of a single instance. So only provides subj_indices_half_N 
-                        # (multiple token indices of the same instance).
-                        emb_v_mixer = partial(mix_embeddings, 'add', mix_indices=subj_indices_half_N)
-                        mix_single_emb_v = emb_v_mixer(subj_single_emb, cls_single_emb, c1_mix_scale=subj_emb_v_layers_mix_scales)
-                        mix_comp_emb_v   = emb_v_mixer(subj_comp_emb,   cls_comp_emb,   c1_mix_scale=subj_emb_v_layers_mix_scales)
-                        # Part of cls embedding is mixed into subject v embedding.
-                        # emb_v_mixer will be used later to mix ada embeddings in UNet.
-                        extra_info['emb_v_mixer']                   = emb_v_mixer
-                        extra_info['subj_emb_v_layers_mix_scales']  = subj_emb_v_layers_mix_scales
-
-                        # The first  half of the embeddings, mix_*_emb_v, will be used as V in cross attention layers.
-                        # The second half of the embeddings, cls_*_emb  , will be used as K in cross attention layers.
-                        mix_comp_emb_all_layers   = torch.cat([mix_comp_emb_v,   cls_comp_emb],   dim=1)
-                        mix_single_emb_all_layers = torch.cat([mix_single_emb_v, cls_single_emb], dim=1)
-
-                        # mix_comp_emb receives smaller grad, since it only serves as the reference.
-                        # If we don't scale gradient on mix_comp_emb, chance is mix_comp_emb might be 
-                        # dominated by subj_comp_emb,
-                        # so that mix_comp_emb will produce images similar as subj_comp_emb does.
-                        # Scaling the gradient will improve compositionality but reduce face similarity.
-                        PROMPT_MIX_GRAD_SCALE = 0.05
-                        grad_scaler = gen_gradient_scaler(PROMPT_MIX_GRAD_SCALE)
-                        mix_comp_emb_all_layers   = grad_scaler(mix_comp_emb_all_layers)
-                        mix_single_emb_all_layers = grad_scaler(mix_single_emb_all_layers)
-
-                        if self.use_layerwise_embedding:
-                            # sync_layer_indices = [4, 5, 6, 7, 8, 9, 10] #, 11, 12, 13]
-                            # 4, 5, 6, 7, 8, 9, 10 correspond to original layer indices 7, 8, 12, 16, 17, 18, 19.
-                            # (same as used in computing mixing loss)
-                            layer_mask = torch.zeros_like(mix_comp_emb_all_layers).reshape(-1, N_LAYERS, *mix_comp_emb_all_layers.shape[1:])
-                            layer_mask[:, sync_layer_indices] = 1
-                            layer_mask = layer_mask.reshape(-1, *mix_comp_emb_all_layers.shape[1:])
-
-                            # This copy of subj_single_emb, subj_comp_emb2 will be simply 
-                            # repeated at the token dimension to match the token number of the mixed (concatenated) 
-                            # mix_single_emb and mix_comp_emb embeddings.
-                            subj_comp_emb2   = subj_comp_emb.repeat(1, 2, 1)
-                            subj_single_emb2 = subj_single_emb.repeat(1, 2, 1)
-
-                            # Otherwise, the second halves of subj_comp_emb2/cls_comp_emb
-                            # are already key embeddings. No need to repeat.
-
-                            # Use most of the layers of embeddings in subj_comp_emb2, but 
-                            # replace sync_layer_indices layers with those from mix_comp_emb_all_layers.
-                            # Do not assign with sync_layers as indices, which destroys the computation graph.
-                            mix_comp_emb   = subj_comp_emb2 * (1 - layer_mask) \
-                                             + mix_comp_emb_all_layers * layer_mask
-
-                            mix_single_emb = subj_single_emb2 * (1 - layer_mask) \
-                                             + mix_single_emb_all_layers * layer_mask
-                            
-                        else:
-                            # There is only one layer of embeddings.
-                            mix_comp_emb   = mix_comp_emb_all_layers
-                            mix_single_emb = mix_single_emb_all_layers
-
-                        # c_static_emb2 will be added with the ada embeddings to form the 
-                        # conditioning embeddings in the U-Net.
-                        # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
-                        # image generation and computing compositional mix loss.
-                        c_static_emb2 = torch.cat([ subj_single_emb2, subj_comp_emb2, 
-                                                    mix_single_emb,   mix_comp_emb ], dim=0)
-                        
                         extra_info['iter_type']      = self.prompt_mix_scheme   # 'mix_hijk'
                         # Set ada_bp_to_unet to False will reduce performance.
                         extra_info['ada_bp_to_unet'] = True
@@ -1577,11 +1488,7 @@ class LatentDiffusion(DDPM):
                     # Kept for clarity. 
                     elif self.iter_flags['do_ada_emb_delta_reg'] and not self.iter_flags['do_mix_prompt_distillation']:
                         # Do ada prompt delta loss in this iteration. 
-                        # c_static_emb: static embeddings, [64, 77, 768]. 128 = 4 * 16. 
-                        # 4 is the total number of prompts in delta_prompts. 
-                        # Each prompt is converted to 16 embeddings.
-                        c_static_emb2 = c_static_emb
-                        c_in2         = c_in
+                        c_in2         = delta_prompts
                         # c_in2 consists of four types of prompts: 
                         # subj_single, subj_comp, cls_single, cls_comp.
                         extra_info['iter_type']     = 'do_ada_emb_delta_reg'
@@ -1597,8 +1504,9 @@ class LatentDiffusion(DDPM):
                         # Use the original subj_single_prompts embeddings and prompts.
                         # When num_compositions_per_image > 1, subj_single_prompts contains repeated prompts,
                         # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
-                        c_in2         = subj_single_prompts[:ORIG_BS]
-                        c_static_emb2 = subj_single_emb[:N_EMBEDS]
+                        c_in2         = subj_single_prompts
+                        # subj_single_emb has been patched above.
+                        c_static_emb  = subj_single_emb
 
                         # The prompts used to compute the static embeddings are 
                         # (subj single, subj comp, cls single, cls comp).
@@ -1611,34 +1519,22 @@ class LatentDiffusion(DDPM):
                     extra_info['cls_comp_prompts']   = cls_comp_prompts
                     extra_info['cls_single_prompts'] = cls_single_prompts
                     # 'delta_prompts' is only used in comp_prompt_mix_reg iters.
-                    extra_info['delta_prompts']      = c_in
+                    extra_info['delta_prompts']      = delta_prompts
 
-                    # c_static_emb2 is the static embeddings of the prompts used in losses other than 
-                    # the static delta loss, e.g., used to estimate the ada embeddings.
-                    # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
-                    # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
-                    # c_static_emb2: [64, 154, 768]
-                    c = (c_static_emb2, c_in2, extra_info)
                     # c_static_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
                     # cls_single_prompts, cls_comp_prompts. 
-                    # c_static_emb is backed up to be used to compute the static delta loss.
-                    # c_static_emb: [64, 77, 768]
-                    self.c_static_emb = c_static_emb
-
+                    # c_static_emb: [64, 77, 768]                    
+                    c = (c_static_emb, c_in2, extra_info)
                 else:
                     # Not (self.do_static_prompt_delta_reg or 'do_mix_prompt_distillation').
-                    # That is, no delta loss, compositional mix loss, or attention-weighted recon loss. 
-                    # It's an unweighted recon iter. 
+                    # That is, non-compositional iter, or recon iter without static delta loss. 
                     # Keep the tuple c unchanged. prompts: subject single.
                     c = self.get_learned_conditioning(c)
                     # c[2]: extra_info. Here is only reached when do_static_prompt_delta_reg = False.
-                    # Either prompt_emb_delta_reg_weight == 0 or it's called by self.validation_step().
+                    # Either prompt_emb_delta_reg_weight == 0 (ablation) or 
+                    # it's called by self.validation_step().
                     assert self.iter_flags['do_normal_recon']
                     c[2]['iter_type'] = 'normal_recon'
-                    # subj_indices and bg_indices have been set in get_learned_conditioning().
-                    # No need to set up subj_indices_2b or subj_indices_1b. 
-                    # We don't meddle with the whole batch of prompts, so just use all the computed indices.
-                    self.c_static_emb = None
 
                 # c[2]: extra_info. 
                 c[2]['use_background_token'] = self.iter_flags['use_background_token']
@@ -1966,11 +1862,8 @@ class LatentDiffusion(DDPM):
                 t_tail = torch.randint(int(self.num_timesteps * 0.85), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
                 t = t_tail
 
-            # Ignore img_mask.
-            # img_mask = None
-
-            # Only do ada delta loss. This usually won't happen unless mix_prompt_distill_weight = 0.
             if not self.iter_flags['do_mix_prompt_distillation']:
+                # Only do ada delta loss. This usually won't happen unless mix_prompt_distill_weight = 0.
                 # Generate a batch of 4 instances with the same initial x_start, noise and t.
                 # This doubles the batch size to 4, if bs=2.
                 x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
@@ -1989,8 +1882,8 @@ class LatentDiffusion(DDPM):
                 cfg_scales_for_clip_loss = torch.cat([cfg_scales_for_student, cfg_scales_for_teacher], dim=0)
 
                 # First iteration of a two-iteration do_mix_prompt_distillation.
-                # Generate a batch of 4 instances in *two* sets, each set with the *2* instances 
-                # of the same initial x_start, noise and t.
+                # Generate a batch of 4 instances in *two* sets, each set with the *2* instances. 
+                # Within each set, the same initial x_start, noise and t are used.
                 # Then filter, find the best teachable set (if any) and pass to the recursive iteration.
                 # If no teachable set is found, skip recursion and the prompt mix reg.
                 # Note x_start[0] = x_start[2] != x_start[1] = x_start[3].
@@ -1999,24 +1892,25 @@ class LatentDiffusion(DDPM):
                 # This doubles the batch size to 4, if bs=2.
                 if self.iter_flags['do_teacher_filter']:
                     x_start = x_start.repeat(2, 1, 1, 1)
-                    # noise is repeated in the same way as x_start.
+                    # noise and t are repeated in the same way as x_start for two sets. 
+                    # Set 1 is for two subj comp instances, set 2 is for two mix comp instances.
+                    # Noise and t are different between the two instances within one set.
                     noise   = noise.repeat(2, 1, 1, 1)
                     t       = t.repeat(2)
-
-                    # print(c_in)
 
                     # Make two identical sets of c_static_emb2 and c_in2.
                     subj_single_emb, subj_comp_emb, mix_single_emb, mix_comp_emb = \
                         c_static_emb.chunk(4)
-                    # Only keep *comp_emb, but repeat them to form twin comp sets.
+                    # Only keep *_comp_emb, but repeat them to form twin comp sets.
                     c_static_emb2 = torch.cat([ subj_comp_emb, subj_comp_emb, 
                                                 mix_comp_emb,  mix_comp_emb ], dim=0)
                     
                     subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                         chunk_list(c_in, 4)
+                    # Only keep *comp_prompts, but repeat them to form twin comp sets.
                     c_in2 = subj_comp_prompts + subj_comp_prompts + cls_comp_prompts + cls_comp_prompts
                     cond_orig = cond
-                    # Replace cond with the cond for twin comp sets.
+                    # Back up cond as cond_orig. Replace cond with the cond for twin comp sets.
                     cond = (c_static_emb2, c_in2, extra_info)
                 # Not self.iter_flags['do_teacher_filter']. This branch is do_mix_prompt_distillation.
                 # So it's either reuse_init_conds, or not do_clip_teacher_filtering (globally).
@@ -2037,7 +1931,25 @@ class LatentDiffusion(DDPM):
                     # No change to cond here.
                     # NOTE cond is mainly determined by the prompts c_in. Since c_in is inherited from
                     # the previous iteration, cond is also almost the same.
-
+            
+            # Use cond[1] instead of c_static_emb as input, since c_static_emb is changed in
+            # the 'do_teacher_filter' branch.
+            # Only need the subject indices, so extra_info['subj_indices_1b'] is enough.
+            # extra_info['subj_indices_2b'][1] just repeats extra_info['subj_indices_1b'][1] twice.
+            c_static_emb_qv, emb_v_mixer, emb_v_layers_subj_mix_scales = \
+                mix_static_qv_embeddings(cond[0], extra_info['subj_indices_1b'][1], 
+                                         t_frac = t.chunk(2)[0] / self.num_timesteps,
+                                         use_layerwise_embedding = self.use_layerwise_embedding,
+                                         N_LAYERS = self.N_LAYERS)
+          
+            # Update cond[0] to c_static_emb_qv.
+            # Use cond[1] instead of c_in as part of the tuple, since c_in is changed in the
+            # 'do_teacher_filter' branch.
+            cond = (c_static_emb_qv, cond[1], extra_info)
+            extra_info['emb_v_mixer']                   = emb_v_mixer
+            # emb_v_layers_subj_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
+            extra_info['emb_v_layers_subj_mix_scales']  = emb_v_layers_subj_mix_scales            
+            
         # Otherwise, it's a recon iter (attentional or unweighted).
         else:
             assert self.iter_flags['do_normal_recon']
@@ -2263,6 +2175,18 @@ class LatentDiffusion(DDPM):
                     t       = t[better_cand_idx].repeat(4)
                     # Use the original cond, which is organized as 
                     # (subj single, subj comp, mix single, mix comp).
+                    c_static_emb_qv_orig, emb_v_mixer, emb_v_layers_subj_mix_scales = \
+                        mix_static_qv_embeddings(cond_orig[0], extra_info['subj_indices_1b'][1], 
+                                                t_frac = t.chunk(2)[0] / self.num_timesteps,
+                                                use_layerwise_embedding = self.use_layerwise_embedding,
+                                                N_LAYERS = self.N_LAYERS)
+                    
+                    extra_info['emb_v_mixer']                   = emb_v_mixer
+                    # emb_v_layers_subj_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
+                    # Different from the emb_v_layers_subj_mix_scales above, which is for the twin comp instances.
+                    extra_info['emb_v_layers_subj_mix_scales']  = emb_v_layers_subj_mix_scales  
+                    # Mix embeddings to get c_static_emb_qv_orig for cond_orig.
+                    cond_orig2 = (c_static_emb_qv_orig, cond_orig[1], extra_info)
 
                     # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
                     # on mix reg and ada embeddings is generated for the delta loss. 
@@ -2275,7 +2199,7 @@ class LatentDiffusion(DDPM):
                     # to be used to initialize the next reuse_init comp iteration.
                     # student prompts are subject prompts.  
                     model_output, x_recon, ada_embeddings = \
-                        self.guided_denoise(x_start, noise, t, cond_orig, unet_has_grad=True, 
+                        self.guided_denoise(x_start, noise, t, cond_orig2, unet_has_grad=True, 
                                             crossattn_force_grad=False,
                                             do_recon=True, cfg_scales=cfg_scales_for_clip_loss)
 
@@ -2321,7 +2245,11 @@ class LatentDiffusion(DDPM):
                         # BS = 2. Corresponds to the twin comp instances (subj comp 1, subj comp 2).
                         c_static_emb3 = subj_single_emb.repeat(2, 1, 1, 1)
                         c_in3 = subj_single_prompts * 2
-                        cond_single = (c_static_emb3, c_in3, extra_info)
+                        extra_info3 = copy.copy(extra_info)
+                        # No mix_hijk, since c_static_emb3 (subj_single_emb) only contains one type of embeddings
+                        # (instead of K and V).
+                        extra_info3['iter_type'] = 'normal_recon'
+                        cond_single = (c_static_emb3, c_in3, extra_info3)
                         # Previously retured ada_embeddings from guided_denoise() is twin_comp_ada_embeddings. 
                         # twin_comp_ada_embeddings: [4, 16, 77, 768], 
                         # the two sets of ada embeddings with compositional prompts.
@@ -2384,12 +2312,15 @@ class LatentDiffusion(DDPM):
             # do_ada_emb_delta_reg controls whether to do ada comp delta reg here.
             # Use subj_indices_1b here, since this index is used to extract 
             # subject embeddings from each block, and compare two such blocks.
-            static_delta_loss, ada_delta_loss \
+            try:
+                static_delta_loss, ada_delta_loss \
                 = self.embedding_manager.calc_prompt_emb_delta_loss( 
-                                        self.c_static_emb, ada_embeddings,
+                                        extra_info['c_static_emb_4b'], ada_embeddings,
                                         self.iter_flags['do_ada_emb_delta_reg']
                                        )
-            
+            except:
+                breakpoint()
+
             loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
             if ada_delta_loss != 0:
                 loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})

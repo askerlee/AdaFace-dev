@@ -214,89 +214,6 @@ def ortho_subtract(a, b):
     w_optimal = dot_a_b / dot_b_b
     return a - b * w_optimal.unsqueeze(-1)
 
-# c1, c2: [32, 77, 768]. mix_indices: 1D index tensor.
-# mix_scheme: 'add', 'concat', 'sdeltaconcat', 'adeltaconcat'.
-# The masked tokens will have the same embeddings after mixing.
-def mix_embeddings(mix_scheme, c1, c2, mix_indices=None, 
-                   c1_mix_scale=1., c2_mix_weight=None,
-                   use_ortho_subtract=True):
-
-    assert c1 is not None
-    if c2 is None:
-        return c1
-    assert c1.shape == c2.shape
-
-    if c2_mix_weight is None:
-        c2_mix_weight = 1.
-        
-    if mix_scheme == 'add':
-        # c1_mix_scale is an all-one tensor. No need to mix.
-        if type(c1_mix_scale) == torch.Tensor:
-            if (c1_mix_scale == 1).all():
-                return c1
-        # c1_mix_scale = 1. No need to mix.
-        elif c1_mix_scale == 1:
-            return c1
-
-        if mix_indices is not None:
-            scale_mask = torch.ones_like(c1)
-
-            if type(c1_mix_scale) == torch.Tensor:
-                # c1_mix_scale is only for one instance. Repeat it for all instances in the batch.
-                if len(c1_mix_scale) < len(scale_mask):
-                    assert len(scale_mask) % len(c1_mix_scale) == 0
-                    BS = len(scale_mask) // len(c1_mix_scale)
-                    c1_mix_scale = c1_mix_scale.repeat(BS)
-                # c1_mix_scale should be a 1D or 2D tensor. Extend it to 3D.
-                for _ in range(3 - c1_mix_scale.ndim):
-                    c1_mix_scale = c1_mix_scale.unsqueeze(-1)
-
-            scale_mask[:, mix_indices] = c1_mix_scale
-            # 1 - scale_mask: almost 0 everywhere, except those corresponding to the placeholder tokens 
-            # being 1 - c1_mix_scale.
-            # c1, c2: [16, 77, 768].
-            # Each is of a single instance. So only provides subj_indices_N 
-            # (multiple token indices of the same instance).
-            c_mix = c1 * scale_mask + c2 * (1 - scale_mask)
-        else:
-            # Mix the whole sequence.
-            c_mix = c1 * c1_mix_scale + c2 * (1 - c1_mix_scale)
-
-    elif mix_scheme == 'concat':
-        c_mix = torch.cat([ c1, c2 * c2_mix_weight ], dim=1)
-    elif mix_scheme == 'addconcat':
-        c_mix = torch.cat([ c1, c1 * (1 - c2_mix_weight) + c2 * c2_mix_weight ], dim=1)
-
-    # sdeltaconcat: subject-delta concat. Requires placeholder_indices.
-    elif mix_scheme == 'sdeltaconcat':
-        assert mix_indices is not None
-        # delta_embedding is the difference between the subject embedding and the class embedding.
-        if use_ortho_subtract:
-            delta_embedding = ortho_subtract(c2, c1)
-        else:
-            delta_embedding = c2 - c1
-            
-        delta_embedding = delta_embedding[:, mix_indices]
-        assert delta_embedding.shape[0] == c1.shape[0]
-
-        c2_delta = c1.clone()
-        # c2_mix_weight only boosts the delta embedding, and other tokens in c2 always have weight 1.
-        c2_delta[:, mix_indices] = delta_embedding
-        c_mix = torch.cat([ c1, c2_delta * c2_mix_weight ], dim=1)
-
-    # adeltaconcat: all-delta concat.
-    elif mix_scheme == 'adeltaconcat':
-        # delta_embedding is the difference between all the subject tokens and the class tokens.
-        if use_ortho_subtract:
-            delta_embedding = ortho_subtract(c2, c1)
-        else:
-            delta_embedding = c2 - c1
-            
-        # c2_mix_weight scales all tokens in delta_embedding.
-        c_mix = torch.cat([ c1, delta_embedding * c2_mix_weight ], dim=1)
-
-    return c_mix
-
 def demean(x):
     return x - x.mean(dim=-1, keepdim=True)
 
@@ -835,3 +752,195 @@ def scale_mask_for_attn(flat_attn, mask, mask_name, mode="nearest|bilinear"):
         print(f"WARNING: {mask_name} has all-zero masks.")
     
     return mask2
+
+
+# c1, c2: [32, 77, 768]. mix_indices: 1D index tensor.
+# mix_scheme: 'add', 'concat', 'sdeltaconcat', 'adeltaconcat'.
+# The masked tokens will have the same embeddings after mixing.
+def mix_embeddings(mix_scheme, c1, c2, mix_indices=None, 
+                   c1_mix_scale=1., c2_mix_weight=None,
+                   use_ortho_subtract=True):
+
+    assert c1 is not None
+    if c2 is None:
+        return c1
+    assert c1.shape == c2.shape
+
+    if c2_mix_weight is None:
+        c2_mix_weight = 1.
+        
+    if mix_scheme == 'add':
+        # c1_mix_scale is an all-one tensor. No need to mix.
+        if isinstance(c1_mix_scale, torch.Tensor)       and (c1_mix_scale == 1).all():
+            return c1
+        # c1_mix_scale = 1. No need to mix.
+        elif not isinstance(c1_mix_scale, torch.Tensor) and c1_mix_scale == 1:
+            return c1
+
+        if mix_indices is not None:
+            scale_mask = torch.ones_like(c1)
+
+            if type(c1_mix_scale) == torch.Tensor:
+                # c1_mix_scale is only for one instance. Repeat it for all instances in the batch.
+                if len(c1_mix_scale) < len(scale_mask):
+                    assert len(scale_mask) % len(c1_mix_scale) == 0
+                    BS = len(scale_mask) // len(c1_mix_scale)
+                    c1_mix_scale = c1_mix_scale.repeat(BS)
+                # c1_mix_scale should be a 1D or 2D tensor. Extend it to 3D.
+                for _ in range(3 - c1_mix_scale.ndim):
+                    c1_mix_scale = c1_mix_scale.unsqueeze(-1)
+
+            scale_mask[:, mix_indices] = c1_mix_scale
+            # 1 - scale_mask: almost 0 everywhere, except those corresponding to the placeholder tokens 
+            # being 1 - c1_mix_scale.
+            # c1, c2: [16, 77, 768].
+            # Each is of a single instance. So only provides subj_indices_N 
+            # (multiple token indices of the same instance).
+            c_mix = c1 * scale_mask + c2 * (1 - scale_mask)
+        else:
+            # Mix the whole sequence.
+            c_mix = c1 * c1_mix_scale + c2 * (1 - c1_mix_scale)
+
+    elif mix_scheme == 'concat':
+        c_mix = torch.cat([ c1, c2 * c2_mix_weight ], dim=1)
+    elif mix_scheme == 'addconcat':
+        c_mix = torch.cat([ c1, c1 * (1 - c2_mix_weight) + c2 * c2_mix_weight ], dim=1)
+
+    # sdeltaconcat: subject-delta concat. Requires placeholder_indices.
+    elif mix_scheme == 'sdeltaconcat':
+        assert mix_indices is not None
+        # delta_embedding is the difference between the subject embedding and the class embedding.
+        if use_ortho_subtract:
+            delta_embedding = ortho_subtract(c2, c1)
+        else:
+            delta_embedding = c2 - c1
+            
+        delta_embedding = delta_embedding[:, mix_indices]
+        assert delta_embedding.shape[0] == c1.shape[0]
+
+        c2_delta = c1.clone()
+        # c2_mix_weight only boosts the delta embedding, and other tokens in c2 always have weight 1.
+        c2_delta[:, mix_indices] = delta_embedding
+        c_mix = torch.cat([ c1, c2_delta * c2_mix_weight ], dim=1)
+
+    # adeltaconcat: all-delta concat.
+    elif mix_scheme == 'adeltaconcat':
+        # delta_embedding is the difference between all the subject tokens and the class tokens.
+        if use_ortho_subtract:
+            delta_embedding = ortho_subtract(c2, c1)
+        else:
+            delta_embedding = c2 - c1
+            
+        # c2_mix_weight scales all tokens in delta_embedding.
+        c_mix = torch.cat([ c1, delta_embedding * c2_mix_weight ], dim=1)
+
+    return c_mix
+
+# t_frac is a float scalar. 
+def mix_static_qv_embeddings(c_static_emb, subj_indices_half_N, 
+                             t_frac=1.0,
+                             use_layerwise_embedding=True,
+                             N_LAYERS=16, 
+                             LAYERS_CLS_E_SCALE_RANGE=(0.8, 0.2),
+                             sync_layer_indices=[4, 5, 6, 7, 8, 9, 10]
+                             ):
+    
+    subj_emb, cls_emb = c_static_emb.chunk(2)
+    BS = subj_emb.shape[0] // N_LAYERS
+    if not isinstance(t_frac, torch.Tensor):
+        t_frac = torch.tensor(t_frac, dtype=c_static_emb.dtype, device=c_static_emb.device)
+    if len(t_frac) == 1:
+        t_frac = t_frac.repeat(BS)
+    t_frac = t_frac.unsqueeze(1)
+
+    if len(t_frac) != BS:
+        breakpoint()
+        
+    FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE = LAYERS_CLS_E_SCALE_RANGE
+
+    if use_layerwise_embedding:
+        SCALE_STEP = (FINAL_LAYER_CLS_E_SCALE - FIRST_LAYER_CLS_E_SCALE) / (len(sync_layer_indices) - 1)
+        # Linearly decrease the scale of the class   embeddings from 0.5 to 0.1, 
+        # i.e., 
+        # Linearly increase the scale of the subject embeddings from 0.5 to 0.9.
+        # emb_v_layers_subj_mix_scales = [1.0, 1.0, 1.0, 1.0, 0.3, 0.4, 0.5, 0.6, 
+        #                                 0.7, 0.8, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0000]
+        emb_v_layers_subj_mix_scales = torch.ones(BS, N_LAYERS, device=c_static_emb.device) 
+        # Scale the class embeddings mix scale by t_frac.
+        emb_v_layers_subj_mix_scales[:, sync_layer_indices] = \
+            1 - torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
+                             step=SCALE_STEP, device=c_static_emb.device).repeat(BS, 1) * t_frac
+    else:
+        # Same scale for all layers.
+        # emb_v_layers_subj_mix_scales = [0.5, 0.5, ..., 0.5].
+        AVG_SCALE = (FIRST_LAYER_CLS_E_SCALE + FINAL_LAYER_CLS_E_SCALE) / 2
+        emb_v_layers_subj_mix_scales = 1 - torch.ones(N_LAYERS, device=c_static_emb.device).repeat(BS, 1) \
+                                        * AVG_SCALE * t_frac
+
+    # First mix the static embeddings.
+    # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
+    # where they are subj_comp_emb * emb_v_layers_subj_mix_scales + cls_comp_emb * (1 - emb_v_layers_subj_mix_scales).
+    # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
+    # Each is of a single instance. So only provides subj_indices_half_N 
+    # (multiple token indices of the same instance).
+    emb_v_mixer = partial(mix_embeddings, 'add', mix_indices=subj_indices_half_N)
+
+    # Part of cls embedding is mixed into subject v embedding.
+    mix_emb_v = emb_v_mixer(subj_emb, cls_emb, c1_mix_scale=emb_v_layers_subj_mix_scales.view(-1))
+    # The first  half of mix_emb_all_layers will be used as V in cross attention layers.
+    # The second half of mix_emb_all_layers will be used as K in cross attention layers.
+    mix_emb_all_layers = torch.cat([mix_emb_v, cls_emb], dim=1)
+
+    PROMPT_MIX_GRAD_SCALE = 0.05
+    grad_scaler = gen_gradient_scaler(PROMPT_MIX_GRAD_SCALE)
+    # mix_comp_emb receives smaller grad, since it only serves as the reference.
+    # If we don't scale gradient on mix_comp_emb, chance is mix_comp_emb might be 
+    # dominated by subj_comp_emb,
+    # so that mix_comp_emb will produce images similar as subj_comp_emb does.
+    # Scaling the gradient will improve compositionality but reduce face similarity.
+    mix_emb_all_layers   = grad_scaler(mix_emb_all_layers)
+
+    if use_layerwise_embedding:
+        # sync_layer_indices = [4, 5, 6, 7, 8, 9, 10] #, 11, 12, 13]
+        # 4, 5, 6, 7, 8, 9, 10 correspond to original layer indices 7, 8, 12, 16, 17, 18, 19.
+        # (same as used in computing mixing loss)
+        # layer_mask: [2, 16, 154, 768]
+        layer_mask = torch.zeros_like(mix_emb_all_layers).reshape(-1, N_LAYERS, *mix_emb_all_layers.shape[1:])
+        # t_frac controls how much mix_emb_all_layers is mixed with subj_comp_emb2 into mix_comp_emb,
+        # and how much mix_single_emb_all_layers is mixed with subj_single_emb2 into mix_single_emb.
+
+        # layer_mask[:, sync_layer_indices]: [2, 7, 154, 768]
+        layer_mask[:, sync_layer_indices] = t_frac.view(-1, 1, 1, 1)
+        layer_mask = layer_mask.reshape(-1, *mix_emb_all_layers.shape[1:])
+
+        # This copy of subj_emb will be simply 
+        # repeated at the token dimension to match the token number of the mixed (concatenated) 
+        # mix_emb embeddings.
+        subj_emb2   = subj_emb.repeat(1, 2, 1)
+
+        # Use most of the layers of embeddings in subj_comp_emb2, but 
+        # replace sync_layer_indices layers with those from mix_emb_all_layers.
+        # Do not assign with sync_layers as indices, which destroys the computation graph.
+        mix_emb   = subj_emb2 * (1 - layer_mask) \
+                    + mix_emb_all_layers * layer_mask
+        
+    else:
+        # There is only one layer of embeddings.
+        mix_emb   = mix_emb_all_layers
+
+    # c_static_emb2 is the static embeddings of the prompts used in losses other than 
+    # the static delta loss, e.g., used to estimate the ada embeddings.
+    # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
+    # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
+    # c_static_emb2: [64, 154, 768]
+    # c_static_emb2 will be added with the ada embeddings to form the 
+    # conditioning embeddings in the U-Net.
+    # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
+    # image generation and computing compositional mix loss.
+    c_static_emb2 = torch.cat([ subj_emb2, mix_emb ], dim=0)
+
+    # emb_v_mixer will be used later to mix ada embeddings in UNet.
+    # extra_info['emb_v_mixer']                   = emb_v_mixer
+    # extra_info['emb_v_layers_subj_mix_scales']  = emb_v_layers_subj_mix_scales
+    
+    return c_static_emb2, emb_v_mixer, emb_v_layers_subj_mix_scales

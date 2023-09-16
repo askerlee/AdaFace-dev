@@ -788,7 +788,7 @@ class UNetModel(nn.Module):
         debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
-        subj_emb_v_layers_mix_scales = extra_info.get('subj_emb_v_layers_mix_scales', None)  if extra_info is not None else None
+        emb_v_layers_subj_mix_scales = extra_info.get('emb_v_layers_subj_mix_scales', None)  if extra_info is not None else None
 
         ca_old_flags = self.set_cross_attn_flags({'use_conv_attn': use_conv_attn})
 
@@ -849,6 +849,8 @@ class UNetModel(nn.Module):
             if iter_type.startswith("mix_"):
                 layer_static_value_context, layer_static_key_context = \
                             layer_static_context.chunk(2, dim=1)
+                if layer_static_value_context.shape[1] < 77:
+                    breakpoint()
             else:
                 layer_static_value_context = layer_static_context
 
@@ -899,9 +901,11 @@ class UNetModel(nn.Module):
                                                                            bg_indices_N)
                             if emb_v_mixer is not None:
                                 # Mix subj ada emb into mix ada emb, in the same way as to static embeddings.
-                                subj_emb_v_mix_scale  = subj_emb_v_layers_mix_scales[[emb_idx]]
+                                # emb_v_subj_mix_scale: [2, 1]
+                                emb_v_subj_mix_scale  = emb_v_layers_subj_mix_scales[:, [emb_idx]]
+                                # subj_layer_ada_context, cls_layer_ada_context: [2, 77, 768]
                                 mix_layer_ada_context = emb_v_mixer(subj_layer_ada_context, cls_layer_ada_context,
-                                                                    c1_mix_scale=subj_emb_v_mix_scale)
+                                                                    c1_mix_scale=emb_v_subj_mix_scale)
                             else:
                                 mix_layer_ada_context = cls_layer_ada_context
                                 
