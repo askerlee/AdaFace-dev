@@ -1617,7 +1617,6 @@ class LatentDiffusion(DDPM):
                             mix_single_emb = subj_single_emb2 * (1 - layer_mask) \
                                              + mix_single_emb_all_layers * layer_mask
                             
-                            breakpoint()
                         else:
                             # There is only one layer of embeddings.
                             mix_comp_emb   = mix_comp_emb_all_layers
