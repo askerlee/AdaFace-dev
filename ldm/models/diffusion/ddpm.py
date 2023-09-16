@@ -2508,8 +2508,9 @@ class LatentDiffusion(DDPM):
                 if loss_subj_comp_attn_comple != 0:
                     loss_dict.update({f'{prefix}/loss_subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
 
+            subj_attn_delta_distill_loss_scale = 0.5
             subj_attn_norm_distill_loss_scale = 5
-            loss_mix_prompt_distill =  loss_subj_attn_delta_distill \
+            loss_mix_prompt_distill =  loss_subj_attn_delta_distill * subj_attn_delta_distill_loss_scale \
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                         + loss_feat_distill
 
@@ -2572,7 +2573,7 @@ class LatentDiffusion(DDPM):
                                              21: 0., 22: 0., 23: 0., 24: 0.,                                       
                                             }
         # DISABLE attn delta loss.
-        attn_delta_distill_layer_weights = {}
+        # attn_delta_distill_layer_weights = {}
 
         # attn norm distillation is applied to almost all conditioning layers.
         attn_norm_distill_layer_weights = { # 7:  1., 8: 1.,
@@ -3034,7 +3035,9 @@ class LatentDiffusion(DDPM):
             # such as "z wearing a santa hat / z that is red", because the attended areas 
             # largely overlap with the subject, and making them orthogonal will 
             # hurt their expression in the image (e.g., push the attributes to the background).
-            batch_mask = ~comps_are_dresses if comps_are_dresses is not None else None
+            #batch_mask = ~comps_are_dresses if comps_are_dresses is not None else None
+            # DISABLE batch_mask.
+            batch_mask = None
             # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
             loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
                                                              batch_mask=batch_mask, exponent=2,
