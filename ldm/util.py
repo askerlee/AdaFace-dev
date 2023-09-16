@@ -755,8 +755,12 @@ def halve_token_indices(token_indices):
 
 def normalize_dict_values(d):
     value_sum = np.sum(list(d.values()))
-    d = { k: v / value_sum for k, v in d.items() }
-    return d
+    # If d is empty, do nothing.
+    if value_sum == 0:
+        return d
+    
+    d2 = { k: v / value_sum for k, v in d.items() }
+    return d2
 
 def masked_mean(ts, mask, dim=None):
     if mask is None:
