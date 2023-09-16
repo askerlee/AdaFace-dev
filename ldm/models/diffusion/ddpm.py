@@ -2636,7 +2636,7 @@ class LatentDiffusion(DDPM):
             # So here we only check attn_norm_distill_layer_weights.
             if unet_layer_idx in attn_norm_distill_layer_weights:
                 attn_norm_distill_layer_weight     = attn_norm_distill_layer_weights[unet_layer_idx]
-                attn_delta_distill_layer_weight    = attn_delta_distill_layer_weights[unet_layer_idx]
+                attn_delta_distill_layer_weight    = attn_delta_distill_layer_weights.get(unet_layer_idx, 0)
 
                 # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to subj_attn_mix_comp/subj_attn_mix_single. 
                 # Use this scaler to release the graph and avoid OOM.
