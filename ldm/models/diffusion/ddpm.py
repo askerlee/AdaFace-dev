@@ -96,7 +96,7 @@ class DDPM(pl.LightningModule):
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_attn_complementary_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
-                 comp_fg_area_preserve_loss_weight=0.,
+                 comp_fg_area_preserve_loss_weight_range=None,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_mask_align_loss_weight=0.,
                  do_clip_teacher_filtering=False,
@@ -125,7 +125,8 @@ class DDPM(pl.LightningModule):
         self.subj_comp_key_ortho_loss_weight = subj_comp_key_ortho_loss_weight
         self.subj_comp_attn_complementary_loss_weight = subj_comp_attn_complementary_loss_weight
         self.mix_prompt_distill_weight       = mix_prompt_distill_weight
-        self.comp_fg_area_preserve_loss_weight = comp_fg_area_preserve_loss_weight
+        self.comp_fg_area_preserve_loss_weight_range = comp_fg_area_preserve_loss_weight_range
+        self.comp_fg_area_preserve_loss_weight = 0.
         self.fg_bg_complementary_loss_weight = fg_bg_complementary_loss_weight
         self.fg_bg_mask_align_loss_weight    = fg_bg_mask_align_loss_weight
         self.do_clip_teacher_filtering       = do_clip_teacher_filtering
@@ -459,6 +460,14 @@ class DDPM(pl.LightningModule):
         self.init_iter_flags()
 
         self.training_percent = self.global_step / self.trainer.max_steps
+
+        if self.comp_fg_area_preserve_loss_weight_range is not None:
+            self.comp_fg_area_preserve_loss_weight = \
+                self.comp_fg_area_preserve_loss_weight_range[0] + self.training_percent \
+                                    * (self.comp_fg_area_preserve_loss_weight_range[1]  \
+                                    - self.comp_fg_area_preserve_loss_weight_range[0])
+        else:
+            self.comp_fg_area_preserve_loss_weight = 0.
 
         # How many regularizations are done intermittently during the training iterations?
         cand_reg_types = []
