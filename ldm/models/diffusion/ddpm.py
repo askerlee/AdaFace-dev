@@ -2366,8 +2366,6 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill':  loss_subj_attn_delta_distill.mean().detach()})
             if loss_subj_attn_norm_distill > 0:
                 loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
-            if loss_mix_prompt_distill > 0:
-                loss_dict.update({f'{prefix}/loss_mix_prompt_distill':       loss_mix_prompt_distill.mean().detach()})
 
             loss_subj_comp_key_ortho = 0
             if self.subj_comp_key_ortho_loss_weight > 0:
@@ -2381,15 +2379,15 @@ class LatentDiffusion(DDPM):
                                                    cls_grad_scale=0.05)
 
                 if loss_subj_comp_key_ortho != 0:
-                    loss_dict.update({f'{prefix}/loss_subj_comp_key_ortho': loss_subj_comp_key_ortho.mean().detach()})
+                    loss_dict.update({f'{prefix}/loss_subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
                 if loss_subj_comp_attn_comple != 0:
                     loss_dict.update({f'{prefix}/loss_subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
 
             if self.comp_fg_area_preserve_loss_weight > 0 and self.iter_flags['comp_init_with_fg_area']:
-                loss_comp_fg_area_preserve = self.calc_fg_area_preserve_loss(unet_feats, filtered_fg_mask)
-                loss_dict.update({f'{prefix}/loss_comp_fg_area_preserve': loss_comp_fg_area_preserve.mean().detach()})
+                loss_comp_fg_feat_preserve = self.calc_fg_feat_preserve_loss(unet_feats, filtered_fg_mask)
+                loss_dict.update({f'{prefix}/loss_comp_fg_feat_preserve': loss_comp_fg_feat_preserve.mean().detach()})
             else:
-                loss_comp_fg_area_preserve = 0
+                loss_comp_fg_feat_preserve = 0
 
             subj_attn_delta_distill_loss_scale = 0.5
             # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
@@ -2398,12 +2396,15 @@ class LatentDiffusion(DDPM):
             loss_mix_prompt_distill =  loss_subj_attn_delta_distill * subj_attn_delta_distill_loss_scale \
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                         + loss_feat_delta_distill 
+                                        
+            if loss_mix_prompt_distill > 0:
+                loss_dict.update({f'{prefix}/loss_mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
 
             # mix_prompt_distill_weight: 2e-4.
             loss += loss_mix_prompt_distill       * self.mix_prompt_distill_weight \
                      + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
                      + loss_subj_comp_attn_comple * self.subj_comp_attn_complementary_loss_weight \
-                     + loss_comp_fg_area_preserve * self.comp_fg_area_preserve_loss_weight
+                     + loss_comp_fg_feat_preserve * self.comp_fg_area_preserve_loss_weight
             
             self.release_plosses_intermediates(locals())
 
@@ -2953,7 +2954,7 @@ class LatentDiffusion(DDPM):
 
         return loss_subj_comp_key_ortho, loss_subj_comp_attn_comple
 
-    def calc_fg_area_preserve_loss(self, unet_feats, fg_mask):
+    def calc_fg_feat_preserve_loss(self, unet_feats, fg_mask):
         if fg_mask is None or fg_mask.sum() == 0:
             breakpoint()
 
@@ -2968,10 +2969,10 @@ class LatentDiffusion(DDPM):
 
         # Normalize the weights above so that each set sum to 1.
         feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
-        mix_feat_grad_scale = 0.1
-        mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
+        single_feat_grad_scale  = 0.1
+        single_feat_grad_scaler = gen_gradient_scaler(single_feat_grad_scale)
 
-        loss_fg_feat_distill = 0
+        loss_fg_feat_preserve = 0
 
         for unet_layer_idx, unet_feat in unet_feats.items():
             if unet_layer_idx not in feat_distill_layer_weights:
@@ -2988,12 +2989,15 @@ class LatentDiffusion(DDPM):
             # Use mix single/comp weights on both subject-only and mix features, 
             # to reduce misalignment and facilitate distillation.
             # The multiple heads are aggregated by mean(), since the weighted features don't have multiple heads.
+            feat_subj_single = feat_subj_single * fg_mask2
             feat_subj_comp   = feat_subj_comp   * fg_mask2
+            feat_mix_single  = feat_mix_single  * fg_mask2
             feat_mix_comp    = feat_mix_comp    * fg_mask2
 
-            # mix_feat_grad_scale = 0.1.
-            feat_mix_comp    = mix_feat_grad_scaler(feat_mix_comp)
-                
+            # single_feat_grad_scale = 0.1. 
+            # feat_*_single are used as references, so their gradients are reduced.
+            feat_subj_single_gs = single_feat_grad_scaler(feat_subj_single)
+            feat_mix_single_gs  = single_feat_grad_scaler(feat_mix_single)
             # feat_subj_delta, feat_mix_delta: [1, 1280], ...
             # Pool the spatial dimensions H, W to remove spatial information.
             # The gradient goes back to feat_subj_delta -> feat_subj_comp,
@@ -3004,12 +3008,18 @@ class LatentDiffusion(DDPM):
             # the single embeddings, as the former should be optimized to look good by itself,
             # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
             # and 2) the embeddings are amendable to composition.
-            loss_layer_fg_feat_distill = self.get_loss(feat_subj_comp, feat_mix_comp, mean=True)
-            
+            loss_layer_subj_fg_feat_preserve = self.get_loss(feat_subj_comp, feat_subj_single_gs, mean=True)
+            loss_layer_mix_fg_feat_preserve  = self.get_loss(feat_mix_comp,  feat_mix_single_gs,  mean=True)
+            # A small weight to the preservation loss on mix instances. 
+            # The requirement of preserving foreground features is not as strict as that of preserving
+            # subject features, as the former is only used to facilitate composition.
+            mix_fg_feat_preserve_loss_scale = 0.1
             # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
-            loss_fg_feat_distill += loss_layer_fg_feat_distill * feat_distill_layer_weight
+            loss_fg_feat_preserve += (loss_layer_subj_fg_feat_preserve 
+                                      + loss_layer_mix_fg_feat_preserve * mix_fg_feat_preserve_loss_scale) \
+                                     * feat_distill_layer_weight
 
-        return loss_fg_feat_distill
+        return loss_fg_feat_preserve
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):
