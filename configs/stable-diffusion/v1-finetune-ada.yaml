@@ -31,6 +31,8 @@ model:
     use_fp_trick:              True
     # typical loss_embedding_reg is ~0.02, * weight -> 1e-4.
     embedding_reg_weight:               5e-3
+    # Less regularizations on ada embedders, to allow it to adapt the input better.
+    static_vs_ada_emb_reg_weight_ratio: [2, 1]
     # composition_regs does composition_prompt_mix_reg, which always comes with prompt_delta_reg.
     composition_regs_iter_gap:          3
     # typical delta reg loss: 0.85, * weight -> 1.7e-4

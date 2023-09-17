@@ -77,7 +77,6 @@ class DDPM(pl.LightningModule):
                  cosine_s=8e-3,
                  given_betas=None,
                  original_elbo_weight=0.,
-                 embedding_reg_weight=0.,
                  unfreeze_model=False,
                  model_lr=0.,
                  v_posterior=0.,  # weight for choosing posterior variance as sigma = (1-v) * beta_tilde + v * beta
@@ -92,6 +91,8 @@ class DDPM(pl.LightningModule):
                  use_layerwise_embedding=False,
                  use_ada_embedding=False,
                  composition_regs_iter_gap=-1,
+                 embedding_reg_weight=0.,
+                 static_vs_ada_emb_reg_weight_ratio=None,
                  prompt_emb_delta_reg_weight=0.,
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_attn_complementary_loss_weight=0.,
@@ -119,6 +120,9 @@ class DDPM(pl.LightningModule):
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.use_ada_embedding = (use_layerwise_embedding and use_ada_embedding)
+
+        self.embedding_reg_weight = embedding_reg_weight
+        self.static_vs_ada_emb_reg_weight_ratio = static_vs_ada_emb_reg_weight_ratio
 
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight     = prompt_emb_delta_reg_weight
@@ -171,8 +175,6 @@ class DDPM(pl.LightningModule):
         self.v_posterior = v_posterior
         self.original_elbo_weight = original_elbo_weight
         self.l_simple_weight = l_simple_weight
-        self.embedding_reg_weight = embedding_reg_weight
-
         self.unfreeze_model = unfreeze_model
         self.model_lr = model_lr
 
@@ -2319,9 +2321,17 @@ class LatentDiffusion(DDPM):
             self.iter_flags['is_teachable'] = False
             
         if self.embedding_reg_weight > 0:
-            loss_embedding_reg = self.embedding_manager.embedding_to_loss().mean()
-            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg.mean().detach()})
-            loss += (self.embedding_reg_weight * loss_embedding_reg)
+            loss_emb_reg = self.embedding_manager.embedding_to_loss()
+            if self.use_layerwise_embedding:
+                loss_static_emb_reg, loss_ada_emb_reg = loss_emb_reg
+                loss_dict.update({f'{prefix}/loss_static_emb_reg': loss_static_emb_reg.mean().detach()})
+                loss_dict.update({f'{prefix}/loss_ada_emb_reg':    loss_ada_emb_reg.mean().detach()})
+                STATIC_EMB_W, ADA_EMB_W = self.static_vs_ada_emb_reg_weight_ratio
+                loss_emb_reg = (loss_static_emb_reg * STATIC_EMB_W + loss_ada_emb_reg * ADA_EMB_W) \
+                                / (STATIC_EMB_W + ADA_EMB_W)
+
+            loss_dict.update({f'{prefix}/loss_emb_reg': loss_emb_reg.mean().detach()})
+            loss += (self.embedding_reg_weight * loss_emb_reg)
 
         if self.do_static_prompt_delta_reg:
             # do_ada_emb_delta_reg controls whether to do ada comp delta reg here.

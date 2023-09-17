@@ -1470,7 +1470,8 @@ class EmbeddingManager(nn.Module):
         return loss / num_placeholders
 
     def layerwise_embedding_norm_loss(self):
-        loss = 0.
+        loss_static = 0.
+        loss_ada    = 0.
         euc_loss_type     = 'l2'       # l1, l2. l2 is recommended.
 
         # Update: revert the reduction of the reg weight of the global bias, although 
@@ -1587,18 +1588,22 @@ class EmbeddingManager(nn.Module):
                     # l1 loss is numerically much larger than l2 loss, 
                     # hence it has smaller weight than l2 loss.
                     loss_boost = 1.
-                loss = loss + curr_loss * loss_boost
 
-        return loss / num_out_embeddings
+                if isinstance(embobj, StaticLayerwiseEmbedding):
+                    loss_static = loss_static + curr_loss * static_l2_loss_boost
+                else:
+                    loss_ada = loss_ada + curr_loss * ada_l2_loss_boost
+
+        # num_out_embeddings counts both the embeddings of the static part and the dynamic part.
+        # It's the twice of the actual number of embeddings.
+        num_out_embeddings /= 2
+
+        return loss_static / num_out_embeddings, loss_ada / num_out_embeddings
 
     def embedding_to_loss(self):
         self.loss_call_count += 1
         if self.use_layerwise_embedding:
-            if self.layerwise_lora_rank_token_ratio > 0:
-                return self.layerwise_embedding_norm_loss()
-            else:
-            # Do not use. Performs poorly. 
-                return self.layerwise_embedding_attractor_loss()
+            return self.layerwise_embedding_norm_loss()
         else:
             return self.embedding_attractor_loss()
 
