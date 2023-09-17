@@ -2375,8 +2375,7 @@ class LatentDiffusion(DDPM):
                     self.calc_subj_comp_ortho_loss(cond[2]['unet_ks'], unet_attns,
                                                    extra_info['subj_indices_2b'],
                                                    self.embedding_manager.delta_loss_emb_mask,
-                                                   BLOCK_SIZE, comps_are_dresses,
-                                                   cls_grad_scale=0.05)
+                                                   BLOCK_SIZE, cls_grad_scale=0.05)
 
                 if loss_subj_comp_key_ortho != 0:
                     loss_dict.update({f'{prefix}/loss_subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
@@ -2816,17 +2815,16 @@ class LatentDiffusion(DDPM):
     
     def calc_subj_comp_ortho_loss(self, unet_ks, unet_attns,
                                   subj_indices, delta_loss_emb_mask, 
-                                  BS, comps_are_dresses,
-                                  cls_grad_scale=0.05):
+                                  BS, cls_grad_scale=0.05):
 
         # Discard the first few bottom layers from the orthogonal loss.
         k_ortho_layer_weights = { #7:  1., 8: 1.,
                                  12: 1.,
                                  16: 1., 17: 1., 
                                  18: 0.5,
-                                 19: 0.25, 20: 0.25, 
-                                 21: 0.12, 22: 0.12, 
-                                 23: 0.06, 24: 0.06,
+                                 19: 0.5,  20: 0.5, 
+                                 21: 0.25, 22: 0.25, 
+                                 23: 0.25, 24: 0.25,
                                 }
         
         # Normalize the weights above so that each set sum to 1.
