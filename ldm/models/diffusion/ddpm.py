@@ -27,7 +27,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, halve_token_indices, \
                        normalize_dict_values, masked_mean, anneal_t, flip_coin_annealed, \
-                       scale_mask_for_attn, mix_static_qv_embeddings
+                       scale_mask_for_feat_attn, mix_static_qv_embeddings
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -96,6 +96,7 @@ class DDPM(pl.LightningModule):
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_attn_complementary_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
+                 comp_fg_area_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_mask_align_loss_weight=0.,
                  do_clip_teacher_filtering=False,
@@ -124,6 +125,7 @@ class DDPM(pl.LightningModule):
         self.subj_comp_key_ortho_loss_weight = subj_comp_key_ortho_loss_weight
         self.subj_comp_attn_complementary_loss_weight = subj_comp_attn_complementary_loss_weight
         self.mix_prompt_distill_weight       = mix_prompt_distill_weight
+        self.comp_fg_area_preserve_loss_weight = comp_fg_area_preserve_loss_weight
         self.fg_bg_complementary_loss_weight = fg_bg_complementary_loss_weight
         self.fg_bg_mask_align_loss_weight    = fg_bg_mask_align_loss_weight
         self.do_clip_teacher_filtering       = do_clip_teacher_filtering
@@ -443,6 +445,7 @@ class DDPM(pl.LightningModule):
                             # 'is_teachable':             False,
                             'use_background_token':         False,
                             'reuse_init_conds':             False,
+                            'comp_init_with_fg_area':       False,
                           }
         
     # This shared_step() is overridden by LatentDiffusion::shared_step() and never called. 
@@ -1790,6 +1793,11 @@ class LatentDiffusion(DDPM):
         img_mask                = self.iter_flags['img_mask']
         fg_mask                 = self.iter_flags['fg_mask']
         batch_have_fg_mask      = self.iter_flags['batch_have_fg_mask']
+        # In fg_mask, if an instance has no mask, then its fg_mask is all 1.
+        # filtered_fg_mask: filter fg_mask, by only keeping fg_mask[i] if batch_have_fg_mask[i] == True. 
+        # Otherwise filtered_fg_mask[i] is all 0.
+        # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
+        filtered_fg_mask        = fg_mask * batch_have_fg_mask.view(-1, 1, 1, 1)
         comps_are_dresses       = self.iter_flags['comps_are_dresses']
 
         cfg_scales_for_clip_loss = None
@@ -1845,15 +1853,16 @@ class LatentDiffusion(DDPM):
                 # This may help the model ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
 
-                if flip_coin_annealed(self.training_percent, final_percent=0.5, true_prob_range=(0.6, 0.9)):
+                # The probability of this branch is annealed from 0.4 to 0.1.
+                if flip_coin_annealed(self.training_percent, final_percent=0.5, true_prob_range=(0.6, 0.8)):
                     x_start.normal_()
                 else:
-                    # The probability of this branch is annealed from 0.4 to 0.1.
-                    if fg_mask is not None:
+                    if self.mask_avail_ratio > 0:
                         # At foreground, keep 30% of the original x_start values and add 70% noise. 
                         # At background, fill with random values (100% noise).
-                        x_start = torch.where(fg_mask.bool(), x_start, torch.randn_like(x_start))
+                        x_start = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
                         x_start = torch.randn_like(x_start) * 0.7 + x_start * 0.3
+                        self.iter_flags['comp_init_with_fg_area'] = True
                     else:
                         # No fg_mask. Add 90% noise to x_start.
                         x_start = torch.randn_like(x_start) * 0.9 + x_start * 0.1
@@ -2085,9 +2094,6 @@ class LatentDiffusion(DDPM):
                     x_recon.chunk(4)
                 clip_images_code = torch.cat([x_recon_subj_comp, x_recon_mix_comp], dim=0)
                 clip_prompts_comp = cond[2]['cls_comp_prompts'] * 2
-
-            if len(clip_images_code) != len(clip_prompts_comp):
-                breakpoint()
 
             # Use CLIP loss as a metric to evaluate the compositionality of the generated images 
             # and do distillation selectively.
@@ -2348,14 +2354,23 @@ class LatentDiffusion(DDPM):
             # The indices will be shifted along the batch dimension (size doubled) within calc_prompt_mix_loss()
             # to index all the 4 blocks.
 
-            loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_distill = \
+            loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_delta_distill = \
                                 self.calc_prompt_mix_loss(unet_feats, unet_attns, 
                                                           extra_info['subj_indices_2b'],
                                                           BLOCK_SIZE)
 
+
+            if loss_feat_delta_distill > 0:
+                loss_dict.update({f'{prefix}/loss_feat_delta_distill':       loss_feat_delta_distill.mean().detach()})
+            if loss_subj_attn_delta_distill > 0:
+                loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill':  loss_subj_attn_delta_distill.mean().detach()})
+            if loss_subj_attn_norm_distill > 0:
+                loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
+            if loss_mix_prompt_distill > 0:
+                loss_dict.update({f'{prefix}/loss_mix_prompt_distill':       loss_mix_prompt_distill.mean().detach()})
+
             loss_subj_comp_key_ortho = 0
             if self.subj_comp_key_ortho_loss_weight > 0:
-
                 # It's easier to implement attention complementary loss in calc_subj_comp_ortho_loss(),
                 # instead of reusing calc_fg_bg_complementary_loss().
                 loss_subj_comp_key_ortho, loss_subj_comp_attn_comple = \
@@ -2370,25 +2385,25 @@ class LatentDiffusion(DDPM):
                 if loss_subj_comp_attn_comple != 0:
                     loss_dict.update({f'{prefix}/loss_subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
 
+            if self.comp_fg_area_preserve_loss_weight > 0 and self.iter_flags['comp_init_with_fg_area']:
+                loss_comp_fg_area_preserve = self.calc_fg_area_preserve_loss(unet_feats, filtered_fg_mask)
+                loss_dict.update({f'{prefix}/loss_comp_fg_area_preserve': loss_comp_fg_area_preserve.mean().detach()})
+            else:
+                loss_comp_fg_area_preserve = 0
+
             subj_attn_delta_distill_loss_scale = 0.5
-            subj_attn_norm_distill_loss_scale  = 5
+            # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
+            # smaller magnitudes than the delta loss. So we scale it up by 20x.
+            subj_attn_norm_distill_loss_scale  = 20
             loss_mix_prompt_distill =  loss_subj_attn_delta_distill * subj_attn_delta_distill_loss_scale \
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
-                                        + loss_feat_distill
-
-            if loss_feat_distill > 0:
-                loss_dict.update({f'{prefix}/loss_feat_distill':             loss_feat_distill.mean().detach()})
-            if loss_subj_attn_delta_distill > 0:
-                loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill':  loss_subj_attn_delta_distill.mean().detach()})
-            if loss_subj_attn_norm_distill > 0:
-                loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
-            if loss_mix_prompt_distill > 0:
-                loss_dict.update({f'{prefix}/loss_mix_prompt_distill':       loss_mix_prompt_distill.mean().detach()})
+                                        + loss_feat_delta_distill 
 
             # mix_prompt_distill_weight: 2e-4.
             loss += loss_mix_prompt_distill       * self.mix_prompt_distill_weight \
                      + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
-                     + loss_subj_comp_attn_comple * self.subj_comp_attn_complementary_loss_weight
+                     + loss_subj_comp_attn_comple * self.subj_comp_attn_complementary_loss_weight \
+                     + loss_comp_fg_area_preserve * self.comp_fg_area_preserve_loss_weight
             
             self.release_plosses_intermediates(locals())
 
@@ -2402,9 +2417,6 @@ class LatentDiffusion(DDPM):
         # under subj_comp_prompts should satisfy the delta loss constraint:
         # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
         # F(subj_single_prompts) - F(cls_single_prompts)
-
-        # The norm is actually the abs().mean(), so it has small magnitudes and should be scaled up.
-        attn_norm_loss_scale    = 6
 
         # Avoid doing distillation on top layers (too detailed) and 
         # the first few bottom layers (little difference).
@@ -2476,7 +2488,7 @@ class LatentDiffusion(DDPM):
 
         loss_subj_attn_delta_distill    = 0
         loss_subj_attn_norm_distill     = 0
-        loss_feat_distill = 0
+        loss_feat_delta_distill = 0
 
         for unet_layer_idx, unet_feat in unet_feats.items():
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_norm_distill_layer_weights):
@@ -2529,10 +2541,9 @@ class LatentDiffusion(DDPM):
                 # print(loss_layer_subj_comp_attn_norm, loss_layer_subj_single_attn_norm)
 
                 # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
-                # smaller magnitudes than the delta loss. 
-                # So we scale it up by attn_norm_loss_scale = 6.
+                # smaller magnitudes than the delta loss. So we scale it up later.
                 loss_subj_attn_norm_distill   += ( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \
-                                                 * attn_norm_loss_scale * attn_norm_distill_layer_weight
+                                                  * attn_norm_distill_layer_weight
 
             if unet_layer_idx not in feat_distill_layer_weights:
                 continue
@@ -2610,12 +2621,12 @@ class LatentDiffusion(DDPM):
             # the single embeddings, as the former should be optimized to look good by itself,
             # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
             # and 2) the embeddings are amendable to composition.
-            loss_layer_feat_distill = self.get_loss(feat_subj_delta, feat_mix_delta, mean=True)
+            loss_layer_feat_delta_distill = self.get_loss(feat_subj_delta, feat_mix_delta, mean=True)
             
             # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
-            loss_feat_distill += loss_layer_feat_distill * feat_distill_layer_weight
+            loss_feat_delta_distill += loss_layer_feat_delta_distill * feat_distill_layer_weight
 
-        return loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_distill
+        return loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_delta_distill
 
     def calc_fg_bg_complementary_loss(self, unet_attns, unet_attnscores,
                                       placeholder_indices_fg, 
@@ -2683,7 +2694,7 @@ class LatentDiffusion(DDPM):
             
             if img_mask is not None:
                 # img_mask: [2, 1, 64, 64] -> [2, 1, 8, 8]. subj_attn: [2, 8, 64]
-                img_mask2 = scale_mask_for_attn(subj_attn, img_mask, "img_mask", mode="nearest|bilinear")
+                img_mask2 = scale_mask_for_feat_attn(subj_attn, img_mask, "img_mask", mode="nearest|bilinear")
                 # img_mask2: [2, 1, 8, 8] -> [2, 1, 64] -> [2, 8, 64].
                 img_mask2 = img_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 bg_attn   = bg_attn   * img_mask2
@@ -2713,7 +2724,7 @@ class LatentDiffusion(DDPM):
                 # bg_score:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
                 bg_score   = score_mat[placeholder_indices_bg].reshape(BS, K_bg, *score_mat.shape[2:]).mean(dim=1)
 
-                fg_mask2 = scale_mask_for_attn(subj_attn, fg_mask, "fg_mask", mode="nearest|bilinear")
+                fg_mask2 = scale_mask_for_feat_attn(subj_attn, fg_mask, "fg_mask", mode="nearest|bilinear")
                 # Repeat 8 times to match the number of attention heads.
                 fg_mask2 = fg_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 fg_mask3 = torch.zeros_like(fg_mask2)
@@ -2941,6 +2952,64 @@ class LatentDiffusion(DDPM):
             loss_subj_comp_attn_comple += loss_layer_comp_attn_comple * k_ortho_layer_weight   
 
         return loss_subj_comp_key_ortho, loss_subj_comp_attn_comple
+
+    def calc_fg_area_preserve_loss(self, unet_feats, fg_mask):
+        if fg_mask is None or fg_mask.sum() == 0:
+            breakpoint()
+
+        feat_distill_layer_weights = { # 7:  1., 8: 1.,   
+                                       12: 1.,
+                                       16: 1., 17: 1.,
+                                       18: 0.5,
+                                       19: 0.25, 20: 0.25, 
+                                       21: 0.12, 22: 0.12, 
+                                       23: 0.06, 24: 0.06,
+                                     }
+
+        # Normalize the weights above so that each set sum to 1.
+        feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
+        mix_feat_grad_scale = 0.1
+        mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
+
+        loss_fg_feat_distill = 0
+
+        for unet_layer_idx, unet_feat in unet_feats.items():
+            if unet_layer_idx not in feat_distill_layer_weights:
+                continue
+            feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
+
+            # each is [1, 1280, 16, 16]
+            feat_subj_single, feat_subj_comp, feat_mix_single, feat_mix_comp \
+                = unet_feat.chunk(4)
+
+            fg_mask2 = scale_mask_for_feat_attn(unet_feat, fg_mask, "fg_mask", 
+                                                mode="nearest|bilinear", warn_on_all_zero=False)
+
+            # Use mix single/comp weights on both subject-only and mix features, 
+            # to reduce misalignment and facilitate distillation.
+            # The multiple heads are aggregated by mean(), since the weighted features don't have multiple heads.
+            feat_subj_comp   = feat_subj_comp   * fg_mask2
+            feat_mix_comp    = feat_mix_comp    * fg_mask2
+
+            # mix_feat_grad_scale = 0.1.
+            feat_mix_comp    = mix_feat_grad_scaler(feat_mix_comp)
+                
+            # feat_subj_delta, feat_mix_delta: [1, 1280], ...
+            # Pool the spatial dimensions H, W to remove spatial information.
+            # The gradient goes back to feat_subj_delta -> feat_subj_comp,
+            # as well as feat_mix_delta -> feat_mix_comp.
+            # If stop_single_grad, the gradients to feat_subj_single and feat_mix_single are stopped, 
+            # as these two images should look good by themselves (since they only contain the subject).
+            # Note the learning strategy to the single image features should be different from 
+            # the single embeddings, as the former should be optimized to look good by itself,
+            # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
+            # and 2) the embeddings are amendable to composition.
+            loss_layer_fg_feat_distill = self.get_loss(feat_subj_comp, feat_mix_comp, mean=True)
+            
+            # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
+            loss_fg_feat_distill += loss_layer_fg_feat_distill * feat_distill_layer_weight
+
+        return loss_fg_feat_distill
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):

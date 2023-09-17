@@ -726,11 +726,18 @@ def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0
         ti_upperbound = min(int(ti * ratio_ub) + 1, num_timesteps)
         t_anneal[i] = np.random.randint(ti_lowerbound, ti_upperbound)
 
-# flat_attn: geometrical dimensions (H, W) have been flatten to 1D (last dim).
-# mask:      still 4D.
+# feat_or_attn: 4D features or 3D attention. If it's attention, then
+# its geometrical dimensions (H, W) have been flatten to 1D (last dim).
+# mask:      always 4D.
 # mode: either "nearest" or "nearest|bilinear". Other modes will be ignored.
-def scale_mask_for_attn(flat_attn, mask, mask_name, mode="nearest|bilinear"):
-    spatial_scale = np.sqrt(flat_attn.shape[-1] / mask.shape[2:].numel())
+def scale_mask_for_feat_attn(feat_or_attn, mask, mask_name, mode="nearest|bilinear", warn_on_all_zero=True):
+    if feat_or_attn.ndim == 3:
+        spatial_scale = np.sqrt(feat_or_attn.shape[-1] / mask.shape[2:].numel())
+    elif feat_or_attn.ndim == 4:
+        spatial_scale = np.sqrt(feat_or_attn.shape[-2:].numel() / mask.shape[2:].numel())
+    else:
+        breakpoint()
+
     spatial_shape2 = (int(mask.shape[2] * spatial_scale), int(mask.shape[3] * spatial_scale))
 
     # NOTE: avoid "bilinear" mode. If the object is too small in the mask, 
@@ -747,7 +754,7 @@ def scale_mask_for_attn(flat_attn, mask, mask_name, mode="nearest|bilinear"):
     else:
         mask2 = mask2_nearest
 
-    if (mask2.sum(dim=(1,2,3)) == 0).any():
+    if warn_on_all_zero and (mask2.sum(dim=(1,2,3)) == 0).any():
         # Very rare cases. Safe to skip.
         print(f"WARNING: {mask_name} has all-zero masks.")
     
