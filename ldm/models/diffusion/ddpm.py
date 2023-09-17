@@ -2960,9 +2960,9 @@ class LatentDiffusion(DDPM):
                                        12: 1.,
                                        16: 1., 17: 1.,
                                        18: 0.5,
-                                       19: 0.25, 20: 0.25, 
-                                       21: 0.12, 22: 0.12, 
-                                       23: 0.06, 24: 0.06,
+                                       19: 0.5,  20: 0.5, 
+                                       21: 0.25, 22: 0.25, 
+                                       23: 0.25, 24: 0.25,
                                      }
 
         # Normalize the weights above so that each set sum to 1.
@@ -2988,6 +2988,20 @@ class LatentDiffusion(DDPM):
             feat_subj_comp   = feat_subj_comp   * fg_mask2
             feat_mix_single  = feat_mix_single  * fg_mask2
             feat_mix_comp    = feat_mix_comp    * fg_mask2
+
+            do_feat_pooling = True
+            feat_pool_kernel_size = 4
+            feat_pool_stride      = 2
+            # feature pooling: allow small perturbations of the locations of pixels.
+            if do_feat_pooling:
+                pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
+            else:
+                pooler = nn.Identity()
+
+            feat_subj_single = pooler(feat_subj_single)
+            feat_subj_comp   = pooler(feat_subj_comp)
+            feat_mix_single  = pooler(feat_mix_single)
+            feat_mix_comp    = pooler(feat_mix_comp)
 
             # single_feat_grad_scale = 0.1. 
             # feat_*_single are used as references, so their gradients are reduced.
