@@ -2986,9 +2986,6 @@ class LatentDiffusion(DDPM):
             fg_mask2 = scale_mask_for_feat_attn(unet_feat, fg_mask, "fg_mask", 
                                                 mode="nearest|bilinear", warn_on_all_zero=False)
 
-            # Use mix single/comp weights on both subject-only and mix features, 
-            # to reduce misalignment and facilitate distillation.
-            # The multiple heads are aggregated by mean(), since the weighted features don't have multiple heads.
             feat_subj_single = feat_subj_single * fg_mask2
             feat_subj_comp   = feat_subj_comp   * fg_mask2
             feat_mix_single  = feat_mix_single  * fg_mask2
@@ -2998,23 +2995,12 @@ class LatentDiffusion(DDPM):
             # feat_*_single are used as references, so their gradients are reduced.
             feat_subj_single_gs = single_feat_grad_scaler(feat_subj_single)
             feat_mix_single_gs  = single_feat_grad_scaler(feat_mix_single)
-            # feat_subj_delta, feat_mix_delta: [1, 1280], ...
-            # Pool the spatial dimensions H, W to remove spatial information.
-            # The gradient goes back to feat_subj_delta -> feat_subj_comp,
-            # as well as feat_mix_delta -> feat_mix_comp.
-            # If stop_single_grad, the gradients to feat_subj_single and feat_mix_single are stopped, 
-            # as these two images should look good by themselves (since they only contain the subject).
-            # Note the learning strategy to the single image features should be different from 
-            # the single embeddings, as the former should be optimized to look good by itself,
-            # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
-            # and 2) the embeddings are amendable to composition.
             loss_layer_subj_fg_feat_preserve = self.get_loss(feat_subj_comp, feat_subj_single_gs, mean=True)
             loss_layer_mix_fg_feat_preserve  = self.get_loss(feat_mix_comp,  feat_mix_single_gs,  mean=True)
             # A small weight to the preservation loss on mix instances. 
             # The requirement of preserving foreground features is not as strict as that of preserving
             # subject features, as the former is only used to facilitate composition.
             mix_fg_feat_preserve_loss_scale = 0.1
-            # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
             loss_fg_feat_preserve += (loss_layer_subj_fg_feat_preserve 
                                       + loss_layer_mix_fg_feat_preserve * mix_fg_feat_preserve_loss_scale) \
                                      * feat_distill_layer_weight
