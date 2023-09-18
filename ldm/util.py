@@ -951,3 +951,14 @@ def mix_static_qv_embeddings(c_static_emb, subj_indices_half_N,
     # extra_info['emb_v_layers_subj_mix_scales']  = emb_v_layers_subj_mix_scales
     
     return c_static_emb2, emb_v_mixer, emb_v_layers_subj_mix_scales
+
+def repeat_part_of_masks(img_mask, fg_mask, batch_have_fg_mask, sel_indices, REPEAT):
+    # img_mask should always be available.
+    # fg_mask could be None when masks are not available.    
+    img_mask, fg_mask = \
+        [ m[sel_indices].repeat(REPEAT, 1, 1, 1) if m is not None else None for m in (img_mask, fg_mask) ]
+    # batch_have_fg_mask is never None. 
+    batch_have_fg_mask = batch_have_fg_mask[sel_indices].repeat(REPEAT)
+    fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
+
+    return img_mask, fg_mask, batch_have_fg_mask, fg_mask_avail_ratio
