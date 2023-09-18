@@ -3137,8 +3137,8 @@ class LatentDiffusion(DDPM):
 
             # Simply suppress the subj attention on background areas. 
             # No need to use attn_*_single as references.
-            loss_layer_subj_bg_attn_suppress = torch.norm(subj_subj_bg_attn)
-            loss_layer_mix_bg_attn_suppress  = torch.norm(mix_subj_bg_attn)
+            loss_layer_subj_bg_attn_suppress = torch.pow(subj_subj_bg_attn, 2).mean()
+            loss_layer_mix_bg_attn_suppress  = torch.pow(mix_subj_bg_attn, 2).mean()
             mix_bg_attn_suppress_loss_scale = 0.1
             loss_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
                                       + loss_layer_mix_bg_attn_suppress * mix_bg_attn_suppress_loss_scale) \
