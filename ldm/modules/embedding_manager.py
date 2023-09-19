@@ -1600,7 +1600,7 @@ class EmbeddingManager(nn.Module):
 
         return loss_static / num_out_embeddings, loss_ada / num_out_embeddings
 
-    def embedding_to_loss(self):
+    def embedding_reg_loss(self):
         self.loss_call_count += 1
         if self.use_layerwise_embedding:
             return self.layerwise_embedding_norm_loss()

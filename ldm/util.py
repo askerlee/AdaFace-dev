@@ -696,25 +696,38 @@ def masked_mean(ts, mask, dim=None):
     mask_sum = torch.maximum( mask_sum, torch.ones_like(mask_sum) * 1e-6 )
     return (ts * mask).sum(dim=dim) / mask_sum
 
-# true_prob_range = (p_init, p_final). 
-# The prob of flipping true is gradually annealed from p_init to p_final.
-def flip_coin_annealed(training_percent, final_percent, true_prob_range):
+def anneal_value(training_percent, final_percent, value_range):
     assert 0 - 1e-6 <= training_percent <= 1 + 1e-6
-    p_init, p_final = true_prob_range
+    v_init, v_final = value_range
     # Gradually decrease the chance of flipping from the upperbound to lowerbound.
     if training_percent < final_percent:
-        true_p_annealed = p_init + (p_final - p_init) * training_percent
+        v_annealed = v_init + (v_final - v_init) * training_percent
     else:
-        # Stop at p_final.
-        true_p_annealed = p_final
+        # Stop at v_final.
+        v_annealed = v_final
 
+    return v_annealed
+
+# fluct_range: range of fluctuation ratios.
+def rand_annealed(training_percent, final_percent, mean_range, 
+                  fluct_range=(0.8, 1.2), legal_range=(0, 1)):
+    mean_annealed = anneal_value(training_percent, final_percent, value_range=mean_range)
+    rand_lb = max(mean_annealed * fluct_range[0], legal_range[0])
+    rand_ub = min(mean_annealed * fluct_range[1], legal_range[1])
+    
+    return np.random.uniform(rand_lb, rand_ub)
+
+# true_prob_range = (p_init, p_final). 
+# The prob of flipping true is gradually annealed from p_init to p_final.
+def bool_annealed(training_percent, final_percent, true_prob_range):
+    true_p_annealed = anneal_value(training_percent, final_percent, value_range=true_prob_range)
     # Flip a coin, with prob of true being true_p_annealed.    
     return random.random() < true_p_annealed
 
 def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0, 0.5)):
     t_anneal = t.clone()
     # Gradually increase the chance of keeping the original t from 0 to 0.5.
-    do_keep = flip_coin_annealed(training_percent, final_percent=1., true_prob_range=keep_prob_range)
+    do_keep = bool_annealed(training_percent, final_percent=1., true_prob_range=keep_prob_range)
     if do_keep:
         return t_anneal
     

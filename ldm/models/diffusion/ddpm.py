@@ -26,8 +26,9 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, halve_token_indices, \
-                       normalize_dict_values, masked_mean, anneal_t, flip_coin_annealed, \
-                       scale_mask_for_feat_attn, mix_static_qv_embeddings, repeat_part_of_masks
+                       normalize_dict_values, masked_mean, \
+                       scale_mask_for_feat_attn, mix_static_qv_embeddings, repeat_part_of_masks, \
+                       rand_annealed, bool_annealed, anneal_t
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -91,8 +92,8 @@ class DDPM(pl.LightningModule):
                  use_layerwise_embedding=False,
                  use_ada_embedding=False,
                  composition_regs_iter_gap=-1,
-                 embedding_reg_weight=0.,
-                 static_vs_ada_emb_reg_weight_ratio=None,
+                 static_embedding_reg_weight=0.,
+                 ada_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_attn_complementary_loss_weight=0.,
@@ -121,8 +122,8 @@ class DDPM(pl.LightningModule):
         self.use_layerwise_embedding = use_layerwise_embedding
         self.use_ada_embedding = (use_layerwise_embedding and use_ada_embedding)
 
-        self.embedding_reg_weight = embedding_reg_weight
-        self.static_vs_ada_emb_reg_weight_ratio = static_vs_ada_emb_reg_weight_ratio
+        self.static_embedding_reg_weight = static_embedding_reg_weight
+        self.ada_embedding_reg_weight    = ada_embedding_reg_weight
 
         self.composition_regs_iter_gap       = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight     = prompt_emb_delta_reg_weight
@@ -1799,15 +1800,15 @@ class LatentDiffusion(DDPM):
         self.iter_flags['do_teacher_filter'] = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
                                                 and not self.iter_flags['reuse_init_conds'])
 
-        img_mask                = self.iter_flags['img_mask']
-        fg_mask                 = self.iter_flags['fg_mask']
-        batch_have_fg_mask      = self.iter_flags['batch_have_fg_mask']
+        img_mask            = self.iter_flags['img_mask']
+        fg_mask             = self.iter_flags['fg_mask']
+        batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
         # In fg_mask, if an instance has no mask, then its fg_mask is all 1.
         # filtered_fg_mask: filter fg_mask, by only keeping fg_mask[i] if batch_have_fg_mask[i] == True. 
         # Otherwise filtered_fg_mask[i] is all 0.
         # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
-        filtered_fg_mask        = fg_mask * batch_have_fg_mask.view(-1, 1, 1, 1) \
-                                    if self.fg_mask_avail_ratio > 0 else None
+        filtered_fg_mask    = fg_mask * batch_have_fg_mask.view(-1, 1, 1, 1) \
+                                if self.fg_mask_avail_ratio > 0 else None
 
         cfg_scales_for_clip_loss = None
         c_static_emb, c_in, extra_info = cond
@@ -1862,16 +1863,24 @@ class LatentDiffusion(DDPM):
                 # This may help the model ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
 
-                # The probability of this branch is annealed from 0.4 to 0.1.
-                if flip_coin_annealed(self.training_percent, final_percent=0.5, true_prob_range=(0.6, 0.8)):
+                # The probability of this branch is annealed from 0.4 to 0.2.
+                if bool_annealed(self.training_percent, final_percent=0.5, true_prob_range=(0.6, 0.8)):
                     x_start.normal_()
                 else:
                     if self.fg_mask_avail_ratio > 0:
                         # At foreground, keep 30% of the original x_start values and add 70% noise. 
                         # At background, fill with random values (100% noise).
                         x_start = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
-                        x_start = torch.randn_like(x_start) * 0.7 + x_start * 0.3
-                        self.iter_flags['comp_init_with_fg_area'] = True
+                        min_fg_noise_amount, max_fg_noise_amount = (0.7, 0.9)
+                        # The mean of fg_noise_amount is annealed from 0.7 to 0.9.
+                        # Then randomly choose fg_noise_amount from [0.8 * mean, 1.2 * mean] 
+                        # (bounded by [0, 1]).
+                        fg_noise_amount = rand_annealed(self.training_percent, final_percent=1.0, 
+                                                        mean_range=(min_fg_noise_amount, max_fg_noise_amount))
+                        x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
+                        self.iter_flags['comp_init_with_fg_area']   = True
+                        # comp_init_fg_info_amount will be used as the weight of loss_comp_fg_bg_preserve.
+                        self.iter_flags['comp_init_fg_info_amount'] = (1 - fg_noise_amount) / (1 - min_fg_noise_amount)
                     else:
                         # No fg_mask. Add 90% noise to x_start.
                         x_start = torch.randn_like(x_start) * 0.9 + x_start * 0.1
@@ -2367,18 +2376,21 @@ class LatentDiffusion(DDPM):
             # Not is_compos_iter. Distillation won't be done in this iter, so is_teachable = False.
             self.iter_flags['is_teachable'] = False
             
-        if self.embedding_reg_weight > 0:
-            loss_emb_reg = self.embedding_manager.embedding_to_loss()
+        if self.static_embedding_reg_weight + self.ada_embedding_reg_weight > 0:
+            loss_emb_reg = self.embedding_manager.embedding_reg_loss()
             if self.use_layerwise_embedding:
                 loss_static_emb_reg, loss_ada_emb_reg = loss_emb_reg
-                loss_dict.update({f'{prefix}/loss_static_emb_reg': loss_static_emb_reg.mean().detach()})
-                loss_dict.update({f'{prefix}/loss_ada_emb_reg':    loss_ada_emb_reg.mean().detach()})
-                STATIC_EMB_W, ADA_EMB_W = self.static_vs_ada_emb_reg_weight_ratio
-                loss_emb_reg = (loss_static_emb_reg * STATIC_EMB_W + loss_ada_emb_reg * ADA_EMB_W) \
-                                / (STATIC_EMB_W + ADA_EMB_W)
+            else:
+                loss_static_emb_reg = loss_emb_reg
+                loss_ada_emb_reg    = 0
 
-            loss_dict.update({f'{prefix}/loss_emb_reg': loss_emb_reg.mean().detach()})
-            loss += (self.embedding_reg_weight * loss_emb_reg)
+            if loss_static_emb_reg > 0:
+                loss_dict.update({f'{prefix}/loss_static_emb_reg': loss_static_emb_reg.mean().detach()})
+            if loss_ada_emb_reg > 0:
+                loss_dict.update({f'{prefix}/loss_ada_emb_reg':    loss_ada_emb_reg.mean().detach()})
+
+            loss += loss_static_emb_reg * self.static_embedding_reg_weight \
+                    + loss_ada_emb_reg  * self.ada_embedding_reg_weight
 
         if self.do_static_prompt_delta_reg:
             # do_ada_emb_delta_reg controls whether to do ada comp delta reg here.
@@ -2464,8 +2476,14 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/loss_bg_attn_suppress': loss_bg_attn_suppress.mean().detach()})
                 bg_attn_suppress_loss_scale = 0.2
                 loss_comp_fg_bg_preserve = loss_fg_feat_contrast + loss_bg_attn_suppress * bg_attn_suppress_loss_scale
+                # min_fg_noise_amount, max_fg_noise_amount = (0.7, 0.9)
+                # So comp_init_fg_info_amount is annealed from 1 to 1/3:
+                # (1 - 0.7) / (1 - 0.7) = 1, (1 - 0.9) / (1 - 0.7) = 1/3.
+                # loss_comp_fg_bg_preserve is weighted from 1 to 1/3.
+                comp_init_fg_info_amount = self.iter_flags['comp_init_fg_info_amount']
             else:
                 loss_comp_fg_bg_preserve = 0
+                comp_init_fg_info_amount = 0
 
             subj_attn_delta_distill_loss_scale = 0.5
             # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
@@ -2482,7 +2500,7 @@ class LatentDiffusion(DDPM):
             loss += loss_mix_prompt_distill       * self.mix_prompt_distill_weight \
                      + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
                      + loss_subj_comp_attn_comple * self.subj_comp_attn_complementary_loss_weight \
-                     + loss_comp_fg_bg_preserve   * self.comp_fg_bg_preserve_loss_weight
+                     + loss_comp_fg_bg_preserve * comp_init_fg_info_amount * self.comp_fg_bg_preserve_loss_weight
             
             self.release_plosses_intermediates(locals())
 
