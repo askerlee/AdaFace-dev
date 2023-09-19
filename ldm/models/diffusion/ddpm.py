@@ -1835,7 +1835,7 @@ class LatentDiffusion(DDPM):
                 # so as to match the once-denoised x_start.
                 # generate the full batch size of t, but actually only use the first block of BLOCK_SIZE.
                 # This is to make the code consistent with the non-comp case and avoid unnecessary confusion.
-                t_mid = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.75), 
+                t_mid = torch.randint(int(self.num_timesteps * 0.4), int(self.num_timesteps * 0.7), 
                                       (x_start.shape[0],), device=x_start.device)
                 # t_upperbound: old t - 150. That is, at least 150 steps away from the previous t.
                 t_upperbound = prev_t - int(self.num_timesteps * 0.15)
@@ -1847,7 +1847,10 @@ class LatentDiffusion(DDPM):
 
             else:
                 # Fresh compositional iter.
+                t_tail = torch.randint(int(self.num_timesteps * 0.8), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
+                t = t_tail
                 # x_start is of ORIG_BS = 2. So BLOCK_SIZE=1.
+                # Randomly choose t from the largest 150 timesteps, so as to match the completely noisy x_start.
                 BLOCK_SIZE  = max(x_start.shape[0] // 2, 1)
                 # At 60% of the chance, randomly initialize x_start and t. Note the batch size is still 2 here.
                 # At 40% of the chance, use a noisy x_start based on the training images. 
@@ -1875,10 +1878,6 @@ class LatentDiffusion(DDPM):
                     else:
                         # No fg_mask. Add 90% noise to x_start.
                         x_start = torch.randn_like(x_start) * 0.9 + x_start * 0.1
-
-                # Randomly choose t from the largest 150 timesteps, so as to match the completely noisy x_start.
-                t_tail = torch.randint(int(self.num_timesteps * 0.85), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
-                t = t_tail
 
             if not self.iter_flags['do_mix_prompt_distillation']:
                 # Only do ada delta loss. This usually won't happen unless mix_prompt_distill_weight = 0.
