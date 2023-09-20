@@ -1865,8 +1865,9 @@ class LatentDiffusion(DDPM):
                         # At foreground, keep 30% of the original x_start values and add 70% noise. 
                         # At background, fill with random values (100% noise).
                         x_start = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
-                        min_fg_noise_amount, max_fg_noise_amount = (0.7, 0.9)
-                        # The mean of fg_noise_amount is annealed from 0.7 to 0.9.
+                        # Disable annealing fg noise amount
+                        min_fg_noise_amount, max_fg_noise_amount = (0.7, 0.7)
+                        ## The mean of fg_noise_amount is annealed from 0.7 to 0.9.
                         # Then randomly choose fg_noise_amount from [0.8 * mean, 1.2 * mean] 
                         # (bounded by [0, 1]).
                         fg_noise_amount = rand_annealed(self.training_percent, final_percent=1.0, 
@@ -1877,7 +1878,7 @@ class LatentDiffusion(DDPM):
                         self.iter_flags['comp_init_fg_info_amount'] = (1 - fg_noise_amount) / (1 - min_fg_noise_amount)
                     else:
                         # No fg_mask. Add 90% noise to x_start.
-                        x_start = torch.randn_like(x_start) * 0.9 + x_start * 0.1
+                        x_start = torch.randn_like(x_start) * 0.7 + x_start * 0.3
 
             if not self.iter_flags['do_mix_prompt_distillation']:
                 # Only do ada delta loss. This usually won't happen unless mix_prompt_distill_weight = 0.
@@ -3077,8 +3078,8 @@ class LatentDiffusion(DDPM):
 
         # Normalize the weights above so that each set sum to 1.
         feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
-        single_feat_grad_scale  = 0.1
-        single_feat_grad_scaler = gen_gradient_scaler(single_feat_grad_scale)
+        feat_single_grad_scale  = 0.1
+        feat_single_grad_scaler = gen_gradient_scaler(feat_single_grad_scale)
 
         loss_comp_fg_feat_contrast = 0
         loss_comp_bg_attn_suppress = 0
@@ -3115,10 +3116,10 @@ class LatentDiffusion(DDPM):
             feat_mix_single  = pooler(feat_mix_single)
             feat_mix_comp    = pooler(feat_mix_comp)
 
-            # single_feat_grad_scale = 0.1. 
+            # feat_single_grad_scale = 0.1. 
             # feat_*_single are used as references, so their gradients are reduced.
-            feat_subj_single_gs = single_feat_grad_scaler(feat_subj_single)
-            feat_mix_single_gs  = single_feat_grad_scaler(feat_mix_single)
+            feat_subj_single_gs = feat_single_grad_scaler(feat_subj_single)
+            feat_mix_single_gs  = feat_single_grad_scaler(feat_mix_single)
             loss_layer_subj_fg_feat_preserve = self.get_loss(feat_subj_comp, feat_subj_single_gs, mean=True)
             loss_layer_mix_fg_feat_preserve  = self.get_loss(feat_mix_comp,  feat_mix_single_gs,  mean=True)
             # A small weight to the preservation loss on mix instances. 
