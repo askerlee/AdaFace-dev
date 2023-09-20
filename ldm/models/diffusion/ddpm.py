@@ -2536,8 +2536,8 @@ class LatentDiffusion(DDPM):
                                              16: 1., 17: 1.,
                                              18: 0.5, 
                                              19: 0.25, 20: 0.25,
-                                             # 21 ~ 24 are excluded.
-                                             21: 0.12, 22: 0.12, 23: 0.12, 24: 0.12,                                       
+                                             21: 0.12, 22: 0.12, 
+                                             23: 0.12, 24: 0.12,                                       
                                             }
         # DISABLE attn delta loss.
         # attn_delta_distill_layer_weights = {}
