@@ -3048,7 +3048,6 @@ class LatentDiffusion(DDPM):
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0
 
-
         fg_mask_1b = fg_mask.chunk(4)[0]
         batch_have_fg_mask_1b = batch_have_fg_mask.chunk(4)[0]
         # filtered_fg_mask: filter fg_mask, by only keeping fg_mask[i] if batch_have_fg_mask[i] == True. 
