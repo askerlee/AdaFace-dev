@@ -2387,7 +2387,7 @@ class LatentDiffusion(DDPM):
             # Use subj_indices_1b here, since this index is used to extract 
             # subject embeddings from each block, and compare two such blocks.
             try:
-                static_delta_loss, ada_delta_loss \
+                loss_static_delta, loss_ada_delta \
                 = self.embedding_manager.calc_prompt_emb_delta_loss( 
                                         extra_info['c_static_emb_4b'], ada_embeddings,
                                         self.iter_flags['do_ada_emb_delta_reg']
@@ -2395,9 +2395,9 @@ class LatentDiffusion(DDPM):
             except:
                 breakpoint()
 
-            loss_dict.update({f'{prefix}/static_delta_loss': static_delta_loss.mean().detach()})
-            if ada_delta_loss != 0:
-                loss_dict.update({f'{prefix}/ada_delta_loss': ada_delta_loss.mean().detach()})
+            loss_dict.update({f'{prefix}/static_delta': loss_static_delta.mean().detach()})
+            if loss_ada_delta != 0:
+                loss_dict.update({f'{prefix}/ada_delta': loss_ada_delta.mean().detach()})
 
             # The prompt delta loss for ada embeddings is only applied 
             # every self.composition_regs_iter_gap iterations. So the ada loss 
@@ -2405,7 +2405,7 @@ class LatentDiffusion(DDPM):
             # Divide it by 2 to reduce the proportion of ada emb loss relative to 
             # static emb loss in the total loss.                
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            loss_prompt_delta_reg = static_delta_loss + ada_comp_loss_boost_ratio * ada_delta_loss
+            loss_prompt_delta_reg = loss_static_delta + ada_comp_loss_boost_ratio * loss_ada_delta
             
             loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
         
@@ -2429,11 +2429,11 @@ class LatentDiffusion(DDPM):
 
 
             if loss_feat_delta_distill > 0:
-                loss_dict.update({f'{prefix}/loss_feat_delta_distill':       loss_feat_delta_distill.mean().detach()})
+                loss_dict.update({f'{prefix}/feat_delta_distill':       loss_feat_delta_distill.mean().detach()})
             if loss_subj_attn_delta_distill > 0:
-                loss_dict.update({f'{prefix}/loss_subj_attn_delta_distill':  loss_subj_attn_delta_distill.mean().detach()})
+                loss_dict.update({f'{prefix}/subj_attn_delta_distill':  loss_subj_attn_delta_distill.mean().detach()})
             if loss_subj_attn_norm_distill > 0:
-                loss_dict.update({f'{prefix}/loss_subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
+                loss_dict.update({f'{prefix}/subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
 
             loss_subj_comp_key_ortho = 0
             if self.subj_comp_key_ortho_loss_weight > 0:
@@ -2446,9 +2446,9 @@ class LatentDiffusion(DDPM):
                                                    BLOCK_SIZE, cls_grad_scale=0.05)
 
                 if loss_subj_comp_key_ortho != 0:
-                    loss_dict.update({f'{prefix}/loss_subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
+                    loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
                 if loss_subj_comp_attn_comple != 0:
-                    loss_dict.update({f'{prefix}/loss_subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
+                    loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
 
             # Although fg_mask_avail_ratio > 0 when comp_init_with_fg_area,
             # fg_mask_avail_ratio may have been updated after doing teacher filtering 
@@ -2456,21 +2456,26 @@ class LatentDiffusion(DDPM):
             # and the same as to fg_mask_avail_ratio). So we need to check it here.
             if self.comp_fg_bg_preserve_loss_weight > 0 and self.iter_flags['comp_init_with_fg_area'] \
               and self.fg_mask_avail_ratio > 0:
-                loss_fg_feat_contrast, loss_bg_attn_suppress = \
-                    self.calc_fg_bg_preserve_loss(unet_attns, unet_feats, 
+                loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress = \
+                    self.calc_comp_fg_bg_preserve_loss(unet_attns, unet_feats, 
                                                   fg_mask, batch_have_fg_mask,
                                                   extra_info['subj_indices_1b'], BLOCK_SIZE)
-                if loss_fg_feat_contrast > 0:
-                    loss_dict.update({f'{prefix}/loss_fg_feat_contrast': loss_fg_feat_contrast.mean().detach()})
-                if loss_bg_attn_suppress > 0:
-                    loss_dict.update({f'{prefix}/loss_bg_attn_suppress': loss_bg_attn_suppress.mean().detach()})
+                if loss_comp_fg_feat_contrast > 0:
+                    loss_dict.update({f'{prefix}/comp_fg_feat_contrast': loss_comp_fg_feat_contrast.mean().detach()})
+                if loss_comp_bg_attn_suppress > 0:
+                    loss_dict.update({f'{prefix}/comp_bg_attn_suppress': loss_comp_bg_attn_suppress.mean().detach()})
                 bg_attn_suppress_loss_scale = 0.2
-                loss_comp_fg_bg_preserve = loss_fg_feat_contrast + loss_bg_attn_suppress * bg_attn_suppress_loss_scale
-                # min_fg_noise_amount, max_fg_noise_amount = (0.7, 0.9)
-                # So comp_init_fg_info_amount is annealed from 1 to 1/3:
-                # (1 - 0.7) / (1 - 0.7) = 1, (1 - 0.9) / (1 - 0.7) = 1/3.
-                # loss_comp_fg_bg_preserve is weighted from 1 to 1/3.
-                comp_init_fg_info_amount = self.iter_flags['comp_init_fg_info_amount']
+                loss_comp_fg_bg_preserve = loss_comp_fg_feat_contrast + loss_comp_bg_attn_suppress * bg_attn_suppress_loss_scale
+                # WEIGHT_WITH_FG_INFO_AMOUNT seems to reduce authenticity greatly.
+                WEIGHT_WITH_FG_INFO_AMOUNT = False
+                if WEIGHT_WITH_FG_INFO_AMOUNT:
+                    # min_fg_noise_amount, max_fg_noise_amount = (0.7, 0.9)
+                    # So comp_init_fg_info_amount is annealed from 1 to 1/3:
+                    # (1 - 0.7) / (1 - 0.7) = 1, (1 - 0.9) / (1 - 0.7) = 1/3.
+                    # loss_comp_fg_bg_preserve is weighted from 1 to 1/3.
+                    comp_init_fg_info_amount = self.iter_flags['comp_init_fg_info_amount']
+                else:
+                    comp_init_fg_info_amount = 1
             else:
                 loss_comp_fg_bg_preserve = 0
                 comp_init_fg_info_amount = 0
@@ -2479,12 +2484,12 @@ class LatentDiffusion(DDPM):
             # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
             # smaller magnitudes than the delta loss. So we scale it up by 20x.
             subj_attn_norm_distill_loss_scale  = 10
-            loss_mix_prompt_distill =  loss_subj_attn_delta_distill * subj_attn_delta_distill_loss_scale \
+            loss_mix_prompt_distill =  loss_subj_attn_delta_distill   * subj_attn_delta_distill_loss_scale \
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                         + loss_feat_delta_distill 
                                         
             if loss_mix_prompt_distill > 0:
-                loss_dict.update({f'{prefix}/loss_mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
+                loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
 
             # mix_prompt_distill_weight: 2e-4.
             loss += loss_mix_prompt_distill       * self.mix_prompt_distill_weight \
@@ -3037,9 +3042,9 @@ class LatentDiffusion(DDPM):
 
         return loss_subj_comp_key_ortho, loss_subj_comp_attn_comple
 
-    def calc_fg_bg_preserve_loss(self, unet_attns, unet_feats, 
+    def calc_comp_fg_bg_preserve_loss(self, unet_attns, unet_feats, 
                                  fg_mask, batch_have_fg_mask, subj_indices, BS):
-        # No masks available. loss_fg_feat_contrast, loss_bg_attn_suppress are both 0.
+        # No masks available. loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0
 
@@ -3076,8 +3081,8 @@ class LatentDiffusion(DDPM):
         single_feat_grad_scale  = 0.1
         single_feat_grad_scaler = gen_gradient_scaler(single_feat_grad_scale)
 
-        loss_fg_feat_contrast = 0
-        loss_bg_attn_suppress = 0
+        loss_comp_fg_feat_contrast = 0
+        loss_comp_bg_attn_suppress = 0
 
         for unet_layer_idx, unet_feat in unet_feats.items():
             if unet_layer_idx not in feat_distill_layer_weights:
@@ -3121,9 +3126,9 @@ class LatentDiffusion(DDPM):
             # The requirement of preserving foreground features is not as strict as that of preserving
             # subject features, as the former is only used to facilitate composition.
             mix_fg_feat_preserve_loss_scale = 0.1
-            loss_fg_feat_contrast += (loss_layer_subj_fg_feat_preserve 
-                                      + loss_layer_mix_fg_feat_preserve * mix_fg_feat_preserve_loss_scale) \
-                                     * feat_distill_layer_weight
+            loss_comp_fg_feat_contrast += (loss_layer_subj_fg_feat_preserve 
+                                            + loss_layer_mix_fg_feat_preserve * mix_fg_feat_preserve_loss_scale) \
+                                            * feat_distill_layer_weight
 
             ##### unet_attn fg preservation loss & bg suppression loss #####
             unet_attn = unet_attns[unet_layer_idx]
@@ -3148,11 +3153,11 @@ class LatentDiffusion(DDPM):
             loss_layer_subj_bg_attn_suppress = torch.pow(subj_subj_bg_attn, 2).mean()
             loss_layer_mix_bg_attn_suppress  = torch.pow(mix_subj_bg_attn, 2).mean()
             mix_bg_attn_suppress_loss_scale = 0.1
-            loss_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
-                                      + loss_layer_mix_bg_attn_suppress * mix_bg_attn_suppress_loss_scale) \
-                                     * feat_distill_layer_weight
-            
-        return loss_fg_feat_contrast, loss_bg_attn_suppress
+            loss_comp_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
+                                            + loss_layer_mix_bg_attn_suppress * mix_bg_attn_suppress_loss_scale) \
+                                            * feat_distill_layer_weight
+                    
+        return loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):
