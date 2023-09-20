@@ -2526,7 +2526,7 @@ class LatentDiffusion(DDPM):
                                        18: 0.5,
                                        19: 0.25, 20: 0.25, 
                                        21: 0.12, 22: 0.12, 
-                                       23: 0.06, 24: 0.06,
+                                       23: 0.12, 24: 0.12,
                                      }
 
         # attn delta loss is more strict and could cause pollution of subject features with class features.
@@ -2535,9 +2535,9 @@ class LatentDiffusion(DDPM):
                                              12: 1.,
                                              16: 1., 17: 1.,
                                              18: 0.5, 
-                                             19: 0.1, 20: 0.1,
+                                             19: 0.25, 20: 0.25,
                                              # 21 ~ 24 are excluded.
-                                             21: 0., 22: 0., 23: 0., 24: 0.,                                       
+                                             21: 0.12, 22: 0.12, 23: 0.12, 24: 0.12,                                       
                                             }
         # DISABLE attn delta loss.
         # attn_delta_distill_layer_weights = {}
@@ -2546,10 +2546,10 @@ class LatentDiffusion(DDPM):
         attn_norm_distill_layer_weights = { # 7:  1., 8: 1.,
                                             12: 1.,
                                             16: 1., 17: 1.,
-                                            18: 0.5,
-                                            19: 0.25, 20: 0.25, 
-                                            21: 0.12, 22: 0.12, 
-                                            23: 0.06, 24: 0.06,                                   
+                                            18: 1.,
+                                            19: 1., 20: 1., 
+                                            21: 1., 22: 1., 
+                                            23: 1., 24: 1.,                                   
                                            }
 
         # Normalize the weights above so that each set sum to 1.
@@ -2914,11 +2914,11 @@ class LatentDiffusion(DDPM):
         # Discard the first few bottom layers from the orthogonal loss.
         k_ortho_layer_weights = { #7:  1., 8: 1.,
                                  12: 1.,
-                                 16: 1., 17: 1., 
+                                 16: 1., 17: 1.,
                                  18: 0.5,
-                                 19: 0.5,  20: 0.5, 
-                                 21: 0.25, 22: 0.25, 
-                                 23: 0.25, 24: 0.25,
+                                 19: 0.25, 20: 0.25, 
+                                 21: 0.12, 22: 0.12, 
+                                 23: 0.12, 24: 0.12,
                                 }
         
         # Normalize the weights above so that each set sum to 1.
@@ -3049,6 +3049,15 @@ class LatentDiffusion(DDPM):
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0
 
+        feat_distill_layer_weights = { # 7:  1., 8: 1.,   
+                                       12: 1.,
+                                       16: 1., 17: 1.,
+                                       18: 1.,
+                                       19: 0.5,  20: 0.5, 
+                                       21: 0.12, 22: 0.12, 
+                                       23: 0.12, 24: 0.12,
+                                     }
+
         fg_mask_1b = fg_mask.chunk(4)[0]
         batch_have_fg_mask_1b = batch_have_fg_mask.chunk(4)[0]
         # filtered_fg_mask: filter fg_mask, by only keeping fg_mask[i] if batch_have_fg_mask[i] == True. 
@@ -3067,14 +3076,6 @@ class LatentDiffusion(DDPM):
         # Shift ind_subj_subj_B by 2 * BS, so that it points to mix comp embeddings.
         ind_mix_subj_B,  ind_mix_subj_N  = ind_subj_subj_B + 2 * BS, ind_subj_subj_N
 
-        feat_distill_layer_weights = { # 7:  1., 8: 1.,   
-                                       12: 1.,
-                                       16: 1., 17: 1.,
-                                       18: 0.5,
-                                       19: 0.5,  20: 0.5, 
-                                       21: 0.25, 22: 0.25, 
-                                       23: 0.25, 24: 0.25,
-                                     }
 
         # Normalize the weights above so that each set sum to 1.
         feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)

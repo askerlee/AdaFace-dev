@@ -125,6 +125,9 @@ def parse_args():
     # --dryrun
     parser.add_argument("--dryrun", action="store_true",
                         help="Dry run: only print the commands without actual execution")
+    # --debug
+    parser.add_argument("--debug", action="store_true",
+                        help="Debug mode")
 
     args = parser.parse_args()
     return args, parser
@@ -431,6 +434,9 @@ if __name__ == "__main__":
                 # Tell stable_txt2img.py to do face-specific evaluation.
                 command_line += f" --calc_face_sim"
 
+        if args.debug:
+            command_line += f" --debug"
+            
         print(command_line)
         if not args.dryrun:
             os.system(command_line)
