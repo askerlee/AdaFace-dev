@@ -806,7 +806,7 @@ class LatentDiffusion(DDPM):
                     c = c.mode()
                 
                 c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_fg, num_layers=self.N_LAYERS)
-                c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_bg, num_layers=self.N_LAYERS)
+                # c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_bg, num_layers=self.N_LAYERS)
 
                 extra_info = { 
                                 'use_layerwise_context': self.use_layerwise_embedding, 
@@ -860,7 +860,7 @@ class LatentDiffusion(DDPM):
         # CLIP skip weights consistent with the static embeddings.
         c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_fg)
-        c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_bg)
+        # c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_bg)
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, reset_ada_embedding_cache() should have been called somewhere.
         self.embedding_manager.cache_ada_embedding(layer_idx, c)
