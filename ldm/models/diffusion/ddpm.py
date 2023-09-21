@@ -1877,7 +1877,7 @@ class LatentDiffusion(DDPM):
                         # At background, fill with random values (100% noise).
                         x_start = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
                         # Disable annealing fg noise amount
-                        min_fg_noise_amount, max_fg_noise_amount = (0.7, 0.7)
+                        min_fg_noise_amount, max_fg_noise_amount = (0.7, 0.85)
                         ## The mean of fg_noise_amount is annealed from 0.7 to 0.9.
                         # Then randomly choose fg_noise_amount from [0.8 * mean, 1.2 * mean] 
                         # (bounded by [0, 1]).
