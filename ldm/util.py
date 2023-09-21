@@ -208,7 +208,7 @@ def parallel_data_prefetch(
 # a, b are n-dimensional tensors.
 # Orthogonal subtraction of b from a: the result of a-w*b is orthogonal to b (on the last dimension).
 def ortho_subtract(a, b):
-    assert a.shape == b.shape, "Tensors a and b must have the same shape"
+    assert a.ndim == b.ndim, "Tensors a and b must have the same number of dimensions"
     dot_a_b = torch.einsum('...i,...i->...', a, b)
     dot_b_b = torch.einsum('...i,...i->...', b, b)
     w_optimal = dot_a_b / dot_b_b
@@ -258,8 +258,8 @@ def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 
         # Flatten delta and ref_delta, by tucking the layer and token dimensions into the batch dimension.
         # delta_i: [2464, 768], ref_delta_i: [2464, 768]
-        delta_i     = delta_i.view(delta_i.shape[:first_n_dims_to_flatten].numel(), -1)
-        ref_delta_i = ref_delta_i.view(delta_i.shape)
+        delta_i     = delta_i.reshape(delta_i.shape[:first_n_dims_to_flatten].numel(), -1)
+        ref_delta_i = ref_delta_i.reshape(delta_i.shape)
         emb_mask_i  = emb_mask_i.flatten() if emb_mask_i is not None else None
 
         # A bias vector to a set of conditioning embeddings doesn't change the attention matrix 
