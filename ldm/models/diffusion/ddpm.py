@@ -120,6 +120,8 @@ class DDPM(pl.LightningModule):
         self.use_positional_encodings = use_positional_encodings
 
         self.use_layerwise_embedding = use_layerwise_embedding
+        self.N_LAYERS = 16 if self.use_layerwise_embedding else 1
+
         self.use_ada_embedding = (use_layerwise_embedding and use_ada_embedding)
 
         self.static_embedding_reg_weight = static_embedding_reg_weight
@@ -803,8 +805,8 @@ class LatentDiffusion(DDPM):
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
                 
-                c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_fg)
-                
+                c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_fg, num_layers=self.N_LAYERS)
+
                 extra_info = { 
                                 'use_layerwise_context': self.use_layerwise_embedding, 
                                 'use_ada_context':       self.use_ada_embedding,
@@ -820,9 +822,9 @@ class LatentDiffusion(DDPM):
                              }
                 
                 if self.use_ada_embedding:
-                    ada_embedder = self.get_ada_conditioning
+                    ada_embedder = self.get_layer_ada_conditioning
                     # Initialize the ada embedding cache, so that the subsequent calls to 
-                    # EmbeddingManager.get_ada_embedding() will store the ada embedding 
+                    # self.get_layer_ada_embedding() will store the ada embedding 
                     # for each layer into the cache. 
                     # The cache will be used in calc_prompt_emb_delta_loss().
                     self.embedding_manager.reset_ada_embedding_cache()
@@ -845,10 +847,10 @@ class LatentDiffusion(DDPM):
 
         return c
 
-    # get_ada_conditioning() is a callback function called iteratively by each layer in UNet.
+    # get_layer_ada_conditioning() is a callback function called iteratively by each layer in UNet.
     # It returns the conditioning embedding (ada embedding & other token embeddings -> clip encoder) 
     # for the current layer to UNet.
-    def get_ada_conditioning(self, c_in, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
+    def get_layer_ada_conditioning(self, c_in, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
         # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
         # when embedding_manager is called within cond_stage_model.encode().
@@ -1380,7 +1382,6 @@ class LatentDiffusion(DDPM):
                     #if self.iter_flags['use_background_token']:
                     #    print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
-                    self.N_LAYERS = 16 if self.use_layerwise_embedding else 1
                     ORIG_BS  = len(x)
                     N_EMBEDS = ORIG_BS * self.N_LAYERS
                     
@@ -1528,6 +1529,9 @@ class LatentDiffusion(DDPM):
                     extra_info['delta_prompts']      = (subj_single_prompts, subj_comp_prompts, \
                                                         cls_single_prompts,  cls_comp_prompts)
 
+                    # Restore the placeholder_indces of the embedding_manager according to the original prompts.
+                    self.embedding_manager.placeholder_indices_fg = extra_info['subj_indices']
+                    self.embedding_manager.placeholder_indices_bg = extra_info['bg_indices']
                     # c_static_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
                     # cls_single_prompts, cls_comp_prompts. 
                     # c_static_emb: [64, 77, 768]                    
@@ -1746,6 +1750,8 @@ class LatentDiffusion(DDPM):
                 # as the second half (mix single, mix comp) is generated under the same initial conditions 
                 # (only differ on prompts, but uncond means no prompts).
                 x_noisy_ = self.q_sample(x_start=x_start_, t=t_, noise=noise_)
+                # Clear the cached placeholder indices, as they are for conditional embeddings.
+                self.embedding_manager.clear_placeholder_indices()
                 # self.uncond: precomputed unconditional embeddings.
                 model_output_uncond = self.apply_model(x_noisy_, t_, self.uncond)
                 # model_output_uncond: [2, 4, 64, 64] -> [4, 4, 64, 64]

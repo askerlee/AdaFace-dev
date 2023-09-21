@@ -580,11 +580,16 @@ def patch_multi_embeddings(text_embedding, placeholder_indices_N, divide_scheme=
     return patched_text_embedding
 
 # text_embedding: [B, N, D]
-def fix_emb_scales(text_embedding, placeholder_indices, scale=-1):
-    if placeholder_indices == None:
+# If text_embedding is static embedding, then num_layers=16, 
+# we need to reshape it to [B0, num_layers, N, D].
+def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1, scale=-1):
+    if placeholder_indices is None:
         return text_embedding
     placeholder_indices_B, placeholder_indices_N = placeholder_indices
     M = len(torch.unique(placeholder_indices_N))
+    B = text_embedding.shape[0]
+    B0 = B // num_layers
+    B_IND = len(torch.unique(placeholder_indices_B))
 
     # The default scale is 1 / sqrt(M).
     if scale == -1:
@@ -594,9 +599,20 @@ def fix_emb_scales(text_embedding, placeholder_indices, scale=-1):
     if scale == 1:
         return text_embedding
     
-    scale_mask = torch.ones_like(text_embedding)
-    scale_mask[placeholder_indices_B, placeholder_indices_N] = scale
-    scaled_text_embedding = text_embedding * scale_mask
+    if num_layers == 1:
+        if B_IND > B:
+            breakpoint()
+        scale_mask = torch.ones_like(text_embedding)
+        scale_mask[placeholder_indices_B, placeholder_indices_N] = scale
+        scaled_text_embedding = text_embedding * scale_mask
+    else:
+        text_embedding = text_embedding.reshape(B0, num_layers, *text_embedding.shape[1:])
+        scale_mask = torch.ones_like(text_embedding)
+        scale_mask[placeholder_indices_B, :, placeholder_indices_N] = scale
+        scaled_text_embedding = text_embedding * scale_mask
+        # Change back to the original shape.
+        scaled_text_embedding = scaled_text_embedding.reshape(B, *text_embedding.shape[2:])
+
     return scaled_text_embedding
 
 # Revised from RevGrad, by removing the grad negation.
