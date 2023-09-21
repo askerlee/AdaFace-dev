@@ -2823,10 +2823,10 @@ class LatentDiffusion(DDPM):
 
             if (fg_mask is not None) and (batch_have_fg_mask.sum() > 0):
                 score_mat = unet_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
-                # subj_score: [8, 8, 64] -> [2, 4, 8, 64] mean among K_fg embeddings -> [2, 8, 64]
-                subj_score = score_mat[placeholder_indices_fg].reshape(BS, K_fg, *score_mat.shape[2:]).mean(dim=1)
-                # bg_score:   [4, 8, 64] -> [2, 2, 8, 64] mean among K_bg embeddings -> [2, 8, 64]
-                bg_score   = score_mat[placeholder_indices_bg].reshape(BS, K_bg, *score_mat.shape[2:]).mean(dim=1)
+                # subj_score: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
+                subj_score = score_mat[placeholder_indices_fg].reshape(BS, K_fg, *score_mat.shape[2:]).sum(dim=1)
+                # bg_score:   [4, 8, 64] -> [2, 2, 8, 64] sum among K_bg embeddings -> [2, 8, 64]
+                bg_score   = score_mat[placeholder_indices_bg].reshape(BS, K_bg, *score_mat.shape[2:]).sum(dim=1)
 
                 fg_mask2 = scale_mask_for_feat_attn(subj_attn, fg_mask, "fg_mask", mode="nearest|bilinear")
                 # Repeat 8 times to match the number of attention heads.
