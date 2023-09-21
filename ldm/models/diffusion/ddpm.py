@@ -2607,7 +2607,7 @@ class LatentDiffusion(DDPM):
             attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
             # subj_attn: [4, 8, 256] (1 embedding  for 1 token)  => [4, 1, 8, 256] mean => [4, 8, 256]
             # or         [16, 8, 256] (4 embeddings for 1 token) => [4, 4, 8, 256] mean => [4, 8, 256]
-            # mean() is taken across the multiple subject tokens.
+            # mean(dim=1) is taken across the multiple subject tokens.
             # BLOCK_SIZE*4: this batch contains 4 blocks. Each block should have one instance.
             subj_attn = attn_mat[placeholder_indices].reshape(BLOCK_SIZE*4, K_fg, *attn_mat.shape[2:]).mean(dim=1)
             # subj_attn_subj_single, ...: [1, 8, 256] (1 embedding  for 1 token) 
@@ -2993,13 +2993,13 @@ class LatentDiffusion(DDPM):
             cls_comp_ks  = unet_seq_k[ind_cls_comp_B,  :, ind_cls_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
 
             # subj_subj_ks_mean: [1, 8, 4, 160] => [1, 8, 160]. Averaged over 4 subject embeddings.
-            subj_subj_ks_mean = subj_subj_ks.mean(dim=2)
+            subj_subj_ks_mean = subj_subj_ks
             # subj_comp_ks_mean: [1, 8, 18, 160] => [1, 8, 160]. Averaged over all extra 18 compositional embeddings.
-            subj_comp_ks_mean = subj_comp_ks.mean(dim=2)
+            subj_comp_ks_mean = subj_comp_ks.mean(dim=2, keepdim=True)
             # cls_subj_ks_mean:  [1, 8, 4, 160] => [1, 8, 160]. Averaged over 4 subject embeddings.
-            cls_subj_ks_mean  = cls_subj_ks.mean(dim=2)
+            cls_subj_ks_mean  = cls_subj_ks
             # cls_comp_ks_mean:  [1, 8, 18, 160] => [1, 8, 160]. Averaged over all extra 18 compositional embeddings.
-            cls_comp_ks_mean  = cls_comp_ks.mean(dim=2)
+            cls_comp_ks_mean  = cls_comp_ks.mean(dim=2, keepdim=True)
 
             # The orthogonal projection of subj_subj_ks_mean against subj_comp_ks_mean.
             subj_comp_emb_diff = ortho_subtract(subj_subj_ks_mean, subj_comp_ks_mean)
@@ -3015,7 +3015,7 @@ class LatentDiffusion(DDPM):
             # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
             loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
                                                              batch_mask=None, exponent=2,
-                                                             do_demean_first=True, first_n_dims_to_flatten=2,
+                                                             do_demean_first=True, first_n_dims_to_flatten=3,
                                                              ref_grad_scale=cls_grad_scale)
             
             k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
