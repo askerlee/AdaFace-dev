@@ -495,7 +495,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
         # Since the V(emb) is also scaled down by sqrt(M) by fix_emb_scales(), 
         # they cancel each other, and the sum_m(attn)*V(emb) is 
         # at a similar scale as that of a single embedding.
-        subj_attn = F.conv2d(subj_q_padded, subj_k.reshape(H, C, ks, ks), groups=H) * sim_scale / ks
+        subj_attn = F.conv2d(subj_q_padded, subj_k.reshape(H, C, ks, ks), groups=H) * sim_scale / M
         # Shift subj_attn (with 0 padding) to yield ks*ks slightly different attention maps 
         # for the M embeddings.
         # dx, dy: the relative position of a subject token to the center subject token.
