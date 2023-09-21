@@ -449,10 +449,7 @@ class StaticLayerwiseEmbedding(nn.Module):
 
             # Different layers and embeddings have different biases.
             # self.bias: [16, K, 768].
-            # sqrt(K): reduce magnitude of embedding vectors, to avoid dominating the whole prompt.
-            # When there are K embeddings for each concept, class embeddings are divided by sqrt(K).
-            # Therefore we need to make subject embeddings in a similar scale.
-            out_vecs_ln = (out_vecs_ln + self.bias) / np.sqrt(self.K)
+            out_vecs_ln = out_vecs_ln + self.bias
             # Return static embeddings of all layers together: [16, K, 768].
             return out_vecs_ln
 
@@ -744,10 +741,7 @@ class AdaEmbedding(nn.Module):
             # out_emb_dim: 768.
             out_vecs0 = out_vecs0 / np.sqrt(self.out_emb_dim)
             # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
-            # sqrt(K): reduce magnitude of embedding vectors, to avoid dominating the whole prompt.
-            # When there are K embeddings for each concept, class embeddings are divided by sqrt(K).
-            # Therefore we need to make subject embeddings in a similar scale.
-            out_vecs  = (out_vecs0 + bias) / np.sqrt(self.K)
+            out_vecs  = out_vecs0 + bias
 
             if 'call_count' not in self.__dict__:
                 self.call_count = 0

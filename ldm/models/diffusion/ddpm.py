@@ -25,8 +25,8 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        count_params, instantiate_from_config, \
                        ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
-                       save_grid, chunk_list, patch_multi_embeddings, halve_token_indices, \
-                       normalize_dict_values, masked_mean, \
+                       save_grid, chunk_list, patch_multi_embeddings, fix_emb_scales, \
+                       halve_token_indices, normalize_dict_values, masked_mean, \
                        scale_mask_for_feat_attn, mix_static_qv_embeddings, repeat_part_of_masks, \
                        rand_annealed, bool_annealed, anneal_t
 
@@ -803,6 +803,8 @@ class LatentDiffusion(DDPM):
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
                 
+                c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_fg)
+                
                 extra_info = { 
                                 'use_layerwise_context': self.use_layerwise_embedding, 
                                 'use_ada_context':       self.use_ada_embedding,
@@ -854,6 +856,7 @@ class LatentDiffusion(DDPM):
         # DO NOT call sample_last_layers_skip_weights() here, to make the ada embeddings are generated with 
         # CLIP skip weights consistent with the static embeddings.
         c = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
+        c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_fg)
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, reset_ada_embedding_cache() should have been called somewhere.
         self.embedding_manager.cache_ada_embedding(layer_idx, c)

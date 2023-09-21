@@ -540,6 +540,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)
 
+# text_embedding: [B, N, D]
 def patch_multi_embeddings(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):
     if placeholder_indices_N is None:
         return text_embedding
@@ -578,12 +579,23 @@ def patch_multi_embeddings(text_embedding, placeholder_indices_N, divide_scheme=
     patched_text_embedding = text_embedding * (1 - repl_mask) + repl_text_embedding * repl_mask
     return patched_text_embedding
 
-def scale_emb_in_embs(text_embedding, placeholder_indices_N, scale, scale_first_only=True):
+# text_embedding: [B, N, D]
+def fix_emb_scales(text_embedding, placeholder_indices, scale=-1):
+    if placeholder_indices == None:
+        return text_embedding
+    placeholder_indices_B, placeholder_indices_N = placeholder_indices
+    M = len(torch.unique(placeholder_indices_N))
+
+    # The default scale is 1 / sqrt(M).
+    if scale == -1:
+        scale = 1 / np.sqrt(M)
+
+    # scale == 1: No need to do scaling.
+    if scale == 1:
+        return text_embedding
+    
     scale_mask = torch.ones_like(text_embedding)
-    if scale_first_only:
-        # Only scale the first embedding in a multi-embedding token.
-        placeholder_indices_N = placeholder_indices_N[:1]
-    scale_mask[:, placeholder_indices_N] = scale
+    scale_mask[placeholder_indices_B, placeholder_indices_N] = scale
     scaled_text_embedding = text_embedding * scale_mask
     return scaled_text_embedding
 
