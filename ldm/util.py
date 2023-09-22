@@ -912,30 +912,30 @@ def mix_static_qv_embeddings(c_static_emb, subj_indices_half_N,
         # Linearly decrease the scale of the class   embeddings from 0.5 to 0.1, 
         # i.e., 
         # Linearly increase the scale of the subject embeddings from 0.5 to 0.9.
-        # emb_v_layers_subj_mix_scales = [1.0, 1.0, 1.0, 1.0, 0.3, 0.4, 0.5, 0.6, 
+        # emb_v_layers_cls_mix_scales =  [1.0, 1.0, 1.0, 1.0, 0.3, 0.4, 0.5, 0.6, 
         #                                 0.7, 0.8, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0000]
-        emb_v_layers_subj_mix_scales = torch.ones(BS, N_LAYERS, device=c_static_emb.device) 
+        emb_v_layers_cls_mix_scales = torch.ones(BS, N_LAYERS, device=c_static_emb.device) 
         # Scale the class embeddings mix scale by t_frac.
-        emb_v_layers_subj_mix_scales[:, sync_layer_indices] = \
-            1 - torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
+        emb_v_layers_cls_mix_scales[:, sync_layer_indices] = \
+            torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
                              step=SCALE_STEP, device=c_static_emb.device).repeat(BS, 1) * t_frac
     else:
         # Same scale for all layers.
-        # emb_v_layers_subj_mix_scales = [0.5, 0.5, ..., 0.5].
+        # emb_v_layers_cls_mix_scales = [0.5, 0.5, ..., 0.5].
         AVG_SCALE = (FIRST_LAYER_CLS_E_SCALE + FINAL_LAYER_CLS_E_SCALE) / 2
-        emb_v_layers_subj_mix_scales = 1 - torch.ones(N_LAYERS, device=c_static_emb.device).repeat(BS, 1) \
+        emb_v_layers_cls_mix_scales = torch.ones(N_LAYERS, device=c_static_emb.device).repeat(BS, 1) \
                                         * AVG_SCALE * t_frac
 
     # First mix the static embeddings.
     # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,
-    # where they are subj_comp_emb * emb_v_layers_subj_mix_scales + cls_comp_emb * (1 - emb_v_layers_subj_mix_scales).
+    # where they are subj_comp_emb * emb_v_layers_cls_mix_scales + cls_comp_emb * (1 - emb_v_layers_cls_mix_scales).
     # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
     # Each is of a single instance. So only provides subj_indices_half_N 
     # (multiple token indices of the same instance).
     emb_v_mixer = partial(mix_embeddings, 'add', mix_indices=subj_indices_half_N)
 
-    # Part of cls embedding is mixed into subject v embedding.
-    mix_emb_v = emb_v_mixer(subj_emb, cls_emb, c1_mix_scale=emb_v_layers_subj_mix_scales.view(-1))
+    # Part of subject embedding is mixed into mix v embedding.
+    mix_emb_v = emb_v_mixer(cls_emb, subj_emb, c1_mix_scale=emb_v_layers_cls_mix_scales.view(-1))
     # The first  half of mix_emb_all_layers will be used as V in cross attention layers.
     # The second half of mix_emb_all_layers will be used as K in cross attention layers.
     mix_emb_all_layers = torch.cat([mix_emb_v, cls_emb], dim=1)
@@ -949,6 +949,11 @@ def mix_static_qv_embeddings(c_static_emb, subj_indices_half_N,
     # Scaling the gradient will improve compositionality but reduce face similarity.
     mix_emb_all_layers   = grad_scaler(mix_emb_all_layers)
 
+    # This copy of subj_emb will be simply 
+    # repeated at the token dimension to match the token number of the mixed (concatenated) 
+    # mix_emb embeddings.
+    subj_emb2   = subj_emb.repeat(1, 2, 1)
+    
     # Only mix sync_layer_indices layers.
     if use_layerwise_embedding:
         # sync_layer_indices = [4, 5, 6, 7, 8, 9, 10] #, 11, 12, 13]
@@ -960,19 +965,16 @@ def mix_static_qv_embeddings(c_static_emb, subj_indices_half_N,
         # and how much mix_single_emb_all_layers is mixed with subj_single_emb2 into mix_single_emb.
 
         # layer_mask[:, sync_layer_indices]: [2, 7, 154, 768]
-        layer_mask[:, sync_layer_indices] = t_frac.view(-1, 1, 1, 1)
+        # certain layers in layer_mask (used on subj_emb2) gradually reduce from 1 to 0.
+        # i.e., the proportions of subj_emb2 gradually reduce from 1 to 0.
+        layer_mask[:, sync_layer_indices] = 1 - t_frac.view(-1, 1, 1, 1)
         layer_mask = layer_mask.reshape(-1, *mix_emb_all_layers.shape[1:])
-
-        # This copy of subj_emb will be simply 
-        # repeated at the token dimension to match the token number of the mixed (concatenated) 
-        # mix_emb embeddings.
-        subj_emb2   = subj_emb.repeat(1, 2, 1)
 
         # Use most of the layers of embeddings in subj_comp_emb2, but 
         # replace sync_layer_indices layers with those from mix_emb_all_layers.
         # Do not assign with sync_layers as indices, which destroys the computation graph.
-        mix_emb   = subj_emb2 * (1 - layer_mask) \
-                    + mix_emb_all_layers * layer_mask
+        mix_emb   =   subj_emb2          * layer_mask \
+                    + mix_emb_all_layers * (1 - layer_mask)
         
     else:
         # There is only one layer of embeddings.
@@ -991,9 +993,9 @@ def mix_static_qv_embeddings(c_static_emb, subj_indices_half_N,
 
     # emb_v_mixer will be used later to mix ada embeddings in UNet.
     # extra_info['emb_v_mixer']                   = emb_v_mixer
-    # extra_info['emb_v_layers_subj_mix_scales']  = emb_v_layers_subj_mix_scales
+    # extra_info['emb_v_layers_cls_mix_scales']  = emb_v_layers_cls_mix_scales
     
-    return c_static_emb2, emb_v_mixer, emb_v_layers_subj_mix_scales
+    return c_static_emb2, emb_v_mixer, emb_v_layers_cls_mix_scales
 
 def repeat_part_of_masks(img_mask, fg_mask, batch_have_fg_mask, sel_indices, REPEAT):
     # img_mask should always be available.

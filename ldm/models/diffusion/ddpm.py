@@ -1995,7 +1995,7 @@ class LatentDiffusion(DDPM):
             # The subject indices are applied to every of the half-batch instances, 
             # so extra_info['subj_indices_1b'] is enough.
             # (extra_info['subj_indices_2b'][1] just repeats extra_info['subj_indices_1b'][1] twice.)
-            c_static_emb_qv, emb_v_mixer, emb_v_layers_subj_mix_scales = \
+            c_static_emb_qv, emb_v_mixer, emb_v_layers_cls_mix_scales = \
                 mix_static_qv_embeddings(cond[0], extra_info['subj_indices_1b'][1], 
                                          t_frac = t_frac,
                                          use_layerwise_embedding = self.use_layerwise_embedding,
@@ -2007,8 +2007,8 @@ class LatentDiffusion(DDPM):
             # 'do_teacher_filter' branch.
             cond = (c_static_emb_qv, cond[1], extra_info)
             extra_info['emb_v_mixer']                   = emb_v_mixer
-            # emb_v_layers_subj_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
-            extra_info['emb_v_layers_subj_mix_scales']  = emb_v_layers_subj_mix_scales            
+            # emb_v_layers_cls_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
+            extra_info['emb_v_layers_cls_mix_scales']  = emb_v_layers_cls_mix_scales            
             
         # Otherwise, it's a recon iter (attentional or unweighted).
         else:
@@ -2237,7 +2237,7 @@ class LatentDiffusion(DDPM):
                     # Do mixing on saved cond_orig instead of the updated "cond".
                     # cond_orig is organized as (subj single, subj comp, mix single, mix comp).
                     # but cond  is organized as (subj comp, subj comp, mix comp, mix comp).
-                    c_static_emb_orig_qv, emb_v_mixer, emb_v_layers_subj_mix_scales = \
+                    c_static_emb_orig_qv, emb_v_mixer, emb_v_layers_cls_mix_scales = \
                         mix_static_qv_embeddings(cond_orig[0], extra_info['subj_indices_1b'][1], 
                                                  t_frac = t_frac,
                                                  use_layerwise_embedding = self.use_layerwise_embedding,
@@ -2245,9 +2245,9 @@ class LatentDiffusion(DDPM):
                                                  LAYERS_CLS_E_SCALE_RANGE=[1.0, 0.7])
                     
                     extra_info['emb_v_mixer']                   = emb_v_mixer
-                    # emb_v_layers_subj_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
-                    # Different from the emb_v_layers_subj_mix_scales above, which is for the twin comp instances.
-                    extra_info['emb_v_layers_subj_mix_scales']  = emb_v_layers_subj_mix_scales  
+                    # emb_v_layers_cls_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
+                    # Different from the emb_v_layers_cls_mix_scales above, which is for the twin comp instances.
+                    extra_info['emb_v_layers_cls_mix_scales']  = emb_v_layers_cls_mix_scales  
                     # Update c_static_emb.
                     cond_orig_qv = (c_static_emb_orig_qv, cond_orig[1], extra_info)
 
