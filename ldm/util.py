@@ -949,6 +949,7 @@ def mix_static_qv_embeddings(c_static_emb, subj_indices_half_N,
     # Scaling the gradient will improve compositionality but reduce face similarity.
     mix_emb_all_layers   = grad_scaler(mix_emb_all_layers)
 
+    # Only mix sync_layer_indices layers.
     if use_layerwise_embedding:
         # sync_layer_indices = [4, 5, 6, 7, 8, 9, 10] #, 11, 12, 13]
         # 4, 5, 6, 7, 8, 9, 10 correspond to original layer indices 7, 8, 12, 16, 17, 18, 19.
