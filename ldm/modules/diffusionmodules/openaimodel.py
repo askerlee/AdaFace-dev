@@ -876,11 +876,7 @@ class UNetModel(nn.Module):
                 if iter_type.startswith("mix_"):
                     if layer_ada_context.shape[1] != layer_static_context.shape[1] // 2:
                         breakpoint()
-                    # "mix_concat_cls" is inference only.
-                    if iter_type == 'mix_concat_cls':
-                        # Do not BP into the copy of ada embeddings that are added with the mixed embeddings. 
-                        layer_ada_context = th.cat([layer_ada_context, layer_ada_context.detach()], dim=1)
-                    else:
+                    if iter_type == 'mix_hijk':
                         # iter_type == 'mix_hijk'. Separate layer_static_context into q and k.
                         layer_static_context, layer_static_key_context = \
                             layer_static_context.chunk(2, dim=1)
