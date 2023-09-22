@@ -847,6 +847,7 @@ class UNetModel(nn.Module):
             hijk_layer_indices = [7, 8, 12, 16, 17, 18]
 
             if iter_type.startswith("mix_"):
+                # layer_static_context is v, k concatenated. Separate it into v and k.
                 layer_static_value_context, layer_static_key_context = \
                             layer_static_context.chunk(2, dim=1)
                 if layer_static_value_context.shape[1] < 77:
@@ -897,17 +898,18 @@ class UNetModel(nn.Module):
                             # Four embeddings (6,7,8,9) for each token.
                             cls_layer_ada_context = patch_multi_embeddings(cls_layer_ada_context, 
                                                                            subj_indices_N)
-                            cls_layer_ada_context = patch_multi_embeddings(cls_layer_ada_context, 
-                                                                           bg_indices_N)
+                            #cls_layer_ada_context = patch_multi_embeddings(cls_layer_ada_context, 
+                            #                                               bg_indices_N)
                             if emb_v_mixer is not None:
                                 # Mix subj ada emb into mix ada emb, in the same way as to static embeddings.
                                 # emb_v_cls_mix_scale: [2, 1]
                                 emb_v_cls_mix_scale   = emb_v_layers_cls_mix_scales[:, [emb_idx]]
                                 # subj_layer_ada_context, cls_layer_ada_context: [2, 77, 768]
-                                mix_layer_ada_context = emb_v_mixer(cls_layer_ada_context, subj_layer_ada_context, 
-                                                                    c1_mix_scale=emb_v_cls_mix_scale)
+                                mix_layer_ada_context_vk = emb_v_mixer(cls_layer_ada_context, subj_layer_ada_context, 
+                                                                       c1_mix_scale=emb_v_cls_mix_scale)
+                                mix_layer_ada_context    = mix_layer_ada_context_vk
                             else:
-                                mix_layer_ada_context = cls_layer_ada_context
+                                mix_layer_ada_context    = cls_layer_ada_context
                                 
                             layer_ada_context = th.cat([subj_layer_ada_context, mix_layer_ada_context], dim=0)
                         # otherwise, iter_type == 'mix_recon'. The two instances in the batch are 

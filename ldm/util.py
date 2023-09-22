@@ -886,7 +886,7 @@ def mix_embeddings(mix_scheme, c1, c2, mix_indices=None,
     return c_mix
 
 # t_frac is a float scalar. 
-def mix_static_qv_embeddings(c_static_emb, subj_indices_half_N, 
+def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N, 
                              t_frac=1.0,
                              use_layerwise_embedding=True,
                              N_LAYERS=16, 
@@ -980,22 +980,22 @@ def mix_static_qv_embeddings(c_static_emb, subj_indices_half_N,
         # There is only one layer of embeddings.
         mix_emb   = mix_emb_all_layers
 
-    # c_static_emb2 is the static embeddings of the prompts used in losses other than 
+    # c_static_emb_vk is the static embeddings of the prompts used in losses other than 
     # the static delta loss, e.g., used to estimate the ada embeddings.
     # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
     # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
-    # c_static_emb2: [64, 154, 768]
-    # c_static_emb2 will be added with the ada embeddings to form the 
+    # c_static_emb_vk: [64, 154, 768]
+    # c_static_emb_vk will be added with the ada embeddings to form the 
     # conditioning embeddings in the U-Net.
     # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
     # image generation and computing compositional mix loss.
-    c_static_emb2 = torch.cat([ subj_emb2, mix_emb ], dim=0)
+    c_static_emb_vk = torch.cat([ subj_emb2, mix_emb ], dim=0)
 
     # emb_v_mixer will be used later to mix ada embeddings in UNet.
     # extra_info['emb_v_mixer']                   = emb_v_mixer
     # extra_info['emb_v_layers_cls_mix_scales']  = emb_v_layers_cls_mix_scales
     
-    return c_static_emb2, emb_v_mixer, emb_v_layers_cls_mix_scales
+    return c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales
 
 def repeat_part_of_masks(img_mask, fg_mask, batch_have_fg_mask, sel_indices, REPEAT):
     # img_mask should always be available.
