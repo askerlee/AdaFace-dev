@@ -2018,7 +2018,7 @@ class LatentDiffusion(DDPM):
             # No need to update masks.
 
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
-        # then cond[2]['use_conv_attn'] = True, it will inform U-Net to do conv attn.
+        # then extra_info['use_conv_attn'] = True, it will inform U-Net to do conv attn.
         # Disabling unet_has_grad for recon iters will greatly reduce performance,
         # although ada_bp_to_unet = False for recon iters.
         # (probably because gradients of static embeddings still need to go through UNet)
@@ -2055,8 +2055,8 @@ class LatentDiffusion(DDPM):
                 # extra_info['subj_indices_1b'] and extra_info['bg_indices_1b']. 
                 if self.fg_bg_complementary_loss_weight > 0:
                     loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast = \
-                                self.calc_fg_bg_complementary_loss(cond[2]['unet_attns'], 
-                                                                   cond[2]['unet_attnscores'],
+                                self.calc_fg_bg_complementary_loss(extra_info['unet_attns'], 
+                                                                   extra_info['unet_attnscores'],
                                                                    extra_info['subj_indices'],
                                                                    extra_info['bg_indices'],
                                                                    x_start.shape[0],
@@ -2081,7 +2081,7 @@ class LatentDiffusion(DDPM):
                         loss_dict.update({f'{prefix}/fg_bg_contrast': loss_fg_bg_contrast.mean().detach()})
 
                 # Release RAM.
-                del cond[2]['unet_attns'], cond[2]['unet_feats'], cond[2]['unet_ks']
+                del extra_info['unet_attns'], extra_info['unet_feats'], extra_info['unet_ks']
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_simple_pixels = self.get_loss(model_output, target, mean=False)
@@ -2136,7 +2136,7 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['do_teacher_filter']:
                 clip_images_code  = x_recon
                 # 4 sets of cls_comp_prompts for (subj comp 1, subj comp 2, mix comp 1, mix comp 2).                
-                clip_prompts_comp = cond[2]['cls_comp_prompts'] * 4            
+                clip_prompts_comp = extra_info['cls_comp_prompts'] * 4            
             else:
                 # Either self.iter_flags['reuse_init_conds'], or a pure ada delta loss iter.
                 # A batch of either type has the (subj_single, subj_comp, mix_single, mix_comp) structure.
@@ -2146,7 +2146,7 @@ class LatentDiffusion(DDPM):
                 x_recon_subj_single, x_recon_subj_comp, x_recon_mix_single, x_recon_mix_comp = \
                     x_recon.chunk(4)
                 clip_images_code = torch.cat([x_recon_subj_comp, x_recon_mix_comp], dim=0)
-                clip_prompts_comp = cond[2]['cls_comp_prompts'] * 2
+                clip_prompts_comp = extra_info['cls_comp_prompts'] * 2
 
             # Use CLIP loss as a metric to evaluate the compositionality of the generated images 
             # and do distillation selectively.
@@ -2427,11 +2427,11 @@ class LatentDiffusion(DDPM):
             # unet_feats is a dict as: layer_idx -> unet_feat. 
             # It contains the 6 specified conditioned layers of UNet features.
             # i.e., layers 7, 8, 12, 16, 17, 18.
-            unet_feats  = cond[2]['unet_feats']
+            unet_feats  = extra_info['unet_feats']
             # unet_attns is a dict as: layer_idx -> attn_mat. 
             # It contains the 6 specified conditioned layers of UNet attentions, 
             # i.e., layers 7, 8, 12, 16, 17, 18.
-            unet_attns  = cond[2]['unet_attns']
+            unet_attns  = extra_info['unet_attns']
             # subj_indices_2b is used here, as it's used to index subj single and subj comp embeddings.
             # The indices will be shifted along the batch dimension (size doubled) within calc_prompt_mix_loss()
             # to index all the 4 blocks.
@@ -2454,7 +2454,7 @@ class LatentDiffusion(DDPM):
                 # It's easier to implement attention complementary loss in calc_subj_comp_ortho_loss(),
                 # instead of reusing calc_fg_bg_complementary_loss().
                 loss_subj_comp_key_ortho, loss_subj_comp_attn_comple = \
-                    self.calc_subj_comp_ortho_loss(cond[2]['unet_ks'], unet_attns,
+                    self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_attnscores'],
                                                    extra_info['subj_indices_2b'],
                                                    self.embedding_manager.delta_loss_emb_mask,
                                                    BLOCK_SIZE, cls_grad_scale=0.05)
@@ -2824,11 +2824,11 @@ class LatentDiffusion(DDPM):
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_align_layer_weight
 
             if (fg_mask is not None) and (batch_have_fg_mask.sum() > 0):
-                score_mat = unet_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
+                attnscore_mat = unet_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
                 # subj_score: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
-                subj_score = score_mat[placeholder_indices_fg].reshape(BS, K_fg, *score_mat.shape[2:]).sum(dim=1)
+                subj_score = attnscore_mat[placeholder_indices_fg].reshape(BS, K_fg, *attnscore_mat.shape[2:]).sum(dim=1)
                 # bg_score:   [4, 8, 64] -> [2, 2, 8, 64] sum among K_bg embeddings -> [2, 8, 64]
-                bg_score   = score_mat[placeholder_indices_bg].reshape(BS, K_bg, *score_mat.shape[2:]).sum(dim=1)
+                bg_score   = attnscore_mat[placeholder_indices_bg].reshape(BS, K_bg, *attnscore_mat.shape[2:]).sum(dim=1)
 
                 fg_mask2 = scale_mask_for_feat_attn(subj_attn, fg_mask, "fg_mask", mode="nearest|bilinear")
                 # Repeat 8 times to match the number of attention heads.
@@ -2920,7 +2920,7 @@ class LatentDiffusion(DDPM):
 
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast
     
-    def calc_subj_comp_ortho_loss(self, unet_ks, unet_attns,
+    def calc_subj_comp_ortho_loss(self, unet_ks, unet_attnscores,
                                   subj_indices, delta_loss_emb_mask, 
                                   BS, cls_grad_scale=0.05):
 
@@ -2978,7 +2978,7 @@ class LatentDiffusion(DDPM):
             if (unet_layer_idx not in k_ortho_layer_weights):
                 continue
 
-            unet_attn = unet_attns[unet_layer_idx]
+            attnscore_mat = unet_attnscores[unet_layer_idx]
 
             # unet_seq_k: [B, H, N, D] = [2, 8, 77, 160].
             # H = 8, number of attention heads. D: 160, number of image tokens.
@@ -3020,29 +3020,28 @@ class LatentDiffusion(DDPM):
             loss_subj_comp_key_ortho += loss_layer_subj_comp_key_ortho * k_ortho_layer_weight
 
             ###########   loss_subj_comp_attn_comple   ###########
-            # attn_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
-            attn_mat = unet_attn.permute(0, 3, 1, 2)
-            # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]   sum among K_fg embeddings   -> [1, 8, 64]
-            subj_subj_attn = attn_mat[ind_subj_subj_B, ind_subj_subj_N].reshape(BS, K_fg, *attn_mat.shape[2:]).sum(dim=1)
-            # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 8, 64]
+            # attnscore_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
+            attnscore_mat = attnscore_mat.permute(0, 3, 1, 2)
+            # subj_subj_attnscore: [4, 8, 64] -> [1, 4, 8, 64]   sum among K_fg embeddings   -> [1, 8, 64]
+            subj_subj_attnscore = attnscore_mat[ind_subj_subj_B, ind_subj_subj_N].reshape(BS, K_fg, *attnscore_mat.shape[2:]).sum(dim=1)
+            # subj_comp_attnscore: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
-            subj_comp_attn = attn_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attn_mat.shape[2:]).sum(dim=1)
-            cls_subj_attn  = attn_mat[ind_cls_subj_B,  ind_cls_subj_N].reshape(BS,  K_fg,   *attn_mat.shape[2:]).sum(dim=1)
-            cls_comp_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attn_mat.shape[2:]).sum(dim=1)
-            # The orthogonal projection of subj_subj_attn against subj_comp_attn.
-            subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn)
-            # The orthogonal projection of cls_subj_attn against cls_comp_attn.
-            cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn)
-            # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
+            subj_comp_attnscore = attnscore_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attnscore_mat.shape[2:]).sum(dim=1)
+            cls_subj_attnscore  = attnscore_mat[ind_cls_subj_B,  ind_cls_subj_N].reshape(BS,  K_fg,   *attnscore_mat.shape[2:]).sum(dim=1)
+            cls_comp_attnscore  = attnscore_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attnscore_mat.shape[2:]).sum(dim=1)
+            # The orthogonal projection of subj_subj_attnscore against subj_comp_attnscore.
+            subj_comp_attnscore_diff = ortho_subtract(subj_subj_attnscore, subj_comp_attnscore)
+            # The orthogonal projection of cls_subj_attnscore against cls_comp_attnscore.
+            cls_comp_attnscore_diff  = ortho_subtract(cls_subj_attnscore,  cls_comp_attnscore)
+            # The two orthogonal projections should be aligned. That is, subj_subj_attnscore is allowed to
             # vary only along the direction of the orthogonal projections of class attention.
             
-            # Align bg_attn with (1 - subj_attn), so that the two attention maps are complementary.
             # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
             # But we don't want to only focus on large activations. So set it to 2.
             # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
             # to make the two attention maps more complementary (expect the loss pushes the 
             # subject embedding to a more accurate point).
-            loss_layer_comp_attn_comple = calc_delta_loss(subj_comp_attn_diff, cls_comp_attn_diff, 
+            loss_layer_comp_attn_comple = calc_delta_loss(subj_comp_attnscore_diff, cls_comp_attnscore_diff, 
                                                           exponent=2,    
                                                           do_demean_first=False,
                                                           first_n_dims_to_flatten=2, 
