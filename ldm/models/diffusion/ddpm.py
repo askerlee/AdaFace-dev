@@ -1999,7 +1999,8 @@ class LatentDiffusion(DDPM):
                 mix_static_qv_embeddings(cond[0], extra_info['subj_indices_1b'][1], 
                                          t_frac = t_frac,
                                          use_layerwise_embedding = self.use_layerwise_embedding,
-                                         N_LAYERS = self.N_LAYERS)
+                                         N_LAYERS = self.N_LAYERS,
+                                         LAYERS_CLS_E_SCALE_RANGE=[1.0, 0.7])
           
             # Update cond[0] to c_static_emb_qv.
             # Use cond[1] instead of c_in as part of the tuple, since c_in is changed in the
@@ -2238,9 +2239,10 @@ class LatentDiffusion(DDPM):
                     # but cond  is organized as (subj comp, subj comp, mix comp, mix comp).
                     c_static_emb_orig_qv, emb_v_mixer, emb_v_layers_subj_mix_scales = \
                         mix_static_qv_embeddings(cond_orig[0], extra_info['subj_indices_1b'][1], 
-                                                t_frac = t_frac,
-                                                use_layerwise_embedding = self.use_layerwise_embedding,
-                                                N_LAYERS = self.N_LAYERS)
+                                                 t_frac = t_frac,
+                                                 use_layerwise_embedding = self.use_layerwise_embedding,
+                                                 N_LAYERS = self.N_LAYERS,
+                                                 LAYERS_CLS_E_SCALE_RANGE=[1.0, 0.7])
                     
                     extra_info['emb_v_mixer']                   = emb_v_mixer
                     # emb_v_layers_subj_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
