@@ -492,7 +492,8 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
         # sim_scale is to keep consistent to the original cross attention scores.
         # Scale down attention scores by M, so that the sum of the M attention scores is 
         # roughly the same as the attention of a single embedding.
-        subj_attn = F.conv2d(subj_q_padded, subj_k.reshape(H, C, ks, ks), groups=H) * sim_scale / M
+        subj_attn = F.conv2d(subj_q_padded, subj_k.reshape(H, C, ks, ks), 
+                             bias=None, groups=H) * sim_scale / M
         # Shift subj_attn (with 0 padding) to yield ks*ks slightly different attention maps 
         # for the M embeddings.
         # dx, dy: the relative position of a subject token to the center subject token.
