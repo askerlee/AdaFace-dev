@@ -2928,10 +2928,10 @@ class LatentDiffusion(DDPM):
         k_ortho_layer_weights = { #7:  1., 8: 1.,
                                  12: 1.,
                                  16: 1., 17: 1.,
-                                 18: 0.5,
-                                 19: 0.25, 20: 0.25, 
-                                 21: 0.12, 22: 0.12, 
-                                 23: 0.12, 24: 0.12,
+                                 18: 1.,
+                                 19: 1., 20: 1., 
+                                 21: 1., 22: 1., 
+                                 23: 1., 24: 1.,
                                 }
         
         # Normalize the weights above so that each set sum to 1.
