@@ -2472,13 +2472,13 @@ class LatentDiffusion(DDPM):
               and self.fg_mask_avail_ratio > 0:
                 loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress = \
                     self.calc_comp_fg_bg_preserve_loss(unet_attns, unet_feats, 
-                                                  fg_mask, batch_have_fg_mask,
-                                                  extra_info['subj_indices_1b'], BLOCK_SIZE)
+                                                       fg_mask, batch_have_fg_mask,
+                                                       extra_info['subj_indices_1b'], BLOCK_SIZE)
                 if loss_comp_fg_feat_contrast > 0:
                     loss_dict.update({f'{prefix}/comp_fg_feat_contrast': loss_comp_fg_feat_contrast.mean().detach()})
                 if loss_comp_bg_attn_suppress > 0:
                     loss_dict.update({f'{prefix}/comp_bg_attn_suppress': loss_comp_bg_attn_suppress.mean().detach()})
-                bg_attn_suppress_loss_scale = 0.2
+                bg_attn_suppress_loss_scale = 0.1
                 loss_comp_fg_bg_preserve = loss_comp_fg_feat_contrast + loss_comp_bg_attn_suppress * bg_attn_suppress_loss_scale
                 # WEIGHT_WITH_FG_INFO_AMOUNT seems to reduce authenticity greatly.
                 WEIGHT_WITH_FG_INFO_AMOUNT = False
@@ -3088,7 +3088,7 @@ class LatentDiffusion(DDPM):
 
         # Normalize the weights above so that each set sum to 1.
         feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
-        feat_single_grad_scale  = 0.1
+        feat_single_grad_scale  = 0.02
         feat_single_grad_scaler = gen_gradient_scaler(feat_single_grad_scale)
 
         loss_comp_fg_feat_contrast = 0
