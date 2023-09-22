@@ -2454,7 +2454,7 @@ class LatentDiffusion(DDPM):
                 # It's easier to implement attention complementary loss in calc_subj_comp_ortho_loss(),
                 # instead of reusing calc_fg_bg_complementary_loss().
                 loss_subj_comp_key_ortho, loss_subj_comp_attn_comple = \
-                    self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_attnscores'],
+                    self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_attns'],
                                                    extra_info['subj_indices_2b'],
                                                    self.embedding_manager.delta_loss_emb_mask,
                                                    BLOCK_SIZE, cls_grad_scale=0.05)
@@ -2920,7 +2920,7 @@ class LatentDiffusion(DDPM):
 
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast
     
-    def calc_subj_comp_ortho_loss(self, unet_ks, unet_attnscores,
+    def calc_subj_comp_ortho_loss(self, unet_ks, unet_attns,
                                   subj_indices, delta_loss_emb_mask, 
                                   BS, cls_grad_scale=0.05):
 
@@ -2978,7 +2978,7 @@ class LatentDiffusion(DDPM):
             if (unet_layer_idx not in k_ortho_layer_weights):
                 continue
 
-            attnscore_mat = unet_attnscores[unet_layer_idx]
+            attn_mat = unet_attns[unet_layer_idx]
 
             # unet_seq_k: [B, H, N, D] = [2, 8, 77, 160].
             # H = 8, number of attention heads. D: 160, number of image tokens.
@@ -3020,20 +3020,20 @@ class LatentDiffusion(DDPM):
             loss_subj_comp_key_ortho += loss_layer_subj_comp_key_ortho * k_ortho_layer_weight
 
             ###########   loss_subj_comp_attn_comple   ###########
-            # attnscore_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
-            attnscore_mat = attnscore_mat.permute(0, 3, 1, 2)
-            # subj_subj_attnscore: [4, 8, 64] -> [1, 4, 8, 64]   sum among K_fg embeddings   -> [1, 8, 64]
-            subj_subj_attnscore = attnscore_mat[ind_subj_subj_B, ind_subj_subj_N].reshape(BS, K_fg, *attnscore_mat.shape[2:]).sum(dim=1)
-            # subj_comp_attnscore: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 8, 64]
+            # attn_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
+            attn_mat = attn_mat.permute(0, 3, 1, 2)
+            # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]   sum among K_fg embeddings   -> [1, 8, 64]
+            subj_subj_attn = attn_mat[ind_subj_subj_B, ind_subj_subj_N].reshape(BS, K_fg, *attn_mat.shape[2:]).sum(dim=1)
+            # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
-            subj_comp_attnscore = attnscore_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attnscore_mat.shape[2:]).sum(dim=1)
-            cls_subj_attnscore  = attnscore_mat[ind_cls_subj_B,  ind_cls_subj_N].reshape(BS,  K_fg,   *attnscore_mat.shape[2:]).sum(dim=1)
-            cls_comp_attnscore  = attnscore_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attnscore_mat.shape[2:]).sum(dim=1)
-            # The orthogonal projection of subj_subj_attnscore against subj_comp_attnscore.
-            subj_comp_attnscore_diff = ortho_subtract(subj_subj_attnscore, subj_comp_attnscore)
-            # The orthogonal projection of cls_subj_attnscore against cls_comp_attnscore.
-            cls_comp_attnscore_diff  = ortho_subtract(cls_subj_attnscore,  cls_comp_attnscore)
-            # The two orthogonal projections should be aligned. That is, subj_subj_attnscore is allowed to
+            subj_comp_attn = attn_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attn_mat.shape[2:]).sum(dim=1)
+            cls_subj_attn  = attn_mat[ind_cls_subj_B,  ind_cls_subj_N].reshape(BS,  K_fg,   *attn_mat.shape[2:]).sum(dim=1)
+            cls_comp_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attn_mat.shape[2:]).sum(dim=1)
+            # The orthogonal projection of subj_subj_attn against subj_comp_attn.
+            subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn)
+            # The orthogonal projection of cls_subj_attn against cls_comp_attn.
+            cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn)
+            # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
             # vary only along the direction of the orthogonal projections of class attention.
             
             # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
@@ -3041,7 +3041,7 @@ class LatentDiffusion(DDPM):
             # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
             # to make the two attention maps more complementary (expect the loss pushes the 
             # subject embedding to a more accurate point).
-            loss_layer_comp_attn_comple = calc_delta_loss(subj_comp_attnscore_diff, cls_comp_attnscore_diff, 
+            loss_layer_comp_attn_comple = calc_delta_loss(subj_comp_attn_diff, cls_comp_attn_diff, 
                                                           exponent=2,    
                                                           do_demean_first=False,
                                                           first_n_dims_to_flatten=2, 
