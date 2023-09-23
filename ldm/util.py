@@ -222,7 +222,7 @@ def demean(x):
 # emb_mask: [2, 77, 1]. Could be fractional, e.g., 0.5, to discount some tokens.
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
 def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
-                    exponent=3, do_demean_first=True, repair_ref_bound_zeros=False,
+                    exponent=3, do_demean_first=False, repair_ref_bound_zeros=False,
                     first_n_dims_to_flatten=3,
                     ref_grad_scale=0, aim_to_align=True, debug=False):
     B = delta.shape[0]

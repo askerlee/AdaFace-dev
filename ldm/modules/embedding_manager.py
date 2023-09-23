@@ -1661,7 +1661,8 @@ class EmbeddingManager(nn.Module):
             cls_delta    = static_cls_comp_emb  - static_cls_single_emb
             static_delta = static_subj_comp_emb - static_subj_single_emb
 
-        static_delta_loss   = calc_delta_loss(static_delta, cls_delta, emb_mask=delta_loss_emb_mask)
+        static_delta_loss   = calc_delta_loss(static_delta, cls_delta, emb_mask=delta_loss_emb_mask,
+                                              do_demean_first=True)
 
         if do_ada_prompt_delta_reg and ada_embeddings is not None:
             # ada_embeddings: [4, 16, 77, 768]
@@ -1699,7 +1700,8 @@ class EmbeddingManager(nn.Module):
             else:
                 ada_delta = ada_subj_comp_emb - ada_subj_single_emb
 
-            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, emb_mask=delta_loss_emb_mask2)
+            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, emb_mask=delta_loss_emb_mask2,
+                                             do_demean_first=True)
             # The cached ada embeddings are useless now, release them.
             self.clear_ada_embedding_cache()
         else:
