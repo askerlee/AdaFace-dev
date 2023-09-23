@@ -2613,10 +2613,10 @@ class LatentDiffusion(DDPM):
             # or         [16, 8, 256] (4 embeddings for 1 token) => [4, 4, 8, 256] mean => [4, 8, 256]
             # sum(dim=1) is taken across the multiple subject tokens.
             # BLOCK_SIZE*4: this batch contains 4 blocks. Each block should have one instance.
-            subj_attn = attn_mat[placeholder_indices].reshape(BLOCK_SIZE*4, K_fg, *attn_mat.shape[2:]).sum(dim=1)
-            # subj_attn_subj_single, ...: [1, 8, 256] (1 embedding  for 1 token) 
+            subj_attn = attn_mat[placeholder_indices].reshape(BLOCK_SIZE*4, K_fg, *attn_mat.shape[2:])
+            # subj_single_subj_attn, ...: [1, 8, 256] (1 embedding  for 1 token) 
             # or                          [1, 8, 256] (4 embeddings for 1 token)
-            subj_attn_subj_single, subj_attn_subj_comp, subj_attn_mix_single,  subj_attn_mix_comp \
+            subj_single_subj_attn, subj_comp_subj_attn, mix_single_subj_attn,  mix_comp_subj_attn \
                 = subj_attn.chunk(4)
 
             # attn_delta_distill_layer_weights is a subset of attn_norm_distill_layer_weights. 
@@ -2625,27 +2625,27 @@ class LatentDiffusion(DDPM):
                 attn_norm_distill_layer_weight     = attn_norm_distill_layer_weights[unet_layer_idx]
                 attn_delta_distill_layer_weight    = attn_delta_distill_layer_weights.get(unet_layer_idx, 0)
 
-                # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to subj_attn_mix_comp/subj_attn_mix_single. 
+                # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to mix_comp_subj_attn/mix_single_subj_attn. 
                 # Use this scaler to release the graph and avoid OOM.
-                subj_attn_mix_comp_gs   = mix_attn_grad_scaler(subj_attn_mix_comp)
-                subj_attn_mix_single_gs = mix_attn_grad_scaler(subj_attn_mix_single)
+                mix_comp_subj_attn_gs   = mix_attn_grad_scaler(mix_comp_subj_attn)
+                mix_single_subj_attn_gs = mix_attn_grad_scaler(mix_single_subj_attn)
 
                 if attn_delta_distill_layer_weight > 0:
-                    attn_subj_delta = subj_attn_subj_comp - subj_attn_subj_single
-                    attn_mix_delta  = subj_attn_mix_comp  - subj_attn_mix_single
+                    subj_attn_delta = subj_comp_subj_attn - subj_single_subj_attn
+                    mix_attn_delta  = mix_comp_subj_attn  - mix_single_subj_attn
 
                     # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
                     # towards class embeddings, hurting authenticity.
-                    loss_layer_subj_delta_attn = calc_delta_loss(attn_subj_delta, attn_mix_delta, 
-                                                                 exponent=3,
-                                                                 first_n_dims_to_flatten=2, 
+                    loss_layer_subj_delta_attn = calc_delta_loss(subj_attn_delta, mix_attn_delta, 
+                                                                 exponent=2,
+                                                                 first_n_dims_to_flatten=3, 
                                                                  ref_grad_scale=0.05)
                     
                     loss_subj_attn_delta_distill  += loss_layer_subj_delta_attn * attn_delta_distill_layer_weight
                 
                 # Align the attention corresponding to each embedding individually.
-                loss_layer_subj_comp_attn_norm   = (subj_attn_subj_comp.mean(dim=2)   - subj_attn_mix_comp_gs.mean(dim=2)).abs().mean()
-                loss_layer_subj_single_attn_norm = (subj_attn_subj_single.mean(dim=2) - subj_attn_mix_single_gs.mean(dim=2)).abs().mean()
+                loss_layer_subj_comp_attn_norm   = (subj_comp_subj_attn.mean(dim=-1)   - mix_comp_subj_attn_gs.mean(dim=-1)).abs().mean()
+                loss_layer_subj_single_attn_norm = (subj_single_subj_attn.mean(dim=-1) - mix_single_subj_attn_gs.mean(dim=-1)).abs().mean()
                 # print(loss_layer_subj_comp_attn_norm, loss_layer_subj_single_attn_norm)
 
                 # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
@@ -2668,11 +2668,11 @@ class LatentDiffusion(DDPM):
                 # avoid BP through attention.
                 # reversed=True: larger subject attention => smaller spatial weight, i.e., 
                 # pay more attention to the context.
-                spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(subj_attn_mix_comp, BLOCK_SIZE, 
+                spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(mix_comp_subj_attn, BLOCK_SIZE, 
                                                                                                   feat_mix_comp.shape[2:],
                                                                                                   reversed=True)
 
-                spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_attn_subj_comp, BLOCK_SIZE,
+                spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_comp_subj_attn, BLOCK_SIZE,
                                                                                                   feat_subj_comp.shape[2:],
                                                                                                   reversed=True)
                 spatial_weight = (spatial_weight_mix_comp + spatial_weight_subj_comp) / 2
@@ -3018,7 +3018,8 @@ class LatentDiffusion(DDPM):
             # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
             loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
                                                              batch_mask=None, exponent=2,
-                                                             do_demean_first=True, first_n_dims_to_flatten=3,
+                                                             do_demean_first=False, 
+                                                             first_n_dims_to_flatten=3,
                                                              ref_grad_scale=cls_grad_scale)
             
             k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
