@@ -2609,9 +2609,8 @@ class LatentDiffusion(DDPM):
             # attn_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
             # We don't need BP through attention into UNet.
             attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
-            # subj_attn: [4, 8, 256] (1 embedding  for 1 token)  => [4, 1, 8, 256] mean => [4, 8, 256]
-            # or         [16, 8, 256] (4 embeddings for 1 token) => [4, 4, 8, 256] mean => [4, 8, 256]
-            # sum(dim=1) is taken across the multiple subject tokens.
+            # subj_attn: [4, 8, 256] (1 embedding  for 1 token)  => [4, 1, 8, 256]
+            # or         [16, 8, 256] (4 embeddings for 1 token) => [4, 4, 8, 256]
             # BLOCK_SIZE*4: this batch contains 4 blocks. Each block should have one instance.
             subj_attn = attn_mat[placeholder_indices].reshape(BLOCK_SIZE*4, K_fg, *attn_mat.shape[2:])
             # subj_single_subj_attn, ...: [1, 8, 256] (1 embedding  for 1 token) 
@@ -2668,11 +2667,11 @@ class LatentDiffusion(DDPM):
                 # avoid BP through attention.
                 # reversed=True: larger subject attention => smaller spatial weight, i.e., 
                 # pay more attention to the context.
-                spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(mix_comp_subj_attn, BLOCK_SIZE, 
+                spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(mix_comp_subj_attn.sum(dim=1), BLOCK_SIZE, 
                                                                                                   feat_mix_comp.shape[2:],
                                                                                                   reversed=True)
 
-                spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_comp_subj_attn, BLOCK_SIZE,
+                spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_comp_subj_attn.sum(dim=1), BLOCK_SIZE,
                                                                                                   feat_subj_comp.shape[2:],
                                                                                                   reversed=True)
                 spatial_weight = (spatial_weight_mix_comp + spatial_weight_subj_comp) / 2
