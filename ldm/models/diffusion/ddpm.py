@@ -1779,12 +1779,9 @@ class LatentDiffusion(DDPM):
     def release_plosses_intermediates(self, local_vars):
         del local_vars['model_output'], local_vars['x_recon'], local_vars['clip_images_code']
         cond = local_vars['cond']
-        if 'unet_feats' in cond[2]:
-            del cond[2]['unet_feats']
-        if 'unet_attns' in cond[2]:
-            del cond[2]['unet_attns']        
-        if 'unet_ks' in cond[2]:
-            del cond[2]['unet_ks']
+        for k in ('unet_feats', 'unet_attns', 'unet_attnscores', 'unet_ks'):
+            if k in cond[2]:
+                del cond[2][k]
 
     # t: steps.
     # cond: (c_static_emb, c_in, extra_info). c_in is the textual prompts. 
@@ -2083,7 +2080,9 @@ class LatentDiffusion(DDPM):
                         loss_dict.update({f'{prefix}/fg_bg_contrast': loss_fg_bg_contrast.mean().detach()})
 
                 # Release RAM.
-                del extra_info['unet_attns'], extra_info['unet_feats'], extra_info['unet_ks']
+                for key in ('unet_attns', 'unet_attnscores', 'unet_feats', 'unet_ks'):
+                    if key in extra_info:
+                        del extra_info[key]
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_simple_pixels = self.get_loss(model_output, target, mean=False)
@@ -2460,7 +2459,7 @@ class LatentDiffusion(DDPM):
                                                    extra_info['subj_indices_2b'],
                                                    self.embedding_manager.delta_loss_emb_mask,
                                                    BLOCK_SIZE, cls_grad_scale=0.05,
-                                                   attn_uses_scores=self.subj_comp_attn_comple_loss_uses_scores)
+                                                   subj_comp_attn_uses_scores=self.subj_comp_attn_comple_loss_uses_scores)
 
                 if loss_subj_comp_key_ortho != 0:
                     loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
@@ -2925,7 +2924,8 @@ class LatentDiffusion(DDPM):
     
     def calc_subj_comp_ortho_loss(self, unet_ks, unet_attns,
                                   subj_indices, delta_loss_emb_mask, 
-                                  BS, cls_grad_scale=0.05, attn_uses_scores=False):
+                                  BS, cls_grad_scale=0.05, 
+                                  subj_comp_attn_uses_scores=False):
 
         # Discard the first few bottom layers from the orthogonal loss.
         k_ortho_layer_weights = { #7:  1., 8: 1.,
@@ -2998,7 +2998,7 @@ class LatentDiffusion(DDPM):
             cls_comp_ks  = unet_seq_k[ind_cls_comp_B,  :, ind_cls_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
 
             # Don't consider negative scores.
-            if attn_uses_scores:
+            if subj_comp_attn_uses_scores:
                 subj_subj_ks = torch.clip(subj_subj_ks, min=0)
                 cls_subj_ks  = torch.clip(cls_subj_ks,  min=0)
                 subj_comp_ks = torch.clip(subj_comp_ks, min=0)
