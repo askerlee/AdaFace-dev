@@ -2441,7 +2441,6 @@ class LatentDiffusion(DDPM):
                                                           extra_info['subj_indices_2b'],
                                                           BLOCK_SIZE)
 
-
             if loss_feat_delta_distill > 0:
                 loss_dict.update({f'{prefix}/feat_delta_distill':       loss_feat_delta_distill.mean().detach()})
             if loss_subj_attn_delta_distill > 0:
@@ -2450,19 +2449,27 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
 
             loss_subj_comp_key_ortho = 0
+            subj_comp_attn_comple_loss_scale = 1
             if self.subj_comp_key_ortho_loss_weight > 0:
                 # It's easier to implement attention complementary loss in calc_subj_comp_ortho_loss(),
                 # instead of reusing calc_fg_bg_complementary_loss().
+                subj_comp_attn_comple_uses_scores = True
+                unet_attns = extra_info['unet_attnscores'] if subj_comp_attn_comple_uses_scores \
+                             else extra_info['unet_attns']
                 loss_subj_comp_key_ortho, loss_subj_comp_attn_comple = \
-                    self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_attns'],
+                    self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], unet_attns,
                                                    extra_info['subj_indices_2b'],
                                                    self.embedding_manager.delta_loss_emb_mask,
-                                                   BLOCK_SIZE, cls_grad_scale=0.05)
+                                                   BLOCK_SIZE, cls_grad_scale=0.05,
+                                                   attn_uses_scores=subj_comp_attn_comple_uses_scores)
 
                 if loss_subj_comp_key_ortho != 0:
                     loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
                 if loss_subj_comp_attn_comple != 0:
                     loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
+
+                if subj_comp_attn_comple_uses_scores:
+                    subj_comp_attn_comple_loss_scale = 0.1
 
             # Although fg_mask_avail_ratio > 0 when comp_init_with_fg_area,
             # fg_mask_avail_ratio may have been updated after doing teacher filtering 
@@ -2508,7 +2515,7 @@ class LatentDiffusion(DDPM):
             # mix_prompt_distill_weight: 2e-4.
             loss += loss_mix_prompt_distill       * self.mix_prompt_distill_weight \
                      + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
-                     + loss_subj_comp_attn_comple * self.subj_comp_attn_complementary_loss_weight \
+                     + loss_subj_comp_attn_comple * subj_comp_attn_comple_loss_scale * self.subj_comp_attn_complementary_loss_weight \
                      + loss_comp_fg_bg_preserve * comp_init_fg_info_amount * self.comp_fg_bg_preserve_loss_weight
             
             self.release_plosses_intermediates(locals())
@@ -2922,7 +2929,7 @@ class LatentDiffusion(DDPM):
     
     def calc_subj_comp_ortho_loss(self, unet_ks, unet_attns,
                                   subj_indices, delta_loss_emb_mask, 
-                                  BS, cls_grad_scale=0.05):
+                                  BS, cls_grad_scale=0.05, attn_uses_scores=False):
 
         # Discard the first few bottom layers from the orthogonal loss.
         k_ortho_layer_weights = { #7:  1., 8: 1.,
@@ -2993,6 +3000,13 @@ class LatentDiffusion(DDPM):
             # subj_comp_ks, cls_comp_ks: [11, 16, 160] => [1, 11, 16, 160] => [1, 16, 11, 160].
             subj_comp_ks = unet_seq_k[ind_subj_comp_B, :, ind_subj_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
             cls_comp_ks  = unet_seq_k[ind_cls_comp_B,  :, ind_cls_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
+
+            # Don't consider negative scores.
+            if attn_uses_scores:
+                subj_subj_ks = torch.clip(subj_subj_ks, min=0)
+                cls_subj_ks  = torch.clip(cls_subj_ks,  min=0)
+                subj_comp_ks = torch.clip(subj_comp_ks, min=0)
+                cls_comp_ks  = torch.clip(cls_comp_ks,  min=0)
 
             # subj_comp_ks_sum: [1, 8, 18, 160] => [1, 8, 1, 160]. 
             # Sum over all extra 18 compositional embeddings and average by K_fg.
