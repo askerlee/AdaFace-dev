@@ -2452,10 +2452,10 @@ class LatentDiffusion(DDPM):
             loss_subj_comp_key_ortho = 0
             subj_comp_attn_comple_loss_scale = 0.1 if self.subj_comp_attn_comple_loss_uses_scores else 1
             if self.subj_comp_key_ortho_loss_weight > 0:
-                unet_attns = extra_info['unet_attnscores'] if self.subj_comp_attn_comple_loss_uses_scores \
-                             else extra_info['unet_attns']
+                unet_attns_or_scores = extra_info['unet_attnscores'] if self.subj_comp_attn_comple_loss_uses_scores \
+                                        else extra_info['unet_attns']
                 loss_subj_comp_key_ortho, loss_subj_comp_attn_comple = \
-                    self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], unet_attns,
+                    self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], unet_attns_or_scores,
                                                    extra_info['subj_indices_2b'],
                                                    self.embedding_manager.delta_loss_emb_mask,
                                                    BLOCK_SIZE, cls_grad_scale=0.05,
