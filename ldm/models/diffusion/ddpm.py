@@ -2638,6 +2638,7 @@ class LatentDiffusion(DDPM):
                     # towards class embeddings, hurting authenticity.
                     loss_layer_subj_delta_attn = calc_delta_loss(subj_attn_delta, mix_attn_delta, 
                                                                  exponent=3,
+                                                                 do_demean_first=False,
                                                                  first_n_dims_to_flatten=2, 
                                                                  ref_grad_scale=0.05)
                     
