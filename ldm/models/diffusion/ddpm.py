@@ -2609,10 +2609,10 @@ class LatentDiffusion(DDPM):
             # attn_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
             # We don't need BP through attention into UNet.
             attn_mat = unet_attns[unet_layer_idx].permute(0, 3, 1, 2)
-            # subj_attn: [4, 8, 256] (1 embedding  for 1 token)  => [4, 1, 8, 256]
-            # or         [16, 8, 256] (4 embeddings for 1 token) => [4, 4, 8, 256]
+            # subj_attn: [4, 8, 256] (1 embedding  for 1 token)  => [4, 1, 8, 256] => [4, 8, 256]
+            # or         [16, 8, 256] (4 embeddings for 1 token) => [4, 4, 8, 256] => [4, 8, 256]
             # BLOCK_SIZE*4: this batch contains 4 blocks. Each block should have one instance.
-            subj_attn = attn_mat[placeholder_indices].reshape(BLOCK_SIZE*4, K_fg, *attn_mat.shape[2:])
+            subj_attn = attn_mat[placeholder_indices].reshape(BLOCK_SIZE*4, K_fg, *attn_mat.shape[2:]).sum(dim=1)
             # subj_single_subj_attn, ...: [1, 8, 256] (1 embedding  for 1 token) 
             # or                          [1, 8, 256] (4 embeddings for 1 token)
             subj_single_subj_attn, subj_comp_subj_attn, mix_single_subj_attn,  mix_comp_subj_attn \
@@ -2630,25 +2630,26 @@ class LatentDiffusion(DDPM):
                 mix_single_subj_attn_gs = mix_attn_grad_scaler(mix_single_subj_attn)
 
                 if attn_delta_distill_layer_weight > 0:
+                    # No need to use *_gs version here, as gradient scaling is done in calc_delta_loss().
                     subj_attn_delta = subj_comp_subj_attn - subj_single_subj_attn
                     mix_attn_delta  = mix_comp_subj_attn  - mix_single_subj_attn
 
                     # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
                     # towards class embeddings, hurting authenticity.
                     loss_layer_subj_delta_attn = calc_delta_loss(subj_attn_delta, mix_attn_delta, 
-                                                                 exponent=2,
-                                                                 first_n_dims_to_flatten=3, 
+                                                                 exponent=3,
+                                                                 first_n_dims_to_flatten=2, 
                                                                  ref_grad_scale=0.05)
                     
                     loss_subj_attn_delta_distill  += loss_layer_subj_delta_attn * attn_delta_distill_layer_weight
                 
                 # Align the attention corresponding to each embedding individually.
+                # Note mix_*subj_attn use *_gs versions.
                 loss_layer_subj_comp_attn_norm   = (subj_comp_subj_attn.mean(dim=-1)   - mix_comp_subj_attn_gs.mean(dim=-1)).abs().mean()
                 loss_layer_subj_single_attn_norm = (subj_single_subj_attn.mean(dim=-1) - mix_single_subj_attn_gs.mean(dim=-1)).abs().mean()
-                # print(loss_layer_subj_comp_attn_norm, loss_layer_subj_single_attn_norm)
 
                 # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
-                # smaller magnitudes than the delta loss. So we scale it up later.
+                # smaller magnitudes than the delta loss. So it will be scaled up later in p_losses().
                 loss_subj_attn_norm_distill   += ( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \
                                                   * attn_norm_distill_layer_weight
 
