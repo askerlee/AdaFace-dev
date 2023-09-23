@@ -3052,7 +3052,7 @@ class LatentDiffusion(DDPM):
             loss_layer_comp_attn_comple = calc_delta_loss(subj_comp_attn_diff, cls_comp_attn_diff, 
                                                           exponent=2,    
                                                           do_demean_first=False,
-                                                          first_n_dims_to_flatten=2, 
+                                                          first_n_dims_to_flatten=3, 
                                                           ref_grad_scale=cls_grad_scale)
             
             loss_subj_comp_attn_comple += loss_layer_comp_attn_comple * k_ortho_layer_weight   
