@@ -2922,7 +2922,7 @@ class LatentDiffusion(DDPM):
 
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast
     
-    def calc_subj_comp_ortho_loss(self, unet_ks, unet_attns,
+    def calc_subj_comp_ortho_loss(self, unet_ks, unet_attns_or_scores,
                                   subj_indices, delta_loss_emb_mask, 
                                   BS, cls_grad_scale=0.05, 
                                   subj_comp_attn_uses_scores=False):
@@ -2981,7 +2981,7 @@ class LatentDiffusion(DDPM):
             if (unet_layer_idx not in k_ortho_layer_weights):
                 continue
 
-            attn_mat = unet_attns[unet_layer_idx]
+            attn_mat = unet_attns_or_scores[unet_layer_idx]
 
             # unet_seq_k: [B, H, N, D] = [2, 8, 77, 160].
             # H = 8, number of attention heads. D: 160, number of image tokens.
@@ -2996,13 +2996,6 @@ class LatentDiffusion(DDPM):
             # subj_comp_ks, cls_comp_ks: [11, 16, 160] => [1, 11, 16, 160] => [1, 16, 11, 160].
             subj_comp_ks = unet_seq_k[ind_subj_comp_B, :, ind_subj_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
             cls_comp_ks  = unet_seq_k[ind_cls_comp_B,  :, ind_cls_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
-
-            # Don't consider negative scores.
-            if subj_comp_attn_uses_scores:
-                subj_subj_ks = torch.clip(subj_subj_ks, min=0)
-                cls_subj_ks  = torch.clip(cls_subj_ks,  min=0)
-                subj_comp_ks = torch.clip(subj_comp_ks, min=0)
-                cls_comp_ks  = torch.clip(cls_comp_ks,  min=0)
 
             # subj_comp_ks_sum: [1, 8, 18, 160] => [1, 8, 1, 160]. 
             # Sum over all extra 18 compositional embeddings and average by K_fg.
@@ -3034,16 +3027,26 @@ class LatentDiffusion(DDPM):
             ###########   loss_subj_comp_attn_comple   ###########
             # attn_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
             attn_mat = attn_mat.permute(0, 3, 1, 2)
-            # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]   sum among K_fg embeddings   -> [1, 8, 64]
-            subj_subj_attn = attn_mat[ind_subj_subj_B, ind_subj_subj_N].reshape(BS, K_fg, *attn_mat.shape[2:]).sum(dim=1)
-            # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 8, 64]
+            # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]
+            subj_subj_attn = attn_mat[ind_subj_subj_B, ind_subj_subj_N].reshape(BS, K_fg, *attn_mat.shape[2:])
+            # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 1, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
-            subj_comp_attn = attn_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attn_mat.shape[2:]).sum(dim=1)
-            cls_subj_attn  = attn_mat[ind_cls_subj_B,  ind_cls_subj_N].reshape(BS,  K_fg,   *attn_mat.shape[2:]).sum(dim=1)
-            cls_comp_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attn_mat.shape[2:]).sum(dim=1)
+            subj_comp_attn = attn_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True) / K_fg
+            cls_subj_attn  = attn_mat[ind_cls_subj_B,  ind_cls_subj_N].reshape(BS,  K_fg,   *attn_mat.shape[2:])
+            cls_comp_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True) / K_fg
+
+            # Don't consider negative scores.
+            if subj_comp_attn_uses_scores:
+                subj_subj_attn = torch.clip(subj_subj_attn, min=0)
+                cls_subj_attn  = torch.clip(cls_subj_attn,  min=0)
+                subj_comp_attn = torch.clip(subj_comp_attn, min=0)
+                cls_comp_attn  = torch.clip(cls_comp_attn,  min=0)
+
             # The orthogonal projection of subj_subj_attn against subj_comp_attn.
+            # subj_comp_attn will broadcast to the K_fg dimension.
             subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn)
             # The orthogonal projection of cls_subj_attn against cls_comp_attn.
+            # cls_comp_attn will broadcast to the K_fg dimension.
             cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn)
             # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
             # vary only along the direction of the orthogonal projections of class attention.
