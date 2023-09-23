@@ -3018,7 +3018,7 @@ class LatentDiffusion(DDPM):
             # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
             loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
                                                              batch_mask=None, exponent=2,
-                                                             do_demean_first=False, 
+                                                             do_demean_first=True, 
                                                              first_n_dims_to_flatten=3,
                                                              ref_grad_scale=cls_grad_scale)
             
