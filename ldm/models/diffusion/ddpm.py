@@ -2668,11 +2668,11 @@ class LatentDiffusion(DDPM):
                 # avoid BP through attention.
                 # reversed=True: larger subject attention => smaller spatial weight, i.e., 
                 # pay more attention to the context.
-                spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(mix_comp_subj_attn.sum(dim=1), BLOCK_SIZE, 
+                spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(mix_comp_subj_attn, BLOCK_SIZE, 
                                                                                                   feat_mix_comp.shape[2:],
                                                                                                   reversed=True)
 
-                spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_comp_subj_attn.sum(dim=1), BLOCK_SIZE,
+                spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_comp_subj_attn, BLOCK_SIZE,
                                                                                                   feat_subj_comp.shape[2:],
                                                                                                   reversed=True)
                 spatial_weight = (spatial_weight_mix_comp + spatial_weight_subj_comp) / 2
