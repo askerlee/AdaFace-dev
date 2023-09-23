@@ -3029,10 +3029,10 @@ class LatentDiffusion(DDPM):
             attn_mat = attn_mat.permute(0, 3, 1, 2)
             # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]
             subj_subj_attn = attn_mat[ind_subj_subj_B, ind_subj_subj_N].reshape(BS, K_fg, *attn_mat.shape[2:])
+            cls_subj_attn  = attn_mat[ind_cls_subj_B,  ind_cls_subj_N].reshape(BS,  K_fg,   *attn_mat.shape[2:])
             # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 1, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
             subj_comp_attn = attn_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True) / K_fg
-            cls_subj_attn  = attn_mat[ind_cls_subj_B,  ind_cls_subj_N].reshape(BS,  K_fg,   *attn_mat.shape[2:])
             cls_comp_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True) / K_fg
 
             # The orthogonal projection of subj_subj_attn against subj_comp_attn.
@@ -3060,7 +3060,7 @@ class LatentDiffusion(DDPM):
         return loss_subj_comp_key_ortho, loss_subj_comp_attn_comple
 
     def calc_comp_fg_bg_preserve_loss(self, unet_attns, unet_feats, 
-                                 fg_mask, batch_have_fg_mask, subj_indices, BS):
+                                      fg_mask, batch_have_fg_mask, subj_indices, BS):
         # No masks available. loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0
@@ -3167,8 +3167,8 @@ class LatentDiffusion(DDPM):
 
             # Simply suppress the subj attention on background areas. 
             # No need to use attn_*_single as references.
-            loss_layer_subj_bg_attn_suppress = torch.pow(subj_subj_bg_attn, 2).mean()
-            loss_layer_mix_bg_attn_suppress  = torch.pow(mix_subj_bg_attn, 2).mean()
+            loss_layer_subj_bg_attn_suppress = subj_subj_bg_attn.abs().mean()
+            loss_layer_mix_bg_attn_suppress  = mix_subj_bg_attn.abs().mean()
             mix_bg_attn_suppress_loss_scale = 0.1
             loss_comp_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
                                             + loss_layer_mix_bg_attn_suppress * mix_bg_attn_suppress_loss_scale) \
