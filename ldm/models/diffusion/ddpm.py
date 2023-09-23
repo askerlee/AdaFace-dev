@@ -2990,14 +2990,16 @@ class LatentDiffusion(DDPM):
             # and there's no interaction among them.
             subj_subj_ks = unet_seq_k[ind_subj_subj_B, :, ind_subj_subj_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3)
             cls_subj_ks  = unet_seq_k[ind_cls_subj_B,  :, ind_cls_subj_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3)
-            # subj_comp_ks, cls_comp_ks: [11, 16, 160] => [1, 11, 16, 160] => [1, 16, 11, 160]
+            # subj_comp_ks, cls_comp_ks: [11, 16, 160] => [1, 11, 16, 160] => [1, 16, 11, 160].
             subj_comp_ks = unet_seq_k[ind_subj_comp_B, :, ind_subj_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
             cls_comp_ks  = unet_seq_k[ind_cls_comp_B,  :, ind_cls_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
 
-            # subj_comp_ks_sum: [1, 8, 18, 160] => [1, 8, 1, 160]. Sum over all extra 18 compositional embeddings.
-            subj_comp_ks_sum = subj_comp_ks.sum(dim=2, keepdim=True)
-            # cls_comp_ks_sum:  [1, 8, 18, 160] => [1, 8, 1, 160]. Sum over all extra 18 compositional embeddings.
-            cls_comp_ks_sum  = cls_comp_ks.sum(dim=2, keepdim=True)
+            # subj_comp_ks_sum: [1, 8, 18, 160] => [1, 8, 1, 160]. 
+            # Sum over all extra 18 compositional embeddings and average by K_fg.
+            subj_comp_ks_sum = subj_comp_ks.sum(dim=2, keepdim=True) / K_fg
+            # cls_comp_ks_sum:  [1, 8, 18, 160] => [1, 8, 1, 160]. 
+            # Sum over all extra 18 compositional embeddings and average by K_fg.
+            cls_comp_ks_sum  = cls_comp_ks.sum(dim=2, keepdim=True) / K_fg
 
             # The orthogonal projection of subj_subj_ks_mean against subj_comp_ks_sum.
             subj_comp_emb_diff = ortho_subtract(subj_subj_ks, subj_comp_ks_sum)
