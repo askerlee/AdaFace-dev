@@ -40,7 +40,6 @@ model:
     subj_comp_key_ortho_loss_weight:          1e-3
     # typical loss_subj_comp_attn_comple is 0.4, * weight -> 2e-6
     subj_comp_attn_complementary_loss_weight: 1e-3
-    subj_comp_attn_comple_loss_uses_scores:   True
     # typical prompt mix reg loss: 2, * weight -> 4e-4.
     mix_prompt_distill_weight:          2e-4
     # loss_fg_feat_contrast_step: 1~2,     * weight -> 1e-6~2e-6
