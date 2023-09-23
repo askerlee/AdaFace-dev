@@ -3035,13 +3035,6 @@ class LatentDiffusion(DDPM):
             cls_subj_attn  = attn_mat[ind_cls_subj_B,  ind_cls_subj_N].reshape(BS,  K_fg,   *attn_mat.shape[2:])
             cls_comp_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True) / K_fg
 
-            # Don't consider negative scores.
-            if subj_comp_attn_uses_scores:
-                subj_subj_attn = torch.clip(subj_subj_attn, min=0)
-                cls_subj_attn  = torch.clip(cls_subj_attn,  min=0)
-                subj_comp_attn = torch.clip(subj_comp_attn, min=0)
-                cls_comp_attn  = torch.clip(cls_comp_attn,  min=0)
-
             # The orthogonal projection of subj_subj_attn against subj_comp_attn.
             # subj_comp_attn will broadcast to the K_fg dimension.
             subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn)
@@ -3050,7 +3043,7 @@ class LatentDiffusion(DDPM):
             cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn)
             # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
             # vary only along the direction of the orthogonal projections of class attention.
-            
+
             # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
             # But we don't want to only focus on large activations. So set it to 2.
             # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
