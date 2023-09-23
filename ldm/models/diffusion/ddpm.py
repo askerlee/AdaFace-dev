@@ -97,6 +97,7 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=0.,
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_attn_complementary_loss_weight=0.,
+                 subj_comp_attn_comple_loss_uses_scores=False,
                  mix_prompt_distill_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
@@ -131,6 +132,7 @@ class DDPM(pl.LightningModule):
         self.prompt_emb_delta_reg_weight     = prompt_emb_delta_reg_weight
         self.subj_comp_key_ortho_loss_weight = subj_comp_key_ortho_loss_weight
         self.subj_comp_attn_complementary_loss_weight = subj_comp_attn_complementary_loss_weight
+        self.subj_comp_attn_comple_loss_uses_scores   = subj_comp_attn_comple_loss_uses_scores
         self.mix_prompt_distill_weight       = mix_prompt_distill_weight
         self.comp_fg_bg_preserve_loss_weight = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight = fg_bg_complementary_loss_weight
@@ -2449,27 +2451,21 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
 
             loss_subj_comp_key_ortho = 0
-            subj_comp_attn_comple_loss_scale = 1
+            subj_comp_attn_comple_loss_scale = 0.1 if self.subj_comp_attn_comple_loss_uses_scores else 1
             if self.subj_comp_key_ortho_loss_weight > 0:
-                # It's easier to implement attention complementary loss in calc_subj_comp_ortho_loss(),
-                # instead of reusing calc_fg_bg_complementary_loss().
-                subj_comp_attn_comple_uses_scores = True
-                unet_attns = extra_info['unet_attnscores'] if subj_comp_attn_comple_uses_scores \
+                unet_attns = extra_info['unet_attnscores'] if self.subj_comp_attn_comple_loss_uses_scores \
                              else extra_info['unet_attns']
                 loss_subj_comp_key_ortho, loss_subj_comp_attn_comple = \
                     self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], unet_attns,
                                                    extra_info['subj_indices_2b'],
                                                    self.embedding_manager.delta_loss_emb_mask,
                                                    BLOCK_SIZE, cls_grad_scale=0.05,
-                                                   attn_uses_scores=subj_comp_attn_comple_uses_scores)
+                                                   attn_uses_scores=self.subj_comp_attn_comple_loss_uses_scores)
 
                 if loss_subj_comp_key_ortho != 0:
                     loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
                 if loss_subj_comp_attn_comple != 0:
                     loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
-
-                if subj_comp_attn_comple_uses_scores:
-                    subj_comp_attn_comple_loss_scale = 0.1
 
             # Although fg_mask_avail_ratio > 0 when comp_init_with_fg_area,
             # fg_mask_avail_ratio may have been updated after doing teacher filtering 
