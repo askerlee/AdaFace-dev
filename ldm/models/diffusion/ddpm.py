@@ -2988,10 +2988,11 @@ class LatentDiffusion(DDPM):
         loss_subj_comp_value_ortho = 0
         loss_subj_comp_attn_comple = 0
 
+        emb_kq_do_demean_first = False
+
         for unet_layer_idx, unet_seq_k in unet_ks.items():
             if (unet_layer_idx not in k_ortho_layer_weights):
                 continue
-
 
             loss_layer_subj_comp_key_ortho = \
                 calc_layer_subj_comp_k_ortho_loss(unet_seq_k, K_fg, K_comp, BS,
@@ -2999,19 +3000,21 @@ class LatentDiffusion(DDPM):
                                                   ind_cls_subj_B,  ind_cls_subj_N, 
                                                   ind_subj_comp_B, ind_subj_comp_N, 
                                                   ind_cls_comp_B,  ind_cls_comp_N,
-                                                  cls_grad_scale)
+                                                  do_demean_first=emb_kq_do_demean_first, 
+                                                  cls_grad_scale=cls_grad_scale)
             loss_layer_subj_comp_value_ortho = \
                 calc_layer_subj_comp_k_ortho_loss(unet_vs[unet_layer_idx], K_fg, K_comp, BS,
                                                   ind_subj_subj_B, ind_subj_subj_N, 
                                                   ind_cls_subj_B,  ind_cls_subj_N, 
                                                   ind_subj_comp_B, ind_subj_comp_N, 
                                                   ind_cls_comp_B,  ind_cls_comp_N,
-                                                  cls_grad_scale)
+                                                  do_demean_first=emb_kq_do_demean_first, 
+                                                  cls_grad_scale=cls_grad_scale)
             
             k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
             loss_subj_comp_key_ortho   += loss_layer_subj_comp_key_ortho   * k_ortho_layer_weight
             loss_subj_comp_value_ortho += loss_layer_subj_comp_value_ortho * k_ortho_layer_weight
-            
+
             ###########   loss_subj_comp_attn_comple   ###########
             # attn_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
             attn_mat = unet_attns_or_scores[unet_layer_idx]

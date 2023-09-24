@@ -1014,7 +1014,7 @@ def calc_layer_subj_comp_k_ortho_loss(unet_seq_k, K_fg, K_comp, BS,
                                       ind_cls_subj_B,  ind_cls_subj_N, 
                                       ind_subj_comp_B, ind_subj_comp_N, 
                                       ind_cls_comp_B,  ind_cls_comp_N,
-                                      cls_grad_scale=0.05):
+                                      do_demean_first=True, cls_grad_scale=0.05):
 
     # unet_seq_k: [B, H, N, D] = [2, 8, 77, 160].
     # H = 8, number of attention heads. D: 160, number of image tokens.
@@ -1052,7 +1052,7 @@ def calc_layer_subj_comp_k_ortho_loss(unet_seq_k, K_fg, K_comp, BS,
     # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
     loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
                                                      batch_mask=None, exponent=2,
-                                                     do_demean_first=True, 
+                                                     do_demean_first=do_demean_first, 
                                                      first_n_dims_to_flatten=3,
                                                      ref_grad_scale=cls_grad_scale)
     return loss_layer_subj_comp_key_ortho
