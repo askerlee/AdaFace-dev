@@ -769,6 +769,8 @@ def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0
         ti_upperbound = min(int(ti * ratio_ub) + 1, num_timesteps)
         t_anneal[i] = np.random.randint(ti_lowerbound, ti_upperbound)
 
+    return t_anneal
+
 # feat_or_attn: 4D features or 3D attention. If it's attention, then
 # its geometrical dimensions (H, W) have been flatten to 1D (last dim).
 # mask:      always 4D.
@@ -888,7 +890,8 @@ def mix_embeddings(mix_scheme, c1, c2, mix_indices=None,
 
 # t_frac is a float scalar. 
 def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N, 
-                             t_frac=1.0, subj_v_frac=0.2,
+                             training_percent,
+                             t_frac=1.0, 
                              use_layerwise_embedding=True,
                              N_LAYERS=16, 
                              CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.7],
@@ -965,9 +968,16 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N,
         # and how much mix_single_emb_all_layers is mixed with subj_single_emb2 into mix_single_emb.
 
         # layer_mask[:, sync_layer_indices]: [2, 7, 154, 768]
-        # certain layers in layer_mask (used on subj_emb2) gradually reduce from 1 to 0.
-        # i.e., the proportions of subj_emb2 gradually reduce from 1 to 0.
-        layer_mask[:, sync_layer_indices] = subj_v_frac #1 - t_frac.view(-1, 1, 1, 1)
+        # selected layers in layer_mask (used on subj_emb2) vary between [0, 1] 
+        # according to t_frac and training_percent.
+        # i.e., when training_percent=0,
+        # when t=999, the proportions of subj_emb2 is 0.
+        # when t=0,   the proportions of subj_emb2 is 1.
+        #       when training_percent=1,
+        # when t=999, the proportions of subj_emb2 is 0.3.
+        # when t=0,   the proportions of subj_emb2 is 1.
+        # Essentially, this is doing diffusion w.r.t. subj_emb2 proportions.
+        layer_mask[:, sync_layer_indices] = 1 - t_frac.view(-1, 1, 1, 1) * (1 - training_percent * 0.3)
         layer_mask = layer_mask.reshape(-1, *mix_emb_all_layers.shape[1:])
 
         # Use most of the layers of embeddings in subj_comp_emb2, but 
