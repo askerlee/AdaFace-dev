@@ -891,8 +891,9 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N,
                              t_frac=1.0,
                              use_layerwise_embedding=True,
                              N_LAYERS=16, 
-                             LAYERS_CLS_E_SCALE_RANGE=(0.8, 0.2),
-                             sync_layer_indices=[4, 5, 6, 7, 8, 9, 10]
+                             CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.7],
+                             # 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24
+                             sync_layer_indices=[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
                              ):
     
     subj_emb, cls_emb = c_static_emb.chunk(2)
@@ -906,26 +907,25 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N,
     if len(t_frac) != BS:
         breakpoint()
         
-    FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE = LAYERS_CLS_E_SCALE_RANGE
+    FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE = CLS_E_SCALE_LAYERWISE_RANGE
 
     if use_layerwise_embedding:
         SCALE_STEP = (FINAL_LAYER_CLS_E_SCALE - FIRST_LAYER_CLS_E_SCALE) / (len(sync_layer_indices) - 1)
-        # Linearly decrease the scale of the class   embeddings from 0.5 to 0.1, 
+        # Linearly decrease the scale of the class   embeddings from 1.0 to 0.7, 
         # i.e., 
-        # Linearly increase the scale of the subject embeddings from 0.5 to 0.9.
-        # emb_v_layers_cls_mix_scales =  [1.0, 1.0, 1.0, 1.0, 0.3, 0.4, 0.5, 0.6, 
-        #                                 0.7, 0.8, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0000]
+        # Linearly increase the scale of the subject embeddings from 0.0 to 0.3.
+        # emb_v_layers_cls_mix_scales =  [1.00, 1.00, 1.00, 1.00, 1.00, 0.95, 0.9, 0.85, 
+        #                                 0.80, 0.75, 0.70, 1.0, 1.0, 1.0, 1.0, 1.0]
         emb_v_layers_cls_mix_scales = torch.ones(BS, N_LAYERS, device=c_static_emb.device) 
         # Scale the class embeddings mix scale by t_frac.
         emb_v_layers_cls_mix_scales[:, sync_layer_indices] = \
             torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
-                             step=SCALE_STEP, device=c_static_emb.device).repeat(BS, 1) * t_frac
+                         step=SCALE_STEP, device=c_static_emb.device).repeat(BS, 1)
     else:
         # Same scale for all layers.
         # emb_v_layers_cls_mix_scales = [0.5, 0.5, ..., 0.5].
         AVG_SCALE = (FIRST_LAYER_CLS_E_SCALE + FINAL_LAYER_CLS_E_SCALE) / 2
-        emb_v_layers_cls_mix_scales = torch.ones(N_LAYERS, device=c_static_emb.device).repeat(BS, 1) \
-                                        * AVG_SCALE * t_frac
+        emb_v_layers_cls_mix_scales = AVG_SCALE * torch.ones(N_LAYERS, device=c_static_emb.device).repeat(BS, 1)
 
     # First mix the static embeddings.
     # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_half_N,

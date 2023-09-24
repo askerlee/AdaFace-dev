@@ -1856,7 +1856,7 @@ class LatentDiffusion(DDPM):
                 inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0))
 
             else:
-                # Fresh compositional iter.
+                # Fresh compositional iter. May do teacher filtering.
                 t_tail = torch.randint(int(self.num_timesteps * 0.8), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
                 t = t_tail
                 # x_start is of ORIG_BS = 2. So BLOCK_SIZE=1.
@@ -1867,16 +1867,16 @@ class LatentDiffusion(DDPM):
                 # This may help the model ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
 
-                # The probability of this branch is annealed from 0.4 to 0.2.
-                if bool_annealed(self.training_percent, final_percent=0.5, true_prob_range=(0.6, 0.8)):
+                if bool_annealed(self.training_percent, final_percent=0.5, true_prob_range=(0.6, 0.75)):
                     x_start.normal_()
                 else:
+                    # The probability of this branch is annealed from 0.4 to 0.25 above.
                     if self.fg_mask_avail_ratio > 0:
                         # At foreground, keep 30% of the original x_start values and add 70% noise. 
                         # At background, fill with random values (100% noise).
                         x_start = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
                         # Disable annealing fg noise amount
-                        min_fg_noise_amount, max_fg_noise_amount = (0.7, 0.85)
+                        min_fg_noise_amount, max_fg_noise_amount = (0.7, 0.7)
                         ## The mean of fg_noise_amount is annealed from 0.7 to 0.9.
                         # Then randomly choose fg_noise_amount from [0.8 * mean, 1.2 * mean] 
                         # (bounded by [0, 1]).
@@ -1887,8 +1887,8 @@ class LatentDiffusion(DDPM):
                         # comp_init_fg_info_amount will be used as the weight of loss_comp_fg_bg_preserve.
                         self.iter_flags['comp_init_fg_info_amount'] = (1 - fg_noise_amount) / (1 - min_fg_noise_amount)
                     else:
-                        # No fg_mask. Add 90% noise to x_start.
-                        x_start = torch.randn_like(x_start) * 0.7 + x_start * 0.3
+                        # No fg_mask. Add 80% noise to x_start.
+                        x_start = torch.randn_like(x_start) * 0.8 + x_start * 0.2
 
             if not self.iter_flags['do_mix_prompt_distillation']:
                 # Only do ada delta loss. This usually won't happen unless mix_prompt_distill_weight = 0.
@@ -1931,7 +1931,8 @@ class LatentDiffusion(DDPM):
                     noise   = noise.repeat(2, 1, 1, 1)
                     t       = t.repeat(2)
 
-                    # Make two identical sets of c_static_emb2 and c_in2.
+                    # Make two identical sets of c_static_emb2 and c_in2 (first half batch and second half batch).
+                    # The two sets are applied on different initial x_start, noise and t (within each half batch).
                     subj_single_emb, subj_comp_emb, mix_single_emb, mix_comp_emb = \
                         c_static_emb.chunk(4)
                     # Only keep *_comp_emb, but repeat them to form twin comp sets.
@@ -1942,8 +1943,8 @@ class LatentDiffusion(DDPM):
                         chunk_list(c_in, 4)
                     # Only keep *comp_prompts, but repeat them to form twin comp sets.
                     c_in2 = subj_comp_prompts + subj_comp_prompts + cls_comp_prompts + cls_comp_prompts
+                    # Back up cond as cond_orig. Replace cond with the cond for the twin comp sets.
                     cond_orig = cond
-                    # Back up cond as cond_orig. Replace cond with the cond for twin comp sets.
                     cond = (c_static_emb2, c_in2, extra_info)
 
                     # Update masks to be a two-fold * 2 structure.
@@ -1999,7 +2000,7 @@ class LatentDiffusion(DDPM):
                                          t_frac = t_frac,
                                          use_layerwise_embedding = self.use_layerwise_embedding,
                                          N_LAYERS = self.N_LAYERS,
-                                         LAYERS_CLS_E_SCALE_RANGE=[1.0, 0.7])
+                                         CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.7])
           
             # Update cond[0] to c_static_emb_vk.
             # Use cond[1] instead of c_in as part of the tuple, since c_in is changed in the
@@ -2245,7 +2246,7 @@ class LatentDiffusion(DDPM):
                                                  t_frac = t_frac,
                                                  use_layerwise_embedding = self.use_layerwise_embedding,
                                                  N_LAYERS = self.N_LAYERS,
-                                                 LAYERS_CLS_E_SCALE_RANGE=[1.0, 0.7])
+                                                 CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.7])
                     
                     extra_info['emb_v_mixer']                   = emb_v_mixer
                     # emb_v_layers_cls_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
