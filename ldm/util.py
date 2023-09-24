@@ -914,10 +914,9 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N,
         # Linearly decrease the scale of the class   embeddings from 1.0 to 0.7, 
         # i.e., 
         # Linearly increase the scale of the subject embeddings from 0.0 to 0.3.
-        # emb_v_layers_cls_mix_scales =  [1.00, 1.00, 1.00, 1.00, 1.00, 0.95, 0.9, 0.85, 
-        #                                 0.80, 0.75, 0.70, 1.0, 1.0, 1.0, 1.0, 1.0]
+        # [1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 0.9727, 0.9455, 0.9182, 
+        #  0.8909, 0.8636, 0.8364, 0.8091, 0.7818, 0.7545, 0.7273, 0.7000]
         emb_v_layers_cls_mix_scales = torch.ones(BS, N_LAYERS, device=c_static_emb.device) 
-        # Scale the class embeddings mix scale by t_frac.
         emb_v_layers_cls_mix_scales[:, sync_layer_indices] = \
             torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
                          step=SCALE_STEP, device=c_static_emb.device).repeat(BS, 1)
@@ -968,7 +967,7 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N,
         # layer_mask[:, sync_layer_indices]: [2, 7, 154, 768]
         # certain layers in layer_mask (used on subj_emb2) gradually reduce from 1 to 0.
         # i.e., the proportions of subj_emb2 gradually reduce from 1 to 0.
-        layer_mask[:, sync_layer_indices] = 1 - t_frac.view(-1, 1, 1, 1)
+        layer_mask[:, sync_layer_indices] = 1 #- t_frac.view(-1, 1, 1, 1)
         layer_mask = layer_mask.reshape(-1, *mix_emb_all_layers.shape[1:])
 
         # Use most of the layers of embeddings in subj_comp_emb2, but 
