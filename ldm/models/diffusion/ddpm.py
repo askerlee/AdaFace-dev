@@ -2056,7 +2056,7 @@ class LatentDiffusion(DDPM):
                     self.fg_bg_comple_attn_uses_scores = True
                     fg_bg_comple_attn_key = 'unet_attnscores' if self.fg_bg_comple_attn_uses_scores \
                                             else 'unet_attns'
-                    loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast = \
+                    loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_mask_contrast = \
                                 self.calc_fg_bg_complementary_loss(extra_info[fg_bg_comple_attn_key], 
                                                                    extra_info['unet_attnscores'],
                                                                    extra_info['subj_indices'],
@@ -2068,19 +2068,18 @@ class LatentDiffusion(DDPM):
                                                                    batch_have_fg_mask=batch_have_fg_mask
                                                                   )
 
-
-                    loss += self.fg_bg_complementary_loss_weight * loss_fg_bg_complementary \
-                            + self.fg_bg_mask_align_loss_weight * \
-                              (loss_fg_mask_align + loss_bg_mask_align + loss_fg_bg_contrast)
-                    
                     loss_dict.update({f'{prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach()})
                     # If fg_mask is None, then loss_fg_mask_align = loss_bg_mask_align = 0.
                     if loss_fg_mask_align > 0:
                         loss_dict.update({f'{prefix}/fg_mask_align': loss_fg_mask_align.mean().detach()})
                     if loss_bg_mask_align > 0:
                         loss_dict.update({f'{prefix}/bg_mask_align': loss_bg_mask_align.mean().detach()})
-                    if loss_fg_bg_contrast > 0:
-                        loss_dict.update({f'{prefix}/fg_bg_contrast': loss_fg_bg_contrast.mean().detach()})
+                    if loss_fg_bg_mask_contrast > 0:
+                        loss_dict.update({f'{prefix}/fg_bg_mask_contrast': loss_fg_bg_mask_contrast.mean().detach()})
+
+                    loss += self.fg_bg_complementary_loss_weight * loss_fg_bg_complementary \
+                            + self.fg_bg_mask_align_loss_weight * \
+                              (loss_fg_mask_align + loss_bg_mask_align + loss_fg_bg_mask_contrast)
 
                 # Release RAM.
                 for k in ('unet_feats', 'unet_attns', 'unet_attnscores', 'unet_ks', 'unet_vs'):
@@ -2774,7 +2773,7 @@ class LatentDiffusion(DDPM):
         loss_fg_bg_complementary = 0
         loss_fg_mask_align = 0
         loss_bg_mask_align = 0
-        loss_fg_bg_contrast = 0
+        loss_fg_bg_mask_contrast = 0
 
         emb_mfmb_contrast_scale         = 0.01
         fgbg_emb_contrast_scale         = 0.05
@@ -2917,7 +2916,7 @@ class LatentDiffusion(DDPM):
                                         * attn_align_layer_weight * emb_mfmb_contrast_scale
                 loss_bg_mask_align  += loss_layer_bg_mfmb_contrast \
                                         * attn_align_layer_weight * emb_mfmb_contrast_scale
-                loss_fg_bg_contrast += (loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
+                loss_fg_bg_mask_contrast += (loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
                                         * attn_align_layer_weight * fgbg_emb_contrast_scale
                 #print(f'layer {unet_layer_idx}')
                 #print(f'subj_contrast: {loss_layer_subj_contrast:.4f}, subj_bg_contrast_at_mf: {loss_layer_subj_bg_contrast_at_mf:.4f},')
@@ -2927,11 +2926,11 @@ class LatentDiffusion(DDPM):
         if batch_have_fg_mask.sum() > 0:
             loss_fg_mask_align  = (loss_fg_mask_align  * batch_have_fg_mask).sum() / batch_have_fg_mask.sum()
             loss_bg_mask_align  = (loss_bg_mask_align  * batch_have_fg_mask).sum() / batch_have_fg_mask.sum()
-            loss_fg_bg_contrast = (loss_fg_bg_contrast * batch_have_fg_mask).sum() / batch_have_fg_mask.sum()
-        # Otherwise, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast are all initial 0.
+            loss_fg_bg_mask_contrast = (loss_fg_bg_mask_contrast * batch_have_fg_mask).sum() / batch_have_fg_mask.sum()
+        # Otherwise, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_mask_contrast are all initial 0.
         # No need further processing.
 
-        return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_contrast
+        return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_mask_contrast
     
     def calc_subj_comp_ortho_loss(self, unet_ks, unet_vs, unet_attns_or_scores,
                                   subj_indices, delta_loss_emb_mask, 
