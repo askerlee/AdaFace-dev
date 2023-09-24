@@ -768,11 +768,13 @@ class UNetModel(nn.Module):
         assert (y is not None) == (
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"
+        
         hs = []
         distill_feats = {}
         distill_attns = {}
         distill_attnscores = {}
-        distill_ks    = {}
+        distill_ks      = {}
+        distill_vs      = {}
 
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
@@ -969,6 +971,7 @@ class UNetModel(nn.Module):
                     distill_attns[layer_idx]        = module[1].transformer_blocks[0].attn2.cached_attn_mat 
                     distill_attnscores[layer_idx]   = module[1].transformer_blocks[0].attn2.cached_attn_scores
                     distill_ks[layer_idx]           = module[1].transformer_blocks[0].attn2.cached_k
+                    distill_vs[layer_idx]           = module[1].transformer_blocks[0].attn2.cached_v
                     distill_feats[layer_idx]        = h
 
             layer_idx += 1
@@ -981,6 +984,7 @@ class UNetModel(nn.Module):
                 distill_attns[layer_idx]        = self.middle_block[1].transformer_blocks[0].attn2.cached_attn_mat 
                 distill_attnscores[layer_idx]   = self.middle_block[1].transformer_blocks[0].attn2.cached_attn_scores
                 distill_ks[layer_idx]           = self.middle_block[1].transformer_blocks[0].attn2.cached_k
+                distill_vs[layer_idx]           = self.middle_block[1].transformer_blocks[0].attn2.cached_v
                 distill_feats[layer_idx]        = h
 
         layer_idx += 1
@@ -1008,6 +1012,7 @@ class UNetModel(nn.Module):
                     distill_attns[layer_idx]        = module[1].transformer_blocks[0].attn2.cached_attn_mat 
                     distill_attnscores[layer_idx]   = module[1].transformer_blocks[0].attn2.cached_attn_scores
                     distill_ks[layer_idx]           = module[1].transformer_blocks[0].attn2.cached_k
+                    distill_vs[layer_idx]           = module[1].transformer_blocks[0].attn2.cached_v
                     distill_feats[layer_idx]        = h
 
             layer_idx += 1
@@ -1016,6 +1021,7 @@ class UNetModel(nn.Module):
         extra_info['unet_attns']        = distill_attns
         extra_info['unet_attnscores']   = distill_attnscores
         extra_info['unet_ks']           = distill_ks
+        extra_info['unet_vs']           = distill_vs
 
         if debug_attn:
             breakpoint()

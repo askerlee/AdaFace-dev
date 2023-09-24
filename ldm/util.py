@@ -1008,3 +1008,51 @@ def repeat_part_of_masks(img_mask, fg_mask, batch_have_fg_mask, sel_indices, REP
     fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
 
     return img_mask, fg_mask, batch_have_fg_mask, fg_mask_avail_ratio
+
+def calc_layer_subj_comp_k_ortho_loss(unet_seq_k, K_fg, K_comp, BS, 
+                                      ind_subj_subj_B, ind_subj_subj_N, 
+                                      ind_cls_subj_B,  ind_cls_subj_N, 
+                                      ind_subj_comp_B, ind_subj_comp_N, 
+                                      ind_cls_comp_B,  ind_cls_comp_N,
+                                      cls_grad_scale=0.05):
+
+    # unet_seq_k: [B, H, N, D] = [2, 8, 77, 160].
+    # H = 8, number of attention heads. D: 160, number of image tokens.
+    H, D = unet_seq_k.shape[1], unet_seq_k.shape[-1]
+    # subj_subj_ks, cls_subj_ks: [4,  8, 160] => [1, 4,  8, 160] => [1, 8, 4, 160].
+    # subj_comp_ks, cls_comp_ks: [15, 8, 160] => [1, 15, 8, 160] => [1, 8, 15, 160].
+    # Put the 4 subject embeddings in the 2nd to last dimension for torch.mm().
+    # The ortho losses on different "instances" are computed separately 
+    # and there's no interaction among them.
+
+    subj_subj_ks = unet_seq_k[ind_subj_subj_B, :, ind_subj_subj_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3)
+    cls_subj_ks  = unet_seq_k[ind_cls_subj_B,  :, ind_cls_subj_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3)
+    # subj_comp_ks, cls_comp_ks: [11, 16, 160] => [1, 11, 16, 160] => [1, 16, 11, 160].
+    subj_comp_ks = unet_seq_k[ind_subj_comp_B, :, ind_subj_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
+    cls_comp_ks  = unet_seq_k[ind_cls_comp_B,  :, ind_cls_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
+
+    # subj_comp_ks_sum: [1, 8, 18, 160] => [1, 8, 1, 160]. 
+    # Sum over all extra 18 compositional embeddings and average by K_fg.
+    subj_comp_ks_sum = subj_comp_ks.sum(dim=2, keepdim=True) / K_fg
+    # cls_comp_ks_sum:  [1, 8, 18, 160] => [1, 8, 1, 160]. 
+    # Sum over all extra 18 compositional embeddings and average by K_fg.
+    cls_comp_ks_sum  = cls_comp_ks.sum(dim=2, keepdim=True) / K_fg
+
+    # The orthogonal projection of subj_subj_ks_mean against subj_comp_ks_sum.
+    subj_comp_emb_diff = ortho_subtract(subj_subj_ks, subj_comp_ks_sum)
+    # The orthogonal projection of cls_subj_ks_mean against cls_comp_ks_sum.
+    cls_comp_emb_diff  = ortho_subtract(cls_subj_ks,  cls_comp_ks_sum)
+    # The two orthogonal projections should be aligned. That is, subj_subj_ks_mean is allowed to
+    # vary only along the direction of the orthogonal projections of class embeddings.
+
+    # Don't compute the ortho loss on dress-type compositions, 
+    # such as "z wearing a santa hat / z that is red", because the attended areas 
+    # largely overlap with the subject, and making them orthogonal will 
+    # hurt their expression in the image (e.g., push the attributes to the background).
+    # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
+    loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
+                                                     batch_mask=None, exponent=2,
+                                                     do_demean_first=True, 
+                                                     first_n_dims_to_flatten=3,
+                                                     ref_grad_scale=cls_grad_scale)
+    return loss_layer_subj_comp_key_ortho
