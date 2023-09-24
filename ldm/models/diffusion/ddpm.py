@@ -1997,7 +1997,7 @@ class LatentDiffusion(DDPM):
             # (extra_info['subj_indices_2b'][1] just repeats extra_info['subj_indices_1b'][1] twice.)
             c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales = \
                 mix_static_vk_embeddings(cond[0], extra_info['subj_indices_1b'][1], 
-                                         t_frac = t_frac,
+                                         t_frac = t_frac, subj_v_frac=0.2,
                                          use_layerwise_embedding = self.use_layerwise_embedding,
                                          N_LAYERS = self.N_LAYERS,
                                          CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.7])
@@ -2243,7 +2243,7 @@ class LatentDiffusion(DDPM):
                     # but cond  is organized as (subj comp, subj comp, mix comp, mix comp).
                     c_static_emb_orig_vk, emb_v_mixer, emb_v_layers_cls_mix_scales = \
                         mix_static_vk_embeddings(cond_orig[0], extra_info['subj_indices_1b'][1], 
-                                                 t_frac = t_frac,
+                                                 t_frac = t_frac, subj_v_frac=0.2,
                                                  use_layerwise_embedding = self.use_layerwise_embedding,
                                                  N_LAYERS = self.N_LAYERS,
                                                  CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.7])

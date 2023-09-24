@@ -888,7 +888,7 @@ def mix_embeddings(mix_scheme, c1, c2, mix_indices=None,
 
 # t_frac is a float scalar. 
 def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N, 
-                             t_frac=1.0,
+                             t_frac=1.0, subj_v_frac=0.2,
                              use_layerwise_embedding=True,
                              N_LAYERS=16, 
                              CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.7],
@@ -967,7 +967,7 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N,
         # layer_mask[:, sync_layer_indices]: [2, 7, 154, 768]
         # certain layers in layer_mask (used on subj_emb2) gradually reduce from 1 to 0.
         # i.e., the proportions of subj_emb2 gradually reduce from 1 to 0.
-        layer_mask[:, sync_layer_indices] = 1 #- t_frac.view(-1, 1, 1, 1)
+        layer_mask[:, sync_layer_indices] = subj_v_frac #1 - t_frac.view(-1, 1, 1, 1)
         layer_mask = layer_mask.reshape(-1, *mix_emb_all_layers.shape[1:])
 
         # Use most of the layers of embeddings in subj_comp_emb2, but 
