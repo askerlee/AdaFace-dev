@@ -30,6 +30,13 @@ animal_action_regexs = \
   "eating (a sandwich|an ice cream|barbecue|a pizza|a burger|a bowl of pasta|a piece of cake|a sushi roll|a bowl of soup|a plate of tacos)",
 ]
 
+animal_dresses = [
+  "wearing a (tshirt|stormtrooper costume|superman costume|ironman armor|ski outfit|astronaut outfit|medal|suit|tie|baseball cap)",
+  "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt|aikido training clothes|green robe)",
+  # This is kind of static but only for humans/animals. So we put it here.
+  "in a (chef outfit|firefighter outfit|police outfit|a purple wizard outfit|dress|suit|tshirt|stormtrooper costume|superman costume)",
+]
+
 # static compositions are used by both humans/animals and objects
 static_action_regexs = \
 [ 
@@ -46,22 +53,15 @@ static_action_regexs = \
   "on top of (pink fabric|a wooden floor|green grass with sunflowers around it|a mirror|the sidewalk in a crowded street|a dirt road|a white rug|a purple rug in a forest)",
 ]
 
-animal_dresses = [
-  "wearing a (tshirt|stormtrooper costume|superman costume|ironman armor|ski outfit|astronaut outfit|medal|suit|tie|baseball cap)",
-  "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt|aikido training clothes|green robe)",
-  # This is kind of static but only for humans/animals. So we put it here.
-  "in a (chef outfit|firefighter outfit|police outfit|a purple wizard outfit|dress|suit|tshirt|stormtrooper costume|superman costume)",
-]
-
-static_dresses = [
+static_appearances = [
   # To avoid misalignment issues, we don't use "a red/purple z" as prompts.
   "that is (red|purple|shiny|cube|wet)",
 ]
 
 all_action_regexs = static_action_regexs + animal_action_regexs
-all_dress_regexs  = static_dresses + animal_dresses
+all_dress_regexs  = static_appearances   + animal_dresses
 all_composition_regexs    = all_action_regexs    + all_dress_regexs
-static_composition_regexs = static_action_regexs + static_dresses
+static_composition_regexs = static_action_regexs + static_appearances
 
 # Prompt with locations will be combined with a common animal/human.
 # E.g. "a z at the left, a dog in the center"
@@ -116,20 +116,22 @@ all_backgrounds = ["a beach", "a table", "a park", "a concert", "a gym", "a libr
                    "a city", "a mountain", "a blue house", "a wheat field", "a tree and autumn leaves", "the Eiffel Tower", "a jungle", "the snow",
                    "a cobblestone street", "underwater", "an ocean of milk", "pink fabric", "a wooden floor", "green grass with sunflowers around it",
                    "a mirror", "the sidewalk in a crowded street", "a dirt road", "a white rug", "a purple rug in a forest", "a red cube", "a purple cube"
-                   ]
+                  ]
 
 
-def sample_compositions(N, is_animal, is_training=False):
+def sample_compositions(N, subj_type, is_training=False):
     compositions = []
-    are_dresses  = []
+    are_appearances  = []
 
-    if is_animal:
+    if subj_type == 'animal':
         composition_regexs = all_composition_regexs
-        dress_start_idx = len(all_action_regexs)
-    else:
+        appearance_start_idx = len(all_action_regexs)
+    elif subj_type == 'object':
         composition_regexs = static_composition_regexs
-        dress_start_idx = len(static_action_regexs)
-        
+        appearance_start_idx = len(static_action_regexs)
+    else:
+        raise ValueError(f"Unknown subject type: {subj_type}")
+    
     K = len(composition_regexs)
 
     if is_training:
@@ -146,12 +148,12 @@ def sample_compositions(N, is_animal, is_training=False):
 
     for i in range(N):
         idx = np.random.choice(K)
-        is_dress = (idx >= dress_start_idx)
+        is_appearance = (idx >= appearance_start_idx)
 
         composition = exrex.getone(composition_regexs[idx])
         # Disable another object in the image for non-animal subjects,
         # to avoid the spotlight of the non-animal subject being stolen by the other object.
-        if is_animal:
+        if subj_type == 'animal':
             has_another_obj = np.random.choice([0, 1], p=option_probs)
         else:
             has_another_obj = False
@@ -221,13 +223,13 @@ def sample_compositions(N, is_animal, is_training=False):
                 composition = composition[2:]
         
         compositions.append(composition)
-        are_dresses.append(is_dress)
+        are_appearances.append(is_appearance)
         
-    return compositions, are_dresses
+    return compositions, are_appearances
 
 if __name__ == "__main__":
     print("Test:")
-    print("\n".join(sample_compositions(20, True)))
+    print("\n".join(sample_compositions(20, 'animal')))
     print()
     print("Training:")
-    print("\n".join(sample_compositions(20, True, is_training=True)))
+    print("\n".join(sample_compositions(20, 'animal', is_training=True)))
