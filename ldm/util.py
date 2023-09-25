@@ -909,7 +909,8 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N,
 
     if len(t_frac) != BS:
         breakpoint()
-        
+    assert 0 - 1e-6 <= training_percent <= 1 + 1e-6
+
     FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE = CLS_E_SCALE_LAYERWISE_RANGE
 
     if use_layerwise_embedding:
