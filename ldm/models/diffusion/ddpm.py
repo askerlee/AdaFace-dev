@@ -2927,11 +2927,12 @@ class LatentDiffusion(DDPM):
                 #print(f'subj_contrast: {loss_layer_subj_contrast:.4f}, subj_bg_contrast_at_mf: {loss_layer_subj_bg_contrast_at_mf:.4f},')
                 #print(f"bg_contrast:   {loss_layer_bg_contrast:.4f},   subj_bg_contrast_at_mb: {loss_layer_subj_bg_contrast_at_mb:.4f}")
 
-        loss_fg_mask_align          = masked_mean(loss_fg_mask_align,       loss_fg_mask_align > 0)
-        loss_bg_mask_align          = masked_mean(loss_bg_mask_align,       loss_bg_mask_align > 0)
-        loss_fg_bg_mask_contrast    = masked_mean(loss_fg_bg_mask_contrast, loss_fg_bg_mask_contrast > 0)
+        if batch_have_fg_mask.any():
+            loss_fg_mask_align          = masked_mean(loss_fg_mask_align,       loss_fg_mask_align > 0)
+            loss_bg_mask_align          = masked_mean(loss_bg_mask_align,       loss_bg_mask_align > 0)
+            loss_fg_bg_mask_contrast    = masked_mean(loss_fg_bg_mask_contrast, loss_fg_bg_mask_contrast > 0)
         # Otherwise, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_mask_contrast are all initial 0.
-        # No need further processing.
+        # loss_fg_bg_complementary doesn't need fg_mask.
 
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_mask_contrast
     
