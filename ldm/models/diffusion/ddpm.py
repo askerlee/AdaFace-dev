@@ -23,7 +23,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
-                       ortho_subtract, gen_gradient_scaler, \
+                       ortho_subtract, normalized_ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, fix_emb_scales, \
                        halve_token_indices, normalize_dict_values, masked_mean, \
@@ -2725,9 +2725,9 @@ class LatentDiffusion(DDPM):
 
             distill_on_delta = True
             if distill_on_delta:
-                # ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
-                feat_mix_delta  = ortho_subtract(feat_mix_comp,  feat_mix_single)
-                feat_subj_delta = ortho_subtract(feat_subj_comp, feat_subj_single)
+                # normalized_ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
+                feat_mix_delta  = normalized_ortho_subtract(feat_mix_comp,  feat_mix_single)
+                feat_subj_delta = normalized_ortho_subtract(feat_subj_comp, feat_subj_single)
             else:
                 feat_mix_delta  = feat_mix_comp
                 feat_subj_delta = feat_subj_comp
@@ -3024,15 +3024,15 @@ class LatentDiffusion(DDPM):
             cls_subj_attn  = attn_mat[ind_cls_subj_B,  ind_cls_subj_N].reshape(BS,  K_fg,   *attn_mat.shape[2:])
             # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 1, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
-            subj_comp_attn = attn_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True) / K_fg
-            cls_comp_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True) / K_fg
+            subj_comp_attn = attn_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True)
+            cls_comp_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True)
 
             # The orthogonal projection of subj_subj_attn against subj_comp_attn.
             # subj_comp_attn will broadcast to the K_fg dimension.
-            subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn)
+            subj_comp_attn_diff = normalized_ortho_subtract(subj_subj_attn, subj_comp_attn)
             # The orthogonal projection of cls_subj_attn against cls_comp_attn.
             # cls_comp_attn will broadcast to the K_fg dimension.
-            cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn)
+            cls_comp_attn_diff  = normalized_ortho_subtract(cls_subj_attn,  cls_comp_attn)
             # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
             # vary only along the direction of the orthogonal projections of class attention.
 

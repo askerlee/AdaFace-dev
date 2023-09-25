@@ -214,6 +214,12 @@ def ortho_subtract(a, b):
     w_optimal = dot_a_b / dot_b_b
     return a - b * w_optimal.unsqueeze(-1)
 
+# Normalize a, b to unit vectors, then do orthogonal subtraction.
+def normalized_ortho_subtract(a, b):
+    a = a / a.norm(dim=-1, keepdim=True)
+    b = b / b.norm(dim=-1, keepdim=True)
+    return ortho_subtract(a, b)
+
 def demean(x):
     return x - x.mean(dim=-1, keepdim=True)
 
@@ -916,17 +922,20 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N,
     if use_layerwise_embedding:
         SCALE_STEP = (FINAL_LAYER_CLS_E_SCALE - FIRST_LAYER_CLS_E_SCALE) / (len(sync_layer_indices) - 1)
         # Linearly decrease the scale of the class   embeddings from 1.0 to 0.7, 
-        # i.e., 
-        # Linearly increase the scale of the subject embeddings from 0.0 to 0.3.
         # [1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 0.9727, 0.9455, 0.9182, 
         #  0.8909, 0.8636, 0.8364, 0.8091, 0.7818, 0.7545, 0.7273, 0.7000]
+        # i.e., 
+        # Linearly increase the scale of the subject embeddings from 0.0 to 0.3.
+        # [0.    , 0.    , 0.    , 0.    , 0.    , 0.0273, 0.0545, 0.0818,
+        #  0.1091, 0.1364, 0.1636, 0.1909, 0.2182, 0.2455, 0.2727, 0.3   ]
         emb_v_layers_cls_mix_scales = torch.ones(BS, N_LAYERS, device=c_static_emb.device) 
         emb_v_layers_cls_mix_scales[:, sync_layer_indices] = \
             torch.arange(FIRST_LAYER_CLS_E_SCALE, FINAL_LAYER_CLS_E_SCALE + SCALE_STEP, 
                          step=SCALE_STEP, device=c_static_emb.device).repeat(BS, 1)
     else:
         # Same scale for all layers.
-        # emb_v_layers_cls_mix_scales = [0.5, 0.5, ..., 0.5].
+        # emb_v_layers_cls_mix_scales = [0.85, 0.85, ..., 0.85].
+        # i.e., the subject embedding scales are [0.15, 0.15, ..., 0.15].
         AVG_SCALE = (FIRST_LAYER_CLS_E_SCALE + FINAL_LAYER_CLS_E_SCALE) / 2
         emb_v_layers_cls_mix_scales = AVG_SCALE * torch.ones(N_LAYERS, device=c_static_emb.device).repeat(BS, 1)
 
@@ -1043,17 +1052,19 @@ def calc_layer_subj_comp_k_ortho_loss(unet_seq_k, K_fg, K_comp, BS,
 
     # subj_comp_ks_sum: [1, 8, 18, 160] => [1, 8, 1, 160]. 
     # Sum over all extra 18 compositional embeddings and average by K_fg.
-    subj_comp_ks_sum = subj_comp_ks.sum(dim=2, keepdim=True) / K_fg
+    subj_comp_ks_sum = subj_comp_ks.sum(dim=2, keepdim=True)
     # cls_comp_ks_sum:  [1, 8, 18, 160] => [1, 8, 1, 160]. 
     # Sum over all extra 18 compositional embeddings and average by K_fg.
-    cls_comp_ks_sum  = cls_comp_ks.sum(dim=2, keepdim=True) / K_fg
+    cls_comp_ks_sum  = cls_comp_ks.sum(dim=2, keepdim=True)
 
-    # The orthogonal projection of subj_subj_ks_mean against subj_comp_ks_sum.
-    subj_comp_emb_diff = ortho_subtract(subj_subj_ks, subj_comp_ks_sum)
-    # The orthogonal projection of cls_subj_ks_mean against cls_comp_ks_sum.
-    cls_comp_emb_diff  = ortho_subtract(cls_subj_ks,  cls_comp_ks_sum)
-    # The two orthogonal projections should be aligned. That is, subj_subj_ks_mean is allowed to
-    # vary only along the direction of the orthogonal projections of class embeddings.
+    # The orthogonal projection of subj_subj_ks against subj_comp_ks_sum.
+    # subj_comp_ks_sum will broadcast to the K_fg dimension of subj_subj_ks.
+    subj_comp_emb_diff = normalized_ortho_subtract(subj_subj_ks, subj_comp_ks_sum)
+    # The orthogonal projection of cls_subj_ks against cls_comp_ks_sum.
+    # cls_comp_ks_sum will broadcast to the K_fg dimension of cls_subj_ks_mean.
+    cls_comp_emb_diff  = normalized_ortho_subtract(cls_subj_ks,  cls_comp_ks_sum)
+    # The two orthogonal projections should be aligned. That is, each embedding in subj_subj_ks 
+    # is allowed to vary only along the direction of the orthogonal projections of class embeddings.
 
     # Don't compute the ortho loss on dress-type compositions, 
     # such as "z wearing a santa hat / z that is red", because the attended areas 
