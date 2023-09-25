@@ -230,11 +230,14 @@ def get_parser(**parser_kwargs):
         type=float, default=-1,
         help="Layerwise lora rank/token ratio")
 
-    # embedding_reg_weight
-    parser.add_argument("--embedding_reg_weight",
+    # static_embedding_reg_weight, ada_embedding_reg_weight
+    parser.add_argument("--static_embedding_reg_weight",
         type=float, default=-1,
-        help="Embedding regularization weight")
-    
+        help="Static embedding regularization weight")
+    parser.add_argument("--ada_embedding_reg_weight",
+        type=float, default=-1,
+        help="Ada embedding regularization weight")
+        
     parser.add_argument("--ada_emb_weight",
         type=float, default=-1,
         help="Weight of ada embeddings (in contrast to static embeddings)")
@@ -777,9 +780,11 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \
                                     opt.layerwise_lora_rank_token_ratio
 
-        if opt.embedding_reg_weight >= 0:
-            config.model.params.embedding_reg_weight = opt.embedding_reg_weight
-        
+        if opt.static_embedding_reg_weight >= 0:
+            config.model.params.static_embedding_reg_weight = opt.static_embedding_reg_weight
+        if opt.ada_embedding_reg_weight >= 0:
+            config.model.params.ada_embedding_reg_weight = opt.ada_embedding_reg_weight
+            
         if opt.ada_emb_weight != -1:
             config.model.params.personalization_config.params.ada_emb_weight = opt.ada_emb_weight
 
