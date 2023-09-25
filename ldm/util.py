@@ -214,15 +214,6 @@ def ortho_subtract(a, b):
     w_optimal = dot_a_b / dot_b_b
     return a - b * w_optimal.unsqueeze(-1)
 
-# Normalize a, b to unit vectors, then do orthogonal subtraction.
-def normalized_ortho_subtract(a, b):
-    a_norm = a.norm(dim=-1, keepdim=True) + 1e-6
-    b_norm = b.norm(dim=-1, keepdim=True) + 1e-6
-    a = a * (a_norm + b_norm) / (a_norm * 2)
-    b = b * (a_norm + b_norm) / (b_norm * 2)
-    diff = ortho_subtract(a, b)
-    return diff
-
 def demean(x):
     return x - x.mean(dim=-1, keepdim=True)
 

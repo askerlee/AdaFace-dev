@@ -23,7 +23,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
-                       ortho_subtract, normalized_ortho_subtract, gen_gradient_scaler, \
+                       ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, fix_emb_scales, \
                        halve_token_indices, normalize_dict_values, masked_mean, \
@@ -3032,10 +3032,10 @@ class LatentDiffusion(DDPM):
 
             # The orthogonal projection of subj_subj_attn against subj_comp_attn.
             # subj_comp_attn will broadcast to the K_fg dimension.
-            subj_comp_attn_diff = normalized_ortho_subtract(subj_subj_attn, subj_comp_attn)
+            subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn)
             # The orthogonal projection of cls_subj_attn against cls_comp_attn.
             # cls_comp_attn will broadcast to the K_fg dimension.
-            cls_comp_attn_diff  = normalized_ortho_subtract(cls_subj_attn,  cls_comp_attn)
+            cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn)
             # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
             # vary only along the direction of the orthogonal projections of class attention.
 
