@@ -218,11 +218,10 @@ def ortho_subtract(a, b):
 def normalized_ortho_subtract(a, b):
     a_norm = a.norm(dim=-1, keepdim=True) + 1e-6
     b_norm = b.norm(dim=-1, keepdim=True) + 1e-6
-    a = a / a_norm
-    b = b / b_norm
+    a = a * (a_norm + b_norm) / (a_norm * 2)
+    b = b * (a_norm + b_norm) / (b_norm * 2)
     diff = ortho_subtract(a, b)
-    orig_scaled_diff = diff * (a_norm + b_norm) / 2
-    return orig_scaled_diff
+    return diff
 
 def demean(x):
     return x - x.mean(dim=-1, keepdim=True)
