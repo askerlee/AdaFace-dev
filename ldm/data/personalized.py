@@ -122,7 +122,7 @@ class PersonalizedBase(Dataset):
                  set="train",
                  placeholder_string="z",
                  background_string=None,
-                 placeholder_prefix=None,
+                 placeholder_prefix=None,   # Could be a list of strings, separated by ",".
                  # cls token used to compute the delta loss.
                  cls_delta_token=None,  
                  # background tokens used to compute the delta loss.
@@ -162,8 +162,12 @@ class PersonalizedBase(Dataset):
         self._length = self.num_images 
         self.placeholder_string  = placeholder_string
         self.background_string   = background_string
-        self.placeholder_prefix  = placeholder_prefix
         self.broad_class = broad_class
+        # placeholder_prefix could be a list of strings, separated by ",".
+        if placeholder_prefix is not None:
+            self.placeholder_prefixes   = re.split("\s*,\s*", placeholder_prefix)
+        else:
+            self.placeholder_prefixes   = None
 
         if cls_delta_token is None:
             if verbose:
@@ -174,7 +178,7 @@ class PersonalizedBase(Dataset):
 
         self.cls_bg_delta_tokens = cls_bg_delta_tokens
 
-        self.num_vectors_per_token = num_vectors_per_token
+        self.num_vectors_per_token    = num_vectors_per_token
         self.num_vectors_per_bg_token = num_vectors_per_bg_token
         self.center_crop = center_crop
 
@@ -266,7 +270,8 @@ class PersonalizedBase(Dataset):
         cls_bg_delta_token = random.choice(self.cls_bg_delta_tokens) if self.cls_bg_delta_tokens is not None \
                                else self.background_string
 
-        if self.placeholder_prefix is not None:
+        if self.placeholder_prefixes is not None:
+            self.placeholder_prefix = random.choice(self.placeholder_prefixes)
             placeholder_string = self.placeholder_prefix + " " + placeholder_string
             cls_delta_token    = self.placeholder_prefix + " " + cls_delta_token
             
