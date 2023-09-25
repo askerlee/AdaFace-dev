@@ -216,9 +216,13 @@ def ortho_subtract(a, b):
 
 # Normalize a, b to unit vectors, then do orthogonal subtraction.
 def normalized_ortho_subtract(a, b):
-    a = a / a.norm(dim=-1, keepdim=True)
-    b = b / b.norm(dim=-1, keepdim=True)
-    return ortho_subtract(a, b)
+    a_norm = a.norm(dim=-1, keepdim=True) + 1e-6
+    b_norm = b.norm(dim=-1, keepdim=True) + 1e-6
+    a = a / a_norm
+    b = b / b_norm
+    diff = ortho_subtract(a, b)
+    orig_scaled_diff = diff * (a_norm + b_norm) / 2
+    return orig_scaled_diff
 
 def demean(x):
     return x - x.mean(dim=-1, keepdim=True)
