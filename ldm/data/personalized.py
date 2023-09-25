@@ -142,17 +142,22 @@ class PersonalizedBase(Dataset):
 
         # image_paths and mask_paths are full paths.
         image_paths         = [os.path.join(self.data_root, file_path) for file_path in sorted(os.listdir(self.data_root))]
-        self.image_paths    = list(filter(lambda x: "_mask" not in x, image_paths))
+        self.image_paths    = list(filter(lambda x: "_mask" not in x and os.path.splitext(x)[1].lower() != '.txt', image_paths))
         fg_mask_paths       = [ os.path.splitext(x)[0] + "_mask.png" for x in self.image_paths ]
         self.fg_mask_paths  = list(map(lambda x: x if x in image_paths else None, fg_mask_paths))
         num_valid_fg_masks  = sum([ 1 if x is not None else 0 for x in self.fg_mask_paths ])
+        annot_paths         = [ os.path.splitext(x)[0] + ".txt" for x in self.image_paths ]
+        self.annot_paths    = list(map(lambda x: x if x in image_paths else None, annot_paths))
+        num_valid_annots    = sum([ 1 if x is not None else 0 for x in self.annot_paths ])
 
         if verbose:
-            print("{} images and {} fg masks found in '{}'".format( \
-                  len(self.image_paths), num_valid_fg_masks, self.data_root))
-            if num_valid_fg_masks < len(self.image_paths):
+            print("{} images, {} fg masks, {} annotations found in '{}'".format( \
+                  len(self.image_paths), num_valid_fg_masks, num_valid_annots, self.data_root))
+            if num_valid_fg_masks > 0 and num_valid_fg_masks < len(self.image_paths):
                 print("WARNING: {} fg masks are missing!".format(len(self.image_paths) - num_valid_fg_masks))
-        
+            if num_valid_annots > 0 and num_valid_annots < len(self.image_paths):
+                print("WARNING: {} annotations are missing!".format(len(self.image_paths) - num_valid_annots))
+
         self.num_images = len(self.image_paths)
         self._length = self.num_images 
         self.placeholder_string  = placeholder_string
@@ -218,6 +223,8 @@ class PersonalizedBase(Dataset):
         example = {}
         image_path = self.image_paths[index % self.num_images]
         fg_mask_path  = self.fg_mask_paths[index % self.num_images] 
+        annot_path    = self.annot_paths[index % self.num_images]
+
         image_obj = Image.open(image_path)
         if not image_obj.mode == "RGB":
             image_obj = image_obj.convert("RGB")
@@ -278,9 +285,6 @@ class PersonalizedBase(Dataset):
 
         subj_prompt_single          = template
         cls_prompt_single           = template
-
-        #subj_prompt_single          = template.format(placeholder_string)
-        #cls_prompt_single           = template.format(cls_delta_token)
 
         bg_suffix = " with background {}".format(background_string) if background_string is not None else ""
         # If background_string is None, then cls_bg_delta_token is None as well, thus cls_bg_suffix is "".

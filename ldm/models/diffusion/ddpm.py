@@ -2725,9 +2725,11 @@ class LatentDiffusion(DDPM):
 
             distill_on_delta = True
             if distill_on_delta:
-                # normalized_ortho_subtract is in terms of the last dimension. So we pool the spatial dimensions first above.
-                feat_mix_delta  = normalized_ortho_subtract(feat_mix_comp,  feat_mix_single)
-                feat_subj_delta = normalized_ortho_subtract(feat_subj_comp, feat_subj_single)
+                # ortho_subtract() is done on the last dimension. 
+                # So we flatten the spatial dimensions first as above.
+                # NOTE: use normalized_ortho_subtract() will reduce performance.
+                feat_mix_delta  = ortho_subtract(feat_mix_comp,  feat_mix_single)
+                feat_subj_delta = ortho_subtract(feat_subj_comp, feat_subj_single)
             else:
                 feat_mix_delta  = feat_mix_comp
                 feat_subj_delta = feat_subj_comp
