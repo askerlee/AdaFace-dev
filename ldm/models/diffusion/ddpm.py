@@ -1218,34 +1218,25 @@ class LatentDiffusion(DDPM):
     # 'caption' is not named 'subj_prompt_single' to keep it compatible with older code.
     # ANCHOR[id=shared_step]
     def shared_step(self, batch, **kwargs):
-        # c = batch["caption"]
+        # captions = batch["caption"]
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
-        x, c = self.get_input(batch, self.first_stage_key)
+        x, captions = self.get_input(batch, self.first_stage_key)
 
         batch_have_fg_mask = batch['has_fg_mask']
 
         self.fg_mask_avail_ratio = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
 
         if self.iter_flags['do_mix_prompt_distillation']:
-            # Allow a small prob of using background token in mix reg iterations 
-            # (Note Mix reg iterations are the same iterations as Ada delta reg iterations).
-            # If fg_mask_avail_ratio = 0, then p_bg_token = 0.1.
-            # If fg_mask_avail_ratio = 1, then p_bg_token = 0.05.
             p_bg_token = 0
         else:
             # This iter is only doing recon on training images.
-            # use_background_token is mainly for such cases. 
-            # If fg_mask_avail_ratio = 0, then p_bg_token = 0.9.
-            # If fg_mask_avail_ratio = 1, then p_bg_token = 0.8.
-            # In other worse, with prob 0.2, no background token in the prompt, 
-            # and we only evaluate recon loss on the foreground areas.
+            # use_background_token is only for such cases. 
             p_bg_token = 0.85
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
         # do_ada_emb_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
         if self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation']:
-            subj_comp_prompts = []
             # *_fp prompts are like "a face portrait of ...". They are advantageous over "a photo of ..."
             # when doing compositional mix regularization. 
             # However this trick is only applicable to humans/animals.
@@ -1257,39 +1248,41 @@ class LatentDiffusion(DDPM):
             # If do_mix_prompt_distillation but broad_class == 0 or 2, this statement is False, and 
             # used prompts will be 'subj_prompt_comp', 'cls_prompt_single', 'cls_prompt_comp'...
             if self.iter_flags['do_mix_prompt_distillation'] and (self.use_fp_trick and 'subj_prompt_single_fp' in batch):
-                # Replace c from the default batch['caption'] to batch['subj_prompt_single_fp'].
-                c = batch['subj_prompt_single_fp']
-                SUBJ_PROMPT_COMP  = 'subj_prompt_comp_fp'
-                CLS_PROMPT_COMP   = 'cls_prompt_comp_fp'
-                CLS_PROMPT_SINGLE = 'cls_prompt_single_fp'
+                SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp'
+                SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp'
+                CLS_PROMPT_COMP    = 'cls_prompt_comp_fp'
+                CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp'
             # *_comp_bg: used for static delta loss. 
             # To avoid the backgound token taking too much of the foreground, 
             # we only use the background token on 80% of the training images.
             elif self.use_background_token \
               and self.global_step >= 0 \
               and random.random() < p_bg_token:
-                c = batch['subj_prompt_single_bg']
-                SUBJ_PROMPT_COMP  = 'subj_prompt_comp_bg'
-                CLS_PROMPT_COMP   = 'cls_prompt_comp_bg'
-                CLS_PROMPT_SINGLE = 'cls_prompt_single_bg'
+                captions = batch["caption_bg"]
+                SUBJ_PROMPT_SINGLE = 'subj_prompt_single_bg'
+                SUBJ_PROMPT_COMP   = 'subj_prompt_comp_bg'
+                CLS_PROMPT_COMP    = 'cls_prompt_comp_bg'
+                CLS_PROMPT_SINGLE  = 'cls_prompt_single_bg'
                 self.iter_flags['use_background_token'] = True
             # Either do_mix_prompt_distillation but not (use_fp_trick and broad_class == 1), 
             # or recon iters (not do_mix_prompt_distillation) and not use_background_token 
             # We don't use_fp_tricks on training images. use_fp_tricks is only for compositional regularization.
             else:
-                # c has been assigned at the first line of this function.
-                SUBJ_PROMPT_COMP  = 'subj_prompt_comp'
-                CLS_PROMPT_COMP   = 'cls_prompt_comp'
-                CLS_PROMPT_SINGLE = 'cls_prompt_single'
+                SUBJ_PROMPT_SINGLE = 'subj_prompt_single'
+                SUBJ_PROMPT_COMP   = 'subj_prompt_comp'
+                CLS_PROMPT_COMP    = 'cls_prompt_comp'
+                CLS_PROMPT_SINGLE  = 'cls_prompt_single'
 
             # Each prompt_comp consists of multiple prompts separated by "|".
             # Split them into a list of subj_comp_prompts/cls_comp_prompts.
+            subj_single_prompts = batch[SUBJ_PROMPT_SINGLE]
+            cls_single_prompts  = batch[CLS_PROMPT_SINGLE]
+            subj_comp_prompts = []
             for prompt_comp in batch[SUBJ_PROMPT_COMP]:
                 subj_comp_prompts.append(prompt_comp.split("|"))
             cls_comp_prompts = []
             for prompt_comp in batch[CLS_PROMPT_COMP]:
                 cls_comp_prompts.append(prompt_comp.split("|"))
-            cls_single_prompts = batch[CLS_PROMPT_SINGLE]
             # REPEATS: how many prompts correspond to each image.
             REPEATS = len(subj_comp_prompts[0])
             if REPEATS == 1 or self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_emb_delta_reg']:
@@ -1298,7 +1291,7 @@ class LatentDiffusion(DDPM):
                 # otherwise it will use more than 40G RAM.
                 subj_comp_prompts = [ prompts[0] for prompts in subj_comp_prompts ]
                 cls_comp_prompts  = [ prompts[0] for prompts in cls_comp_prompts ]
-                delta_prompts = (c, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+                delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
             else:
                 subj_comp_prompts2 = []
                 cls_prompt_comp2   = []
@@ -1314,9 +1307,9 @@ class LatentDiffusion(DDPM):
                     cls_prompt_comp2 += prompts
                 subj_comp_prompts = subj_comp_prompts2
                 cls_comp_prompts  = cls_prompt_comp2
-                c = c * REPEATS
+                captions = captions * REPEATS
                 cls_single_prompts = cls_single_prompts * REPEATS
-                delta_prompts = (c, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+                delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
         else:
             delta_prompts = None
 
@@ -1340,13 +1333,13 @@ class LatentDiffusion(DDPM):
         self.iter_flags['batch_have_fg_mask']   = batch_have_fg_mask
         self.iter_flags['delta_prompts']        = delta_prompts
 
-        loss = self(x, c, **kwargs)
+        loss = self(x, captions, **kwargs)
 
         return loss
 
     # LatentDiffusion.forward() is only called during training, by shared_step().
     #LINK #shared_step
-    def forward(self, x, c, *args, **kwargs):
+    def forward(self, x, captions, *args, **kwargs):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         # If cached_inits_available, cached_inits are only used if do_mix_prompt_distillation = True.
         self.iter_flags['reuse_init_conds']     = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
@@ -1357,15 +1350,13 @@ class LatentDiffusion(DDPM):
         # (shouldn't happen but just in case).
 
         if self.model.conditioning_key is not None:
-            assert c is not None
-            # c: condition, a prompt template. 
-            # get_learned_conditioning(): convert c to a [B, 77, 768] tensor.
+            assert captions is not None
+            # get_learned_conditioning(): convert captions to a [B, 77, 768] tensor.
             if self.cond_stage_trainable:
                 # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
                 # or traditional TI.
                 # do_ada_emb_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
-                # c: subj_single_prompts, which are plain prompts like 
-                # ['an illustration of a dirty z', 'an illustration of the cool z']
+                # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
                 if self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation']:
                     # reuse_init_conds, discard the prompts offered in shared_step().
                     if self.iter_flags['reuse_init_conds']:
@@ -1408,7 +1399,7 @@ class LatentDiffusion(DDPM):
                     # But now there are 8 prompts (4 * ORIG_BS = 8), as the batch is not halved.
                     delta_prompts = subj_single_prompts + subj_comp_prompts \
                                     + cls_single_prompts + cls_comp_prompts
-                    # print(delta_prompts)
+                    #print(delta_prompts)
                     # breakpoint()
                     # c_static_emb: the static embeddings [4 * N_EMBEDS, 77, 768], 
                     # 4 * N_EMBEDS = 4 * ORIG_BS * N_LAYERS,
@@ -1508,10 +1499,10 @@ class LatentDiffusion(DDPM):
                     else:
                         # do_normal_recon. The original scheme. 
                         extra_info['iter_type']      = 'normal_recon'
-                        # Use the original subj_single_prompts embeddings and prompts.
+                        # Use the original "captions" prompts and embeddings.
                         # When num_compositions_per_image > 1, subj_single_prompts contains repeated prompts,
                         # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
-                        c_in2         = subj_single_prompts
+                        c_in2         = captions
                         # subj_single_emb has been patched above.
                         c_static_emb  = subj_single_emb
 
@@ -1539,31 +1530,31 @@ class LatentDiffusion(DDPM):
                     # c_static_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
                     # cls_single_prompts, cls_comp_prompts. 
                     # c_static_emb: [64, 77, 768]                    
-                    c = (c_static_emb, c_in2, extra_info)
+                    cond = (c_static_emb, c_in2, extra_info)
                 else:
                     # Not (self.do_static_prompt_delta_reg or 'do_mix_prompt_distillation').
                     # That is, non-compositional iter, or recon iter without static delta loss. 
-                    # Keep the tuple c unchanged. prompts: subject single.
-                    c = self.get_learned_conditioning(c)
-                    # c[2]: extra_info. Here is only reached when do_static_prompt_delta_reg = False.
+                    # Keep the tuple cond unchanged. prompts: subject single.
+                    cond = self.get_learned_conditioning(captions)
+                    # cond[2]: extra_info. Here is only reached when do_static_prompt_delta_reg = False.
                     # Either prompt_emb_delta_reg_weight == 0 (ablation) or 
                     # it's called by self.validation_step().
                     assert self.iter_flags['do_normal_recon']
-                    c[2]['iter_type'] = 'normal_recon'
+                    cond[2]['iter_type'] = 'normal_recon'
 
-                # c[2]: extra_info. 
-                c[2]['use_background_token'] = self.iter_flags['use_background_token']
+                # cond[2]: extra_info. 
+                cond[2]['use_background_token'] = self.iter_flags['use_background_token']
 
             # shorten_cond_schedule: False. Skipped.
             if self.shorten_cond_schedule:  # TODO: drop this option
                 tc = self.cond_ids[t].to(self.device)
                 # q_sample() is only called during training. 
                 # q_sample() calls apply_model(), which estimates the latent code of the image.
-                c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
+                cond = self.q_sample(x_start=captions, t=tc, noise=torch.randn_like(captions.float()))
 
         # self.model (UNetModel) is called in p_losses().
         #LINK #p_losses
-        return self.p_losses(x, c, t, *args, **kwargs)
+        return self.p_losses(x, cond, t, *args, **kwargs)
 
     def _rescale_annotations(self, bboxes, crop_coordinates):  # TODO: move to dataset
         def rescale_bbox(bbox):

@@ -353,9 +353,16 @@ class PersonalizedBase(Dataset):
                 subj_prompt_comps_fp.append(subj_prompt_comp_fp)
                 cls_prompt_comps_fp.append(cls_prompt_comp_fp)
 
-        # For subj_prompt_single, we put the caption in the "caption" field, instead of "subj_prompt_single".
+        # NOTE: "caption" and "caption_bg" are only for image reconstruction.
+        # But subj_prompt_single must align with cls_prompt_single, subj_prompt_comp, cls_prompt_comp.
+        # So they are different when comps_placeholder_prefix is specified.
+        # Only "caption" and "caption_bg" are formatted with placeholder_string and placeholder_string_with_bg.
+        # Other 4 types of prompts are formatted with compos_placeholder_string and compos_cls_delta_token.
         example["caption"]              = subj_prompt_single.format(placeholder_string)
-        example["cls_prompt_single"]    = cls_prompt_single.format(cls_delta_token)
+        example["caption_bg"]           = subj_prompt_single.format(placeholder_string_with_bg)
+
+        example["subj_prompt_single"]   = subj_prompt_single.format(compos_placeholder_string)
+        example["cls_prompt_single"]    = cls_prompt_single.format(compos_cls_delta_token)
         # Will be split by "|" in the ddpm trainer.
         subj_prompt_comp = "|".join([ subj_prompt_comp.format(compos_placeholder_string) for subj_prompt_comp in subj_prompt_comps])
         cls_prompt_comp  = "|".join([ cls_prompt_comp.format(compos_cls_delta_token)     for cls_prompt_comp  in cls_prompt_comps])
@@ -366,8 +373,8 @@ class PersonalizedBase(Dataset):
         example["comps_are_appearances"]    = comps_are_appearances
 
         if bg_suffix:
-            example["subj_prompt_single_bg"] = subj_prompt_single.format(placeholder_string_with_bg)
-            example["cls_prompt_single_bg"]  = cls_prompt_single.format(cls_delta_token_with_bg)
+            example["subj_prompt_single_bg"] = subj_prompt_single.format(compos_placeholder_string_with_bg)
+            example["cls_prompt_single_bg"]  = cls_prompt_single.format(compos_cls_delta_token_with_bg)
             # *_comp_bg prompts are for static delta loss on training images.
             example["subj_prompt_comp_bg"]   = "|".join([ subj_prompt_comp.format(compos_placeholder_string_with_bg) for subj_prompt_comp in subj_prompt_comps])
             example["cls_prompt_comp_bg"]    = "|".join([ cls_prompt_comp.format(compos_cls_delta_token_with_bg)     for cls_prompt_comp  in cls_prompt_comps])
@@ -375,14 +382,14 @@ class PersonalizedBase(Dataset):
         if self.broad_class == 1:
             # Delta loss requires subj_prompt_single/cls_prompt_single to be token-wise aligned
             # with subj_prompt_comp/cls_prompt_comp, so we need to specify them in the dataloader as well.
-            example["subj_prompt_single_fp"] = subj_prompt_single_fp.format(placeholder_string_with_bg)
-            example["cls_prompt_single_fp"]  = cls_prompt_single_fp.format(cls_delta_token_with_bg)
+            example["subj_prompt_single_fp"] = subj_prompt_single_fp.format(compos_placeholder_string_with_bg)
+            example["cls_prompt_single_fp"]  = cls_prompt_single_fp.format(compos_cls_delta_token_with_bg)
             example["subj_prompt_comp_fp"]   = "|".join([ subj_prompt_comp.format(compos_placeholder_string_with_bg) for subj_prompt_comp in subj_prompt_comps_fp]) 
             example["cls_prompt_comp_fp"]    = "|".join([ cls_prompt_comp.format(compos_cls_delta_token_with_bg)     for cls_prompt_comp  in cls_prompt_comps_fp])
 
             if bg_suffix:
-                example["subj_prompt_single_bg"] = subj_prompt_single_fp.format(placeholder_string_with_bg)
-                example["cls_prompt_single_bg"]  = cls_prompt_single_fp.format(cls_delta_token_with_bg)
+                example["subj_prompt_single_bg"] = subj_prompt_single_fp.format(compos_placeholder_string_with_bg)
+                example["cls_prompt_single_bg"]  = cls_prompt_single_fp.format(compos_cls_delta_token_with_bg)
                 # *_comp_bg prompts are for static delta loss on training images.
                 example["subj_prompt_comp_bg"]   = "|".join([ subj_prompt_comp.format(compos_placeholder_string_with_bg) for subj_prompt_comp in subj_prompt_comps_fp])
                 example["cls_prompt_comp_bg"]    = "|".join([ cls_prompt_comp.format(compos_cls_delta_token_with_bg)     for cls_prompt_comp  in cls_prompt_comps_fp])
