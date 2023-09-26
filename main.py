@@ -228,7 +228,7 @@ def get_parser(**parser_kwargs):
         help="Use convolutional attention at subject tokens")
     
     parser.add_argument("--layerwise_lora_rank", 
-        type=float, default=-1,
+        type=int, default=-1,
         help="Layerwise lora rank")
     # layerwise_lora_rank_token_ratio. When there are two tokens, 
     # it seems that increasing the rank to 3 doesn't help.
