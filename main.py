@@ -227,6 +227,9 @@ def get_parser(**parser_kwargs):
         action="store_true", 
         help="Use convolutional attention at subject tokens")
     
+    parser.add_argument("--layerwise_lora_rank", 
+        type=float, default=-1,
+        help="Layerwise lora rank")
     # layerwise_lora_rank_token_ratio. When there are two tokens, 
     # it seems that increasing the rank to 3 doesn't help.
     parser.add_argument("--layerwise_lora_rank_token_ratio", 
@@ -780,8 +783,12 @@ if __name__ == "__main__":
 
         config.data.params.train.params.num_compositions_per_image = opt.num_compositions_per_image
         config.data.params.train.params.rand_scaling_range = (opt.min_rand_scaling, opt.max_rand_scaling)
-            
-        if opt.layerwise_lora_rank_token_ratio > 0:
+        
+        # layerwise_lora_rank has the highest priority. 
+        # If layerwise_lora_rank is not specified, use layerwise_lora_rank_token_ratio.
+        if opt.layerwise_lora_rank > 0:
+            config.model.params.personalization_config.params.layerwise_lora_rank = opt.layerwise_lora_rank
+        elif opt.layerwise_lora_rank_token_ratio > 0:
             config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \
                                     opt.layerwise_lora_rank_token_ratio
 
