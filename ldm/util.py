@@ -205,13 +205,14 @@ def parallel_data_prefetch(
     else:
         return gather_res
 
-# a, b are n-dimensional tensors.
+# NOTE: ortho_subtract(a, b) is scale-invariant w.r.t. b.
+# a, b are n-dimensional tensors. Subtraction happens at the last dim.
 # Orthogonal subtraction of b from a: the result of a-w*b is orthogonal to b (on the last dimension).
 def ortho_subtract(a, b):
     assert a.ndim == b.ndim, "Tensors a and b must have the same number of dimensions"
     dot_a_b = torch.einsum('...i,...i->...', a, b)
     dot_b_b = torch.einsum('...i,...i->...', b, b)
-    w_optimal = dot_a_b / dot_b_b
+    w_optimal = dot_a_b / (dot_b_b + 1e-6)
     return a - b * w_optimal.unsqueeze(-1)
 
 # Normalize a, b to unit vectors, then do orthogonal subtraction.
