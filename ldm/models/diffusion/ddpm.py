@@ -2651,7 +2651,6 @@ class LatentDiffusion(DDPM):
                 # Note mix_*subj_attn use *_gs versions.
                 loss_layer_subj_comp_attn_norm   = (subj_comp_subj_attn.mean(dim=-1)   - mix_comp_subj_attn_gs.mean(dim=-1)).abs().mean()
                 loss_layer_subj_single_attn_norm = (subj_single_subj_attn.mean(dim=-1) - mix_single_subj_attn_gs.mean(dim=-1)).abs().mean()
-
                 # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
                 # smaller magnitudes than the delta loss. So it will be scaled up later in p_losses().
                 loss_subj_attn_norm_distill   += ( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \

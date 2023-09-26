@@ -277,6 +277,17 @@ class PersonalizedBase(Dataset):
         cls_bg_delta_token = random.choice(self.cls_bg_delta_tokens) if self.cls_bg_delta_tokens is not None \
                                else self.background_string
 
+        # If num_vectors_per_token == 3:
+        # "z"    => "z, , "
+        # "girl" => "girl, , "
+        # Need to leave a space between multiple ",,", otherwise they are treated as one token.
+        if self.num_vectors_per_token > 1:
+            placeholder_string += ", " * (self.num_vectors_per_token - 1)
+            cls_delta_token    += ", " * (self.num_vectors_per_token - 1)
+        if self.num_vectors_per_bg_token > 1 and background_string is not None:
+            background_string += ", " * (self.num_vectors_per_bg_token - 1)
+            cls_bg_delta_token += ", " * (self.num_vectors_per_bg_token - 1)
+
         if self.common_placeholder_prefixes is not None:
             common_placeholder_prefix = random.choice(self.common_placeholder_prefixes)
             placeholder_string = common_placeholder_prefix + " " + placeholder_string
@@ -293,17 +304,6 @@ class PersonalizedBase(Dataset):
         else:
             compos_placeholder_string = placeholder_string
             compos_cls_delta_token    = cls_delta_token
-
-        # If num_vectors_per_token == 3:
-        # "z"    => "z, , "
-        # "girl" => "girl, , "
-        # Need to leave a space between multiple ",,", otherwise they are treated as one token.
-        if self.num_vectors_per_token > 1:
-            placeholder_string += ", " * (self.num_vectors_per_token - 1)
-            cls_delta_token    += ", " * (self.num_vectors_per_token - 1)
-        if self.num_vectors_per_bg_token > 1 and background_string is not None:
-            background_string += ", " * (self.num_vectors_per_bg_token - 1)
-            cls_bg_delta_token += ", " * (self.num_vectors_per_bg_token - 1)
 
         template = random.choice(imagenet_templates_small)
 
