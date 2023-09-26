@@ -3027,8 +3027,8 @@ class LatentDiffusion(DDPM):
             cls_subj_attn  = attn_mat[ind_cls_subj_B,  ind_cls_subj_N].reshape(BS,  K_fg,   *attn_mat.shape[2:])
             # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 1, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
-            subj_comp_attn = attn_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True)
-            cls_comp_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True)
+            subj_comp_attn = attn_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True) / K_fg
+            cls_comp_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True) / K_fg
 
             # The orthogonal projection of subj_subj_attn against subj_comp_attn.
             # subj_comp_attn will broadcast to the K_fg dimension.
