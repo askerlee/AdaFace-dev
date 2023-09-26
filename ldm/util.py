@@ -621,6 +621,7 @@ def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1, scale=-1):
         text_embedding = text_embedding.reshape(B0, num_layers, *text_embedding.shape[1:])
         scale_mask = torch.ones_like(text_embedding)
         scale_mask[placeholder_indices_B, :, placeholder_indices_N] = scale
+        breakpoint()
         scaled_text_embedding = text_embedding * scale_mask
         # Change back to the original shape.
         scaled_text_embedding = scaled_text_embedding.reshape(B, *text_embedding.shape[2:])

@@ -157,7 +157,7 @@ for i in $indices
             # z_prefix for the current subject.
             if set -l z_prefix_index (contains -i -- $subject $z_prefix_keys)
                 set z_prefix $z_prefix_values[$z_prefix_index]
-                set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --placeholder_prefix $z_prefix
+                set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --common_placeholder_prefix $z_prefix
             end
         end
 

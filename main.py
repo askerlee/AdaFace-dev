@@ -193,9 +193,12 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--background_string", 
         type=str, default=None,
         help="Background string which will be used in prompts to denote the background in training images.")
-    parser.add_argument("--placeholder_prefix",
+    parser.add_argument("--common_placeholder_prefix",
         type=str, default=None,
-        help="Prefix of the placeholder string. Default: None.")
+        help="Prefix of the placeholder string for all types of prompts. Default: None.")
+    parser.add_argument("--compos_placeholder_prefix",
+        type=str, default=None,
+        help="Prefix of the placeholder string for compositional prompts. Default: None.")
     
     parser.add_argument("--init_words", 
         type=str, 
@@ -725,9 +728,11 @@ if __name__ == "__main__":
         # placeholder_string
         config.data.params.train.params.placeholder_string       = opt.placeholder_string
         config.data.params.validation.params.placeholder_string  = opt.placeholder_string
-        # placeholder_prefix
-        config.data.params.train.params.placeholder_prefix       = opt.placeholder_prefix
-        config.data.params.validation.params.placeholder_prefix  = opt.placeholder_prefix
+        # common_placeholder_prefix, compos_placeholder_prefix
+        config.data.params.train.params.common_placeholder_prefix       = opt.common_placeholder_prefix
+        config.data.params.validation.params.common_placeholder_prefix  = opt.common_placeholder_prefix
+        config.data.params.train.params.compos_placeholder_prefix       = opt.compos_placeholder_prefix
+        config.data.params.validation.params.compos_placeholder_prefix  = opt.compos_placeholder_prefix        
         # broad_class
         config.data.params.train.params.broad_class             = opt.broad_class
         config.data.params.validation.params.broad_class        = opt.broad_class
