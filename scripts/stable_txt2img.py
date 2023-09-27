@@ -6,7 +6,6 @@ from PIL import Image
 from tqdm import tqdm, trange
 from itertools import islice
 from einops import rearrange
-from torchvision.utils import make_grid
 import time
 import re
 import csv
@@ -373,8 +372,8 @@ def main(opt):
         blip_model.load_checkpoint(opt.ckpt)
         cond_subject = opt.cls_token
         tgt_subject  = opt.cls_token
-        cond_subject = txt_preprocess["eval"](cond_subject)
-        tgt_subject  = txt_preprocess["eval"](tgt_subject)
+        cond_subjects = [txt_preprocess["eval"](cond_subject)]
+        tgt_subjects  = [txt_preprocess["eval"](tgt_subject)]
         negative_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
         opt.subj_model_path = ""
         
@@ -612,7 +611,7 @@ def main(opt):
                             x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
                         else:
                             x_samples_ddim = []
-                            blip_seed = 88 * p_i
+                            blip_seed = 8888
                             for i_sample, prompt in enumerate(prompts):
                                 stripped_prompt_parts = re.split("of z[, ]*", prompt)
                                 if stripped_prompt_parts[1] == "":
@@ -624,23 +623,24 @@ def main(opt):
                                 if i_sample == 0:
                                     print("blip:", stripped_prompt)
 
+                                stripped_prompts = [txt_preprocess["eval"](stripped_prompt)]
                                 samples_info = {
-                                    "cond_images": None,
-                                    "cond_subject": [cond_subject],
-                                    "tgt_subject":  [tgt_subject],
-                                    "prompt": stripped_prompt,
-                                } 
+                                    "cond_images":  None,
+                                    "cond_subject": cond_subjects,
+                                    "tgt_subject":  tgt_subjects,
+                                    "prompt":       stripped_prompts,
+                                }
 
                                 samples = blip_model.generate(
                                     samples_info,
                                     seed=blip_seed + i_sample,
-                                    guidance_scale=opt.scale,
-                                    num_inference_steps=opt.ddim_steps,
+                                    guidance_scale=7.5,
+                                    num_inference_steps=50,
                                     neg_prompt=negative_prompt,
                                     height=512,
                                     width=512,
                                 )
-                                x_samples_ddim += samples
+                                x_samples_ddim.append(samples[0])
 
                         if not opt.skip_save:
                             indiv_subdir = batched_subdirs[p_i]
