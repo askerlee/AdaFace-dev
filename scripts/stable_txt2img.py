@@ -344,11 +344,12 @@ def main(opt):
                                                             placeholder_strings=[opt.placeholder_string])
 
         if opt.use_conv_attn:
-            assert opt.num_vectors_per_token == 4 or opt.num_vectors_per_token == 9, \
-                    f"Only support 4 or 9 embeddings per token but got {opt.num_vectors_per_token}. " \
-                    "4 = 2*2 kernel, 9 = 3*3 kernel."
-            model.use_conv_attn = True
-            kernel_desc = "2x2" if opt.num_vectors_per_token == 4 else "3x3"
+            assert opt.num_vectors_per_token in [4, 9, 16], \
+                    f"Only support 4/9/16 embeddings per token but got {opt.num_vectors_per_token}. " \
+                    "4 = 2*2 kernel, 9 = 3*3, 16 = 4*4."
+            config.model.params.use_conv_attn = True
+            kernel_desc_map = {4: "2x2", 9: "3x3", 16: "4x4"}
+            kernel_desc = kernel_desc_map[opt.num_vectors_per_token]
             print(f"Use {kernel_desc} Conv Attention with subject embeddings")
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
@@ -365,6 +366,7 @@ def main(opt):
         else:
             sampler = DDIMSampler(model)
 
+        #opt.neg_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
     # eval_blip
     else:
         from lavis.models import load_model_and_preprocess

@@ -147,9 +147,9 @@ if __name__ == "__main__":
         args.placeholder += ", " * (args.num_vectors_per_token - 1)
 
     if args.use_conv_attn:
-        assert args.num_vectors_per_token == 4 or args.num_vectors_per_token == 9, \
-                f"Only support 4 or 9 embeddings per token but got {args.num_vectors_per_token}. " \
-                "4 = 2*2 kernel, 9 = 3*3 kernel."
+            assert args.num_vectors_per_token in [4, 9, 16], \
+                    f"Only support 4/9/16 embeddings per token but got {args.num_vectors_per_token}. " \
+                    "4 = 2*2 kernel, 9 = 3*3, 16 = 4*4."
 
     z_prefixes_by_class     = [""] * 3
     z_prefixes_by_subject   = None

@@ -771,11 +771,12 @@ if __name__ == "__main__":
                 config.data.params.validation.params.cls_bg_delta_tokens = re.split(r"\s+", opt.bg_init_words)
 
         if opt.use_conv_attn:
-            assert opt.num_vectors_per_token == 4 or opt.num_vectors_per_token == 9, \
-                    f"Only support 4 or 9 embeddings per token but got {opt.num_vectors_per_token}. " \
-                    "4 = 2*2 kernel, 9 = 3*3 kernel."
+            assert opt.num_vectors_per_token in [4, 9, 16], \
+                    f"Only support 4/9/16 embeddings per token but got {opt.num_vectors_per_token}. " \
+                    "4 = 2*2 kernel, 9 = 3*3, 16 = 4*4."
             config.model.params.use_conv_attn = True
-            kernel_desc = "2x2" if opt.num_vectors_per_token == 4 else "3x3"
+            kernel_desc_map = {4: "2x2", 9: "3x3", 16: "4x4"}
+            kernel_desc = kernel_desc_map[opt.num_vectors_per_token]
             print(f"Use {kernel_desc} Conv Attention with subject embeddings")
 
         if hasattr(opt, 'composition_regs_iter_gap'):

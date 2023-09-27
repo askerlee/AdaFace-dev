@@ -453,8 +453,13 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
     if ks == 2:
         pads = (0, 1, 0, 1)
     # if ks == 3, pad 1 pixel on each side.
-    else:
+    elif ks == 3:
         pads = (1, 1, 1, 1)
+    elif ks == 4:
+        pads = (1, 2, 1, 2)
+    else:
+        breakpoint()
+        
     padder = nn.ZeroPad2d(pads)
 
     # Traversed delta x: {0, 1} (ks=2) or {-1, 0, 1} (ks=3)
