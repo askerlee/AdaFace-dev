@@ -11,6 +11,7 @@ import time
 import re
 import csv
 import sys
+from collections import namedtuple
 
 from pytorch_lightning import seed_everything
 from torch import autocast
@@ -252,6 +253,12 @@ def parse_args():
     # --debug
     parser.add_argument("--debug", action="store_true",
                         help="debug mode")
+    # --eval_blip
+    parser.add_argument("--eval_blip", action="store_true",
+                        help="Evaluate BLIP-diffusion models")
+    # cls_token
+    parser.add_argument("--cls_token", type=str, default=None,
+                        help="Subject class name. Only requires for --eval_blip")
     
     args = parser.parse_args()
     return args
@@ -311,51 +318,77 @@ def main(opt):
         opt.ckpt = "models/ldm/text2img-large/model.ckpt"
         opt.outdir = "outputs/txt2img-samples-laion400m"
 
-    seed_everything(opt.seed)
-    torch.cuda.set_device(opt.gpu)
-    torch.backends.cuda.matmul.allow_tf32 = True
-
-    config = OmegaConf.load(f"{opt.config}")
-    
-    model  = load_model_from_config(config, f"{opt.ckpt}")
-    if opt.embedding_paths is not None:
-        model.embedding_manager.load(opt.embedding_paths)
-        opt.subj_model_path = opt.embedding_paths[0]
-    else:
-        opt.subj_model_path = opt.ckpt
-
-    # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
-    model.cond_stage_model.set_last_layers_skip_weights(opt.clip_last_layers_skip_weights)
-    
-    if hasattr(opt, 'num_vectors_per_token'):
-        model.embedding_manager.set_num_vectors_per_token(opt.num_vectors_per_token, 
-                                                          placeholder_strings=[opt.placeholder_string])
-
-    if opt.use_conv_attn:
-        assert opt.num_vectors_per_token == 4 or opt.num_vectors_per_token == 9, \
-                f"Only support 4 or 9 embeddings per token but got {opt.num_vectors_per_token}. " \
-                "4 = 2*2 kernel, 9 = 3*3 kernel."
-        model.use_conv_attn = True
-        kernel_desc = "2x2" if opt.num_vectors_per_token == 4 else "3x3"
-        print(f"Use {kernel_desc} Conv Attention with subject embeddings")
-
-    if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
-        model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
-    if opt.background_string is not None:
-        model.embedding_manager.background_string = opt.background_string
-        
     # No GPUs detected. Use CPU instead.
     if not torch.cuda.is_available():
         opt.gpu = -1
-
-    device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
-    model  = model.to(device)
-    model.cond_stage_model.device = device
-
-    if opt.plms:
-        sampler = PLMSSampler(model)
     else:
-        sampler = DDIMSampler(model)
+        torch.cuda.set_device(opt.gpu)
+        torch.backends.cuda.matmul.allow_tf32 = True
+
+    seed_everything(opt.seed)
+
+    if not opt.eval_blip:
+        config = OmegaConf.load(f"{opt.config}")
+        
+        model  = load_model_from_config(config, f"{opt.ckpt}")
+        if opt.embedding_paths is not None:
+            model.embedding_manager.load(opt.embedding_paths)
+            opt.subj_model_path = opt.embedding_paths[0]
+        else:
+            opt.subj_model_path = opt.ckpt
+
+        # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
+        model.cond_stage_model.set_last_layers_skip_weights(opt.clip_last_layers_skip_weights)
+        
+        if hasattr(opt, 'num_vectors_per_token'):
+            model.embedding_manager.set_num_vectors_per_token(opt.num_vectors_per_token, 
+                                                            placeholder_strings=[opt.placeholder_string])
+
+        if opt.use_conv_attn:
+            assert opt.num_vectors_per_token == 4 or opt.num_vectors_per_token == 9, \
+                    f"Only support 4 or 9 embeddings per token but got {opt.num_vectors_per_token}. " \
+                    "4 = 2*2 kernel, 9 = 3*3 kernel."
+            model.use_conv_attn = True
+            kernel_desc = "2x2" if opt.num_vectors_per_token == 4 else "3x3"
+            print(f"Use {kernel_desc} Conv Attention with subject embeddings")
+
+        if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
+            model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
+        if opt.background_string is not None:
+            model.embedding_manager.background_string = opt.background_string
+            
+        device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
+        model  = model.to(device)
+        model.cond_stage_model.device = device
+
+        if opt.plms:
+            sampler = PLMSSampler(model)
+        else:
+            sampler = DDIMSampler(model)
+
+    # eval_blip
+    else:
+        from lavis.models import load_model_and_preprocess
+        blip_model, vis_preprocess, txt_preprocess = load_model_and_preprocess("blip_diffusion", "base", device=f"cuda:{opt.gpu}", is_eval=True)
+        blip_model.load_checkpoint(opt.ckpt)
+        cond_subject = opt.cls_token
+        tgt_subject  = opt.cls_token
+        cond_subject = txt_preprocess["eval"](cond_subject)
+        tgt_subject  = txt_preprocess["eval"](tgt_subject)
+        negative_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
+        opt.subj_model_path = ""
+        
+        class DummyScope(object):
+            def __init__(self):
+                pass
+            def __enter__(self):
+                pass
+            def __exit__(self, *args):
+                pass
+
+        DummyModel = namedtuple('DummyModel', ['ema_scope'])
+        # model.ema_scope() is a do-nothing object.
+        model = DummyModel(DummyScope)
 
     os.makedirs(opt.outdir, exist_ok=True)
 
@@ -456,25 +489,32 @@ def main(opt):
     if opt.fixed_code:
         start_code = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
-    use_layerwise_embedding = config.model.params.use_layerwise_embedding
-    if hasattr(opt, 'prompt_mix_scheme'):
-        if opt.prompt_mix_scheme == 'mix_hijk':
-            prompt_mix_weight = 1.0
-        elif opt.prompt_mix_scheme == 'mix_concat_cls':
-            prompt_mix_weight = opt.prompt_mix_weight
+    if not opt.eval_blip:
+        # Normal evaluation.
+        use_layerwise_embedding = config.model.params.use_layerwise_embedding
+        if hasattr(opt, 'prompt_mix_scheme'):
+            if opt.prompt_mix_scheme == 'mix_hijk':
+                prompt_mix_weight = 1.0
+            elif opt.prompt_mix_scheme == 'mix_concat_cls':
+                prompt_mix_weight = opt.prompt_mix_weight
+            else:
+                raise NotImplementedError
         else:
-            raise NotImplementedError
-    else:
-        prompt_mix_weight = 0
+            prompt_mix_weight = 0
 
-    if opt.scale != 1.0:
-        try:
-            uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt])
-        except:
-            breakpoint()
+        if opt.scale != 1.0:
+            try:
+                uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt])
+            except:
+                breakpoint()
+        else:
+            uc = None
     else:
+        # eval_blip
+        use_layerwise_embedding = False
+        prompt_mix_weight = 0
         uc = None
-        
+
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     with torch.no_grad():
         with precision_scope("cuda"):
@@ -510,65 +550,98 @@ def main(opt):
 
                         if isinstance(prompts, tuple):
                             prompts = list(prompts)
-                        c = model.get_learned_conditioning(prompts)
-                        
-                        # ref_c is not None, implies (prompt_mix_weight != 0 and ref_prompt is not None).
-                        if ref_c is not None:
-                            # c / ref_c are tuples of (cond, prompts, extra_info).
-                            c0_mix_all_layers = mix_embeddings(c[0], ref_c[0], prompt_mix_weight, 
-                                                               mix_scheme='adeltaconcat')
 
-                            if use_layerwise_embedding:
-                                # 4, 5, 6, 7, 8 correspond to original layer indices 7, 8, 12, 16, 17
-                                # (same as used in computing mixing loss)
-                                sync_layer_indices = [4, 5, 6, 7, 8]
-                                # [64, 154, 768] => [4, 16, 154, 768] => assign 1s => [64, 154, 768]
-                                layer_mask = torch.zeros_like(c0_mix_all_layers).reshape(-1, 16, *c0_mix_all_layers.shape[1:])
-                                layer_mask[:, sync_layer_indices] = 1
-                                layer_mask = layer_mask.reshape(c0_mix_all_layers.shape)
-                                # Use most of the layers of embeddings in subj_comps_emb, but 
-                                # replace sync_layer_indices layers with those from subj_comps_emb_mix_all_layers.
-                                # Do not assign with sync_layers as indices, which destroys the computation graph.
-                                c0_mix  = c[0].repeat(1, 2, 1) * (1 - layer_mask) \
-                                          + c0_mix_all_layers * layer_mask
+                        if not opt.eval_blip:
+                            c = model.get_learned_conditioning(prompts)
+                            
+                            # ref_c is not None, implies (prompt_mix_weight != 0 and ref_prompt is not None).
+                            if ref_c is not None:
+                                # c / ref_c are tuples of (cond, prompts, extra_info).
+                                c0_mix_all_layers = mix_embeddings(c[0], ref_c[0], prompt_mix_weight, 
+                                                                mix_scheme='adeltaconcat')
 
-                            else:
-                                # There is only one layer of embeddings.
-                                c0_mix = c0_mix_all_layers
+                                if use_layerwise_embedding:
+                                    # 4, 5, 6, 7, 8 correspond to original layer indices 7, 8, 12, 16, 17
+                                    # (same as used in computing mixing loss)
+                                    sync_layer_indices = [4, 5, 6, 7, 8]
+                                    # [64, 154, 768] => [4, 16, 154, 768] => assign 1s => [64, 154, 768]
+                                    layer_mask = torch.zeros_like(c0_mix_all_layers).reshape(-1, 16, *c0_mix_all_layers.shape[1:])
+                                    layer_mask[:, sync_layer_indices] = 1
+                                    layer_mask = layer_mask.reshape(c0_mix_all_layers.shape)
+                                    # Use most of the layers of embeddings in subj_comps_emb, but 
+                                    # replace sync_layer_indices layers with those from subj_comps_emb_mix_all_layers.
+                                    # Do not assign with sync_layers as indices, which destroys the computation graph.
+                                    c0_mix  = c[0].repeat(1, 2, 1) * (1 - layer_mask) \
+                                            + c0_mix_all_layers * layer_mask
 
-                            c[2]['iter_type'] = 'mix_hijk'
-                            # c / ref_c are tuples of (cond, prompts, extra_info).
-                            c = (c0_mix, c[1], c[2])
+                                else:
+                                    # There is only one layer of embeddings.
+                                    c0_mix = c0_mix_all_layers
 
-                        if opt.debug and ref_c is None:
-                            c[2]['debug_attn'] = True
+                                c[2]['iter_type'] = 'mix_hijk'
+                                # c / ref_c are tuples of (cond, prompts, extra_info).
+                                c = (c0_mix, c[1], c[2])
 
-                        shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                        # During inference, the batch size is *doubled*. 
-                        # The first half contains negative samples, and the second half positive.
-                        # When ada embedding is used, c is a tuple of (cond, ada_embedder).
-                        # When both unconditional and conditional guidance are passed to ddim sampler, 
-                        # ada_embedder of the conditional guidance is applied on both 
-                        # unconditional and conditional embeddings within UNetModel.forward(). 
-                        # But since unconditional prompt doesn't contain the placeholder token,
-                        # ada_embedder won't change the unconditional embedding uc.
-                        # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
-                        samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
-                                                         conditioning=c,
-                                                         batch_size=batch_size,
-                                                         shape=shape,
-                                                         verbose=False,
-                                                         unconditional_guidance_scale=opt.scale,
-                                                         unconditional_conditioning=uc,
-                                                         eta=opt.ddim_eta,
-                                                         x0=x0,
-                                                         mask=mask,
-                                                         x_T=start_code)
+                            if opt.debug and ref_c is None:
+                                c[2]['debug_attn'] = True
 
-                        x_samples_ddim = model.decode_first_stage(samples_ddim)
-                        # x_samples_ddim: -1 ~ +1 -> 0 ~ 1.
-                        x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
-                
+                            shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+                            # During inference, the batch size is *doubled*. 
+                            # The first half contains negative samples, and the second half positive.
+                            # When ada embedding is used, c is a tuple of (cond, ada_embedder).
+                            # When both unconditional and conditional guidance are passed to ddim sampler, 
+                            # ada_embedder of the conditional guidance is applied on both 
+                            # unconditional and conditional embeddings within UNetModel.forward(). 
+                            # But since unconditional prompt doesn't contain the placeholder token,
+                            # ada_embedder won't change the unconditional embedding uc.
+                            # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
+                            samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
+                                                            conditioning=c,
+                                                            batch_size=batch_size,
+                                                            shape=shape,
+                                                            verbose=False,
+                                                            unconditional_guidance_scale=opt.scale,
+                                                            unconditional_conditioning=uc,
+                                                            eta=opt.ddim_eta,
+                                                            x0=x0,
+                                                            mask=mask,
+                                                            x_T=start_code)
+
+                            x_samples_ddim = model.decode_first_stage(samples_ddim)
+                            # x_samples_ddim: -1 ~ +1 -> 0 ~ 1.
+                            x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+                        else:
+                            x_samples_ddim = []
+                            blip_seed = 88 * p_i
+                            for i_sample, prompt in enumerate(prompts):
+                                stripped_prompt_parts = re.split("of z[, ]*", prompt)
+                                if stripped_prompt_parts[1] == "":
+                                    stripped_prompt = re.sub("^a ", "", stripped_prompt_parts[0])
+                                    stripped_prompt = stripped_prompt.strip()
+                                else:
+                                    stripped_prompt = stripped_prompt_parts[1].strip()
+
+                                if i_sample == 0:
+                                    print("blip:", stripped_prompt)
+
+                                samples_info = {
+                                    "cond_images": None,
+                                    "cond_subject": [cond_subject],
+                                    "tgt_subject":  [tgt_subject],
+                                    "prompt": stripped_prompt,
+                                } 
+
+                                samples = blip_model.generate(
+                                    samples_info,
+                                    seed=blip_seed + i_sample,
+                                    guidance_scale=opt.scale,
+                                    num_inference_steps=opt.ddim_steps,
+                                    neg_prompt=negative_prompt,
+                                    height=512,
+                                    width=512,
+                                )
+                                x_samples_ddim += samples
+
                         if not opt.skip_save:
                             indiv_subdir = batched_subdirs[p_i]
                             class_long_prompt = batched_class_long_prompts[p_i]
@@ -583,8 +656,18 @@ def main(opt):
                                     base_count += 1
                                     sample_file_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
 
-                                x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                                Image.fromarray(x_sample.astype(np.uint8)).save(sample_file_path)
+                                if not opt.eval_blip:
+                                    x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                                    Image.fromarray(x_sample.astype(np.uint8)).save(sample_file_path)
+                                else:
+                                    # eval_blip. x_sample is already a PIL image.
+                                    x_sample.save(sample_file_path)
+                                    # Convert x_sample to a torch tensor with a compatible shape.
+                                    # H, W, C => C, H, W
+                                    x_samples_ddim[i] = torch.from_numpy(np.array(x_sample)).permute(2, 0, 1).float() / 255.
+
+                            if opt.eval_blip:
+                                x_samples_ddim = torch.stack(x_samples_ddim, dim=0)
 
                             if opt.compare_with:
                                 # There's an extra "None" after the last indiv_subdir in batched_subdirs 
