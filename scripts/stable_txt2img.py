@@ -526,6 +526,9 @@ def main(opt):
         prompt_mix_weight = 0
         uc = None
 
+    if opt.neg_prompt != "":
+        print("Negative prompt:", opt.neg_prompt)
+        
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     with torch.no_grad():
         with precision_scope("cuda"):
