@@ -47,7 +47,9 @@ def parse_args():
                         help="Prompt to use for generating samples, using {} for placeholder (default: None)")
     parser.add_argument("--neg_prompt", type=str, default=argparse.SUPPRESS,
                         help="Negative prompt to use for generating samples (default: None)")
-    
+    parser.add_argument("--pre_neg_prompt", action='store_true',
+                        help="use predefined negative prompts")
+
     # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.
     parser.add_argument("--z_suffix_type", default=argparse.SUPPRESS, 
                         help="Append this string to the subject placeholder token during inference "
@@ -424,7 +426,9 @@ if __name__ == "__main__":
 
         if hasattr(args, 'neg_prompt'):
             command_line += f" --neg_prompt \"{args.neg_prompt}\""
-            
+        elif args.pre_neg_prompt:
+            command_line += f" --pre_neg_prompt"
+
         if args.compare_with_pardir:
             # Do evaluation on authenticity/composition.
             subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)
