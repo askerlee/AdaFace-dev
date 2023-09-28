@@ -103,6 +103,7 @@ class DDPM(pl.LightningModule):
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_mask_align_loss_weight=0.,
                  do_clip_teacher_filtering=False,
+                 clip_teacher_filtering_neg_prompt="",
                  use_background_token=False,
                  use_conv_attn=False,
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
@@ -133,12 +134,13 @@ class DDPM(pl.LightningModule):
         self.subj_comp_key_ortho_loss_weight    = subj_comp_key_ortho_loss_weight
         self.subj_comp_value_ortho_loss_weight  = subj_comp_value_ortho_loss_weight
         self.subj_comp_attn_complementary_loss_weight = subj_comp_attn_complementary_loss_weight
-        self.mix_prompt_distill_weight       = mix_prompt_distill_weight
-        self.comp_fg_bg_preserve_loss_weight = comp_fg_bg_preserve_loss_weight
-        self.fg_bg_complementary_loss_weight = fg_bg_complementary_loss_weight
-        self.fg_bg_mask_align_loss_weight    = fg_bg_mask_align_loss_weight
-        self.do_clip_teacher_filtering       = do_clip_teacher_filtering
-        self.prompt_mix_scheme               = 'mix_hijk'
+        self.mix_prompt_distill_weight          = mix_prompt_distill_weight
+        self.comp_fg_bg_preserve_loss_weight    = comp_fg_bg_preserve_loss_weight
+        self.fg_bg_complementary_loss_weight    = fg_bg_complementary_loss_weight
+        self.fg_bg_mask_align_loss_weight       = fg_bg_mask_align_loss_weight
+        self.do_clip_teacher_filtering          = do_clip_teacher_filtering
+        self.clip_teacher_filtering_neg_prompt  = clip_teacher_filtering_neg_prompt
+        self.prompt_mix_scheme                  = 'mix_hijk'
 
         self.use_conv_attn                   = use_conv_attn
         self.use_background_token            = use_background_token
@@ -704,7 +706,7 @@ class LatentDiffusion(DDPM):
         if self.global_step == 0:
             self.create_clip_evaluator(next(self.parameters()).device)
             with torch.no_grad():
-                self.uncond = self.get_learned_conditioning([""] * 2)
+                self.uncond = self.get_learned_conditioning([self.clip_teacher_filtering_neg_prompt] * 2)
 
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
