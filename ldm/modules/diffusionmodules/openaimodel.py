@@ -509,7 +509,8 @@ class UNetModel(nn.Module):
         self.use_conv_attn  = False
         self.save_attn_vars = False
         self.deep_neg_context    = None
-
+        self.deep_cfg_scale      = 1.5
+        
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
@@ -716,66 +717,67 @@ class UNetModel(nn.Module):
 
     # set_cross_attn_flags: Set one or more flags for all or a subset of cross-attention layers.
     # If ca_layer_indices is None, then set the flags for all cross-attention layers.
-    def set_cross_attn_flags(self, ca_flag_dict, trans_flag_dict, ca_layer_indices=None):
-        if ca_flag_dict is None:
+    def set_cross_attn_flags(self, ca_flag_dict,   ca_layer_indices=None,
+                             trans_flag_dict=None, trans_layer_indices=None):
+        if ca_flag_dict is None and trans_flag_dict is None:
             return None, None
         
-        old_ca_flag_dict    = {}
-        old_trans_flag_dict = {}
-
-        all_ca_layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
-                                     17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
-        
+        all_ca_layer_indices = [1, 2, 4, 5, 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
         if ca_layer_indices is None:
-            ca_layer_idx2emb_idx = all_ca_layer_idx2emb_idx
+            ca_layer_indices = all_ca_layer_indices
+
+        if (ca_flag_dict is not None) and len(ca_layer_indices) > 0:            
+            old_ca_flag_dict    = {}
+            for k, v in ca_flag_dict.items():
+                old_ca_flag_dict[k] = self.__dict__[k]
+                self.__dict__[k] = v
+
+                layer_idx = 0
+                for module in self.input_blocks:
+                    if layer_idx in ca_layer_indices:
+                        # module: SpatialTransformer.
+                        # module.transformer_blocks: contains only 1 BasicTransformerBlock 
+                        # that does cross-attention with layer_context in attn2 only.                    
+                        module[1].transformer_blocks[0].attn2.__dict__[k] = v
+                    layer_idx += 1
+
+                if layer_idx in ca_layer_indices:
+                    self.middle_block[1].transformer_blocks[0].attn2.__dict__[k] = v
+                layer_idx += 1
+
+                for module in self.output_blocks:
+                    if layer_idx in ca_layer_indices:
+                        module[1].transformer_blocks[0].attn2.__dict__[k] = v
+                    layer_idx += 1
         else:
-            ca_layer_idx2emb_idx = { k: all_ca_layer_idx2emb_idx[k] for k in ca_layer_indices }
-            if len(ca_layer_idx2emb_idx) == 0:
-                return old_ca_flag_dict, old_trans_flag_dict
-            
-        for k, v in ca_flag_dict.items():
-            old_ca_flag_dict[k] = self.__dict__[k]
-            self.__dict__[k] = v
+            old_ca_flag_dict = None
 
-            layer_idx = 0
-            for module in self.input_blocks:
-                if layer_idx in ca_layer_idx2emb_idx:
-                    # module: SpatialTransformer.
-                    # module.transformer_blocks: contains only 1 BasicTransformerBlock 
-                    # that does cross-attention with layer_context in attn2 only.                    
-                    module[1].transformer_blocks[0].attn2.__dict__[k] = v
+        # trans_flag_dict is optional. If trans_layer_indices is None, then do nothing.
+        if (trans_flag_dict is not None) and (trans_layer_indices is not None):     
+            old_trans_flag_dict = {}
+            for k, v in trans_flag_dict.items():
+                old_trans_flag_dict[k] = self.__dict__[k]
+                self.__dict__[k] = v
+
+                layer_idx = 0
+                for module in self.input_blocks:
+                    if layer_idx in trans_layer_indices:
+                        # module: SpatialTransformer.
+                        # module.transformer_blocks: contains only 1 BasicTransformerBlock 
+                        # that does cross-attention with layer_context in attn2 only.                    
+                        module[1].transformer_blocks[0].__dict__[k] = v
+                    layer_idx += 1
+
+                if layer_idx in trans_layer_indices:
+                    self.middle_block[1].transformer_blocks[0].__dict__[k] = v
                 layer_idx += 1
 
-            if layer_idx in ca_layer_idx2emb_idx:
-                self.middle_block[1].transformer_blocks[0].attn2.__dict__[k] = v
-            layer_idx += 1
-
-            for module in self.output_blocks:
-                if layer_idx in ca_layer_idx2emb_idx:
-                    module[1].transformer_blocks[0].attn2.__dict__[k] = v
-                layer_idx += 1
-
-        for k, v in trans_flag_dict.items():
-            old_trans_flag_dict[k] = self.__dict__[k]
-            self.__dict__[k] = v
-
-            layer_idx = 0
-            for module in self.input_blocks:
-                if layer_idx in ca_layer_idx2emb_idx:
-                    # module: SpatialTransformer.
-                    # module.transformer_blocks: contains only 1 BasicTransformerBlock 
-                    # that does cross-attention with layer_context in attn2 only.                    
-                    module[1].transformer_blocks[0].__dict__[k] = v
-                layer_idx += 1
-
-            if layer_idx in ca_layer_idx2emb_idx:
-                self.middle_block[1].transformer_blocks[0].__dict__[k] = v
-            layer_idx += 1
-
-            for module in self.output_blocks:
-                if layer_idx in ca_layer_idx2emb_idx:
-                    module[1].transformer_blocks[0].__dict__[k] = v
-                layer_idx += 1
+                for module in self.output_blocks:
+                    if layer_idx in trans_layer_indices:
+                        module[1].transformer_blocks[0].__dict__[k] = v
+                    layer_idx += 1
+        else:
+            old_trans_flag_dict = None
 
         return old_ca_flag_dict, old_trans_flag_dict
     
@@ -833,9 +835,14 @@ class UNetModel(nn.Module):
                 # deep_neg_context: [8, 16, 77, 768] => [8, 77, 768]
                 deep_neg_context = deep_neg_context[0]
 
-        old_ca_flags, old_trans_flags = self.set_cross_attn_flags({'use_conv_attn':     use_conv_attn},
-                                                                  {'deep_neg_context':  deep_neg_context,
-                                                                   'deep_cfg_scale':    deep_cfg_scale},)
+        # If using deep_neg_context, only apply it on the middle-level layers, i.e., 
+        # layers 7, 8, 12, 16, 17.
+        trans_layer_indices = [7, 8, 12, 16, 17] if deep_neg_context is not None else None
+        old_ca_flags, old_trans_flags = \
+            self.set_cross_attn_flags( ca_flag_dict   ={'use_conv_attn':     use_conv_attn},
+                                       trans_flag_dict={'deep_neg_context':  deep_neg_context,
+                                                        'deep_cfg_scale':    deep_cfg_scale},
+                                       trans_layer_indices=trans_layer_indices)
 
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
@@ -1039,7 +1046,8 @@ class UNetModel(nn.Module):
             breakpoint()
         
         # Restore the original flags in cross-attention layers.
-        self.set_cross_attn_flags(old_ca_flags, old_trans_flags)
+        self.set_cross_attn_flags(ca_flag_dict=old_ca_flags, trans_flag_dict=old_trans_flags,
+                                  trans_layer_indices=trans_layer_indices)
         if distill_old_ca_flags is not None:
             self.set_cross_attn_flags(distill_old_ca_flags, ca_layer_indices=distill_layer_indices)
 
