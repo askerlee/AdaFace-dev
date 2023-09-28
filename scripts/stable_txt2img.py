@@ -53,9 +53,9 @@ def parse_args():
         action='store_true',
         help="use deep negative prompts",
     )    
-    # --deep_cfp_scale
+    # --deep_cfg_scale
     parser.add_argument(
-        "--deep_cfp_scale",
+        "--deep_cfg_scale",
         type=float,
         default=1.5,
         help="scale of deep negative prompts",
@@ -532,7 +532,7 @@ def main(opt):
 
                 if opt.use_deep_neg_prompt:
                     deep_neg_context = model.get_learned_conditioning(batch_size * [predefined_negative_prompt])
-                    deep_neg_context = (deep_neg_context[0], opt.deep_cfp_scale)
+                    deep_neg_context = (deep_neg_context[0], opt.deep_cfg_scale)
                 else:
                     deep_neg_context = None
 

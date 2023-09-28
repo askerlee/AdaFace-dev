@@ -816,7 +816,7 @@ class UNetModel(nn.Module):
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
         emb_v_layers_cls_mix_scales = extra_info.get('emb_v_layers_cls_mix_scales', None)   if extra_info is not None else None
         deep_neg_context      = extra_info.get('deep_neg_context', None)       if extra_info is not None else None
-        deep_cfp_scale        = extra_info.get('deep_cfp_scale', 1.5)          if extra_info is not None else None
+        deep_cfg_scale        = extra_info.get('deep_cfg_scale', 1.5)          if extra_info is not None else None
 
         # If uncond (null) condition is active, then subj_indices = None.
         subj_indices_B, subj_indices_N = subj_indices if subj_indices is not None else (None, None)
@@ -835,7 +835,7 @@ class UNetModel(nn.Module):
 
         old_ca_flags, old_trans_flags = self.set_cross_attn_flags({'use_conv_attn':     use_conv_attn},
                                                                   {'deep_neg_context':  deep_neg_context,
-                                                                   'deep_cfp_scale':    deep_cfp_scale},)
+                                                                   'deep_cfg_scale':    deep_cfg_scale},)
 
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
