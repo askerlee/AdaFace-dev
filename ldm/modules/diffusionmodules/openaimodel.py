@@ -973,8 +973,8 @@ class UNetModel(nn.Module):
         if iter_type.startswith("mix_") or use_background_token or debug_attn:
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
             distill_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
-            distill_old_ca_flags = self.set_cross_attn_flags({'crossattn_force_grad': crossattn_force_grad, 
-                                                              'save_attn_vars': True}, 
+            distill_old_ca_flags, _ = self.set_cross_attn_flags(ca_flag_dict={'crossattn_force_grad': crossattn_force_grad, 
+                                                                           'save_attn_vars': True}, 
                                                              ca_layer_indices=distill_layer_indices)
         else:
             distill_layer_indices = []
@@ -1046,10 +1046,12 @@ class UNetModel(nn.Module):
             breakpoint()
         
         # Restore the original flags in cross-attention layers.
-        self.set_cross_attn_flags(ca_flag_dict=old_ca_flags, trans_flag_dict=old_trans_flags,
+        self.set_cross_attn_flags(ca_flag_dict=old_ca_flags, 
+                                  trans_flag_dict=old_trans_flags,
                                   trans_layer_indices=trans_layer_indices)
         if distill_old_ca_flags is not None:
-            self.set_cross_attn_flags(distill_old_ca_flags, ca_layer_indices=distill_layer_indices)
+            self.set_cross_attn_flags(ca_flag_dict=distill_old_ca_flags, 
+                                      ca_layer_indices=distill_layer_indices)
 
         # [2, 320, 64, 64]
         h = h.type(x.dtype)

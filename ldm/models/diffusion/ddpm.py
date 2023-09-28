@@ -103,7 +103,8 @@ class DDPM(pl.LightningModule):
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_mask_align_loss_weight=0.,
                  do_clip_teacher_filtering=False,
-                 clip_teacher_filtering_neg_prompt="",
+                 distill_deep_neg_prompt=None,
+                 distill_deep_cfg_scale=1.5,
                  use_background_token=False,
                  use_conv_attn=False,
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
@@ -139,7 +140,8 @@ class DDPM(pl.LightningModule):
         self.fg_bg_complementary_loss_weight    = fg_bg_complementary_loss_weight
         self.fg_bg_mask_align_loss_weight       = fg_bg_mask_align_loss_weight
         self.do_clip_teacher_filtering          = do_clip_teacher_filtering
-        self.clip_teacher_filtering_neg_prompt  = clip_teacher_filtering_neg_prompt
+        self.distill_deep_neg_prompt            = distill_deep_neg_prompt
+        self.distill_deep_cfg_scale             = distill_deep_cfg_scale
         self.prompt_mix_scheme                  = 'mix_hijk'
 
         self.use_conv_attn                   = use_conv_attn
@@ -706,7 +708,15 @@ class LatentDiffusion(DDPM):
         if self.global_step == 0:
             self.create_clip_evaluator(next(self.parameters()).device)
             with torch.no_grad():
-                self.uncond = self.get_learned_conditioning([self.clip_teacher_filtering_neg_prompt] * 2)
+                self.uncond_context             = self.get_learned_conditioning([""] * 2)
+                if self.distill_deep_neg_prompt is not None:
+                    # distill_deep_neg_context is generated with a batch size of 1. 
+                    # Need to repeat it BLOCK_SIZE times to match the distillation batch size later.
+                    distill_deep_neg_context   = self.get_learned_conditioning([self.distill_deep_neg_prompt])
+                    # Only use the static embeddings of distill_deep_neg_prompt.
+                    self.distill_deep_neg_context = distill_deep_neg_context[0]
+                else:
+                    self.distill_deep_neg_context   = None
 
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
@@ -1482,6 +1492,10 @@ class LatentDiffusion(DDPM):
                         extra_info['subj_indices'] = extra_info['subj_indices_2b']
                         extra_info['bg_indices']   = extra_info['bg_indices_2b']                            
 
+                        if self.distill_deep_neg_context is not None:
+                            extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(BLOCK_SIZE * 4, 1, 1)
+                            extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
+
                     # This iter is a simple ada prompt delta loss iter, without prompt mixing loss. 
                     # This branch is reached only if prompt mixing is not enabled.
                     # "and not self.iter_flags['do_mix_prompt_distillation']" is redundant, because it's at an "elif" branch.
@@ -1694,13 +1708,13 @@ class LatentDiffusion(DDPM):
         kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
         return mean_flat(kl_prior) / np.log(2.0)
 
-    # do_recon: return denoised images. 
-    # if do_recon and cfg_scale > 1, apply classifier-free guidance. 
-    # unet_has_grad: when returning do_recon (e.g. to select the better instance by smaller clip loss), 
+    # do_pixel_recon: return denoised images. This is not the iter_type 'do_normal_recon'.
+    # if do_pixel_recon and cfg_scale > 1, apply classifier-free guidance. 
+    # unet_has_grad: when returning do_pixel_recon (e.g. to select the better instance by smaller clip loss), 
     # to speed up, no BP is done on these instances, so unet_has_grad=False.
     def guided_denoise(self, x_start, noise, t, cond, inj_noise_t=None, 
                        unet_has_grad=True, crossattn_force_grad=False, 
-                       do_recon=False, cfg_scales=None):
+                       do_pixel_recon=False, cfg_scales=None):
         
         if inj_noise_t is not None:
             # We can choose to add amount of noises different from t.
@@ -1735,9 +1749,9 @@ class LatentDiffusion(DDPM):
         else:
             ada_embeddings = None
 
-        # Get model output conditioned on uncond.
+        # Get model output of both conditioned and uncond prompts.
         # Unconditional prompts and reconstructed images are never involved in optimization.
-        if do_recon:
+        if do_pixel_recon:
             with torch.no_grad():
                 x_start_ = x_start.chunk(2)[0]
                 noise_   = noise.chunk(2)[0]
@@ -1749,8 +1763,8 @@ class LatentDiffusion(DDPM):
                 x_noisy_ = self.q_sample(x_start=x_start_, t=t_, noise=noise_)
                 # Clear the cached placeholder indices, as they are for conditional embeddings.
                 self.embedding_manager.clear_placeholder_indices()
-                # self.uncond: precomputed unconditional embeddings.
-                model_output_uncond = self.apply_model(x_noisy_, t_, self.uncond)
+                # self.uncond_context: precomputed unconditional embeddings.
+                model_output_uncond = self.apply_model(x_noisy_, t_, self.uncond_context)
                 # model_output_uncond: [2, 4, 64, 64] -> [4, 4, 64, 64]
                 model_output_uncond = model_output_uncond.repeat(2, 1, 1, 1)
                 
@@ -2020,7 +2034,9 @@ class LatentDiffusion(DDPM):
             self.guided_denoise(x_start, noise, t, cond, inj_noise_t,
                                 unet_has_grad=not self.iter_flags['do_teacher_filter'], 
                                 crossattn_force_grad=False,
-                                do_recon=self.iter_flags['calc_clip_loss'],
+                                # Reconstruct the images at the pixel level for CLIP loss.
+                                # do_pixel_recon is not the iter_type 'do_normal_recon'.
+                                do_pixel_recon=self.iter_flags['calc_clip_loss'],
                                 # cfg_scales: classifier-free guidance scales.
                                 cfg_scales=cfg_scales_for_clip_loss)
 
@@ -2256,14 +2272,14 @@ class LatentDiffusion(DDPM):
                     # as it's only used to filter a teacher.)
                     # If unet_has_grad=False, the gradients of the ada delta loss
                     # couldn't pass through UNet, reducing the performance.
-                    # do_recon=True: return denoised images x_recon. If cfg_scale > 1, 
+                    # do_pixel_recon=True: return denoised images x_recon. If cfg_scale > 1, 
                     # do classifier-free guidance, so that x_recon are better instances
                     # to be used to initialize the next reuse_init comp iteration.
                     # student prompts are subject prompts.  
                     model_output, x_recon, ada_embeddings = \
                         self.guided_denoise(x_start_sel, noise_sel, t_sel, cond_orig_qv, unet_has_grad=True, 
                                             crossattn_force_grad=False,
-                                            do_recon=True, cfg_scales=cfg_scales_for_clip_loss)
+                                            do_pixel_recon=True, cfg_scales=cfg_scales_for_clip_loss)
 
                     # Update masks according to x_start_sel. Select the masks corresponding to 
                     # the better candidate, indexed by [better_cand_idx] (Keep it as a list).

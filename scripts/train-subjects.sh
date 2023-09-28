@@ -26,7 +26,7 @@ end
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'eval' 'use_conv_attn' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'use_conv_attn' 'eval' 'use_deep_neg_prompt' -- $argv
 or begin
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] [--use_conv_attn] (ada|ti|db) [low-high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
@@ -89,6 +89,7 @@ else
 end
 
 set EXTRA_EVAL_ARGS0  --bb_type $_flag_bb_type
+set -q _flag_use_deep_neg_prompt; and set EXTRA_EVAL_ARGS0 $EXTRA_EVAL_ARGS0 --use_deep_neg_prompt
 
 if set -q _flag_num_vectors_per_token
     set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --num_vectors_per_token $_flag_num_vectors_per_token
@@ -171,7 +172,7 @@ for i in $indices
         #if set -q prompt_mix_max; and test $prompt_mix_max[$i] -ne -1
         #    set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --mix_range (math $prompt_mix_max[$i]/3) $prompt_mix_max[$i]
         #end
-
+        
         if not set -q _flag_lr
             set -q lrs; and set lr $lrs[(math $broad_class+1)]
         end
