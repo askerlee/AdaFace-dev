@@ -19,7 +19,7 @@ from contextlib import nullcontext
 from ldm.util import instantiate_from_config, mix_embeddings, save_grid
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
-from evaluation.eval_utils import compare_folders, compare_face_folders, compare_face_folders_fast, \
+from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
                                   init_evaluators, set_tf_gpu
 
 from safetensors.torch import load_file as safetensors_load_file
@@ -41,6 +41,13 @@ def parse_args():
         default="",
         help="the prompt to render"
     )    
+    # --pre_neg_prompt, use predefined negative prompts
+    parser.add_argument(
+        "--pre_neg_prompt",
+        action='store_true',
+        help="use predefined negative prompts",
+    )
+        
     parser.add_argument(
         "--outdir",
         type=str,
@@ -366,7 +373,10 @@ def main(opt):
         else:
             sampler = DDIMSampler(model)
 
-        #opt.neg_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
+        if opt.neg_prompt == "" and opt.pre_neg_prompt:
+            # negative prompt borrowed from BLIP-Diffusion.
+            opt.neg_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
+
     # eval_blip
     else:
         from lavis.models import load_model_and_preprocess
@@ -724,6 +734,8 @@ def main(opt):
                     experiment_sig = "-".join([date_sig, iter_sig, f"scale{opt.scale:.1f}"])
                     if opt.bb_type:
                         experiment_sig += "-" + opt.bb_type
+                    if opt.neg_prompt != "":
+                        experiment_sig += "-" + "neg"
 
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                     if opt.from_file:
