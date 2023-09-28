@@ -270,18 +270,31 @@ class BasicTransformerBlock(nn.Module):
         self.norm2 = nn.LayerNorm(dim)
         self.norm3 = nn.LayerNorm(dim)
         self.checkpoint = checkpoint
+        self.deep_neg_context = None
 
     def forward(self, x, context=None, mask=None):
         return checkpoint(self._forward, (x, context, mask), self.parameters(), self.checkpoint)
 
     def _forward(self, x, context=None, mask=None):
-        x = self.attn1(self.norm1(x), mask=mask) + x
+        x1 = self.attn1(self.norm1(x), mask=mask) + x
         # The mask is of the key (context). 
         # If key is text prompt, then we shouldn't provide img_mask.
         # Otherwise nan will occur.
-        x = self.attn2(self.norm2(x), context=context) + x
-        x = self.ff(self.norm3(x)) + x
-        return x
+        x_ca = self.attn2(self.norm2(x1), context=context)
+        x2 = x1 + x_ca
+        x3 = self.ff(self.norm3(x2)) + x2
+
+        if self.deep_neg_context is not None:
+            deep_cfp_scale = 1.5
+            x_neg = self.attn2(self.norm2(x1), context=self.deep_neg_context)
+            x2_neg = x1 + x_neg
+            x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
+            x3_cfp = x3 * deep_cfp_scale - x3_neg * (deep_cfp_scale - 1)
+            cond_mask = self.deep_neg_context.abs().sum(dim=(1,2), keepdim=True) > 0
+            x3_masked = torch.where(cond_mask, x3_cfp, x3)
+            return x3_masked
+        
+        return x3
 
 class SpatialTransformer(nn.Module):
     """

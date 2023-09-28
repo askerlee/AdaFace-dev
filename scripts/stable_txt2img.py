@@ -41,13 +41,18 @@ def parse_args():
         default="",
         help="the prompt to render"
     )    
-    # --pre_neg_prompt, use predefined negative prompts
+    # --use_pre_neg_prompt, use predefined negative prompts
     parser.add_argument(
-        "--pre_neg_prompt",
+        "--use_pre_neg_prompt",
         action='store_true',
         help="use predefined negative prompts",
     )
-        
+    # --use_deep_neg_prompt, use deep negative prompts
+    parser.add_argument(
+        "--use_deep_neg_prompt",
+        action='store_true',
+        help="use deep negative prompts",
+    )    
     parser.add_argument(
         "--outdir",
         type=str,
@@ -332,6 +337,7 @@ def main(opt):
         torch.backends.cuda.matmul.allow_tf32 = True
 
     seed_everything(opt.seed)
+    predefined_negative_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
 
     if not opt.eval_blip:
         config = OmegaConf.load(f"{opt.config}")
@@ -373,9 +379,9 @@ def main(opt):
         else:
             sampler = DDIMSampler(model)
 
-        if opt.neg_prompt == "" and opt.pre_neg_prompt:
+        if opt.neg_prompt == "" and opt.use_pre_neg_prompt:
             # negative prompt borrowed from BLIP-Diffusion.
-            opt.neg_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
+            opt.neg_prompt = predefined_negative_prompt
 
     # eval_blip
     else:
@@ -386,7 +392,7 @@ def main(opt):
         tgt_subject  = opt.cls_token
         cond_subjects = [txt_preprocess["eval"](cond_subject)]
         tgt_subjects  = [txt_preprocess["eval"](tgt_subject)]
-        negative_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
+        negative_prompt = predefined_negative_prompt
         opt.subj_model_path = ""
         
         class DummyScope(object):
@@ -516,10 +522,18 @@ def main(opt):
         if opt.scale != 1.0:
             try:
                 uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt])
+                
+                if opt.use_deep_neg_prompt:
+                    deep_neg_context = model.get_learned_conditioning(batch_size * [predefined_negative_prompt])
+                    deep_neg_context = deep_neg_context[0]
+                else:
+                    deep_neg_context = None
+
             except:
                 breakpoint()
         else:
             uc = None
+            deep_neg_context = None
     else:
         # eval_blip
         use_layerwise_embedding = False
@@ -619,7 +633,8 @@ def main(opt):
                                                             eta=opt.ddim_eta,
                                                             x0=x0,
                                                             mask=mask,
-                                                            x_T=start_code)
+                                                            x_T=start_code,
+                                                            deep_neg_context=deep_neg_context)
 
                             x_samples_ddim = model.decode_first_stage(samples_ddim)
                             # x_samples_ddim: -1 ~ +1 -> 0 ~ 1.

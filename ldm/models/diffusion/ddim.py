@@ -116,6 +116,7 @@ class DDIMSampler(object):
                                                     log_every_t=log_every_t,
                                                     unconditional_guidance_scale=unconditional_guidance_scale,
                                                     unconditional_conditioning=unconditional_conditioning,
+                                                    **kwargs
                                                     )
         return samples, intermediates
 
@@ -125,7 +126,8 @@ class DDIMSampler(object):
                       callback=None, timesteps=None, quantize_denoised=False,
                       mask=None, x0=None, img_callback=None, log_every_t=100,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
-                      unconditional_guidance_scale=1., unconditional_conditioning=None,):
+                      unconditional_guidance_scale=1., unconditional_conditioning=None,
+                      **kwargs):
         device = self.model.betas.device
         b = shape[0]
         if x_T is None:
@@ -182,7 +184,8 @@ class DDIMSampler(object):
                                       noise_dropout=noise_dropout, score_corrector=score_corrector,
                                       corrector_kwargs=corrector_kwargs,
                                       unconditional_guidance_scale=guide_scale,
-                                      unconditional_conditioning=unconditional_conditioning)
+                                      unconditional_conditioning=unconditional_conditioning,
+                                      **kwargs)
             img, pred_x0 = outs
             if callback: callback(i)
             if img_callback: img_callback(pred_x0, i)
@@ -200,8 +203,10 @@ class DDIMSampler(object):
 
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
-                      unconditional_guidance_scale=1., unconditional_conditioning=None):
+                      unconditional_guidance_scale=1., unconditional_conditioning=None, deep_neg_context=None):
         b, *_, device = *x.shape, x.device
+
+        use_deep_negative_prompting = True
 
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
             e_t = self.model.apply_model(x, t, c)
@@ -209,9 +214,15 @@ class DDIMSampler(object):
             # Double the batch size for unconditional and conditional conditioning.
             x_in = torch.cat([x] * 2)
             t_in = torch.cat([t] * 2)
+
             if isinstance(c, tuple):
                 c_c, c_in_c, extra_info = c
                 c_u, c_in_u, _ = unconditional_conditioning
+                if use_deep_negative_prompting and deep_neg_context is not None:
+                    assert deep_neg_context.shape == c_u.shape
+                    # The second chunk of deep_neg_context is 0, corresponding to unconditional conditioning.
+                    # We don't apply deep_neg_context on unconditional conditioning x.
+                    extra_info['deep_neg_context'] = torch.cat([deep_neg_context, torch.zeros_like(deep_neg_context)], dim=0)
                 # Concatenated conditining embedding in the order of (conditional, unconditional).
                 # NOTE: the original order is (unconditional, conditional). But if we use_conv_attn,
                 # extra_info['subj_indices'] index the conditional prompts. If we prepend unconditonal prompts,

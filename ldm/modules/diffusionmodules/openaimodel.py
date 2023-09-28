@@ -506,8 +506,9 @@ class UNetModel(nn.Module):
         self.num_heads_upsample = num_heads_upsample
         self.predict_codebook_ids = n_embed is not None
         self.crossattn_force_grad = False
-        self.use_conv_attn = False
+        self.use_conv_attn  = False
         self.save_attn_vars = False
+        self.deep_neg_context    = None
 
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
@@ -715,24 +716,25 @@ class UNetModel(nn.Module):
 
     # set_cross_attn_flags: Set one or more flags for all or a subset of cross-attention layers.
     # If ca_layer_indices is None, then set the flags for all cross-attention layers.
-    def set_cross_attn_flags(self, flag_dict, ca_layer_indices=None):
-        if flag_dict is None:
-            return None
+    def set_cross_attn_flags(self, ca_flag_dict, trans_flag_dict, ca_layer_indices=None):
+        if ca_flag_dict is None:
+            return None, None
         
-        old_flag_dict = {}
+        old_ca_flag_dict    = {}
+        old_trans_flag_dict = {}
 
         all_ca_layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
-                                 17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
+                                     17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
+        
         if ca_layer_indices is None:
             ca_layer_idx2emb_idx = all_ca_layer_idx2emb_idx
         else:
             ca_layer_idx2emb_idx = { k: all_ca_layer_idx2emb_idx[k] for k in ca_layer_indices }
             if len(ca_layer_idx2emb_idx) == 0:
-                return old_flag_dict
+                return old_ca_flag_dict, old_trans_flag_dict
             
-        for k, v in flag_dict.items():
-            old_v = self.__dict__[k]
-            old_flag_dict[k] = old_v
+        for k, v in ca_flag_dict.items():
+            old_ca_flag_dict[k] = self.__dict__[k]
             self.__dict__[k] = v
 
             layer_idx = 0
@@ -753,7 +755,29 @@ class UNetModel(nn.Module):
                     module[1].transformer_blocks[0].attn2.__dict__[k] = v
                 layer_idx += 1
 
-        return old_flag_dict
+        for k, v in trans_flag_dict.items():
+            old_trans_flag_dict[k] = self.__dict__[k]
+            self.__dict__[k] = v
+
+            layer_idx = 0
+            for module in self.input_blocks:
+                if layer_idx in ca_layer_idx2emb_idx:
+                    # module: SpatialTransformer.
+                    # module.transformer_blocks: contains only 1 BasicTransformerBlock 
+                    # that does cross-attention with layer_context in attn2 only.                    
+                    module[1].transformer_blocks[0].__dict__[k] = v
+                layer_idx += 1
+
+            if layer_idx in ca_layer_idx2emb_idx:
+                self.middle_block[1].transformer_blocks[0].__dict__[k] = v
+            layer_idx += 1
+
+            for module in self.output_blocks:
+                if layer_idx in ca_layer_idx2emb_idx:
+                    module[1].transformer_blocks[0].__dict__[k] = v
+                layer_idx += 1
+
+        return old_ca_flag_dict, old_trans_flag_dict
     
     def forward(self, x, timesteps=None, context=None, y=None, 
                 context_in=None, extra_info=None, **kwargs):
@@ -790,41 +814,27 @@ class UNetModel(nn.Module):
         debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
-        emb_v_layers_cls_mix_scales = extra_info.get('emb_v_layers_cls_mix_scales', None)  if extra_info is not None else None
-
-        ca_old_flags = self.set_cross_attn_flags({'use_conv_attn': use_conv_attn})
+        emb_v_layers_cls_mix_scales = extra_info.get('emb_v_layers_cls_mix_scales', None)   if extra_info is not None else None
+        deep_neg_context      = extra_info.get('deep_neg_context', None)       if extra_info is not None else None
 
         # If uncond (null) condition is active, then subj_indices = None.
         subj_indices_B, subj_indices_N = subj_indices if subj_indices is not None else (None, None)
         bg_indices_B,   bg_indices_N   = bg_indices   if bg_indices   is not None else (None, None)
-
-        # Sanity check.
-        do_sanity_check = False
-        if do_sanity_check:
-            for b in range(x.shape[0]):
-                if ' z,' in context_in[b] and b not in subj_indices_B:
-                    breakpoint()
-                if ' y,' in context_in[b] and b not in bg_indices_B:
-                    breakpoint()
-
-            if subj_indices is not None:
-                for b in th.unique(subj_indices_B):
-                    if ' z,' not in context_in[b]:
-                        breakpoint()
-            if bg_indices_B is not None:
-                for b in th.unique(bg_indices_B):
-                    if ' y,' not in context_in[b]:
-                        breakpoint()
-
-        #if iter_type == 'mix_recon':
-        #    breakpoint()
 
         if use_layerwise_context:
             B = x.shape[0]
             # If use_layerwise_context, then context is static layerwise embeddings.
             # context: [16*B, N, 768] reshape => [B, 16, N, 768] permute => [16, B, N, 768]
             context = context.reshape(B, 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
-                    
+            if deep_neg_context is not None:
+                deep_neg_context = deep_neg_context.reshape(B, 16, -1, deep_neg_context.shape[-1]).permute(1, 0, 2, 3)
+                # deep_neg_context is just the same embedding repeated 16 times. Only one is needed.
+                # deep_neg_context: [8, 16, 77, 768] => [8, 77, 768]
+                deep_neg_context = deep_neg_context[0]
+
+        old_ca_flags, old_trans_flags = self.set_cross_attn_flags({'use_conv_attn': use_conv_attn},
+                                                                  {'deep_neg_context':   deep_neg_context})
+
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)
@@ -954,12 +964,12 @@ class UNetModel(nn.Module):
         if iter_type.startswith("mix_") or use_background_token or debug_attn:
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
             distill_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
-            distill_ca_old_flags = self.set_cross_attn_flags({'crossattn_force_grad': crossattn_force_grad, 
+            distill_old_ca_flags = self.set_cross_attn_flags({'crossattn_force_grad': crossattn_force_grad, 
                                                               'save_attn_vars': True}, 
                                                              ca_layer_indices=distill_layer_indices)
         else:
             distill_layer_indices = []
-            distill_ca_old_flags = None
+            distill_old_ca_flags = None
 
         for module in self.input_blocks:
             get_layer_idx_context = partial(get_layer_context, layer_idx)
@@ -1027,9 +1037,9 @@ class UNetModel(nn.Module):
             breakpoint()
         
         # Restore the original flags in cross-attention layers.
-        self.set_cross_attn_flags(ca_old_flags)
-        if distill_ca_old_flags is not None:
-            self.set_cross_attn_flags(distill_ca_old_flags, ca_layer_indices=distill_layer_indices)
+        self.set_cross_attn_flags(old_ca_flags, old_trans_flags)
+        if distill_old_ca_flags is not None:
+            self.set_cross_attn_flags(distill_old_ca_flags, ca_layer_indices=distill_layer_indices)
 
         # [2, 320, 64, 64]
         h = h.type(x.dtype)
