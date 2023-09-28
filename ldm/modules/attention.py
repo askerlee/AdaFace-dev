@@ -271,6 +271,7 @@ class BasicTransformerBlock(nn.Module):
         self.norm3 = nn.LayerNorm(dim)
         self.checkpoint = checkpoint
         self.deep_neg_context = None
+        self.deep_cfp_scale = 1.5
 
     def forward(self, x, context=None, mask=None):
         return checkpoint(self._forward, (x, context, mask), self.parameters(), self.checkpoint)
@@ -285,11 +286,10 @@ class BasicTransformerBlock(nn.Module):
         x3 = self.ff(self.norm3(x2)) + x2
 
         if self.deep_neg_context is not None:
-            deep_cfp_scale = 1.5
             x_neg = self.attn2(self.norm2(x1), context=self.deep_neg_context)
             x2_neg = x1 + x_neg
             x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
-            x3_cfp = x3 * deep_cfp_scale - x3_neg * (deep_cfp_scale - 1)
+            x3_cfp = x3 * self.deep_cfp_scale - x3_neg * (self.deep_cfp_scale - 1)
             cond_mask = self.deep_neg_context.abs().sum(dim=(1,2), keepdim=True) > 0
             x3_masked = torch.where(cond_mask, x3_cfp, x3)
             return x3_masked

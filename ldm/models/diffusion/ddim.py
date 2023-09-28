@@ -219,10 +219,13 @@ class DDIMSampler(object):
                 c_c, c_in_c, extra_info = c
                 c_u, c_in_u, _ = unconditional_conditioning
                 if use_deep_negative_prompting and deep_neg_context is not None:
+                    deep_neg_context, deep_cfp_scale = deep_neg_context
                     assert deep_neg_context.shape == c_u.shape
                     # The second chunk of deep_neg_context is 0, corresponding to unconditional conditioning.
                     # We don't apply deep_neg_context on unconditional conditioning x.
                     extra_info['deep_neg_context'] = torch.cat([deep_neg_context, torch.zeros_like(deep_neg_context)], dim=0)
+                    extra_info['deep_cfp_scale']   = deep_cfp_scale
+                    
                 # Concatenated conditining embedding in the order of (conditional, unconditional).
                 # NOTE: the original order is (unconditional, conditional). But if we use_conv_attn,
                 # extra_info['subj_indices'] index the conditional prompts. If we prepend unconditonal prompts,
