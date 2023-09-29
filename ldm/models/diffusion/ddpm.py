@@ -104,7 +104,7 @@ class DDPM(pl.LightningModule):
                  fg_bg_mask_align_loss_weight=0.,
                  do_clip_teacher_filtering=False,
                  distill_deep_neg_prompt=None,
-                 distill_deep_cfg_scale=1.5,
+                 distill_deep_cfg_scale=0.,
                  use_background_token=False,
                  use_conv_attn=False,
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
@@ -709,7 +709,7 @@ class LatentDiffusion(DDPM):
             self.create_clip_evaluator(next(self.parameters()).device)
             with torch.no_grad():
                 self.uncond_context             = self.get_learned_conditioning([""] * 2)
-                if self.distill_deep_neg_prompt is not None:
+                if (self.distill_deep_cfg_scale > 0) and (self.distill_deep_neg_prompt is not None):
                     # distill_deep_neg_context is generated with a batch size of 1. 
                     # Need to repeat it BLOCK_SIZE times to match the distillation batch size later.
                     distill_deep_neg_context   = self.get_learned_conditioning([self.distill_deep_neg_prompt])
@@ -1492,8 +1492,9 @@ class LatentDiffusion(DDPM):
                         extra_info['subj_indices'] = extra_info['subj_indices_2b']
                         extra_info['bg_indices']   = extra_info['bg_indices_2b']                            
 
-                        # In distillation iters, enable deep_neg_context at 50% chance.
-                        if (self.distill_deep_neg_context is not None) and random.random() < 0.5:
+                        # In distillation iters, at 50% chance, apply positive prompts and deep_neg_context. 
+                        #              At the other 50% chance, apply only the positive prompts.
+                        if (self.distill_deep_neg_context is not None) and (random.random() < 0.5):
                             extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(BLOCK_SIZE * 4, 1, 1)
                             extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
 

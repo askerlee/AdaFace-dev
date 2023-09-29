@@ -51,8 +51,8 @@ model:
     # loss_fg_bg_contrast: 0.06,                     * weight -> 3e-5
     fg_bg_mask_align_loss_weight:       2e-3
     do_clip_teacher_filtering: True
-    # To disable negative prompt used for distillation, comment out the following line.
     distill_deep_neg_prompt:  "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
+    # To disable negative prompt used for distillation, set distill_deep_cfg_scale to 0.
     # 1.5 is larger than the inference default value 1.3. Because during training, t is usually large
     # (corresponding to early stage of inference), and a larger scale factor may help locate a
     # better subspace more quickly.
