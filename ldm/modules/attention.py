@@ -304,7 +304,7 @@ class BasicTransformerBlock(nn.Module):
                 # we still multiply x3_neg by (self.deep_cfg_scale - 1).
                 ortho_residual = ortho_subtract(x3 * self.deep_cfg_scale, x3_neg * (self.deep_cfg_scale - 1))
                 # Remove the orthogonal residual from x3, so that the informative part is kept.
-                x3_cfg = x3 * self.deep_cfg_scale - ortho_residual
+                x3_cfg = x3 * self.deep_cfg_scale - ortho_residual * (self.deep_cfg_scale - 1) / self.deep_cfg_scale
             else:
                 x3_cfg = x3 * self.deep_cfg_scale - x3_neg * (self.deep_cfg_scale - 1)
 
