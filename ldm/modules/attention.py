@@ -6,7 +6,7 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn
+from ldm.util import replace_rows_by_conv_attn, ortho_subtract
 
 def exists(val):
     return val is not None
@@ -298,9 +298,16 @@ class BasicTransformerBlock(nn.Module):
                 x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
 
             self.attn2.save_attn_vars = attn2_save_attn_vars
-            x3_cfp = x3 * self.deep_cfg_scale - x3_neg * (self.deep_cfg_scale - 1)
+            cfg_use_ortho_subtract = False
+            if cfg_use_ortho_subtract:
+                # ortho_subtract is invariant to scales of the second argument. But for clarity
+                # we still multiply x3_neg by (self.deep_cfg_scale - 1).
+                x3_cfg = ortho_subtract(x3 * self.deep_cfg_scale, x3_neg * (self.deep_cfg_scale - 1))
+            else:
+                x3_cfg = x3 * self.deep_cfg_scale - x3_neg * (self.deep_cfg_scale - 1)
+
             cond_mask = self.deep_neg_context.abs().sum(dim=(1,2), keepdim=True) > 0
-            x3_masked = torch.where(cond_mask, x3_cfp, x3)
+            x3_masked = torch.where(cond_mask, x3_cfg, x3)
             return x3_masked
         
         return x3
