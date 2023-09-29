@@ -206,7 +206,8 @@ class DDIMSampler(object):
                       unconditional_guidance_scale=1., unconditional_conditioning=None, deep_neg_context=None):
         b, *_, device = *x.shape, x.device
 
-        use_deep_negative_prompting = True
+        if deep_neg_context is not None:
+            deep_neg_context, deep_cfg_scale = deep_neg_context
 
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
             e_t = self.model.apply_model(x, t, c)
@@ -218,8 +219,7 @@ class DDIMSampler(object):
             if isinstance(c, tuple):
                 c_c, c_in_c, extra_info = c
                 c_u, c_in_u, _ = unconditional_conditioning
-                if use_deep_negative_prompting and deep_neg_context is not None:
-                    deep_neg_context, deep_cfg_scale = deep_neg_context
+                if deep_neg_context is not None:
                     assert deep_neg_context.shape == c_u.shape
                     # The second chunk of deep_neg_context is 0, corresponding to unconditional conditioning.
                     # We don't apply deep_neg_context on unconditional conditioning x.

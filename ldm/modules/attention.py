@@ -286,7 +286,7 @@ class BasicTransformerBlock(nn.Module):
         x2 = x1 + x_ca
         x3 = self.ff(self.norm3(x2)) + x2
 
-        if (not self.disable_deep_neg_context) and (self.deep_neg_context is not None):
+        if (not self.disable_deep_neg_context) and (self.deep_neg_context is not None) and self.deep_cfg_scale != 1:
             attn2_save_attn_vars = self.attn2.save_attn_vars
             # Disable save_attn_vars, so that the saved attn vars given the 
             # normal context are not overwritten.
