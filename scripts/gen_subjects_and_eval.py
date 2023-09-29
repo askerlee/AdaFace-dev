@@ -53,7 +53,7 @@ def parse_args():
     parser.add_argument("--use_deep_neg_prompt", action='store_true',
                         help="use deep negative prompts")    
     # --deep_cfg_scale
-    parser.add_argument("--deep_cfg_scale", type=float, default=1.25,
+    parser.add_argument("--deep_cfg_scale", type=float, default=1.3,
                         help="scale of deep negative prompts")
     # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.
     parser.add_argument("--z_suffix_type", default=argparse.SUPPRESS, 

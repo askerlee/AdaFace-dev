@@ -57,7 +57,7 @@ def parse_args():
     parser.add_argument(
         "--deep_cfg_scale",
         type=float,
-        default=1.5,
+        default=1.3,
         help="scale of deep negative prompts",
     )
     parser.add_argument(
