@@ -302,7 +302,9 @@ class BasicTransformerBlock(nn.Module):
             if cfg_use_ortho_subtract:
                 # ortho_subtract is invariant to scales of the second argument. But for clarity
                 # we still multiply x3_neg by (self.deep_cfg_scale - 1).
-                x3_cfg = ortho_subtract(x3 * self.deep_cfg_scale, x3_neg * (self.deep_cfg_scale - 1))
+                ortho_residual = ortho_subtract(x3 * self.deep_cfg_scale, x3_neg * (self.deep_cfg_scale - 1))
+                # Remove the orthogonal residual from x3, so that the informative part is kept.
+                x3_cfg = x3 * self.deep_cfg_scale - ortho_residual
             else:
                 x3_cfg = x3 * self.deep_cfg_scale - x3_neg * (self.deep_cfg_scale - 1)
 
