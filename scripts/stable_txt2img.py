@@ -536,6 +536,8 @@ def main(opt):
                     if os.environ.get('IGN_NEG_PROMPT'):
                         print("Ignore deep negative prompts")
                         deep_neg_context = None
+                    else:
+                        print("Use deep negative prompts")
                 else:
                     deep_neg_context = None
 
