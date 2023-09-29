@@ -761,7 +761,9 @@ def main(opt):
                         experiment_sig += "-" + opt.bb_type
                     if opt.neg_prompt != "":
                         experiment_sig += "-" + "neg"
-
+                    if opt.use_deep_neg_prompt:
+                        experiment_sig += "-" + "deepneg"
+                        
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                     if opt.from_file:
                         prompt = prompts[0]
