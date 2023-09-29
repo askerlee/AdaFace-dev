@@ -1763,11 +1763,14 @@ class LatentDiffusion(DDPM):
                 x_noisy_ = self.q_sample(x_start=x_start_, t=t_, noise=noise_)
                 # Clear the cached placeholder indices, as they are for conditional embeddings.
                 self.embedding_manager.clear_placeholder_indices()
+                # Do not apply deep neg prompts on unconditional embeddings. 
+                # It will cancel out the effect of unconditional embeddings.
+                cond[2]['disable_deep_neg_context'] = True
                 # self.uncond_context: precomputed unconditional embeddings.
                 model_output_uncond = self.apply_model(x_noisy_, t_, self.uncond_context)
                 # model_output_uncond: [2, 4, 64, 64] -> [4, 4, 64, 64]
                 model_output_uncond = model_output_uncond.repeat(2, 1, 1, 1)
-                
+                cond[2]['disable_deep_neg_context'] = False
             # Classifier-free guidance to make the contents in the 
             # generated images more pronounced => smaller CLIP loss.
             if cfg_scales is not None:
@@ -2520,6 +2523,10 @@ class LatentDiffusion(DDPM):
             # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
             # smaller magnitudes than the delta loss. So we scale it up by 20x.
             subj_attn_norm_distill_loss_scale  = 2 if self.subj_attn_delta_distill_uses_scores else 20
+            # Using distill_deep_neg_prompt will somehow increase the subj attn norm. So punish it more.
+            if self.distill_deep_neg_prompt is not None:
+                subj_attn_norm_distill_loss_scale *= 2
+
             loss_mix_prompt_distill =  loss_subj_attn_delta_distill   * subj_attn_delta_distill_loss_scale \
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                         + loss_feat_delta_distill 

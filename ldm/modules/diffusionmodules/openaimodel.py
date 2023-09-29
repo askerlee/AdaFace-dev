@@ -508,9 +508,10 @@ class UNetModel(nn.Module):
         self.crossattn_force_grad = False
         self.use_conv_attn  = False
         self.save_attn_vars = False
-        self.deep_neg_context    = None
-        self.deep_cfg_scale      = 1.5
-        
+        self.deep_neg_context           = None
+        self.deep_cfg_scale             = 1.5
+        self.disable_deep_neg_context   = False
+
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
@@ -819,6 +820,7 @@ class UNetModel(nn.Module):
         emb_v_layers_cls_mix_scales = extra_info.get('emb_v_layers_cls_mix_scales', None)   if extra_info is not None else None
         deep_neg_context      = extra_info.get('deep_neg_context', None)       if extra_info is not None else None
         deep_cfg_scale        = extra_info.get('deep_cfg_scale', 1.5)          if extra_info is not None else None
+        disable_deep_neg_context = extra_info.get('disable_deep_neg_context', False) if extra_info is not None else False
 
         # If uncond (null) condition is active, then subj_indices = None.
         subj_indices_B, subj_indices_N = subj_indices if subj_indices is not None else (None, None)
@@ -839,9 +841,10 @@ class UNetModel(nn.Module):
         # layers 7, 8, 12, 16, 17.
         trans_layer_indices = [7, 8, 12, 16, 17] if deep_neg_context is not None else None
         old_ca_flags, old_trans_flags = \
-            self.set_cross_attn_flags( ca_flag_dict   ={'use_conv_attn':     use_conv_attn},
-                                       trans_flag_dict={'deep_neg_context':  deep_neg_context,
-                                                        'deep_cfg_scale':    deep_cfg_scale},
+            self.set_cross_attn_flags( ca_flag_dict   ={'use_conv_attn':            use_conv_attn},
+                                       trans_flag_dict={'deep_neg_context':         deep_neg_context,
+                                                        'deep_cfg_scale':           deep_cfg_scale,
+                                                        'disable_deep_neg_context': disable_deep_neg_context},
                                        trans_layer_indices=trans_layer_indices)
 
         if self.num_classes is not None:
