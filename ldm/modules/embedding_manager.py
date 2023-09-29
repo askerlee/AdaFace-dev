@@ -590,7 +590,7 @@ class AdaEmbedding(nn.Module):
         self.layer_maps     = nn.ModuleList(layer_maps)
         self.layers_out_lns = nn.ModuleList(layers_out_lns)
         self.layer_lncat3s  = nn.ModuleList(layer_lncat3s)
-        self.mask_layer_map_weights()
+        #self.mask_layer_map_weights()
 
         self.has_bias = has_bias
         if has_bias:
@@ -650,7 +650,7 @@ class AdaEmbedding(nn.Module):
         # Some Linears only use either fg or bg features. 
         # So we mask weights at the unused half, since the corresponding weights are 
         # updated during BP and become nonzero. 
-        self.mask_layer_map_weights(emb_idx)
+        #self.mask_layer_map_weights(emb_idx)
         if not self.is_fg_only and self.use_cached_bg:
             # cached_infeat_bg must be provided when use_cached_bg.
             if cached_infeat_bg is None:
