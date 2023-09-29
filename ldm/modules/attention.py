@@ -288,13 +288,16 @@ class BasicTransformerBlock(nn.Module):
 
         if (not self.disable_deep_neg_context) and (self.deep_neg_context is not None):
             attn2_save_attn_vars = self.attn2.save_attn_vars
+            # Disable save_attn_vars, so that the saved attn vars given the 
+            # normal context are not overwritten.
             self.attn2.save_attn_vars = False
-            # Disable save_attn_vars, so that the saved attn vars are not overwritten.
-            x_neg = self.attn2(self.norm2(x1), context=self.deep_neg_context)
-            self.attn2.save_attn_vars = attn2_save_attn_vars
+            # Disable gradient for the deep_neg_context to speed up the computation.
+            with torch.no_grad():
+                x_neg = self.attn2(self.norm2(x1), context=self.deep_neg_context)
+                x2_neg = x1 + x_neg
+                x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
 
-            x2_neg = x1 + x_neg
-            x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
+            self.attn2.save_attn_vars = attn2_save_attn_vars
             x3_cfp = x3 * self.deep_cfg_scale - x3_neg * (self.deep_cfg_scale - 1)
             cond_mask = self.deep_neg_context.abs().sum(dim=(1,2), keepdim=True) > 0
             x3_masked = torch.where(cond_mask, x3_cfp, x3)
