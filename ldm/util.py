@@ -206,6 +206,7 @@ def parallel_data_prefetch(
         return gather_res
 
 # NOTE: ortho_subtract(a, b) is scale-invariant w.r.t. b.
+# ortho_subtract(a, b) scales proportionally to the scale of a.
 # a, b are n-dimensional tensors. Subtraction happens at the last dim.
 # Orthogonal subtraction of b from a: the result of a-w*b is orthogonal to b (on the last dimension).
 def ortho_subtract(a, b):

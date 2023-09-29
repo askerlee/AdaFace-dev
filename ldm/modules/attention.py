@@ -298,13 +298,16 @@ class BasicTransformerBlock(nn.Module):
                 x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
 
             self.attn2.save_attn_vars = attn2_save_attn_vars
-            cfg_use_ortho_subtract = False
+            cfg_use_ortho_subtract = True
             if cfg_use_ortho_subtract:
-                # ortho_subtract is invariant to scales of the second argument. But for clarity
-                # we still multiply x3 by self.deep_cfg_scale.
-                ortho_residual = ortho_subtract(x3_neg * (self.deep_cfg_scale - 1), x3 * self.deep_cfg_scale)
-                # Remove the orthogonal residual from x3, so that the informative part is kept.
-                x3_cfg = x3 * self.deep_cfg_scale - ortho_residual
+                # ortho_residual is orthogonal to x3, whose scale is proportional to the scale of x3_neg.
+                # ortho_residual is invariant to scales of x3. 
+                ortho_residual = ortho_subtract(x3_neg * (self.deep_cfg_scale - 1), x3)
+                # Subtraction "adds" (instead of removes, but adds in an opposite direction) 
+                # the orthogonal residual to x3, and at the same time the information in x3 is intact.
+                # Do not multiply x3 by self.deep_cfg_scale, because ortho_residual is orthogonal to x3,
+                # and subtracting them will only increase the magnitude of x3.
+                x3_cfg = x3 - ortho_residual
             else:
                 x3_cfg = x3 * self.deep_cfg_scale - x3_neg * (self.deep_cfg_scale - 1)
 
