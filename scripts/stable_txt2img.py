@@ -533,9 +533,11 @@ def main(opt):
                 if opt.use_deep_neg_prompt:
                     deep_neg_context = model.get_learned_conditioning(batch_size * [predefined_negative_prompt])
                     deep_neg_context = (deep_neg_context[0], opt.deep_cfg_scale)
-                #else:
-                print("Ignore deep negative prompts")
-                deep_neg_context = None
+                    if os.environ.get('IGN_NEG_PROMPT'):
+                        print("Ignore deep negative prompts")
+                        deep_neg_context = None
+                else:
+                    deep_neg_context = None
 
             except:
                 breakpoint()
