@@ -1513,7 +1513,7 @@ class LatentDiffusion(DDPM):
                         # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
                         extra_info['subj_indices']  = extra_info['subj_indices_2b']
                         extra_info['bg_indices']    = extra_info['bg_indices_2b']    
-                                                
+
                     else:
                         # do_normal_recon. The original scheme. 
                         extra_info['iter_type']      = 'normal_recon'
@@ -1531,7 +1531,13 @@ class LatentDiffusion(DDPM):
                         # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
                         extra_info['subj_indices'] = extra_info['subj_indices_1b']
                         extra_info['bg_indices']   = extra_info['bg_indices_1b']
-                        
+
+                        # In normal_recon iters, at 50% chance, apply positive prompts and deep_neg_context. 
+                        #              At the other 50% chance, apply only the positive prompts.
+                        if (self.distill_deep_neg_context is not None) and (random.random() < 0.5):
+                            extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(ORIG_BS, 1, 1)
+                            extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
+
                     extra_info['cls_comp_prompts']   = cls_comp_prompts
                     extra_info['cls_single_prompts'] = cls_single_prompts
                     # 'delta_prompts' is only used in comp_prompt_mix_reg iters. 
@@ -1559,6 +1565,13 @@ class LatentDiffusion(DDPM):
                     # it's called by self.validation_step().
                     assert self.iter_flags['do_normal_recon']
                     cond[2]['iter_type'] = 'normal_recon'
+
+                    # In recon iter without static delta loss, 
+                    # At 50% chance,           apply positive prompts and deep_neg_context. 
+                    # At the other 50% chance, apply only the positive prompts.
+                    if (self.distill_deep_neg_context is not None) and (random.random() < 0.5):
+                        extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(ORIG_BS, 1, 1)
+                        extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
 
                 # cond[2]: extra_info. 
                 cond[2]['use_background_token'] = self.iter_flags['use_background_token']
