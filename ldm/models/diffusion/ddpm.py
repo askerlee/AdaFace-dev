@@ -1492,7 +1492,8 @@ class LatentDiffusion(DDPM):
                         extra_info['subj_indices'] = extra_info['subj_indices_2b']
                         extra_info['bg_indices']   = extra_info['bg_indices_2b']                            
 
-                        if self.distill_deep_neg_context is not None:
+                        # In distillation iters, enable deep_neg_context at 50% chance.
+                        if (self.distill_deep_neg_context is not None) and random.random() < 0.5:
                             extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(BLOCK_SIZE * 4, 1, 1)
                             extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
 
