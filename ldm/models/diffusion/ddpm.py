@@ -2504,7 +2504,7 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/comp_fg_feat_contrast': loss_comp_fg_feat_contrast.mean().detach()})
                 if loss_comp_bg_attn_suppress > 0:
                     loss_dict.update({f'{prefix}/comp_bg_attn_suppress': loss_comp_bg_attn_suppress.mean().detach()})
-                bg_attn_suppress_loss_scale = 0.1
+                bg_attn_suppress_loss_scale = 0.2
                 loss_comp_fg_bg_preserve = loss_comp_fg_feat_contrast + loss_comp_bg_attn_suppress * bg_attn_suppress_loss_scale
                 # WEIGHT_WITH_FG_INFO_AMOUNT seems to reduce authenticity greatly.
                 WEIGHT_WITH_FG_INFO_AMOUNT = False
@@ -3180,9 +3180,9 @@ class LatentDiffusion(DDPM):
 
             # Simply suppress the subj attention on background areas. 
             # No need to use attn_*_single as references.
-            loss_layer_subj_bg_attn_suppress = subj_subj_bg_attn.abs().mean()
-            loss_layer_mix_bg_attn_suppress  = mix_subj_bg_attn.abs().mean()
-            mix_bg_attn_suppress_loss_scale = 0.1
+            loss_layer_subj_bg_attn_suppress = masked_mean(subj_subj_bg_attn, subj_subj_bg_attn > 0)
+            loss_layer_mix_bg_attn_suppress  = masked_mean(mix_subj_bg_attn,  mix_subj_bg_attn  > 0)
+            mix_bg_attn_suppress_loss_scale = 0.2
             loss_comp_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
                                             + loss_layer_mix_bg_attn_suppress * mix_bg_attn_suppress_loss_scale) \
                                             * feat_distill_layer_weight
