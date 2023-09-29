@@ -533,7 +533,7 @@ def main(opt):
                 if opt.use_deep_neg_prompt:
                     deep_neg_context = model.get_learned_conditioning(batch_size * [predefined_negative_prompt])
                     deep_neg_context = (deep_neg_context[0], opt.deep_cfg_scale)
-                else:
+                #else:
                     deep_neg_context = None
 
             except:
@@ -763,7 +763,7 @@ def main(opt):
                         experiment_sig += "-" + "neg"
                     if opt.use_deep_neg_prompt:
                         experiment_sig += "-" + "deepneg"
-                        
+
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                     if opt.from_file:
                         prompt = prompts[0]
