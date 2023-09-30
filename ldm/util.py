@@ -1069,10 +1069,10 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, K_fg, K_comp, BS,
 
     # The orthogonal projection of subj_subj_ks against subj_comp_ks_sum.
     # subj_comp_ks_sum will broadcast to the K_fg dimension of subj_subj_ks.
-    subj_comp_emb_diff = normalized_ortho_subtract(subj_comp_ks_sum, subj_subj_ks)
+    subj_comp_emb_diff = normalized_ortho_subtract(subj_subj_ks, subj_comp_ks_sum)
     # The orthogonal projection of cls_subj_ks against cls_comp_ks_sum.
     # cls_comp_ks_sum will broadcast to the K_fg dimension of cls_subj_ks_mean.
-    cls_comp_emb_diff  = normalized_ortho_subtract(cls_comp_ks_sum, cls_subj_ks)
+    cls_comp_emb_diff  = normalized_ortho_subtract(cls_subj_ks,  cls_comp_ks_sum)
     # The two orthogonal projections should be aligned. That is, each embedding in subj_subj_ks 
     # is allowed to vary only along the direction of the orthogonal projections of class embeddings.
 

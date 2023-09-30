@@ -3060,11 +3060,11 @@ class LatentDiffusion(DDPM):
             # The orthogonal projection of subj_subj_attn against subj_comp_attn.
             # subj_comp_attn will broadcast to the K_fg dimension.
             # ortho_subtract() is scale-invariant w.r.t. subj_comp_attn. So no need to normalize it.
-            subj_comp_attn_diff = ortho_subtract(subj_comp_attn, subj_subj_attn)
+            subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn)
             # The orthogonal projection of cls_subj_attn against cls_comp_attn.
             # cls_comp_attn will broadcast to the K_fg dimension.
             # ortho_subtract() is scale-invariant w.r.t. cls_comp_attn.  So no need to normalize it.
-            cls_comp_attn_diff  = ortho_subtract(cls_comp_attn, cls_subj_attn)
+            cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn)
             # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
             # vary only along the direction of the orthogonal projections of class attention.
 
