@@ -1909,8 +1909,6 @@ class LatentDiffusion(DDPM):
                                                         mean_range=(min_fg_noise_amount, max_fg_noise_amount))
                         x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
                         self.iter_flags['comp_init_with_fg_area']   = True
-                        # comp_init_fg_info_amount will be used as the weight of loss_comp_fg_bg_preserve.
-                        self.iter_flags['comp_init_fg_info_amount'] = (1 - fg_noise_amount) / (1 - min_fg_noise_amount)
                     else:
                         # No fg_mask. Add 80% noise to x_start.
                         x_start = torch.randn_like(x_start) * 0.8 + x_start * 0.2
@@ -2520,19 +2518,8 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/comp_bg_attn_suppress': loss_comp_bg_attn_suppress.mean().detach()})
                 bg_attn_suppress_loss_scale = 0.2
                 loss_comp_fg_bg_preserve = loss_comp_fg_feat_contrast + loss_comp_bg_attn_suppress * bg_attn_suppress_loss_scale
-                # WEIGHT_WITH_FG_INFO_AMOUNT seems to reduce authenticity greatly.
-                WEIGHT_WITH_FG_INFO_AMOUNT = False
-                if WEIGHT_WITH_FG_INFO_AMOUNT:
-                    # min_fg_noise_amount, max_fg_noise_amount = (0.7, 0.9)
-                    # So comp_init_fg_info_amount is annealed from 1 to 1/3:
-                    # (1 - 0.7) / (1 - 0.7) = 1, (1 - 0.9) / (1 - 0.7) = 1/3.
-                    # loss_comp_fg_bg_preserve is weighted from 1 to 1/3.
-                    comp_init_fg_info_amount = self.iter_flags['comp_init_fg_info_amount']
-                else:
-                    comp_init_fg_info_amount = 1
             else:
                 loss_comp_fg_bg_preserve = 0
-                comp_init_fg_info_amount = 0
 
             subj_attn_delta_distill_loss_scale = 0.5
             # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
@@ -2554,7 +2541,7 @@ class LatentDiffusion(DDPM):
                      + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
                      + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
                      + loss_subj_comp_attn_comple * subj_comp_attn_comple_loss_scale * self.subj_comp_attn_complementary_loss_weight \
-                     + loss_comp_fg_bg_preserve * comp_init_fg_info_amount * self.comp_fg_bg_preserve_loss_weight
+                     + loss_comp_fg_bg_preserve   * self.comp_fg_bg_preserve_loss_weight
             
             self.release_plosses_intermediates(locals())
 
