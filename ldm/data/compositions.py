@@ -6,28 +6,25 @@ animal_action_regexs = \
 [ "lifting a (rock|box|barbell|cat|dog)",
   "doing (makeup|housekeeping|gardening|exercise)",
   "carrying a (bag|backpack|luggage|laptop|book|briefcase|purse|suitcase|bouquet|baby|cat|dog|teddy bear)",
-  "holding a (mobile phone|book|cup of water|piece of paper|flower|bouquet|pen|sign|cat|dog|teddy bear|baby)",
+  "holding a (mobile phone|book|cup of water|piece of paper|flower|bouquet|pen|sign|cat|dog|teddy bear|baby|rock|leaf|mushroom|stick|fruit)",
   "(sitting|sleeping) (on a table|on a chair|on a bench|on a tank|in a wheelchair|on the ground|on flying cloud)",
-  "jumping on a (table|stair|board|chair|bed|box|trampoline)",
-  "punching a (tree|wall|table|punching bag)",
   "swimming (in a pool|underwater|in the ocean|in a lake|in a river)( among tropical fishes)?",
   "pushing a (door|table|car|wheelchair|stroller|shopping cart|bicycle|motorcycle|scooter)",
   "running (in a forest|at the beach|over forest leaves|on a trail|under the moon|on a treadmill)",
   "walking (in a forest|at the beach|over forest leaves|on a trail|under the moon|on a treadmill)",
   "throwing (a ball|a rock|water|a book|a bottle|a cat|a dart|a frisbee|a grenade|a knife|a javelin)",
-  "catching (a ball|an arrow|a butterfly|a fish|a leaf|a cat|a rabbit|a thief|a prey)",
-  "kicking a (ball|bottle|tree|rock|punching bag|telephone booth)",
+  "catching (a ball|an arrow|a butterfly|a fish|a leaf)",
+  "kicking a (ball|bottle|tree|rock|punching bag|booth)",
   "playing (a card game|a video game|a piano|a violin|basketball|tennis)",
   "riding a (bike|motorcycle|scooter|horse|car|bus|train|boat)",
   "(kissing|hugging|holding) a (boy|girl|baby|lady|man|cat)",
   "dancing with a (boy|girl|lady|man|villager)",
   "standing (besides a friend|besides a tree|besides a car|in a river|on a table|on a stair|on a board|on a box)",
-  "picking up a (rock|leaf|mushroom|stick|flower|shell|pebble|twig|fruit)",
   "opening a (door|window|book|bottle|jar|box|envelope|bag|pouch|wallet|suitcase)",
   "pointing at (the sky|the sun|the beach|the mountains|the forest)",
-  "looking at (a book|a mobile phone|the screen|the sky|the sun|the beach|a UFO|a map|a painting|a photo|a clock|a mirror|a telescope|a microscope)",
-  "drinking (a bottle of water|a cup of wine|a can of beer|a glass of juice|a cup of tea|a bottle of milk)",
-  "eating (a sandwich|an ice cream|barbecue|a pizza|a burger|a bowl of pasta|a piece of cake|a sushi roll|a bowl of soup|a plate of tacos)",
+  "looking at (a book|a mobile phone|the screen|the sky|the sun|the beach|a UFO|a map|a painting|a photo|a clock|a mirror)",
+  "drinking (a bottle of water|a cup of wine|beer|milk|a glass of juice|a cup of tea)",
+  "eating (a sandwich|an ice cream|a pizza|a burger|pasta|cake|sushi|soup|tacos)",
 ]
 
 animal_dresses = [
@@ -99,11 +96,12 @@ all_modifiers = [ "concept art", "realistic painting", "character design", "anim
                 ]
 
 #add time prompts
-all_time = ["futuristic", "modern", "ancient", "antique","retro","old-fashioned", "youthful"]
+all_time = [ "futuristic", "modern", "ancient", "antique","retro","old-fashioned", "youthful" ]
 
 #add light prompts
-all_light = ['daylight', 'moonlight', "natural light", "front light", "backlight", "soft light", 
-             "hard light", "moody light", "dramatic light", "dynamic light", "natural light" ]
+all_light = [ "daylight", "moonlight", "night sky", "natural light", "front light", 
+              "backlight", "soft light", "hard light", "moody light", "dramatic light", 
+              "dynamic light", "natural light" ]
 
 
 all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve",
@@ -112,10 +110,11 @@ all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "m
                "agnes Lawrence","disney animation studio"]
 
 #add background prompts
-all_backgrounds = ["a beach", "a table", "a park", "a concert", "a gym", "a library", "a mall", "a movie theater", "a hotel room", "a theme park",
-                   "a city", "a mountain", "a blue house", "a wheat field", "a tree and autumn leaves", "the Eiffel Tower", "a jungle", "the snow",
-                   "a cobblestone street", "underwater", "an ocean of milk", "pink fabric", "a wooden floor", "green grass with sunflowers around it",
-                   "a mirror", "the sidewalk in a crowded street", "a dirt road", "a white rug", "a purple rug in a forest", "a red cube", "a purple cube"
+all_backgrounds = [ "a beach", "a table", "a park", "a concert", "a gym", "a library", "a mall", "a movie theater", "a hotel room", "a theme park",
+                    "a city", "a mountain", "a blue house", "a wheat field", "a tree and autumn leaves", "the Eiffel Tower", "a jungle", "the snow",
+                    "a cobblestone street", "underwater", "an ocean of milk", "pink fabric", "a wooden floor", "green grass with sunflowers around it",
+                    "a mirror", "the sidewalk in a crowded street", "a dirt road", "a white rug", "a purple rug in a forest", "a red cube", "a purple cube",
+                    "a building", 
                   ]
 
 

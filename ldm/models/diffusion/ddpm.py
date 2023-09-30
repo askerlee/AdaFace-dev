@@ -28,7 +28,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        save_grid, chunk_list, patch_multi_embeddings, fix_emb_scales, \
                        halve_token_indices, normalize_dict_values, masked_mean, \
                        scale_mask_for_feat_attn, mix_static_vk_embeddings, repeat_part_of_masks, \
-                       rand_annealed, bool_annealed, anneal_t, calc_layer_subj_comp_k_ortho_loss
+                       rand_annealed, bool_annealed, anneal_t, calc_layer_subj_comp_k_or_v_ortho_loss
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -2592,10 +2592,10 @@ class LatentDiffusion(DDPM):
         attn_delta_distill_layer_weights = { # 7:  1., 8: 1.,
                                              12: 1.,
                                              16: 1., 17: 1.,
-                                             18: 0.5, 
-                                             19: 0.25, 20: 0.25,
-                                             21: 0.12, 22: 0.12, 
-                                             23: 0.12, 24: 0.12,                                       
+                                             18: 1., 
+                                             19: 1., 20: 1.,
+                                             21: 1., 22: 1., 
+                                             23: 1., 24: 1.,                                       
                                             }
         # DISABLE attn delta loss.
         # attn_delta_distill_layer_weights = {}
@@ -2789,9 +2789,9 @@ class LatentDiffusion(DDPM):
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
         attn_align_layer_weights = { #7:  1., 8: 1.,
-                                    12: 0.25,
-                                    16: 0.5, 17: 0.5, 
-                                    18: 0.5,
+                                    12: 1.,
+                                    16: 1., 17: 1., 
+                                    18: 1.,
                                     19: 1., 20: 1., 
                                     21: 1., 22: 1., 23: 1.,  24: 1.,
                                    }
@@ -2980,9 +2980,18 @@ class LatentDiffusion(DDPM):
                                  23: 1., 24: 1.,
                                 }
         
+        v_ortho_layer_weights = { #7:  1., 8: 1.,
+                                 12: 1.,
+                                 16: 1., 17: 1.,
+                                 18: 0.5,
+                                 19: 0.25, 20: 0.25, 
+                                 21: 0.12, 22: 0.12, 
+                                 23: 0.12, 24: 0.12,                                 
+                               }
+        
         # Normalize the weights above so that each set sum to 1.
         k_ortho_layer_weights = normalize_dict_values(k_ortho_layer_weights)
-
+        v_ortho_layer_weights = normalize_dict_values(v_ortho_layer_weights)
         # K_fg: 4, number of embeddings per subject token.
         K_fg   = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
         # In each instance, subj_indices has K_fg times as many elements as placeholder_indices_bg.
@@ -3028,25 +3037,26 @@ class LatentDiffusion(DDPM):
                 continue
 
             loss_layer_subj_comp_key_ortho = \
-                calc_layer_subj_comp_k_ortho_loss(unet_seq_k, K_fg, K_comp, BS,
-                                                  ind_subj_subj_B, ind_subj_subj_N, 
-                                                  ind_cls_subj_B,  ind_cls_subj_N, 
-                                                  ind_subj_comp_B, ind_subj_comp_N, 
-                                                  ind_cls_comp_B,  ind_cls_comp_N,
-                                                  do_demean_first=emb_kq_do_demean_first, 
-                                                  cls_grad_scale=cls_grad_scale)
+                calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, K_fg, K_comp, BS,
+                                                        ind_subj_subj_B, ind_subj_subj_N, 
+                                                        ind_cls_subj_B,  ind_cls_subj_N, 
+                                                        ind_subj_comp_B, ind_subj_comp_N, 
+                                                        ind_cls_comp_B,  ind_cls_comp_N,
+                                                        do_demean_first=emb_kq_do_demean_first, 
+                                                        cls_grad_scale=cls_grad_scale)
             loss_layer_subj_comp_value_ortho = \
-                calc_layer_subj_comp_k_ortho_loss(unet_vs[unet_layer_idx], K_fg, K_comp, BS,
-                                                  ind_subj_subj_B, ind_subj_subj_N, 
-                                                  ind_cls_subj_B,  ind_cls_subj_N, 
-                                                  ind_subj_comp_B, ind_subj_comp_N, 
-                                                  ind_cls_comp_B,  ind_cls_comp_N,
-                                                  do_demean_first=emb_kq_do_demean_first, 
-                                                  cls_grad_scale=cls_grad_scale)
-            
+                calc_layer_subj_comp_k_or_v_ortho_loss(unet_vs[unet_layer_idx], K_fg, K_comp, BS,
+                                                        ind_subj_subj_B, ind_subj_subj_N, 
+                                                        ind_cls_subj_B,  ind_cls_subj_N, 
+                                                        ind_subj_comp_B, ind_subj_comp_N, 
+                                                        ind_cls_comp_B,  ind_cls_comp_N,
+                                                        do_demean_first=emb_kq_do_demean_first, 
+                                                        cls_grad_scale=cls_grad_scale)
+                    
             k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
+            v_ortho_layer_weight = v_ortho_layer_weights[unet_layer_idx]
             loss_subj_comp_key_ortho   += loss_layer_subj_comp_key_ortho   * k_ortho_layer_weight
-            loss_subj_comp_value_ortho += loss_layer_subj_comp_value_ortho * k_ortho_layer_weight
+            loss_subj_comp_value_ortho += loss_layer_subj_comp_value_ortho * v_ortho_layer_weight
 
             ###########   loss_subj_comp_attn_comple   ###########
             # attn_mat: [4, 8, 64, 77] => [4, 77, 8, 64]

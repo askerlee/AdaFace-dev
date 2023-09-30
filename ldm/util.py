@@ -1038,7 +1038,7 @@ def repeat_part_of_masks(img_mask, fg_mask, batch_have_fg_mask, sel_indices, REP
 
     return img_mask, fg_mask, batch_have_fg_mask, fg_mask_avail_ratio
 
-def calc_layer_subj_comp_k_ortho_loss(unet_seq_k, K_fg, K_comp, BS, 
+def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, K_fg, K_comp, BS, 
                                       ind_subj_subj_B, ind_subj_subj_N, 
                                       ind_cls_subj_B,  ind_cls_subj_N, 
                                       ind_subj_comp_B, ind_subj_comp_N, 

@@ -30,7 +30,7 @@ def parse_args():
                         action="store_true", 
                         help="Whether to include the background string in the prompts. Only valid if --background_string is specified.")
     parser.add_argument("--background_string", 
-                        type=str, default=argparse.SUPPRESS,
+                        type=str, default="y",
                         help="Background string which will be used in prompts to denote the background in training images.")
     parser.add_argument("--num_vectors_per_bg_token",
                         type=int, default=1,
@@ -322,7 +322,7 @@ if __name__ == "__main__":
         outdir = args.out_dir_tmpl + "-" + args.method
         os.makedirs(outdir, exist_ok=True)
 
-        if hasattr(args, "background_string") and args.include_bg_string:
+        if args.background_string and args.include_bg_string:
             background_string = "with background " + args.background_string + ", " * (args.num_vectors_per_bg_token - 1)
         else:
             background_string = ""
@@ -426,7 +426,7 @@ if __name__ == "__main__":
         if args.use_conv_attn:
             command_line += f" --use_conv_attn"
         
-        if hasattr(args, 'background_string'):
+        if args.background_string and args.include_bg_string:
             command_line += f" --background_string {args.background_string}"
 
         if hasattr(args, 'neg_prompt'):
