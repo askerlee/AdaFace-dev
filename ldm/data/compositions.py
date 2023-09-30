@@ -12,9 +12,9 @@ animal_action_regexs = \
   "pushing a (door|table|car|wheelchair|stroller|shopping cart|bicycle|motorcycle|scooter)",
   "running (in a forest|at the beach|over forest leaves|on a trail|under the moon|on a treadmill)",
   "walking (in a forest|at the beach|over forest leaves|on a trail|under the moon|on a treadmill)",
-  "throwing (a ball|a rock|water|a book|a bottle|a cat|a dart|a frisbee|a grenade|a knife|a javelin)",
+  "throwing (a ball|a rock|water|a dart|a frisbee|a knife|a javelin)",
   "catching (a ball|an arrow|a butterfly|a fish|a leaf)",
-  "kicking a (ball|bottle|tree|rock|punching bag|booth)",
+  "kicking a (ball|bottle|tree|rock|punching bag|pole|box)",
   "playing (a card game|a video game|a piano|a violin|basketball|tennis)",
   "riding a (bike|motorcycle|scooter|horse|car|bus|train|boat)",
   "(kissing|hugging|holding) a (boy|girl|baby|lady|man|cat)",
@@ -22,16 +22,16 @@ animal_action_regexs = \
   "standing (besides a friend|besides a tree|besides a car|in a river|on a table|on a stair|on a board|on a box)",
   "opening a (door|window|book|bottle|jar|box|envelope|bag|pouch|wallet|suitcase)",
   "pointing at (the sky|the sun|the beach|the mountains|the forest)",
-  "looking at (a book|a mobile phone|the screen|the sky|the sun|the beach|a UFO|a map|a painting|a photo|a clock|a mirror)",
+  "looking at (a book|a mobile phone|the screen|the sky|the sun|the beach|a UFO|a painting|a clock|a mirror)",
   "drinking (a bottle of water|a cup of wine|beer|milk|a glass of juice|a cup of tea)",
   "eating (a sandwich|an ice cream|a pizza|a burger|pasta|cake|sushi|soup|tacos)",
 ]
 
 animal_dresses = [
-  "wearing a (tshirt|stormtrooper costume|superman costume|ironman armor|ski outfit|astronaut outfit|medal|suit|tie|baseball cap)",
-  "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt|aikido training clothes|green robe)",
+  "wearing a (tshirt|stormtrooper costume|superman costume|ironman armor|ski outfit|astronaut outfit|suit|baseball cap)",
+  "wearing (a red hat|a santa hat|a rainbow scarf|a black top hat and a monocle|pink glasses|a yellow shirt|aikido uniform|green robe)",
   # This is kind of static but only for humans/animals. So we put it here.
-  "in a (chef outfit|firefighter outfit|police outfit|a purple wizard outfit|dress|suit|tshirt|stormtrooper costume|superman costume)",
+  "in a (chef outfit|firefighter outfit|police outfit|a purple wizard outfit|dress|suit|stormtrooper costume|superman costume)",
 ]
 
 # static compositions are used by both humans/animals and objects
@@ -39,8 +39,12 @@ static_action_regexs = \
 [ 
   "leaning (against a wall|against a tree|against a table|on a chair|on top of a car)",
   "flying (in the sky|under the sunset|in the outer space|over water|over a building)",
-  "on (an airplane|a bus|a busy street|a grass|a roof|an escalator|a train|a boat|a bike|a roller coaster|a ski lift|a hot air balloon|a scooter)",
-  "in (a car|a meeting|a class|a wedding|an elevator|a dinner|a concert|a gym|a library|a park|a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
+  # Split a regex with too many candidate patterns into two lines, 
+  # to avoid under-representation of the patterns, as the regexs are unifomly sampled.
+  "on (an airplane|a bus|a busy street|a grass|a roof|an escalator|a train)",
+  "on (a boat|a bike|a roller coaster|a ski lift|a hot air balloon|a scooter)",
+  "in (a car|a meeting|a class|a wedding|a dinner|a concert|a gym|a library|a park)",
+  "in (a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
   "at (a beach|a table|a park|a concert|a gym|a library|a mall|a movie theater|a hotel room|a theme park)",
   "next to (a friend|a tree|a car|a river|a lake|a mountain|an ocean|a playground|a statue|a panda)",
   "made of (metal|stainless steel|fractal flame|marble|rubber|bronze|ice)",
