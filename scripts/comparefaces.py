@@ -1,7 +1,7 @@
 import os
 import argparse
 import time
-from evaluation.eval_utils import compare_face_folders, set_tf_gpu
+from evaluation.eval_utils import compare_face_folders_fast, set_tf_gpu
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -22,7 +22,7 @@ if __name__ == "__main__":
 
     set_tf_gpu(args.gpu_id)
 
-    skip_subjs = [ 'corgi', 'lilbub', 'jiffpom', 'princessmonstertruck' ]
+    skip_subjs = [ 'lilbub', 'jiffpom', 'princessmonstertruck' ]
 
     begin = time.time()
 
@@ -36,13 +36,13 @@ if __name__ == "__main__":
                     continue
 
                 print("Self comparing %s:" %(subdir_path))
-                compare_face_folders(subdir_path, subdir_path)
+                compare_face_folders_fast(subdir_path, subdir_path)
                 subdir_count += 1
             if subdir_count == 0:
                 print("Self comparing %s:" %(args.path1))
-                compare_face_folders(args.path1, args.path1)
+                compare_face_folders_fast(args.path1, args.path1)
         else:            
-            compare_face_folders(args.path1, args.path2, verbose=False)
+            compare_face_folders_fast(args.path1, args.path2, verbose=False)
     else:
         subdirs = sorted(os.listdir(args.path1))
         for subdir in subdirs:
@@ -53,7 +53,7 @@ if __name__ == "__main__":
             if os.path.isdir(subdir_path1) == False or os.path.isdir(subdir_path2) == False:
                 continue
             print("Pair comparing %s vs %s:" %(subdir_path1, subdir_path2))
-            compare_face_folders(subdir_path1, subdir_path2)        
+            compare_face_folders_fast(subdir_path1, subdir_path2)        
         
     end = time.time()
     print("Time elapsed: %.2f seconds" %(end - begin))
