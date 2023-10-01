@@ -455,6 +455,7 @@ class DDPM(pl.LightningModule):
                             # 'do_teacher_filter':        False,
                             # 'is_teachable':             False,
                             'use_background_token':         False,
+                            'use_fp_trick':                 False,
                             'reuse_init_conds':             False,
                             'comp_init_with_fg_area':       False,
                           }
@@ -1238,13 +1239,6 @@ class LatentDiffusion(DDPM):
 
         self.fg_mask_avail_ratio = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
 
-        if self.iter_flags['do_mix_prompt_distillation']:
-            p_bg_token = 0
-        else:
-            # This iter is only doing recon on training images.
-            # use_background_token is only for such cases. 
-            p_bg_token = 0.85
-
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
         # do_ada_emb_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
@@ -1259,28 +1253,31 @@ class LatentDiffusion(DDPM):
             # Only use_background_token on recon iters. 
             # So if do_mix_prompt_distillation, then no need to check use_background_token.
             p_use_fp_trick = 0.8
-            self.use_fp_trick_iter = self.iter_flags['do_mix_prompt_distillation'] and self.use_fp_trick \
-                                        and 'subj_prompt_single_fp' in batch \
-                                        and random.random() < p_use_fp_trick
+            self.iter_flags['use_fp_trick'] = self.iter_flags['do_mix_prompt_distillation'] and self.use_fp_trick \
+                                                and 'subj_prompt_single_fp' in batch \
+                                                and random.random() < p_use_fp_trick
 
-            if self.use_fp_trick_iter:
+            p_bg_token = 0.85
+            # Only use_background_token on recon iters.
+            # To avoid the backgound token taking too much of the foreground, 
+            # we only use the background token on 85% of the training images, to 
+            # force the foreground token to focus on the whole image.
+            self.iter_flags['use_background_token'] = not self.iter_flags['do_mix_prompt_distillation'] \
+                                                        and self.use_background_token \
+                                                        and random.random() < p_bg_token
+            
+            if self.iter_flags['use_fp_trick']:
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp'
                 CLS_PROMPT_COMP    = 'cls_prompt_comp_fp'
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp'
-            # use_background_token: implies it's a recon iter.
             # *_comp_bg: used for static delta loss. 
-            # To avoid the backgound token taking too much of the foreground, 
-            # we only use the background token on 80% of the training images.
-            elif self.use_background_token \
-              and self.global_step >= 0 \
-              and random.random() < p_bg_token:
+            elif self.iter_flags['use_background_token']:
                 captions = batch["caption_bg"]
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_bg'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_bg'
                 CLS_PROMPT_COMP    = 'cls_prompt_comp_bg'
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single_bg'
-                self.iter_flags['use_background_token'] = True
             # Either do_mix_prompt_distillation but not (use_fp_trick_iter and broad_class == 1), 
             # or recon iters (not do_mix_prompt_distillation) and not use_background_token 
             # We don't use_fp_trick on training images. use_fp_trick is only for compositional regularization.
