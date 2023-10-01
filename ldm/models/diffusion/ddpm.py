@@ -1259,11 +1259,17 @@ class LatentDiffusion(DDPM):
             # 'subj_prompt_single_fp' in batch is True <=> (broad_class == 1 and use_fp_trick).
             # If do_mix_prompt_distillation but broad_class == 0 or 2, this statement is False, and 
             # used prompts will be 'subj_prompt_comp', 'cls_prompt_single', 'cls_prompt_comp'...
-            if self.iter_flags['do_mix_prompt_distillation'] and (self.use_fp_trick and 'subj_prompt_single_fp' in batch):
+            p_use_fp_trick = 0.8
+            self.use_fp_trick_iter = self.iter_flags['do_mix_prompt_distillation'] and self.use_fp_trick \
+                                        and 'subj_prompt_single_fp' in batch \
+                                        and random.random() < p_use_fp_trick
+
+            if self.use_fp_trick_iter:
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp'
                 CLS_PROMPT_COMP    = 'cls_prompt_comp_fp'
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp'
+            # use_background_token: implies it's a recon iter.
             # *_comp_bg: used for static delta loss. 
             # To avoid the backgound token taking too much of the foreground, 
             # we only use the background token on 80% of the training images.
