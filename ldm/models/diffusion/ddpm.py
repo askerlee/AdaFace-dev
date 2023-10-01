@@ -1235,9 +1235,18 @@ class LatentDiffusion(DDPM):
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
         x, captions = self.get_input(batch, self.first_stage_key)
 
-        batch_have_fg_mask = batch['has_fg_mask']
-
+        batch_have_fg_mask       = batch['has_fg_mask']
         self.fg_mask_avail_ratio = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
+
+        # If cached_inits_available, cached_inits are only used if do_mix_prompt_distillation = True.
+        self.iter_flags['reuse_init_conds']  = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
+                                                and self.cached_inits_available)
+
+        # do_teacher_filter: If not reuse_init_conds and do_teacher_filtering, then we choose the better instance 
+        # between the two in the batch, if it's above the usable threshold.
+        # do_teacher_filtering and reuse_init_conds are mutually exclusive.
+        self.iter_flags['do_teacher_filter'] = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
+                                                and not self.iter_flags['reuse_init_conds'])
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
@@ -1257,15 +1266,32 @@ class LatentDiffusion(DDPM):
                                                 and 'subj_prompt_single_fp' in batch \
                                                 and random.random() < p_use_fp_trick
 
-            p_bg_token = 0.85
-            # Only use_background_token on recon iters.
+            p_comp_init_with_fg_area = 0.7
+            self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
+                                                          and not self.iter_flags['reuse_init_conds'] \
+                                                          and self.fg_mask_avail_ratio > 0 \
+                                                          and random.random() < p_comp_init_with_fg_area
+
+            # Mainly use background token on recon iters.
             # To avoid the backgound token taking too much of the foreground, 
-            # we only use the background token on 85% of the training images, to 
+            # we only use the background token on 90% of the training images, to 
             # force the foreground token to focus on the whole image.
-            self.iter_flags['use_background_token'] = not self.iter_flags['do_mix_prompt_distillation'] \
-                                                        and self.use_background_token \
+            if not self.iter_flags['do_mix_prompt_distillation']:
+                p_bg_token     = 0.9
+            # If do_mix_prompt_distillation and comp_init_with_fg_area, then we still 
+            # use background token on 50% of the iterations, hoping the background token to 
+            # capture some non-compositional information.
+            elif self.iter_flags['comp_init_with_fg_area']:
+                p_bg_token     = 0.5
+            else:
+                # When do_mix_prompt_distillation and not comp_init_with_fg_area, or 
+                # at 50% of the time when comp_init_with_fg_area, we don't use background token.
+                p_bg_token     = 0
+
+            # Only use_background_token on recon iters.
+            self.iter_flags['use_background_token'] = self.use_background_token \
                                                         and random.random() < p_bg_token
-            
+                        
             if self.iter_flags['use_fp_trick']:
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp'
@@ -1355,9 +1381,6 @@ class LatentDiffusion(DDPM):
     #LINK #shared_step
     def forward(self, x, captions, *args, **kwargs):
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
-        # If cached_inits_available, cached_inits are only used if do_mix_prompt_distillation = True.
-        self.iter_flags['reuse_init_conds']     = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
-                                                   and self.cached_inits_available)
 
         # Use >=, i.e., assign decay in all iterations after the first 100.
         # This is in case there are skips of iterations of global_step 
@@ -1821,13 +1844,6 @@ class LatentDiffusion(DDPM):
         noise = default(noise, lambda: torch.randn_like(x_start))
         #print(cond[1])
 
-        # reuse_init_conds was evaluated in LatentDiffusion::forward().
-        # If not reuse_init_conds and do_teacher_filtering, then we choose the better instance 
-        # between the two in the batch, if it's above the usable threshold.
-        # do_teacher_filtering and reuse_init_conds are mutually exclusive.
-        self.iter_flags['do_teacher_filter'] = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
-                                                and not self.iter_flags['reuse_init_conds'])
-
         img_mask            = self.iter_flags['img_mask']
         fg_mask             = self.iter_flags['fg_mask']
         batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
@@ -1894,26 +1910,14 @@ class LatentDiffusion(DDPM):
                 # This may help the model ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
 
-                if bool_annealed(self.training_percent, final_percent=0.5, true_prob_range=(0.6, 0.75)):
+                if not self.iter_flags['comp_init_with_fg_area']:
                     x_start.normal_()
                 else:
-                    # The probability of this branch is annealed from 0.4 to 0.25 above.
-                    if self.fg_mask_avail_ratio > 0:
-                        # At foreground, keep 30% of the original x_start values and add 70% noise. 
-                        # At background, fill with random values (100% noise).
-                        x_start = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
-                        # Disable annealing fg noise amount
-                        min_fg_noise_amount, max_fg_noise_amount = (0.7, 0.7)
-                        ## The mean of fg_noise_amount is annealed from 0.7 to 0.9.
-                        # Then randomly choose fg_noise_amount from [0.8 * mean, 1.2 * mean] 
-                        # (bounded by [0, 1]).
-                        fg_noise_amount = rand_annealed(self.training_percent, final_percent=1.0, 
-                                                        mean_range=(min_fg_noise_amount, max_fg_noise_amount))
-                        x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
-                        self.iter_flags['comp_init_with_fg_area']   = True
-                    else:
-                        # No fg_mask. Add 80% noise to x_start.
-                        x_start = torch.randn_like(x_start) * 0.8 + x_start * 0.2
+                    # At background, fill x_start with random values (100% noise).
+                    x_start = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
+                    fg_noise_amount = 0.7
+                    # At foreground, keep 30% of the original x_start values and add 70% noise. 
+                    x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
 
             if not self.iter_flags['do_mix_prompt_distillation']:
                 # Only do ada delta loss. This usually won't happen unless mix_prompt_distill_weight = 0.
