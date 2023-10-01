@@ -1252,7 +1252,7 @@ class LatentDiffusion(DDPM):
             # used prompts will be 'subj_prompt_comp', 'cls_prompt_single', 'cls_prompt_comp'...
             # Only use_background_token on recon iters. 
             # So if do_mix_prompt_distillation, then no need to check use_background_token.
-            p_use_fp_trick = 0.8
+            p_use_fp_trick = 0.9
             self.iter_flags['use_fp_trick'] = self.iter_flags['do_mix_prompt_distillation'] and self.use_fp_trick \
                                                 and 'subj_prompt_single_fp' in batch \
                                                 and random.random() < p_use_fp_trick
