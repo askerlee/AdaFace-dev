@@ -1292,12 +1292,18 @@ class LatentDiffusion(DDPM):
             self.iter_flags['use_background_token'] = self.use_background_token \
                                                         and random.random() < p_bg_token
                         
-            if self.iter_flags['use_fp_trick']:
+            if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
+                SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp_bg'
+                SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp_bg'
+                CLS_PROMPT_COMP    = 'cls_prompt_comp_fp_bg'
+                CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp_bg'
+            # use_fp_trick but not use_background_token.
+            elif self.iter_flags['use_fp_trick']:
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp'
                 CLS_PROMPT_COMP    = 'cls_prompt_comp_fp'
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp'
-            # *_comp_bg: used for static delta loss. 
+            # not use_fp_trick and use_background_token.
             elif self.iter_flags['use_background_token']:
                 captions = batch["caption_bg"]
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_bg'
