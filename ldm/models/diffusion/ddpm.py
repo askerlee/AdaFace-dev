@@ -1282,7 +1282,7 @@ class LatentDiffusion(DDPM):
             # use background token on 50% of the iterations, hoping the background token to 
             # capture some non-compositional information.
             elif self.iter_flags['comp_init_with_fg_area']:
-                p_use_background_token  = 0.5
+                p_use_background_token  = 0 # 0.5
             else:
                 # When do_mix_prompt_distillation and not comp_init_with_fg_area, or 
                 # at 50% of the time when comp_init_with_fg_area, we don't use background token.
@@ -1362,6 +1362,8 @@ class LatentDiffusion(DDPM):
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
         else:
             delta_prompts = None
+            if self.iter_flags['use_background_token']:
+                captions = batch["caption_bg"]
 
         if 'aug_mask' in batch:
             img_mask = batch['aug_mask']
