@@ -353,9 +353,9 @@ class PersonalizedBase(Dataset):
                 subj_prompt_comps_fp.append(subj_prompt_comp_fp)
                 cls_prompt_comps_fp.append(cls_prompt_comp_fp)
 
-        # NOTE: "caption" and "caption_bg" are only for image reconstruction.
+        # NOTE: "caption" and "caption_bg" are only for image reconstruction iterations.
         # But subj_prompt_single must align with cls_prompt_single, subj_prompt_comp, cls_prompt_comp.
-        # So they are different when comps_placeholder_prefix is specified.
+        # So they are different when compos_placeholder_prefix is specified.
         # Only "caption" and "caption_bg" are formatted with placeholder_string and placeholder_string_with_bg.
         # Other 4 types of prompts are formatted with compos_placeholder_string and compos_cls_delta_token.
         example["caption"]              = subj_prompt_single.format(placeholder_string)
@@ -368,9 +368,6 @@ class PersonalizedBase(Dataset):
         cls_prompt_comp  = "|".join([ cls_prompt_comp.format(compos_cls_delta_token)     for cls_prompt_comp  in cls_prompt_comps])
         example["subj_prompt_comp"]     = subj_prompt_comp
         example["cls_prompt_comp"]      = cls_prompt_comp
-        # comps_are_appearances is a list of length num_compositions_per_image. So in the collated batch, 
-        # "comps_are_appearances" is a list of lists and needs concat.
-        example["comps_are_appearances"]    = comps_are_appearances
 
         if bg_suffix:
             example["subj_prompt_single_bg"] = subj_prompt_single.format(compos_placeholder_string_with_bg)
@@ -393,6 +390,10 @@ class PersonalizedBase(Dataset):
                 # *_comp_bg prompts are for static delta loss on training images.
                 example["subj_prompt_comp_fp_bg"]   = "|".join([ subj_prompt_comp.format(compos_placeholder_string_with_bg) for subj_prompt_comp in subj_prompt_comps_fp])
                 example["cls_prompt_comp_fp_bg"]    = "|".join([ cls_prompt_comp.format(compos_cls_delta_token_with_bg)     for cls_prompt_comp  in cls_prompt_comps_fp])
+
+        # comps_are_appearances is a list of length num_compositions_per_image. So in the collated batch, 
+        # "comps_are_appearances" is a list of lists and needs concat.
+        example["comps_are_appearances"]    = comps_are_appearances
 
         #print(f"subj_prompt_comp: {subj_prompt_comp}")
         #print(f"cls_prompt_comp: {cls_prompt_comp}")

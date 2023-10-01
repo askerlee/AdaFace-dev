@@ -1233,6 +1233,8 @@ class LatentDiffusion(DDPM):
     def shared_step(self, batch, **kwargs):
         # captions = batch["caption"]
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
+        # NOTE: captions (batch["caption"] or batch["caption_bg"])
+        # are only for image reconstruction iterations.
         x, captions = self.get_input(batch, self.first_stage_key)
 
         batch_have_fg_mask       = batch['has_fg_mask']
@@ -1277,20 +1279,23 @@ class LatentDiffusion(DDPM):
             # we only use the background token on 90% of the training images, to 
             # force the foreground token to focus on the whole image.
             if not self.iter_flags['do_mix_prompt_distillation']:
-                p_bg_token     = 0.9
+                p_use_background_token  = 0.9
             # If do_mix_prompt_distillation and comp_init_with_fg_area, then we still 
             # use background token on 50% of the iterations, hoping the background token to 
             # capture some non-compositional information.
             elif self.iter_flags['comp_init_with_fg_area']:
-                p_bg_token     = 0.5
+                p_use_background_token  = 0.5
             else:
                 # When do_mix_prompt_distillation and not comp_init_with_fg_area, or 
                 # at 50% of the time when comp_init_with_fg_area, we don't use background token.
-                p_bg_token     = 0
+                p_use_background_token  = 0
 
             # Only use_background_token on recon iters.
+            # No need to check do_mix_prompt_distillation, because if do_mix_prompt_distillation,
+            # in most iterations p_use_background_token = 0, except for 50% of the iterations when
+            # comp_init_with_fg_area = True.
             self.iter_flags['use_background_token'] = self.use_background_token \
-                                                        and random.random() < p_bg_token
+                                                        and random.random() < p_use_background_token
                         
             if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp_bg'
@@ -1299,6 +1304,7 @@ class LatentDiffusion(DDPM):
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp_bg'
             # use_fp_trick but not use_background_token.
             elif self.iter_flags['use_fp_trick']:
+                # Never use_fp_trick for recon iters. So no need to have "caption_fp" or "caption_fp_bg".
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp'
                 CLS_PROMPT_COMP    = 'cls_prompt_comp_fp'
