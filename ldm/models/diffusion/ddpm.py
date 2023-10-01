@@ -1250,15 +1250,14 @@ class LatentDiffusion(DDPM):
         # do_ada_emb_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
         if self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation']:
             # *_fp prompts are like "a face portrait of ...". They are advantageous over "a photo of ..."
-            # when doing compositional mix regularization. 
-            # However this trick is only applicable to humans/animals.
-            # For objects, even if use_fp_trick = True, 
-            # *_fp prompts are not available in batch, so they won't be used.
-            # Only use_background_token on training images. So if do_mix_prompt_distillation, 
-            # then no need to check use_background_token.
+            # when doing compositional mix regularization on humans/animals.
+            # For objects (broad_class != 1), even if use_fp_trick = True, 
+            # *_fp prompts are not available in batch, so fp_trick won't be used.
             # 'subj_prompt_single_fp' in batch is True <=> (broad_class == 1 and use_fp_trick).
             # If do_mix_prompt_distillation but broad_class == 0 or 2, this statement is False, and 
             # used prompts will be 'subj_prompt_comp', 'cls_prompt_single', 'cls_prompt_comp'...
+            # Only use_background_token on recon iters. 
+            # So if do_mix_prompt_distillation, then no need to check use_background_token.
             p_use_fp_trick = 0.8
             self.use_fp_trick_iter = self.iter_flags['do_mix_prompt_distillation'] and self.use_fp_trick \
                                         and 'subj_prompt_single_fp' in batch \
@@ -1282,9 +1281,9 @@ class LatentDiffusion(DDPM):
                 CLS_PROMPT_COMP    = 'cls_prompt_comp_bg'
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single_bg'
                 self.iter_flags['use_background_token'] = True
-            # Either do_mix_prompt_distillation but not (use_fp_trick and broad_class == 1), 
+            # Either do_mix_prompt_distillation but not (use_fp_trick_iter and broad_class == 1), 
             # or recon iters (not do_mix_prompt_distillation) and not use_background_token 
-            # We don't use_fp_tricks on training images. use_fp_tricks is only for compositional regularization.
+            # We don't use_fp_trick on training images. use_fp_trick is only for compositional regularization.
             else:
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp'
