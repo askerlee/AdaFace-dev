@@ -216,6 +216,12 @@ def ortho_subtract(a, b):
     w_optimal = dot_a_b / (dot_b_b + 1e-6)
     return a - b * w_optimal.unsqueeze(-1)
 
+def ortho_enhance_add(a, b, ortho_enhance=0):
+    if ortho_enhance == 0:
+        return a + b
+    else:
+        return a + b + ortho_subtract(b, a) * ortho_enhance
+    
 # Normalize a, b to unit vectors, then do orthogonal subtraction.
 def normalized_ortho_subtract(a, b):
     a_norm = a.norm(dim=-1, keepdim=True) + 1e-6
