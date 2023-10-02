@@ -283,7 +283,8 @@ class BasicTransformerBlock(nn.Module):
         # If key is text prompt, then we shouldn't provide img_mask.
         # Otherwise nan will occur.
         x_ca = self.attn2(self.norm2(x1), context=context)
-        x2 = x1 + x_ca
+        ca_boost = 1 #1.1
+        x2 = x1 * (2 - ca_boost) + x_ca * ca_boost
         x3 = self.ff(self.norm3(x2)) + x2
 
         if (not self.disable_deep_neg_context) and (self.deep_neg_context is not None) and self.deep_cfg_scale != 1:
@@ -294,7 +295,7 @@ class BasicTransformerBlock(nn.Module):
             # Disable gradient for the deep_neg_context to speed up the computation.
             with torch.no_grad():
                 x_neg = self.attn2(self.norm2(x1), context=self.deep_neg_context)
-                x2_neg = x1 + x_neg
+                x2_neg = x1 * (2 - ca_boost) + x_neg * ca_boost
                 x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
 
             self.attn2.save_attn_vars = attn2_save_attn_vars
