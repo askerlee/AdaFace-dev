@@ -283,7 +283,7 @@ class BasicTransformerBlock(nn.Module):
         # If key is text prompt, then we shouldn't provide img_mask.
         # Otherwise nan will occur.
         x_ca = self.attn2(self.norm2(x1), context=context)
-        ca_ortho_enhance = 0.2
+        ca_ortho_enhance = 0.3
         x2 = ortho_enhance_add(x1, x_ca, ca_ortho_enhance) # x1 + x_ca
         x3 = self.ff(self.norm3(x2)) + x2
 
