@@ -60,6 +60,12 @@ def parse_args():
         default=1.3,
         help="scale of deep negative prompts",
     )
+    # --ca_ortho_enhance
+    parser.add_argument("--ca_ortho_enhance",
+                        type=float, 
+                        default=argparse.SUPPRESS,
+                        help="orthogonal enhancement of cross-attn features")    
+    
     parser.add_argument(
         "--outdir",
         type=str,
@@ -594,7 +600,9 @@ def main(opt):
 
                         if not opt.eval_blip:
                             c = model.get_learned_conditioning(prompts)
-                            
+                            if hasattr(opt, 'ca_ortho_enhance'):
+                                c[2]['ca_ortho_enhance'] = opt.ca_ortho_enhance
+                                
                             # ref_c is not None, implies (prompt_mix_weight != 0 and ref_prompt is not None).
                             if ref_c is not None:
                                 # c / ref_c are tuples of (cond, prompts, extra_info).

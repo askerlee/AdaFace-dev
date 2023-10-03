@@ -505,12 +505,16 @@ class UNetModel(nn.Module):
         self.num_head_channels = num_head_channels
         self.num_heads_upsample = num_heads_upsample
         self.predict_codebook_ids = n_embed is not None
-        self.crossattn_force_grad = False
-        self.use_conv_attn  = False
-        self.save_attn_vars = False
-        self.deep_neg_context           = None
-        self.deep_cfg_scale             = 1.5
-        self.disable_deep_neg_context   = False
+
+        self.backup_vars = { 
+                            'use_conv_attn':            False,
+                            'crossattn_force_grad':     False,
+                            'save_attn_vars':           False,
+                            'deep_neg_context':         None,
+                            'deep_cfg_scale':           1.5,
+                            'disable_deep_neg_context': False,
+                            'ca_ortho_enhance':         0,
+                           }
 
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
@@ -718,7 +722,7 @@ class UNetModel(nn.Module):
 
     # set_cross_attn_flags: Set one or more flags for all or a subset of cross-attention layers.
     # If ca_layer_indices is None, then set the flags for all cross-attention layers.
-    def set_cross_attn_flags(self, ca_flag_dict,   ca_layer_indices=None,
+    def set_cross_attn_flags(self, ca_flag_dict=None,   ca_layer_indices=None,
                              trans_flag_dict=None, trans_layer_indices=None):
         if ca_flag_dict is None and trans_flag_dict is None:
             return None, None
@@ -726,12 +730,14 @@ class UNetModel(nn.Module):
         all_ca_layer_indices = [1, 2, 4, 5, 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
         if ca_layer_indices is None:
             ca_layer_indices = all_ca_layer_indices
+        if trans_layer_indices is None:
+            trans_layer_indices = all_ca_layer_indices
 
         if (ca_flag_dict is not None) and len(ca_layer_indices) > 0:            
             old_ca_flag_dict    = {}
             for k, v in ca_flag_dict.items():
-                old_ca_flag_dict[k] = self.__dict__[k]
-                self.__dict__[k] = v
+                old_ca_flag_dict[k] = self.backup_vars[k]
+                self.backup_vars[k] = v
 
                 layer_idx = 0
                 for module in self.input_blocks:
@@ -753,12 +759,12 @@ class UNetModel(nn.Module):
         else:
             old_ca_flag_dict = None
 
-        # trans_flag_dict is optional. If trans_layer_indices is None, then do nothing.
-        if (trans_flag_dict is not None) and (trans_layer_indices is not None):     
+        # trans_flag_dict is optional.
+        if (trans_flag_dict is not None) and len(trans_layer_indices) > 0:  
             old_trans_flag_dict = {}
             for k, v in trans_flag_dict.items():
-                old_trans_flag_dict[k] = self.__dict__[k]
-                self.__dict__[k] = v
+                old_trans_flag_dict[k] = self.backup_vars[k]
+                self.backup_vars[k] = v
 
                 layer_idx = 0
                 for module in self.input_blocks:
@@ -812,7 +818,6 @@ class UNetModel(nn.Module):
         use_background_token  = extra_info.get('use_background_token', False)  if extra_info is not None else False
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
-        bg_indices            = extra_info.get('bg_indices', None)             if extra_info is not None else None
         crossattn_force_grad  = extra_info.get('crossattn_force_grad', False)  if extra_info is not None else False
         debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
@@ -821,10 +826,10 @@ class UNetModel(nn.Module):
         deep_neg_context      = extra_info.get('deep_neg_context', None)       if extra_info is not None else None
         deep_cfg_scale        = extra_info.get('deep_cfg_scale', 1.5)          if extra_info is not None else None
         disable_deep_neg_context = extra_info.get('disable_deep_neg_context', False) if extra_info is not None else False
+        ca_ortho_enhance      = extra_info.get('ca_ortho_enhance', 0)          if extra_info is not None else False
 
         # If uncond (null) condition is active, then subj_indices = None.
         subj_indices_B, subj_indices_N = subj_indices if subj_indices is not None else (None, None)
-        bg_indices_B,   bg_indices_N   = bg_indices   if bg_indices   is not None else (None, None)
 
         if use_layerwise_context:
             B = x.shape[0]
@@ -836,22 +841,6 @@ class UNetModel(nn.Module):
                 # deep_neg_context is just the same embedding repeated 16 times. Only one is needed.
                 # deep_neg_context: [8, 16, 77, 768] => [8, 77, 768]
                 deep_neg_context = deep_neg_context[0]
-
-        # If using deep_neg_context, only apply it on the middle-level layers, i.e., 
-        # layers 7, 8, 12, 16, 17.
-        trans_layer_indices = [7, 8, 12, 16, 17] if deep_neg_context is not None else None
-        old_ca_flags, old_trans_flags = \
-            self.set_cross_attn_flags( ca_flag_dict   ={'use_conv_attn':            use_conv_attn},
-                                       trans_flag_dict={'deep_neg_context':         deep_neg_context,
-                                                        'deep_cfg_scale':           deep_cfg_scale,
-                                                        'disable_deep_neg_context': disable_deep_neg_context},
-                                       trans_layer_indices=trans_layer_indices)
-
-        if self.num_classes is not None:
-            assert y.shape == (x.shape[0],)
-            emb = emb + self.label_emb(y)
-
-        h = x.type(self.dtype)
 
         def get_layer_context(layer_idx, layer_attn_components):
             # print(h.shape)
@@ -918,8 +907,6 @@ class UNetModel(nn.Module):
                             # Four embeddings (6,7,8,9) for each token.
                             cls_layer_ada_context = patch_multi_embeddings(cls_layer_ada_context, 
                                                                            subj_indices_N)
-                            #cls_layer_ada_context = patch_multi_embeddings(cls_layer_ada_context, 
-                            #                                               bg_indices_N)
                             if emb_v_mixer is not None:
                                 # Mix subj ada emb into mix ada emb, in the same way as to static embeddings.
                                 # emb_v_cls_mix_scale: [2, 1]
@@ -956,7 +943,47 @@ class UNetModel(nn.Module):
             # subj_indices is passed from extra_info, which was obtained when generating static embeddings.
             # Return subj_indices to cross attention layers for conv attn computation.
             return layer_context, subj_indices
-    
+
+
+        deep_neg_trans_flag_dict = {'deep_neg_context':         deep_neg_context,
+                                    'deep_cfg_scale':           deep_cfg_scale,
+                                    'disable_deep_neg_context': disable_deep_neg_context,
+                                   } if deep_neg_context is not None else None
+        # If using deep_neg_context, only apply it on the middle-level layers, i.e., 
+        # layers 7, 8, 12, 16, 17.
+        deep_neg_trans_layer_indices = [7, 8, 12, 16, 17] 
+
+        ca_flags_stack = []
+        old_ca_flags, old_trans_flags = \
+            self.set_cross_attn_flags( ca_flag_dict   ={'use_conv_attn': use_conv_attn},
+                                       trans_flag_dict=deep_neg_trans_flag_dict,
+                                       trans_layer_indices=deep_neg_trans_layer_indices )
+
+        ca_flags_stack.append([ old_ca_flags, None, old_trans_flags, deep_neg_trans_layer_indices ])
+
+        if ca_ortho_enhance > 0:
+            _, old_trans_flags2 = \
+                self.set_cross_attn_flags( ca_flag_dict   =None,
+                                           trans_flag_dict={ 'ca_ortho_enhance': ca_ortho_enhance },
+                                           trans_layer_indices=None )
+            ca_flags_stack.append([ None, None, old_trans_flags2, None ])
+
+        if iter_type.startswith("mix_") or use_background_token or debug_attn:
+            # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
+            distill_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+            distill_old_ca_flags, _ = self.set_cross_attn_flags(ca_flag_dict={'crossattn_force_grad': crossattn_force_grad, 
+                                                                              'save_attn_vars': True}, 
+                                                                ca_layer_indices=distill_layer_indices)
+            ca_flags_stack.append([ distill_old_ca_flags, distill_layer_indices, None, None ])
+        else:
+            distill_layer_indices = []
+
+        if self.num_classes is not None:
+            assert y.shape == (x.shape[0],)
+            emb = emb + self.label_emb(y)
+
+        h = x.type(self.dtype)
+
         
         # 0  input h:   [2, 4,    64, 64]
         # 1             [2, 320,  64, 64]
@@ -972,16 +999,6 @@ class UNetModel(nn.Module):
         # 11            [2, 1280, 8,  8]
         # 12            [2, 1280, 8,  8]
         layer_idx = 0
-
-        if iter_type.startswith("mix_") or use_background_token or debug_attn:
-            # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
-            distill_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
-            distill_old_ca_flags, _ = self.set_cross_attn_flags(ca_flag_dict={'crossattn_force_grad': crossattn_force_grad, 
-                                                                           'save_attn_vars': True}, 
-                                                             ca_layer_indices=distill_layer_indices)
-        else:
-            distill_layer_indices = []
-            distill_old_ca_flags = None
 
         for module in self.input_blocks:
             get_layer_idx_context = partial(get_layer_context, layer_idx)
@@ -1048,13 +1065,12 @@ class UNetModel(nn.Module):
         if debug_attn:
             breakpoint()
         
-        # Restore the original flags in cross-attention layers.
-        self.set_cross_attn_flags(ca_flag_dict=old_ca_flags, 
-                                  trans_flag_dict=old_trans_flags,
-                                  trans_layer_indices=trans_layer_indices)
-        if distill_old_ca_flags is not None:
-            self.set_cross_attn_flags(ca_flag_dict=distill_old_ca_flags, 
-                                      ca_layer_indices=distill_layer_indices)
+        # Restore the original flags in cross-attention layers, in reverse order.
+        for old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices in reversed(ca_flags_stack):
+            self.set_cross_attn_flags(ca_flag_dict=old_ca_flags, 
+                                      ca_layer_indices=ca_layer_indices,
+                                      trans_flag_dict=old_trans_flags,
+                                      trans_layer_indices=trans_layer_indices)
 
         # [2, 320, 64, 64]
         h = h.type(x.dtype)

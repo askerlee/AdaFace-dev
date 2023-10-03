@@ -55,6 +55,9 @@ def parse_args():
     # --deep_cfg_scale
     parser.add_argument("--deep_cfg_scale", type=float, default=1.3,
                         help="scale of deep negative prompts")
+    # --ca_ortho_enhance
+    parser.add_argument("--ca_ortho_enhance", type=float, default=argparse.SUPPRESS,
+                        help="orthogonal enhancement of cross-attn features")
     # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.
     parser.add_argument("--z_suffix_type", default=argparse.SUPPRESS, 
                         help="Append this string to the subject placeholder token during inference "
@@ -436,6 +439,9 @@ if __name__ == "__main__":
 
         if args.use_deep_neg_prompt:
             command_line += f" --use_deep_neg_prompt --deep_cfg_scale {args.deep_cfg_scale}"
+        
+        if hasattr(args, 'ca_ortho_enhance'):
+            command_line += f" --ca_ortho_enhance {args.ca_ortho_enhance}"
             
         if args.compare_with_pardir:
             # Do evaluation on authenticity/composition.

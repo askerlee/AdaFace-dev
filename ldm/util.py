@@ -220,7 +220,7 @@ def ortho_enhance_add(a, b, ortho_enhance=0):
     if ortho_enhance == 0:
         return a + b
     else:
-        return a + b * (1 - ortho_enhance) + ortho_subtract(b, a) * ortho_enhance
+        return a + b * max(1 - ortho_enhance, 0) + ortho_subtract(b, a) * ortho_enhance
     
 # Normalize a, b to unit vectors, then do orthogonal subtraction.
 def normalized_ortho_subtract(a, b):
