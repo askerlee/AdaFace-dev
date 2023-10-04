@@ -1454,12 +1454,12 @@ class EmbeddingManager(nn.Module):
                 self.string_to_token_dict[k2]        = k2_token
 
                 # Mapped from k in ckpt to k2 in the current session.
-                for km in ckpt["string_to_param"].keys():
+                for km in ckpt["string_to_static_embedder_dict"].keys():
                     # If there are pseudo-tokens within multi-embedding tokens, load them as well.
                     if km.startswith(k):
                         km2 = km.replace(k, k2)
-                        self.string_to_static_embedder_dict[km2] = ckpt["string_to_param"][km]
-                        self.string_to_ada_embedder_dict[km2] = ckpt["string_to_ada_embedder"][km]
+                        self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder_dict"][km]
+                        self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
                         if km in ckpt["token2num_vectors"]:
                             token2num_vectors[km2] = ckpt["token2num_vectors"][km]
                         print(f"Loaded {km}->{km2} from {ckpt_path}")
