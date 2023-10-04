@@ -1030,7 +1030,6 @@ class EmbeddingManager(nn.Module):
                     # then it's time to update EMA embeddings.
                     if len(ada_temp_emb.updated_layers) == ada_temp_emb.num_layers:
                         self.string_to_static_embedder_dict[k](ada_temp_emb)
-                        print("Update EMA embedding for {}".format(k))
 
             # Release ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
