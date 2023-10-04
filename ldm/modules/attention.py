@@ -297,11 +297,9 @@ class BasicTransformerBlock(nn.Module):
             # Disable save_attn_vars, so that the saved attn vars given the 
             # normal context are not overwritten.
             self.attn2.save_attn_vars = False
-            # Disable gradient for the deep_neg_context to speed up the computation.
-            with torch.no_grad():
-                x_neg_ca = self.attn2(self.norm2(x1), context=self.deep_neg_context)
-                x2_neg = align_suppressed_add(x_neg_ca, x1, self.ca_align_suppress_scale)
-                x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
+            x_neg_ca = self.attn2(self.norm2(x1), context=self.deep_neg_context)
+            x2_neg = align_suppressed_add(x_neg_ca, x1, self.ca_align_suppress_scale)
+            x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
 
             self.attn2.save_attn_vars = attn2_save_attn_vars
             cfg_use_ortho_subtract = True

@@ -1,6 +1,7 @@
 import torch
 from torch import nn, einsum
 from einops import rearrange, repeat
+from ldm.modules.ema import LitEma
 
 import torch.nn.functional as F
 import numpy as np
@@ -294,6 +295,32 @@ class AttentionalPooler(nn.Module):
         # out: N, 1, D -> N, D, i.e., ([2, 768], [2, 768]).
         # Make the output shape consistent with MaskedAvgPool2d.
         return fg_out.squeeze(1), bg_out.squeeze(1)
+
+# init_embedding: [1, 768].
+class Embedding2d(nn.Module):
+    def __init__(self, num_layers=16, num_vectors_per_token=9, 
+                 out_emb_dim=768, init_embedding=None):
+        super().__init__()
+        self.num_layers = num_layers
+        self.num_vectors_per_token = num_vectors_per_token
+        self.out_emb_dim = out_emb_dim
+        # self.embedding: [16, K, 768]
+        self.embedding = nn.Parameter(torch.zeros(num_layers, num_vectors_per_token, out_emb_dim), requires_grad=True)
+        if init_embedding is not None:
+            # init_embedding: [1, 768] => [16, 9, 768].
+            self.embedding.data = init_embedding.clone()
+
+    def forward(self, layer_idx, token_idx=None):
+        if token_idx is None:
+            return self.embedding[layer_idx]
+        else:
+            return self.embedding[layer_idx, token_idx]
+    
+    def update(self, layer_idx, token_idx, new_embedding):
+        if token_idx is None:
+            self.embedding[layer_idx] = new_embedding
+        else:
+            self.embedding[layer_idx, token_idx] = new_embedding
 
 class StaticLayerwiseEmbedding(nn.Module):
     # num_layers: 16 (9 layers out of 25 of UNet are skipped), out_emb_dim: 768, 
@@ -775,7 +802,7 @@ class EmbeddingManager(nn.Module):
             # num_vectors_per_token is an int or a dict.
             num_vectors_per_token=None,
             use_layerwise_embedding=False,
-            num_unet_layers=16,
+            num_unet_ca_layers=16,
             # If two tokens, LoRA rank= 2 * layerwise_lora_rank_token_ratio = 4. That means,
             # compress 16 embeddings to the linear combination of 4 embeddings,
             # in which two are initialized as the two token embeddings, and two are learned through BP.
@@ -787,25 +814,27 @@ class EmbeddingManager(nn.Module):
                                   17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             ada_emb_weight=0.5, 
             ada_use_attn_pooler=True,
+            ada_ema_as_static_emb=False,
             **kwargs
     ):
         super().__init__()
         self.string_to_token_dict = OrderedDict()
         
-        self.string_to_param_dict = nn.ParameterDict()
+        self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict = nn.ModuleDict()
         self.initial_embeddings = nn.ParameterDict() # These should not be optimized
 
         self.set_ada_emb_weight(ada_emb_weight, first_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
+        self.ada_ema_as_static_emb = ada_ema_as_static_emb
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
-        self.num_unet_layers    = num_unet_layers
+        self.num_unet_ca_layers = num_unet_ca_layers
         if self.use_layerwise_embedding:
             # self.num_layers_per_embedder specifies the total layers of embeddings for each embedder.
             # There could be multiple embeddings for each layer.
-            self.num_layers_per_embedder = num_unet_layers
+            self.num_layers_per_embedder = num_unet_ca_layers
         else:
             self.num_layers_per_embedder = 1
 
@@ -873,22 +902,29 @@ class EmbeddingManager(nn.Module):
             self.string_to_token_dict[placeholder_string] = token
             # initial_embeddings are only used to compute the regularization loss.
             # Wrap with Parameter so that they will be saved to checkpoints.
+            # avg_init_word_embedding_3d: [1, 768] => [1, 9, 768]
+            avg_init_word_embedding_3d = avg_init_word_embedding.unsqueeze(0).repeat(self.num_layers_per_embedder, num_vectors_per_token, 1)
 
             # Initialize static/ada embedders.
             # A static/ada embedder can generate K embeddings.
             # layerwise_lora_rank > 0 implies use_layerwise_embedding.
             if layerwise_lora_rank > 0:
-                # num_layers_per_embedder = num_unet_layers
-                token_params        = StaticLayerwiseEmbedding(self.num_layers_per_embedder, 
-                                                               num_vectors_per_token, 
-                                                               self.token_dim, 
-                                                               layerwise_lora_rank, 
-                                                               (0.1, 0.02), 
-                                                               init_words,
-                                                               init_word_embeddings, init_word_weights, 
-                                                               token_string=placeholder_string)
-
-                
+                # num_layers_per_embedder = num_unet_ca_layers
+                if not self.ada_ema_as_static_emb:
+                    token_static_embedder   = StaticLayerwiseEmbedding(self.num_layers_per_embedder, 
+                                                                       num_vectors_per_token, 
+                                                                       self.token_dim, 
+                                                                       layerwise_lora_rank, 
+                                                                       (0.1, 0.02), 
+                                                                       init_words,
+                                                                       init_word_embeddings, init_word_weights, 
+                                                                       token_string=placeholder_string)
+                else:
+                    # avg_init_word_embedding: [1, 768].
+                    static_embedding2d = Embedding2d(self.num_layers_per_embedder, num_vectors_per_token, self.token_dim, 
+                                                     init_embedding=avg_init_word_embedding_3d)
+                    token_static_embedder = LitEma(static_embedding2d, decay=0.99)
+                    
                 # Reserve 1 embedding to take both fg and cached-bg infeat. 
                 # Half of the embeddings are fg embeddings, and (the other half - 1) are bg embeddings.
                 # If num_vectors_per_token == 1, then fg_emb_count = 0, bg_emb_count = 0.
@@ -914,15 +950,13 @@ class EmbeddingManager(nn.Module):
             else:
                 # Degenerate to Textual Inversion. 
                 # ANCHOR[id=init_embed] : 16*K vectors are initialized with the same embedding.
-                # avg_init_word_embedding: [1, 768] => [1, 2, 768]
-                avg_init_word_embedding = avg_init_word_embedding.unsqueeze(0).repeat(self.num_layers_per_embedder, num_vectors_per_token, 1)
-                token_params = nn.Parameter(avg_init_word_embedding, requires_grad=True)
+                token_static_embedder = nn.Parameter(avg_init_word_embedding_3d, requires_grad=True)
                 token_ada_embedder = None
 
-            # token_params: an embedding vector or a StaticLayerwiseEmbedding object (when use_layerwise_embedding).
+            # token_static_embedder: a StaticLayerwiseEmbedding object (when use_layerwise_embedding) or an embedding vector.
             # Pytorch >= 1.12.0 allows to put an nn.Module object into an nn.ParameterDict.
-            self.string_to_param_dict[placeholder_string] = token_params
-            self.string_to_ada_embedder_dict[placeholder_string] = token_ada_embedder
+            self.string_to_static_embedder_dict[placeholder_string] = token_static_embedder
+            self.string_to_ada_embedder_dict[placeholder_string]    = token_ada_embedder
 
             if init_word_embeddings is not None:
                 # initial_embeddings won't be optimized. Just used to compute the regularization loss.
@@ -951,7 +985,7 @@ class EmbeddingManager(nn.Module):
                placeholder_strings, num_vectors_per_token, layerwise_lora_rank, ada_emb_weight, self.background_string))
             
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
-    # If self.use_layerwise_embedding, then each token expands to num_unet_layers = 16 
+    # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
     # layerwise embeddings.
     def forward(
             self,
@@ -972,12 +1006,19 @@ class EmbeddingManager(nn.Module):
         if self.gen_ada_embedding:
             # self.layer_idx, self.layer_infeat, self.time_emb were cached by 
             # a previous call of  set_ada_layer_temp_info() from UNet.
-            ada_embedded_text = \
+            ada_embedded_text, ada_subj_embs_dict = \
                 self.get_ada_embedding(self.layer_idx, self.layer_attn_components, self.time_emb,
                                        tokenized_text, embedded_text, self.static_subj_embs_dict,
                                        self.ada_bp_to_unet)
             # Release ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
+            if self.ada_ema_as_static_emb:
+                for k in ada_subj_embs_dict:
+                    # LitEma requires an nn.Module to do updating. So we create a dummy Embedding2d. 
+                    temp_embedding2d = Embedding2d(self.num_layers_per_embedder, self.token2num_vectors[k], self.token_dim,
+                                                   init_embedding=ada_subj_embs_dict[k])            
+                    # Update EMA embeddings.
+                    self.string_to_static_embedder_dict[k](temp_embedding2d)
 
             return ada_embedded_text
 
@@ -991,8 +1032,8 @@ class EmbeddingManager(nn.Module):
             # the modification in get_static_embedding() is in-place. 
             static_embeddings, static_subj_embs_dict = \
                             self.get_static_embedding(tokenized_text, embedded_text.clone(), 
-                                                      self.string_to_param_dict,
-                                                      B, N, self.num_unet_layers, device)
+                                                      self.string_to_static_embedder_dict,
+                                                      B, N, self.num_unet_ca_layers, device)
             # Cache the static embeddings to be used in ada embedding computation later.
             for k in static_subj_embs_dict:
                 self.static_subj_embs_dict[k] = static_subj_embs_dict[k]
@@ -1001,7 +1042,7 @@ class EmbeddingManager(nn.Module):
     
     # N: length of sequence (including padding).
     def get_static_embedding(self, tokenized_text, embedded_text, embedder_dict, 
-                             B, N, num_unet_layers, device):
+                             B, N, num_unet_ca_layers, device):
         orig_tokenized_text = tokenized_text
         static_subj_embs_dict = {}
 
@@ -1013,11 +1054,11 @@ class EmbeddingManager(nn.Module):
             # to each other across the batch dim:
             # [b1_l1, ..., b1_l16, b2_l1, ..., b2_l16, ..., bB_l1, ..., bB_l16].
             # {________b1________} {_______b2_______}  ...  {_______bB________}
-            embedded_text = embedded_text.unsqueeze(1).repeat(1, num_unet_layers, 1, 1).view(B * num_unet_layers, N, -1)
+            embedded_text = embedded_text.unsqueeze(1).repeat(1, num_unet_ca_layers, 1, 1).view(B * num_unet_ca_layers, N, -1)
             # tokenized_text: [B, 16, N] => [16*B, N]
             # tokenized_text has to be repeated along the layer dimension as well, so that 
             # placeholder_indices can index the embedding at each layer in the batch.
-            tokenized_text = tokenized_text.unsqueeze(1).repeat(1, num_unet_layers, 1).view(B * num_unet_layers, N)
+            tokenized_text = tokenized_text.unsqueeze(1).repeat(1, num_unet_ca_layers, 1).view(B * num_unet_ca_layers, N)
             # mirror-reflect the embedding along the layer dimension, to make it symmetric 
             # in the encoder & decoder.
 
@@ -1062,6 +1103,11 @@ class EmbeddingManager(nn.Module):
                 # placeholder_embeddings: [16, K, 768].
                 placeholder_embeddings = static_embedder()
                 static_subj_embs_dict[placeholder_string] = placeholder_embeddings
+            elif isinstance(static_embedder, LitEma):
+                # static_embedder is an Embedding2d within a LitEma. Get the actual embedding.
+                # LitEma copies the member variables of the wrapped Embedding2d. 
+                # So it's static_embedder.embedding.
+                placeholder_embeddings = static_embedder.embedding
             else:
                 # static_embedder is already the embeddings.
                 placeholder_embeddings = static_embedder
@@ -1096,7 +1142,7 @@ class EmbeddingManager(nn.Module):
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # As the output embedding is only generated for a particular layer, 
-    # no need to repeat num_unet_layers times as replacing with the static embedding in forward().
+    # no need to repeat num_unet_ca_layers times as replacing with the static embedding in forward().
     def get_ada_embedding(
             self,
             layer_idx,              # the index of the current layer in the UNet.
@@ -1109,6 +1155,7 @@ class EmbeddingManager(nn.Module):
     ):
         device = tokenized_text.device
         emb_idx = self.layer_idx2emb_idx[layer_idx]
+        ada_subj_embs_dict = {}
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
         
@@ -1185,6 +1232,8 @@ class EmbeddingManager(nn.Module):
                                      self.img_mask, ada_bp_to_unet, 
                                      self.cached_infeat_bg[layer_idx])
             
+            ada_subj_embs_dict[placeholder_string] = placeholder_embeddings
+
             if placeholder_string != self.background_string:
                 # Cache the bg infeat computed by the first (fg) ada embedder, 
                 # to be used by the second Ada embedder and the background Ada embedder.
@@ -1205,7 +1254,7 @@ class EmbeddingManager(nn.Module):
                 # placeholder_embeddings: [BS, K, 768]. BS: 2 or 4 (regularization batches).
                 embedded_text[placeholder_indices_k] = placeholder_embeddings[placeholder_indices[0], k]
                 
-        return embedded_text
+        return embedded_text, ada_subj_embs_dict
 
     # Update token embedding mask.
     def update_emb_mask(self, tokenized_text):
@@ -1282,7 +1331,7 @@ class EmbeddingManager(nn.Module):
     # ada_embeddings is used to cache the embeddings of all layers, 
     # for computing the prompt delta loss.
     def reset_ada_embedding_cache(self):
-        self.ada_embeddings     = [ None for i in range(self.num_unet_layers) ]
+        self.ada_embeddings     = [ None for i in range(self.num_unet_ca_layers) ]
 
     def cache_ada_embedding(self, i, embedding):
         emb_idx = self.layer_idx2emb_idx[i]
@@ -1340,11 +1389,11 @@ class EmbeddingManager(nn.Module):
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, ckpt_path):
-        torch.save({ "string_to_token":         self.string_to_token_dict,
-                     "string_to_param":         self.string_to_param_dict,
-                     "string_to_ada_embedder":  self.string_to_ada_embedder_dict,
-                     "ada_emb_weight":          self.ada_emb_weight,  
-                     "token2num_vectors":   self.token2num_vectors,
+        torch.save({ "string_to_token":             self.string_to_token_dict,
+                     "string_to_static_embedder":   self.string_to_static_embedder_dict,
+                     "string_to_ada_embedder":      self.string_to_ada_embedder_dict,
+                     "ada_emb_weight":              self.ada_emb_weight,  
+                     "token2num_vectors":           self.token2num_vectors,
                    }, 
                     ckpt_path)
 
@@ -1353,7 +1402,7 @@ class EmbeddingManager(nn.Module):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         self.string_to_token_dict           = {}
-        self.string_to_param_dict           = nn.ParameterDict()
+        self.string_to_static_embedder_dict           = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
         token2num_vectors                   = {}
 
@@ -1392,7 +1441,7 @@ class EmbeddingManager(nn.Module):
                     # If there are pseudo-tokens within multi-embedding tokens, load them as well.
                     if km.startswith(k):
                         km2 = km.replace(k, k2)
-                        self.string_to_param_dict[km2] = ckpt["string_to_param"][km]
+                        self.string_to_static_embedder_dict[km2] = ckpt["string_to_param"][km]
                         self.string_to_ada_embedder_dict[km2] = ckpt["string_to_ada_embedder"][km]
                         if km in ckpt["token2num_vectors"]:
                             token2num_vectors[km2] = ckpt["token2num_vectors"][km]
@@ -1407,7 +1456,7 @@ class EmbeddingManager(nn.Module):
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def optimized_parameters(self):
-        params = list(self.string_to_param_dict.parameters()) \
+        params = list(self.string_to_static_embedder_dict.parameters()) \
                + list(self.string_to_ada_embedder_dict.parameters())
         
         return params
@@ -1417,7 +1466,7 @@ class EmbeddingManager(nn.Module):
         num_placeholders = len(self.initial_embeddings)
 
         for key in self.initial_embeddings:
-            optimized = self.string_to_param_dict[key]
+            optimized = self.string_to_static_embedder_dict[key]
             coarse = self.initial_embeddings[key]
             loss = loss + (optimized - coarse) @ (optimized - coarse).T / num_placeholders
 
@@ -1434,7 +1483,7 @@ class EmbeddingManager(nn.Module):
         reg_center_type     = 'init'     # avg, init
 
         for key in self.initial_embeddings:
-            embeddings = self.string_to_param_dict[key]
+            embeddings = self.string_to_static_embedder_dict[key]
             # Generate the actual embeddings on the fly.
             if isinstance(embeddings, StaticLayerwiseEmbedding):
                 embeddings = embeddings()
@@ -1500,7 +1549,7 @@ class EmbeddingManager(nn.Module):
         num_out_embeddings  = 0
 
         for key in self.initial_embeddings:
-            for embobj in (self.string_to_param_dict[key], 
+            for embobj in (self.string_to_static_embedder_dict[key], 
                            self.string_to_ada_embedder_dict[key]):
                 # Skip non-layerwise embeddings.
                 if not isinstance(embobj, StaticLayerwiseEmbedding) \
@@ -1614,11 +1663,11 @@ class EmbeddingManager(nn.Module):
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
     def calc_prompt_emb_delta_loss(self, static_embeddings, ada_embeddings, do_ada_prompt_delta_reg):
         if self.use_layerwise_embedding:
-            num_embed_layers = self.num_unet_layers
+            num_embed_layers = self.num_unet_ca_layers
         else:
             num_embed_layers = 1
 
-        # num_unet_layers = 16. 
+        # num_unet_ca_layers = 16. 
         # If do_ada_prompt_delta_reg, then static_embeddings: [64, 77, 768]. 
         # So BS = 1.
         # static_embeddings / ada_embeddings contain 4 types of embeddings:

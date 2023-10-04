@@ -74,7 +74,7 @@ if __name__ == "__main__":
     EmbeddingManager = partial(EmbeddingManager, embedder, ["*"])
 
     string_to_token_dict = {}    
-    string_to_param_dict = torch.nn.ParameterDict()
+    string_to_static_embedder_dict = torch.nn.ParameterDict()
 
     placeholder_to_src = {}
 
@@ -87,19 +87,19 @@ if __name__ == "__main__":
         for placeholder_string in manager.string_to_token_dict:
             if not placeholder_string in string_to_token_dict:
                 string_to_token_dict[placeholder_string] = manager.string_to_token_dict[placeholder_string]
-                string_to_param_dict[placeholder_string] = manager.string_to_param_dict[placeholder_string]
+                string_to_static_embedder_dict[placeholder_string] = manager.string_to_static_embedder_dict[placeholder_string]
 
                 placeholder_to_src[placeholder_string] = manager_ckpt
             else:
                 new_placeholder, new_token = get_placeholder_loop(placeholder_string, embedder, is_sd=args.stable_diffusion)
                 string_to_token_dict[new_placeholder] = new_token
-                string_to_param_dict[new_placeholder] = manager.string_to_param_dict[placeholder_string]
+                string_to_static_embedder_dict[new_placeholder] = manager.string_to_static_embedder_dict[placeholder_string]
 
                 placeholder_to_src[new_placeholder] = manager_ckpt
 
     print("Saving combined manager...")
     merged_manager = EmbeddingManager()
-    merged_manager.string_to_param_dict = string_to_param_dict
+    merged_manager.string_to_static_embedder_dict = string_to_static_embedder_dict
     merged_manager.string_to_token_dict = string_to_token_dict
     merged_manager.save(args.output_path)
 

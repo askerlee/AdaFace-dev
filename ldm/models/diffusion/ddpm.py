@@ -683,7 +683,7 @@ class LatentDiffusion(DDPM):
         self.db_reg_weight  = 1.
         if not is_dreambooth:
             self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
-            # embedding_manager.optimized_parameters(): string_to_param_dict, 
+            # embedding_manager.optimized_parameters(): string_to_static_embedder_dict, 
             # which maps custom tokens to embeddings
             for param in self.embedding_manager.optimized_parameters():
                 param.requires_grad = True
