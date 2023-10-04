@@ -3,7 +3,7 @@ from torch import nn
 
 
 class LitEma(nn.Module):
-    def __init__(self, model, decay=0.9999, use_num_upates=True):
+    def __init__(self, model, decay=0.9999, use_num_upates=True, requires_grad=False):
         super().__init__()
         if decay < 0.0 or decay > 1.0:
             raise ValueError('Decay must be between 0 and 1')
@@ -18,9 +18,11 @@ class LitEma(nn.Module):
                 #remove as '.'-character is not allowed in buffers
                 s_name = name.replace('.','')
                 self.m_name2s_name.update({name:s_name})
-                self.register_buffer(s_name,p.clone().detach().data)
+                p2 = nn.Parameter(p.clone().detach().data, requires_grad=requires_grad)
+                self.register_parameter(s_name, p2)
 
         self.collected_params = []
+        self.requires_grad = requires_grad
 
     def forward(self, model):
         decay = self.decay
@@ -33,7 +35,7 @@ class LitEma(nn.Module):
 
         with torch.no_grad():
             m_param = dict(model.named_parameters())
-            shadow_params = dict(self.named_buffers())
+            shadow_params = dict(self.named_parameters())
 
             for key in m_param:
                 if m_param[key].requires_grad:
@@ -47,7 +49,7 @@ class LitEma(nn.Module):
     # copy EMA parameters to model.
     def copy_to(self, model):
         m_param = dict(model.named_parameters())
-        shadow_params = dict(self.named_buffers())
+        shadow_params = dict(self.named_parameters())
         for key in m_param:
             if m_param[key].requires_grad:
                 m_param[key].data.copy_(shadow_params[self.m_name2s_name[key]].data)

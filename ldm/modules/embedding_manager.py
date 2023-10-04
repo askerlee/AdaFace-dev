@@ -318,7 +318,7 @@ class Embedding2d(nn.Module):
         else:
             return self.embedding[layer_idx, token_idx]
     
-    def update(self, new_embedding, layer_idx, token_idx=None):
+    def update_layer(self, new_embedding, layer_idx, token_idx=None):
         if token_idx is None:
             self.embedding.data[layer_idx] = new_embedding
         else:
@@ -931,7 +931,7 @@ class EmbeddingManager(nn.Module):
                     # avg_init_word_embedding: [1, 768].
                     static_embedding2d = Embedding2d(self.num_layers_per_embedder, num_vectors_per_token, self.token_dim, 
                                                      init_embedding=avg_init_word_embedding_3d)
-                    token_static_embedder = LitEma(static_embedding2d, decay=0.99)
+                    token_static_embedder = LitEma(static_embedding2d, decay=0.995)
                     self.token2ada_temp_emb[placeholder_string] = static_embedding2d
 
                 # Reserve 1 embedding to take both fg and cached-bg infeat. 
@@ -1025,11 +1025,7 @@ class EmbeddingManager(nn.Module):
                     ca_layer_idx = self.layer_idx2ca_layer_idx[self.layer_idx]
                     # LitEma requires an nn.Module to do updating. So we create a dummy Embedding2d. 
                     # ada_subj_embs_dict[k].mean(dim=0): [9, 768].
-                    ada_temp_emb.update(ada_subj_embs_dict[k].mean(dim=0), ca_layer_idx)
-                    # If all layers of ada embeddings have been saved in ada_temp_emb,
-                    # then it's time to update EMA embeddings.
-                    if len(ada_temp_emb.updated_layers) == ada_temp_emb.num_layers:
-                        self.string_to_static_embedder_dict[k](ada_temp_emb)
+                    ada_temp_emb.update_layer(ada_subj_embs_dict[k].mean(dim=0), ca_layer_idx)
 
             # Release ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
@@ -1224,7 +1220,7 @@ class EmbeddingManager(nn.Module):
             # should have been computed by the previous subject Ada embedder. 
             # Otherwise it's a bug.
             if placeholder_string == self.background_string \
-                and ada_embedder.use_cached_bg and self.cached_infeat_bg[layer_idx] is None:
+              and ada_embedder.use_cached_bg and self.cached_infeat_bg[layer_idx] is None:
                 breakpoint()
 
             # static_subj_embs_dict[placeholder_string]: static_subj_embeddings, [16, K, 768].
@@ -1347,8 +1343,15 @@ class EmbeddingManager(nn.Module):
     # for computing the prompt delta loss.
     def reset_ada_embedding_cache(self):
         self.ada_embeddings     = [ None for i in range(self.num_unet_ca_layers) ]
-        for k in self.token2ada_temp_emb:
-            self.token2ada_temp_emb[k].reset_updated_layers_tracker()
+        for k, ada_temp_emb in self.token2ada_temp_emb.pairs():
+            # If all layers of ada embeddings have been saved in ada_temp_emb,
+            # then it's time to update EMA embeddings.
+            # This should happen after the previous iteration finishes and 
+            # before the current iteration starts.
+            if len(ada_temp_emb.updated_layers) == ada_temp_emb.num_layers:
+                self.string_to_static_embedder_dict[k](ada_temp_emb)
+
+            ada_temp_emb.reset_updated_layers_tracker()
 
     def cache_ada_embedding(self, i, embedding):
         ca_layer_idx = self.layer_idx2ca_layer_idx[i]
