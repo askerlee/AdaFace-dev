@@ -6,7 +6,8 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn, ortho_subtract, ortho_enhance_add
+from ldm.util import replace_rows_by_conv_attn, ortho_subtract, \
+                     align_suppressed_add
 
 def exists(val):
     return val is not None
@@ -272,10 +273,10 @@ class BasicTransformerBlock(nn.Module):
         self.checkpoint = checkpoint
         self.deep_neg_context = None
         self.deep_cfg_scale = 1.5
-        # will be updated if --ca_ortho_enhance is specified.
-        self.ca_ortho_enhance = 0 
+        # will be updated if --ca_align_suppress_scale is specified.
+        self.ca_align_suppress_scale = 1.0 
         self.disable_deep_neg_context = False
-            
+
     def forward(self, x, context=None, mask=None):
         return checkpoint(self._forward, (x, context, mask), self.parameters(), self.checkpoint)
 
@@ -285,7 +286,10 @@ class BasicTransformerBlock(nn.Module):
         # If key is text prompt, then we shouldn't provide img_mask.
         # Otherwise nan will occur.
         x_ca = self.attn2(self.norm2(x1), context=context)
-        x2 = ortho_enhance_add(x_ca, x1, self.ca_ortho_enhance) # x1 + x_ca
+        # if ca_align_suppress_scale == 1, then x2 = x1 + x_ca. 
+        # So no need to check if ca_align_suppress_scale == 1.
+        x2 = align_suppressed_add(x_ca, x1, self.ca_align_suppress_scale)
+
         x3 = self.ff(self.norm3(x2)) + x2
 
         if (not self.disable_deep_neg_context) and (self.deep_neg_context is not None) and self.deep_cfg_scale != 1:
@@ -296,7 +300,7 @@ class BasicTransformerBlock(nn.Module):
             # Disable gradient for the deep_neg_context to speed up the computation.
             with torch.no_grad():
                 x_neg_ca = self.attn2(self.norm2(x1), context=self.deep_neg_context)
-                x2_neg = ortho_enhance_add(x_neg_ca, x1, self.ca_ortho_enhance) # x1 + x_neg_ca * ca_boost
+                x2_neg = align_suppressed_add(x_neg_ca, x1, self.ca_align_suppress_scale)
                 x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
 
             self.attn2.save_attn_vars = attn2_save_attn_vars

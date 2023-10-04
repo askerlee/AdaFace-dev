@@ -216,12 +216,19 @@ def ortho_subtract(a, b):
     w_optimal = dot_a_b / (dot_b_b + 1e-6)
     return a - b * w_optimal.unsqueeze(-1)
 
-def ortho_enhance_add(a, b, ortho_enhance=0):
-    if ortho_enhance == 0:
-        return a + b
+# Decompose a as ortho (w.r.t. b) and align (w.r.t. b) components.
+# Scale down the align component by align_suppress_scale.
+def directional_suppress(a, b, align_suppress_scale=1):
+    if align_suppress_scale == 1 or b.abs().sum() < 1e-6:
+        return a
     else:
-        return a + b * max(1 - ortho_enhance, 0) + ortho_subtract(b, a) * ortho_enhance
-    
+        ortho = ortho_subtract(a, b)
+        align = a - ortho
+        return align * align_suppress_scale + ortho
+
+def align_suppressed_add(a, b, align_suppress_scale=1):
+    return a + directional_suppress(b, a, align_suppress_scale)
+
 # Normalize a, b to unit vectors, then do orthogonal subtraction.
 def normalized_ortho_subtract(a, b):
     a_norm = a.norm(dim=-1, keepdim=True) + 1e-6

@@ -60,8 +60,8 @@ def parse_args():
         default=1.3,
         help="scale of deep negative prompts",
     )
-    # --ca_ortho_enhance
-    parser.add_argument("--ca_ortho_enhance",
+    # --ca_align_suppress_scale
+    parser.add_argument("--ca_align_suppress_scale",
                         type=float, 
                         default=argparse.SUPPRESS,
                         help="orthogonal enhancement of cross-attn features")    
@@ -600,8 +600,8 @@ def main(opt):
 
                         if not opt.eval_blip:
                             c = model.get_learned_conditioning(prompts)
-                            if hasattr(opt, 'ca_ortho_enhance'):
-                                c[2]['ca_ortho_enhance'] = opt.ca_ortho_enhance
+                            if hasattr(opt, 'ca_align_suppress_scale'):
+                                c[2]['ca_align_suppress_scale'] = opt.ca_align_suppress_scale
                                 
                             # ref_c is not None, implies (prompt_mix_weight != 0 and ref_prompt is not None).
                             if ref_c is not None:

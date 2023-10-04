@@ -513,7 +513,7 @@ class UNetModel(nn.Module):
                             'deep_neg_context':         None,
                             'deep_cfg_scale':           1.5,
                             'disable_deep_neg_context': False,
-                            'ca_ortho_enhance':         0,
+                            'ca_align_suppress_scale':  1.0,
                            }
 
         time_embed_dim = model_channels * 4
@@ -826,7 +826,7 @@ class UNetModel(nn.Module):
         deep_neg_context      = extra_info.get('deep_neg_context', None)       if extra_info is not None else None
         deep_cfg_scale        = extra_info.get('deep_cfg_scale', 1.5)          if extra_info is not None else None
         disable_deep_neg_context = extra_info.get('disable_deep_neg_context', False) if extra_info is not None else False
-        ca_ortho_enhance      = extra_info.get('ca_ortho_enhance', 0)          if extra_info is not None else False
+        ca_align_suppress_scale  = extra_info.get('ca_align_suppress_scale', 1.0) if extra_info is not None else False
 
         # If uncond (null) condition is active, then subj_indices = None.
         subj_indices_B, subj_indices_N = subj_indices if subj_indices is not None else (None, None)
@@ -961,10 +961,10 @@ class UNetModel(nn.Module):
 
         ca_flags_stack.append([ old_ca_flags, None, old_trans_flags, deep_neg_trans_layer_indices ])
 
-        if ca_ortho_enhance > 0:
+        if ca_align_suppress_scale < 1:
             _, old_trans_flags2 = \
                 self.set_cross_attn_flags( ca_flag_dict   =None,
-                                           trans_flag_dict={ 'ca_ortho_enhance': ca_ortho_enhance },
+                                           trans_flag_dict={ 'ca_align_suppress_scale':  ca_align_suppress_scale },
                                            trans_layer_indices=None )
             ca_flags_stack.append([ None, None, old_trans_flags2, None ])
 

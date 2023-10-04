@@ -1282,7 +1282,7 @@ class EmbeddingManager(nn.Module):
     # ada_embeddings is used to cache the embeddings of all layers, 
     # for computing the prompt delta loss.
     def reset_ada_embedding_cache(self):
-        self.ada_embeddings = [ None for i in range(self.num_unet_layers) ]
+        self.ada_embeddings     = [ None for i in range(self.num_unet_layers) ]
 
     def cache_ada_embedding(self, i, embedding):
         emb_idx = self.layer_idx2emb_idx[i]
