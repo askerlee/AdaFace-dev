@@ -310,17 +310,24 @@ class Embedding2d(nn.Module):
             # init_embedding: [1, 768] => [16, 9, 768].
             self.embedding.data = init_embedding.clone()
 
+        self.reset_updated_layers_tracker()
+
     def forward(self, layer_idx, token_idx=None):
         if token_idx is None:
             return self.embedding[layer_idx]
         else:
             return self.embedding[layer_idx, token_idx]
     
-    def update(self, layer_idx, token_idx, new_embedding):
+    def update(self, new_embedding, layer_idx, token_idx=None):
         if token_idx is None:
-            self.embedding[layer_idx] = new_embedding
+            self.embedding.data[layer_idx] = new_embedding
         else:
-            self.embedding[layer_idx, token_idx] = new_embedding
+            self.embedding.data[layer_idx, token_idx] = new_embedding
+
+        self.updated_layers[layer_idx] = 1
+
+    def reset_updated_layers_tracker(self):
+        self.updated_layers = {}
 
 class StaticLayerwiseEmbedding(nn.Module):
     # num_layers: 16 (9 layers out of 25 of UNet are skipped), out_emb_dim: 768, 
@@ -486,7 +493,7 @@ class AdaEmbedding(nn.Module):
     # infeat_dims: a list of 25 integers, each is the dimension of 
     # the input feature from the respective layer. 9 of them are skipped.
     # infeat_dims are (almost) reflective around the middle layer, except for the first and last layers.
-    # Layer indices absent in layer_idx2emb_idx are skipped layers.
+    # Layer indices absent in layer_idx2ca_layer_idx are skipped layers.
     def __init__(self, num_layers=16, num_vectors_per_token=1, 
                  fg_emb_count=1, bg_emb_count=0, use_cached_bg=False,
                  out_emb_dim=768, r=12, 
@@ -494,13 +501,13 @@ class AdaEmbedding(nn.Module):
                  attn_infeat_dims = [ 320, 320, 640, 640, 1280, 1280, 1280, 1280, 
                                       1280, 1280, 640, 640, 640, 320, 320, 320 ],
                  # skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15],
-                 layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
-                                       17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },
+                 layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
+                                            17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },
                  has_bias=True, use_attn_pooler=True,
                  device_type="cuda", token_string=""):
         super().__init__()
         self.token_string = token_string
-        assert num_layers == len(layer_idx2emb_idx), f"num_layers={num_layers} != len(layer_idx2emb_idx)={len(layer_idx2emb_idx)}"
+        assert num_layers == len(layer_idx2ca_layer_idx), f"num_layers={num_layers} != len(layer_idx2ca_layer_idx)={len(layer_idx2ca_layer_idx)}"
         self.num_layers = num_layers
         self.out_emb_dim = out_emb_dim
         self.in_static_emb_dim = 0 #out_emb_dim
@@ -527,9 +534,9 @@ class AdaEmbedding(nn.Module):
                                 + [ 2 ] * (self.K - self.fg_emb_count - self.bg_emb_count)
 
         self.device_type = device_type
-        self.layer_idx2emb_idx = layer_idx2emb_idx
-        # emb_idx2layer_idx: Reverse mapping of layer_idx2emb_idx.
-        self.emb_idx2layer_idx = { v: k for k, v in layer_idx2emb_idx.items() }
+        self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
+        # ca_layer_idx2layer_idx: Reverse mapping of layer_idx2ca_layer_idx.
+        self.ca_layer_idx2layer_idx = { v: k for k, v in layer_idx2ca_layer_idx.items() }
 
         # Unless is_one_stream_only, then always use both fg and bg features as the input to the Linear, 
         # therefore the input feature dim is doubled.
@@ -667,17 +674,17 @@ class AdaEmbedding(nn.Module):
             # and            [6:] will be like [0       * 320, nonzero * 320, nonzero * 80].
 
     # layer_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
-    # layer_idx: 0 ~ 24. emb_idx: 0 ~ 15.
+    # layer_idx: 0 ~ 24. ca_layer_idx: 0 ~ 15.
     # time_emb: [B, 1280].
     def forward(self, layer_idx, layer_attn_components, time_emb, 
                 layer_static_emb_mean, static_subj_layer_emb, 
                 img_mask=None, bp_to_unet=False, cached_infeat_bg=None):
-        emb_idx = self.layer_idx2emb_idx[layer_idx]
-        pooler  = self.poolers[emb_idx]
+        ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
+        pooler  = self.poolers[ca_layer_idx]
         # Some Linears only use either fg or bg features. 
         # So we mask weights at the unused half, since the corresponding weights are 
         # updated during BP and become nonzero. 
-        #self.mask_layer_map_weights(emb_idx)
+        #self.mask_layer_map_weights(ca_layer_idx)
         if not self.is_fg_only and self.use_cached_bg:
             # cached_infeat_bg must be provided when use_cached_bg.
             if cached_infeat_bg is None:
@@ -734,7 +741,7 @@ class AdaEmbedding(nn.Module):
             # and the last dimensions tend to be the same for all time steps.
             # TD is typically C_layer/4, so that the time embeddings won't dominate 
             # the image features infeat_pooled.
-            TD = self.TDs[emb_idx]
+            TD = self.TDs[ca_layer_idx]
             
             ablate_time = False
             if ablate_time:
@@ -745,13 +752,13 @@ class AdaEmbedding(nn.Module):
             # infeat_time_semb: cat(ln(infeat_pooled), ln(time_emb), ln(static_emb_mean)) as the input features.
             # If self.in_static_emb_dim == 0, then layer_static_emb_mean is ignored, i.e.,
             # infeat_time_semb = cat(ln(infeat_pooled), ln(time_emb)).
-            infeat_time_semb    = self.layer_lncat3s[emb_idx](infeat_pooled, time_feat, layer_static_emb_mean)
+            infeat_time_semb    = self.layer_lncat3s[ca_layer_idx](infeat_pooled, time_feat, layer_static_emb_mean)
 
             # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
             # Consider the last dim. 
-            basis_dyn_coeffs = self.layer_maps[emb_idx](infeat_time_semb).reshape(-1, self.K, self.r)
+            basis_dyn_coeffs = self.layer_maps[ca_layer_idx](infeat_time_semb).reshape(-1, self.K, self.r)
             # bias: [1, K, 768]
-            bias = self.bias[emb_idx].unsqueeze(0)
+            bias = self.bias[ca_layer_idx].unsqueeze(0)
 
             # self.N: number of pre_vecs.
             if self.N > 0:
@@ -761,7 +768,7 @@ class AdaEmbedding(nn.Module):
             else:
                 basis_vecs = self.basis_vecs
 
-            out_lns = self.layers_out_lns[emb_idx]
+            out_lns = self.layers_out_lns[ca_layer_idx]
             # out_vecs_unnorm: K elements, each is [BS, 1, r] x [r, 768]_k = [BS, 1, 768].
             out_vecs_unnorm = [ torch.matmul(basis_dyn_coeffs[:, k], basis_vecs[k]) for k in range(self.K) ]
             out_vecs0 = torch.stack([ out_lns[k](out_vecs_unnorm[k]) for k in range(self.K) ], dim=1)
@@ -775,13 +782,13 @@ class AdaEmbedding(nn.Module):
 
             self.verbose = False
             if self.verbose and self.call_count % 10 == 0:
-                calc_stats(f'{emb_idx} time_emb', time_emb[:, :TD])
-                calc_stats(f'{emb_idx} infeat_fg_bg', infeat_fg_bg)
-                calc_stats(f'{emb_idx} basis_dyn_coeffs', basis_dyn_coeffs)
-                calc_stats(f'{emb_idx} out_vecs0', out_vecs0)
-                calc_stats(f'{emb_idx} bias', bias)
+                calc_stats(f'{ca_layer_idx} time_emb', time_emb[:, :TD])
+                calc_stats(f'{ca_layer_idx} infeat_fg_bg', infeat_fg_bg)
+                calc_stats(f'{ca_layer_idx} basis_dyn_coeffs', basis_dyn_coeffs)
+                calc_stats(f'{ca_layer_idx} out_vecs0', out_vecs0)
+                calc_stats(f'{ca_layer_idx} bias', bias)
 
-            if emb_idx == 24:
+            if ca_layer_idx == 24:
                 self.call_count += 1
 
         # Return infeat_bg to be used by another ada_embedder that specializes on the background.
@@ -810,7 +817,7 @@ class EmbeddingManager(nn.Module):
             layerwise_lora_rank=-1,
             # If no initializer words are specified, then default LoRA rank = 2.
             layerwise_lora_default_rank=2,
-            layer_idx2emb_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
+            layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                   17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             ada_emb_weight=0.5, 
             ada_use_attn_pooler=True,
@@ -823,6 +830,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict = nn.ModuleDict()
         self.initial_embeddings = nn.ParameterDict() # These should not be optimized
+        self.token2ada_temp_emb = nn.ParameterDict() # These should not be optimized
 
         self.set_ada_emb_weight(ada_emb_weight, first_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
@@ -924,7 +932,8 @@ class EmbeddingManager(nn.Module):
                     static_embedding2d = Embedding2d(self.num_layers_per_embedder, num_vectors_per_token, self.token_dim, 
                                                      init_embedding=avg_init_word_embedding_3d)
                     token_static_embedder = LitEma(static_embedding2d, decay=0.99)
-                    
+                    self.token2ada_temp_emb[placeholder_string] = static_embedding2d
+
                 # Reserve 1 embedding to take both fg and cached-bg infeat. 
                 # Half of the embeddings are fg embeddings, and (the other half - 1) are bg embeddings.
                 # If num_vectors_per_token == 1, then fg_emb_count = 0, bg_emb_count = 0.
@@ -965,12 +974,12 @@ class EmbeddingManager(nn.Module):
             else:
                 self.initial_embeddings[placeholder_string] = None
 
-        self.static_subj_embs_dict = {}
+        self.static_subj_embs_dict = {}            
         self.clear_ada_layer_temp_info()
         self.clear_delta_loss_emb_mask()
         self.img_mask = None
         self.cached_infeat_bg = {}
-        self.layer_idx2emb_idx = layer_idx2emb_idx
+        self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
         self.loss_call_count = 0
         # Store the text_embedder to compute the delta loss.
         self.text_embedder  = text_embedder
@@ -1010,15 +1019,21 @@ class EmbeddingManager(nn.Module):
                 self.get_ada_embedding(self.layer_idx, self.layer_attn_components, self.time_emb,
                                        tokenized_text, embedded_text, self.static_subj_embs_dict,
                                        self.ada_bp_to_unet)
-            # Release ada-specific intermediate variables.
-            self.clear_ada_layer_temp_info()
             if self.ada_ema_as_static_emb:
                 for k in ada_subj_embs_dict:
+                    ada_temp_emb = self.token2ada_temp_emb[k]
+                    ca_layer_idx = self.layer_idx2ca_layer_idx[self.layer_idx]
                     # LitEma requires an nn.Module to do updating. So we create a dummy Embedding2d. 
-                    temp_embedding2d = Embedding2d(self.num_layers_per_embedder, self.token2num_vectors[k], self.token_dim,
-                                                   init_embedding=ada_subj_embs_dict[k])            
-                    # Update EMA embeddings.
-                    self.string_to_static_embedder_dict[k](temp_embedding2d)
+                    # ada_subj_embs_dict[k].mean(dim=0): [9, 768].
+                    ada_temp_emb.update(ada_subj_embs_dict[k].mean(dim=0), ca_layer_idx)
+                    # If all layers of ada embeddings have been saved in ada_temp_emb,
+                    # then it's time to update EMA embeddings.
+                    if len(ada_temp_emb.updated_layers) == ada_temp_emb.num_layers:
+                        self.string_to_static_embedder_dict[k](ada_temp_emb)
+                        print("Update EMA embedding for {}".format(k))
+
+            # Release ada-specific intermediate variables.
+            self.clear_ada_layer_temp_info()
 
             return ada_embedded_text
 
@@ -1080,15 +1095,15 @@ class EmbeddingManager(nn.Module):
                 continue
             
             # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
-            # Non-layerwise: embedded_text[placeholder_indices]: [2, 768].  placeholder_embeddings: [1, K, 768].
+            # Non-layerwise: embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [1, K, 768].
             # layerwise: placeholder_indices =  
             # (tensor([ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]), 
             #  tensor([ 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]))
-            # embedded_text[placeholder_indices]: [32, 768]. placeholder_embeddings: [16, K, 768].
+            # embedded_text[placeholder_indices]: [32, 768]. placeholder_embedding: [16, K, 768].
             # The first 16 elements (0-8) in embedded_text[placeholder_indices] correspond to the 16 layers of the 
             # first instance in the batch.
-            # 16 layers of placeholder_embeddings are repeated REAL_OCCURS_IN_BATCH times.
-            # placeholder_embeddings: [16, 768] repeat=> [32, 768]
+            # 16 layers of placeholder_embedding are repeated REAL_OCCURS_IN_BATCH times.
+            # placeholder_embedding: [16, 768] repeat=> [32, 768]
             # LINK #init_embed
 
             # REAL_OCCURS_IN_BATCH: the real number of occurrences of the placeholder in the current batch,
@@ -1097,20 +1112,21 @@ class EmbeddingManager(nn.Module):
 
             static_embedder = embedder_dict[placeholder_string].to(device)
             if isinstance(static_embedder, StaticLayerwiseEmbedding):
-                # Generate the actual placeholder_embeddings on the fly.
+                # Generate the actual placeholder_embedding on the fly.
                 # The 16 static subject embeddings are formed by linearly combining the basis vectors.
                 # The matrix operations are done on the fly.
-                # placeholder_embeddings: [16, K, 768].
-                placeholder_embeddings = static_embedder()
-                static_subj_embs_dict[placeholder_string] = placeholder_embeddings
+                # placeholder_embedding: [16, K, 768].
+                placeholder_embedding = static_embedder()
             elif isinstance(static_embedder, LitEma):
                 # static_embedder is an Embedding2d within a LitEma. Get the actual embedding.
                 # LitEma copies the member variables of the wrapped Embedding2d. 
                 # So it's static_embedder.embedding.
-                placeholder_embeddings = static_embedder.embedding
+                placeholder_embedding = static_embedder.embedding
             else:
                 # static_embedder is already the embeddings.
-                placeholder_embeddings = static_embedder
+                placeholder_embedding = static_embedder
+
+            static_subj_embs_dict[placeholder_string] = placeholder_embedding
 
             for k in range(self.token2num_vectors[placeholder_string]):
                 placeholder_indices_k = (placeholder_indices[0], placeholder_indices[1] + k)
@@ -1119,13 +1135,13 @@ class EmbeddingManager(nn.Module):
                 # to each other across the batch dim:
                 # [b1_l1, ..., b1_l16, b2_l1, ..., b2_l16, ..., bB_l1, ..., bB_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
-                # The first dim of placeholder_embeddings is the layer dim (size = 16). 
-                # So we repeat the 16 layers of the k-th embedding, placeholder_embeddings[:, k], 
+                # The first dim of placeholder_embedding is the layer dim (size = 16). 
+                # So we repeat the 16 layers of the k-th embedding, placeholder_embedding[:, k], 
                 # REAL_OCCURS_IN_BATCH times, to match 16*REAL_OCCURS_IN_BATCH.
                 # After repeat, the RHS is
                 # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
-                embedded_text[placeholder_indices_k] = placeholder_embeddings[:, k].repeat(REAL_OCCURS_IN_BATCH, 1)
+                embedded_text[placeholder_indices_k] = placeholder_embedding[:, k].repeat(REAL_OCCURS_IN_BATCH, 1)
                 
             # Cache the placeholder indices for mix prompt distillation.
             # Note placeholder_indices are recomputed in update_placeholder_indices(), 
@@ -1154,7 +1170,7 @@ class EmbeddingManager(nn.Module):
             ada_bp_to_unet=False
     ):
         device = tokenized_text.device
-        emb_idx = self.layer_idx2emb_idx[layer_idx]
+        ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         ada_subj_embs_dict = {}
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
@@ -1215,24 +1231,24 @@ class EmbeddingManager(nn.Module):
             # static_subj_embs_dict[placeholder_string]: static_subj_embeddings, [16, K, 768].
             # If K > 1, only take the first embedding out of the K embeddings.
             # static_subj_layer_emb: [768].
-            static_subj_layer_emb = static_subj_embs_dict[placeholder_string][emb_idx].mean(dim=0)
+            static_subj_layer_emb = static_subj_embs_dict[placeholder_string][ca_layer_idx].mean(dim=0)
 
-            # Generate the actual placeholder_embeddings on the fly.
-            # placeholder_embeddings: [B, K, 768]. B: 2 or 4 (regularization batches).
+            # Generate the actual placeholder_embedding on the fly.
+            # placeholder_embedding: [B, K, 768]. B: 2 or 4 (regularization batches).
             # Before this call, we assume static_subj_embs has been generated by 
             # a call to get_static_embedding(). 
             # The pipeline is generate static embeddings first, then generate the ada embeddings. 
             # So this assumption should always hold.
             # For background Ada embedder, cached_infeat_bg is only used when
             # use_cached_bg. Otherwise, it's ignored.
-            placeholder_embeddings, infeat_bg = \
+            placeholder_embedding, infeat_bg = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
                                      layer_static_emb_mean, 
                                      static_subj_layer_emb,
                                      self.img_mask, ada_bp_to_unet, 
                                      self.cached_infeat_bg[layer_idx])
             
-            ada_subj_embs_dict[placeholder_string] = placeholder_embeddings
+            ada_subj_embs_dict[placeholder_string] = placeholder_embedding
 
             if placeholder_string != self.background_string:
                 # Cache the bg infeat computed by the first (fg) ada embedder, 
@@ -1242,17 +1258,17 @@ class EmbeddingManager(nn.Module):
 
             for k in range(self.token2num_vectors[placeholder_string]):
                 # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
-                # embedded_text[placeholder_indices]: [2, 768].  placeholder_embeddings: [2, 768].
+                # embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [2, 768].
                 # Sometimes (e.g. during inference, some instances contain the placeholder token but
                 # others don't. tokenized_text has a batch size of those containing the placeholder token only.
-                # But layer_infeat is still of the full batch size. So placeholder_embeddings has a batch size 
+                # But layer_infeat is still of the full batch size. So placeholder_embedding has a batch size 
                 # larger than the number of instances containing the placeholder token. We need to index
-                # placeholder_embeddings with placeholder_indices[0] to get the matching new placeholder_embeddings.
+                # placeholder_embedding with placeholder_indices[0] to get the matching new placeholder_embedding.
                 # We can save some computation by generating embeddings only for the instances containing 
                 # the placeholder token. But that requires complex processing so not pursued now.
                 placeholder_indices_k = (placeholder_indices[0], placeholder_indices[1] + k)
-                # placeholder_embeddings: [BS, K, 768]. BS: 2 or 4 (regularization batches).
-                embedded_text[placeholder_indices_k] = placeholder_embeddings[placeholder_indices[0], k]
+                # placeholder_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
+                embedded_text[placeholder_indices_k] = placeholder_embedding[placeholder_indices[0], k]
                 
         return embedded_text, ada_subj_embs_dict
 
@@ -1332,10 +1348,12 @@ class EmbeddingManager(nn.Module):
     # for computing the prompt delta loss.
     def reset_ada_embedding_cache(self):
         self.ada_embeddings     = [ None for i in range(self.num_unet_ca_layers) ]
+        for k in self.token2ada_temp_emb:
+            self.token2ada_temp_emb[k].reset_updated_layers_tracker()
 
     def cache_ada_embedding(self, i, embedding):
-        emb_idx = self.layer_idx2emb_idx[i]
-        self.ada_embeddings[emb_idx] = embedding
+        ca_layer_idx = self.layer_idx2ca_layer_idx[i]
+        self.ada_embeddings[ca_layer_idx] = embedding
 
     def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings=None):
         if num_vectors_per_token is None or type(num_vectors_per_token) == int:
