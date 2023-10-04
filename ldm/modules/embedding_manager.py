@@ -1019,7 +1019,7 @@ class EmbeddingManager(nn.Module):
                 self.get_ada_embedding(self.layer_idx, self.layer_attn_components, self.time_emb,
                                        tokenized_text, embedded_text, self.static_subj_embs_dict,
                                        self.ada_bp_to_unet)
-            if self.ada_ema_as_static_emb:
+            if self.ada_ema_as_static_emb and self.training:
                 for k in ada_subj_embs_dict:
                     ada_temp_emb = self.token2ada_temp_emb[k]
                     ca_layer_idx = self.layer_idx2ca_layer_idx[self.layer_idx]
