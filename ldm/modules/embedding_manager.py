@@ -931,7 +931,7 @@ class EmbeddingManager(nn.Module):
                     # avg_init_word_embedding: [1, 768].
                     static_embedding2d = Embedding2d(self.num_layers_per_embedder, num_vectors_per_token, self.token_dim, 
                                                      init_embedding=avg_init_word_embedding_3d)
-                    token_static_embedder = LitEma(static_embedding2d, decay=0.995)
+                    token_static_embedder = LitEma(static_embedding2d, decay=0.995, requires_grad=True)
                     self.token2ada_temp_emb[placeholder_string] = static_embedding2d
 
                 # Reserve 1 embedding to take both fg and cached-bg infeat. 
