@@ -1343,7 +1343,7 @@ class EmbeddingManager(nn.Module):
     # for computing the prompt delta loss.
     def reset_ada_embedding_cache(self):
         self.ada_embeddings     = [ None for i in range(self.num_unet_ca_layers) ]
-        for k, ada_temp_emb in self.token2ada_temp_emb.pairs():
+        for k, ada_temp_emb in self.token2ada_temp_emb.items():
             # If all layers of ada embeddings have been saved in ada_temp_emb,
             # then it's time to update EMA embeddings.
             # This should happen after the previous iteration finishes and 
