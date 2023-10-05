@@ -1873,8 +1873,9 @@ class LatentDiffusion(DDPM):
         # filtered_fg_mask: filter fg_mask, by only keeping fg_mask[i] if batch_have_fg_mask[i] == True. 
         # Otherwise filtered_fg_mask[i] is all 0.
         # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
+        # If no fg_mask is available, then filtered_fg_mask is all 1.
         filtered_fg_mask    = fg_mask * batch_have_fg_mask.view(-1, 1, 1, 1) \
-                                if self.fg_mask_avail_ratio > 0 else None
+                                if self.fg_mask_avail_ratio > 0 else torch.ones_like(fg_mask)
 
         cfg_scales_for_clip_loss = None
         c_static_emb, c_in, extra_info = cond
@@ -1935,14 +1936,16 @@ class LatentDiffusion(DDPM):
                 # This may help the model ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
 
-                if not self.iter_flags['comp_init_with_fg_area']:
-                    x_start.normal_()
-                else:
+                if self.iter_flags['comp_init_with_fg_area']:
                     # At background, fill x_start with random values (100% noise).
+                    # If no fg_mask is available, then filtered_fg_mask is all 1, i.e., 
+                    # use the whole image to initialize x_start.
                     x_start = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
                     fg_noise_amount = 0.7
                     # At foreground, keep 30% of the original x_start values and add 70% noise. 
                     x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
+                else:
+                    x_start.normal_()
 
             if not self.iter_flags['do_mix_prompt_distillation']:
                 # Only do ada delta loss. This usually won't happen unless mix_prompt_distill_weight = 0.
