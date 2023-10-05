@@ -36,10 +36,10 @@ model:
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:        4e-4
     # typical loss_subj_comp_key_ortho is 0.2, * weight -> 2e-7
-    subj_comp_key_ortho_loss_weight:          1e-3
-    subj_comp_value_ortho_loss_weight:        2e-4
+    subj_comp_key_ortho_loss_weight:          5e-4
+    subj_comp_value_ortho_loss_weight:        1e-4
     # typical loss_subj_comp_attn_comple is 0.4, * weight -> 2e-6
-    subj_comp_attn_complementary_loss_weight: 1e-3
+    subj_comp_attn_complementary_loss_weight: 5e-4
     # typical prompt mix reg loss: 2, * weight -> 4e-4.
     mix_prompt_distill_weight:          2e-4
     # loss_fg_feat_contrast_step: 1~2,     * weight -> 1e-6~2e-6
@@ -49,7 +49,7 @@ model:
     fg_bg_complementary_loss_weight:    5e-4
     # loss_fg_mask_align, loss_bg_mask_align: 0.004, * weight -> 2e-6
     # loss_fg_bg_contrast: 0.06,                     * weight -> 3e-5
-    fg_bg_mask_align_loss_weight:       2e-3
+    fg_bg_mask_align_loss_weight:       5e-4
     do_clip_teacher_filtering: True
     distill_deep_neg_prompt:  "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
     # To disable negative prompt used for distillation, set distill_deep_cfg_scale to 0.
