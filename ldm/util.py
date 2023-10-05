@@ -1040,7 +1040,7 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N,
     
     return c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales
 
-def repeat_part_of_instances(sel_indices, REPEAT, *args):
+def repeat_selected_instances(sel_indices, REPEAT, *args):
     rep_args = []
     for arg in args:
         if arg is not None:

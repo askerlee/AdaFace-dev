@@ -27,8 +27,8 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, fix_emb_scales, \
                        halve_token_indices, normalize_dict_values, masked_mean, \
-                       scale_mask_for_feat_attn, mix_static_vk_embeddings, repeat_part_of_masks, \
-                       rand_annealed, bool_annealed, anneal_t, calc_layer_subj_comp_k_or_v_ortho_loss
+                       scale_mask_for_feat_attn, mix_static_vk_embeddings, repeat_selected_instances, \
+                       anneal_t, calc_layer_subj_comp_k_or_v_ortho_loss
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -1956,7 +1956,7 @@ class LatentDiffusion(DDPM):
 
                 # Update masks to be a 4-fold structure.
                 img_mask, fg_mask, batch_have_fg_mask = \
-                    repeat_part_of_masks(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, batch_have_fg_mask)
+                    repeat_selected_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, batch_have_fg_mask)
                 self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
 
             else:
@@ -2004,10 +2004,10 @@ class LatentDiffusion(DDPM):
 
                     # Update masks to be a two-fold * 2 structure.
                     # Before repeating, img_mask, fg_mask, batch_have_fg_mask should all 
-                    # have a batch size of 2*BLOCK_SIZE. So repeat_part_of_masks() 
+                    # have a batch size of 2*BLOCK_SIZE. So repeat_selected_instances() 
                     # won't discard part of them, but simply repeat them twice.
                     img_mask, fg_mask, batch_have_fg_mask = \
-                        repeat_part_of_masks(slice(0, 2 * BLOCK_SIZE), 2, img_mask, fg_mask, batch_have_fg_mask)
+                        repeat_selected_instances(slice(0, 2 * BLOCK_SIZE), 2, img_mask, fg_mask, batch_have_fg_mask)
                     self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
 
                 # Not self.iter_flags['do_teacher_filter']. This branch is do_mix_prompt_distillation.
@@ -2032,7 +2032,7 @@ class LatentDiffusion(DDPM):
 
                     # Update masks to be a 1-repeat-4 structure.
                     img_mask, fg_mask, batch_have_fg_mask = \
-                        repeat_part_of_masks(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, batch_have_fg_mask)
+                        repeat_selected_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, batch_have_fg_mask)
                     self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
 
                     # use cached x_start and cond. cond already has the 4-type structure. 
@@ -2327,7 +2327,7 @@ class LatentDiffusion(DDPM):
                     # Update masks according to x_start_sel. Select the masks corresponding to 
                     # the better candidate, indexed by [better_cand_idx] (Keep it as a list).
                     img_mask, fg_mask, batch_have_fg_mask = \
-                        repeat_part_of_masks([better_cand_idx], 4, img_mask, fg_mask, batch_have_fg_mask)
+                        repeat_selected_instances([better_cand_idx], 4, img_mask, fg_mask, batch_have_fg_mask)
                     self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
