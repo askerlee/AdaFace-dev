@@ -1040,16 +1040,16 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N,
     
     return c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales
 
-def repeat_part_of_masks(img_mask, fg_mask, batch_have_fg_mask, sel_indices, REPEAT):
-    # img_mask should always be available.
-    # fg_mask could be None when masks are not available.    
-    img_mask, fg_mask = \
-        [ m[sel_indices].repeat(REPEAT, 1, 1, 1) if m is not None else None for m in (img_mask, fg_mask) ]
-    # batch_have_fg_mask is never None. 
-    batch_have_fg_mask = batch_have_fg_mask[sel_indices].repeat(REPEAT)
-    fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
+def repeat_part_of_instances(sel_indices, REPEAT, *args):
+    rep_args = []
+    for arg in args:
+        if arg is not None:
+            arg = arg[sel_indices].repeat([REPEAT] + [1] * (arg.ndim - 1))
+        else:
+            arg = None
+        rep_args.append(arg)
 
-    return img_mask, fg_mask, batch_have_fg_mask, fg_mask_avail_ratio
+    return rep_args
 
 def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, K_fg, K_comp, BS, 
                                       ind_subj_subj_B, ind_subj_subj_N, 

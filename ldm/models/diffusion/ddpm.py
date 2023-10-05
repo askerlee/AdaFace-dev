@@ -1896,9 +1896,6 @@ class LatentDiffusion(DDPM):
                 # noise will be kept as the sampled random noise at the beginning of p_losses(). 
                 x_start = self.cached_inits['x_start']
                 prev_t  = self.cached_inits['t']
-                # reuse_target will be used for the recon loss on subject single instance.
-                # No need to apply img_mask, as img_mask is ignored in compositional iterations.
-                reuse_target = self.cached_inits['reuse_target']
                 # Avoid the next mix iter to still use the cached inits.
                 self.cached_inits_available = False
                 self.cached_inits = None
@@ -1958,8 +1955,9 @@ class LatentDiffusion(DDPM):
                 cfg_scales_for_clip_loss = torch.ones_like(t) * 5
 
                 # Update masks to be a 4-fold structure.
-                img_mask, fg_mask, batch_have_fg_mask, self.fg_mask_avail_ratio = \
-                    repeat_part_of_masks(img_mask, fg_mask, batch_have_fg_mask, slice(0, BLOCK_SIZE), 4)
+                img_mask, fg_mask, batch_have_fg_mask = \
+                    repeat_part_of_masks(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, batch_have_fg_mask)
+                self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
 
             else:
                 # do_mix_prompt_distillation. We need to compute CLIP scores for teacher filtering.
@@ -2008,8 +2006,9 @@ class LatentDiffusion(DDPM):
                     # Before repeating, img_mask, fg_mask, batch_have_fg_mask should all 
                     # have a batch size of 2*BLOCK_SIZE. So repeat_part_of_masks() 
                     # won't discard part of them, but simply repeat them twice.
-                    img_mask, fg_mask, batch_have_fg_mask, self.fg_mask_avail_ratio = \
-                        repeat_part_of_masks(img_mask, fg_mask, batch_have_fg_mask, slice(0, 2 * BLOCK_SIZE), 2)
+                    img_mask, fg_mask, batch_have_fg_mask = \
+                        repeat_part_of_masks(slice(0, 2 * BLOCK_SIZE), 2, img_mask, fg_mask, batch_have_fg_mask)
+                    self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
 
                 # Not self.iter_flags['do_teacher_filter']. This branch is do_mix_prompt_distillation.
                 # So it's either reuse_init_conds, or not do_clip_teacher_filtering (globally).
@@ -2032,9 +2031,10 @@ class LatentDiffusion(DDPM):
                         inj_noise_t = inj_noise_t[:BLOCK_SIZE].repeat(4)
 
                     # Update masks to be a 1-repeat-4 structure.
-                    img_mask, fg_mask, batch_have_fg_mask, self.fg_mask_avail_ratio = \
-                        repeat_part_of_masks(img_mask, fg_mask, batch_have_fg_mask, slice(0, BLOCK_SIZE), 4)
-                    
+                    img_mask, fg_mask, batch_have_fg_mask = \
+                        repeat_part_of_masks(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, batch_have_fg_mask)
+                    self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
+
                     # use cached x_start and cond. cond already has the 4-type structure. 
                     # No change to cond here.
                     # NOTE cond is mainly determined by the prompts c_in. Since c_in is inherited from
@@ -2326,9 +2326,9 @@ class LatentDiffusion(DDPM):
 
                     # Update masks according to x_start_sel. Select the masks corresponding to 
                     # the better candidate, indexed by [better_cand_idx] (Keep it as a list).
-                    img_mask, fg_mask, batch_have_fg_mask, self.fg_mask_avail_ratio = \
-                        repeat_part_of_masks(img_mask, fg_mask, batch_have_fg_mask, [better_cand_idx], 4)
-
+                    img_mask, fg_mask, batch_have_fg_mask = \
+                        repeat_part_of_masks([better_cand_idx], 4, img_mask, fg_mask, batch_have_fg_mask)
+                    self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
                     # since this x_recon was denoised under this cond.
@@ -2345,7 +2345,6 @@ class LatentDiffusion(DDPM):
                     # is half-repeat-2 of (the reconstructed images of) x_start_sel. 
                     # Doing half-repeat-2 on masks won't change them, as they are 1-repeat-4.
                     self.cached_inits = { 'x_start':                x_recon_sel_rep, 
-                                          'reuse_target':           x_start_sel,
                                           'delta_prompts':          cond_orig[2]['delta_prompts'],
                                           't':                      t_sel,
                                           'img_mask':               img_mask,
@@ -2543,26 +2542,12 @@ class LatentDiffusion(DDPM):
                                             
                 if loss_mix_prompt_distill > 0:
                     loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
-
-                if self.iter_flags['comp_init_with_fg_area']:
-                    if self.iter_flags['do_teacher_filter']:
-                        subj_single_target = x_start_sel
-                    elif self.iter_flags['reuse_init_conds']:
-                        subj_single_target = reuse_target
-                    else:
-                        subj_single_target = x_start
-                    # Calc recon loss on subj single instances.
-                    loss_single_recon, _ = self.calc_recon_loss(model_output, subj_single_target, fg_mask, 
-                                                                torch.arange(BLOCK_SIZE, device=x_start.device))
-                else:
-                    loss_single_recon = 0
-                                    
+  
                 # mix_prompt_distill_weight: 2e-4.
                 loss += loss_mix_prompt_distill      * self.mix_prompt_distill_weight \
                         + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
                         + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
-                        + loss_subj_comp_attn_comple * subj_comp_attn_comple_loss_scale * self.subj_comp_attn_complementary_loss_weight \
-                        + loss_single_recon
+                        + loss_subj_comp_attn_comple * subj_comp_attn_comple_loss_scale * self.subj_comp_attn_complementary_loss_weight
                 
             # NOTE: loss_comp_fg_bg_preserve is applied only when this 
             # iteration is teachable, because at such iterations the unet gradient is enabled.
@@ -2574,10 +2559,10 @@ class LatentDiffusion(DDPM):
             # and the same as to fg_mask_avail_ratio). So we need to check it here.
             if self.iter_flags['is_teachable'] and self.comp_fg_bg_preserve_loss_weight > 0 and self.iter_flags['comp_init_with_fg_area'] \
                 and self.fg_mask_avail_ratio > 0:
-                comp_bg_attn_suppress_key = 'unet_attnscores' if self.comp_bg_attn_suppress_uses_scores \
-                                            else 'unet_attns'
+                attns_or_scores = 'unet_attnscores' if self.comp_bg_attn_suppress_uses_scores \
+                                  else 'unet_attns'
                 loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress = \
-                    self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info[comp_bg_attn_suppress_key], 
+                    self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info[attns_or_scores], 
                                                        fg_mask, batch_have_fg_mask,
                                                        extra_info['subj_indices_1b'], BLOCK_SIZE)
                 if loss_comp_fg_feat_contrast > 0:
@@ -2590,7 +2575,7 @@ class LatentDiffusion(DDPM):
                 loss_comp_fg_bg_preserve = 0
 
             # Scale down loss_comp_fg_bg_preserve if reuse_init_conds.
-            comp_fg_bg_preserve_loss_scale = 0.4 if self.iter_flags['reuse_init_conds'] else 1
+            comp_fg_bg_preserve_loss_scale = 0.25 if self.iter_flags['reuse_init_conds'] else 1
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                      * comp_fg_bg_preserve_loss_scale
 
