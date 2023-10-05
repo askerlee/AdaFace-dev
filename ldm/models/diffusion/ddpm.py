@@ -419,13 +419,13 @@ class DDPM(pl.LightningModule):
 
         log_prefix = 'train' if self.training else 'val'
 
-        loss_dict.update({f'{log_prefix}/loss_simple': loss.mean().detach()})
-        loss_simple = loss.mean() * self.l_simple_weight
+        loss_dict.update({f'{log_prefix}/loss_recon': loss.mean().detach()})
+        loss_recon = loss.mean() * self.l_simple_weight
 
         loss_vlb = (self.lvlb_weights[t] * loss).mean()
         loss_dict.update({f'{log_prefix}/loss_vlb': loss_vlb.mean().detach()})
 
-        loss = loss_simple + self.original_elbo_weight * loss_vlb
+        loss = loss_recon + self.original_elbo_weight * loss_vlb
 
         loss_dict.update({f'{log_prefix}/loss': loss.mean().detach()})
 
@@ -1895,6 +1895,9 @@ class LatentDiffusion(DDPM):
                 # noise will be kept as the sampled random noise at the beginning of p_losses(). 
                 x_start = self.cached_inits['x_start']
                 prev_t  = self.cached_inits['t']
+                # reuse_target will be used for the recon loss on subject single instance.
+                # No need to apply img_mask, as img_mask is ignored in compositional iterations.
+                reuse_target = self.cached_inits['reuse_target']
                 # Avoid the next mix iter to still use the cached inits.
                 self.cached_inits_available = False
                 self.cached_inits = None
@@ -2142,33 +2145,26 @@ class LatentDiffusion(DDPM):
                         del extra_info[k]
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-            loss_simple_pixels = self.get_loss(model_output, target, mean=False)
-            if self.iter_flags['use_background_token']:
-                # recon loss on the whole image.
-                loss_simple = loss_simple_pixels.mean()
-            else:
-                # recon loss only on the foreground pixels.
-                loss_simple = masked_mean(loss_simple_pixels, fg_mask)
-
-            loss_dict.update({f'{prefix}/loss_simple': loss_simple.detach()})
+            loss_recon, loss_recon_pixels = self.calc_recon_loss(model_output, target, fg_mask)
+            loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
 
             logvar_t = self.logvar.to(self.device)[t].reshape(-1, 1, 1, 1)
             # In theory, the loss can be weighted according to t. However in practice,
             # all the weights are the same, so this step is useless.
-            loss_gamma_pixels = loss_simple_pixels / torch.exp(logvar_t) + logvar_t
+            loss_recon_gamma_pixels = loss_recon_pixels / torch.exp(logvar_t) + logvar_t
 
             if self.iter_flags['use_background_token']:
-                loss_gamma = loss_gamma_pixels.mean()
+                loss_recon_gamma = loss_recon_gamma_pixels.mean()
             else:
                 # Only evaluate recon loss on the foreground pixels.
-                loss_gamma = masked_mean(loss_gamma_pixels, fg_mask)
+                loss_recon_gamma = masked_mean(loss_recon_gamma_pixels, fg_mask)
 
-            # loss = loss_simple / torch.exp(self.logvar) + self.logvar
+            # loss = loss_recon / torch.exp(self.logvar) + self.logvar
             if self.learn_logvar:
-                loss_dict.update({f'{prefix}/loss_gamma': loss_gamma.detach()})
+                loss_dict.update({f'{prefix}/loss_recon_gamma': loss_recon_gamma.detach()})
                 loss_dict.update({'logvar': self.logvar.data.mean().detach()})
 
-            loss += self.l_simple_weight * loss_gamma
+            loss += self.l_simple_weight * loss_recon_gamma
 
             loss_vlb_pixels = self.get_loss(model_output, target, mean=False)
             loss_vlb_pixels = self.lvlb_weights[t].reshape(-1, 1, 1, 1) * loss_vlb_pixels
@@ -2333,19 +2329,20 @@ class LatentDiffusion(DDPM):
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
                     # since this x_recon was denoised under this cond.
-                    # Use the mix half of the batch, chunk(2)[1], instead of the subject half, chunk(2)[0], as 
-                    # the mix half is better at composition (it's worse on subject authenticity, but that's fine).
-                    x_start_sel_rep = x_recon.detach().chunk(2)[1].repeat(2, 1, 1, 1)
+                    # Use the subject half of the batch, chunk(2)[0], instead of the mix half, chunk(2)[1], as 
+                    # the subject half is better at subject authenticity (but worse on composition).
+                    x_recon_sel_rep = x_recon.detach().chunk(2)[0].repeat(2, 1, 1, 1)
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but under some settings, maybe mix comp = subj comp.
                     # cached_inits['x_start'] has a BS of 4.
-                    # x_start_sel_rep doesn't have the 1-repeat-4 structure, instead a 
+                    # x_recon_sel_rep doesn't have the 1-repeat-4 structure, instead a 
                     # 1-repeat-2 structure that's repeated twice.
                     # But it approximates a 1-repeat-4 structure, so the distillation should still work.
-                    # NOTE: no need to update masks to correspond to x_start_sel_rep, as x_start_sel_rep
-                    # is half-repeat-2 of x_start_sel. 
+                    # NOTE: no need to update masks to correspond to x_recon_sel_rep, as x_recon_sel_rep
+                    # is half-repeat-2 of (the reconstructed images of) x_start_sel. 
                     # Doing half-repeat-2 on masks won't change them, as they are 1-repeat-4.
-                    self.cached_inits = { 'x_start':                x_start_sel_rep, 
+                    self.cached_inits = { 'x_start':                x_recon_sel_rep, 
+                                          'reuse_target':           x_start_sel,
                                           'delta_prompts':          cond_orig[2]['delta_prompts'],
                                           't':                      t_sel,
                                           'img_mask':               img_mask,
@@ -2544,12 +2541,17 @@ class LatentDiffusion(DDPM):
                 if loss_mix_prompt_distill > 0:
                     loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
 
+                # Calc recon loss on subj single instances.
+                loss_single_recon, _ = self.calc_recon_loss(model_output, reuse_target, fg_mask, 
+                                                            torch.arange(BLOCK_SIZE, device=x_start.device))
+                
                 # mix_prompt_distill_weight: 2e-4.
                 loss += loss_mix_prompt_distill       * self.mix_prompt_distill_weight \
                         + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
                         + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
-                        + loss_subj_comp_attn_comple * subj_comp_attn_comple_loss_scale * self.subj_comp_attn_complementary_loss_weight
-
+                        + loss_subj_comp_attn_comple * subj_comp_attn_comple_loss_scale * self.subj_comp_attn_complementary_loss_weight \
+                        + loss_single_recon
+                
             # NOTE: loss_comp_fg_bg_preserve is applied only when this 
             # iteration is teachable, because at such iterations the unet gradient is enabled.
             # The current iteration may be a fresh iteration or a reuse_init_conds iteration.
@@ -2585,6 +2587,25 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
+    # pixel-wise recon loss. If batch_indices is not None, 
+    # only compute the recon loss on selected instances.
+    def calc_recon_loss(self, model_output, target, fg_mask, batch_indices=None):
+        if batch_indices is not None:
+            model_output = model_output[batch_indices]
+            target       = target[batch_indices]
+            fg_mask      = fg_mask[batch_indices]
+
+        # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+        loss_recon_pixels = self.get_loss(model_output, target, mean=False)
+        if self.iter_flags['use_background_token']:
+            # recon loss on the whole image.
+            loss_recon = loss_recon_pixels.mean()
+        else:
+            # recon loss only on the foreground pixels.
+            loss_recon = masked_mean(loss_recon_pixels, fg_mask)
+
+        return loss_recon, loss_recon_pixels
+    
     def calc_prompt_mix_loss(self, unet_feats, unet_attns_or_scores, placeholder_indices, BLOCK_SIZE):
         # do_mix_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
