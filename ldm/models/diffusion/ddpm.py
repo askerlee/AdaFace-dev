@@ -2413,7 +2413,7 @@ class LatentDiffusion(DDPM):
                         # No need to concatenate these two, instead let calc_prompt_emb_delta_loss() handle the intricacy.
                         ada_embeddings = (twin_single_ada_embeddings, twin_comp_ada_embeddings)
 
-                        self.release_plosses_intermediates(locals())
+                        # self.release_plosses_intermediates(locals())
 
                     # Otherwise, it's an reuse_init_conds iter, and no teachable instances are found.
                     # We've computed the ada embeddings for the 4-type instances, 
@@ -2516,10 +2516,10 @@ class LatentDiffusion(DDPM):
                                                 else 'unet_attns'
                     loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple = \
                         self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
-                                                    extra_info[subj_comp_attn_comple_key],
-                                                    extra_info['subj_indices_2b'],
-                                                    self.embedding_manager.delta_loss_emb_mask,
-                                                    BLOCK_SIZE, cls_grad_scale=0.05)
+                                                        extra_info[subj_comp_attn_comple_key],
+                                                        extra_info['subj_indices_2b'],
+                                                        self.embedding_manager.delta_loss_emb_mask,
+                                                        BLOCK_SIZE, cls_grad_scale=0.05)
 
                     if loss_subj_comp_key_ortho != 0:
                         loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
