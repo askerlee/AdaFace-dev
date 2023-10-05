@@ -2499,8 +2499,8 @@ class LatentDiffusion(DDPM):
                                             else 'unet_attns'
                 loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_delta_distill = \
                                     self.calc_prompt_mix_loss(unet_feats, extra_info[subj_attn_delta_distill_key], 
-                                                            extra_info['subj_indices_2b'],
-                                                            BLOCK_SIZE)
+                                                              extra_info['subj_indices_2b'],
+                                                              BLOCK_SIZE)
 
                 if loss_feat_delta_distill > 0:
                     loss_dict.update({f'{prefix}/feat_delta_distill':       loss_feat_delta_distill.mean().detach()})
@@ -2550,22 +2550,22 @@ class LatentDiffusion(DDPM):
                         + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
                         + loss_subj_comp_attn_comple * subj_comp_attn_comple_loss_scale * self.subj_comp_attn_complementary_loss_weight
 
-            # NOTE: loss_comp_fg_bg_preserve is applied no matter whether this 
-            # iteration is teachable or not.
+            # NOTE: loss_comp_fg_bg_preserve is applied only when this 
+            # iteration is teachable, because at such iterations the unet gradient is enabled.
             # The current iteration may be a fresh iteration or a reuse_init_conds iteration.
             # In both cases, if comp_init_with_fg_area, then we need to preserve the fg/bg areas.
             # Although fg_mask_avail_ratio > 0 when comp_init_with_fg_area,
             # fg_mask_avail_ratio may have been updated after doing teacher filtering 
             # (since x_start has been filtered, masks are also filtered accordingly, 
             # and the same as to fg_mask_avail_ratio). So we need to check it here.
-            if self.comp_fg_bg_preserve_loss_weight > 0 and self.iter_flags['comp_init_with_fg_area'] \
+            if self.iter_flags['is_teachable'] and self.comp_fg_bg_preserve_loss_weight > 0 and self.iter_flags['comp_init_with_fg_area'] \
                 and self.fg_mask_avail_ratio > 0:
                 comp_bg_attn_suppress_key = 'unet_attnscores' if self.comp_bg_attn_suppress_uses_scores \
                                             else 'unet_attns'
                 loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress = \
                     self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info[comp_bg_attn_suppress_key], 
-                                                        fg_mask, batch_have_fg_mask,
-                                                        extra_info['subj_indices_1b'], BLOCK_SIZE)
+                                                       fg_mask, batch_have_fg_mask,
+                                                       extra_info['subj_indices_1b'], BLOCK_SIZE)
                 if loss_comp_fg_feat_contrast > 0:
                     loss_dict.update({f'{prefix}/comp_fg_feat_contrast': loss_comp_fg_feat_contrast.mean().detach()})
                 if loss_comp_bg_attn_suppress > 0:
@@ -2575,7 +2575,10 @@ class LatentDiffusion(DDPM):
             else:
                 loss_comp_fg_bg_preserve = 0
 
-            loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
+            # Scale down loss_comp_fg_bg_preserve if reuse_init_conds.
+            comp_fg_bg_preserve_loss_scale = 0.4 if self.iter_flags['reuse_init_conds'] else 1
+            loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
+                     * comp_fg_bg_preserve_loss_scale
 
         self.release_plosses_intermediates(locals())
         loss_dict.update({f'{prefix}/loss': loss.mean().detach()})
@@ -3116,6 +3119,8 @@ class LatentDiffusion(DDPM):
 
         return loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple
 
+    # Intuition: Features under comp prompts should align with 
+    #            features under single prompts, at fg_mask areas.
     def calc_comp_fg_bg_preserve_loss(self, unet_feats, unet_attns_or_scores, 
                                       fg_mask, batch_have_fg_mask, subj_indices, BS):
         # No masks available. loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress are both 0.
@@ -3151,7 +3156,7 @@ class LatentDiffusion(DDPM):
 
 
         # Normalize the weights above so that each set sum to 1.
-        feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
+        feat_distill_layer_weights  = normalize_dict_values(feat_distill_layer_weights)
         feat_single_grad_scale  = 0.02
         feat_single_grad_scaler = gen_gradient_scaler(feat_single_grad_scale)
 
