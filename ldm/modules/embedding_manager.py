@@ -1348,7 +1348,7 @@ class EmbeddingManager(nn.Module):
             # then it's time to update EMA embeddings.
             # This should happen after the previous iteration finishes and 
             # before the current iteration starts.
-            if self.training() and (len(ada_temp_emb.updated_layers) == ada_temp_emb.num_layers):
+            if self.training and (len(ada_temp_emb.updated_layers) == ada_temp_emb.num_layers):
                 self.string_to_static_embedder_dict[k](ada_temp_emb)
 
             ada_temp_emb.reset_updated_layers_tracker()
