@@ -2363,7 +2363,6 @@ class LatentDiffusion(DDPM):
                     # If not is_teachable, do not do distillation this time 
                     # (since both instances are not good teachers), 
                     # NOTE: thus we can only compute emb reg and delta loss.
-                    # self.release_plosses_intermediates(locals())
 
                     # In an self.iter_flags['do_teacher_filter'], and not teachable instances are found.
                     # guided_denoise() above is done on twin comp instances, 
@@ -2415,8 +2414,6 @@ class LatentDiffusion(DDPM):
                         
                         # No need to concatenate these two, instead let calc_prompt_emb_delta_loss() handle the intricacy.
                         ada_embeddings = (twin_single_ada_embeddings, twin_comp_ada_embeddings)
-
-                        # self.release_plosses_intermediates(locals())
 
                     # Otherwise, it's an reuse_init_conds iter, and no teachable instances are found.
                     # We've computed the ada embeddings for the 4-type instances, 
@@ -2489,14 +2486,14 @@ class LatentDiffusion(DDPM):
             # i.e., layers 7, 8, 12, 16, 17, 18.
             # Similar are unet_attns and unet_attnscores.
             unet_feats  = extra_info['unet_feats']
+            self.subj_attn_delta_distill_uses_scores    = True
+            self.subj_comp_attn_comple_loss_uses_scores = True
+            self.comp_bg_attn_suppress_uses_scores      = True
 
             if self.iter_flags['is_teachable']:
                 # subj_indices_2b is used here, as it's used to index subj single and subj comp embeddings.
                 # The indices will be shifted along the batch dimension (size doubled) within calc_prompt_mix_loss()
                 # to index all the 4 blocks.
-                self.subj_attn_delta_distill_uses_scores    = True
-                self.subj_comp_attn_comple_loss_uses_scores = True
-                self.comp_bg_attn_suppress_uses_scores      = True
 
                 subj_attn_delta_distill_key = 'unet_attnscores' if self.subj_attn_delta_distill_uses_scores \
                                             else 'unet_attns'
