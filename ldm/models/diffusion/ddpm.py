@@ -1266,6 +1266,8 @@ class LatentDiffusion(DDPM):
                                                 and random.random() < p_use_fp_trick
 
             p_comp_init_with_fg_area = 0.7
+            # If reuse_init_conds, comp_init_with_fg_area may be set to True later
+            # if the previous iteration has comp_init_with_fg_area = True.
             self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
                                                           and not self.iter_flags['reuse_init_conds'] \
                                                           and self.fg_mask_avail_ratio > 0 \
@@ -1384,6 +1386,16 @@ class LatentDiffusion(DDPM):
         self.iter_flags['batch_have_fg_mask']   = batch_have_fg_mask
         self.iter_flags['delta_prompts']        = delta_prompts
 
+        # reuse_init_conds, discard the prompts offered in shared_step().
+        if self.iter_flags['reuse_init_conds']:
+            # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
+            delta_prompts = self.cached_inits['delta_prompts']
+            self.iter_flags['img_mask']                 = self.cached_inits['img_mask']
+            self.iter_flags['fg_mask']                  = self.cached_inits['fg_mask']
+            self.iter_flags['batch_have_fg_mask']       = self.cached_inits['batch_have_fg_mask']
+            self.iter_flags['use_background_token']     = self.cached_inits['use_background_token']
+            self.iter_flags['comp_init_with_fg_area']   = self.cached_inits['comp_init_with_fg_area']
+
         loss = self(x, captions, **kwargs)
 
         return loss
@@ -1410,10 +1422,6 @@ class LatentDiffusion(DDPM):
                     if self.iter_flags['reuse_init_conds']:
                         # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
                         delta_prompts = self.cached_inits['delta_prompts']
-                        self.iter_flags['img_mask']             = self.cached_inits['img_mask']
-                        self.iter_flags['fg_mask']              = self.cached_inits['fg_mask']
-                        self.iter_flags['batch_have_fg_mask']   = self.cached_inits['batch_have_fg_mask']
-                        self.iter_flags['use_background_token'] = self.cached_inits['use_background_token']
                         # cached_inits will be used in p_losses(), 
                         # so don't set cached_inits_available to False yet.
                     else:
@@ -2341,6 +2349,7 @@ class LatentDiffusion(DDPM):
                                           'fg_mask':                fg_mask,
                                           'batch_have_fg_mask':     batch_have_fg_mask,
                                           'use_background_token':   self.iter_flags['use_background_token'],
+                                          'comp_init_with_fg_area': self.iter_flags['comp_init_with_fg_area'],
                                         }
                     
                     # Do not put cached_inits_available on self.iter_flags, as iter_flags will be reset
@@ -2471,64 +2480,91 @@ class LatentDiffusion(DDPM):
             
             loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
         
-        if self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']:
-            # unet_feats is a dict as: layer_idx -> unet_feat. 
-            # It contains the 6 specified conditioned layers of UNet features.
-            # i.e., layers 7, 8, 12, 16, 17, 18.
-            # Similar are unet_attns and unet_attnscores.
-            unet_feats  = extra_info['unet_feats']
-            # subj_indices_2b is used here, as it's used to index subj single and subj comp embeddings.
-            # The indices will be shifted along the batch dimension (size doubled) within calc_prompt_mix_loss()
-            # to index all the 4 blocks.
-            self.subj_attn_delta_distill_uses_scores    = True
-            self.subj_comp_attn_comple_loss_uses_scores = True
-            self.comp_bg_attn_suppress_uses_scores      = True
+        if self.iter_flags['do_mix_prompt_distillation']:
+            if self.iter_flags['is_teachable']:
+                # unet_feats is a dict as: layer_idx -> unet_feat. 
+                # It contains the 6 specified conditioned layers of UNet features.
+                # i.e., layers 7, 8, 12, 16, 17, 18.
+                # Similar are unet_attns and unet_attnscores.
+                unet_feats  = extra_info['unet_feats']
+                # subj_indices_2b is used here, as it's used to index subj single and subj comp embeddings.
+                # The indices will be shifted along the batch dimension (size doubled) within calc_prompt_mix_loss()
+                # to index all the 4 blocks.
+                self.subj_attn_delta_distill_uses_scores    = True
+                self.subj_comp_attn_comple_loss_uses_scores = True
+                self.comp_bg_attn_suppress_uses_scores      = True
 
-            subj_attn_delta_distill_key = 'unet_attnscores' if self.subj_attn_delta_distill_uses_scores \
-                                          else 'unet_attns'
-            loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_delta_distill = \
-                                self.calc_prompt_mix_loss(unet_feats, extra_info[subj_attn_delta_distill_key], 
-                                                          extra_info['subj_indices_2b'],
-                                                          BLOCK_SIZE)
-
-            if loss_feat_delta_distill > 0:
-                loss_dict.update({f'{prefix}/feat_delta_distill':       loss_feat_delta_distill.mean().detach()})
-            if loss_subj_attn_delta_distill > 0:
-                loss_dict.update({f'{prefix}/subj_attn_delta_distill':  loss_subj_attn_delta_distill.mean().detach()})
-            if loss_subj_attn_norm_distill > 0:
-                loss_dict.update({f'{prefix}/subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
-
-            loss_subj_comp_key_ortho = 0
-            subj_comp_attn_comple_loss_scale = 1 if self.subj_comp_attn_comple_loss_uses_scores else 1
-            if self.subj_comp_key_ortho_loss_weight > 0:
-                subj_comp_attn_comple_key = 'unet_attnscores' if self.subj_comp_attn_comple_loss_uses_scores \
+                subj_attn_delta_distill_key = 'unet_attnscores' if self.subj_attn_delta_distill_uses_scores \
                                             else 'unet_attns'
-                loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple = \
-                    self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
-                                                   extra_info[subj_comp_attn_comple_key],
-                                                   extra_info['subj_indices_2b'],
-                                                   self.embedding_manager.delta_loss_emb_mask,
-                                                   BLOCK_SIZE, cls_grad_scale=0.05)
+                loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_delta_distill = \
+                                    self.calc_prompt_mix_loss(unet_feats, extra_info[subj_attn_delta_distill_key], 
+                                                            extra_info['subj_indices_2b'],
+                                                            BLOCK_SIZE)
 
-                if loss_subj_comp_key_ortho != 0:
-                    loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
-                if loss_subj_comp_value_ortho != 0:
-                    loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
-                if loss_subj_comp_attn_comple != 0:
-                    loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
+                if loss_feat_delta_distill > 0:
+                    loss_dict.update({f'{prefix}/feat_delta_distill':       loss_feat_delta_distill.mean().detach()})
+                if loss_subj_attn_delta_distill > 0:
+                    loss_dict.update({f'{prefix}/subj_attn_delta_distill':  loss_subj_attn_delta_distill.mean().detach()})
+                if loss_subj_attn_norm_distill > 0:
+                    loss_dict.update({f'{prefix}/subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
 
+                loss_subj_comp_key_ortho = 0
+                subj_comp_attn_comple_loss_scale = 1 if self.subj_comp_attn_comple_loss_uses_scores else 1
+                if self.subj_comp_key_ortho_loss_weight > 0:
+                    subj_comp_attn_comple_key = 'unet_attnscores' if self.subj_comp_attn_comple_loss_uses_scores \
+                                                else 'unet_attns'
+                    loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple = \
+                        self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
+                                                    extra_info[subj_comp_attn_comple_key],
+                                                    extra_info['subj_indices_2b'],
+                                                    self.embedding_manager.delta_loss_emb_mask,
+                                                    BLOCK_SIZE, cls_grad_scale=0.05)
+
+                    if loss_subj_comp_key_ortho != 0:
+                        loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
+                    if loss_subj_comp_value_ortho != 0:
+                        loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
+                    if loss_subj_comp_attn_comple != 0:
+                        loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
+
+
+                subj_attn_delta_distill_loss_scale = 0.5
+                # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
+                # smaller magnitudes than the delta loss. So we scale it up by 20x.
+                subj_attn_norm_distill_loss_scale  = 2 if self.subj_attn_delta_distill_uses_scores else 20
+                # Using distill_deep_neg_prompt will somehow increase the subj attn norm. So punish it more.
+                if self.distill_deep_neg_context is not None:
+                    subj_attn_norm_distill_loss_scale *= 2
+
+                loss_mix_prompt_distill =  loss_subj_attn_delta_distill   * subj_attn_delta_distill_loss_scale \
+                                            + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
+                                            + loss_feat_delta_distill 
+                                            
+                if loss_mix_prompt_distill > 0:
+                    loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
+
+                # mix_prompt_distill_weight: 2e-4.
+                loss += loss_mix_prompt_distill       * self.mix_prompt_distill_weight \
+                        + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
+                        + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
+                        + loss_subj_comp_attn_comple * subj_comp_attn_comple_loss_scale * self.subj_comp_attn_complementary_loss_weight
+
+            # NOTE: loss_comp_fg_bg_preserve is applied no matter whether this 
+            # iteration is teachable or not.
+            # The current iteration may be a fresh iteration or a reuse_init_conds iteration.
+            # In both cases, if comp_init_with_fg_area, then we need to preserve the fg/bg areas.
             # Although fg_mask_avail_ratio > 0 when comp_init_with_fg_area,
             # fg_mask_avail_ratio may have been updated after doing teacher filtering 
             # (since x_start has been filtered, masks are also filtered accordingly, 
             # and the same as to fg_mask_avail_ratio). So we need to check it here.
             if self.comp_fg_bg_preserve_loss_weight > 0 and self.iter_flags['comp_init_with_fg_area'] \
-              and self.fg_mask_avail_ratio > 0:
+                and self.fg_mask_avail_ratio > 0:
                 comp_bg_attn_suppress_key = 'unet_attnscores' if self.comp_bg_attn_suppress_uses_scores \
                                             else 'unet_attns'
                 loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress = \
                     self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info[comp_bg_attn_suppress_key], 
-                                                       fg_mask, batch_have_fg_mask,
-                                                       extra_info['subj_indices_1b'], BLOCK_SIZE)
+                                                        fg_mask, batch_have_fg_mask,
+                                                        extra_info['subj_indices_1b'], BLOCK_SIZE)
                 if loss_comp_fg_feat_contrast > 0:
                     loss_dict.update({f'{prefix}/comp_fg_feat_contrast': loss_comp_fg_feat_contrast.mean().detach()})
                 if loss_comp_bg_attn_suppress > 0:
@@ -2538,30 +2574,9 @@ class LatentDiffusion(DDPM):
             else:
                 loss_comp_fg_bg_preserve = 0
 
-            subj_attn_delta_distill_loss_scale = 0.5
-            # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
-            # smaller magnitudes than the delta loss. So we scale it up by 20x.
-            subj_attn_norm_distill_loss_scale  = 2 if self.subj_attn_delta_distill_uses_scores else 20
-            # Using distill_deep_neg_prompt will somehow increase the subj attn norm. So punish it more.
-            if self.distill_deep_neg_context is not None:
-                subj_attn_norm_distill_loss_scale *= 2
+            loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
 
-            loss_mix_prompt_distill =  loss_subj_attn_delta_distill   * subj_attn_delta_distill_loss_scale \
-                                        + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
-                                        + loss_feat_delta_distill 
-                                        
-            if loss_mix_prompt_distill > 0:
-                loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
-
-            # mix_prompt_distill_weight: 2e-4.
-            loss += loss_mix_prompt_distill       * self.mix_prompt_distill_weight \
-                     + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
-                     + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
-                     + loss_subj_comp_attn_comple * subj_comp_attn_comple_loss_scale * self.subj_comp_attn_complementary_loss_weight \
-                     + loss_comp_fg_bg_preserve   * self.comp_fg_bg_preserve_loss_weight
-            
-            self.release_plosses_intermediates(locals())
-
+        self.release_plosses_intermediates(locals())
         loss_dict.update({f'{prefix}/loss': loss.mean().detach()})
 
         return loss, loss_dict
