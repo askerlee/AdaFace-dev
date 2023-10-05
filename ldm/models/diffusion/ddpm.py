@@ -2541,8 +2541,14 @@ class LatentDiffusion(DDPM):
                 if loss_mix_prompt_distill > 0:
                     loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
 
+                if self.iter_flags['do_teacher_filter']:
+                    subj_single_target = x_start_sel
+                elif self.iter_flags['reuse_init_conds']:
+                    subj_single_target = reuse_target
+                else:
+                    subj_single_target = x_start
                 # Calc recon loss on subj single instances.
-                loss_single_recon, _ = self.calc_recon_loss(model_output, reuse_target, fg_mask, 
+                loss_single_recon, _ = self.calc_recon_loss(model_output, subj_single_target, fg_mask, 
                                                             torch.arange(BLOCK_SIZE, device=x_start.device))
                 
                 # mix_prompt_distill_weight: 2e-4.
