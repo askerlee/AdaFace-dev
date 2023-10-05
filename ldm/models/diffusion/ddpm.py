@@ -2541,18 +2541,21 @@ class LatentDiffusion(DDPM):
                 if loss_mix_prompt_distill > 0:
                     loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
 
-                if self.iter_flags['do_teacher_filter']:
-                    subj_single_target = x_start_sel
-                elif self.iter_flags['reuse_init_conds']:
-                    subj_single_target = reuse_target
+                if self.iter_flags['comp_init_with_fg_area']:
+                    if self.iter_flags['do_teacher_filter']:
+                        subj_single_target = x_start_sel
+                    elif self.iter_flags['reuse_init_conds']:
+                        subj_single_target = reuse_target
+                    else:
+                        subj_single_target = x_start
+                    # Calc recon loss on subj single instances.
+                    loss_single_recon, _ = self.calc_recon_loss(model_output, subj_single_target, fg_mask, 
+                                                                torch.arange(BLOCK_SIZE, device=x_start.device))
                 else:
-                    subj_single_target = x_start
-                # Calc recon loss on subj single instances.
-                loss_single_recon, _ = self.calc_recon_loss(model_output, subj_single_target, fg_mask, 
-                                                            torch.arange(BLOCK_SIZE, device=x_start.device))
-                
+                    loss_single_recon = 0
+                                    
                 # mix_prompt_distill_weight: 2e-4.
-                loss += loss_mix_prompt_distill       * self.mix_prompt_distill_weight \
+                loss += loss_mix_prompt_distill      * self.mix_prompt_distill_weight \
                         + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
                         + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
                         + loss_subj_comp_attn_comple * subj_comp_attn_comple_loss_scale * self.subj_comp_attn_complementary_loss_weight \
