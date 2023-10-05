@@ -1846,7 +1846,10 @@ class LatentDiffusion(DDPM):
 
     # Release part of the computation graph on unused instances to save RAM.
     def release_plosses_intermediates(self, local_vars):
-        del local_vars['model_output'], local_vars['x_recon'], local_vars['clip_images_code']
+        for k in ('model_output', 'x_recon', 'clip_images_code'):
+            if k in local_vars:
+                del local_vars[k]
+
         cond = local_vars['cond']
         for k in ('unet_feats', 'unet_attns', 'unet_attnscores', 'unet_ks', 'unet_vs'):
             if k in cond[2]:
