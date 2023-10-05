@@ -2481,12 +2481,13 @@ class LatentDiffusion(DDPM):
             loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
         
         if self.iter_flags['do_mix_prompt_distillation']:
+            # unet_feats is a dict as: layer_idx -> unet_feat. 
+            # It contains the 6 specified conditioned layers of UNet features.
+            # i.e., layers 7, 8, 12, 16, 17, 18.
+            # Similar are unet_attns and unet_attnscores.
+            unet_feats  = extra_info['unet_feats']
+
             if self.iter_flags['is_teachable']:
-                # unet_feats is a dict as: layer_idx -> unet_feat. 
-                # It contains the 6 specified conditioned layers of UNet features.
-                # i.e., layers 7, 8, 12, 16, 17, 18.
-                # Similar are unet_attns and unet_attnscores.
-                unet_feats  = extra_info['unet_feats']
                 # subj_indices_2b is used here, as it's used to index subj single and subj comp embeddings.
                 # The indices will be shifted along the batch dimension (size doubled) within calc_prompt_mix_loss()
                 # to index all the 4 blocks.
