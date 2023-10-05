@@ -2363,7 +2363,7 @@ class LatentDiffusion(DDPM):
                     # If not is_teachable, do not do distillation this time 
                     # (since both instances are not good teachers), 
                     # NOTE: thus we can only compute emb reg and delta loss.
-                    self.release_plosses_intermediates(locals())
+                    # self.release_plosses_intermediates(locals())
 
                     # In an self.iter_flags['do_teacher_filter'], and not teachable instances are found.
                     # guided_denoise() above is done on twin comp instances, 
