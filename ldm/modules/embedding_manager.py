@@ -1575,8 +1575,7 @@ class EmbeddingManager(nn.Module):
             for embobj in (self.string_to_static_embedder_dict[key], 
                            self.string_to_ada_embedder_dict[key]):
                 # Skip non-layerwise embeddings.
-                if not isinstance(embobj, StaticLayerwiseEmbedding) \
-                  and not isinstance(embobj, AdaEmbedding):
+                if not isinstance(embobj, (StaticLayerwiseEmbedding, AdaEmbedding)):
                     continue
                 
                 # init_vecs is used to regularize pre_vecs.

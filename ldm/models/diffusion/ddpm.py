@@ -81,7 +81,7 @@ class DDPM(pl.LightningModule):
                  unfreeze_model=False,
                  model_lr=0.,
                  v_posterior=0.,  # weight for choosing posterior variance as sigma = (1-v) * beta_tilde + v * beta
-                 l_simple_weight=1.,
+                 recon_loss_weight=1.,
                  conditioning_key=None,
                  parameterization="eps",  # all assuming fixed variance schedules
                  optimizer_type='AdamW',
@@ -182,7 +182,7 @@ class DDPM(pl.LightningModule):
 
         self.v_posterior = v_posterior
         self.original_elbo_weight = original_elbo_weight
-        self.l_simple_weight = l_simple_weight
+        self.recon_loss_weight = recon_loss_weight
         self.unfreeze_model = unfreeze_model
         self.model_lr = model_lr
 
@@ -420,7 +420,7 @@ class DDPM(pl.LightningModule):
         log_prefix = 'train' if self.training else 'val'
 
         loss_dict.update({f'{log_prefix}/loss_recon': loss.mean().detach()})
-        loss_recon = loss.mean() * self.l_simple_weight
+        loss_recon = loss.mean() * self.recon_loss_weight
 
         loss_vlb = (self.lvlb_weights[t] * loss).mean()
         loss_dict.update({f'{log_prefix}/loss_vlb': loss_vlb.mean().detach()})
@@ -1265,7 +1265,7 @@ class LatentDiffusion(DDPM):
                                                 and 'subj_prompt_single_fp' in batch \
                                                 and random.random() < p_use_fp_trick
 
-            p_comp_init_with_fg_area = 0.7
+            p_comp_init_with_fg_area = 0.5
             # If reuse_init_conds, comp_init_with_fg_area may be set to True later
             # if the previous iteration has comp_init_with_fg_area = True.
             self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
@@ -1277,16 +1277,10 @@ class LatentDiffusion(DDPM):
             # To avoid the backgound token taking too much of the foreground, 
             # we only use the background token on 90% of the training images, to 
             # force the foreground token to focus on the whole image.
-            if not self.iter_flags['do_mix_prompt_distillation']:
+            if not self.iter_flags['is_compos_iter']:
                 p_use_background_token  = 0.9
-            # If do_mix_prompt_distillation and comp_init_with_fg_area, then we still 
-            # use background token on 50% of the iterations, hoping the background token to 
-            # capture some non-compositional information.
-            elif self.iter_flags['comp_init_with_fg_area']:
-                p_use_background_token  = 0 # 0.5
             else:
-                # When do_mix_prompt_distillation and not comp_init_with_fg_area, or 
-                # at 50% of the time when comp_init_with_fg_area, we don't use background token.
+                # When do_mix_prompt_distillation, we don't use background token.
                 p_use_background_token  = 0
 
             # Only use_background_token on recon iters.
@@ -2148,7 +2142,8 @@ class LatentDiffusion(DDPM):
                         del extra_info[k]
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-            loss_recon, loss_recon_pixels = self.calc_recon_loss(model_output, target, fg_mask)
+            loss_recon, loss_recon_pixels = self.calc_recon_loss(model_output, target, fg_mask, 
+                                                                 self.iter_flags['use_background_token'])
             loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
 
             logvar_t = self.logvar.to(self.device)[t].reshape(-1, 1, 1, 1)
@@ -2159,7 +2154,7 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['use_background_token']:
                 loss_recon_gamma = loss_recon_gamma_pixels.mean()
             else:
-                # Only evaluate recon loss on the foreground pixels.
+                # When background token is not use, only evaluate recon loss on the foreground pixels.
                 loss_recon_gamma = masked_mean(loss_recon_gamma_pixels, fg_mask)
 
             # loss = loss_recon / torch.exp(self.logvar) + self.logvar
@@ -2167,7 +2162,7 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/loss_recon_gamma': loss_recon_gamma.detach()})
                 loss_dict.update({'logvar': self.logvar.data.mean().detach()})
 
-            loss += self.l_simple_weight * loss_recon_gamma
+            loss += self.recon_loss_weight * loss_recon_gamma
 
             loss_vlb_pixels = self.get_loss(model_output, target, mean=False)
             loss_vlb_pixels = self.lvlb_weights[t].reshape(-1, 1, 1, 1) * loss_vlb_pixels
@@ -2586,7 +2581,7 @@ class LatentDiffusion(DDPM):
 
     # pixel-wise recon loss. If batch_indices is not None, 
     # only compute the recon loss on selected instances.
-    def calc_recon_loss(self, model_output, target, fg_mask, batch_indices=None):
+    def calc_recon_loss(self, model_output, target, fg_mask, use_background_token, batch_indices=None):
         if batch_indices is not None:
             model_output = model_output[batch_indices]
             target       = target[batch_indices]
@@ -2594,7 +2589,7 @@ class LatentDiffusion(DDPM):
 
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon_pixels = self.get_loss(model_output, target, mean=False)
-        if self.iter_flags['use_background_token']:
+        if use_background_token:
             # recon loss on the whole image.
             loss_recon = loss_recon_pixels.mean()
         else:
@@ -2620,12 +2615,12 @@ class LatentDiffusion(DDPM):
         # feature map distillation only uses delta loss on the features to reduce the 
         # class polluting the subject features.
         feat_distill_layer_weights = { # 7:  1., 8: 1.,   
-                                       12: 1.,
-                                       16: 1., 17: 1.,
-                                       18: 0.5,
-                                       19: 0.5, 20: 0.5, 
-                                       21: 0.25, 22: 0.25, 
-                                       23: 0.25, 24: 0.25,
+                                        12: 1.,
+                                        16: 1., 17: 1.,
+                                        18: 1.,
+                                        19: 1., 20: 1., 
+                                        21: 1., 22: 1., 
+                                        23: 1., 24: 1., 
                                      }
 
         # attn delta loss is more strict and could cause pollution of subject features with class features.
@@ -2633,10 +2628,10 @@ class LatentDiffusion(DDPM):
         attn_delta_distill_layer_weights = { # 7:  1., 8: 1.,
                                             12: 1.,
                                             16: 1., 17: 1.,
-                                            18: 0.5,
-                                            19: 0.5, 20: 0.5, 
-                                            21: 0.25, 22: 0.25, 
-                                            23: 0.25, 24: 0.25,                                   
+                                            18: 1.,
+                                            19: 1., 20: 1., 
+                                            21: 1., 22: 1., 
+                                            23: 1., 24: 1.,                            
                                             }
         # DISABLE attn delta loss.
         # attn_delta_distill_layer_weights = {}
@@ -2828,10 +2823,11 @@ class LatentDiffusion(DDPM):
         # attn_align_layer_weights: relative weight of each layer. 
         attn_align_layer_weights = { #7:  1., 8: 1.,
                                     12: 1.,
-                                    16: 1., 17: 1., 
+                                    16: 1., 17: 1.,
                                     18: 1.,
                                     19: 1., 20: 1., 
-                                    21: 1., 22: 1., 23: 1.,  24: 1.,
+                                    21: 1., 22: 1., 
+                                    23: 1., 24: 1., 
                                    }
         
         # Normalize the weights above so that each set sum to 1.
@@ -3012,10 +3008,10 @@ class LatentDiffusion(DDPM):
         k_ortho_layer_weights = { #7:  1., 8: 1.,
                                 12: 1.,
                                 16: 1., 17: 1.,
-                                18: 0.5,
-                                19: 0.5, 20: 0.5, 
-                                21: 0.25, 22: 0.25, 
-                                23: 0.25, 24: 0.25,     
+                                18: 1.,
+                                19: 1., 20: 1., 
+                                21: 1., 22: 1., 
+                                23: 1., 24: 1.,     
                                 }
         
         v_ortho_layer_weights = { #7:  1., 8: 1.,
@@ -3148,12 +3144,12 @@ class LatentDiffusion(DDPM):
             return 0, 0
 
         feat_distill_layer_weights = { # 7:  1., 8: 1.,   
-                                       12: 1.,
-                                       16: 1., 17: 1.,
-                                       18: 0.5,
-                                       19: 0.5, 20: 0.5, 
-                                       21: 0.25, 22: 0.25, 
-                                       23: 0.25, 24: 0.25,
+                                        12: 1.,
+                                        16: 1., 17: 1.,
+                                        18: 1.,
+                                        19: 1., 20: 1., 
+                                        21: 1., 22: 1., 
+                                        23: 1., 24: 1., 
                                      }
 
         fg_mask_1b = fg_mask.chunk(4)[0]
