@@ -1119,7 +1119,7 @@ class EmbeddingManager(nn.Module):
                 # Our modified LitEma allows to be updated by SGD. However, the update may be 
                 # too aggressive. So we scale down the gradient by a factor of 0.1.
                 litema_emb_scaler     = gen_gradient_scaler(0.1)
-                placeholder_embedding = litema_emb_scaler(static_embedder.embedding)
+                placeholder_embedding = litema_emb_scaler(static_embedder.embedding.clone())
             else:
                 # static_embedder is already the embeddings.
                 placeholder_embedding = static_embedder
