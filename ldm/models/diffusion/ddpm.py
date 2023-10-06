@@ -2687,7 +2687,7 @@ class LatentDiffusion(DDPM):
                 continue
 
             # each is [1, 1280, 16, 16]
-            feat_subj_single, feat_subj_comp, feat_mix_single, feat_mix_comp \
+            subj_single_feat, subj_comp_feat, mix_single_feat, mix_comp_feat \
                 = unet_feat.chunk(4)
             
             # attn_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
@@ -2715,16 +2715,18 @@ class LatentDiffusion(DDPM):
 
                 if attn_delta_distill_layer_weight > 0:
                     # No need to use *_gs version here, as gradient scaling is done in calc_delta_loss().
-                    subj_attn_delta = subj_comp_subj_attn - subj_single_subj_attn
-                    mix_attn_delta  = mix_comp_subj_attn  - mix_single_subj_attn
+                    #subj_attn_delta = subj_comp_subj_attn - subj_single_subj_attn
+                    #mix_attn_delta  = mix_comp_subj_attn  - mix_single_subj_attn
+                    single_attn_delta = ortho_subtract(mix_single_subj_attn, subj_single_subj_attn)
+                    comp_attn_delta   = ortho_subtract(mix_comp_subj_attn,   subj_comp_subj_attn)
 
                     # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
                     # towards class embeddings, hurting authenticity.
-                    loss_layer_subj_delta_attn = calc_delta_loss(subj_attn_delta, mix_attn_delta, 
+                    loss_layer_subj_delta_attn = calc_delta_loss(single_attn_delta, comp_attn_delta, 
                                                                  exponent=3,
                                                                  do_demean_first=False,
                                                                  first_n_dims_to_flatten=2, 
-                                                                 ref_grad_scale=0.05)
+                                                                 ref_grad_scale=1)
                     
                     loss_subj_attn_delta_distill  += loss_layer_subj_delta_attn * attn_delta_distill_layer_weight
                 
@@ -2744,8 +2746,8 @@ class LatentDiffusion(DDPM):
             if use_subj_attn_as_spatial_weights:
                 feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
 
-                # feat_subj_single, ...: [1, 1280, 16, 16]
-                feat_subj_single, feat_subj_comp, feat_mix_single, feat_mix_comp \
+                # subj_single_feat, ...: [1, 1280, 16, 16]
+                subj_single_feat, subj_comp_feat, mix_single_feat, mix_comp_feat \
                     = unet_feat.chunk(4)
 
                 # convert_attn_to_spatial_weight() will detach attention weights to 
@@ -2753,11 +2755,11 @@ class LatentDiffusion(DDPM):
                 # reversed=True: larger subject attention => smaller spatial weight, i.e., 
                 # pay more attention to the context.
                 spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(mix_comp_subj_attn, BLOCK_SIZE, 
-                                                                                                  feat_mix_comp.shape[2:],
+                                                                                                  mix_comp_feat.shape[2:],
                                                                                                   reversed=True)
 
                 spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_comp_subj_attn, BLOCK_SIZE,
-                                                                                                  feat_subj_comp.shape[2:],
+                                                                                                  subj_comp_feat.shape[2:],
                                                                                                   reversed=True)
                 spatial_weight = (spatial_weight_mix_comp + spatial_weight_subj_comp) / 2
 
@@ -2768,10 +2770,10 @@ class LatentDiffusion(DDPM):
                 # Use mix single/comp weights on both subject-only and mix features, 
                 # to reduce misalignment and facilitate distillation.
                 # The multiple heads are aggregated by mean(), since the weighted features don't have multiple heads.
-                feat_subj_single = feat_subj_single * spatial_weight
-                feat_subj_comp   = feat_subj_comp   * spatial_weight
-                feat_mix_single  = feat_mix_single  * spatial_weight
-                feat_mix_comp    = feat_mix_comp    * spatial_weight
+                subj_single_feat = subj_single_feat * spatial_weight
+                subj_comp_feat   = subj_comp_feat   * spatial_weight
+                mix_single_feat  = mix_single_feat  * spatial_weight
+                mix_comp_feat    = mix_comp_feat    * spatial_weight
 
             do_feat_pooling = True
             feat_pool_kernel_size = 4
@@ -2783,39 +2785,34 @@ class LatentDiffusion(DDPM):
                 pooler = nn.Identity()
 
             # Pool the H, W dimensions to remove spatial information.
-            # After pooling, feat_subj_single, feat_subj_comp, 
-            # feat_mix_single, feat_mix_comp: [1, 1280] or [1, 640], ...
-            feat_subj_single = pooler(feat_subj_single).reshape(feat_subj_single.shape[0], -1)
-            feat_subj_comp   = pooler(feat_subj_comp).reshape(feat_subj_comp.shape[0], -1)
-            feat_mix_single  = pooler(feat_mix_single).reshape(feat_mix_single.shape[0], -1)
-            feat_mix_comp    = pooler(feat_mix_comp).reshape(feat_mix_comp.shape[0], -1)
+            # After pooling, subj_single_feat, subj_comp_feat, 
+            # mix_single_feat, mix_comp_feat: [1, 1280] or [1, 640], ...
+            subj_single_feat = pooler(subj_single_feat).reshape(subj_single_feat.shape[0], -1)
+            subj_comp_feat   = pooler(subj_comp_feat).reshape(subj_comp_feat.shape[0], -1)
+            mix_single_feat  = pooler(mix_single_feat).reshape(mix_single_feat.shape[0], -1)
+            mix_comp_feat    = pooler(mix_comp_feat).reshape(mix_comp_feat.shape[0], -1)
 
             # mix_feat_grad_scale = 0.1.
-            feat_mix_single  = mix_feat_grad_scaler(feat_mix_single)
-            feat_mix_comp    = mix_feat_grad_scaler(feat_mix_comp)
+            mix_single_feat  = mix_feat_grad_scaler(mix_single_feat)
+            mix_comp_feat    = mix_feat_grad_scaler(mix_comp_feat)
 
-            distill_on_delta = True
-            if distill_on_delta:
-                # ortho_subtract() is done on the last dimension. 
-                # So we flatten the spatial dimensions first as above.
-                # NOTE: use normalized_ortho_subtract() will reduce performance.
-                feat_mix_delta  = ortho_subtract(feat_mix_comp,  feat_mix_single)
-                feat_subj_delta = ortho_subtract(feat_subj_comp, feat_subj_single)
-            else:
-                feat_mix_delta  = feat_mix_comp
-                feat_subj_delta = feat_subj_comp
+            # ortho_subtract() is done on the last dimension. 
+            # So we flatten the spatial dimensions first as above.
+            # NOTE: use normalized_ortho_subtract() will reduce performance.
+            comp_feat_delta   = ortho_subtract(mix_comp_feat,   subj_comp_feat)
+            single_feat_delta = ortho_subtract(mix_single_feat, subj_single_feat)
                 
-            # feat_subj_delta, feat_mix_delta: [1, 1280], ...
+            # single_feat_delta, comp_feat_delta: [1, 1280], ...
             # Pool the spatial dimensions H, W to remove spatial information.
-            # The gradient goes back to feat_subj_delta -> feat_subj_comp,
-            # as well as feat_mix_delta -> feat_mix_comp.
-            # If stop_single_grad, the gradients to feat_subj_single and feat_mix_single are stopped, 
+            # The gradient goes back to single_feat_delta -> subj_comp_feat,
+            # as well as comp_feat_delta -> mix_comp_feat.
+            # If stop_single_grad, the gradients to subj_single_feat and mix_single_feat are stopped, 
             # as these two images should look good by themselves (since they only contain the subject).
             # Note the learning strategy to the single image features should be different from 
             # the single embeddings, as the former should be optimized to look good by itself,
             # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
             # and 2) the embeddings are amendable to composition.
-            loss_layer_feat_delta_distill = self.get_loss(feat_subj_delta, feat_mix_delta, mean=True)
+            loss_layer_feat_delta_distill = self.get_loss(single_feat_delta, comp_feat_delta, mean=True)
             
             # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
             loss_feat_delta_distill += loss_layer_feat_delta_distill * feat_distill_layer_weight
@@ -3187,17 +3184,17 @@ class LatentDiffusion(DDPM):
             feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
 
             # each is [1, 1280, 16, 16]
-            feat_subj_single, feat_subj_comp, feat_mix_single, feat_mix_comp \
+            subj_single_feat, subj_comp_feat, mix_single_feat, mix_comp_feat \
                 = unet_feat.chunk(4)
 
             # fg_mask_1b_2: [1, 1, 64, 64] => [1, 1, 8, 8]
             fg_mask_1b_2 = scale_mask_for_feat_attn(unet_feat, fg_mask_1b, "fg_mask_1b", 
                                                     mode="nearest|bilinear", warn_on_all_zero=False)
 
-            feat_subj_single = feat_subj_single * fg_mask_1b_2
-            feat_subj_comp   = feat_subj_comp   * fg_mask_1b_2
-            feat_mix_single  = feat_mix_single  * fg_mask_1b_2
-            feat_mix_comp    = feat_mix_comp    * fg_mask_1b_2
+            subj_single_feat = subj_single_feat * fg_mask_1b_2
+            subj_comp_feat   = subj_comp_feat   * fg_mask_1b_2
+            mix_single_feat  = mix_single_feat  * fg_mask_1b_2
+            mix_comp_feat    = mix_comp_feat    * fg_mask_1b_2
 
             do_feat_pooling = True
             feat_pool_kernel_size = 4
@@ -3208,17 +3205,17 @@ class LatentDiffusion(DDPM):
             else:
                 pooler = nn.Identity()
 
-            feat_subj_single = pooler(feat_subj_single)
-            feat_subj_comp   = pooler(feat_subj_comp)
-            feat_mix_single  = pooler(feat_mix_single)
-            feat_mix_comp    = pooler(feat_mix_comp)
+            subj_single_feat = pooler(subj_single_feat)
+            subj_comp_feat   = pooler(subj_comp_feat)
+            mix_single_feat  = pooler(mix_single_feat)
+            mix_comp_feat    = pooler(mix_comp_feat)
 
             # feat_single_grad_scale = 0.1. 
             # feat_*_single are used as references, so their gradients are reduced.
-            feat_subj_single_gs = feat_single_grad_scaler(feat_subj_single)
-            feat_mix_single_gs  = feat_single_grad_scaler(feat_mix_single)
-            loss_layer_subj_fg_feat_preserve = self.get_loss(feat_subj_comp, feat_subj_single_gs, mean=True)
-            loss_layer_mix_fg_feat_preserve  = self.get_loss(feat_mix_comp,  feat_mix_single_gs,  mean=True)
+            subj_single_feat_gs = feat_single_grad_scaler(subj_single_feat)
+            mix_single_feat_gs  = feat_single_grad_scaler(mix_single_feat)
+            loss_layer_subj_fg_feat_preserve = self.get_loss(subj_comp_feat, subj_single_feat_gs, mean=True)
+            loss_layer_mix_fg_feat_preserve  = self.get_loss(mix_comp_feat,  mix_single_feat_gs,  mean=True)
             # A small weight to the preservation loss on mix instances. 
             # The requirement of preserving foreground features is not as strict as that of preserving
             # subject features, as the former is only used to facilitate composition.
