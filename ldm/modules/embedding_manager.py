@@ -1170,7 +1170,7 @@ class EmbeddingManager(nn.Module):
             static_subj_embs_dict,  # A dictionary of subject embeddings, used to do attentional pooling.
             ada_bp_to_unet=False
     ):
-        device = tokenized_text.device
+        B, device = tokenized_text.shape[0], tokenized_text.device
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         ada_subj_embs_dict = {}
 
@@ -1250,9 +1250,9 @@ class EmbeddingManager(nn.Module):
                                         self.img_mask, ada_bp_to_unet, 
                                         self.cached_infeat_bg[layer_idx])
             else:
-                placeholder_embedding = static_subj_embs_dict[placeholder_string][ca_layer_idx]
+                placeholder_embedding = static_subj_embs_dict[placeholder_string][ca_layer_idx].unsqueeze(0).repeat(B, 1, 1)
                 infeat_bg = None
-                
+
             ada_subj_embs_dict[placeholder_string] = placeholder_embedding
 
             if placeholder_string != self.background_string:
