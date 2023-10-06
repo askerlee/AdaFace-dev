@@ -1024,11 +1024,12 @@ class EmbeddingManager(nn.Module):
                                        self.ada_bp_to_unet)
             if self.ada_ema_as_static_emb and self.training:
                 for k in ada_subj_embs_dict:
-                    ada_temp_emb = self.token2ada_temp_emb[k]
-                    ca_layer_idx = self.layer_idx2ca_layer_idx[self.layer_idx]
-                    # LitEma requires an nn.Module to do updating. So we create a dummy Embedding2d. 
-                    # ada_subj_embs_dict[k].mean(dim=0): [9, 768].
-                    ada_temp_emb.update_layer(ada_subj_embs_dict[k].mean(dim=0), ca_layer_idx)
+                    if k in self.token2ada_temp_emb:
+                        ada_temp_emb = self.token2ada_temp_emb[k]
+                        ca_layer_idx = self.layer_idx2ca_layer_idx[self.layer_idx]
+                        # LitEma requires an nn.Module to do updating. So we create a dummy Embedding2d. 
+                        # ada_subj_embs_dict[k].mean(dim=0): [9, 768].
+                        ada_temp_emb.update_layer(ada_subj_embs_dict[k].mean(dim=0), ca_layer_idx)
 
             # Release ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
