@@ -2557,8 +2557,8 @@ class LatentDiffusion(DDPM):
             # fg_mask_avail_ratio may have been updated after doing teacher filtering 
             # (since x_start has been filtered, masks are also filtered accordingly, 
             # and the same as to fg_mask_avail_ratio). So we need to check it here.
-            if self.iter_flags['is_teachable'] and self.comp_fg_bg_preserve_loss_weight > 0 and self.iter_flags['comp_init_with_fg_area'] \
-                and self.fg_mask_avail_ratio > 0:
+            if self.iter_flags['comp_init_with_fg_area'] and self.fg_mask_avail_ratio > 0 \
+              and self.iter_flags['is_teachable'] and self.comp_fg_bg_preserve_loss_weight > 0:
                 attns_or_scores = 'unet_attnscores' if self.comp_bg_attn_suppress_uses_scores \
                                   else 'unet_attns'
                 loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress = \
@@ -2623,20 +2623,20 @@ class LatentDiffusion(DDPM):
                                        12: 1.,
                                        16: 1., 17: 1.,
                                        18: 0.5,
-                                       19: 0.25, 20: 0.25, 
-                                       21: 0.12, 22: 0.12, 
-                                       23: 0.12, 24: 0.12,
+                                       19: 0.5, 20: 0.5, 
+                                       21: 0.25, 22: 0.25, 
+                                       23: 0.25, 24: 0.25,
                                      }
 
         # attn delta loss is more strict and could cause pollution of subject features with class features.
         # so top layers layers 21, 22, 23, 24 are excluded by setting their weights to 0.
         attn_delta_distill_layer_weights = { # 7:  1., 8: 1.,
-                                             12: 1.,
-                                             16: 1., 17: 1.,
-                                             18: 1., 
-                                             19: 1., 20: 1.,
-                                             21: 1., 22: 1., 
-                                             23: 1., 24: 1.,                                       
+                                            12: 1.,
+                                            16: 1., 17: 1.,
+                                            18: 0.5,
+                                            19: 0.5, 20: 0.5, 
+                                            21: 0.25, 22: 0.25, 
+                                            23: 0.25, 24: 0.25,                                   
                                             }
         # DISABLE attn delta loss.
         # attn_delta_distill_layer_weights = {}
@@ -3010,21 +3010,21 @@ class LatentDiffusion(DDPM):
 
         # Discard the first few bottom layers from the orthogonal loss.
         k_ortho_layer_weights = { #7:  1., 8: 1.,
-                                 12: 1.,
-                                 16: 1., 17: 1.,
-                                 18: 1.,
-                                 19: 1., 20: 1., 
-                                 21: 1., 22: 1., 
-                                 23: 1., 24: 1.,
+                                12: 1.,
+                                16: 1., 17: 1.,
+                                18: 0.5,
+                                19: 0.5, 20: 0.5, 
+                                21: 0.25, 22: 0.25, 
+                                23: 0.25, 24: 0.25,     
                                 }
         
         v_ortho_layer_weights = { #7:  1., 8: 1.,
-                                 12: 1.,
-                                 16: 1., 17: 1.,
-                                 18: 0.5,
-                                 19: 0.25, 20: 0.25, 
-                                 21: 0.12, 22: 0.12, 
-                                 23: 0.12, 24: 0.12,                                 
+                                12: 1.,
+                                16: 1., 17: 1.,
+                                18: 0.5,
+                                19: 0.5, 20: 0.5, 
+                                21: 0.25, 22: 0.25, 
+                                23: 0.25, 24: 0.25,                                
                                }
         
         # Normalize the weights above so that each set sum to 1.
@@ -3150,10 +3150,10 @@ class LatentDiffusion(DDPM):
         feat_distill_layer_weights = { # 7:  1., 8: 1.,   
                                        12: 1.,
                                        16: 1., 17: 1.,
-                                       18: 1.,
-                                       19: 1., 20: 1., 
-                                       21: 1., 22: 1., 
-                                       23: 1., 24: 1.,
+                                       18: 0.5,
+                                       19: 0.5, 20: 0.5, 
+                                       21: 0.25, 22: 0.25, 
+                                       23: 0.25, 24: 0.25,
                                      }
 
         fg_mask_1b = fg_mask.chunk(4)[0]
@@ -3192,14 +3192,14 @@ class LatentDiffusion(DDPM):
             subj_single_feat, subj_comp_feat, mix_single_feat, mix_comp_feat \
                 = unet_feat.chunk(4)
 
-            # fg_mask_1b_2: [1, 1, 64, 64] => [1, 1, 8, 8]
-            fg_mask_1b_2 = scale_mask_for_feat_attn(unet_feat, fg_mask_1b, "fg_mask_1b", 
-                                                    mode="nearest|bilinear", warn_on_all_zero=False)
+            # fg_mask_1b_scaled: [1, 1, 64, 64] => [1, 1, 8, 8]
+            fg_mask_1b_scaled = scale_mask_for_feat_attn(unet_feat, fg_mask_1b, "fg_mask_1b", 
+                                                         mode="nearest|bilinear", warn_on_all_zero=False)
 
-            subj_single_feat = subj_single_feat * fg_mask_1b_2
-            subj_comp_feat   = subj_comp_feat   * fg_mask_1b_2
-            mix_single_feat  = mix_single_feat  * fg_mask_1b_2
-            mix_comp_feat    = mix_comp_feat    * fg_mask_1b_2
+            subj_single_feat = subj_single_feat * fg_mask_1b_scaled
+            subj_comp_feat   = subj_comp_feat   * fg_mask_1b_scaled
+            mix_single_feat  = mix_single_feat  * fg_mask_1b_scaled
+            mix_comp_feat    = mix_comp_feat    * fg_mask_1b_scaled
 
             do_feat_pooling = True
             feat_pool_kernel_size = 4
@@ -3237,10 +3237,10 @@ class LatentDiffusion(DDPM):
             subj_subj_attn = attn_mat[ind_subj_subj_B, ind_subj_subj_N].reshape(BS, K_fg, -1)
             mix_subj_attn  = attn_mat[ind_mix_subj_B,  ind_mix_subj_N].reshape(BS,  K_fg, -1)
 
-            bg_mask_1b_2 = scale_mask_for_feat_attn(attn_mat, bg_mask_1b, "bg_mask_1b",
-                                                    mode="nearest|bilinear", warn_on_all_zero=True)
+            bg_mask_1b_scaled = scale_mask_for_feat_attn(attn_mat, bg_mask_1b, "bg_mask_1b",
+                                                         mode="nearest|bilinear", warn_on_all_zero=True)
             # bg_mask_1b_flat: [1, 1, 8, 8] => [1, 1, 64]
-            bg_mask_1b_flat  = bg_mask_1b_2.reshape(BS, 1, -1)
+            bg_mask_1b_flat  = bg_mask_1b_scaled.reshape(BS, 1, -1)
             if bg_mask_1b_flat.sum() == 0:
                 breakpoint()
             
