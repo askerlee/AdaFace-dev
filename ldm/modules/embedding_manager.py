@@ -822,6 +822,7 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight=0.5, 
             ada_use_attn_pooler=True,
             ada_ema_as_static_emb=False,
+            adj_layer_skip_weight=0.,
             **kwargs
     ):
         super().__init__()
@@ -835,7 +836,8 @@ class EmbeddingManager(nn.Module):
         self.set_ada_emb_weight(ada_emb_weight, first_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
         self.ada_ema_as_static_emb = ada_ema_as_static_emb
-
+        self.adj_layer_skip_weight = adj_layer_skip_weight
+        
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
         self.num_unet_ca_layers = num_unet_ca_layers
@@ -983,7 +985,8 @@ class EmbeddingManager(nn.Module):
         self.loss_call_count = 0
         # Store the text_embedder to compute the delta loss.
         self.text_embedder  = text_embedder
-        self.ada_embeddings = None
+        self.ada_embedding_cache = None
+        self.static_embedding_cache = None
         self.ada_bp_to_unet = False
         self.force_grad     = False
         self.placeholder_indices_bg = None
@@ -1007,14 +1010,14 @@ class EmbeddingManager(nn.Module):
         # even if it's specified as 2, so B=8.
         B, N, device = *tokenized_text.shape, tokenized_text.device
 
-        # gen_ada_embedding is dynamically switched on/off by  set_ada_layer_temp_info()/clear_ada_layer_temp_info().
+        # gen_ada_embedding is dynamically switched on/off by  cache_layer_features_for_ada()/clear_ada_layer_temp_info().
         # No need to calculate delta_loss_emb_mask here, as the mask for ada embeddings is 
         # the same as for the static embeddings. 
         # AdaPrompt combines static and ada embeddings. So the static embedding replacement 
         # code below is always called, and delta_loss_emb_mask is always calculated.
         if self.gen_ada_embedding:
             # self.layer_idx, self.layer_infeat, self.time_emb were cached by 
-            # a previous call of  set_ada_layer_temp_info() from UNet.
+            # a previous call of  cache_layer_features_for_ada() from UNet.
             ada_embedded_text, ada_subj_embs_dict = \
                 self.get_ada_embedding(self.layer_idx, self.layer_attn_components, self.time_emb,
                                        tokenized_text, embedded_text, self.static_subj_embs_dict,
@@ -1239,13 +1242,17 @@ class EmbeddingManager(nn.Module):
             # So this assumption should always hold.
             # For background Ada embedder, cached_infeat_bg is only used when
             # use_cached_bg. Otherwise, it's ignored.
-            placeholder_embedding, infeat_bg = \
-                        ada_embedder(layer_idx, layer_attn_components, time_emb,
-                                     layer_static_emb_mean, 
-                                     static_subj_layer_emb,
-                                     self.img_mask, ada_bp_to_unet, 
-                                     self.cached_infeat_bg[layer_idx])
-            
+            if placeholder_string != self.background_string:
+                placeholder_embedding, infeat_bg = \
+                            ada_embedder(layer_idx, layer_attn_components, time_emb,
+                                        layer_static_emb_mean, 
+                                        static_subj_layer_emb,
+                                        self.img_mask, ada_bp_to_unet, 
+                                        self.cached_infeat_bg[layer_idx])
+            else:
+                placeholder_embedding = static_subj_embs_dict[placeholder_string][ca_layer_idx]
+                infeat_bg = None
+                
             ada_subj_embs_dict[placeholder_string] = placeholder_embedding
 
             if placeholder_string != self.background_string:
@@ -1321,10 +1328,10 @@ class EmbeddingManager(nn.Module):
     def get_ada_emb_weight(self):
         if self.training:
             # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
-            rand_ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)
+            ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)
         else:
-            rand_ada_emb_weight = self.ada_emb_weight        
-        return rand_ada_emb_weight
+            ada_emb_weight = self.ada_emb_weight        
+        return ada_emb_weight
     
     def set_ada_emb_weight(self, ada_emb_weight, first_print=False):
         if first_print:
@@ -1334,18 +1341,20 @@ class EmbeddingManager(nn.Module):
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
 
-    def set_ada_layer_temp_info(self, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
+    # Cache features used to compute ada embeddings.
+    def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
         self.gen_ada_embedding = True
         self.layer_idx      = layer_idx
         self.time_emb       = time_emb
         self.ada_bp_to_unet = ada_bp_to_unet
         self.layer_attn_components = layer_attn_components
-        # Initialize the ada_embeddings cache list.
 
-    # ada_embeddings is used to cache the embeddings of all layers, 
+    # self.ada_embedding_cache is a cache for the embeddings of all layers, 
     # for computing the prompt delta loss.
-    def reset_ada_embedding_cache(self):
-        self.ada_embeddings     = [ None for i in range(self.num_unet_ca_layers) ]
+    def reset_embedding_caches(self):
+        self.ada_embedding_cache     = [ None for i in range(self.num_unet_ca_layers) ]
+        self.static_embedding_cache  = [ None for i in range(self.num_unet_ca_layers) ]
+
         for k, ada_temp_emb in self.token2ada_temp_emb.items():
             # If all layers of ada embeddings have been saved in ada_temp_emb,
             # then it's time to update EMA embeddings.
@@ -1358,7 +1367,11 @@ class EmbeddingManager(nn.Module):
 
     def cache_ada_embedding(self, i, embedding):
         ca_layer_idx = self.layer_idx2ca_layer_idx[i]
-        self.ada_embeddings[ca_layer_idx] = embedding
+        self.ada_embedding_cache[ca_layer_idx] = embedding
+
+    def cache_static_embedding(self, i, embedding):
+        ca_layer_idx = self.layer_idx2ca_layer_idx[i]
+        self.static_embedding_cache[ca_layer_idx] = embedding
 
     def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings=None):
         if num_vectors_per_token is None or type(num_vectors_per_token) == int:
@@ -1379,7 +1392,7 @@ class EmbeddingManager(nn.Module):
         print(f"Set token2num_vectors: {self.token2num_vectors}")
 
     # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
-    # which will be enabled again through set_ada_layer_temp_info() in ddpm.py.
+    # which will be enabled again through cache_layer_features_for_ada() in ddpm.py.
     def clear_ada_layer_temp_info(self):
         self.gen_ada_embedding = False
         self.layer_idx      = -1
@@ -1387,7 +1400,7 @@ class EmbeddingManager(nn.Module):
         self.time_emb       = None
         
     def clear_ada_embedding_cache(self):
-        self.ada_embeddings = None
+        self.ada_embedding_cache = None
 
     # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
     # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()

@@ -843,7 +843,7 @@ class LatentDiffusion(DDPM):
                     # self.get_layer_ada_embedding() will store the ada embedding 
                     # for each layer into the cache. 
                     # The cache will be used in calc_prompt_emb_delta_loss().
-                    self.embedding_manager.reset_ada_embedding_cache()
+                    self.embedding_manager.reset_embedding_caches()
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
                     # Do not consider mask on compositional reg iterations.
                     if self.iter_flags['is_compos_iter']:
@@ -870,13 +870,13 @@ class LatentDiffusion(DDPM):
         # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
         # when embedding_manager is called within cond_stage_model.encode().
-        self.embedding_manager.set_ada_layer_temp_info(layer_idx, layer_attn_components, time_emb, ada_bp_to_unet)
+        self.embedding_manager.cache_layer_features_for_ada(layer_idx, layer_attn_components, time_emb, ada_bp_to_unet)
         # DO NOT call sample_last_layers_skip_weights() here, to make the ada embeddings are generated with 
         # CLIP skip weights consistent with the static embeddings.
         cond = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         cond = fix_emb_scales(cond, self.embedding_manager.placeholder_indices_fg)
         # Cache the computed ada embedding of the current layer for delta loss computation.
-        # Before this call, reset_ada_embedding_cache() should have been called somewhere.
+        # Before this call, reset_embedding_caches() should have been called somewhere.
         self.embedding_manager.cache_ada_embedding(layer_idx, cond)
         return cond, self.embedding_manager.get_ada_emb_weight() #, self.embedding_manager.token_attn_weights
 
@@ -1796,9 +1796,9 @@ class LatentDiffusion(DDPM):
 
         # Save ada embeddings generated during apply_model(), to be used in delta loss. 
         # Otherwise it will be overwritten by uncond denoising.
-        if self.embedding_manager.ada_embeddings is not None:
+        if self.embedding_manager.ada_embedding_cache is not None:
             # ada_embeddings: [4, 16, 77, 768]
-            ada_embeddings = torch.stack(self.embedding_manager.ada_embeddings, dim=1)
+            ada_embeddings = torch.stack(self.embedding_manager.ada_embedding_cache, dim=1)
         else:
             ada_embeddings = None
 
@@ -2272,8 +2272,8 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['do_teacher_filter'] and self.iter_flags['is_teachable']:
                     # No need the intermediates of the twin-comp instances. Release them to save RAM.
                     self.release_plosses_intermediates(locals())
-                    # reset_ada_embedding_cache() will implicitly clear the cache.
-                    self.embedding_manager.reset_ada_embedding_cache()
+                    # reset_embedding_caches() will implicitly clear the cache.
+                    self.embedding_manager.reset_embedding_caches()
 
                     better_cand_idx = torch.argmax(loss_diffs_subj_mix)
                     loss_clip_subj_comp = losses_clip_subj_comp[better_cand_idx]
@@ -2383,7 +2383,7 @@ class LatentDiffusion(DDPM):
                         # Previously retured ada_embeddings from guided_denoise() is twin_comp_ada_embeddings. 
                         # twin_comp_ada_embeddings: [4, 16, 77, 768], 
                         # the two sets of ada embeddings with compositional prompts.
-                        self.embedding_manager.reset_ada_embedding_cache()
+                        self.embedding_manager.reset_embedding_caches()
 
                         # Only take the first half of the batch, as the init conditions 
                         # of the second half is a repeat of the first half.
