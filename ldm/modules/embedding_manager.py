@@ -6,7 +6,7 @@ from ldm.modules.ema import LitEma
 import torch.nn.functional as F
 import numpy as np
 
-from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler, masked_mean
+from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler, masked_mean, gen_gradient_scaler
 from functools import partial
 from collections import OrderedDict
 import random
@@ -1116,7 +1116,10 @@ class EmbeddingManager(nn.Module):
                 # static_embedder is an Embedding2d within a LitEma. Get the actual embedding.
                 # LitEma copies the member variables of the wrapped Embedding2d. 
                 # So it's static_embedder.embedding.
-                placeholder_embedding = static_embedder.embedding
+                # Our modified LitEma allows to be updated by SGD. However, the update may be 
+                # too aggressive. So we scale down the gradient by a factor of 0.1.
+                litema_emb_scaler     = gen_gradient_scaler(0.1)
+                placeholder_embedding = litema_emb_scaler(static_embedder.embedding)
             else:
                 # static_embedder is already the embeddings.
                 placeholder_embedding = static_embedder

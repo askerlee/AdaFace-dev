@@ -3134,8 +3134,13 @@ class LatentDiffusion(DDPM):
 
         return loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple
 
-    # Intuition: Features under comp prompts should align with 
-    #            features under single prompts, at fg_mask areas.
+    # Intuition: In distillation iterations, if comp_init_with_fg_area, then at fg_mask areas, x_start is initialized with 
+    #            the noisy input images. (Usually in distillation iterations, x_start is initialized as pure noise.)
+    #            Essentially, it's to mask the background out of the input images. 
+    #            Therefore, features under single prompts should be close to the foreground of the original images (features not computed yet).
+    #            features under comp prompts should align with the foreground of the original images as well.
+    #            So features under comp prompts should be close to features under single prompts, at fg_mask areas.
+    #            (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
     def calc_comp_fg_bg_preserve_loss(self, unet_feats, unet_attns_or_scores, 
                                       fg_mask, batch_have_fg_mask, subj_indices, BS):
         # No masks available. loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress are both 0.
