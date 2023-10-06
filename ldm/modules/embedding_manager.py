@@ -920,7 +920,7 @@ class EmbeddingManager(nn.Module):
             # layerwise_lora_rank > 0 implies use_layerwise_embedding.
             if layerwise_lora_rank > 0:
                 # num_layers_per_embedder = num_unet_ca_layers
-                if not self.ada_ema_as_static_emb:
+                if not self.ada_ema_as_static_emb or placeholder_string == self.background_string:
                     token_static_embedder   = StaticLayerwiseEmbedding(self.num_layers_per_embedder, 
                                                                        num_vectors_per_token, 
                                                                        self.token_dim, 
