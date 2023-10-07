@@ -1494,8 +1494,7 @@ class LatentDiffusion(DDPM):
                     if self.iter_flags['use_background_token']:
                         # All 4 types of prompts have the same background token. 
                         # So placeholder_indices_bg == bg_indices_4b.
-                        extra_info['bg_indices_4b'] = copy.copy(self.embedding_manager.placeholder_indices_bg)
-                        extra_info['bg_indices_2b'] = halve_token_indices(extra_info['bg_indices_4b'])
+                        extra_info['bg_indices_2b'] = copy.copy(self.embedding_manager.placeholder_indices_bg)
                         extra_info['bg_indices_1b'] = halve_token_indices(extra_info['bg_indices_2b'])
                         # bg_indices_half_N: the first half batch of background token indices (the token dim)
                         bg_indices_half_N = extra_info['bg_indices_2b'][1]
