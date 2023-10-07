@@ -218,10 +218,7 @@ class AttentionalPooler(nn.Module):
         # fg_q: [1, 768] -> [1, 320].
         fg_q = to_q(self.ln_fg_q(fg_q_emb))
         # fg_q: [1, 320] -> [N, 1, 320]
-        try:
-            fg_q = repeat(fg_q, 'n d -> b n d', b=x.shape[0])
-        except:
-            breakpoint()
+        fg_q = repeat(fg_q, 'n d -> b n d', b=x.shape[0])
 
         if bg_q_emb is None:
             bg_q_emb_absent = True
@@ -1267,6 +1264,7 @@ class EmbeddingManager(nn.Module):
             # Even if BS/2 > 1, the K static embeddings of different instances are the same.
             # layer_static_subj_emb: [768].
             curr_subj_indices = self.placeholder_indices_fg if not token_is_bg else self.placeholder_indices_bg
+
             layer_static_subj_emb = layer_static_embs[curr_subj_indices].mean(dim=0)
             # Generate the actual placeholder_embedding on the fly.
             # placeholder_embedding: [B, K, 768]. B: 2 or 4 (regularization batches).

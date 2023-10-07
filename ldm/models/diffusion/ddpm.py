@@ -1492,15 +1492,19 @@ class LatentDiffusion(DDPM):
                     # In mix reg iters, background tokens only appear 10% of the time 
                     # to provide delta reg on ada embeddings of bg tokens.
                     if self.iter_flags['use_background_token']:
-                        extra_info['bg_indices_2b'] = copy.copy(self.embedding_manager.placeholder_indices_bg)
+                        # All 4 types of prompts have the same background token. 
+                        # So placeholder_indices_bg == bg_indices_4b.
+                        extra_info['bg_indices_4b'] = copy.copy(self.embedding_manager.placeholder_indices_bg)
+                        extra_info['bg_indices_2b'] = halve_token_indices(extra_info['bg_indices_4b'])
                         extra_info['bg_indices_1b'] = halve_token_indices(extra_info['bg_indices_2b'])
                         # bg_indices_half_N: the first half batch of background token indices (the token dim)
-                        bg_indices_half_N = extra_info['bg_indices_1b'][1]
+                        bg_indices_half_N = extra_info['bg_indices_2b'][1]
                         # Patch background embeddings when the number of background embeddings > 1.
                         if len(bg_indices_half_N) > 1:
                             cls_single_emb = patch_multi_embeddings(cls_single_emb, bg_indices_half_N)
                             cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   bg_indices_half_N)
                     else:
+                        extra_info['bg_indices_4b'] = None
                         extra_info['bg_indices_2b'] = None
                         extra_info['bg_indices_1b'] = None
 

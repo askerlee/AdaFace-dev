@@ -381,15 +381,15 @@ class PersonalizedBase(Dataset):
             # with subj_prompt_comp/cls_prompt_comp, so we need to specify them in the dataloader as well.
             example["subj_prompt_single_fp"] = subj_prompt_single_fp.format(compos_placeholder_string)
             example["cls_prompt_single_fp"]  = cls_prompt_single_fp.format(compos_cls_delta_token)
-            example["subj_prompt_comp_fp"]   = "|".join([ subj_prompt_comp.format(compos_placeholder_string)     for subj_prompt_comp in subj_prompt_comps_fp]) 
-            example["cls_prompt_comp_fp"]    = "|".join([ cls_prompt_comp.format(compos_cls_delta_token_with_bg) for cls_prompt_comp  in cls_prompt_comps_fp])
+            example["subj_prompt_comp_fp"]   = "|".join([ subj_prompt_comp_fp.format(compos_placeholder_string) for subj_prompt_comp_fp in subj_prompt_comps_fp]) 
+            example["cls_prompt_comp_fp"]    = "|".join([ cls_prompt_comp_fp.format(compos_cls_delta_token)     for cls_prompt_comp_fp  in cls_prompt_comps_fp])
 
             if bg_suffix:
                 example["subj_prompt_single_fp_bg"] = subj_prompt_single_fp.format(compos_placeholder_string_with_bg)
                 example["cls_prompt_single_fp_bg"]  = cls_prompt_single_fp.format(compos_cls_delta_token_with_bg)
                 # *_comp_bg prompts are for static delta loss on training images.
-                example["subj_prompt_comp_fp_bg"]   = "|".join([ subj_prompt_comp.format(compos_placeholder_string_with_bg) for subj_prompt_comp in subj_prompt_comps_fp])
-                example["cls_prompt_comp_fp_bg"]    = "|".join([ cls_prompt_comp.format(compos_cls_delta_token_with_bg)     for cls_prompt_comp  in cls_prompt_comps_fp])
+                example["subj_prompt_comp_fp_bg"]   = "|".join([ subj_prompt_comp_fp.format(compos_placeholder_string_with_bg) for subj_prompt_comp_fp in subj_prompt_comps_fp])
+                example["cls_prompt_comp_fp_bg"]    = "|".join([ cls_prompt_comp_fp.format(compos_cls_delta_token_with_bg)     for cls_prompt_comp_fp  in cls_prompt_comps_fp])
 
         # comps_are_appearances is a list of length num_compositions_per_image. So in the collated batch, 
         # "comps_are_appearances" is a list of lists and needs concat.

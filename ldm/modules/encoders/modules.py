@@ -227,7 +227,6 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             all_attentions = () if output_attentions else None
 
             hidden_states = inputs_embeds
-            penultimate_hidden_states = None
 
             for idx, encoder_layer in enumerate(self.layers):
                 if do_output_hidden_states:
@@ -289,6 +288,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
             input_ids = input_ids.view(-1, input_shape[-1])
 
             hidden_states = self.embeddings(input_ids=input_ids, position_ids=position_ids, embedding_manager=embedding_manager)
+           
             # the batch size could be modified by embedding_manager
             bsz = hidden_states.shape[0]
             seq_len = input_shape[1]
