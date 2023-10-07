@@ -939,6 +939,9 @@ class EmbeddingManager(nn.Module):
                                                                        init_words,
                                                                        init_word_embeddings, init_word_weights, 
                                                                        token_string=placeholder_string)
+                else:
+                    token_static_embedder   = None
+                    
                 # avg_init_word_embedding_3d: [16, 9, 768]. 
                 # All layers of all 9 embeddings are initialized as avg_init_word_embedding.
                 ada_emb_cache = Embedding2d(self.num_layers_per_embedder, num_vectors_per_token, self.token_dim, 

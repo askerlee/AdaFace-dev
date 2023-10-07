@@ -2524,7 +2524,6 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
 
                 loss_subj_comp_key_ortho = 0
-                subj_comp_attn_comple_loss_scale = 1 if self.subj_comp_attn_comple_loss_uses_scores else 1
                 if self.subj_comp_key_ortho_loss_weight > 0:
                     subj_comp_attn_comple_key = 'unet_attnscores' if self.subj_comp_attn_comple_loss_uses_scores \
                                                 else 'unet_attns'
@@ -2562,7 +2561,7 @@ class LatentDiffusion(DDPM):
                 loss += loss_mix_prompt_distill      * self.mix_prompt_distill_weight \
                         + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
                         + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
-                        + loss_subj_comp_attn_comple * subj_comp_attn_comple_loss_scale * self.subj_comp_attn_complementary_loss_weight
+                        + loss_subj_comp_attn_comple * self.subj_comp_attn_complementary_loss_weight
                 
             # NOTE: loss_comp_fg_bg_preserve is applied only when this 
             # iteration is teachable, because at such iterations the unet gradient is enabled.
