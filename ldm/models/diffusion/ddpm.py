@@ -2134,7 +2134,7 @@ class LatentDiffusion(DDPM):
                                                                    extra_info['bg_indices'],
                                                                    x_start.shape[0],
                                                                    img_mask,
-                                                                   fg_grad_scale=0.05,
+                                                                   fg_grad_scale=0.1,
                                                                    fg_mask=fg_mask,
                                                                    batch_have_fg_mask=batch_have_fg_mask
                                                                   )
@@ -2825,7 +2825,7 @@ class LatentDiffusion(DDPM):
     def calc_fg_bg_complementary_loss(self, unet_attns_or_scores, unet_attnscores,
                                       placeholder_indices_fg, 
                                       placeholder_indices_bg, 
-                                      BS, img_mask, fg_grad_scale=0.05,
+                                      BS, img_mask, fg_grad_scale=0.1,
                                       fg_mask=None, batch_have_fg_mask=None):
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
@@ -2845,7 +2845,6 @@ class LatentDiffusion(DDPM):
         K_fg = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
         # K_bg: 1 or 2, number of embeddings per background token.
         K_bg = len(placeholder_indices_bg[0]) // len(torch.unique(placeholder_indices_bg[0]))
-        assert self.num_vectors_per_token == K_fg
 
         loss_fg_bg_complementary = 0
         loss_fg_mask_align = 0
@@ -2897,17 +2896,19 @@ class LatentDiffusion(DDPM):
             else:
                 img_mask2 = torch.ones_like(subj_attn)
 
-            # Align bg_attn with (1 - subj_attn), so that the two attention maps are complementary.
+            # aim_to_align=False: push bg_attn to be orthogonal with subj_attn, 
+            # so that the two attention maps are complementary.
             # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
             # But we don't want to only focus on large activations. So set it to 2.
             # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
             # to make the two attention maps more complementary (expect the loss pushes the 
             # subject embedding to a more accurate point).
-            loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, -subj_attn, 
+            loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, subj_attn, 
                                                       exponent=2,    
                                                       do_demean_first=False,
                                                       first_n_dims_to_flatten=2, 
                                                       ref_grad_scale=fg_grad_scale,
+                                                      aim_to_align=False,
                                                       debug=False)
             
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_align_layer_weight
