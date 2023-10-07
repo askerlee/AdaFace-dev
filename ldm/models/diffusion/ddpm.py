@@ -26,7 +26,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, fix_emb_scales, \
-                       halve_token_indices, normalize_dict_values, masked_mean, \
+                       halve_token_indices, double_token_indices, normalize_dict_values, masked_mean, \
                        scale_mask_for_feat_attn, mix_static_vk_embeddings, repeat_selected_instances, \
                        anneal_t, calc_layer_subj_comp_k_or_v_ortho_loss
 
@@ -843,7 +843,7 @@ class LatentDiffusion(DDPM):
                     # self.get_layer_ada_embedding() will store the ada embedding 
                     # for each layer into the cache. 
                     # The cache will be used in calc_prompt_emb_delta_loss().
-                    self.embedding_manager.reset_embedding_caches()
+                    self.embedding_manager.reset_prompt_embedding_caches()
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
                     # Do not consider mask on compositional reg iterations.
                     if self.iter_flags['is_compos_iter']:
@@ -876,8 +876,8 @@ class LatentDiffusion(DDPM):
         cond = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         cond = fix_emb_scales(cond, self.embedding_manager.placeholder_indices_fg)
         # Cache the computed ada embedding of the current layer for delta loss computation.
-        # Before this call, reset_embedding_caches() should have been called somewhere.
-        self.embedding_manager.cache_ada_embedding(layer_idx, cond)
+        # Before this call, reset_prompt_embedding_caches() should have been called somewhere.
+        self.embedding_manager.cache_ada_prompt_embedding(layer_idx, cond)
         return cond, self.embedding_manager.get_ada_emb_weight() #, self.embedding_manager.token_attn_weights
 
     def meshgrid(self, h, w):
@@ -1587,8 +1587,9 @@ class LatentDiffusion(DDPM):
                                                         cls_single_prompts,  cls_comp_prompts)
 
                     # Restore the placeholder_indces of the embedding_manager according to the original prompts.
-                    self.embedding_manager.placeholder_indices_fg = extra_info['subj_indices']
-                    self.embedding_manager.placeholder_indices_bg = extra_info['bg_indices']
+                    self.embedding_manager.set_placeholder_indices(extra_info['subj_indices'], 
+                                                                   extra_info['bg_indices'])
+                    
                     # c_static_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
                     # cls_single_prompts, cls_comp_prompts. 
                     # c_static_emb: [64, 77, 768]                    
@@ -1761,11 +1762,17 @@ class LatentDiffusion(DDPM):
         kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
         return mean_flat(kl_prior) / np.log(2.0)
 
+    # subj_indices, bg_indices: the indices of the subject/background tokens in the prompts.
+    # Sometimes the prompts changed after generating the static embeddings, 
+    # so in such cases we need to manually specify these indices. If they are not provided (None),
+    # then the indices stored in embedding_manager are not updated.
     # do_pixel_recon: return denoised images. This is not the iter_type 'do_normal_recon'.
     # if do_pixel_recon and cfg_scale > 1, apply classifier-free guidance. 
     # unet_has_grad: when returning do_pixel_recon (e.g. to select the better instance by smaller clip loss), 
     # to speed up, no BP is done on these instances, so unet_has_grad=False.
-    def guided_denoise(self, x_start, noise, t, cond, inj_noise_t=None, 
+    def guided_denoise(self, x_start, noise, t, cond, 
+                       subj_indices=None, bg_indices=None,
+                       inj_noise_t=None, 
                        unet_has_grad=True, crossattn_force_grad=False, 
                        do_pixel_recon=False, cfg_scales=None):
         
@@ -1779,6 +1786,7 @@ class LatentDiffusion(DDPM):
             # No need to force grad on cross attention layers, as the whole U-Net has grad.
             crossattn_force_grad = False
 
+        self.embedding_manager.set_placeholder_indices(subj_indices, bg_indices)
         # model_output is the predicted noise.
         # if not unet_has_grad, we save RAM by not storing the computation graph.
         # crossattn_force_grad: even if unet_has_grad = False, 
@@ -1796,9 +1804,9 @@ class LatentDiffusion(DDPM):
 
         # Save ada embeddings generated during apply_model(), to be used in delta loss. 
         # Otherwise it will be overwritten by uncond denoising.
-        if self.embedding_manager.ada_embedding_cache is not None:
+        if self.embedding_manager.ada_prompt_embedding_cache is not None:
             # ada_embeddings: [4, 16, 77, 768]
-            ada_embeddings = torch.stack(self.embedding_manager.ada_embedding_cache, dim=1)
+            ada_embeddings = torch.stack(self.embedding_manager.ada_prompt_embedding_cache, dim=1)
         else:
             ada_embeddings = None
 
@@ -1995,6 +2003,11 @@ class LatentDiffusion(DDPM):
                     # Back up cond as cond_orig. Replace cond with the cond for the twin comp sets.
                     cond_orig = cond
                     cond = (c_static_emb2, c_in2, extra_info)
+                    # subj_indices and bg_indices are the same as the conventional 4-fold structure.
+                    # Since, subj_single_emb, subj_comp_emb, mix_single_emb, mix_comp_emb 
+                    # and    subj_comp_emb,   subj_comp_emb, mix_comp_emb,   mix_comp_emb, 
+                    # have the same subj_indices and bg_indices respectively.
+                    # So we don't need to change subj_indices and bg_indices.
 
                     # Update masks to be a two-fold * 2 structure.
                     # Before repeating, img_mask, fg_mask, batch_have_fg_mask should all 
@@ -2069,13 +2082,16 @@ class LatentDiffusion(DDPM):
             inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.2))
             # No need to update masks.
 
+        subj_indices, bg_indices = extra_info['subj_indices'], extra_info['bg_indices']
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
         # then extra_info['use_conv_attn'] = True, it will inform U-Net to do conv attn.
         # Disabling unet_has_grad for recon iters will greatly reduce performance,
         # although ada_bp_to_unet = False for recon iters.
         # (probably because gradients of static embeddings still need to go through UNet)
         model_output, x_recon, ada_embeddings = \
-            self.guided_denoise(x_start, noise, t, cond, inj_noise_t,
+            self.guided_denoise(x_start, noise, t, cond, 
+                                subj_indices=subj_indices, bg_indices=bg_indices,
+                                inj_noise_t=inj_noise_t,
                                 unet_has_grad=not self.iter_flags['do_teacher_filter'], 
                                 crossattn_force_grad=False,
                                 # Reconstruct the images at the pixel level for CLIP loss.
@@ -2272,8 +2288,8 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['do_teacher_filter'] and self.iter_flags['is_teachable']:
                     # No need the intermediates of the twin-comp instances. Release them to save RAM.
                     self.release_plosses_intermediates(locals())
-                    # reset_embedding_caches() will implicitly clear the cache.
-                    self.embedding_manager.reset_embedding_caches()
+                    # reset_prompt_embedding_caches() will implicitly clear the cache.
+                    self.embedding_manager.reset_prompt_embedding_caches()
 
                     better_cand_idx = torch.argmax(loss_diffs_subj_mix)
                     loss_clip_subj_comp = losses_clip_subj_comp[better_cand_idx]
@@ -2315,8 +2331,10 @@ class LatentDiffusion(DDPM):
                     # to be used to initialize the next reuse_init comp iteration.
                     # student prompts are subject prompts.  
                     model_output, x_recon, ada_embeddings = \
-                        self.guided_denoise(x_start_sel, noise_sel, t_sel, cond_orig_qv, unet_has_grad=True, 
-                                            crossattn_force_grad=False,
+                        self.guided_denoise(x_start_sel, noise_sel, t_sel, cond_orig_qv, 
+                                            subj_indices=extra_info['subj_indices_2b'],
+                                            bg_indices=extra_info['bg_indices_2b'],
+                                            unet_has_grad=True, crossattn_force_grad=False,
                                             do_pixel_recon=True, cfg_scales=cfg_scales_for_clip_loss)
 
                     # Update masks according to x_start_sel. Select the masks corresponding to 
@@ -2383,7 +2401,7 @@ class LatentDiffusion(DDPM):
                         # Previously retured ada_embeddings from guided_denoise() is twin_comp_ada_embeddings. 
                         # twin_comp_ada_embeddings: [4, 16, 77, 768], 
                         # the two sets of ada embeddings with compositional prompts.
-                        self.embedding_manager.reset_embedding_caches()
+                        self.embedding_manager.reset_prompt_embedding_caches()
 
                         # Only take the first half of the batch, as the init conditions 
                         # of the second half is a repeat of the first half.
@@ -2391,7 +2409,7 @@ class LatentDiffusion(DDPM):
                         noise_   = noise.chunk(2)[0]
                         t_       = t.chunk(2)[0]
 
-                        # twin_single_ada_embeddings: [2, 16, 77, 768]. BS = 2, 
+                        # twin_single_ada_embeddings: [2, 16, 77, 768]. batch size = 2, 
                         # as it's only the twin subj-single instances. 
                         # (cls-single ada embeddings are the same as cls-single static embeddings, 
                         # so no need to generate them)
@@ -2404,6 +2422,8 @@ class LatentDiffusion(DDPM):
                         # use_conv_attn = self.use_conv_attn.
                         model_output, x_recon, twin_single_ada_embeddings = \
                             self.guided_denoise(x_start_, noise_, t_, cond_single,
+                                                subj_indices=extra_info['subj_indices_2b'],
+                                                bg_indices=extra_info['bg_indices_2b'],
                                                 unet_has_grad=False, crossattn_force_grad=True)
                         
                         # No need to concatenate these two, instead let calc_prompt_emb_delta_loss() handle the intricacy.
@@ -2651,20 +2671,9 @@ class LatentDiffusion(DDPM):
         attn_norm_distill_layer_weights     = normalize_dict_values(attn_norm_distill_layer_weights)
         attn_delta_distill_layer_weights    = normalize_dict_values(attn_delta_distill_layer_weights)
 
-        orig_placeholder_ind_B, orig_placeholder_ind_T = placeholder_indices
-        # The class prompts are at the latter half of the batch.
-        # So we need to add the batch indices of the subject prompts, to locate
-        # the corresponding class prompts.
-        cls_placeholder_ind_B = orig_placeholder_ind_B + BLOCK_SIZE * 2
-        # Concatenate the placeholder indices of the subject prompts and class prompts.
-        placeholder_indices_B = torch.cat([orig_placeholder_ind_B, cls_placeholder_ind_B ], dim=0)
-        placeholder_indices_T = torch.cat([orig_placeholder_ind_T, orig_placeholder_ind_T], dim=0)
-        # placeholder_indices: 
-        # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
-        #   tensor([6,  7,   6, 7,   6, 7,   6, 7]) )
-        placeholder_indices = (placeholder_indices_B, placeholder_indices_T)
         # K_fg: 4, number of embeddings per subject token.
-        K_fg = len(orig_placeholder_ind_B) // len(torch.unique(orig_placeholder_ind_B))
+        K_fg = len(placeholder_indices[0]) // len(torch.unique(placeholder_indices[0]))
+        placeholder_indices = double_token_indices(placeholder_indices, BLOCK_SIZE * 2)
 
         mix_feat_grad_scale = 0.1
         mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
@@ -2999,7 +3008,8 @@ class LatentDiffusion(DDPM):
         # loss_fg_bg_complementary doesn't need fg_mask.
 
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_mask_contrast
-    
+
+    # BS: BLOCK_SIZE, not batch size.    
     def calc_subj_comp_ortho_loss(self, unet_ks, unet_vs, unet_attns_or_scores,
                                   subj_indices, delta_loss_emb_mask, 
                                   BS, cls_grad_scale=0.05):

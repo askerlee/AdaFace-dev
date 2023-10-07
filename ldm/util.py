@@ -738,6 +738,24 @@ def halve_token_indices(token_indices):
     token_indices_half_N  = token_indices[1].chunk(2)[0]
     return (token_indices_half_B, token_indices_half_N)
 
+def double_token_indices(token_indices, bs_offset):
+    if token_indices is None:
+        return None
+    
+    orig_token_ind_B, orig_token_ind_T = token_indices
+    # The class prompts are at the latter half of the batch.
+    # So we need to add two blocks (BLOCK_SIZE * 2) to the batch indices of the subject prompts, 
+    # to locate the corresponding class prompts.
+    shifted_block_token_ind_B = orig_token_ind_B + bs_offset
+    # Concatenate the token indices of the subject prompts and class prompts.
+    token_indices_B_x2 = torch.cat([orig_token_ind_B, shifted_block_token_ind_B ], dim=0)
+    token_indices_T_x2 = torch.cat([orig_token_ind_T, orig_token_ind_T],           dim=0)
+    # token_indices: 
+    # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
+    #   tensor([6,  7,   6, 7,   6, 7,   6, 7]) )
+    token_indices_x2 = (token_indices_B_x2, token_indices_T_x2)
+    return token_indices_x2
+
 def normalize_dict_values(d):
     value_sum = np.sum(list(d.values()))
     # If d is empty, do nothing.
@@ -1051,6 +1069,7 @@ def repeat_selected_instances(sel_indices, REPEAT, *args):
 
     return rep_args
 
+# BS: BLOCK_SIZE, not batch size.
 def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, K_fg, K_comp, BS, 
                                       ind_subj_subj_B, ind_subj_subj_N, 
                                       ind_cls_subj_B,  ind_cls_subj_N, 
