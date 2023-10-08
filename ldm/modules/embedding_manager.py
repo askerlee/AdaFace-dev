@@ -1121,18 +1121,20 @@ class EmbeddingManager(nn.Module):
             # not repetitively counting the occurrences in the embedded_text repeated for M layers.
             REAL_OCCURS_IN_BATCH = placeholder_indices[0].numel() // self.num_layers_per_embedder
 
-            static_embedder = embedder_dict[placeholder_string].to(device)
-            if isinstance(static_embedder, StaticLayerwiseEmbedding):
-                # Generate the actual placeholder_embedding on the fly.
-                # The 16 static subject embeddings are formed by linearly combining the basis vectors.
-                # The matrix operations are done on the fly.
-                # placeholder_embedding: [16, K, 768].
-                placeholder_embedding = static_embedder()
+            if self.ada_ema_as_static_emb_weight < 1:
+                static_embedder = embedder_dict[placeholder_string].to(device)
+                if isinstance(static_embedder, StaticLayerwiseEmbedding):
+                    # Generate the actual placeholder_embedding on the fly.
+                    # The 16 static subject embeddings are formed by linearly combining the basis vectors.
+                    # The matrix operations are done on the fly.
+                    # placeholder_embedding: [16, K, 768].
+                    placeholder_embedding = static_embedder()
+                else:
+                    # static_embedder is already the embeddings.
+                    placeholder_embedding = static_embedder
             else:
-                # static_embedder is already the embeddings.
-                placeholder_embedding = static_embedder
+                placeholder_embedding = 0
 
-            breakpoint()
             if self.ada_ema_as_static_emb_weight > 0:
                 ada_ema_emb = self.string_to_ada_ema_emb_dict[placeholder_string]
                 # static_embedder is an Embedding2d within a LitEma. Get the actual embedding.
