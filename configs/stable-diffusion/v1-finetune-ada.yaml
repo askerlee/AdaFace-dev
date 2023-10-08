@@ -36,8 +36,8 @@ model:
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:        4e-4
     # typical loss_subj_comp_key_ortho is 0.2, * weight -> 2e-7
-    subj_comp_key_ortho_loss_weight:          5e-4
-    subj_comp_value_ortho_loss_weight:        1e-4
+    subj_comp_key_ortho_loss_weight:          5e-5
+    subj_comp_value_ortho_loss_weight:        1e-5
     # typical loss_subj_comp_attn_comple is 0.4, * weight -> 2e-6
     subj_comp_attn_complementary_loss_weight: 5e-4
     # typical prompt mix reg loss: 2, * weight -> 4e-4.
@@ -81,7 +81,7 @@ model:
         layerwise_lora_rank_token_ratio: 2
         ada_emb_weight: 0.5
         ada_use_attn_pooler: True
-        ada_ema_as_static_emb_weight: 1
+        ada_ema_as_static_emb_weight: 0.3
         
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
