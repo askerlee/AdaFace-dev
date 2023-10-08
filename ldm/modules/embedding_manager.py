@@ -838,7 +838,7 @@ class EmbeddingManager(nn.Module):
         self.token2ada_emb_cache = nn.ParameterDict() # These should not be optimized
 
         self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
-        set.set_ada_ema_as_static_emb_weight(ada_ema_as_static_emb_weight, is_first_time_print=True)
+        self.set_ada_ema_as_static_emb_weight(ada_ema_as_static_emb_weight, is_first_time_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
         self.adj_layer_skip_weight = adj_layer_skip_weight
         
