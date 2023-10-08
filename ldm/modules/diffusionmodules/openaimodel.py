@@ -815,7 +815,7 @@ class UNetModel(nn.Module):
         use_layerwise_context = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
         use_ada_context       = extra_info.get('use_ada_context', False)       if extra_info is not None else False
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
-        use_background_token  = extra_info.get('use_background_token', False)  if extra_info is not None else False
+        capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
         crossattn_force_grad  = extra_info.get('crossattn_force_grad', False)  if extra_info is not None else False
@@ -968,7 +968,7 @@ class UNetModel(nn.Module):
                                            trans_layer_indices=None )
             ca_flags_stack.append([ None, None, old_trans_flags2, None ])
 
-        if iter_type.startswith("mix_") or use_background_token or debug_attn:
+        if iter_type.startswith("mix_") or capture_distill_attn or debug_attn:
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
             distill_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
             distill_old_ca_flags, _ = self.set_cross_attn_flags(ca_flag_dict={'crossattn_force_grad': crossattn_force_grad, 

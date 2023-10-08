@@ -102,6 +102,7 @@ class DDPM(pl.LightningModule):
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_mask_align_loss_weight=0.,
+                 fg_bg_xlayer_consist_loss_weight=0.,
                  do_clip_teacher_filtering=False,
                  distill_deep_neg_prompt=None,
                  distill_deep_cfg_scale=0.,
@@ -139,6 +140,7 @@ class DDPM(pl.LightningModule):
         self.comp_fg_bg_preserve_loss_weight    = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight    = fg_bg_complementary_loss_weight
         self.fg_bg_mask_align_loss_weight       = fg_bg_mask_align_loss_weight
+        self.fg_bg_xlayer_consist_loss_weight   = fg_bg_xlayer_consist_loss_weight
         self.do_clip_teacher_filtering          = do_clip_teacher_filtering
         self.distill_deep_neg_prompt            = distill_deep_neg_prompt
         self.distill_deep_cfg_scale             = distill_deep_cfg_scale
@@ -2081,11 +2083,15 @@ class LatentDiffusion(DDPM):
         # Otherwise, it's a recon iter (attentional or unweighted).
         else:
             assert self.iter_flags['do_normal_recon']
+            BLOCK_SIZE = x_start.shape[0]
             # Increase t slightly to increase noise amount and increase robustness.
             inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.2))
             # No need to update masks.
 
         subj_indices, bg_indices = extra_info['subj_indices'], extra_info['bg_indices']
+        if not self.iter_flags['do_teacher_filter']:
+            extra_info['capture_distill_attn'] = True
+
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
         # then extra_info['use_conv_attn'] = True, it will inform U-Net to do conv attn.
         # Disabling unet_has_grad for recon iters will greatly reduce performance,
@@ -2102,6 +2108,8 @@ class LatentDiffusion(DDPM):
                                 do_pixel_recon=self.iter_flags['calc_clip_loss'],
                                 # cfg_scales: classifier-free guidance scales.
                                 cfg_scales=cfg_scales_for_clip_loss)
+
+        extra_info['capture_distill_attn'] = False
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
@@ -2122,6 +2130,7 @@ class LatentDiffusion(DDPM):
         loss = 0
         twin_comp_ada_embeddings = None
 
+        ###### do_normal_recon ######
         if self.iter_flags['do_normal_recon']:
             if self.iter_flags['use_background_token']:
                 # extra_info['subj_indices'] and extra_info['bg_indices'] are used, instead of
@@ -2154,11 +2163,6 @@ class LatentDiffusion(DDPM):
                     loss += self.fg_bg_complementary_loss_weight * loss_fg_bg_complementary \
                             + self.fg_bg_mask_align_loss_weight * \
                               (loss_fg_mask_align + loss_bg_mask_align + loss_fg_bg_mask_contrast)
-
-                # Release RAM.
-                for k in ('unet_feats', 'unet_attns', 'unet_attnscores', 'unet_ks', 'unet_vs'):
-                    if k in extra_info:
-                        del extra_info[k]
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_recon, loss_recon_pixels = self.calc_recon_loss(model_output, target, fg_mask, 
@@ -2195,7 +2199,9 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/loss_vlb': loss_vlb.detach()})
             # original_elbo_weight = 0, so that loss_vlb is disabled.
             loss += (self.original_elbo_weight * loss_vlb)
+        ###### end of do_normal_recon ######
 
+        ###### begin of preparation for is_compos_iter ######
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
         if self.iter_flags['is_compos_iter'] and self.iter_flags['calc_clip_loss']:
             # Images generated both under subj_comp_prompts and cls_comp_prompts 
@@ -2453,7 +2459,8 @@ class LatentDiffusion(DDPM):
         else:
             # Not is_compos_iter. Distillation won't be done in this iter, so is_teachable = False.
             self.iter_flags['is_teachable'] = False
-            
+        ###### end of preparation for is_compos_iter ######
+
         if self.static_embedding_reg_weight + self.ada_embedding_reg_weight > 0:
             loss_emb_reg = self.embedding_manager.embedding_reg_loss()
             if self.use_layerwise_embedding:
@@ -2497,6 +2504,21 @@ class LatentDiffusion(DDPM):
             
             loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
         
+        if self.fg_bg_xlayer_consist_loss_weight > 0:
+            # If do_normal_recon, then the batch size is BLOCK_SIZE = 2. Use both instances (1 * BLOCK_SIZE).
+            # If is_compos_iter, then the batch size is 4 * BLOCK_SIZE. Use only the subject half (2 * BLOCK_SIZE).
+            BS = BLOCK_SIZE if self.iter_flags['do_normal_recon'] else 2 * BLOCK_SIZE
+            loss_fg_xlayer_consist, loss_bg_xlayer_consist = \
+                self.calc_fg_bg_xlayer_consist_loss(extra_info['unet_attns'],
+                                                    extra_info['subj_indices'],
+                                                    extra_info['bg_indices'],
+                                                    BS, img_mask)
+            if loss_fg_xlayer_consist > 0:
+                loss_dict.update({f'{prefix}/fg_xlayer_consist': loss_fg_xlayer_consist.mean().detach()})
+            if loss_bg_xlayer_consist > 0:
+                loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach()})
+            loss += self.fg_bg_xlayer_consist_loss_weight * (loss_fg_xlayer_consist + loss_bg_xlayer_consist)
+
         if self.iter_flags['do_mix_prompt_distillation']:
             # unet_feats is a dict as: layer_idx -> unet_feat. 
             # It contains the 6 specified conditioned layers of UNet features.
@@ -3011,6 +3033,130 @@ class LatentDiffusion(DDPM):
         # loss_fg_bg_complementary doesn't need fg_mask.
 
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_mask_contrast
+
+    # BS: block size, not batch size.
+    # placeholder_indices_bg could be None if iter_flags['use_background_token'] = False.
+    def calc_fg_bg_xlayer_consist_loss(self, unet_attns,
+                                       placeholder_indices_fg, 
+                                       placeholder_indices_bg, 
+                                       BS, img_mask):
+        # Discard the first few bottom layers from alignment.
+        # attn_align_layer_weights: relative weight of each layer. 
+        attn_align_layer_weights = { #7:  1., 8: 1.,
+                                    #12: 1.,
+                                    16: 1., 17: 1.,
+                                    18: 1.,
+                                    19: 1., 20: 1., 
+                                    21: 1., 22: 1., 
+                                    23: 1., 24: 1., 
+                                   }
+        attn_align_xlayer_maps = { 16: 12, 17: 16, 18: 17, 19: 18, 
+                                   20: 19, 21: 20, 22: 21, 23: 22, 24: 23 }
+
+        # Normalize the weights above so that each set sum to 1.
+        attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
+
+        # K_fg: 4, number of embeddings per subject token.
+        K_fg = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
+        # In each instance, placeholder_indices_fg has K_fg elements, 
+        # and placeholder_indices_bg has K_bg elements or 0 elements 
+        # (if iter_flags['use_background_token'] = False)
+        # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
+        #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
+        # placeholder_indices_bg: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
+        # BS = 2, so we only keep instances indexed by [0, 1].
+        # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
+        placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K_fg], placeholder_indices_fg[1][:BS*K_fg])
+
+        if placeholder_indices_bg is not None:
+            # K_bg: 1 or 2, number of embeddings per background token.
+            K_bg = len(placeholder_indices_bg[0]) // len(torch.unique(placeholder_indices_bg[0]))
+            # placeholder_indices_bg: ([0, 1], [11, 12]).
+            placeholder_indices_bg = (placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg])
+
+        loss_fg_xlayer_consist = 0
+        loss_bg_xlayer_consist = 0
+
+        for unet_layer_idx, unet_attn in unet_attns.items():
+            if (unet_layer_idx not in attn_align_layer_weights):
+                continue
+
+            # [2, 8, 256, 77] => [2, 77, 8, 256]
+            attn_mat        = unet_attn.permute(0, 3, 1, 2)
+            # [2, 8, 64, 77]  => [2, 77, 8, 64]
+            attn_mat_xlayer = unet_attns[attn_align_xlayer_maps[unet_layer_idx]].permute(0, 3, 1, 2)
+            
+            # Make sure attn_mat_xlayer is always smaller than attn_mat.
+            # So we always scale down attn_mat to match attn_mat_xlayer.
+            if attn_mat_xlayer.shape[-1] > attn_mat.shape[-1]:
+                attn_mat, attn_mat_xlayer = attn_mat_xlayer, attn_mat
+
+            # H: 16, Hx: 8
+            H  = int(np.sqrt(attn_mat.shape[-1]))
+            Hx = int(np.sqrt(attn_mat_xlayer.shape[-1]))
+
+            # subj_attn: [8, 8, 256] -> [2, 4, 8, 256] sum among K_fg embeddings -> [2, 8, 256]
+            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat.shape[2:]).sum(dim=1)
+            # subj_attn_xlayer: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
+            subj_attn_xlayer = attn_mat_xlayer[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat_xlayer.shape[2:]).sum(dim=1)
+
+            # subj_attn: [2, 8, 256] -> [2, 8, 16, 16] -> [2, 8, 8, 8] -> [2, 8, 64]
+            subj_attn = subj_attn.reshape(BS, -1, H, H)
+            subj_attn = F.interpolate(subj_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
+            subj_attn = subj_attn.reshape(BS, -1, Hx*Hx)
+
+            if placeholder_indices_bg is not None:
+                # bg_attn:   [4, 8, 256] -> [2, 2, 8, 256] sum among K_bg embeddings -> [2, 8, 256]
+                # 8: 8 attention heads. Last dim 256: number of image tokens.
+                bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).sum(dim=1)
+                bg_attn_xlayer   = attn_mat_xlayer[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat_xlayer.shape[2:]).sum(dim=1)
+                # bg_attn: [2, 8, 256] -> [2, 8, 16, 16] -> [2, 8, 8, 8] -> [2, 8, 64]
+                bg_attn   = bg_attn.reshape(BS, -1, H, H)
+                bg_attn   = F.interpolate(bg_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
+                bg_attn   = bg_attn.reshape(BS, -1, Hx*Hx)
+            
+            attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
+
+            if img_mask is not None:
+                # img_mask: [4, 1, 64, 64] -> [2, 1, 64, 64]
+                img_mask = img_mask[:BS]
+                # img_mask2: [2, 1, 64, 64] -> [2, 1, 8, 8]. subj_attn_xlayer: [2, 8, 64]
+                img_mask2 = scale_mask_for_feat_attn(subj_attn_xlayer, img_mask, "img_mask", mode="nearest|bilinear")
+                # img_mask2: [2, 1, 8, 8] -> [2, 1, 64] -> [2, 8, 64].
+                img_mask2 = img_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
+                subj_attn           = subj_attn         * img_mask2
+                subj_attn_xlayer    = subj_attn_xlayer  * img_mask2
+
+                if placeholder_indices_bg is not None:
+                    bg_attn             = bg_attn           * img_mask2
+                    bg_attn_xlayer      = bg_attn_xlayer    * img_mask2
+
+            # aim_to_align=False: push bg_attn to be orthogonal with subj_attn, 
+            # so that the two attention maps are complementary.
+            # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
+            # But we don't want to only focus on large activations. So set it to 2.
+            # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
+            # to make the two attention maps more complementary (expect the loss pushes the 
+            # subject embedding to a more accurate point).
+            loss_layer_fg_xlayer_consist = calc_delta_loss(subj_attn, subj_attn_xlayer, 
+                                                            exponent=2,    
+                                                            do_demean_first=False,
+                                                            first_n_dims_to_flatten=2, 
+                                                            ref_grad_scale=1,
+                                                            debug=False)
+            loss_fg_xlayer_consist += loss_layer_fg_xlayer_consist * attn_align_layer_weight
+            
+            if placeholder_indices_bg is not None:
+                loss_layer_bg_xlayer_consist = calc_delta_loss(bg_attn, bg_attn_xlayer,
+                                                                exponent=2,    
+                                                                do_demean_first=False,
+                                                                first_n_dims_to_flatten=2, 
+                                                                ref_grad_scale=1,
+                                                                debug=False)
+            
+                loss_bg_xlayer_consist += loss_layer_bg_xlayer_consist * attn_align_layer_weight
+
+        return loss_fg_xlayer_consist, loss_bg_xlayer_consist
 
     # BS: BLOCK_SIZE, not batch size.    
     def calc_subj_comp_ortho_loss(self, unet_ks, unet_vs, unet_attns_or_scores,
