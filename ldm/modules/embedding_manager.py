@@ -837,9 +837,9 @@ class EmbeddingManager(nn.Module):
         self.initial_embeddings  = nn.ParameterDict() # These should not be optimized
         self.token2ada_emb_cache = nn.ParameterDict() # These should not be optimized
 
-        self.set_ada_emb_weight(ada_emb_weight, first_print=True)
+        self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
+        set.set_ada_ema_as_static_emb_weight(ada_ema_as_static_emb_weight, is_first_time_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
-        self.ada_ema_as_static_emb_weight = ada_ema_as_static_emb_weight
         self.adj_layer_skip_weight = adj_layer_skip_weight
         
         self.use_layerwise_embedding = use_layerwise_embedding
@@ -1366,13 +1366,21 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight = self.ada_emb_weight        
         return ada_emb_weight
     
-    def set_ada_emb_weight(self, ada_emb_weight, first_print=False):
-        if first_print:
+    def set_ada_emb_weight(self, ada_emb_weight, is_first_time_print=False):
+        if is_first_time_print:
             print(f"Setting ada_emb_weight = {ada_emb_weight}")
         else:
             if self.ada_emb_weight != ada_emb_weight:
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
+
+    def set_ada_ema_as_static_emb_weight(self, ada_ema_as_static_emb_weight, is_first_time_print=False):
+        if is_first_time_print:
+            print(f"Setting ada_ema_as_static_emb_weight = {ada_ema_as_static_emb_weight}")
+        else:
+            if self.ada_ema_as_static_emb_weight != ada_ema_as_static_emb_weight:
+                print(f"ada_ema_as_static_emb_weight: {self.ada_ema_as_static_emb_weight} => {ada_ema_as_static_emb_weight}")
+        self.ada_ema_as_static_emb_weight = ada_ema_as_static_emb_weight
 
     # Cache features used to compute ada embeddings.
     def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
@@ -1462,12 +1470,13 @@ class EmbeddingManager(nn.Module):
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, ckpt_path):
-        torch.save({ "string_to_token":             self.string_to_token_dict,
-                     "string_to_static_embedder":   self.string_to_static_embedder_dict,
-                     "string_to_ada_embedder":      self.string_to_ada_embedder_dict,
-                     "string_to_ada_ema_emb_dict":  self.string_to_ada_ema_emb_dict,
-                     "ada_emb_weight":              self.ada_emb_weight,  
-                     "token2num_vectors":           self.token2num_vectors,
+        torch.save({ "string_to_token":                 self.string_to_token_dict,
+                     "string_to_static_embedder":       self.string_to_static_embedder_dict,
+                     "string_to_ada_embedder":          self.string_to_ada_embedder_dict,
+                     "string_to_ada_ema_emb_dict":      self.string_to_ada_ema_emb_dict,
+                     "token2num_vectors":               self.token2num_vectors,
+                     "ada_emb_weight":                  self.ada_emb_weight,  
+                     "ada_ema_as_static_emb_weight":    self.ada_ema_as_static_emb_weight,
                    }, 
                     ckpt_path)
 
@@ -1509,7 +1518,7 @@ class EmbeddingManager(nn.Module):
 
                 # The mapping in string_to_token_dict is determined by the tokenizer. 
                 # Shouldn't do the k->k2 mapping on string_to_token_dict.
-                self.string_to_token_dict[k2]        = k2_token
+                self.string_to_token_dict[k2]   = k2_token
 
                 # Mapped from k in ckpt to k2 in the current session.
                 for km in ckpt["string_to_static_embedder"].keys():
@@ -1526,7 +1535,10 @@ class EmbeddingManager(nn.Module):
 
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
             if "ada_emb_weight" in ckpt:
-                self.set_ada_emb_weight(ckpt["ada_emb_weight"], first_print=True)
+                self.set_ada_emb_weight(ckpt["ada_emb_weight"], is_first_time_print=False)
+            if "ada_ema_as_static_emb_weight" in ckpt:
+                self.set_ada_ema_as_static_emb_weight(ckpt["ada_ema_as_static_emb_weight"], is_first_time_print=False)
+
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
 
