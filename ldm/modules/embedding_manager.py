@@ -1132,6 +1132,7 @@ class EmbeddingManager(nn.Module):
                 # static_embedder is already the embeddings.
                 placeholder_embedding = static_embedder
 
+            breakpoint()
             if self.ada_ema_as_static_emb_weight > 0:
                 ada_ema_emb = self.string_to_ada_ema_emb_dict[placeholder_string]
                 # static_embedder is an Embedding2d within a LitEma. Get the actual embedding.
@@ -1405,8 +1406,7 @@ class EmbeddingManager(nn.Module):
             # before the current training iteration begins.
             if self.training and (len(ada_temp_emb.cached_layer) == ada_temp_emb.num_layers):
                 self.string_to_static_embedder_dict[k](ada_temp_emb)
-
-            ada_temp_emb.reset_cached_layer_tracker()
+                ada_temp_emb.reset_cached_layer_tracker()
 
     # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
     # not just the ada or static embeddings of the subject.
