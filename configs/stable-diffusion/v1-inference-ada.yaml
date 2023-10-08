@@ -31,7 +31,7 @@ model:
         use_layerwise_embedding: True
         ada_emb_weight: 0.5
         ada_use_attn_pooler: True
-        ada_ema_as_static_emb: True
+        ada_ema_as_static_emb_weight: 0.3
                 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
