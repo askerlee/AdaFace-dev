@@ -1148,8 +1148,9 @@ class EmbeddingManager(nn.Module):
                 ada_ema_emb_gs = 0
 
             # By default, ada_ema_as_static_emb_weight = 0.25.
-            static_subj_embs_dict[placeholder_string] = placeholder_embedding * (1 - self.ada_ema_as_static_emb_weight) \
+            placeholder_embedding = placeholder_embedding * (1 - self.ada_ema_as_static_emb_weight) \
                                                         + ada_ema_emb_gs      * self.ada_ema_as_static_emb_weight
+            static_subj_embs_dict[placeholder_string] = placeholder_embedding
 
             for k in range(self.token2num_vectors[placeholder_string]):
                 placeholder_indices_k = (placeholder_indices[0], placeholder_indices[1] + k)
