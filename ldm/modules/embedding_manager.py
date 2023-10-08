@@ -1408,7 +1408,7 @@ class EmbeddingManager(nn.Module):
             # This should happen after the previous training iteration finishes and 
             # before the current training iteration begins.
             if self.training and (len(ada_temp_emb.cached_layer) == ada_temp_emb.num_layers):
-                self.string_to_static_embedder_dict[k](ada_temp_emb)
+                self.string_to_ada_ema_emb_dict[k](ada_temp_emb)
                 ada_temp_emb.reset_cached_layer_tracker()
 
     # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
