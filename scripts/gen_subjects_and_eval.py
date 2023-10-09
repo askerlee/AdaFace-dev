@@ -74,7 +74,12 @@ def parse_args():
                         help="suffix to append to the end of each prompt")
     parser.add_argument("--scale", type=float, default=5, 
                         help="the guidance scale")
-
+    parser.add_argument(
+        "--use_first_gt_img_as_init",
+        action='store_true',
+        help="use the first image in the groundtruth folder as the initial image",
+    )
+    
     parser.add_argument("--n_samples", type=int, default=-1, 
                         help="number of samples to generate for each test case")
     parser.add_argument("--bs", type=int, default=-1, 
@@ -439,7 +444,9 @@ if __name__ == "__main__":
 
         if args.use_deep_neg_prompt:
             command_line += f" --use_deep_neg_prompt --deep_cfg_scale {args.deep_cfg_scale}"
-        
+        if args.use_first_gt_img_as_init:
+            command_line += f" --use_first_gt_img_as_init"
+            
         if hasattr(args, 'ca_align_suppress_scale'):
             command_line += f" --ca_align_suppress_scale {args.ca_align_suppress_scale}"
             
