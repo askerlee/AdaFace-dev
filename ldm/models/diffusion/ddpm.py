@@ -1947,8 +1947,8 @@ class LatentDiffusion(DDPM):
                     # If no fg_mask is available, then filtered_fg_mask is all 1, i.e., 
                     # use the whole image to initialize x_start.
                     x_start = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
-                    fg_noise_amount = 0.7
-                    # At foreground, keep 30% of the original x_start values and add 70% noise. 
+                    fg_noise_amount = 0.5
+                    # At foreground, keep 50% of the original x_start values and add 50% noise. 
                     x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
                 else:
                     x_start.normal_()
