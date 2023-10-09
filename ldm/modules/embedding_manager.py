@@ -1142,7 +1142,7 @@ class EmbeddingManager(nn.Module):
                 # So it's static_embedder.embedding.
                 # Our modified LitEma allows to be updated by SGD. However, the update may be 
                 # too aggressive. So we scale down the gradient by a factor of 0.1.
-                litema_emb_scaler   = gen_gradient_scaler(0.1)
+                litema_emb_scaler   = gen_gradient_scaler(0.05)
                 ada_ema_emb_gs      = litema_emb_scaler(ada_ema_emb.embedding.clone())
             else:
                 ada_ema_emb_gs = 0
