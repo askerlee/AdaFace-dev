@@ -108,7 +108,7 @@ def parse_args():
     parser.add_argument(
         "--fixed_code",
         action='store_true',
-        help="if enabled, uses the same starting code across samples ",
+        help="if enabled, uses the same starting code across samples",
     )
     parser.add_argument(
         "--ddim_eta",
@@ -214,12 +214,18 @@ def parse_args():
         default=None,
         help="path to the initial image",
     )  
+    parser.add_argument(
+        "--init_mask",
+        type=str,
+        default=None,
+        help="path to the initial mask",
+    )      
     # Anything between 0 and 1 will cause blended images.
     parser.add_argument(
-        "--mask_weight",
+        "--init_img_weight",
         type=float,
         default=0.0,
-        help="Weight of the initial image",
+        help="Weight of the initial image (if w, then w*img + (1-w)*noise)",
     )
     # No preview
     parser.add_argument(
@@ -510,7 +516,12 @@ def main(opt):
         init_img = init_img.repeat([batch_size, 1, 1, 1]).to(device)
         # move init_img to latent space
         x0      = model.get_first_stage_encoding(model.encode_first_stage(init_img))  
-        mask    = torch.ones_like(x0) * opt.mask_weight
+        if opt.init_mask is not None:
+            mask_obj = Image.open(opt.init_mask).convert("L")
+            mask     = np.array(mask_obj).astype(np.uint8) * opt.init_img_weight
+            breakpoint()
+        else:
+            mask    = torch.ones_like(x0) * opt.init_img_weight
     else:
         x0      = None
         mask    = None
