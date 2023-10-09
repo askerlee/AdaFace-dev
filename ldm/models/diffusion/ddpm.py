@@ -1267,7 +1267,9 @@ class LatentDiffusion(DDPM):
                                                 and 'subj_prompt_single_fp' in batch \
                                                 and random.random() < p_use_fp_trick
 
-            p_comp_init_with_fg_area = 0.5
+            # Slightly larger than 0.5, since comp_init_with_fg_area is disabled under reuse_init_conds.
+            # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
+            p_comp_init_with_fg_area = 0.7
             # If reuse_init_conds, comp_init_with_fg_area may be set to True later
             # if the previous iteration has comp_init_with_fg_area = True.
             self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
