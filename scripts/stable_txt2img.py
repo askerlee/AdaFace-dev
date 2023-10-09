@@ -22,6 +22,7 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
                                   init_evaluators, set_tf_gpu
+from ldm.data.personalized import PersonalizedBase
 
 from safetensors.torch import load_file as safetensors_load_file
 
@@ -216,11 +217,10 @@ def parse_args():
         help="path to the initial image",
     )  
     parser.add_argument(
-        "--init_mask",
-        type=str,
-        default=None,
-        help="path to the initial mask",
-    )      
+        "--use_first_gt_img_as_init",
+        action='store_true',
+        help="use the first image in the groundtruth folder as the initial image",
+    )
     # Anything between 0 and 1 will cause blended images.
     parser.add_argument(
         "--init_img_weight",
@@ -228,6 +228,12 @@ def parse_args():
         default=0.5,
         help="Weight of the initial image (if w, then w*img + (1-w)*noise)",
     )
+    parser.add_argument(
+        "--init_mask",
+        type=str,
+        default=None,
+        help="path to the initial mask",
+    )      
     # No preview
     parser.add_argument(
         "--no_preview",
@@ -332,7 +338,7 @@ def load_model_from_config(config, ckpt, verbose=False):
 def load_img(path, h, w):
     image = Image.open(path).convert("RGB")
     w0, h0 = image.size
-    print(f"loaded input image of size ({w0}, {h0}) from {path}")
+    print(f"Image {path} ({w0}, {h0}) as the init image")
     w, h = map(lambda x: x - x % 32, (w, h))  # round w, h to integer multiple of 32
     image = image.resize((w, h), resample=Image.LANCZOS)
     image = np.array(image).astype(np.float32) / 255.0
@@ -512,6 +518,13 @@ def main(opt):
     else:
         clip_evator, dino_evator = None, None
 
+    if opt.use_first_gt_img_as_init:
+        # Cannot use init_img and use_first_gt_img_as_init at the same time.
+        assert opt.init_img is None, "Cannot use init_img and use_first_gt_img_as_init at the same time."
+        assert opt.compare_with is not None, "Must specify --compare_with when using use_first_gt_img_as_init."
+        gt_data_loader  = PersonalizedBase(opt.compare_with, set='evaluation', size=opt.H, flip_p=0.0)
+        opt.init_img = gt_data_loader.image_paths[0]
+
     if opt.init_img is not None:
         assert opt.fixed_code is False
         init_img = load_img(opt.init_img, opt.H, opt.W)
@@ -530,8 +543,8 @@ def main(opt):
 
         # move init_img to latent space
         # x0: [4, 4, 64, 64]
-        x0      = model.get_first_stage_encoding(model.encode_first_stage(init_img, mask_dict))  
-        x0 = x0 * opt.init_img_weight + (1 - opt.init_img_weight) * torch.randn_like(x0)
+        x0  = model.get_first_stage_encoding(model.encode_first_stage(init_img, mask_dict))  
+        x0  = x0 * opt.init_img_weight + torch.randn_like(x0) * (1 - opt.init_img_weight)
 
     else:
         x0      = None
