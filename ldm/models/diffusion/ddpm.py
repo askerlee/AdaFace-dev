@@ -2509,7 +2509,7 @@ class LatentDiffusion(DDPM):
             # If is_compos_iter, then the batch size is 4 * BLOCK_SIZE. Use only the subject half (2 * BLOCK_SIZE).
             BS = BLOCK_SIZE if self.iter_flags['do_normal_recon'] else 2 * BLOCK_SIZE
             loss_fg_xlayer_consist, loss_bg_xlayer_consist = \
-                self.calc_fg_bg_xlayer_consist_loss(extra_info['unet_attns'],
+                self.calc_fg_bg_xlayer_consist_loss(extra_info['unet_attnscores'],
                                                     extra_info['subj_indices'],
                                                     extra_info['bg_indices'],
                                                     BS, img_mask)
@@ -3036,7 +3036,7 @@ class LatentDiffusion(DDPM):
 
     # BS: block size, not batch size.
     # placeholder_indices_bg could be None if iter_flags['use_background_token'] = False.
-    def calc_fg_bg_xlayer_consist_loss(self, unet_attns,
+    def calc_fg_bg_xlayer_consist_loss(self, unet_attns_or_scores,
                                        placeholder_indices_fg, 
                                        placeholder_indices_bg, 
                                        BS, img_mask):
@@ -3077,14 +3077,14 @@ class LatentDiffusion(DDPM):
         loss_fg_xlayer_consist = 0
         loss_bg_xlayer_consist = 0
 
-        for unet_layer_idx, unet_attn in unet_attns.items():
+        for unet_layer_idx, unet_attn in unet_attns_or_scores.items():
             if (unet_layer_idx not in attn_align_layer_weights):
                 continue
 
             # [2, 8, 256, 77] => [2, 77, 8, 256]
             attn_mat        = unet_attn.permute(0, 3, 1, 2)
             # [2, 8, 64, 77]  => [2, 77, 8, 64]
-            attn_mat_xlayer = unet_attns[attn_align_xlayer_maps[unet_layer_idx]].permute(0, 3, 1, 2)
+            attn_mat_xlayer = unet_attns_or_scores[attn_align_xlayer_maps[unet_layer_idx]].permute(0, 3, 1, 2)
             
             # Make sure attn_mat_xlayer is always smaller than attn_mat.
             # So we always scale down attn_mat to match attn_mat_xlayer.
