@@ -1,5 +1,6 @@
 import argparse, os
 import torch
+import torch.nn.functional as F
 import numpy as np
 from omegaconf import OmegaConf
 from PIL import Image
@@ -224,7 +225,7 @@ def parse_args():
     parser.add_argument(
         "--init_img_weight",
         type=float,
-        default=0.0,
+        default=0.5,
         help="Weight of the initial image (if w, then w*img + (1-w)*noise)",
     )
     # No preview
@@ -332,9 +333,10 @@ def load_img(path, h, w):
     image = Image.open(path).convert("RGB")
     w0, h0 = image.size
     print(f"loaded input image of size ({w0}, {h0}) from {path}")
-    w, h = map(lambda x: x - x % 32, (w, h))  # resize to integer multiple of 32
+    w, h = map(lambda x: x - x % 32, (w, h))  # round w, h to integer multiple of 32
     image = image.resize((w, h), resample=Image.LANCZOS)
     image = np.array(image).astype(np.float32) / 255.0
+    # b h w c -> b c h w
     image = image[None].transpose(0, 3, 1, 2)
     image = torch.from_numpy(image)
     return 2.*image - 1.
@@ -513,15 +515,24 @@ def main(opt):
     if opt.init_img is not None:
         assert opt.fixed_code is False
         init_img = load_img(opt.init_img, opt.H, opt.W)
-        init_img = init_img.repeat([batch_size, 1, 1, 1]).to(device)
-        # move init_img to latent space
-        x0      = model.get_first_stage_encoding(model.encode_first_stage(init_img))  
+        # init_img: [4, 3, 512, 512], [b c h w]
+        init_img = init_img.repeat(batch_size, 1, 1, 1).to(device)
+
         if opt.init_mask is not None:
             mask_obj = Image.open(opt.init_mask).convert("L")
-            mask     = np.array(mask_obj).astype(np.uint8) * opt.init_img_weight
-            breakpoint()
+            mask     = torch.from_numpy(np.array(mask_obj).astype(np.uint8)) / 255
+            mask     = F.interpolate(mask[None, None], size=(opt.H // opt.f, opt.W // opt.f), mode='nearest')
+            mask     = mask.repeat(batch_size, 1, 1, 1).to(device)
+            mask_dict = { 'fg_mask': mask, 'aug_mask': None }
         else:
-            mask    = torch.ones_like(x0) * opt.init_img_weight
+            mask    = None
+            mask_dict = None
+
+        # move init_img to latent space
+        # x0: [4, 4, 64, 64]
+        x0      = model.get_first_stage_encoding(model.encode_first_stage(init_img, mask_dict))  
+        x0 = x0 * opt.init_img_weight + (1 - opt.init_img_weight) * torch.randn_like(x0)
+
     else:
         x0      = None
         mask    = None

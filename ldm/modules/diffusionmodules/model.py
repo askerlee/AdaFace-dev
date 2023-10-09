@@ -194,9 +194,8 @@ class AttnBlock(nn.Module):
 
         # If mask is not None, then at least one of aug_mask and fg_mask is not None.
         if mask is not None:
-            aug_mask = mask['aug_mask'].type(x.dtype) if mask['aug_mask'] is not None else torch.ones_like(x)
-            fg_mask  = mask['fg_mask'].type(x.dtype)  if mask['fg_mask'] is not None  else torch.ones_like(x)
-
+            aug_mask = mask['aug_mask'].type(x.dtype) if mask['aug_mask'] is not None else torch.ones_like(x[:, [0]])
+            fg_mask  = mask['fg_mask'].type(x.dtype)  if mask['fg_mask'] is not None  else torch.ones_like(x[:, [0]])
             # x:    [2, 512, 64,  64]
             # mask: [2, 1,   512, 512] => [2, 1, 64, 64]
             aug_mask, fg_mask = [ F.interpolate(mask, size=x.shape[-2:], mode='nearest') for mask in (aug_mask, fg_mask) ]
