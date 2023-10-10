@@ -339,7 +339,6 @@ def load_model_from_config(config, ckpt, verbose=False):
 def load_img(path, h, w):
     image = Image.open(path).convert("RGB")
     w0, h0 = image.size
-    print(f"Image {path} ({w0}, {h0}) as the init image")
     w, h = map(lambda x: x - x % 32, (w, h))  # round w, h to integer multiple of 32
     image = image.resize((w, h), resample=Image.LANCZOS)
     image = np.array(image).astype(np.float32) / 255.0
@@ -546,6 +545,8 @@ def main(opt):
         avg_x_T = torch.zeros([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
         for init_img_path in opt.init_img_paths:
             init_img = load_img(init_img_path, opt.H, opt.W)
+            print(f"Image {init_img_path}, as the init image, weight {opt.init_img_weight}")
+
             # init_img: [4, 3, 512, 512], [b c h w]
             init_img = init_img.repeat(batch_size, 1, 1, 1).to(device)
             # move avg_init_img to latent space
