@@ -523,15 +523,17 @@ def main(opt):
     if opt.fixed_code:
         # If init_img_paths or use_first_gt_img_as_init is specified, then start_code will be overwritten.
         start_code = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
-
+    else:
+        start_code = None
+        
     if opt.use_first_gt_img_as_init:
         # Cannot specify init_img_paths and use_first_gt_img_as_init at the same time.
         assert opt.init_img_paths is None and opt.init_mask_paths is None, \
             "Cannot use 'init_img_paths'/'init_mask_paths' and 'use_first_gt_img_as_init' at the same time."
         assert opt.compare_with is not None, "Must specify --compare_with when using use_first_gt_img_as_init."
         gt_data_loader  = PersonalizedBase(opt.compare_with, set='evaluation', size=opt.H, flip_p=0.0)
-        opt.init_img_paths  = gt_data_loader.image_paths
-        opt.init_mask_paths = gt_data_loader.fg_mask_paths
+        opt.init_img_paths  = gt_data_loader.image_paths[:1]
+        opt.init_mask_paths = gt_data_loader.fg_mask_paths[:1]
         
     if opt.init_img_paths is not None:
         if opt.init_mask_paths is None:
@@ -553,6 +555,7 @@ def main(opt):
                 mask     = mask.repeat(batch_size, 1, 1, 1).to(device)
                 mask_dict = { 'fg_mask': mask, 'aug_mask': None }
             else:
+                mask = None
                 mask_dict = None
 
             # move avg_init_img to latent space
@@ -561,7 +564,19 @@ def main(opt):
             avg_x_T += x_T
 
         avg_x_T  /= np.sqrt(len(opt.init_img_paths))
-        start_code = avg_x_T * opt.init_img_weight + torch.randn_like(avg_x_T) * (1 - opt.init_img_weight)
+        init_code = avg_x_T * opt.init_img_weight + torch.randn_like(avg_x_T) * (1 - opt.init_img_weight)
+        if mask is None:
+            # If mask is None, then x_T (start_code) is unmasked init_code.
+            start_code = init_code
+            x0 = None
+        else:
+            start_code = None
+            # If mask is not None, then x_0 is the masked version of init_code.
+            x0 = init_code
+
+    else:
+        x0 = None
+        mask = None        
 
     if not opt.eval_blip:
         # Normal evaluation.
@@ -696,8 +711,8 @@ def main(opt):
                                                             unconditional_guidance_scale=opt.scale,
                                                             unconditional_conditioning=uc,
                                                             eta=opt.ddim_eta,
-                                                            x0=None,
-                                                            mask=None,
+                                                            x0=x0,
+                                                            mask=mask,
                                                             x_T=start_code,
                                                             deep_neg_context=deep_neg_context)
 
