@@ -528,7 +528,7 @@ def main(opt):
         assert opt.init_img_paths is None, "Cannot use init_img_paths and use_first_gt_img_as_init at the same time."
         assert opt.compare_with is not None, "Must specify --compare_with when using use_first_gt_img_as_init."
         gt_data_loader  = PersonalizedBase(opt.compare_with, set='evaluation', size=opt.H, flip_p=0.0)
-        opt.init_img_paths = gt_data_loader.image_paths[:1]
+        opt.init_img_paths = gt_data_loader.image_paths
 
     if opt.init_mask is not None:
         mask_obj = Image.open(opt.init_mask).convert("L")
@@ -554,7 +554,7 @@ def main(opt):
             x_T  = model.get_first_stage_encoding(model.encode_first_stage(init_img, mask_dict))  
             avg_x_T += x_T
 
-        avg_x_T  /= len(opt.init_img_paths)
+        avg_x_T  /= np.sqrt(len(opt.init_img_paths))
         start_code = avg_x_T * opt.init_img_weight + torch.randn_like(avg_x_T) * (1 - opt.init_img_weight)
 
     else:
