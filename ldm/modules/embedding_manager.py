@@ -1166,7 +1166,7 @@ class EmbeddingManager(nn.Module):
                 # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
                 embedded_text[placeholder_indices_k] = placeholder_embedding[:, k].repeat(REAL_OCCURS_IN_BATCH, 1)
-                
+
             # Cache the placeholder indices for mix prompt distillation.
             # Note placeholder_indices are recomputed in update_placeholder_indices(), 
             # we don't simply cache placeholder_indices here as they are repeated 16 times 

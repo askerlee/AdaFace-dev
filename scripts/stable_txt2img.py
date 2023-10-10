@@ -380,8 +380,9 @@ def main(opt):
         model.cond_stage_model.set_last_layers_skip_weights(opt.clip_last_layers_skip_weights)
         
         if hasattr(opt, 'num_vectors_per_token'):
-            model.embedding_manager.set_num_vectors_per_token(opt.num_vectors_per_token, 
-                                                            placeholder_strings=[opt.placeholder_string])
+            ckpt_num_vectors_per_token = model.embedding_manager.token2num_vectors[opt.placeholder_string]
+            assert ckpt_num_vectors_per_token == opt.num_vectors_per_token, \
+                   f"Number of vectors per token mismatch: command line {opt.num_vectors_per_token} != ckpt {ckpt_num_vectors_per_token}."
 
         if opt.use_conv_attn:
             assert opt.num_vectors_per_token in [4, 9, 16], \
