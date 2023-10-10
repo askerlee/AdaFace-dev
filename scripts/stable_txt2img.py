@@ -213,6 +213,7 @@ def parse_args():
     parser.add_argument(
         "--init_img_paths",
         type=str,
+        nargs='+', 
         default=None,
         help="path to the initial image(s) (multiple images will be averaged)",
     )  
@@ -225,7 +226,7 @@ def parse_args():
     parser.add_argument(
         "--init_img_weight",
         type=float,
-        default=0.5,
+        default=0.1,
         help="Weight of the initial image (if w, then w*img + (1-w)*noise)",
     )
     parser.add_argument(
@@ -519,6 +520,10 @@ def main(opt):
     else:
         clip_evator, dino_evator = None, None
 
+    if opt.fixed_code:
+        # If init_img_paths or use_first_gt_img_as_init is specified, then start_code will be overwritten.
+        start_code = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
+
     if opt.use_first_gt_img_as_init:
         # Cannot specify init_img_paths and use_first_gt_img_as_init at the same time.
         assert opt.init_img_paths is None, "Cannot use init_img_paths and use_first_gt_img_as_init at the same time."
@@ -526,38 +531,34 @@ def main(opt):
         gt_data_loader  = PersonalizedBase(opt.compare_with, set='evaluation', size=opt.H, flip_p=0.0)
         opt.init_img_paths = gt_data_loader.image_paths[:1]
 
+    if opt.init_mask is not None:
+        mask_obj = Image.open(opt.init_mask).convert("L")
+        mask     = torch.from_numpy(np.array(mask_obj).astype(np.uint8)) / 255
+        mask     = F.interpolate(mask[None, None], size=(opt.H // opt.f, opt.W // opt.f), mode='nearest')
+        mask     = mask.repeat(batch_size, 1, 1, 1).to(device)
+        mask_dict = { 'fg_mask': mask, 'aug_mask': None }
+    else:
+        mask    = None
+        mask_dict = None
+
     if opt.init_img_paths is not None:
         assert opt.fixed_code is False
-        avg_init_img = torch.zeros([batch_size, 3, opt.H, opt.W], device=device)
+        avg_x_T = torch.zeros([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
         for init_img_path in opt.init_img_paths:
             init_img = load_img(init_img_path, opt.H, opt.W)
             # init_img: [4, 3, 512, 512], [b c h w]
             init_img = init_img.repeat(batch_size, 1, 1, 1).to(device)
-            avg_init_img += init_img
-        avg_init_img  /= len(opt.init_img_paths)
+            # move avg_init_img to latent space
+            # x_T: [4, 4, 64, 64]
+            x_T  = model.get_first_stage_encoding(model.encode_first_stage(init_img, mask_dict))  
+            avg_x_T += x_T
 
-        if opt.init_mask is not None:
-            mask_obj = Image.open(opt.init_mask).convert("L")
-            mask     = torch.from_numpy(np.array(mask_obj).astype(np.uint8)) / 255
-            mask     = F.interpolate(mask[None, None], size=(opt.H // opt.f, opt.W // opt.f), mode='nearest')
-            mask     = mask.repeat(batch_size, 1, 1, 1).to(device)
-            mask_dict = { 'fg_mask': mask, 'aug_mask': None }
-        else:
-            mask    = None
-            mask_dict = None
-
-        # move avg_init_img to latent space
-        # x0: [4, 4, 64, 64]
-        x0  = model.get_first_stage_encoding(model.encode_first_stage(avg_init_img, mask_dict))  
-        x0  = x0 * opt.init_img_weight + torch.randn_like(x0) * (1 - opt.init_img_weight)
+        avg_x_T  /= len(opt.init_img_paths)
+        start_code = avg_x_T * opt.init_img_weight + torch.randn_like(avg_x_T) * (1 - opt.init_img_weight)
 
     else:
-        x0      = None
+        start_code      = None
         mask    = None
-
-    start_code = None
-    if opt.fixed_code:
-        start_code = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
     if not opt.eval_blip:
         # Normal evaluation.
@@ -692,7 +693,7 @@ def main(opt):
                                                             unconditional_guidance_scale=opt.scale,
                                                             unconditional_conditioning=uc,
                                                             eta=opt.ddim_eta,
-                                                            x0=x0,
+                                                            x0=None,
                                                             mask=mask,
                                                             x_T=start_code,
                                                             deep_neg_context=deep_neg_context)

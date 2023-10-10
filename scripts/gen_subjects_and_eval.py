@@ -79,7 +79,14 @@ def parse_args():
         action='store_true',
         help="use the first image in the groundtruth folder as the initial image",
     )
-    
+    # Anything between 0 and 1 will cause blended images.
+    parser.add_argument(
+        "--init_img_weight",
+        type=float,
+        default=0.1,
+        help="Weight of the initial image (if w, then w*img + (1-w)*noise)",
+    )
+
     parser.add_argument("--n_samples", type=int, default=-1, 
                         help="number of samples to generate for each test case")
     parser.add_argument("--bs", type=int, default=-1, 
@@ -445,7 +452,7 @@ if __name__ == "__main__":
         if args.use_deep_neg_prompt:
             command_line += f" --use_deep_neg_prompt --deep_cfg_scale {args.deep_cfg_scale}"
         if args.use_first_gt_img_as_init:
-            command_line += f" --use_first_gt_img_as_init"
+            command_line += f" --use_first_gt_img_as_init --init_img_weight {args.init_img_weight}"
             
         if hasattr(args, 'ca_align_suppress_scale'):
             command_line += f" --ca_align_suppress_scale {args.ca_align_suppress_scale}"
