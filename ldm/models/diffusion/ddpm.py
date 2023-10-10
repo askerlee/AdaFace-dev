@@ -28,7 +28,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        save_grid, chunk_list, patch_multi_embeddings, fix_emb_scales, \
                        halve_token_indices, double_token_indices, normalize_dict_values, masked_mean, \
                        scale_mask_for_feat_attn, mix_static_vk_embeddings, repeat_selected_instances, \
-                       anneal_t, calc_layer_subj_comp_k_or_v_ortho_loss
+                       anneal_t, rand_annealed, calc_layer_subj_comp_k_or_v_ortho_loss
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -1947,7 +1947,8 @@ class LatentDiffusion(DDPM):
                     # If no fg_mask is available, then filtered_fg_mask is all 1, i.e., 
                     # use the whole image to initialize x_start.
                     x_start = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
-                    fg_noise_amount = 0.5
+                    # Gradually increase the noise amount from 0.25 to 0.5.
+                    fg_noise_amount = rand_annealed(self.training_percent, final_percent=1, mean_range=(0.25, 0.5))
                     # At foreground, keep 50% of the original x_start values and add 50% noise. 
                     x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
                 else:
