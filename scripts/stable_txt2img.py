@@ -211,10 +211,10 @@ def parse_args():
         help="Weight of adaptive embeddings (in contrast to static embeddings)")
 
     parser.add_argument(
-        "--init_img",
+        "--init_img_paths",
         type=str,
         default=None,
-        help="path to the initial image",
+        help="path to the initial image(s) (multiple images will be averaged)",
     )  
     parser.add_argument(
         "--use_first_gt_img_as_init",
@@ -520,17 +520,21 @@ def main(opt):
         clip_evator, dino_evator = None, None
 
     if opt.use_first_gt_img_as_init:
-        # Cannot use init_img and use_first_gt_img_as_init at the same time.
-        assert opt.init_img is None, "Cannot use init_img and use_first_gt_img_as_init at the same time."
+        # Cannot specify init_img_paths and use_first_gt_img_as_init at the same time.
+        assert opt.init_img_paths is None, "Cannot use init_img_paths and use_first_gt_img_as_init at the same time."
         assert opt.compare_with is not None, "Must specify --compare_with when using use_first_gt_img_as_init."
         gt_data_loader  = PersonalizedBase(opt.compare_with, set='evaluation', size=opt.H, flip_p=0.0)
-        opt.init_img = gt_data_loader.image_paths[0]
+        opt.init_img_paths = gt_data_loader.image_paths[:1]
 
-    if opt.init_img is not None:
+    if opt.init_img_paths is not None:
         assert opt.fixed_code is False
-        init_img = load_img(opt.init_img, opt.H, opt.W)
-        # init_img: [4, 3, 512, 512], [b c h w]
-        init_img = init_img.repeat(batch_size, 1, 1, 1).to(device)
+        avg_init_img = torch.zeros([batch_size, 3, opt.H, opt.W], device=device)
+        for init_img_path in opt.init_img_paths:
+            init_img = load_img(init_img_path, opt.H, opt.W)
+            # init_img: [4, 3, 512, 512], [b c h w]
+            init_img = init_img.repeat(batch_size, 1, 1, 1).to(device)
+            avg_init_img += init_img
+        avg_init_img  /= len(opt.init_img_paths)
 
         if opt.init_mask is not None:
             mask_obj = Image.open(opt.init_mask).convert("L")
@@ -542,9 +546,9 @@ def main(opt):
             mask    = None
             mask_dict = None
 
-        # move init_img to latent space
+        # move avg_init_img to latent space
         # x0: [4, 4, 64, 64]
-        x0  = model.get_first_stage_encoding(model.encode_first_stage(init_img, mask_dict))  
+        x0  = model.get_first_stage_encoding(model.encode_first_stage(avg_init_img, mask_dict))  
         x0  = x0 * opt.init_img_weight + torch.randn_like(x0) * (1 - opt.init_img_weight)
 
     else:
