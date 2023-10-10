@@ -563,6 +563,8 @@ def main(opt):
             x_T  = model.get_first_stage_encoding(model.encode_first_stage(init_img, mask_dict))  
             avg_x_T += torch.where(mask.bool(), x_T, torch.randn_like(x_T))
 
+        # If approximating different images as indepent Gaussian variables, 
+        # then their sum has a STD of sqrt(N). Normalization requires dividing by sqrt(N), instead of N.
         avg_x_T    /= np.sqrt(len(opt.init_img_paths))
         start_code  = avg_x_T * opt.init_img_weight + torch.randn_like(avg_x_T) * (1 - opt.init_img_weight)
 
