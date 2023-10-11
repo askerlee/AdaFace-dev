@@ -169,21 +169,12 @@ class CrossAttention(nn.Module):
             nn.Dropout(dropout)
         )
         self.save_attn_vars = False
-        self.crossattn_force_grad = False
         self.use_conv_attn = False
         self.infeat_size   = None
 
     def forward(self, x, context=None, mask=None):
         h = self.heads
 
-        # If the autograd status should be overridden, then do it here, 
-        # and restore the status before the function returns.
-        if not torch.is_grad_enabled() and self.crossattn_force_grad:
-            is_grad_forced = True
-            torch.set_grad_enabled(True)
-        else:
-            is_grad_forced = False
-        
         # x, q: [4, 4096, 320]
         q = self.to_q(x)
 
@@ -252,10 +243,6 @@ class CrossAttention(nn.Module):
             #self.cached_out      = out
             #self.cached_infeat_size = self.infeat_size
             #breakpoint()
-
-        # Restore the autograd status.
-        if is_grad_forced:
-            torch.set_grad_enabled(False)
 
         return out
 

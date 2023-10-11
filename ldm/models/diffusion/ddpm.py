@@ -1788,8 +1788,7 @@ class LatentDiffusion(DDPM):
     def guided_denoise(self, x_start, noise, t, cond, 
                        subj_indices=None, bg_indices=None,
                        inj_noise_t=None, 
-                       unet_has_grad=True, crossattn_force_grad=False, 
-                       do_pixel_recon=False, cfg_scales=None):
+                       unet_has_grad=True, do_pixel_recon=False, cfg_scales=None):
         
         if inj_noise_t is not None:
             # We can choose to add amount of noises different from t.
@@ -1797,21 +1796,12 @@ class LatentDiffusion(DDPM):
         else:
             x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
-        if unet_has_grad:
-            # No need to force grad on cross attention layers, as the whole U-Net has grad.
-            crossattn_force_grad = False
-
         self.embedding_manager.set_placeholder_indices(subj_indices, bg_indices)
         # model_output is the predicted noise.
         # if not unet_has_grad, we save RAM by not storing the computation graph.
-        # crossattn_force_grad: even if unet_has_grad = False, 
-        # we can still enable gradients on cross attention layers,
-        # so that limited optimizations w.r.t. the embedders can be done (but unable to BP through UNet).
         if not unet_has_grad:
-            cond[2]['crossattn_force_grad'] = crossattn_force_grad
             with torch.no_grad():
                 model_output = self.apply_model(x_noisy, t, cond)
-            del cond[2]['crossattn_force_grad']
         else:
             # if unet_has_grad, we don't have to take care of embedding_manager.force_grad.
             # Subject embeddings will naturally have gradients.
@@ -2113,7 +2103,6 @@ class LatentDiffusion(DDPM):
                                 subj_indices=subj_indices, bg_indices=bg_indices,
                                 inj_noise_t=inj_noise_t,
                                 unet_has_grad=not self.iter_flags['do_teacher_filter'], 
-                                crossattn_force_grad=False,
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 # do_pixel_recon is not the iter_type 'do_normal_recon'.
                                 do_pixel_recon=self.iter_flags['calc_clip_loss'],
@@ -2353,7 +2342,7 @@ class LatentDiffusion(DDPM):
                         self.guided_denoise(x_start_sel, noise_sel, t_sel, cond_orig_qv, 
                                             subj_indices=extra_info['subj_indices_2b'],
                                             bg_indices=extra_info['bg_indices_2b'],
-                                            unet_has_grad=True, crossattn_force_grad=False,
+                                            unet_has_grad=True, 
                                             do_pixel_recon=True, cfg_scales=cfg_scales_for_clip_loss)
 
                     # Update masks according to x_start_sel. Select the masks corresponding to 

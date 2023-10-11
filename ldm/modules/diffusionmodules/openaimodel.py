@@ -508,7 +508,6 @@ class UNetModel(nn.Module):
 
         self.backup_vars = { 
                             'use_conv_attn':            False,
-                            'crossattn_force_grad':     False,
                             'save_attn_vars':           False,
                             'deep_neg_context':         None,
                             'deep_cfg_scale':           1.5,
@@ -818,7 +817,6 @@ class UNetModel(nn.Module):
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
-        crossattn_force_grad  = extra_info.get('crossattn_force_grad', False)  if extra_info is not None else False
         debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
@@ -971,8 +969,7 @@ class UNetModel(nn.Module):
         if iter_type.startswith("mix_") or capture_distill_attn or debug_attn:
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
             distill_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
-            distill_old_ca_flags, _ = self.set_cross_attn_flags(ca_flag_dict={'crossattn_force_grad': crossattn_force_grad, 
-                                                                              'save_attn_vars': True}, 
+            distill_old_ca_flags, _ = self.set_cross_attn_flags(ca_flag_dict={'save_attn_vars': True}, 
                                                                 ca_layer_indices=distill_layer_indices)
             ca_flags_stack.append([ distill_old_ca_flags, distill_layer_indices, None, None ])
         else:
