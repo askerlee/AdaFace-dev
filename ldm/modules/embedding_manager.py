@@ -1516,13 +1516,13 @@ class EmbeddingManager(nn.Module):
             else:
                 placeholder_mapper = None
 
+            ckpt = torch.load(ckpt_path, map_location='cpu')
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
             if "ada_emb_weight" in ckpt:
                 self.set_ada_emb_weight(ckpt["ada_emb_weight"], is_first_time_print=False)
             if "ada_ema_as_static_emb_weight" in ckpt:
                 self.set_ada_ema_as_static_emb_weight(ckpt["ada_ema_as_static_emb_weight"], is_first_time_print=False)
 
-            ckpt = torch.load(ckpt_path, map_location='cpu')
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
                     k2 = placeholder_mapper[k]
