@@ -710,14 +710,16 @@ class AdaEmbedding(nn.Module):
             else:
                 # layer_static_subj_emb should be quite similar to the ada embedding at this layer.
                 # So we use layer_static_subj_emb as an approximate query to do the attention-based pooling.
+
                 infeat_pooled    = pooler(layer_attn_components, 
                                           fg_q_emb=layer_static_subj_emb, 
                                           bg_q_emb=layer_static_extra_emb_mean,
                                           img_mask=img_mask, bp_to_unet=bp_to_unet)
-                
+
                 if self.use_attn_pooler:
                     # infeat_fg, infeat_bg: [2, 320]
                     infeat_fg, infeat_bg = infeat_pooled
+
                     if self.use_cached_bg:
                         # Combine infeat_bg obtained from the attn pooler and cached_infeat_bg.
                         # cached_bg_weight is initialized as 0.5, and updated through BP.
@@ -760,6 +762,7 @@ class AdaEmbedding(nn.Module):
             # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
             # Consider the last dim. 
             basis_dyn_coeffs = self.layer_maps[ca_layer_idx](infeat_time_semb).reshape(-1, self.K, self.r)
+
             # bias: [1, K, 768]
             bias = self.bias[ca_layer_idx].unsqueeze(0)
 
@@ -774,6 +777,7 @@ class AdaEmbedding(nn.Module):
             out_lns = self.layers_out_lns[ca_layer_idx]
             # out_vecs_unnorm: K elements, each is [BS, 1, r] x [r, 768]_k = [BS, 1, 768].
             out_vecs_unnorm = [ torch.matmul(basis_dyn_coeffs[:, k], basis_vecs[k]) for k in range(self.K) ]
+
             out_vecs0 = torch.stack([ out_lns[k](out_vecs_unnorm[k]) for k in range(self.K) ], dim=1)
             # out_emb_dim: 768.
             out_vecs0 = out_vecs0 / np.sqrt(self.out_emb_dim)
@@ -1284,6 +1288,9 @@ class EmbeddingManager(nn.Module):
                                      layer_static_extra_emb_mean, 
                                      self.img_mask, ada_bp_to_unet, 
                                      self.cached_infeat_bg[layer_idx])
+
+            if self.img_mask is not None and self.img_mask.max() > 1:
+                breakpoint()
 
             ada_subj_embs_dict[placeholder_string] = placeholder_embedding
 

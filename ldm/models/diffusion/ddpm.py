@@ -1443,6 +1443,8 @@ class LatentDiffusion(DDPM):
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
                             cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE]
+                    else:
+                        BLOCK_SIZE = ORIG_BS
 
                     # Otherwise, do_static_prompt_delta_reg but not do_ada_emb_delta_reg.
                     # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 2.
@@ -1496,9 +1498,14 @@ class LatentDiffusion(DDPM):
                     # In mix reg iters, background tokens only appear 10% of the time 
                     # to provide delta reg on ada embeddings of bg tokens.
                     if self.iter_flags['use_background_token']:
-                        # All 4 types of prompts have the same background token. 
-                        # So placeholder_indices_bg == bg_indices_4b.
-                        extra_info['bg_indices_2b'] = copy.copy(self.embedding_manager.placeholder_indices_bg)
+                        # Sometimes (when bg_init_words is not speicified), all 4 types of prompts 
+                        # have the same background token. Then placeholder_indices_bg == bg_indices_4b.
+                        if self.embedding_manager.placeholder_indices_bg[0].unique() == 4 * BLOCK_SIZE:
+                            extra_info['bg_indices_4b'] = copy.copy(self.embedding_manager.placeholder_indices_bg)
+                            extra_info['bg_indices_2b'] = halve_token_indices(extra_info['bg_indices_4b'])
+                        else:
+                            extra_info['bg_indices_2b'] = copy.copy(self.embedding_manager.placeholder_indices_bg)
+
                         extra_info['bg_indices_1b'] = halve_token_indices(extra_info['bg_indices_2b'])
                         # bg_indices_half_N: the first half batch of background token indices (the token dim)
                         bg_indices_half_N = extra_info['bg_indices_2b'][1]

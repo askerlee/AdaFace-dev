@@ -40,3 +40,7 @@ scripts/stable_txt2img_db.py
 /releases
 *.DS_Store*
 *subject-models*
+private-scripts/*
+private-scripts
+private-data/*
+private-data
