@@ -550,7 +550,7 @@ def main(opt):
             if init_mask_path is not None:
                 mask_obj = Image.open(init_mask_path).convert("L")
                 print(f"Applied mask {init_mask_path}")
-                mask     = torch.from_numpy(np.array(mask_obj).astype(np.uint8)) / 255
+                mask     = torch.from_numpy(np.array(mask_obj)) / 255
                 mask     = F.interpolate(mask[None, None], size=(opt.H // opt.f, opt.W // opt.f), mode='nearest')
                 mask     = mask.repeat(batch_size, 1, 1, 1).to(device)
                 mask_dict = { 'fg_mask': mask, 'aug_mask': None }
@@ -563,6 +563,8 @@ def main(opt):
             x_T  = model.get_first_stage_encoding(model.encode_first_stage(init_img, mask_dict))  
             avg_x_T += torch.where(mask.bool(), x_T, torch.randn_like(x_T))
 
+        # If approximating different images as indepent Gaussian variables, 
+        # then their sum has a STD of sqrt(N). Normalization requires dividing by sqrt(N), instead of N.
         avg_x_T    /= np.sqrt(len(opt.init_img_paths))
         start_code  = avg_x_T * opt.init_img_weight + torch.randn_like(avg_x_T) * (1 - opt.init_img_weight)
 
