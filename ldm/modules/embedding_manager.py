@@ -945,10 +945,11 @@ class EmbeddingManager(nn.Module):
                     
                 # avg_init_word_embedding_3d: [16, 9, 768]. 
                 # All layers of all 9 embeddings are initialized as avg_init_word_embedding.
-                ada_emb_cache = Embedding2d(self.num_layers_per_embedder, num_vectors_per_token, self.token_dim, 
-                                            init_embedding=avg_init_word_embedding_3d)
-                token_ada_ema_emb = LitEma(ada_emb_cache, decay=0.995, requires_grad=True)
-                self.token2ada_emb_cache[placeholder_string] = ada_emb_cache
+                if self.ada_ema_as_static_emb_weight > 0:
+                    ada_emb_cache = Embedding2d(self.num_layers_per_embedder, num_vectors_per_token, self.token_dim, 
+                                                init_embedding=avg_init_word_embedding_3d)
+                    token_ada_ema_emb = LitEma(ada_emb_cache, decay=0.995, requires_grad=True)
+                    self.token2ada_emb_cache[placeholder_string] = ada_emb_cache
 
                 # Reserve 1 embedding to take both fg and cached-bg infeat. 
                 # Half of the embeddings are fg embeddings, and (the other half - 1) are bg embeddings.
@@ -1151,7 +1152,7 @@ class EmbeddingManager(nn.Module):
             else:
                 ada_ema_emb_gs = 0
 
-            # By default, ada_ema_as_static_emb_weight = 0.25.
+            # By default, ada_ema_as_static_emb_weight = 0.
             placeholder_embedding = placeholder_embedding * (1 - self.ada_ema_as_static_emb_weight) \
                                                         + ada_ema_emb_gs      * self.ada_ema_as_static_emb_weight
             static_subj_embs_dict[placeholder_string] = placeholder_embedding
@@ -1414,7 +1415,8 @@ class EmbeddingManager(nn.Module):
             # then it's time to update EMA embeddings.
             # This should happen after the previous training iteration finishes and 
             # before the current training iteration begins.
-            if self.training and (len(ada_temp_emb.cached_layer) == ada_temp_emb.num_layers):
+            if self.training and self.ada_ema_as_static_emb_weight > 0 \
+              and (len(ada_temp_emb.cached_layer) == ada_temp_emb.num_layers):
                 self.string_to_ada_ema_emb_dict[k](ada_temp_emb)
                 ada_temp_emb.reset_cached_layer_tracker()
 
@@ -1513,7 +1515,13 @@ class EmbeddingManager(nn.Module):
                     placeholder_mapper[from_] = to_
             else:
                 placeholder_mapper = None
-                
+
+            # If multiple checkpoints have different ada_emb_weight, the last one will be used.
+            if "ada_emb_weight" in ckpt:
+                self.set_ada_emb_weight(ckpt["ada_emb_weight"], is_first_time_print=False)
+            if "ada_ema_as_static_emb_weight" in ckpt:
+                self.set_ada_ema_as_static_emb_weight(ckpt["ada_ema_as_static_emb_weight"], is_first_time_print=False)
+
             ckpt = torch.load(ckpt_path, map_location='cpu')
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
@@ -1537,17 +1545,12 @@ class EmbeddingManager(nn.Module):
                         km2 = km.replace(k, k2)
                         self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
                         self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
-                        self.string_to_ada_ema_emb_dict[km2]     = ckpt["string_to_ada_ema_emb_dict"][km]
+                        if self.ada_ema_as_static_emb_weight > 0:
+                            self.string_to_ada_ema_emb_dict[km2]     = ckpt["string_to_ada_ema_emb_dict"][km]
                         
                         if km in ckpt["token2num_vectors"]:
                             token2num_vectors[km2] = ckpt["token2num_vectors"][km]
                         print(f"Loaded {km}->{km2} from {ckpt_path}")
-
-            # If multiple checkpoints have different ada_emb_weight, the last one will be used.
-            if "ada_emb_weight" in ckpt:
-                self.set_ada_emb_weight(ckpt["ada_emb_weight"], is_first_time_print=False)
-            if "ada_ema_as_static_emb_weight" in ckpt:
-                self.set_ada_ema_as_static_emb_weight(ckpt["ada_ema_as_static_emb_weight"], is_first_time_print=False)
 
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
