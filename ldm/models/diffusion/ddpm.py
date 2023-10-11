@@ -2394,62 +2394,13 @@ class LatentDiffusion(DDPM):
                     # If not is_teachable, do not do distillation this time 
                     # (since both instances are not good teachers), 
                     # NOTE: thus we can only compute emb reg and delta loss.
-                    # ada_embeddings = None => loss_ada_delta = 0.
-                    ada_embeddings = None
 
                     # In an self.iter_flags['do_teacher_filter'], and not teachable instances are found.
                     # guided_denoise() above is done on twin comp instances, 
                     # and we've computed twin_comp_ada_embeddings.
-                    if False and self.iter_flags['do_teacher_filter']:
-                        # twin_comp_ada_embeddings is within no_grad(), so it won't receive gradients.
-                        # NOTE: ada_embeddings here comes from the first call to guided_denoise(),
-                        # not the call immediately above. Therefore, it has no gradients.
-                        # Nonetheless, the delta loss takes both twin_single_ada_embeddings 
-                        # and twin_comp_ada_embeddings as input, the ada embeddings 
-                        # can still be optimized through twin_single_ada_embeddings.
-                        twin_comp_ada_embeddings = ada_embeddings
-                        # Ada delta loss requires twin subj-single embeddings that match the 
-                        # previously cached twin comp embeddings.
-                        # Prepare for twin subj-single condition. Only use the ada embeddings for delta loss.
-                        # BS = 2. Corresponds to the twin comp instances (subj comp 1, subj comp 2).
-                        c_static_emb3 = subj_single_emb.repeat(2, 1, 1, 1)
-                        c_in3 = subj_single_prompts * 2
-                        extra_info3 = copy.copy(extra_info)
-                        # No mix_hijk, since c_static_emb3 (subj_single_emb) only contains one type of embeddings
-                        # (instead of K and V).
-                        extra_info3['iter_type'] = 'normal_recon'
-                        cond_single = (c_static_emb3, c_in3, extra_info3)
-                        # Previously retured ada_embeddings from guided_denoise() is twin_comp_ada_embeddings. 
-                        # twin_comp_ada_embeddings: [4, 16, 77, 768], 
-                        # the two sets of ada embeddings with compositional prompts.
-                        self.embedding_manager.reset_prompt_embedding_caches()
-
-                        # Only take the first half of the batch, as the init conditions 
-                        # of the second half is a repeat of the first half.
-                        x_start_ = x_start.chunk(2)[0]
-                        noise_   = noise.chunk(2)[0]
-                        t_       = t.chunk(2)[0]
-
-                        # twin_single_ada_embeddings: [2, 16, 77, 768]. batch size = 2, 
-                        # as it's only the twin subj-single instances. 
-                        # (cls-single ada embeddings are the same as cls-single static embeddings, 
-                        # so no need to generate them)
-                        # twin_single_ada_embeddings has gradients, as has_grad=True by default.
-                        # The iter_type is still 'mix_hijk'. But it should output the same results as 
-                        # normal prompt embeddings, since subj_single_emb 
-                        # consists of identical q, k embeddings.
-                        # Both prompts are subj-single prompts, so in cond_single 
-                        # (inherits extra_info from cond),
-                        # use_conv_attn = self.use_conv_attn.
-                        model_output, x_recon, twin_single_ada_embeddings = \
-                            self.guided_denoise(x_start_, noise_, t_, cond_single,
-                                                subj_indices=extra_info['subj_indices_2b'],
-                                                bg_indices=extra_info['bg_indices_2b'],
-                                                unet_has_grad=False, crossattn_force_grad=True)
-                        
-                        # No need to concatenate these two, instead let calc_prompt_emb_delta_loss() handle the intricacy.
-                        ada_embeddings = (twin_single_ada_embeddings, twin_comp_ada_embeddings)
-
+                    # ada_embeddings = None => loss_ada_delta = 0.
+                    if self.iter_flags['do_teacher_filter']:
+                        ada_embeddings = None
                     # Otherwise, it's an reuse_init_conds iter, and no teachable instances are found.
                     # We've computed the ada embeddings for the 4-type instances, 
                     # so just use the existing ada_embeddings (but avoid distillation).
