@@ -950,7 +950,9 @@ class EmbeddingManager(nn.Module):
                                                 init_embedding=avg_init_word_embedding_3d)
                     token_ada_ema_emb = LitEma(ada_emb_cache, decay=0.995, requires_grad=True)
                     self.token2ada_emb_cache[placeholder_string] = ada_emb_cache
-
+                else:
+                    token_ada_ema_emb  = None
+                    
                 # Reserve 1 embedding to take both fg and cached-bg infeat. 
                 # Half of the embeddings are fg embeddings, and (the other half - 1) are bg embeddings.
                 # If num_vectors_per_token == 1, then fg_emb_count = 0, bg_emb_count = 0.
