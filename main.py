@@ -254,7 +254,7 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--rand_scale_range",
                         type=float, nargs=2, 
-                        default=[0.8, 1.05],
+                        default=[0.7, 1.0],
                         help="Range of random scaling on training images (set to 1 1 to disable)")
 
     parser.add_argument("--composition_regs_iter_gap",
@@ -270,15 +270,16 @@ def get_parser(**parser_kwargs):
                         help="Whether the subject is a human/animal, object or cartoon (0: object, 1: human/animal, 2: cartoon)")
     # nargs="?" and const=True: --use_fp_trick or --use_fp_trick True or --use_fp_trick 1 
     # are all equavalent.
-    parser.add_argument("--use_fp_trick", nargs="?", type=str2bool, const=True, default=True,
+    parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
 
-    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5, 0.5],
-                        help="Weight of the skip connections of the last few layers of CLIP text embedder. " 
-                             "NOTE: the last element is the weight of the last layer.")
+    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
+                        help="Relative weights of the skip connections of the last few layers of CLIP text embedder. " 
+                             "(The last element is the weight of the last layer, ...)")
 
     parser.add_argument("--randomize_clip_skip_weights", nargs="?", type=str2bool, const=True, default=False,
-                        help="Whether to randomize the skip weights of CLIP text embedder")
+                        help="Whether to randomize the skip weights of CLIP text embedder. "
+                             "If True, the weights are sampled from a Dirichlet distribution with clip_last_layers_skip_weights as the alpha.")
     
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
                         help="Disable wandb logging")    
