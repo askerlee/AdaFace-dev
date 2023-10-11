@@ -2312,8 +2312,6 @@ class LatentDiffusion(DDPM):
                     self.embedding_manager.reset_prompt_embedding_caches()
 
                     better_cand_idx = torch.argmax(loss_diffs_subj_mix)
-                    loss_clip_subj_comp = losses_clip_subj_comp[better_cand_idx]
-                    loss_diff_subj_mix  = loss_diffs_subj_mix[better_cand_idx]
 
                     # Choose the x_start, noise, and t of the better candidate. 
                     # Repeat 4 times and use them as the condition to do denoising again.
@@ -2323,8 +2321,9 @@ class LatentDiffusion(DDPM):
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
                     # Mix embeddings to get c_static_emb_orig_vk for cond_orig.
                     # Do mixing on saved cond_orig instead of the updated "cond".
-                    # cond_orig is organized as (subj single, subj comp, mix single, mix comp).
-                    # but cond  is organized as (subj comp, subj comp, mix comp, mix comp).
+                    # cond_orig is the 4-type prompt embeddings (subj single, subj comp, mix single, mix comp).
+                    # but cond  has been re-organized as (subj comp, subj comp, mix comp, mix comp). 
+                    # So we use cond_orig.
                     c_static_emb_orig_vk, emb_v_mixer, emb_v_layers_cls_mix_scales = \
                         mix_static_vk_embeddings(cond_orig[0], extra_info['subj_indices_1b'][1], 
                                                  self.training_percent,
@@ -2336,7 +2335,7 @@ class LatentDiffusion(DDPM):
                     extra_info['emb_v_mixer']                   = emb_v_mixer
                     # emb_v_layers_cls_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
                     # Different from the emb_v_layers_cls_mix_scales above, which is for the twin comp instances.
-                    extra_info['emb_v_layers_cls_mix_scales']  = emb_v_layers_cls_mix_scales  
+                    extra_info['emb_v_layers_cls_mix_scales']   = emb_v_layers_cls_mix_scales  
                     # Update c_static_emb.
                     cond_orig_qv = (c_static_emb_orig_vk, cond_orig[1], extra_info)
 
@@ -2366,7 +2365,7 @@ class LatentDiffusion(DDPM):
                     # Note the 4 types of prompts have to be the same as this iter, 
                     # since this x_recon was denoised under this cond.
                     # Use the subject half of the batch, chunk(2)[0], instead of the mix half, chunk(2)[1], as 
-                    # the subject half is better at subject authenticity (but worse on composition).
+                    # the subject half is better at subject authenticity (but may be worse on composition).
                     x_recon_sel_rep = x_recon.detach().chunk(2)[0].repeat(2, 1, 1, 1)
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but under some settings, maybe mix comp = subj comp.
@@ -2395,11 +2394,13 @@ class LatentDiffusion(DDPM):
                     # If not is_teachable, do not do distillation this time 
                     # (since both instances are not good teachers), 
                     # NOTE: thus we can only compute emb reg and delta loss.
+                    # ada_embeddings = None => loss_ada_delta = 0.
+                    ada_embeddings = None
 
                     # In an self.iter_flags['do_teacher_filter'], and not teachable instances are found.
                     # guided_denoise() above is done on twin comp instances, 
                     # and we've computed twin_comp_ada_embeddings.
-                    if self.iter_flags['do_teacher_filter']:
+                    if False and self.iter_flags['do_teacher_filter']:
                         # twin_comp_ada_embeddings is within no_grad(), so it won't receive gradients.
                         # NOTE: ada_embeddings here comes from the first call to guided_denoise(),
                         # not the call immediately above. Therefore, it has no gradients.
@@ -2492,14 +2493,11 @@ class LatentDiffusion(DDPM):
             # do_ada_emb_delta_reg controls whether to do ada comp delta reg here.
             # Use subj_indices_1b here, since this index is used to extract 
             # subject embeddings from each block, and compare two such blocks.
-            try:
-                loss_static_delta, loss_ada_delta \
-                = self.embedding_manager.calc_prompt_emb_delta_loss( 
-                                        extra_info['c_static_emb_4b'], ada_embeddings,
-                                        self.iter_flags['do_ada_emb_delta_reg']
-                                       )
-            except:
-                breakpoint()
+            loss_static_delta, loss_ada_delta \
+            = self.embedding_manager.calc_prompt_emb_delta_loss( 
+                                    extra_info['c_static_emb_4b'], ada_embeddings,
+                                    self.iter_flags['do_ada_emb_delta_reg']
+                                    )
 
             loss_dict.update({f'{prefix}/static_delta': loss_static_delta.mean().detach()})
             if loss_ada_delta != 0:
@@ -2599,35 +2597,35 @@ class LatentDiffusion(DDPM):
                         + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
                         + loss_subj_comp_attn_comple * self.subj_comp_attn_complementary_loss_weight
                 
-            # NOTE: loss_comp_fg_bg_preserve is applied only when this 
-            # iteration is teachable, because at such iterations the unet gradient is enabled.
-            # The current iteration may be a fresh iteration or a reuse_init_conds iteration.
-            # In both cases, if comp_init_with_fg_area, then we need to preserve the fg/bg areas.
-            # Although fg_mask_avail_ratio > 0 when comp_init_with_fg_area,
-            # fg_mask_avail_ratio may have been updated after doing teacher filtering 
-            # (since x_start has been filtered, masks are also filtered accordingly, 
-            # and the same as to fg_mask_avail_ratio). So we need to check it here.
-            if self.iter_flags['comp_init_with_fg_area'] and self.fg_mask_avail_ratio > 0 \
-              and self.iter_flags['is_teachable'] and self.comp_fg_bg_preserve_loss_weight > 0:
-                attns_or_scores = 'unet_attnscores' if self.comp_bg_attn_suppress_uses_scores \
-                                  else 'unet_attns'
-                loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress = \
-                    self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info[attns_or_scores], 
-                                                       fg_mask, batch_have_fg_mask,
-                                                       extra_info['subj_indices_1b'], BLOCK_SIZE)
-                if loss_comp_fg_feat_contrast > 0:
-                    loss_dict.update({f'{prefix}/comp_fg_feat_contrast': loss_comp_fg_feat_contrast.mean().detach()})
-                if loss_comp_bg_attn_suppress > 0:
-                    loss_dict.update({f'{prefix}/comp_bg_attn_suppress': loss_comp_bg_attn_suppress.mean().detach()})
-                bg_attn_suppress_loss_scale = 0.2
-                loss_comp_fg_bg_preserve = loss_comp_fg_feat_contrast + loss_comp_bg_attn_suppress * bg_attn_suppress_loss_scale
-            else:
-                loss_comp_fg_bg_preserve = 0
+                # NOTE: loss_comp_fg_bg_preserve is applied only when this 
+                # iteration is teachable, because at such iterations the unet gradient is enabled.
+                # The current iteration may be a fresh iteration or a reuse_init_conds iteration.
+                # In both cases, if comp_init_with_fg_area, then we need to preserve the fg/bg areas.
+                # Although fg_mask_avail_ratio > 0 when comp_init_with_fg_area,
+                # fg_mask_avail_ratio may have been updated after doing teacher filtering 
+                # (since x_start has been filtered, masks are also filtered accordingly, 
+                # and the same as to fg_mask_avail_ratio). So we need to check it here.
+                if self.iter_flags['comp_init_with_fg_area'] and self.fg_mask_avail_ratio > 0 \
+                and self.comp_fg_bg_preserve_loss_weight > 0:
+                    attns_or_scores = 'unet_attnscores' if self.comp_bg_attn_suppress_uses_scores \
+                                    else 'unet_attns'
+                    loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress = \
+                        self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info[attns_or_scores], 
+                                                        fg_mask, batch_have_fg_mask,
+                                                        extra_info['subj_indices_1b'], BLOCK_SIZE)
+                    if loss_comp_fg_feat_contrast > 0:
+                        loss_dict.update({f'{prefix}/comp_fg_feat_contrast': loss_comp_fg_feat_contrast.mean().detach()})
+                    if loss_comp_bg_attn_suppress > 0:
+                        loss_dict.update({f'{prefix}/comp_bg_attn_suppress': loss_comp_bg_attn_suppress.mean().detach()})
+                    bg_attn_suppress_loss_scale = 0.2
+                    loss_comp_fg_bg_preserve = loss_comp_fg_feat_contrast + loss_comp_bg_attn_suppress * bg_attn_suppress_loss_scale
+                else:
+                    loss_comp_fg_bg_preserve = 0
 
-            # Scale down loss_comp_fg_bg_preserve if reuse_init_conds.
-            comp_fg_bg_preserve_loss_scale = 0.25 if self.iter_flags['reuse_init_conds'] else 1
-            loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
-                     * comp_fg_bg_preserve_loss_scale
+                # Scale down loss_comp_fg_bg_preserve if reuse_init_conds.
+                comp_fg_bg_preserve_loss_scale = 0.25 if self.iter_flags['reuse_init_conds'] else 1
+                loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
+                        * comp_fg_bg_preserve_loss_scale
 
         self.release_plosses_intermediates(locals())
         loss_dict.update({f'{prefix}/loss': loss.mean().detach()})

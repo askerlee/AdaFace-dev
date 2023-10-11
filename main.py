@@ -252,13 +252,11 @@ def get_parser(**parser_kwargs):
         type=float, default=-1,
         help="Prompt delta regularization weight")
 
-    parser.add_argument("--min_rand_scaling",
-                        type=float, default=0.8, 
-                        help="Minimum random scaling factor of training images (set to -1 to disable)")
-    parser.add_argument("--max_rand_scaling",
-                        type=float, default=1.05,
-                        help="Maximum random scaling factor of training images (default: 1.05)")
-    
+    parser.add_argument("--rand_scale_range",
+                        type=float, nargs=2, 
+                        default=[0.8, 1.05],
+                        help="Range of random scaling on training images (set to 1 1 to disable)")
+
     parser.add_argument("--composition_regs_iter_gap",
                         type=int, default=argparse.SUPPRESS,
                         help="Gap between iterations for composition regularization. "
@@ -783,7 +781,7 @@ if __name__ == "__main__":
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
 
         config.data.params.train.params.num_compositions_per_image = opt.num_compositions_per_image
-        config.data.params.train.params.rand_scaling_range = (opt.min_rand_scaling, opt.max_rand_scaling)
+        config.data.params.train.params.rand_scale_range = opt.rand_scale_range
         
         # layerwise_lora_rank has the highest priority. 
         # If layerwise_lora_rank is not specified, use layerwise_lora_rank_token_ratio.

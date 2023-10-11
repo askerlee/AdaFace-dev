@@ -37,7 +37,7 @@ set H2 $LEN
 
 if [ $method = 'ada' ]; or [ $method = 'ti' ]; or [ $method = 'db' ]
     # In db eval training images, the subjects are usually small.
-    # So set rand_scaling_range = (0.9, 1.1), so that the generated images tend to be larger, 
+    # So set rand_scale_range = (0.9, 1.1), so that the generated images tend to be larger, 
     # and have higher DINO/CLIP scores.
     if [ $method = 'ada' ]; or [ $method = 'ti' ]
         set EXTRA_ARGS --min_rand_scaling 0.9 --max_rand_scaling 1.1 --prompt_emb_delta_reg_weight 0.01 --embedding_reg_weight 0.01 $EXTRA_ARGS

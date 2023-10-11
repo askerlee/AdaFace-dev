@@ -28,4 +28,4 @@ set -g sel_set              4 8 9 11 12 14 18 19 22 25
 # "instagram" for the main dataset, to focus on faces.
 set -g db_suffix           ", instagram"
 set -g data_folder         data
-set -g misc_train_opts     --static_embedding_reg_weight 1e-4   --ada_embedding_reg_weight 2e-3
+set -g misc_train_opts     --static_embedding_reg_weight 2e-5 --ada_embedding_reg_weight 2e-3 --rand_scale_range 0.7 1.0

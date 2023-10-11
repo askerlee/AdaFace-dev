@@ -116,9 +116,9 @@ class PersonalizedBase(Dataset):
                  size=None,
                  repeats=100,
                  flip_p=0.5,
-                 # rand_scaling_range: None (disabled) or a tuple of floats
+                 # rand_scale_range: None (disabled) or a tuple of floats
                  # that specifies the (minimum, maximum) scaling factors.
-                 rand_scaling_range=None,
+                 rand_scale_range=None,
                  set="train",
                  placeholder_string="z",
                  background_string=None,
@@ -205,7 +205,7 @@ class PersonalizedBase(Dataset):
         
         if self.is_training:
             self.flip = transforms.RandomHorizontalFlip(p=flip_p)
-            if rand_scaling_range is not None:
+            if rand_scale_range is not None:
                 # If the scale factor > 1, RandomAffine will crop the scaled image to the original size.
                 # If the scale factor < 1, RandomAffine will pad the scaled image to the original size.
                 # Because the scaled "images" are extended with two mask channels, which contain many zeros,
@@ -214,11 +214,11 @@ class PersonalizedBase(Dataset):
                 # RandomAffine() doesn't change the input image size, 
                 # so transforms.Resize() is redundant. Anyway, just keep it here.
                 self.random_scaler = transforms.Compose([
-                                        transforms.RandomAffine(degrees=0, shear=0, scale=rand_scaling_range,
+                                        transforms.RandomAffine(degrees=0, shear=0, scale=rand_scale_range,
                                                                 interpolation=InterpolationMode.NEAREST),
                                         transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
                                     ])
-                print(f"{set} images will be randomly scaled in range {rand_scaling_range}")
+                print(f"{set} images will be randomly scaled in range {rand_scale_range}")
         else:
             self.random_scaler = None
             self.flip = None
