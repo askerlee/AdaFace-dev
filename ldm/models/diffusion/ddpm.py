@@ -2528,7 +2528,7 @@ class LatentDiffusion(DDPM):
                 subj_attn_delta_distill_loss_scale = 0.5
                 # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
                 # smaller magnitudes than the delta loss. So we scale it up by 20x.
-                subj_attn_norm_distill_loss_scale  = 2 if self.subj_attn_delta_distill_uses_scores else 20
+                subj_attn_norm_distill_loss_scale  = 5 if self.subj_attn_delta_distill_uses_scores else 20
                 # Using distill_deep_neg_prompt will somehow increase the subj attn norm. So punish it more.
                 if self.distill_deep_neg_context is not None:
                     subj_attn_norm_distill_loss_scale *= 2
