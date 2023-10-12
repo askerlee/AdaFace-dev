@@ -3063,6 +3063,12 @@ class LatentDiffusion(DDPM):
             H  = int(np.sqrt(attn_mat.shape[-1]))
             Hx = int(np.sqrt(attn_mat_xlayer.shape[-1]))
 
+            # Why taking mean over 8 heads: In a CA layer, FFN features added to the CA features. 
+            # If there were no FFN pathways, the CA features of the previous CA layer would be better aligned
+            # with the current CA layer (ignoring the transformations by the intermediate conv layers).
+            # Therefore, the CA features in the current CA layer may be barely aligned 
+            # with the CA features in the L_xlayer-th CA layer. So it's of little benefit
+            # to align the corresponding heads across CA layers.
             # subj_attn:        [8, 8, 256] -> [2, 4, 8, 256] -> mean among 8 heads -> [2, 4, 256] 
             subj_attn        = attn_mat[subj_indices].reshape(       SSB_SIZE, K_fg, *attn_mat.shape[2:]).mean(dim=2)
             # subj_attn_xlayer: [8, 8, 64]  -> [2, 4, 8, 64]  -> mean among 8 heads -> [2, 4, 64]
