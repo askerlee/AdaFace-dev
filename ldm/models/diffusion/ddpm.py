@@ -1762,7 +1762,7 @@ class LatentDiffusion(DDPM):
 
     def _predict_eps_from_xstart(self, x_t, t, pred_xstart):
         return (extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - pred_xstart) / \
-               extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
+                extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
 
     def _prior_bpd(self, x_start):
         """
@@ -1918,7 +1918,7 @@ class LatentDiffusion(DDPM):
                 # x1, x2 are different, but they are generated with the same initial noise in the 
                 # previous reconstruction. This is desired as a simulation of a multi-step inference process.
                 BLOCK_SIZE  = max(x_start.shape[0] // 4, 1)
-                # Randomly choose t from the middle 300-600 timesteps, 
+                # Randomly choose t from the middle 400-700 timesteps, 
                 # so as to match the once-denoised x_start.
                 # generate the full batch size of t, but actually only use the first block of BLOCK_SIZE.
                 # This is to make the code consistent with the non-comp case and avoid unnecessary confusion.
@@ -2806,8 +2806,8 @@ class LatentDiffusion(DDPM):
         return loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_delta_distill
 
     def calc_fg_bg_complementary_loss(self, unet_attns_or_scores, unet_attnscores,
-                                      placeholder_indices_fg, 
-                                      placeholder_indices_bg, 
+                                      subj_indices, 
+                                      bg_indices, 
                                       BS, img_mask, fg_grad_scale=0.1,
                                       fg_mask=None, batch_have_fg_mask=None):
         # Discard the first few bottom layers from alignment.
@@ -2825,9 +2825,9 @@ class LatentDiffusion(DDPM):
         attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
 
         # K_fg: 4, number of embeddings per subject token.
-        K_fg = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
+        K_fg = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
         # K_bg: 1 or 2, number of embeddings per background token.
-        K_bg = len(placeholder_indices_bg[0]) // len(torch.unique(placeholder_indices_bg[0]))
+        K_bg = len(bg_indices[0]) // len(torch.unique(bg_indices[0]))
 
         loss_fg_bg_complementary = 0
         loss_fg_mask_align = 0
@@ -2840,15 +2840,15 @@ class LatentDiffusion(DDPM):
         subj_bg_contrast_at_mf_score_margin   = 0.4 * K_fg / K_bg     # 0.8
         bg_subj_contrast_at_mb_score_margin   = 0.4 * K_bg / K_fg     # 0.2
 
-        # In each instance, placeholder_indices_fg has K_fg times as many elements as placeholder_indices_bg.
-        # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
+        # In each instance, subj_indices has K_fg times as many elements as bg_indices.
+        # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
-        # placeholder_indices_bg: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
+        # bg_indices: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
         # BS = 2, so we only keep instances indexed by [0, 1].
-        # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
-        placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K_fg], placeholder_indices_fg[1][:BS*K_fg])
-        # placeholder_indices_bg: ([0, 1], [11, 12]).
-        placeholder_indices_bg = (placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg])
+        # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
+        subj_indices = (subj_indices[0][:BS*K_fg], subj_indices[1][:BS*K_fg])
+        # bg_indices: ([0, 1], [11, 12]).
+        bg_indices = (bg_indices[0][:BS*K_bg], bg_indices[1][:BS*K_bg])
 
         #fg_attn_grad_scale  = 0.5
         #fg_attn_grad_scaler = gen_gradient_scaler(fg_attn_grad_scale)
@@ -2861,11 +2861,11 @@ class LatentDiffusion(DDPM):
             # [2, 77, 8, 256] / [2, 77, 8, 64]
             attn_mat = unet_attn.permute(0, 3, 1, 2)
             # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
-            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat.shape[2:]).sum(dim=1)
+            subj_attn = attn_mat[subj_indices].reshape(BS, K_fg, *attn_mat.shape[2:]).sum(dim=1)
 
             # bg_attn:   [4, 8, 64] -> [2, 2, 8, 64] sum among K_bg embeddings -> [2, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
-            bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).sum(dim=1)
+            bg_attn   = attn_mat[bg_indices].reshape(BS, K_bg, *attn_mat.shape[2:]).sum(dim=1)
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
             
@@ -2899,9 +2899,9 @@ class LatentDiffusion(DDPM):
             if (fg_mask is not None) and (batch_have_fg_mask.sum() > 0):
                 attnscore_mat = unet_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
                 # subj_score: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
-                subj_score = attnscore_mat[placeholder_indices_fg].reshape(BS, K_fg, *attnscore_mat.shape[2:]).sum(dim=1)
+                subj_score = attnscore_mat[subj_indices].reshape(BS, K_fg, *attnscore_mat.shape[2:]).sum(dim=1)
                 # bg_score:   [4, 8, 64] -> [2, 2, 8, 64] sum among K_bg embeddings -> [2, 8, 64]
-                bg_score   = attnscore_mat[placeholder_indices_bg].reshape(BS, K_bg, *attnscore_mat.shape[2:]).sum(dim=1)
+                bg_score   = attnscore_mat[bg_indices].reshape(BS, K_bg, *attnscore_mat.shape[2:]).sum(dim=1)
 
                 fg_mask2 = scale_mask_for_feat_attn(subj_attn, fg_mask, "fg_mask", mode="nearest|bilinear")
                 # Repeat 8 times to match the number of attention heads.
@@ -3063,37 +3063,35 @@ class LatentDiffusion(DDPM):
             H  = int(np.sqrt(attn_mat.shape[-1]))
             Hx = int(np.sqrt(attn_mat_xlayer.shape[-1]))
 
-            # subj_attn: [8, 8, 256] -> [2, 4, 8, 256] sum among K_fg embeddings -> [2, 8, 256] 
-            # -> mean among 8 heads -> [2, 256]
-            subj_attn = attn_mat[subj_indices].reshape(SSB_SIZE, K_fg, *attn_mat.shape[2:]).sum(dim=1).mean(dim=1, keepdim=True)
-            # subj_attn_xlayer: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
-            # -> mean among 8 heads -> [2, 64]
-            subj_attn_xlayer = attn_mat_xlayer[subj_indices].reshape(SSB_SIZE, K_fg, *attn_mat_xlayer.shape[2:]).sum(dim=1).mean(dim=1, keepdim=True)
+            # subj_attn:        [8, 8, 256] -> [2, 4, 8, 256] -> mean among 8 heads -> [2, 4, 256] 
+            subj_attn        = attn_mat[subj_indices].reshape(       SSB_SIZE, K_fg, *attn_mat.shape[2:]).mean(dim=2)
+            # subj_attn_xlayer: [8, 8, 64]  -> [2, 4, 8, 64]  -> mean among 8 heads -> [2, 4, 64]
+            subj_attn_xlayer = attn_mat_xlayer[subj_indices].reshape(SSB_SIZE, K_fg, *attn_mat_xlayer.shape[2:]).mean(dim=2)
 
-            # subj_attn: [2, 8, 256] -> [2, 8, 16, 16] -> [2, 8, 8, 8] -> [2, 8, 64]
-            subj_attn = subj_attn.reshape(SSB_SIZE, 1, H, H)
+            # subj_attn: [2, 4, 256] -> [2, 4, 16, 16] -> [2, 4, 8, 8] -> [2, 4, 64]
+            subj_attn = subj_attn.reshape(SSB_SIZE, -1, H, H)
             subj_attn = F.interpolate(subj_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
-            subj_attn = subj_attn.reshape(SSB_SIZE, 1, Hx*Hx)
+            subj_attn = subj_attn.reshape(SSB_SIZE, -1, Hx*Hx)
 
             if bg_indices is not None:
-                # bg_attn:   [4, 8, 256] -> [2, 2, 8, 256] sum among K_bg embeddings -> [2, 8, 256]
+                # bg_attn:   [4, 8, 256] -> [2, 2, 8, 256] -> sum over 8 attention heads -> [2, 2, 256]
                 # 8: 8 attention heads. Last dim 256: number of image tokens.
-                bg_attn   = attn_mat[bg_indices].reshape(SSB_SIZE, K_bg, *attn_mat.shape[2:]).sum(dim=1).mean(dim=1, keepdim=True)
-                bg_attn_xlayer   = attn_mat_xlayer[bg_indices].reshape(SSB_SIZE, K_bg, *attn_mat_xlayer.shape[2:]).sum(dim=1).mean(dim=1, keepdim=True)
-                # bg_attn: [2, 8, 256] -> [2, 8, 16, 16] -> [2, 8, 8, 8] -> [2, 8, 64]
-                bg_attn   = bg_attn.reshape(SSB_SIZE, 1, H, H)
+                bg_attn   = attn_mat[bg_indices].reshape(SSB_SIZE, K_bg, *attn_mat.shape[2:]).mean(dim=2)
+                bg_attn_xlayer   = attn_mat_xlayer[bg_indices].reshape(SSB_SIZE, K_bg, *attn_mat_xlayer.shape[2:]).mean(dim=2)
+                # bg_attn: [2, 2, 256] -> [2, 2, 16, 16] -> [2, 2, 8, 8] -> [2, 2, 64]
+                bg_attn   = bg_attn.reshape(SSB_SIZE, -1, H, H)
                 bg_attn   = F.interpolate(bg_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
-                bg_attn   = bg_attn.reshape(SSB_SIZE, 1, Hx*Hx)
+                bg_attn   = bg_attn.reshape(SSB_SIZE, -1, Hx*Hx)
             
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
 
             if img_mask is not None:
                 # img_mask: [4, 1, 64, 64] -> [2, 1, 64, 64]
                 img_mask = img_mask[:SSB_SIZE]
-                # img_mask2: [2, 1, 64, 64] -> [2, 1, 8, 8]. subj_attn_xlayer: [2, 8, 64]
+                # img_mask2: [2, 1, 64, 64] -> [2, 1, 8, 8] -> [2, 1, 64]
+                # "1" will be broadcasted to 2: subj_attn_xlayer: [2, 2, 64]
                 img_mask2 = scale_mask_for_feat_attn(subj_attn_xlayer, img_mask, "img_mask", mode="nearest|bilinear")
-                # img_mask2: [2, 1, 8, 8] -> [2, 1, 64] -> [2, 8, 64].
-                img_mask2 = img_mask2.reshape(SSB_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
+                img_mask2 = img_mask2.reshape(SSB_SIZE, 1, -1)
                 subj_attn           = subj_attn         * img_mask2
                 subj_attn_xlayer    = subj_attn_xlayer  * img_mask2
 
@@ -3157,7 +3155,7 @@ class LatentDiffusion(DDPM):
         v_ortho_layer_weights = normalize_dict_values(v_ortho_layer_weights)
         # K_fg: 4, number of embeddings per subject token.
         K_fg   = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
-        # In each instance, subj_indices has K_fg times as many elements as placeholder_indices_bg.
+        # In each instance, subj_indices has K_fg times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
         # ind_subj_subj_B, ind_subj_subj_N: [1, 1, 1, 1], [5, 6, 7, 8].
