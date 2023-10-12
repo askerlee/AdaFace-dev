@@ -99,6 +99,7 @@ class DDPM(pl.LightningModule):
                  subj_comp_value_ortho_loss_weight=0.,
                  subj_comp_attn_complementary_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
+                 subj_attn_norm_distill_loss_scale=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_mask_align_loss_weight=0.,
@@ -137,6 +138,7 @@ class DDPM(pl.LightningModule):
         self.subj_comp_value_ortho_loss_weight  = subj_comp_value_ortho_loss_weight
         self.subj_comp_attn_complementary_loss_weight = subj_comp_attn_complementary_loss_weight
         self.mix_prompt_distill_weight          = mix_prompt_distill_weight
+        self.subj_attn_norm_distill_loss_scale  = subj_attn_norm_distill_loss_scale
         self.comp_fg_bg_preserve_loss_weight    = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight    = fg_bg_complementary_loss_weight
         self.fg_bg_mask_align_loss_weight       = fg_bg_mask_align_loss_weight
@@ -2527,8 +2529,12 @@ class LatentDiffusion(DDPM):
 
                 subj_attn_delta_distill_loss_scale = 0.5
                 # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
-                # smaller magnitudes than the delta loss. So we scale it up by 20x.
-                subj_attn_norm_distill_loss_scale  = 5 if self.subj_attn_delta_distill_uses_scores else 20
+                # smaller magnitudes than the delta loss. So we scale it up by 4x.
+                if self.subj_attn_delta_distill_uses_scores:
+                    subj_attn_norm_distill_loss_scale = self.subj_attn_norm_distill_loss_scale * 4
+                else:
+                    subj_attn_norm_distill_loss_scale = self.subj_attn_norm_distill_loss_scale
+                    
                 # Using distill_deep_neg_prompt will somehow increase the subj attn norm. So punish it more.
                 if self.distill_deep_neg_context is not None:
                     subj_attn_norm_distill_loss_scale *= 2
