@@ -2105,7 +2105,7 @@ class LatentDiffusion(DDPM):
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
                                 subj_indices=subj_indices, bg_indices=bg_indices,
-                                inj_noise_t=None, # inj_noise_t DISABLED
+                                inj_noise_t=inj_noise_t,
                                 unet_has_grad=not self.iter_flags['do_teacher_filter'], 
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 # do_pixel_recon is not the iter_type 'do_normal_recon'.
