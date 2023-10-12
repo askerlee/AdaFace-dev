@@ -847,7 +847,8 @@ class LatentDiffusion(DDPM):
                     # The cache will be used in calc_prompt_emb_delta_loss().
                     self.embedding_manager.reset_prompt_embedding_caches()
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
-                    # Do not consider mask on compositional reg iterations.
+                    # Do not consider mask on compositional reg iterations, as in such iters, 
+                    # the original pixels (out of the fg_mask) do not matter and can freely take any values.
                     if self.iter_flags['is_compos_iter']:
                         img_mask = None
 
@@ -1887,9 +1888,12 @@ class LatentDiffusion(DDPM):
         cfg_scales_for_clip_loss = None
         c_static_emb, c_in, extra_info = cond
 
+        # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
+        # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
+        # (img_mask is not used in the prompt-guided cross-attention layers).
         # Don't consider img_mask in compositional iterations. Because in compositional iterations,
-        # the original images don't play a role (even if we use the original image to initialize x_start,
-        # we still don't consider the actual pixels other than the subject areas, so img_mask doesn't matter).
+        # the original images don't play a role (even if comp_init_with_fg_area,
+        # we still don't consider the actual pixels out of the subject areas, so img_mask doesn't matter).
         extra_info['img_mask']  = img_mask if not self.iter_flags['is_compos_iter'] else None
 
         inj_noise_t = None
@@ -2101,7 +2105,7 @@ class LatentDiffusion(DDPM):
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
                                 subj_indices=subj_indices, bg_indices=bg_indices,
-                                inj_noise_t=inj_noise_t,
+                                inj_noise_t=None, # inj_noise_t DISABLED
                                 unet_has_grad=not self.iter_flags['do_teacher_filter'], 
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 # do_pixel_recon is not the iter_type 'do_normal_recon'.
@@ -2454,14 +2458,19 @@ class LatentDiffusion(DDPM):
             loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
         
         if self.fg_bg_xlayer_consist_loss_weight > 0:
-            # If do_normal_recon, then the batch size is BLOCK_SIZE = 2. Use both instances (1 * BLOCK_SIZE).
-            # If is_compos_iter, then the batch size is 4 * BLOCK_SIZE. Use only the subject half (2 * BLOCK_SIZE).
-            BS = BLOCK_SIZE if self.iter_flags['do_normal_recon'] else 2 * BLOCK_SIZE
+            # SSB_SIZE: subject sub-batch size.
+            # If do_normal_recon, then both instances are subject instances. 
+            # The subject sub-batch size SSB_SIZE = 2 (1 * BLOCK_SIZE).
+            # If is_compos_iter, then subject sub-batch size SSB_SIZE = 2 * BLOCK_SIZE. 
+            # (subj-single and subj-comp instances).
+            SSB_SIZE = BLOCK_SIZE if self.iter_flags['do_normal_recon'] else 2 * BLOCK_SIZE
             loss_fg_xlayer_consist, loss_bg_xlayer_consist = \
                 self.calc_fg_bg_xlayer_consist_loss(extra_info['unet_attnscores'],
                                                     extra_info['subj_indices'],
                                                     extra_info['bg_indices'],
-                                                    BS, img_mask)
+                                                    SSB_SIZE, 
+                                                    self.embedding_manager.delta_loss_emb_mask,                                                    
+                                                    img_mask)
             if loss_fg_xlayer_consist > 0:
                 loss_dict.update({f'{prefix}/fg_xlayer_consist': loss_fg_xlayer_consist.mean().detach()})
             if loss_bg_xlayer_consist > 0:
@@ -2551,8 +2560,8 @@ class LatentDiffusion(DDPM):
                                     else 'unet_attns'
                     loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress = \
                         self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info[attns_or_scores], 
-                                                        fg_mask, batch_have_fg_mask,
-                                                        extra_info['subj_indices_1b'], BLOCK_SIZE)
+                                                            fg_mask, batch_have_fg_mask,
+                                                            extra_info['subj_indices_1b'], BLOCK_SIZE)
                     if loss_comp_fg_feat_contrast > 0:
                         loss_dict.update({f'{prefix}/comp_fg_feat_contrast': loss_comp_fg_feat_contrast.mean().detach()})
                     if loss_comp_bg_attn_suppress > 0:
@@ -2983,12 +2992,14 @@ class LatentDiffusion(DDPM):
 
         return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_mask_contrast
 
-    # BS: block size, not batch size.
-    # placeholder_indices_bg could be None if iter_flags['use_background_token'] = False.
+    # SSB_SIZE: subject sub-batch size.
+    # bg_indices could be None if iter_flags['use_background_token'] = False.
     def calc_fg_bg_xlayer_consist_loss(self, unet_attns_or_scores,
-                                       placeholder_indices_fg, 
-                                       placeholder_indices_bg, 
-                                       BS, img_mask):
+                                       subj_indices, 
+                                       bg_indices, 
+                                       SSB_SIZE, 
+                                       delta_loss_emb_mask, 
+                                       img_mask):
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
         attn_align_layer_weights = { #7:  1., 8: 1.,
@@ -3006,22 +3017,30 @@ class LatentDiffusion(DDPM):
         attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
 
         # K_fg: 4, number of embeddings per subject token.
-        K_fg = len(placeholder_indices_fg[0]) // len(torch.unique(placeholder_indices_fg[0]))
-        # In each instance, placeholder_indices_fg has K_fg elements, 
-        # and placeholder_indices_bg has K_bg elements or 0 elements 
+        K_fg = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
+        # In each instance, subj_indices has K_fg elements, 
+        # and bg_indices has K_bg elements or 0 elements 
         # (if iter_flags['use_background_token'] = False)
-        # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
+        # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
-        # placeholder_indices_bg: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
-        # BS = 2, so we only keep instances indexed by [0, 1].
-        # placeholder_indices_fg: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
-        placeholder_indices_fg = (placeholder_indices_fg[0][:BS*K_fg], placeholder_indices_fg[1][:BS*K_fg])
+        # bg_indices: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
+        # SSB_SIZE = 2, so we only keep instances indexed by [0, 1].
+        # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
+        subj_indices = (subj_indices[0][:SSB_SIZE*K_fg], subj_indices[1][:SSB_SIZE*K_fg])
 
-        if placeholder_indices_bg is not None:
+        if bg_indices is not None:
             # K_bg: 1 or 2, number of embeddings per background token.
-            K_bg = len(placeholder_indices_bg[0]) // len(torch.unique(placeholder_indices_bg[0]))
-            # placeholder_indices_bg: ([0, 1], [11, 12]).
-            placeholder_indices_bg = (placeholder_indices_bg[0][:BS*K_bg], placeholder_indices_bg[1][:BS*K_bg])
+            K_bg = len(bg_indices[0]) // len(torch.unique(bg_indices[0]))
+            # bg_indices: ([0, 1], [11, 12]).
+            bg_indices = (bg_indices[0][:SSB_SIZE*K_bg], bg_indices[1][:SSB_SIZE*K_bg])
+
+        # align_weight_mask: [SSB_SIZE, 1, 77, 1] (recon iters) or [2*SSB_SIZE, 1, 77, 1] (comp iters)
+        # => [SSB_SIZE, 77]
+        xlayer_align_weight_mask = delta_loss_emb_mask[:SSB_SIZE, 0, :, 0].clone()
+        # Set higher weights for the foreground and background embeddings.
+        xlayer_align_weight_mask[subj_indices] = 4
+        if bg_indices is not None:
+            xlayer_align_weight_mask[bg_indices] = 4
 
         loss_fg_xlayer_consist = 0
         loss_bg_xlayer_consist = 0
@@ -3044,39 +3063,41 @@ class LatentDiffusion(DDPM):
             H  = int(np.sqrt(attn_mat.shape[-1]))
             Hx = int(np.sqrt(attn_mat_xlayer.shape[-1]))
 
-            # subj_attn: [8, 8, 256] -> [2, 4, 8, 256] sum among K_fg embeddings -> [2, 8, 256]
-            subj_attn = attn_mat[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat.shape[2:]).sum(dim=1)
+            # subj_attn: [8, 8, 256] -> [2, 4, 8, 256] sum among K_fg embeddings -> [2, 8, 256] 
+            # -> mean among 8 heads -> [2, 256]
+            subj_attn = attn_mat[subj_indices].reshape(SSB_SIZE, K_fg, *attn_mat.shape[2:]).sum(dim=1).mean(dim=1, keepdim=True)
             # subj_attn_xlayer: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
-            subj_attn_xlayer = attn_mat_xlayer[placeholder_indices_fg].reshape(BS, K_fg, *attn_mat_xlayer.shape[2:]).sum(dim=1)
+            # -> mean among 8 heads -> [2, 64]
+            subj_attn_xlayer = attn_mat_xlayer[subj_indices].reshape(SSB_SIZE, K_fg, *attn_mat_xlayer.shape[2:]).sum(dim=1).mean(dim=1, keepdim=True)
 
             # subj_attn: [2, 8, 256] -> [2, 8, 16, 16] -> [2, 8, 8, 8] -> [2, 8, 64]
-            subj_attn = subj_attn.reshape(BS, -1, H, H)
+            subj_attn = subj_attn.reshape(SSB_SIZE, 1, H, H)
             subj_attn = F.interpolate(subj_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
-            subj_attn = subj_attn.reshape(BS, -1, Hx*Hx)
+            subj_attn = subj_attn.reshape(SSB_SIZE, 1, Hx*Hx)
 
-            if placeholder_indices_bg is not None:
+            if bg_indices is not None:
                 # bg_attn:   [4, 8, 256] -> [2, 2, 8, 256] sum among K_bg embeddings -> [2, 8, 256]
                 # 8: 8 attention heads. Last dim 256: number of image tokens.
-                bg_attn   = attn_mat[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat.shape[2:]).sum(dim=1)
-                bg_attn_xlayer   = attn_mat_xlayer[placeholder_indices_bg].reshape(BS, K_bg, *attn_mat_xlayer.shape[2:]).sum(dim=1)
+                bg_attn   = attn_mat[bg_indices].reshape(SSB_SIZE, K_bg, *attn_mat.shape[2:]).sum(dim=1).mean(dim=1, keepdim=True)
+                bg_attn_xlayer   = attn_mat_xlayer[bg_indices].reshape(SSB_SIZE, K_bg, *attn_mat_xlayer.shape[2:]).sum(dim=1).mean(dim=1, keepdim=True)
                 # bg_attn: [2, 8, 256] -> [2, 8, 16, 16] -> [2, 8, 8, 8] -> [2, 8, 64]
-                bg_attn   = bg_attn.reshape(BS, -1, H, H)
+                bg_attn   = bg_attn.reshape(SSB_SIZE, 1, H, H)
                 bg_attn   = F.interpolate(bg_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
-                bg_attn   = bg_attn.reshape(BS, -1, Hx*Hx)
+                bg_attn   = bg_attn.reshape(SSB_SIZE, 1, Hx*Hx)
             
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
 
             if img_mask is not None:
                 # img_mask: [4, 1, 64, 64] -> [2, 1, 64, 64]
-                img_mask = img_mask[:BS]
+                img_mask = img_mask[:SSB_SIZE]
                 # img_mask2: [2, 1, 64, 64] -> [2, 1, 8, 8]. subj_attn_xlayer: [2, 8, 64]
                 img_mask2 = scale_mask_for_feat_attn(subj_attn_xlayer, img_mask, "img_mask", mode="nearest|bilinear")
                 # img_mask2: [2, 1, 8, 8] -> [2, 1, 64] -> [2, 8, 64].
-                img_mask2 = img_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
+                img_mask2 = img_mask2.reshape(SSB_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 subj_attn           = subj_attn         * img_mask2
                 subj_attn_xlayer    = subj_attn_xlayer  * img_mask2
 
-                if placeholder_indices_bg is not None:
+                if bg_indices is not None:
                     bg_attn             = bg_attn           * img_mask2
                     bg_attn_xlayer      = bg_attn_xlayer    * img_mask2
 
@@ -3095,7 +3116,7 @@ class LatentDiffusion(DDPM):
                                                             debug=False)
             loss_fg_xlayer_consist += loss_layer_fg_xlayer_consist * attn_align_layer_weight
             
-            if placeholder_indices_bg is not None:
+            if bg_indices is not None:
                 loss_layer_bg_xlayer_consist = calc_delta_loss(bg_attn, bg_attn_xlayer,
                                                                 exponent=2,    
                                                                 do_demean_first=False,
