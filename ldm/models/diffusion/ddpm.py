@@ -2480,7 +2480,7 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach()})
 
             # bg attention is more flexible and could be less consistent across layers.
-            bg_xlayer_consist_loss_scale = 0.1
+            bg_xlayer_consist_loss_scale = 0.2
             loss += self.fg_bg_xlayer_consist_loss_weight * \
                             (loss_fg_xlayer_consist + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale)
 
@@ -3120,32 +3120,29 @@ class LatentDiffusion(DDPM):
             # But we don't want to only focus on large activations. So set it to 2.
             # ref_grad_scale = 1: No gradient scaling will be applied to the reference embedding, e.g.,
             # subj_attn_xlayer and bg_attn_xlayer, so that they will be optimized as well.
-            # do_demean_first: If not do_demean_first, then at low-attention locations of one attention map,
+            # do_demean_first=True: If not do_demean_first, then at low-attention locations of one attention map,
             # the loss on the other attention map is small (the cosine loss is weighted by 
             # both attention values, so if one of them is small, the loss at this location is small).
             # After demeaning, there are no low-attention locations, so all locations are better aligned.
-            '''
             loss_layer_fg_xlayer_consist = calc_delta_loss(subj_attn, subj_attn_xlayer, 
                                                             exponent=2,    
                                                             do_demean_first=True,
                                                             first_n_dims_to_flatten=2, 
                                                             ref_grad_scale=1,
                                                             debug=False)
-            '''
             # get_loss() returns L2 loss.
-            loss_layer_fg_xlayer_consist = self.get_loss(subj_attn, subj_attn_xlayer, mean=True)
+            # loss_layer_fg_xlayer_consist = self.get_loss(subj_attn, subj_attn_xlayer, mean=True)
             loss_fg_xlayer_consist += loss_layer_fg_xlayer_consist * attn_align_layer_weight
             
             if bg_indices is not None:
-                '''
+                # do_demean_first=False: Regularizations are more relaxed on the background embeddings.
                 loss_layer_bg_xlayer_consist = calc_delta_loss(bg_attn, bg_attn_xlayer,
                                                                 exponent=2,    
                                                                 do_demean_first=False,
                                                                 first_n_dims_to_flatten=2, 
                                                                 ref_grad_scale=1,
                                                                 debug=False)
-                '''
-                loss_layer_bg_xlayer_consist = self.get_loss(bg_attn, bg_attn_xlayer, mean=True)
+                # loss_layer_bg_xlayer_consist = self.get_loss(bg_attn, bg_attn_xlayer, mean=True)
                 loss_bg_xlayer_consist += loss_layer_bg_xlayer_consist * attn_align_layer_weight
 
         return loss_fg_xlayer_consist, loss_bg_xlayer_consist
