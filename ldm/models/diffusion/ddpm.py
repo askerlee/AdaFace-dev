@@ -2478,7 +2478,11 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/fg_xlayer_consist': loss_fg_xlayer_consist.mean().detach()})
             if loss_bg_xlayer_consist > 0:
                 loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach()})
-            loss += self.fg_bg_xlayer_consist_loss_weight * (loss_fg_xlayer_consist + loss_bg_xlayer_consist)
+
+            # bg attention is more flexible and could be less consistent across layers.
+            bg_xlayer_consist_loss_scale = 0.1
+            loss += self.fg_bg_xlayer_consist_loss_weight * \
+                            (loss_fg_xlayer_consist + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale)
 
         if self.iter_flags['do_mix_prompt_distillation']:
             # unet_feats is a dict as: layer_idx -> unet_feat. 
