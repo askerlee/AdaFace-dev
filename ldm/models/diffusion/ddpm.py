@@ -3111,13 +3111,14 @@ class LatentDiffusion(DDPM):
                     bg_attn             = bg_attn           * img_mask2
                     bg_attn_xlayer      = bg_attn_xlayer    * img_mask2
 
-            # aim_to_align=False: push bg_attn to be orthogonal with subj_attn, 
-            # so that the two attention maps are complementary.
             # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
             # But we don't want to only focus on large activations. So set it to 2.
-            # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
-            # to make the two attention maps more complementary (expect the loss pushes the 
-            # subject embedding to a more accurate point).
+            # ref_grad_scale = 1: No gradient scaling will be applied to the reference embedding, e.g.,
+            # subj_attn_xlayer and bg_attn_xlayer, so that they will be optimized as well.
+            # do_demean_first: If not do_demean_first, then at low-attention locations of one attention map,
+            # the loss on the other attention map is small (the cosine loss is weighted by 
+            # both attention values, so if one of them is small, the loss at this location is small).
+            # After demeaning, there are no low-attention locations, so all locations are better aligned.
             loss_layer_fg_xlayer_consist = calc_delta_loss(subj_attn, subj_attn_xlayer, 
                                                             exponent=2,    
                                                             do_demean_first=True,
@@ -3129,7 +3130,7 @@ class LatentDiffusion(DDPM):
             if bg_indices is not None:
                 loss_layer_bg_xlayer_consist = calc_delta_loss(bg_attn, bg_attn_xlayer,
                                                                 exponent=2,    
-                                                                do_demean_first=True,
+                                                                do_demean_first=False,
                                                                 first_n_dims_to_flatten=2, 
                                                                 ref_grad_scale=1,
                                                                 debug=False)
