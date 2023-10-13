@@ -388,6 +388,7 @@ class DDPM(pl.LightningModule):
         return (extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start +
                 extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise)
 
+    # self.loss_type: default 'l2'.
     def get_loss(self, pred, target, mean=True, loss_type=None):
         if loss_type is None:
             loss_type = self.loss_type
@@ -3119,22 +3120,28 @@ class LatentDiffusion(DDPM):
             # the loss on the other attention map is small (the cosine loss is weighted by 
             # both attention values, so if one of them is small, the loss at this location is small).
             # After demeaning, there are no low-attention locations, so all locations are better aligned.
+            '''
             loss_layer_fg_xlayer_consist = calc_delta_loss(subj_attn, subj_attn_xlayer, 
                                                             exponent=2,    
                                                             do_demean_first=True,
                                                             first_n_dims_to_flatten=2, 
                                                             ref_grad_scale=1,
                                                             debug=False)
+            '''
+            # get_loss() returns L2 loss.
+            loss_layer_fg_xlayer_consist = self.get_loss(subj_attn, subj_attn_xlayer, mean=True)
             loss_fg_xlayer_consist += loss_layer_fg_xlayer_consist * attn_align_layer_weight
             
             if bg_indices is not None:
+                '''
                 loss_layer_bg_xlayer_consist = calc_delta_loss(bg_attn, bg_attn_xlayer,
                                                                 exponent=2,    
                                                                 do_demean_first=False,
                                                                 first_n_dims_to_flatten=2, 
                                                                 ref_grad_scale=1,
                                                                 debug=False)
-            
+                '''
+                loss_layer_bg_xlayer_consist = self.get_loss(bg_attn, bg_attn_xlayer, mean=True)
                 loss_bg_xlayer_consist += loss_layer_bg_xlayer_consist * attn_align_layer_weight
 
         return loss_fg_xlayer_consist, loss_bg_xlayer_consist
