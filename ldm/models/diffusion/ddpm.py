@@ -2542,7 +2542,7 @@ class LatentDiffusion(DDPM):
                 # (If self.distill_deep_neg_context is not None, 50% of the chance we will use deep_neg_context 
                 # by assigning it to extra_info['deep_neg_context']), 
                 # the attn magnitude may become slightly larger. So we scale up delta loss by 2x.
-                if extra_info['deep_neg_context'] is not None:
+                if 'deep_neg_context' in extra_info:
                     subj_attn_norm_distill_loss_scale *= 2
 
                 loss_mix_prompt_distill =  loss_subj_attn_delta_distill   * subj_attn_delta_distill_loss_scale \
