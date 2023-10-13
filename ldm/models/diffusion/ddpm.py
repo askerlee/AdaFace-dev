@@ -715,7 +715,7 @@ class LatentDiffusion(DDPM):
             self.create_clip_evaluator(next(self.parameters()).device)
             with torch.no_grad():
                 self.uncond_context             = self.get_learned_conditioning([""] * 2)
-                if (self.distill_deep_cfg_scale > 0) and (self.distill_deep_neg_prompt is not None):
+                if (self.distill_deep_cfg_scale > 1) and (self.distill_deep_neg_prompt is not None):
                     # distill_deep_neg_context is generated with a batch size of 1. 
                     # Need to repeat it BLOCK_SIZE times to match the distillation batch size later.
                     distill_deep_neg_context   = self.get_learned_conditioning([self.distill_deep_neg_prompt])
@@ -2533,12 +2533,12 @@ class LatentDiffusion(DDPM):
 
 
                 subj_attn_delta_distill_loss_scale = 0.5
-                # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
-                # smaller magnitudes than the delta loss. So we scale it up by 4x.
                 if self.subj_attn_delta_distill_uses_scores:
-                    subj_attn_norm_distill_loss_scale = self.subj_attn_norm_distill_loss_scale * 4
-                else:
                     subj_attn_norm_distill_loss_scale = self.subj_attn_norm_distill_loss_scale
+                else:
+                    # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
+                    # smaller magnitudes than the delta loss. So we scale it up by 4x.
+                    subj_attn_norm_distill_loss_scale = self.subj_attn_norm_distill_loss_scale * 4
                     
                 # Using distill_deep_neg_prompt will somehow increase the subj attn norm. So punish it more.
                 if self.distill_deep_neg_context is not None:
