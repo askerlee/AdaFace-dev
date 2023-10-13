@@ -3120,7 +3120,7 @@ class LatentDiffusion(DDPM):
             # subject embedding to a more accurate point).
             loss_layer_fg_xlayer_consist = calc_delta_loss(subj_attn, subj_attn_xlayer, 
                                                             exponent=2,    
-                                                            do_demean_first=False,
+                                                            do_demean_first=True,
                                                             first_n_dims_to_flatten=2, 
                                                             ref_grad_scale=1,
                                                             debug=False)
@@ -3129,7 +3129,7 @@ class LatentDiffusion(DDPM):
             if bg_indices is not None:
                 loss_layer_bg_xlayer_consist = calc_delta_loss(bg_attn, bg_attn_xlayer,
                                                                 exponent=2,    
-                                                                do_demean_first=False,
+                                                                do_demean_first=True,
                                                                 first_n_dims_to_flatten=2, 
                                                                 ref_grad_scale=1,
                                                                 debug=False)
