@@ -23,7 +23,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
-                       ortho_subtract, ortho_l2loss, gen_gradient_scaler, \
+                       ortho_subtract, ortho_l2loss, normalized_ortho_subtract, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, fix_emb_scales, \
                        halve_token_indices, double_token_indices, normalize_dict_values, masked_mean, \
@@ -2839,7 +2839,7 @@ class LatentDiffusion(DDPM):
             # the single embeddings, as the former should be optimized to look good by itself,
             # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
             # and 2) the embeddings are amendable to composition.
-            loss_layer_feat_delta_distill = self.get_loss(comp_feat_delta, single_feat_delta, mean=True)
+            loss_layer_feat_delta_distill = ortho_l2loss(comp_feat_delta, single_feat_delta, mean=True)
             
             # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
             loss_feat_delta_distill += loss_layer_feat_delta_distill * feat_distill_layer_weight
