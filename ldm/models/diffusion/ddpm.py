@@ -1880,13 +1880,6 @@ class LatentDiffusion(DDPM):
         img_mask            = self.iter_flags['img_mask']
         fg_mask             = self.iter_flags['fg_mask']
         batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
-        # In fg_mask, if an instance has no mask, then its fg_mask is all 1.
-        # filtered_fg_mask: filter fg_mask, by only keeping fg_mask[i] if batch_have_fg_mask[i] == True. 
-        # Otherwise filtered_fg_mask[i] is all 0.
-        # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
-        # If no fg_mask is available, then filtered_fg_mask is all 1.
-        filtered_fg_mask    = fg_mask * batch_have_fg_mask.view(-1, 1, 1, 1) \
-                                if self.fg_mask_avail_ratio > 0 else torch.ones_like(fg_mask)
 
         cfg_scales_for_clip_loss = None
         c_static_emb, c_in, extra_info = cond
@@ -1947,11 +1940,38 @@ class LatentDiffusion(DDPM):
                 # This may help the model ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
 
-                if self.iter_flags['comp_init_with_fg_area']:
+                if self.iter_flags['comp_init_with_fg_area'] and self.fg_mask_avail_ratio > 0:
+                    # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
+                    # Therefore, using fg_mask for comp_init_with_fg_area will force the model remember 
+                    # the background in the training images, which is not desirable.
+                    # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
+                    # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
+                    filtered_fg_mask    = fg_mask * batch_have_fg_mask.view(-1, 1, 1, 1)
                     # At background, fill x_start with random values (100% noise).
-                    # If no fg_mask is available, then filtered_fg_mask is all 1, i.e., 
+                    # If no fg_mask is available, then fg_mask_or_allone is all 1, i.e., 
                     # use the whole image to initialize x_start.
-                    x_start = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
+                    x_start_origsize = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
+                    # Scale down the fg area to 60%-100% of the original size, to avoid it dominating the whole image.
+                    fg_rand_scale = np.random.uniform(0.6, 1.0)
+                    # Resize x_start_origsize and filtered_fg_mask by rand_scale. They have different numbers of channels,
+                    # so we need to concatenate them at dim 1, and then resize.
+                    x_mask = torch.cat([x_start_origsize, filtered_fg_mask], dim=1)
+                    x_mask_scaled = F.interpolate(x_mask, scale_factor=fg_rand_scale, mode='bilinear', align_corners=False)
+
+                    # Pad filtered_fg_mask_scaled to the original size, with left/right padding roughly equal
+                    pad_w1 = int((x_start.shape[3] - x_mask_scaled.shape[3]) / 2)
+                    pad_w2 =      x_start.shape[3] - x_mask_scaled.shape[3] - pad_w1
+                    pad_h1 = int((x_start.shape[2] - x_mask_scaled.shape[2]) / 2)
+                    pad_h2 =      x_start.shape[2] - x_mask_scaled.shape[2] - pad_h1
+                    x_mask_scaled_padded = F.pad(x_mask_scaled, 
+                                                 (pad_w1, pad_w2, pad_h1, pad_h2),
+                                                 mode='constant', value=0)
+                    if x_mask_scaled_padded.shape != x_mask.shape:
+                        breakpoint()
+
+                    x_start_scaled_padded, filtered_fg_mask = x_mask_scaled_padded[:, :4], x_mask_scaled_padded[:, 4:]
+
+                    x_start = torch.where(filtered_fg_mask.bool(), x_start_scaled_padded, torch.randn_like(x_start))
                     # Gradually increase the noise amount from 0.25 to 0.5.
                     fg_noise_amount = rand_annealed(self.training_percent, final_percent=1, mean_range=(0.25, 0.5))
                     # At foreground, keep 50% of the original x_start values and add 50% noise. 
@@ -2567,12 +2587,17 @@ class LatentDiffusion(DDPM):
                 # (since x_start has been filtered, masks are also filtered accordingly, 
                 # and the same as to fg_mask_avail_ratio). So we need to check it here.
                 if self.iter_flags['comp_init_with_fg_area'] and self.fg_mask_avail_ratio > 0 \
-                and self.comp_fg_bg_preserve_loss_weight > 0:
+                  and self.comp_fg_bg_preserve_loss_weight > 0:
                     attns_or_scores = 'unet_attnscores' if self.comp_bg_attn_suppress_uses_scores \
                                     else 'unet_attns'
+                    # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
+                    # Therefore, using fg_mask for comp_init_with_fg_area will force the model remember 
+                    # the background in the training images, which is not desirable.
+                    # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
+                    # excluding the instance from the fg_bg_preserve_loss.
                     loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress = \
                         self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info[attns_or_scores], 
-                                                            fg_mask, batch_have_fg_mask,
+                                                            filtered_fg_mask, batch_have_fg_mask,
                                                             extra_info['subj_indices_1b'], BLOCK_SIZE)
                     if loss_comp_fg_feat_contrast > 0:
                         loss_dict.update({f'{prefix}/comp_fg_feat_contrast': loss_comp_fg_feat_contrast.mean().detach()})
@@ -3307,8 +3332,6 @@ class LatentDiffusion(DDPM):
 
         fg_mask_1b = fg_mask.chunk(4)[0]
         batch_have_fg_mask_1b = batch_have_fg_mask.chunk(4)[0]
-        # filtered_fg_mask: filter fg_mask, by only keeping fg_mask[i] if batch_have_fg_mask[i] == True. 
-        # Otherwise filtered_fg_mask[i] is all 0.
         # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
         fg_mask_1b = fg_mask_1b * batch_have_fg_mask_1b.view(-1, 1, 1, 1)
         bg_mask_1b = (1 - fg_mask_1b) * batch_have_fg_mask_1b.view(-1, 1, 1, 1)
