@@ -929,7 +929,7 @@ class EmbeddingManager(nn.Module):
             if layerwise_lora_rank > 0:
                 # if self.ada_ema_as_static_emb_weight == 1, then use ada ema embedding as static embedding.
                 # Otherwise, ada ema embedding is summed with StaticLayerwiseEmbedding.
-                # By default, ada_ema_as_static_emb_weight = 0.
+                # By default, ada_ema_as_static_emb_weight = 0.25.
                 if self.ada_ema_as_static_emb_weight != 1:
                     # num_layers_per_embedder = num_unet_ca_layers
                     token_static_embedder   = StaticLayerwiseEmbedding(self.num_layers_per_embedder, 

@@ -2698,12 +2698,12 @@ class LatentDiffusion(DDPM):
         K_fg = len(placeholder_indices[0]) // len(torch.unique(placeholder_indices[0]))
         placeholder_indices = double_token_indices(placeholder_indices, BLOCK_SIZE * 2)
 
-        feat_grad_scale = 0.1
-        feat_grad_scaler = gen_gradient_scaler(feat_grad_scale)
+        mix_feat_grad_scale = 0.1
+        mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
         # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to teacher attn. 
         # Setting to 0 may prevent the graph from being released and OOM.
-        attn_grad_scale  = 0.05  
-        attn_grad_scaler = gen_gradient_scaler(attn_grad_scale)
+        mix_attn_grad_scale  = 0.05  
+        mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
 
         loss_subj_attn_delta_distill    = 0
         loss_subj_attn_norm_distill     = 0
@@ -2735,26 +2735,25 @@ class LatentDiffusion(DDPM):
                 attn_norm_distill_layer_weight     = attn_norm_distill_layer_weights[unet_layer_idx]
                 attn_delta_distill_layer_weight    = attn_delta_distill_layer_weights.get(unet_layer_idx, 0)
 
-                # attn_grad_scale = 0.05, almost zero, effectively no grad to mix_comp_subj_attn/mix_single_subj_attn. 
+                # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to mix_comp_subj_attn/mix_single_subj_attn. 
                 # Use this scaler to release the graph and avoid OOM.
-                subj_single_subj_attn_gs    = attn_grad_scaler(subj_single_subj_attn)
-                mix_single_subj_attn_gs     = attn_grad_scaler(mix_single_subj_attn)
-                mix_comp_subj_attn_gs       = attn_grad_scaler(mix_comp_subj_attn)
+                mix_comp_subj_attn_gs   = mix_attn_grad_scaler(mix_comp_subj_attn)
+                mix_single_subj_attn_gs = mix_attn_grad_scaler(mix_single_subj_attn)
 
                 if attn_delta_distill_layer_weight > 0:
                     # No need to use *_gs version here, as gradient scaling is done in calc_delta_loss().
                     #subj_attn_delta = subj_comp_subj_attn - subj_single_subj_attn
                     #mix_attn_delta  = mix_comp_subj_attn  - mix_single_subj_attn
-                    subj_attn_delta = ortho_subtract(subj_comp_subj_attn, subj_single_subj_attn_gs)
-                    mix_attn_delta  = ortho_subtract(mix_comp_subj_attn,  mix_single_subj_attn_gs)
+                    single_attn_delta = ortho_subtract(mix_single_subj_attn, subj_single_subj_attn)
+                    comp_attn_delta   = ortho_subtract(mix_comp_subj_attn,   subj_comp_subj_attn)
 
                     # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
                     # towards class embeddings, hurting authenticity.
-                    loss_layer_subj_delta_attn = calc_delta_loss(subj_attn_delta, mix_attn_delta, 
+                    loss_layer_subj_delta_attn = calc_delta_loss(single_attn_delta, comp_attn_delta, 
                                                                  exponent=3,
                                                                  do_demean_first=False,
                                                                  first_n_dims_to_flatten=2, 
-                                                                 ref_grad_scale=0.5)
+                                                                 ref_grad_scale=1)
                     
                     loss_subj_attn_delta_distill  += loss_layer_subj_delta_attn * attn_delta_distill_layer_weight
                 
@@ -2820,16 +2819,15 @@ class LatentDiffusion(DDPM):
             mix_single_feat  = pooler(mix_single_feat).reshape(mix_single_feat.shape[0], -1)
             mix_comp_feat    = pooler(mix_comp_feat).reshape(mix_comp_feat.shape[0], -1)
 
-            # feat_grad_scale = 0.1.
-            mix_single_feat_gs  = feat_grad_scaler(mix_single_feat)
-            mix_comp_feat_gs    = feat_grad_scaler(mix_comp_feat)
-            subj_single_feat_gs = feat_grad_scaler(subj_single_feat)
+            # mix_feat_grad_scale = 0.1.
+            mix_single_feat  = mix_feat_grad_scaler(mix_single_feat)
+            mix_comp_feat    = mix_feat_grad_scaler(mix_comp_feat)
 
             # ortho_subtract() is done on the last dimension. 
             # So we flatten the spatial dimensions first as above.
             # NOTE: use normalized_ortho_subtract() will reduce performance.
-            mix_feat_delta      = ortho_subtract(mix_comp_feat,  mix_single_feat_gs)
-            subj_feat_delta     = ortho_subtract(subj_comp_feat, subj_single_feat_gs)
+            comp_feat_delta   = ortho_subtract(mix_comp_feat,   subj_comp_feat)
+            single_feat_delta = ortho_subtract(mix_single_feat, subj_single_feat)
                 
             # single_feat_delta, comp_feat_delta: [1, 1280], ...
             # Pool the spatial dimensions H, W to remove spatial information.
@@ -2841,7 +2839,7 @@ class LatentDiffusion(DDPM):
             # the single embeddings, as the former should be optimized to look good by itself,
             # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
             # and 2) the embeddings are amendable to composition.
-            loss_layer_feat_delta_distill = ortho_l2loss(subj_feat_delta, mix_feat_delta, mean=True)
+            loss_layer_feat_delta_distill = self.get_loss(comp_feat_delta, single_feat_delta, mean=True)
             
             # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
             loss_feat_delta_distill += loss_layer_feat_delta_distill * feat_distill_layer_weight
