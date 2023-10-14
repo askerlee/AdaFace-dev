@@ -209,6 +209,8 @@ def parallel_data_prefetch(
 # NOTE: ortho_subtract(a, b) is scale-invariant w.r.t. b.
 # ortho_subtract(a, b) scales proportionally to the scale of a.
 # a, b are n-dimensional tensors. Subtraction happens at the last dim.
+# ortho_subtract(a, b) is not symmetric w.r.t. a and b, nor is ortho_l2loss(a, b).
+# NOTE: always choose a to be something we care about, and b to be something as a reference.
 def ortho_subtract(a, b):
     assert a.ndim == b.ndim, "Tensors a and b must have the same number of dimensions"
     dot_a_b = torch.einsum('...i,...i->...', a, b)
@@ -240,6 +242,8 @@ def normalized_ortho_subtract(a, b):
     return diff
 
 # ortho_subtract(a, b): the residual is orthogonal to b (on the last dimension).
+# ortho_subtract(a, b) is not symmetric w.r.t. a and b, nor is ortho_l2loss(a, b).
+# NOTE: always choose a to be something we care about, and b to be something as a reference.
 def ortho_l2loss(a, b, mean=True):
     residual = ortho_subtract(a, b)
     # F.mse_loss() is taking the square of all elements in the residual, then mean.
