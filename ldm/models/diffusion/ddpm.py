@@ -1946,7 +1946,7 @@ class LatentDiffusion(DDPM):
                     # the background in the training images, which is not desirable.
                     # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
                     # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
-                    filtered_fg_mask    = fg_mask * batch_have_fg_mask.view(-1, 1, 1, 1)
+                    filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
                     # At background, fill x_start with random values (100% noise).
                     # If no fg_mask is available, then fg_mask_or_allone is all 1, i.e., 
                     # use the whole image to initialize x_start.
@@ -1966,8 +1966,6 @@ class LatentDiffusion(DDPM):
                     x_mask_scaled_padded = F.pad(x_mask_scaled, 
                                                  (pad_w1, pad_w2, pad_h1, pad_h2),
                                                  mode='constant', value=0)
-                    if x_mask_scaled_padded.shape != x_mask.shape:
-                        breakpoint()
 
                     x_start_scaled_padded, filtered_fg_mask = x_mask_scaled_padded[:, :4], x_mask_scaled_padded[:, 4:]
 
