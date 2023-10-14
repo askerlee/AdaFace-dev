@@ -2839,7 +2839,7 @@ class LatentDiffusion(DDPM):
             # the single embeddings, as the former should be optimized to look good by itself,
             # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
             # and 2) the embeddings are amendable to composition.
-            loss_layer_feat_delta_distill = ortho_l2loss(single_feat_delta, comp_feat_delta, mean=True)
+            loss_layer_feat_delta_distill = ortho_l2loss(comp_feat_delta, single_feat_delta, mean=True)
             
             # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
             loss_feat_delta_distill += loss_layer_feat_delta_distill * feat_distill_layer_weight
