@@ -1395,6 +1395,7 @@ class LatentDiffusion(DDPM):
             self.iter_flags['img_mask']                 = self.cached_inits['img_mask']
             self.iter_flags['fg_mask']                  = self.cached_inits['fg_mask']
             self.iter_flags['batch_have_fg_mask']       = self.cached_inits['batch_have_fg_mask']
+            self.iter_flags['filtered_fg_mask']         = self.cached_inits['filtered_fg_mask']
             self.iter_flags['use_background_token']     = self.cached_inits['use_background_token']
             self.iter_flags['comp_init_with_fg_area']   = self.cached_inits['comp_init_with_fg_area']
 
@@ -1880,6 +1881,7 @@ class LatentDiffusion(DDPM):
         img_mask            = self.iter_flags['img_mask']
         fg_mask             = self.iter_flags['fg_mask']
         batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
+        filtered_fg_mask    = self.iter_flags.get('filtered_fg_mask', None)
 
         cfg_scales_for_clip_loss = None
         c_static_emb, c_in, extra_info = cond
@@ -1940,7 +1942,10 @@ class LatentDiffusion(DDPM):
                 # This may help the model ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
 
-                if self.iter_flags['comp_init_with_fg_area'] and self.fg_mask_avail_ratio > 0:
+                # If reuse_init_conds, and the previous iter has comp_init_with_fg_area=True, then 
+                # the current iter will also have comp_init_with_fg_area=True.
+                if self.iter_flags['comp_init_with_fg_area'] and self.fg_mask_avail_ratio > 0 \
+                  and not self.iter_flags['reuse_init_conds']:
                     # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
                     # Therefore, using fg_mask for comp_init_with_fg_area will force the model remember 
                     # the background in the training images, which is not desirable.
@@ -2396,6 +2401,7 @@ class LatentDiffusion(DDPM):
                                           'img_mask':               img_mask,
                                           'fg_mask':                fg_mask,
                                           'batch_have_fg_mask':     batch_have_fg_mask,
+                                          'filtered_fg_mask':       filtered_fg_mask,
                                           'use_background_token':   self.iter_flags['use_background_token'],
                                           'comp_init_with_fg_area': self.iter_flags['comp_init_with_fg_area'],
                                         }
