@@ -230,6 +230,7 @@ def align_suppressed_add(a, b, align_suppress_scale=1):
     return a + directional_suppress(b, a, align_suppress_scale)
 
 # Normalize a, b to unit vectors, then do orthogonal subtraction.
+# Only used in calc_layer_subj_comp_k_or_v_ortho_loss, to balance the scales of subj and comp embeddings.
 def normalized_ortho_subtract(a, b):
     a_norm = a.norm(dim=-1, keepdim=True) + 1e-6
     b_norm = b.norm(dim=-1, keepdim=True) + 1e-6
@@ -237,6 +238,15 @@ def normalized_ortho_subtract(a, b):
     b = b * (a_norm + b_norm) / (b_norm * 2)
     diff = ortho_subtract(a, b)
     return diff
+
+def ortho_l2loss(a, b, mean=True):
+    residual = ortho_subtract(a, b)
+    # F.mse_loss() is taking the square of all elements in the residual, then mean.
+    # ortho_l2loss() keeps consistent with F.mse_loss().
+    loss = residual * residual
+    if mean:
+        loss = loss.mean()
+    return loss
 
 def demean(x):
     return x - x.mean(dim=-1, keepdim=True)

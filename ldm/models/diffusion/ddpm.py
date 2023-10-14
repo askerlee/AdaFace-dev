@@ -23,7 +23,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
-                       ortho_subtract, gen_gradient_scaler, \
+                       ortho_subtract, ortho_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, fix_emb_scales, \
                        halve_token_indices, double_token_indices, normalize_dict_values, masked_mean, \
@@ -2839,7 +2839,7 @@ class LatentDiffusion(DDPM):
             # the single embeddings, as the former should be optimized to look good by itself,
             # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
             # and 2) the embeddings are amendable to composition.
-            loss_layer_feat_delta_distill = self.get_loss(single_feat_delta, comp_feat_delta, mean=True)
+            loss_layer_feat_delta_distill = ortho_l2loss(single_feat_delta, comp_feat_delta, mean=True)
             
             # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
             loss_feat_delta_distill += loss_layer_feat_delta_distill * feat_distill_layer_weight
@@ -3162,8 +3162,7 @@ class LatentDiffusion(DDPM):
                                                             ref_grad_scale=1,
                                                             debug=False)
             '''
-            # get_loss() returns L2 loss.
-            loss_layer_fg_xlayer_consist = self.get_loss(subj_attn, subj_attn_xlayer, mean=True)
+            loss_layer_fg_xlayer_consist = ortho_l2loss(subj_attn, subj_attn_xlayer, mean=True)
             loss_fg_xlayer_consist += loss_layer_fg_xlayer_consist * attn_align_layer_weight
             
             if bg_indices is not None:
@@ -3176,7 +3175,7 @@ class LatentDiffusion(DDPM):
                                                                 ref_grad_scale=1,
                                                                 debug=False)
                 '''
-                loss_layer_bg_xlayer_consist = self.get_loss(bg_attn, bg_attn_xlayer, mean=True)
+                loss_layer_bg_xlayer_consist = ortho_l2loss(bg_attn, bg_attn_xlayer, mean=True)
                 loss_bg_xlayer_consist += loss_layer_bg_xlayer_consist * attn_align_layer_weight
 
         return loss_fg_xlayer_consist, loss_bg_xlayer_consist
@@ -3395,8 +3394,8 @@ class LatentDiffusion(DDPM):
             # feat_*_single are used as references, so their gradients are reduced.
             subj_single_feat_gs = feat_single_grad_scaler(subj_single_feat)
             mix_single_feat_gs  = feat_single_grad_scaler(mix_single_feat)
-            loss_layer_subj_fg_feat_preserve = self.get_loss(subj_comp_feat, subj_single_feat_gs, mean=True)
-            loss_layer_mix_fg_feat_preserve  = self.get_loss(mix_comp_feat,  mix_single_feat_gs,  mean=True)
+            loss_layer_subj_fg_feat_preserve = ortho_l2loss(subj_comp_feat, subj_single_feat_gs, mean=True)
+            loss_layer_mix_fg_feat_preserve  = ortho_l2loss(mix_comp_feat,  mix_single_feat_gs,  mean=True)
             # A small weight to the preservation loss on mix instances. 
             # The requirement of preserving foreground features is not as strict as that of preserving
             # subject features, as the former is only used to facilitate composition.
