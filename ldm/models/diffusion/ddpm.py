@@ -27,7 +27,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, fix_emb_scales, \
                        halve_token_indices, double_token_indices, normalize_dict_values, masked_mean, \
-                       scale_mask_for_feat_attn, mix_static_vk_embeddings, repeat_selected_instances, \
+                       resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
                        anneal_t, rand_annealed, calc_layer_subj_comp_k_or_v_ortho_loss
 
 from ldm.modules.ema import LitEma
@@ -2599,16 +2599,20 @@ class LatentDiffusion(DDPM):
                     # the background in the training images, which is not desirable.
                     # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
                     # excluding the instance from the fg_bg_preserve_loss.
-                    loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress = \
+                    loss_comp_subj_fg_feat_preserve, loss_comp_subj_fg_attn_preserve, loss_comp_subj_bg_attn_suppress = \
                         self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info[attns_or_scores], 
                                                             filtered_fg_mask, batch_have_fg_mask,
                                                             extra_info['subj_indices_1b'], BLOCK_SIZE)
-                    if loss_comp_fg_feat_contrast > 0:
-                        loss_dict.update({f'{prefix}/comp_fg_feat_contrast': loss_comp_fg_feat_contrast.mean().detach()})
-                    if loss_comp_bg_attn_suppress > 0:
-                        loss_dict.update({f'{prefix}/comp_bg_attn_suppress': loss_comp_bg_attn_suppress.mean().detach()})
+                    if loss_comp_subj_fg_feat_preserve > 0:
+                        loss_dict.update({f'{prefix}/comp_subj_fg_feat_preserve': loss_comp_subj_fg_feat_preserve.mean().detach()})
+                    if loss_comp_subj_fg_attn_preserve > 0:
+                        loss_dict.update({f'{prefix}/comp_subj_fg_attn_preserve': loss_comp_subj_fg_attn_preserve.mean().detach()})
+                    if loss_comp_subj_bg_attn_suppress > 0:
+                        loss_dict.update({f'{prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach()})
                     bg_attn_suppress_loss_scale = 0.2
-                    loss_comp_fg_bg_preserve = loss_comp_fg_feat_contrast + loss_comp_bg_attn_suppress * bg_attn_suppress_loss_scale
+                    loss_comp_fg_bg_preserve = loss_comp_subj_fg_feat_preserve \
+                                                + loss_comp_subj_fg_attn_preserve \
+                                                + loss_comp_subj_bg_attn_suppress * bg_attn_suppress_loss_scale
                 else:
                     loss_comp_fg_bg_preserve = 0
 
@@ -2910,7 +2914,7 @@ class LatentDiffusion(DDPM):
             
             if img_mask is not None:
                 # img_mask: [2, 1, 64, 64] -> [2, 1, 8, 8]. subj_attn: [2, 8, 64]
-                img_mask2 = scale_mask_for_feat_attn(subj_attn, img_mask, "img_mask", mode="nearest|bilinear")
+                img_mask2 = resize_mask_for_feat_or_attn(subj_attn, img_mask, "img_mask", mode="nearest|bilinear")
                 # img_mask2: [2, 1, 8, 8] -> [2, 1, 64] -> [2, 8, 64].
                 img_mask2 = img_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 bg_attn   = bg_attn   * img_mask2
@@ -2942,7 +2946,7 @@ class LatentDiffusion(DDPM):
                 # bg_score:   [4, 8, 64] -> [2, 2, 8, 64] sum among K_bg embeddings -> [2, 8, 64]
                 bg_score   = attnscore_mat[bg_indices].reshape(BS, K_bg, *attnscore_mat.shape[2:]).sum(dim=1)
 
-                fg_mask2 = scale_mask_for_feat_attn(subj_attn, fg_mask, "fg_mask", mode="nearest|bilinear")
+                fg_mask2 = resize_mask_for_feat_or_attn(subj_attn, fg_mask, "fg_mask", mode="nearest|bilinear")
                 # Repeat 8 times to match the number of attention heads.
                 fg_mask2 = fg_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 fg_mask3 = torch.zeros_like(fg_mask2)
@@ -3135,7 +3139,7 @@ class LatentDiffusion(DDPM):
                 img_mask = img_mask[:SSB_SIZE]
                 # img_mask2: [2, 1, 64, 64] -> [2, 1, 8, 8] -> [2, 1, 64]
                 # "1" will be broadcasted to 2: subj_attn_xlayer: [2, 2, 64]
-                img_mask2 = scale_mask_for_feat_attn(subj_attn_xlayer, img_mask, "img_mask", mode="nearest|bilinear")
+                img_mask2 = resize_mask_for_feat_or_attn(subj_attn_xlayer, img_mask, "img_mask", mode="nearest|bilinear")
                 img_mask2 = img_mask2.reshape(SSB_SIZE, 1, -1)
                 subj_attn           = subj_attn         * img_mask2
                 subj_attn_xlayer    = subj_attn_xlayer  * img_mask2
@@ -3316,11 +3320,12 @@ class LatentDiffusion(DDPM):
     #            features under comp prompts should align with the foreground of the original images as well.
     #            So features under comp prompts should be close to features under single prompts, at fg_mask areas.
     #            (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
+    # BS: block size, not batch size.
     def calc_comp_fg_bg_preserve_loss(self, unet_feats, unet_attns_or_scores, 
                                       fg_mask, batch_have_fg_mask, subj_indices, BS):
-        # No masks available. loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress are both 0.
+        # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
-            return 0, 0
+            return 0, 0, 0
 
         feat_distill_layer_weights = { # 7:  1., 8: 1.,   
                                         12: 1.,
@@ -3331,48 +3336,46 @@ class LatentDiffusion(DDPM):
                                         23: 1., 24: 1., 
                                      }
 
-        fg_mask_1b = fg_mask.chunk(4)[0]
-        batch_have_fg_mask_1b = batch_have_fg_mask.chunk(4)[0]
         # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
-        fg_mask_1b = fg_mask_1b * batch_have_fg_mask_1b.view(-1, 1, 1, 1)
-        bg_mask_1b = (1 - fg_mask_1b) * batch_have_fg_mask_1b.view(-1, 1, 1, 1)
+        # *_4b means it corresponds to a 4-block batch (batch size = 4 * BS).
+        fg_mask_4b = fg_mask            * batch_have_fg_mask.view(-1, 1, 1, 1)
+        bg_mask_4b = (1 - fg_mask_4b)   * batch_have_fg_mask.view(-1, 1, 1, 1)
 
         # K_fg: 4, number of embeddings per subject token.
         K_fg   = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
-        # ind_subj_subj_B, ind_subj_subj_N: [1, 1, 1, 1], [5, 6, 7, 8].
-        # Shift ind_subj_subj_B by BS, so that it points to subj comp embeddings.
-        ind_subj_subj_B, ind_subj_subj_N = subj_indices[0][:BS*K_fg] + BS, subj_indices[1][:BS*K_fg]
-        # Shift ind_subj_subj_B by 2 * BS, so that it points to mix comp embeddings.
-        ind_mix_subj_B,  ind_mix_subj_N  = ind_subj_subj_B + 2 * BS, ind_subj_subj_N
-
+        # ind_subj_subj_B_1b, ind_subj_subj_N_1b: [0, 0, 0, 0], [5, 6, 7, 8].
+        ind_subj_subj_B_1b, ind_subj_subj_N_1b = subj_indices[0][:BS*K_fg], subj_indices[1][:BS*K_fg]
+        ind_subj_B = torch.cat([ind_subj_subj_B_1b,            ind_subj_subj_B_1b + BS,
+                                ind_subj_subj_B_1b + 2 * BS,   ind_subj_subj_B_1b + 3 * BS], dim=0)
+        ind_subj_N = ind_subj_subj_N_1b.repeat(4)
 
         # Normalize the weights above so that each set sum to 1.
         feat_distill_layer_weights  = normalize_dict_values(feat_distill_layer_weights)
-        feat_single_grad_scale  = 0.02
-        feat_single_grad_scaler = gen_gradient_scaler(feat_single_grad_scale)
+        single_feat_or_attn_grad_scale  = 0.02
+        single_feat_or_attn_grad_scaler = gen_gradient_scaler(single_feat_or_attn_grad_scale)
 
-        loss_comp_fg_feat_contrast = 0
-        loss_comp_bg_attn_suppress = 0
+        loss_comp_subj_fg_feat_preserve = 0
+        loss_comp_subj_fg_attn_preserve = 0
+        loss_comp_subj_bg_attn_suppress = 0
 
         for unet_layer_idx, unet_feat in unet_feats.items():
             if unet_layer_idx not in feat_distill_layer_weights:
                 continue
             feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
 
-            # each is [1, 1280, 16, 16]
-            subj_single_feat, subj_comp_feat, mix_single_feat, mix_comp_feat \
-                = unet_feat.chunk(4)
-
             # fg_mask_1b_scaled: [1, 1, 64, 64] => [1, 1, 8, 8]
-            fg_mask_1b_scaled = scale_mask_for_feat_attn(unet_feat, fg_mask_1b, "fg_mask_1b", 
-                                                         mode="nearest|bilinear", warn_on_all_zero=False)
+            fg_mask_4b_scaled = resize_mask_for_feat_or_attn(unet_feat, fg_mask_4b, "fg_mask_4b", 
+                                                             mode="nearest|bilinear", warn_on_all_zero=False)
+            # fg_mask_1b_flat: [1, 1, 8, 8] => [4, 1, 64]
+            fg_mask_4b_flat  = fg_mask_4b_scaled.reshape(BS * 4, 1, -1)
 
-            subj_single_feat = subj_single_feat * fg_mask_1b_scaled
-            subj_comp_feat   = subj_comp_feat   * fg_mask_1b_scaled
-            mix_single_feat  = mix_single_feat  * fg_mask_1b_scaled
-            mix_comp_feat    = mix_comp_feat    * fg_mask_1b_scaled
+            # Mask out the background features, and only keep the foreground features.
+            fg_feat = unet_feat * fg_mask_4b_scaled
+            # each is [1, 1280, 16, 16]
+            subj_single_fg_feat, subj_comp_fg_feat, mix_single_fg_feat, mix_comp_fg_feat \
+                = fg_feat.chunk(4)
 
             do_feat_pooling = True
             feat_pool_kernel_size = 4
@@ -3383,53 +3386,72 @@ class LatentDiffusion(DDPM):
             else:
                 pooler = nn.Identity()
 
-            subj_single_feat = pooler(subj_single_feat)
-            subj_comp_feat   = pooler(subj_comp_feat)
-            mix_single_feat  = pooler(mix_single_feat)
-            mix_comp_feat    = pooler(mix_comp_feat)
+            subj_single_fg_feat = pooler(subj_single_fg_feat)
+            subj_comp_fg_feat   = pooler(subj_comp_fg_feat)
+            mix_single_fg_feat  = pooler(mix_single_fg_feat)
+            mix_comp_fg_feat    = pooler(mix_comp_fg_feat)
 
-            # feat_single_grad_scale = 0.1. 
-            # feat_*_single are used as references, so their gradients are reduced.
-            subj_single_feat_gs = feat_single_grad_scaler(subj_single_feat)
-            mix_single_feat_gs  = feat_single_grad_scaler(mix_single_feat)
-            loss_layer_subj_fg_feat_preserve = normalized_l2loss(subj_comp_feat, subj_single_feat_gs, mean=True)
-            loss_layer_mix_fg_feat_preserve  = normalized_l2loss(mix_comp_feat,  mix_single_feat_gs,  mean=True)
+            # single_feat_or_attn_grad_scale = 0.02. 
+            # feat_*_single are used as references, so their gradients are reduced to very small.
+            subj_single_fg_feat_gs = single_feat_or_attn_grad_scaler(subj_single_fg_feat)
+            mix_single_fg_feat_gs  = single_feat_or_attn_grad_scaler(mix_single_fg_feat)
+            # normalized_l2loss() or L2 loss (get_loss()) perform worse than ortho_l2loss().
+            loss_layer_subj_fg_feat_preserve = ortho_l2loss(subj_comp_fg_feat, subj_single_fg_feat_gs, mean=True)
+            loss_layer_mix_fg_feat_preserve  = ortho_l2loss(mix_comp_fg_feat,  mix_single_fg_feat_gs,  mean=True)
             # A small weight to the preservation loss on mix instances. 
             # The requirement of preserving foreground features is not as strict as that of preserving
             # subject features, as the former is only used to facilitate composition.
-            mix_fg_feat_preserve_loss_scale = 0.1
-            loss_comp_fg_feat_contrast += (loss_layer_subj_fg_feat_preserve 
-                                            + loss_layer_mix_fg_feat_preserve * mix_fg_feat_preserve_loss_scale) \
-                                            * feat_distill_layer_weight
+            mix_fg_preserve_loss_scale = 0.1
+            loss_comp_subj_fg_feat_preserve += (loss_layer_subj_fg_feat_preserve 
+                                                + loss_layer_mix_fg_feat_preserve * mix_fg_preserve_loss_scale) \
+                                                * feat_distill_layer_weight
 
             ##### unet_attn fg preservation loss & bg suppression loss #####
             unet_attn = unet_attns_or_scores[unet_layer_idx]
             # attn_mat: [4, 8, 64, 77] => [4, 77, 8, 64] => sum over 8 attention heads => [4, 77, 64]
             attn_mat = unet_attn.permute(0, 3, 1, 2).sum(dim=2)
-            # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]   sum among K_fg embeddings   -> [1, 8, 64]
-            subj_subj_attn = attn_mat[ind_subj_subj_B, ind_subj_subj_N].reshape(BS, K_fg, -1)
-            mix_subj_attn  = attn_mat[ind_mix_subj_B,  ind_mix_subj_N].reshape(BS,  K_fg, -1)
+            # subj_subj_attn: [4, 77, 64] -> [4 * K_fg, 64] -> [4, K_fg, 64]
+            subj_attn = attn_mat[ind_subj_B, ind_subj_N].reshape(BS * 4, K_fg, -1)
+            subj_fg_attn = subj_attn * fg_mask_4b_flat
 
-            bg_mask_1b_scaled = scale_mask_for_feat_attn(attn_mat, bg_mask_1b, "bg_mask_1b",
-                                                         mode="nearest|bilinear", warn_on_all_zero=True)
-            # bg_mask_1b_flat: [1, 1, 8, 8] => [1, 1, 64]
-            bg_mask_1b_flat  = bg_mask_1b_scaled.reshape(BS, 1, -1)
-            if bg_mask_1b_flat.sum() == 0:
+            subj_single_subj_fg_attn, subj_comp_subj_fg_attn, mix_single_subj_fg_attn, mix_comp_subj_fg_attn \
+                = subj_fg_attn.chunk(4)
+            
+            subj_single_subj_fg_attn_gs = single_feat_or_attn_grad_scaler(subj_single_subj_fg_attn)
+            mix_single_subj_fg_attn_gs  = single_feat_or_attn_grad_scaler(mix_single_subj_fg_attn)
+
+            ##### loss_comp_subj_fg_attn_preserve #####
+            loss_layer_subj_subj_fg_attn_contrast = ortho_l2loss(subj_comp_subj_fg_attn, subj_single_subj_fg_attn_gs)
+            loss_layer_mix_subj_fg_attn_contrast  = ortho_l2loss(mix_comp_subj_fg_attn,  mix_single_subj_fg_attn_gs)
+            loss_comp_subj_fg_attn_preserve += (loss_layer_subj_subj_fg_attn_contrast 
+                                                + loss_layer_mix_subj_fg_attn_contrast * mix_fg_preserve_loss_scale) \
+                                                * feat_distill_layer_weight
+            
+            ##### loss_comp_subj_bg_attn_suppress #####
+            bg_mask_4b_scaled = resize_mask_for_feat_or_attn(attn_mat, bg_mask_4b, "bg_mask_1b",
+                                                             mode="nearest|bilinear", warn_on_all_zero=True)
+            # bg_mask_4b_flat: [4, 1, 8, 8] => [4, 1, 64]
+            bg_mask_4b_flat  = bg_mask_4b_scaled.reshape(BS * 4, 1, -1)
+            if bg_mask_4b_flat.sum() == 0:
                 breakpoint()
             
-            subj_subj_bg_attn   = subj_subj_attn   * bg_mask_1b_flat
-            mix_subj_bg_attn    = mix_subj_attn    * bg_mask_1b_flat
+            subj_bg_attn = subj_attn * bg_mask_4b_flat
+            # subj_subj_bg_attn: attention of subj embeddings in subj instances on background areas.
+            # It's not the attention of background embeddings.
+            # mix_subj_bg_attn:  attention of mix embeddings (corresponding to the subj embeddings) in class instances 
+            # on background areas.
+            subj_subj_bg_attn, mix_subj_bg_attn = subj_bg_attn.chunk(2)
 
             # Simply suppress the subj attention on background areas. 
             # No need to use attn_*_single as references.
             loss_layer_subj_bg_attn_suppress = masked_mean(subj_subj_bg_attn, subj_subj_bg_attn > 0)
             loss_layer_mix_bg_attn_suppress  = masked_mean(mix_subj_bg_attn,  mix_subj_bg_attn  > 0)
             mix_bg_attn_suppress_loss_scale = 0.2
-            loss_comp_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
-                                            + loss_layer_mix_bg_attn_suppress * mix_bg_attn_suppress_loss_scale) \
-                                            * feat_distill_layer_weight
+            loss_comp_subj_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
+                                                + loss_layer_mix_bg_attn_suppress * mix_bg_attn_suppress_loss_scale) \
+                                                * feat_distill_layer_weight
                     
-        return loss_comp_fg_feat_contrast, loss_comp_bg_attn_suppress
+        return loss_comp_subj_fg_feat_preserve, loss_comp_subj_fg_attn_preserve, loss_comp_subj_bg_attn_suppress
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):
