@@ -3392,8 +3392,8 @@ class LatentDiffusion(DDPM):
             # feat_*_single are used as references, so their gradients are reduced.
             subj_single_feat_gs = feat_single_grad_scaler(subj_single_feat)
             mix_single_feat_gs  = feat_single_grad_scaler(mix_single_feat)
-            loss_layer_subj_fg_feat_preserve = ortho_l2loss(subj_comp_feat, subj_single_feat_gs, mean=True)
-            loss_layer_mix_fg_feat_preserve  = ortho_l2loss(mix_comp_feat,  mix_single_feat_gs,  mean=True)
+            loss_layer_subj_fg_feat_preserve = self.get_loss(subj_comp_feat, subj_single_feat_gs, mean=True)
+            loss_layer_mix_fg_feat_preserve  = self.get_loss(mix_comp_feat,  mix_single_feat_gs,  mean=True)
             # A small weight to the preservation loss on mix instances. 
             # The requirement of preserving foreground features is not as strict as that of preserving
             # subject features, as the former is only used to facilitate composition.
