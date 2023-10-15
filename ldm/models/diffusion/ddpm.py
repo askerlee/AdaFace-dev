@@ -2377,8 +2377,9 @@ class LatentDiffusion(DDPM):
 
                     # Update masks according to x_start_sel. Select the masks corresponding to 
                     # the better candidate, indexed by [better_cand_idx] (Keep it as a list).
-                    img_mask, fg_mask, batch_have_fg_mask = \
-                        repeat_selected_instances([better_cand_idx], 4, img_mask, fg_mask, batch_have_fg_mask)
+                    img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
+                        repeat_selected_instances([better_cand_idx], 4, img_mask, fg_mask, 
+                                                  filtered_fg_mask, batch_have_fg_mask)
                     self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
@@ -3365,14 +3366,14 @@ class LatentDiffusion(DDPM):
                 continue
             feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
 
-            # fg_mask_1b_scaled: [1, 1, 64, 64] => [1, 1, 8, 8]
-            fg_mask_4b_scaled = resize_mask_for_feat_or_attn(unet_feat, fg_mask_4b, "fg_mask_4b", 
-                                                             mode="nearest|bilinear", warn_on_all_zero=False)
-            # fg_mask_1b_flat: [1, 1, 8, 8] => [4, 1, 64]
-            fg_mask_4b_flat  = fg_mask_4b_scaled.reshape(BS * 4, 1, -1)
+            # fg_feat_mask_4b: [1, 1, 64, 64] => [1, 1, 8, 8]
+            fg_feat_mask_4b = resize_mask_for_feat_or_attn(unet_feat, fg_mask_4b, "fg_mask_4b", 
+                                                           mode="nearest|bilinear", warn_on_all_zero=False)
+            # fg_feat_mask_flat_4b: [1, 1, 8, 8] => [4, 1, 64]
+            fg_feat_mask_flat_4b  = fg_feat_mask_4b.reshape(BS * 4, 1, -1)
 
             # Mask out the background features, and only keep the foreground features.
-            fg_feat = unet_feat * fg_mask_4b_scaled
+            fg_feat = unet_feat * fg_feat_mask_4b
             # each is [1, 1280, 16, 16]
             subj_single_fg_feat, subj_comp_fg_feat, mix_single_fg_feat, mix_comp_fg_feat \
                 = fg_feat.chunk(4)
@@ -3412,7 +3413,14 @@ class LatentDiffusion(DDPM):
             attn_mat = unet_attn.permute(0, 3, 1, 2).sum(dim=2)
             # subj_subj_attn: [4, 77, 64] -> [4 * K_fg, 64] -> [4, K_fg, 64]
             subj_attn = attn_mat[ind_subj_B, ind_subj_N].reshape(BS * 4, K_fg, -1)
-            subj_fg_attn = subj_attn * fg_mask_4b_flat
+
+            # fg_attn_mask_4b: [1, 1, 64, 64] => [1, 1, 8, 8]
+            fg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_mat, fg_mask_4b, "fg_mask_4b", 
+                                                           mode="nearest|bilinear", warn_on_all_zero=False)
+            # fg_attn_mask_flat_4b: [1, 1, 8, 8] => [4, 1, 64]
+            fg_attn_mask_flat_4b  = fg_attn_mask_4b.reshape(BS * 4, 1, -1)
+
+            subj_fg_attn = subj_attn * fg_attn_mask_flat_4b
 
             subj_single_subj_fg_attn, subj_comp_subj_fg_attn, mix_single_subj_fg_attn, mix_comp_subj_fg_attn \
                 = subj_fg_attn.chunk(4)
@@ -3428,14 +3436,14 @@ class LatentDiffusion(DDPM):
                                                 * feat_distill_layer_weight
             
             ##### loss_comp_subj_bg_attn_suppress #####
-            bg_mask_4b_scaled = resize_mask_for_feat_or_attn(attn_mat, bg_mask_4b, "bg_mask_1b",
+            bg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_mat, bg_mask_4b, "bg_mask_4b",
                                                              mode="nearest|bilinear", warn_on_all_zero=True)
-            # bg_mask_4b_flat: [4, 1, 8, 8] => [4, 1, 64]
-            bg_mask_4b_flat  = bg_mask_4b_scaled.reshape(BS * 4, 1, -1)
-            if bg_mask_4b_flat.sum() == 0:
+            # bg_attn_mask_flat_4b: [4, 1, 8, 8] => [4, 1, 64]
+            bg_attn_mask_flat_4b  = bg_attn_mask_4b.reshape(BS * 4, 1, -1)
+            if bg_attn_mask_flat_4b.sum() == 0:
                 breakpoint()
             
-            subj_bg_attn = subj_attn * bg_mask_4b_flat
+            subj_bg_attn = subj_attn * bg_attn_mask_flat_4b
             # subj_subj_bg_attn: attention of subj embeddings in subj instances on background areas.
             # It's not the attention of background embeddings.
             # mix_subj_bg_attn:  attention of mix embeddings (corresponding to the subj embeddings) in class instances 

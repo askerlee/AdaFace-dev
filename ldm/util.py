@@ -1090,10 +1090,10 @@ def repeat_selected_instances(sel_indices, REPEAT, *args):
     rep_args = []
     for arg in args:
         if arg is not None:
-            arg = arg[sel_indices].repeat([REPEAT] + [1] * (arg.ndim - 1))
+            arg2 = arg[sel_indices].repeat([REPEAT] + [1] * (arg.ndim - 1))
         else:
-            arg = None
-        rep_args.append(arg)
+            arg2 = None
+        rep_args.append(arg2)
 
     return rep_args
 
