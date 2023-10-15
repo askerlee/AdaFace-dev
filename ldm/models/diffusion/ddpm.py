@@ -2593,6 +2593,7 @@ class LatentDiffusion(DDPM):
                 # and the same as to fg_mask_avail_ratio). So we need to check it here.
                 if self.iter_flags['comp_init_with_fg_area'] and self.fg_mask_avail_ratio > 0 \
                   and self.comp_fg_bg_preserve_loss_weight > 0:
+                    # By default, attns_or_scores = 'unet_attnscores'
                     attns_or_scores = 'unet_attnscores' if self.comp_bg_attn_suppress_uses_scores \
                                     else 'unet_attns'
                     # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
@@ -3369,8 +3370,6 @@ class LatentDiffusion(DDPM):
             # fg_feat_mask_4b: [1, 1, 64, 64] => [1, 1, 8, 8]
             fg_feat_mask_4b = resize_mask_for_feat_or_attn(unet_feat, fg_mask_4b, "fg_mask_4b", 
                                                            mode="nearest|bilinear", warn_on_all_zero=False)
-            # fg_feat_mask_flat_4b: [1, 1, 8, 8] => [4, 1, 64]
-            fg_feat_mask_flat_4b  = fg_feat_mask_4b.reshape(BS * 4, 1, -1)
 
             # Mask out the background features, and only keep the foreground features.
             fg_feat = unet_feat * fg_feat_mask_4b
