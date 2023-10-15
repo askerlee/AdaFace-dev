@@ -23,7 +23,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
-                       ortho_subtract, ortho_l2loss, normalized_ortho_subtract, gen_gradient_scaler, \
+                       ortho_subtract, ortho_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, fix_emb_scales, \
                        halve_token_indices, double_token_indices, normalize_dict_values, masked_mean, \
@@ -2742,10 +2742,8 @@ class LatentDiffusion(DDPM):
 
                 if attn_delta_distill_layer_weight > 0:
                     # No need to use *_gs version here, as gradient scaling is done in calc_delta_loss().
-                    #subj_attn_delta = subj_comp_subj_attn - subj_single_subj_attn
-                    #mix_attn_delta  = mix_comp_subj_attn  - mix_single_subj_attn
-                    single_attn_delta = ortho_subtract(mix_single_subj_attn, subj_single_subj_attn)
-                    comp_attn_delta   = ortho_subtract(mix_comp_subj_attn,   subj_comp_subj_attn)
+                    single_attn_delta = ortho_subtract(subj_single_subj_attn, mix_single_subj_attn)
+                    comp_attn_delta   = ortho_subtract(subj_comp_subj_attn,   mix_comp_subj_attn)
 
                     # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
                     # towards class embeddings, hurting authenticity.
@@ -2826,8 +2824,8 @@ class LatentDiffusion(DDPM):
             # ortho_subtract() is done on the last dimension. 
             # So we flatten the spatial dimensions first as above.
             # NOTE: use normalized_ortho_subtract() will reduce performance.
-            comp_feat_delta   = ortho_subtract(mix_comp_feat,   subj_comp_feat)
-            single_feat_delta = ortho_subtract(mix_single_feat, subj_single_feat)
+            comp_feat_delta   = ortho_subtract(subj_comp_feat,   mix_comp_feat)
+            single_feat_delta = ortho_subtract(subj_single_feat, mix_single_feat)
                 
             # single_feat_delta, comp_feat_delta: [1, 1280], ...
             # Pool the spatial dimensions H, W to remove spatial information.
