@@ -253,6 +253,19 @@ def ortho_l2loss(a, b, mean=True):
         loss = loss.mean()
     return loss
 
+def normalized_l2loss(a, b, mean=True):
+    a_norm = a.norm(dim=-1, keepdim=True) + 1e-6
+    b_norm = b.norm(dim=-1, keepdim=True) + 1e-6
+    a = a * (a_norm + b_norm) / (a_norm * 2)
+    b = b * (a_norm + b_norm) / (b_norm * 2)
+    diff = a - b
+    # F.mse_loss() is taking the square of all elements in the residual, then mean.
+    # normalized_l2loss() keeps consistent with F.mse_loss().
+    loss = diff * diff
+    if mean:
+        loss = loss.mean()
+    return loss
+
 def demean(x):
     return x - x.mean(dim=-1, keepdim=True)
 
