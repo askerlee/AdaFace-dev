@@ -66,12 +66,12 @@ model:
       params:
         verbosity_interval: 0
         warm_up_steps: 500
-        # max_decay_steps = max_steps = 3500. The final LR is 0.2*base_lr.
+        # max_decay_steps = max_steps = 3500. The final LR is 0.1*base_lr.
         # max_decay_steps and max_steps will be customized in main.py accordingly.
         max_decay_steps: 3500
         lr_start: 0.01
         lr_max:   1.0
-        lr_min:   0.25
+        lr_min:   0.1
 
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
