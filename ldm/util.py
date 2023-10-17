@@ -1097,6 +1097,18 @@ def repeat_selected_instances(sel_indices, REPEAT, *args):
 
     return rep_args
 
+def keep_first_occur_in_each_instance(token_indices):
+    seen_batch_indices = {}
+    token_indices_first_only = [], []
+
+    for token_ind_B, token_ind_T in zip(*token_indices):
+        if token_ind_B not in seen_batch_indices:
+            token_indices_first_only[0].append(token_ind_B)
+            token_indices_first_only[1].append(token_ind_T)
+            seen_batch_indices[token_ind_B] = True
+
+    return token_indices_first_only
+
 # BS: BLOCK_SIZE, not batch size.
 def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, K_fg, K_comp, BS, 
                                       ind_subj_subj_B, ind_subj_subj_N, 

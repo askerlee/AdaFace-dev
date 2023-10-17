@@ -6,7 +6,8 @@ from ldm.modules.ema import LitEma
 import torch.nn.functional as F
 import numpy as np
 
-from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler, masked_mean, gen_gradient_scaler
+from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler, masked_mean, \
+                     gen_gradient_scaler, keep_first_occur_in_each_instance
 from functools import partial
 from collections import OrderedDict
 import random
@@ -1112,6 +1113,10 @@ class EmbeddingManager(nn.Module):
                     self.clear_placeholder_indices(type='bg')
                 continue
             
+            # If multiple occurrences are found in a prompt, only keep the first as the subject.
+            # Other occurrences are treated as part of the background prompt (this may happen if
+            # composition image overlay is used).
+            placeholder_indices = keep_first_occur_in_each_instance(placeholder_indices)
             # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
             # Non-layerwise: embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [1, K, 768].
             # layerwise: placeholder_indices =  
