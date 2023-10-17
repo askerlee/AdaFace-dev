@@ -1097,7 +1097,8 @@ def repeat_selected_instances(sel_indices, REPEAT, *args):
 
     return rep_args
 
-def keep_first_occur_in_each_instance(token_indices):
+# token_indices is a tuple of two 1D tensors: (token_indices_B, token_indices_T).
+def keep_first_index_in_each_instance(token_indices):
     device = token_indices[0].device
     seen_batch_indices = {}
     token_indices_first_only = [], []
@@ -1106,10 +1107,10 @@ def keep_first_occur_in_each_instance(token_indices):
         return token_indices
     
     for token_ind_B, token_ind_T in zip(*token_indices):
-        if token_ind_B not in seen_batch_indices:
+        if token_ind_B.item() not in seen_batch_indices:
             token_indices_first_only[0].append(token_ind_B)
             token_indices_first_only[1].append(token_ind_T)
-            seen_batch_indices[token_ind_B] = True
+            seen_batch_indices[token_ind_B.item()] = True
 
     return (torch.tensor(token_indices_first_only[0], device=device), 
             torch.tensor(token_indices_first_only[1], device=device))
