@@ -1249,6 +1249,7 @@ class EmbeddingManager(nn.Module):
             if placeholder_indices[0].numel() == 0:
                 continue
 
+            placeholder_indices = keep_first_occur_in_each_instance(placeholder_indices)
             token_is_bg = (placeholder_string == self.background_string)
 
             # Clear the infeat_bg cache before generating subject embedding(s) of a subject token.
@@ -1349,14 +1350,15 @@ class EmbeddingManager(nn.Module):
             self.placeholder_indices_bg = None
 
     def update_placeholder_indices(self, tokenized_text, placeholder_token, num_vectors_per_token, is_bg_token):
-        placeholder_indices_B, placeholder_indices_N = \
-            torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
+        placeholder_indices = torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
 
         if len(placeholder_indices_B) == 0:
             if is_bg_token:
                 self.placeholder_indices_bg = None
             return
-        
+
+        placeholder_indices_B, placeholder_indices_N = keep_first_occur_in_each_instance(placeholder_indices)
+
         if num_vectors_per_token > 1:
             BS = placeholder_indices_B.shape[0]
             # unsqueeze(1) -> [B, 1] => [B, num_vectors_per_token] => [B * num_vectors_per_token].
