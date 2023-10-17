@@ -959,8 +959,8 @@ if __name__ == "__main__":
         #  'validation': {'target': 'ldm.data.personalized.PersonalizedBase', 
         #  'params': {'size': 512, 'set': 'val', 'repeats': 10, 
         #  'placeholder_string': 'z', 'data_root': 'data/spikelee/'}}}}
-        config.data.params.train.params.data_root = opt.data_root
-        config.data.params.validation.params.data_root = opt.data_root
+        config.data.params.train.params.data_root       = opt.data_root
+        config.data.params.validation.params.data_root  = opt.data_root
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
         # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
@@ -968,14 +968,15 @@ if __name__ == "__main__":
         # lightning still takes care of proper multiprocessing though
         data.prepare_data()
         data.setup()
+
+
         print("#### Data #####")
         for k in data.datasets:
             print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
-
+            
         # configure learning rate
         bs, base_lr, weight_decay = config.data.params.batch_size, config.model.base_learning_rate, \
                                     config.model.weight_decay
-
 
         if not cpu:
             ngpu = len(lightning_config.trainer.gpus.strip(",").split(','))

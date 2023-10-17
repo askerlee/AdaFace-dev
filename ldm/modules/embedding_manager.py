@@ -714,7 +714,7 @@ class AdaEmbedding(nn.Module):
             else:
                 # layer_static_subj_emb should be quite similar to the ada embedding at this layer.
                 # So we use layer_static_subj_emb as an approximate query to do the attention-based pooling.
-
+                # layer_static_subj_emb: [768]. layer_static_extra_emb_mean: [2, 768].
                 infeat_pooled    = pooler(layer_attn_components, 
                                           fg_q_emb=layer_static_subj_emb, 
                                           bg_q_emb=layer_static_extra_emb_mean,
@@ -1212,7 +1212,6 @@ class EmbeddingManager(nn.Module):
         ada_subj_embs_dict = {}
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
-        
         layer_static_embs   = layer_attn_components['static_embeddings']
         # layer_static_embs:   [4, 77, 768]. 
         # delta_loss_emb_mask: [4, 1, 77, 1] => [4, 77, 1].

@@ -4,6 +4,7 @@ import PIL
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
+from transformers import CLIPTokenizer
 from torchvision.transforms import InterpolationMode
 from .compositions import sample_compositions
 import random
@@ -181,6 +182,11 @@ class PersonalizedBase(Dataset):
         self.placeholder_string  = placeholder_string
         self.background_string   = background_string
         self.broad_class = broad_class
+
+        self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+        self.placeholder_token = None
+        self.background_token  = None
+
         # placeholder_prefix could be a list of strings, separated by ",".
         if common_placeholder_prefix is not None:
             self.common_placeholder_prefixes   = re.split("\s*,\s*", common_placeholder_prefix)
@@ -241,7 +247,7 @@ class PersonalizedBase(Dataset):
         self.num_compositions_per_image = num_compositions_per_image
         # cartoon characters are usually depicted as human-like, so is_animal is True.
         self.is_animal = (broad_class == 1 or broad_class == 2)
-
+   
     def __len__(self):
         return self._length
 
@@ -396,12 +402,24 @@ class PersonalizedBase(Dataset):
         example["fg_mask"]      = fg_mask
 
         if has_fg_mask and self.p_wds_comp > 0 and random.random() < self.p_wds_comp:
-            try:
-                bg_img, bg_json = next(self.comp_wds_iter)
-            except:
-                self.comp_wds_iter = iter(self.comp_wds)
-                bg_img, bg_json = next(self.comp_wds_iter)
-            
+            while True:
+                try:
+                    bg_img, bg_json = next(self.comp_wds_iter)
+                except:
+                    self.comp_wds_iter = iter(self.comp_wds)
+                    bg_img, bg_json = next(self.comp_wds_iter)
+
+                bg_prompt = bg_json['caption']
+                bg_prompt_tokens = self.tokenizer(bg_prompt)['input_ids']
+                if self.placeholder_token is None:
+                    self.placeholder_token = self.tokenizer(self.placeholder_string)['input_ids'][0]
+                if self.background_token is None:
+                    self.background_token = self.tokenizer(self.background_string)['input_ids'][0]
+
+                if self.placeholder_token not in bg_prompt_tokens \
+                  and self.background_token not in bg_prompt_tokens:
+                    break
+
             # bg_img is PIL Image -> np.array (512, 512, 3)
             bg_img = np.array(bg_img).astype(np.uint8)
             orig_h, orig_w = bg_json['original_height'], bg_json['original_width']
@@ -446,7 +464,6 @@ class PersonalizedBase(Dataset):
                 print("Saved overlay sample to {}".format(overlay_sample_filepath))
                   
             self.do_wds_comp = True
-            bg_prompt = bg_json['caption']
         else:
             self.do_wds_comp = False
             
