@@ -412,13 +412,14 @@ class PersonalizedBase(Dataset):
                 bg_prompt = bg_json['caption']
                 bg_prompt_tokens = self.tokenizer(bg_prompt)['input_ids']
                 if self.placeholder_token is None:
-                    self.placeholder_token = self.tokenizer(self.placeholder_string)['input_ids'][0]
+                    self.placeholder_token = self.tokenizer(self.placeholder_string)['input_ids'][1]
                 if self.background_token is None:
-                    self.background_token = self.tokenizer(self.background_string)['input_ids'][0]
+                    self.background_token = self.tokenizer(self.background_string)['input_ids'][1]
 
                 if self.placeholder_token not in bg_prompt_tokens \
                   and self.background_token not in bg_prompt_tokens:
                     break
+                #print("bg_prompt: {}".format(bg_prompt))
 
             # bg_img is PIL Image -> np.array (512, 512, 3)
             bg_img = np.array(bg_img).astype(np.uint8)
