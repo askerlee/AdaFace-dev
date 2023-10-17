@@ -104,6 +104,7 @@ class DDPM(pl.LightningModule):
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_mask_align_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
+                 recon_bg_discount=1.,
                  do_clip_teacher_filtering=False,
                  distill_deep_neg_prompt=None,
                  distill_deep_cfg_scale=0.,
@@ -147,7 +148,8 @@ class DDPM(pl.LightningModule):
         self.distill_deep_neg_prompt            = distill_deep_neg_prompt
         self.distill_deep_cfg_scale             = distill_deep_cfg_scale
         self.prompt_mix_scheme                  = 'mix_hijk'
-
+        self.recon_bg_discount                  = recon_bg_discount
+        
         self.use_conv_attn                   = use_conv_attn
         self.use_background_token            = use_background_token
         # If use_conv_attn, the subject is well expressed, and use_fp_trick is unnecessary 
@@ -1390,6 +1392,8 @@ class LatentDiffusion(DDPM):
         self.iter_flags['fg_mask']  = fg_mask
         self.iter_flags['batch_have_fg_mask']   = batch_have_fg_mask
         self.iter_flags['delta_prompts']        = delta_prompts
+        self.iter_flags['do_wds_comp']          = batch['do_wds_comp']
+        self.wds_comp_avail_ratio               = batch['do_wds_comp'].sum() / batch['do_wds_comp'].shape[0]
 
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
@@ -2205,41 +2209,28 @@ class LatentDiffusion(DDPM):
                             + self.fg_bg_mask_align_loss_weight * \
                               (loss_fg_mask_align + loss_bg_mask_align + loss_fg_bg_mask_contrast)
 
+            if not self.iter_flags['use_background_token'] and self.wds_comp_avail_ratio == 0:
+                # bg loss is ignored.
+                instance_bg_weights = 0
+            else:
+                if self.wds_comp_avail_ratio > 0:
+                    # Some instances are do_wds_comp, some are not. Only consider 
+                    # the bg loss of the do_wds_comp instances, regardless of whether
+                    # use_background_token is True or False.
+                    # instance_bg_weights is instanse-wise. So it's a 1D tensor.
+                    instance_bg_weights = self.iter_flags['do_wds_comp'].view(-1, 1, 1, 1) \
+                                            * self.recon_bg_discount
+                else:
+                    # use_background_token == True and wds_comp_avail_ratio == 0.
+                    # bg loss is not discounted.
+                    instance_bg_weights = 1
+
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-            loss_recon, loss_recon_pixels = self.calc_recon_loss(model_output, target, fg_mask, 
-                                                                 self.iter_flags['use_background_token'])
+            loss_recon, _ = self.calc_recon_loss(model_output, target, fg_mask, 
+                                                 instance_fg_weights=1,
+                                                 instance_bg_weights=instance_bg_weights)
             loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
-
-            logvar_t = self.logvar.to(self.device)[t].reshape(-1, 1, 1, 1)
-            # In theory, the loss can be weighted according to t. However in practice,
-            # all the weights are the same, so this step is useless.
-            loss_recon_gamma_pixels = loss_recon_pixels / torch.exp(logvar_t) + logvar_t
-
-            if self.iter_flags['use_background_token']:
-                loss_recon_gamma = loss_recon_gamma_pixels.mean()
-            else:
-                # When background token is not use, only evaluate recon loss on the foreground pixels.
-                loss_recon_gamma = masked_mean(loss_recon_gamma_pixels, fg_mask)
-
-            # loss = loss_recon / torch.exp(self.logvar) + self.logvar
-            if self.learn_logvar:
-                loss_dict.update({f'{prefix}/loss_recon_gamma': loss_recon_gamma.detach()})
-                loss_dict.update({'logvar': self.logvar.data.mean().detach()})
-
-            loss += self.recon_loss_weight * loss_recon_gamma
-
-            loss_vlb_pixels = self.get_loss(model_output, target, mean=False)
-            loss_vlb_pixels = self.lvlb_weights[t].reshape(-1, 1, 1, 1) * loss_vlb_pixels
-
-            if self.iter_flags['use_background_token']:
-                loss_vlb = loss_vlb_pixels.mean()
-            else:
-                # Only evaluate loss_vlb on the foreground pixels.
-                loss_vlb = masked_mean(loss_vlb_pixels, fg_mask)
-
-            loss_dict.update({f'{prefix}/loss_vlb': loss_vlb.detach()})
-            # original_elbo_weight = 0, so that loss_vlb is disabled.
-            loss += (self.original_elbo_weight * loss_vlb)
+            loss += self.recon_loss_weight * loss_recon
         ###### end of do_normal_recon ######
 
         ###### begin of preparation for is_compos_iter ######
@@ -2640,22 +2631,17 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    # pixel-wise recon loss. If batch_indices is not None, 
-    # only compute the recon loss on selected instances.
-    def calc_recon_loss(self, model_output, target, fg_mask, use_background_token, batch_indices=None):
-        if batch_indices is not None:
-            model_output = model_output[batch_indices]
-            target       = target[batch_indices]
-            fg_mask      = fg_mask[batch_indices]
-
+    # pixel-wise recon loss. 
+    # instance_fg_weights, instance_bg_weights: could be 1D tensors of size BS, or scalars.
+    def calc_recon_loss(self, model_output, target, fg_mask, 
+                        instance_fg_weights=1, instance_bg_weights=1):
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon_pixels = self.get_loss(model_output, target, mean=False)
-        if use_background_token:
-            # recon loss on the whole image.
-            loss_recon = loss_recon_pixels.mean()
-        else:
-            # recon loss only on the foreground pixels.
-            loss_recon = masked_mean(loss_recon_pixels, fg_mask)
+        # recon loss only on the foreground pixels.
+        loss_recon = (  (loss_recon_pixels * fg_mask * instance_fg_weights).sum() \
+                      + (loss_recon_pixels * (1 - fg_mask) * instance_bg_weights).sum() ) \
+                      / (  (instance_fg_weights * fg_mask).sum() \
+                         + (instance_bg_weights * (1 - fg_mask)).sum())
 
         return loss_recon, loss_recon_pixels
     

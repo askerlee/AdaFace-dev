@@ -219,7 +219,10 @@ class AttentionalPooler(nn.Module):
         # fg_q: [1, 768] -> [1, 320].
         fg_q = to_q(self.ln_fg_q(fg_q_emb))
         # fg_q: [1, 320] -> [N, 1, 320]
-        fg_q = repeat(fg_q, 'n d -> b n d', b=x.shape[0])
+        try:
+            fg_q = repeat(fg_q, 'n d -> b n d', b=x.shape[0])
+        except:
+            breakpoint()
 
         if bg_q_emb is None:
             bg_q_emb_absent = True

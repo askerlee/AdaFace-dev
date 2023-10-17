@@ -25,7 +25,7 @@ set -g z_prefix_values  cartoon
 set -g sel_set        2             4           5    6       24     26
 
 #                       objects    animals           cartoon characters
-set -g lrs              8e-4       1e-3              8e-4
+set -g lrs              6e-4       8e-4              6e-4
 set -g inf_z_prefixes   ""         "portrait of"     ""
 set -g maxiters         2500       3500              2500
 # Individual LR for each class in the broad classes, according to their difficulties / inherent complexity.

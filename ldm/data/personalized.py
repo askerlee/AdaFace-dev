@@ -465,6 +465,8 @@ class PersonalizedBase(Dataset):
             # cls_prompt_single, cls_prompt_comps.
             example["caption"]              = example["caption"]    + ", " + bg_prompt
             example["caption_bg"]           = example["caption_bg"] + ", " + bg_prompt
+        
+        example["do_wds_comp"]          = self.do_wds_comp
 
         return example
 

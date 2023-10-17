@@ -793,13 +793,16 @@ def normalize_dict_values(d):
     d2 = { k: v / value_sum for k, v in d.items() }
     return d2
 
-def masked_mean(ts, mask, dim=None):
+def masked_mean(ts, mask, dim=None, instance_weights=1):
+    if isinstance(instance_weights, torch.Tensor):
+        instance_weights = instance_weights.view(list(instance_weights.shape) + [1] * (ts.ndim - instance_weights.ndim))
+
     if mask is None:
-        return ts.mean()
+        return (ts * instance_weights).mean()
     
     mask_sum = mask.sum(dim=dim)
     mask_sum = torch.maximum( mask_sum, torch.ones_like(mask_sum) * 1e-6 )
-    return (ts * mask).sum(dim=dim) / mask_sum
+    return (ts * mask * instance_weights).sum(dim=dim) / mask_sum
 
 def anneal_value(training_percent, final_percent, value_range):
     assert 0 - 1e-6 <= training_percent <= 1 + 1e-6
