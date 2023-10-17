@@ -1102,6 +1102,9 @@ def keep_first_occur_in_each_instance(token_indices):
     seen_batch_indices = {}
     token_indices_first_only = [], []
 
+    if token_indices[0].numel() == 0:
+        return token_indices
+    
     for token_ind_B, token_ind_T in zip(*token_indices):
         if token_ind_B not in seen_batch_indices:
             token_indices_first_only[0].append(token_ind_B)
