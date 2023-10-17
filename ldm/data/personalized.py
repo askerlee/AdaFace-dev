@@ -178,7 +178,6 @@ class PersonalizedBase(Dataset):
             self.p_wds_comp = 0.0
 
         self.num_images = len(self.image_paths)
-        self._length = self.num_images 
         self.placeholder_string  = placeholder_string
         self.background_string   = background_string
         self.broad_class = broad_class
@@ -215,6 +214,7 @@ class PersonalizedBase(Dataset):
             self._length = self.num_images * repeats
         else:
             self.is_training = False
+            self._length = self.num_images 
 
         self.size = size
         interpolation_scheme = "nearest"
@@ -251,7 +251,7 @@ class PersonalizedBase(Dataset):
     def __len__(self):
         return self._length
 
-    def __getitem__(self, index):
+    def __getitem__(self, index):        
         example = {}
         image_path = self.image_paths[index % self.num_images]
         fg_mask_path  = self.fg_mask_paths[index % self.num_images] 
@@ -402,7 +402,8 @@ class PersonalizedBase(Dataset):
         example["fg_mask"]      = fg_mask
 
         if has_fg_mask and self.p_wds_comp > 0 and random.random() < self.p_wds_comp:
-            while True:
+            Found = False
+            while not Found:
                 try:
                     bg_img, bg_json = next(self.comp_wds_iter)
                 except:
@@ -416,15 +417,14 @@ class PersonalizedBase(Dataset):
                 if self.background_token is None:
                     self.background_token = self.tokenizer(self.background_string)['input_ids'][1]
 
-                if self.placeholder_token not in bg_prompt_tokens \
-                  and self.background_token not in bg_prompt_tokens:
-                    break
+                Found = self.placeholder_token not in bg_prompt_tokens \
+                  and self.background_token not in bg_prompt_tokens
                 #print("bg_prompt: {}".format(bg_prompt))
 
             # bg_img is PIL Image -> np.array (512, 512, 3)
             bg_img = np.array(bg_img).astype(np.uint8)
             orig_h, orig_w = bg_json['original_height'], bg_json['original_width']
-            min_height, min_width = 512, 512
+            min_height, min_width = self.size, self.size
             scale = min(min_height / orig_h, min_width / orig_w)
             bg_h, bg_w   = int(orig_h * scale), int(orig_w * scale)
             overlay_mask = np.ones((bg_h, bg_w), dtype=np.uint8)
