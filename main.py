@@ -273,6 +273,10 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
 
+    # --comp_wds_path
+    parser.add_argument("--comp_wds_path", type=str, default=None,
+                        help="Path to the composition webdatabase .tar file")
+    
     parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
                         help="Relative weights of the skip connections of the last few layers of CLIP text embedder. " 
                              "(The last element is the weight of the last layer, ...)")
@@ -748,6 +752,8 @@ if __name__ == "__main__":
         config.data.params.train.params.num_vectors_per_bg_token        = opt.num_vectors_per_bg_token
         config.data.params.validation.params.num_vectors_per_bg_token   = opt.num_vectors_per_bg_token
 
+        config.data.params.train.params.comp_wds_path                   = opt.comp_wds_path
+        
         # Currently, only supports one group of initial words and weights.
         if opt.init_words:
             config.model.params.personalization_config.params.initializer_words[0] = opt.init_words

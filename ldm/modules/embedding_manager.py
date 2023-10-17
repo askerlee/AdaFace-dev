@@ -1764,7 +1764,8 @@ class EmbeddingManager(nn.Module):
     # Textual inversion is supported, where static_embeddings is only one embedding.
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
-    def calc_prompt_emb_delta_loss(self, static_embeddings, ada_embeddings, do_ada_prompt_delta_reg):
+    def calc_prompt_emb_delta_loss(self, static_embeddings, ada_embeddings, delta_loss_emb_mask,
+                                   do_ada_prompt_delta_reg):
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_ca_layers
         else:
@@ -1784,9 +1785,9 @@ class EmbeddingManager(nn.Module):
         static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
                 static_embeddings.chunk(4)
 
-        if self.delta_loss_emb_mask is not None:
+        if delta_loss_emb_mask is not None:
             subj_single_mask, subj_comp_mask, cls_single_mask, cls_comp_mask = \
-                    self.delta_loss_emb_mask.chunk(4)
+                    delta_loss_emb_mask.chunk(4)
             
             # cls_single_mask == subj_single_mask, cls_comp_mask == subj_comp_mask
             # So only compute using subj_single_mask and subj_comp_mask.

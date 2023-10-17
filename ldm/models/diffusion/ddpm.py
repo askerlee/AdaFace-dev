@@ -840,6 +840,7 @@ class LatentDiffusion(DDPM):
                                 # we also set it up here just in case.
                                 'subj_indices':          copy.copy(self.embedding_manager.placeholder_indices_fg),
                                 'bg_indices':            copy.copy(self.embedding_manager.placeholder_indices_bg),
+                                'delta_loss_emb_mask':   copy.copy(self.embedding_manager.delta_loss_emb_mask),
                              }
                 
                 if self.use_ada_embedding:
@@ -1321,6 +1322,7 @@ class LatentDiffusion(DDPM):
             # or recon iters (not do_mix_prompt_distillation) and not use_background_token 
             # We don't use_fp_trick on training images. use_fp_trick is only for compositional regularization.
             else:
+                # Use the above captions returned by self.get_input().
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp'
                 CLS_PROMPT_COMP    = 'cls_prompt_comp'
@@ -1361,7 +1363,8 @@ class LatentDiffusion(DDPM):
                 subj_comp_prompts = subj_comp_prompts2
                 cls_comp_prompts  = cls_prompt_comp2
                 captions = captions * REPEATS
-                cls_single_prompts = cls_single_prompts * REPEATS
+                subj_single_prompts = subj_single_prompts * REPEATS
+                cls_single_prompts  = cls_single_prompts * REPEATS
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
         else:
             delta_prompts = None
@@ -1439,6 +1442,7 @@ class LatentDiffusion(DDPM):
                     ORIG_BS  = len(x)
                     N_EMBEDS = ORIG_BS * self.N_LAYERS
                     
+                    # Recon iters don't do_ada_emb_delta_reg.
                     if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_emb_delta_reg']:
                         # In distillation iterations, the full batch size cannot fit in the RAM.
                         # So we have to halve the batch size. 
@@ -1462,8 +1466,8 @@ class LatentDiffusion(DDPM):
                                     + cls_single_prompts + cls_comp_prompts
                     #print(delta_prompts)
                     # breakpoint()
-                    # c_static_emb: the static embeddings [4 * N_EMBEDS, 77, 768], 
-                    # 4 * N_EMBEDS = 4 * ORIG_BS * N_LAYERS,
+                    # c_static_emb: the static embeddings for static delta loss.
+                    # [4 * N_EMBEDS, 77, 768], 4 * N_EMBEDS = 4 * ORIG_BS * N_LAYERS,
                     # whose layer dimension (N_LAYERS) is tucked into the batch dimension. 
                     # delta_prompts: the concatenation of
                     # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
@@ -1478,7 +1482,7 @@ class LatentDiffusion(DDPM):
 
                     # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
                     # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
-                    extra_info['subj_indices_2b'] = copy.copy(self.embedding_manager.placeholder_indices_fg)
+                    extra_info['subj_indices_2b'] = extra_info['subj_indices']
                     # Only keep the first half (for single prompts), as the second half is the same 
                     # (for comp prompts, differs at the batch index, but the token index is identical).
                     # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
@@ -1506,11 +1510,11 @@ class LatentDiffusion(DDPM):
                         # Sometimes (when bg_init_words is not speicified), all 4 types of prompts 
                         # have the same background token. Then placeholder_indices_bg == bg_indices_4b.
                         # Otherwise, 'bg_indices_4b' is absent in extra_info.
-                        if self.embedding_manager.placeholder_indices_bg[0].unique().numel() == 4 * BLOCK_SIZE:
-                            extra_info['bg_indices_4b'] = copy.copy(self.embedding_manager.placeholder_indices_bg)
+                        if extra_info['bg_indices'][0].unique().numel() == 4 * BLOCK_SIZE:
+                            extra_info['bg_indices_4b'] = extra_info['bg_indices']
                             extra_info['bg_indices_2b'] = halve_token_indices(extra_info['bg_indices_4b'])
                         else:
-                            extra_info['bg_indices_2b'] = copy.copy(self.embedding_manager.placeholder_indices_bg)
+                            extra_info['bg_indices_2b'] = extra_info['bg_indices']
 
                         extra_info['bg_indices_1b'] = halve_token_indices(extra_info['bg_indices_2b'])
                         # bg_indices_half_N: the first half batch of background token indices (the token dim)
@@ -1561,10 +1565,10 @@ class LatentDiffusion(DDPM):
                     # "and not self.iter_flags['do_mix_prompt_distillation']" is redundant, because it's at an "elif" branch.
                     # Kept for clarity. 
                     elif self.iter_flags['do_ada_emb_delta_reg'] and not self.iter_flags['do_mix_prompt_distillation']:
-                        # Do ada prompt delta loss in this iteration. 
-                        c_in2         = delta_prompts
                         # c_in2 consists of four types of prompts: 
                         # subj_single, subj_comp, cls_single, cls_comp.
+                        c_in2         = delta_prompts
+                        # Do ada prompt delta loss in this iteration. 
                         extra_info['iter_type']     = 'do_ada_emb_delta_reg'
                         # The prompts are either (subj single, subj comp, cls single, cls comp) or
                         # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
@@ -1579,8 +1583,19 @@ class LatentDiffusion(DDPM):
                         # When num_compositions_per_image > 1, subj_single_prompts contains repeated prompts,
                         # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
                         c_in2         = captions
-                        # subj_single_emb has been patched above.
-                        c_static_emb  = subj_single_emb
+                        # In most cases, captions == subj_single_prompts.
+                        # They are not the same, if compos_placeholder_prefix is specified,
+                        # or if bg/fg overlay is used. In that case, we need to generate 
+                        # c_static_emb from captions.
+                        if captions == subj_single_prompts:
+                            c_static_emb  = subj_single_emb
+                        else:
+                            # We are unable to reuse the static embeddings of the 4-type prompts, so 
+                            # generate embeddings from the captions from scratch.
+                            # subj_indices and bg_indices in captions should be the same.
+                            # Embeddings of subject prompts (including "captions") don't need patching.
+                            c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions)
+                            # print(captions)
 
                         # The prompts used to compute the static embeddings are 
                         # (subj single, subj comp, cls single, cls comp).
@@ -1595,9 +1610,10 @@ class LatentDiffusion(DDPM):
                         if (self.distill_deep_neg_context is not None) and (random.random() < 0.5):
                             extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(ORIG_BS, 1, 1)
                             extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
+                        ##### End of normal_recon with static delta loss iters. #####
 
-                    extra_info['cls_comp_prompts']   = cls_comp_prompts
                     extra_info['cls_single_prompts'] = cls_single_prompts
+                    extra_info['cls_comp_prompts']   = cls_comp_prompts
                     # 'delta_prompts' is only used in comp_prompt_mix_reg iters. 
                     # Keep extra_info['delta_prompts'] and iter_flags['delta_prompts'] the same structure.
                     # (Both are tuples of 4 lists. But iter_flags['delta_prompts'] may contain more prompts
@@ -1606,10 +1622,6 @@ class LatentDiffusion(DDPM):
                     extra_info['delta_prompts']      = (subj_single_prompts, subj_comp_prompts, \
                                                         cls_single_prompts,  cls_comp_prompts)
 
-                    # Restore the placeholder_indces of the embedding_manager according to the original prompts.
-                    self.embedding_manager.set_placeholder_indices(extra_info['subj_indices'], 
-                                                                   extra_info['bg_indices'])
-                    
                     # c_static_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
                     # cls_single_prompts, cls_comp_prompts. 
                     # c_static_emb: [64, 77, 768]                    
@@ -1632,8 +1644,7 @@ class LatentDiffusion(DDPM):
                         extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(ORIG_BS, 1, 1)
                         extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
 
-                # cond[2]: extra_info. 
-                cond[2]['use_background_token'] = self.iter_flags['use_background_token']
+                    ##### End of normal_recon without static delta loss iters. #####
 
             # shorten_cond_schedule: False. Skipped.
             if self.shorten_cond_schedule:  # TODO: drop this option
@@ -1950,7 +1961,7 @@ class LatentDiffusion(DDPM):
                     # Therefore, using fg_mask for comp_init_with_fg_area will force the model remember 
                     # the background in the training images, which is not desirable.
                     # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
-                    # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
+                    # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
                     filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
                     # At background, fill x_start with random values (100% noise).
                     # If no fg_mask is available, then fg_mask_or_allone is all 1, i.e., 
@@ -2468,6 +2479,7 @@ class LatentDiffusion(DDPM):
             loss_static_delta, loss_ada_delta \
             = self.embedding_manager.calc_prompt_emb_delta_loss( 
                                     extra_info['c_static_emb_4b'], ada_embeddings,
+                                    extra_info['delta_loss_emb_mask'],
                                     self.iter_flags['do_ada_emb_delta_reg']
                                     )
 
