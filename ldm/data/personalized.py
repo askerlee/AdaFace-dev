@@ -387,7 +387,8 @@ class PersonalizedBase(Dataset):
         # Scale and round fg_mask to 0 or 1.
         fg_mask     = (fg_mask  / 255).astype(np.uint8)
         # No need to scale aug_mask, as it's already 0 or 1.
-        aug_mask    = aug_mask.astype(np.uint8)
+        if aug_mask is not None:
+            aug_mask    = aug_mask.astype(np.uint8)
 
         example["has_fg_mask"]  = has_fg_mask
         # If no fg_mask is loaded from file. 'fg_mask' is all-1, and 'has_fg_mask' is set to False.
