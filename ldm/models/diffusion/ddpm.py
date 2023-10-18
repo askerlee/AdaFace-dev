@@ -2640,11 +2640,13 @@ class LatentDiffusion(DDPM):
                         instance_fg_weights=1, instance_bg_weights=1):
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon_pixels = self.get_loss(model_output, target, mean=False)
+        weighted_fg_mask = fg_mask * instance_fg_weights
+        weighted_bg_mask = (1 - fg_mask) * instance_bg_weights
+
         # recon loss only on the foreground pixels.
-        loss_recon = (  (loss_recon_pixels * fg_mask * instance_fg_weights).sum() \
-                      + (loss_recon_pixels * (1 - fg_mask) * instance_bg_weights).sum() ) \
-                      / (  (instance_fg_weights * fg_mask).sum() \
-                         + (instance_bg_weights * (1 - fg_mask)).sum())
+        loss_recon = (  (loss_recon_pixels * weighted_fg_mask).sum()     \
+                      + (loss_recon_pixels * weighted_bg_mask).sum() )   \
+                     / (weighted_fg_mask.sum() + weighted_bg_mask.sum())
 
         return loss_recon, loss_recon_pixels
     
