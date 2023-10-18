@@ -167,10 +167,10 @@ class PersonalizedBase(Dataset):
 
         self.comp_wds_path = comp_wds_path
         # wds composition is enabled if there are fg masks.
-        if (self.comp_wds_path is not None) and (num_valid_fg_masks > 0):
+        if self.is_training and (self.comp_wds_path is not None) and (num_valid_fg_masks > 0):
             self.comp_wds = wds.WebDataset(self.comp_wds_path).shuffle(100).decode("pil").to_tuple("jpg;png", "json")
             self.comp_wds_iter = iter(self.comp_wds)
-            self.p_wds_comp = 0.5
+            self.p_wds_comp = 0.25
             print(f"Composition webdataset {self.comp_wds_path} is enabled with prob {self.p_wds_comp}")
         else:
             self.comp_wds = None
@@ -238,8 +238,19 @@ class PersonalizedBase(Dataset):
                                         transforms.RandomAffine(degrees=0, shear=0, scale=rand_scale_range,
                                                                 interpolation=InterpolationMode.NEAREST),
                                         transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
-                                    ])
+                                     ])
                 print(f"{set} images will be randomly scaled in range {rand_scale_range}")
+            
+            if self.p_wds_comp > 0:
+                # rand_scale_range is (0.7, 1.0) by default. Here we use a smaller range, 
+                # i.e., more aggressive scaling.
+                self.random_small_scaler = transforms.Compose([
+                                            transforms.RandomAffine(degrees=0, shear=0, scale=(0.5, 0.8),
+                                                                    interpolation=InterpolationMode.NEAREST),
+                                            transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
+                                           ])
+                print(f"{set} fg will be randomly scaled to (0.5, 0.8) before overlaying to bg images")
+
         else:
             self.random_scaler = None
             self.flip = None
@@ -314,11 +325,24 @@ class PersonalizedBase(Dataset):
             image_mask_obj = self.flip(image_mask_obj)
         
         image_mask = np.array(image_mask_obj)
+        random_scaler = self.random_scaler
+        if random_scaler is not None:
+            scale_p = 0.5
+        else:
+            scale_p = 0
 
-        scale_p = 0.5
+        if has_fg_mask and self.p_wds_comp > 0 and random.random() < self.p_wds_comp:
+            self.do_wds_comp = True
+            # If do_wds_comp, then we always do more aggressive scaling to the foreground image,
+            # so that the foreground won't dominate the whole image, which may help learning composition.
+            random_scaler = self.random_small_scaler
+            scale_p = 1
+        else:
+            self.do_wds_comp = False
+
         # Do random scaling with 50% chance. Not to do it all the time, 
         # as it seems to hurt (maybe introduced domain gap between training and inference?)
-        if self.random_scaler and random.random() < scale_p:
+        if scale_p > 0 and random.random() < scale_p:
                 image_tensor = torch.tensor(image_mask).permute(2, 0, 1)
                 # aug_mask doesn't have to take {0, 255}. Since some inaccuracy around the boundary
                 # doesn't really matter. But fg_mask has to take {0, 255}, otherwise after scaling,
@@ -327,7 +351,7 @@ class PersonalizedBase(Dataset):
                 aug_mask    = torch.ones_like(image_tensor[0:1])
                 image_ext   = torch.cat([image_tensor, aug_mask], dim=0)
                 # image_ext: [4, 512, 512]
-                image_ext   = self.random_scaler(image_ext)
+                image_ext   = random_scaler(image_ext)
                 # After random scaling, the valid area is only a sub-region at the center of the image.
                 # NOTE: random shifting DISABLED, as it seems to hurt.
                 # ??% chance to randomly roll towards right and bottom (), 
@@ -401,7 +425,7 @@ class PersonalizedBase(Dataset):
         # 'fg_mask' has to be present in all examples, otherwise collation will cause exceptions.
         example["fg_mask"]      = fg_mask
 
-        if has_fg_mask and self.p_wds_comp > 0 and random.random() < self.p_wds_comp:
+        if self.do_wds_comp:
             Found = False
             while not Found:
                 try:
@@ -417,9 +441,9 @@ class PersonalizedBase(Dataset):
                 if self.background_token is None:
                     self.background_token = self.tokenizer(self.background_string)['input_ids'][1]
 
+                # Skip those image/prompt pairs that will cause parsing errors.
                 Found = self.placeholder_token not in bg_prompt_tokens \
-                  and self.background_token not in bg_prompt_tokens
-                #print("bg_prompt: {}".format(bg_prompt))
+                          and self.background_token not in bg_prompt_tokens
 
             # bg_img is PIL Image -> np.array (512, 512, 3)
             bg_img = np.array(bg_img).astype(np.uint8)
@@ -463,11 +487,7 @@ class PersonalizedBase(Dataset):
                         overlay_sample_filepath = os.path.join(self.overlay_dir, f'{overlay_sample_count:04}.jpg')
                 Image.fromarray(image).save(overlay_sample_filepath)
                 print("Saved overlay sample to {}".format(overlay_sample_filepath))
-                  
-            self.do_wds_comp = True
-        else:
-            self.do_wds_comp = False
-            
+
         example["aug_mask"]  = aug_mask
 
         # Also return the unnormalized numpy array image.
