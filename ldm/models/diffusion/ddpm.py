@@ -2208,9 +2208,11 @@ class LatentDiffusion(DDPM):
                     if loss_fg_bg_mask_contrast > 0:
                         loss_dict.update({f'{prefix}/fg_bg_mask_contrast': loss_fg_bg_mask_contrast.mean().detach()})
 
-                    loss += self.fg_bg_complementary_loss_weight * loss_fg_bg_complementary \
-                            + self.fg_bg_mask_align_loss_weight * \
-                              (loss_fg_mask_align + loss_bg_mask_align + loss_fg_bg_mask_contrast)
+                    fg_bg_comple_loss_scale = 1 + self.iter_flags['do_wds_comp'].float().sum()
+                    loss += fg_bg_comple_loss_scale \
+                            * (self.fg_bg_complementary_loss_weight * loss_fg_bg_complementary \
+                               + self.fg_bg_mask_align_loss_weight * \
+                               (loss_fg_mask_align + loss_bg_mask_align + loss_fg_bg_mask_contrast))
 
             if not self.iter_flags['use_background_token'] and self.wds_comp_avail_ratio == 0:
                 # bg loss is ignored.
@@ -2617,7 +2619,8 @@ class LatentDiffusion(DDPM):
                         loss_dict.update({f'{prefix}/comp_subj_fg_attn_preserve': loss_comp_subj_fg_attn_preserve.mean().detach()})
                     if loss_comp_subj_bg_attn_suppress > 0:
                         loss_dict.update({f'{prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach()})
-                    bg_attn_suppress_loss_scale = 0.2
+
+                    bg_attn_suppress_loss_scale = 0.5
                     loss_comp_fg_bg_preserve = loss_comp_subj_fg_feat_preserve \
                                                 + loss_comp_subj_fg_attn_preserve \
                                                 + loss_comp_subj_bg_attn_suppress * bg_attn_suppress_loss_scale
