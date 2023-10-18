@@ -1218,7 +1218,10 @@ class EmbeddingManager(nn.Module):
         emb_mask = self.delta_loss_emb_mask.squeeze(1).clone()
         # Mask out the foreground embeddings.
         emb_mask[self.placeholder_indices_fg] = 0
-        
+        if self.placeholder_indices_bg is not None:
+            # Mask out the background embeddings.
+            emb_mask[self.placeholder_indices_bg] = 0
+
         if layer_static_embs.shape[0] < emb_mask.shape[0]:
             # In teacher filtering stage within prompt distillation iterations,
             # there are more prompts (BS) than prompts containing subject tokens (BS/2). 
