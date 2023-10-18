@@ -165,6 +165,14 @@ class PersonalizedBase(Dataset):
             if num_valid_annots > 0 and num_valid_annots < len(self.image_paths):
                 print("WARNING: {} annotations are missing!".format(len(self.image_paths) - num_valid_annots))
 
+        self.num_images = len(self.image_paths)
+        if set == "train":
+            self.is_training = True
+            self._length = self.num_images * repeats
+        else:
+            self.is_training = False
+            self._length = self.num_images 
+
         self.comp_wds_path = comp_wds_path
         # wds composition is enabled if there are fg masks.
         if self.is_training and (self.comp_wds_path is not None) and (num_valid_fg_masks > 0):
@@ -177,7 +185,6 @@ class PersonalizedBase(Dataset):
             self.comp_wds_iter = None
             self.p_wds_comp = 0.0
 
-        self.num_images = len(self.image_paths)
         self.placeholder_string  = placeholder_string
         self.background_string   = background_string
         self.broad_class = broad_class
@@ -208,13 +215,6 @@ class PersonalizedBase(Dataset):
         self.num_vectors_per_token    = num_vectors_per_token
         self.num_vectors_per_bg_token = num_vectors_per_bg_token
         self.center_crop = center_crop
-
-        if set == "train":
-            self.is_training = True
-            self._length = self.num_images * repeats
-        else:
-            self.is_training = False
-            self._length = self.num_images 
 
         self.size = size
         interpolation_scheme = "nearest"
