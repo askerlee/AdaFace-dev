@@ -2978,6 +2978,7 @@ class LatentDiffusion(DDPM):
                     print("WARNING: bg_mask3 has all-one masks.")
                     breakpoint()
 
+                # subj_score_at_mf: [BS, 8, 64].
                 # subj, bg: subject embedding,         background embedding.
                 # mf,   mb: mask foreground locations, mask background locations.
                 # sum(dim=(1,2)): avoid summing across the batch dimension. 
@@ -3003,28 +3004,37 @@ class LatentDiffusion(DDPM):
                 # to be at least larger by mfmb_contrast_score_margin = 1 than 
                 # subj_score_at_mb at any background locations.
                 # If not, clip() > 0, incurring a loss.
+                # layer_subj_mfmb_contrast: [BS, 8, 64].
                 layer_subj_mfmb_contrast        = subj_score_at_mb + mfmb_contrast_score_margin - avg_subj_score_at_mf
                 # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
                 # activations conform to the margin restrictions.
-                loss_layer_subj_mfmb_contrast   = masked_mean(layer_subj_mfmb_contrast, layer_subj_mfmb_contrast > 0)
+                loss_layer_subj_mfmb_contrast   = masked_mean(layer_subj_mfmb_contrast, 
+                                                              layer_subj_mfmb_contrast > 0, 
+                                                              instance_weights=batch_have_fg_mask)
                 # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
                 # to be at least larger by mfmb_contrast_score_margin = 1 than
                 # bg_score_at_mf at any foreground locations.
                 # If not, clip() > 0, incurring a loss.
                 layer_bg_mfmb_contrast          = bg_score_at_mf   + mfmb_contrast_score_margin - avg_bg_score_at_mb
-                loss_layer_bg_mfmb_contrast     = masked_mean(layer_bg_mfmb_contrast, layer_bg_mfmb_contrast > 0)
+                loss_layer_bg_mfmb_contrast     = masked_mean(layer_bg_mfmb_contrast, 
+                                                              layer_bg_mfmb_contrast > 0, 
+                                                              instance_weights=batch_have_fg_mask)
                 # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations)
                 # to be at least larger by subj_bg_contrast_at_mf_score_margin = 0.8 than
                 # bg_score_at_mf at any foreground locations.
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, as avg_bg_score_at_mf 
                 # usually takes a much smaller value than avg_subj_score_at_mf.
                 layer_subj_bg_contrast_at_mf        = bg_score_at_mf    + subj_bg_contrast_at_mf_score_margin - avg_subj_score_at_mf
-                loss_layer_subj_bg_contrast_at_mf   = masked_mean(layer_subj_bg_contrast_at_mf, layer_subj_bg_contrast_at_mf > 0)
+                loss_layer_subj_bg_contrast_at_mf   = masked_mean(layer_subj_bg_contrast_at_mf, 
+                                                                  layer_subj_bg_contrast_at_mf > 0, 
+                                                                  instance_weights=batch_have_fg_mask)
                 # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
                 # to be at least larger by subj_bg_contrast_at_mf_score_margin = 0.2 than
                 # subj_score_at_mb at any background locations.
                 layer_bg_subj_contrast_at_mb        = subj_score_at_mb   + bg_subj_contrast_at_mb_score_margin - avg_bg_score_at_mb
-                loss_layer_bg_subj_contrast_at_mb   = masked_mean(layer_bg_subj_contrast_at_mb, layer_bg_subj_contrast_at_mb > 0)
+                loss_layer_bg_subj_contrast_at_mb   = masked_mean(layer_bg_subj_contrast_at_mb, 
+                                                                  layer_bg_subj_contrast_at_mb > 0, 
+                                                                  instance_weights=batch_have_fg_mask)
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, 
                 # so loss_fg_mask_align is much smaller than loss_bg_mask_align.
                 loss_fg_mask_align          += loss_layer_subj_mfmb_contrast \
