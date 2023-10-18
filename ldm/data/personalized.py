@@ -334,9 +334,9 @@ class PersonalizedBase(Dataset):
 
         if has_fg_mask and self.p_wds_comp > 0 and random.random() < self.p_wds_comp:
             self.do_wds_comp = True
-            # If do_wds_comp, then we do more aggressive scaling to the foreground image,
-            # so that the foreground won't dominate the whole image, which may help learning composition.
-            random_scaler = self.random_small_scaler if mask_fg_percent < 0.2 else self.random_scaler
+            # If do_wds_comp, and fg areas are large enough, then we do more aggressive scaling to fg,
+            # so that fg won't dominate the whole image, which may help learning composition.
+            random_scaler = self.random_small_scaler if mask_fg_percent > 0.1 else self.random_scaler
             scale_p = 1
         else:
             self.do_wds_comp = False
