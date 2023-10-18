@@ -2132,6 +2132,9 @@ class LatentDiffusion(DDPM):
             BLOCK_SIZE = x_start.shape[0]
             # Increase t slightly to increase noise amount and increase robustness.
             inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.2))
+            # Do not add extra noise for do_wds_comp instances, since such instances are 
+            # kind of "Out-of-Domain" and are intrinsically difficult to denoise.
+            inj_noise_t = torch.where(self.iter_flags['do_wds_comp'], t, inj_noise_t)
             # No need to update masks.
 
         subj_indices, bg_indices = extra_info['subj_indices'], extra_info['bg_indices']
