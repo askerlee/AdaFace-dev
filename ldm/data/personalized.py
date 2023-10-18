@@ -294,13 +294,14 @@ class PersonalizedBase(Dataset):
             has_fg_mask = False
 
         # image is made sure to be uint8. So fg_mask is also uint8.
-        # Map 255 to 1, so that fg_mask is binary.
         fg_mask     = np.array(fg_mask_obj).astype(np.uint8)
         # Concatenate fg_mask to the last channel of image, so that we don't need to transform fg_mask separately.
         # image_mask: (1282, 1282, 4)
         image_mask  = np.concatenate([image, fg_mask[:, :, np.newaxis]], axis=2)
         image_mask_obj  = Image.fromarray(image_mask)
 
+        mask_fg_percent = fg_mask.astype(float).sum() / (255 * fg_mask.size)
+        # print(f"mask_fg_percent: {mask_fg_percent}")
 
         #print(f"subj_prompt_comp: {subj_prompt_comp}")
         #print(f"cls_prompt_comp: {cls_prompt_comp}")
@@ -333,9 +334,9 @@ class PersonalizedBase(Dataset):
 
         if has_fg_mask and self.p_wds_comp > 0 and random.random() < self.p_wds_comp:
             self.do_wds_comp = True
-            # If do_wds_comp, then we always do more aggressive scaling to the foreground image,
+            # If do_wds_comp, then we do more aggressive scaling to the foreground image,
             # so that the foreground won't dominate the whole image, which may help learning composition.
-            random_scaler = self.random_small_scaler
+            random_scaler = self.random_small_scaler if mask_fg_percent < 0.2 else self.random_scaler
             scale_p = 1
         else:
             self.do_wds_comp = False
