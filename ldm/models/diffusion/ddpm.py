@@ -2885,8 +2885,8 @@ class LatentDiffusion(DDPM):
         loss_bg_mask_align = 0
         loss_fg_bg_mask_contrast = 0
 
-        emb_mfmb_contrast_scale         = 0.01
-        fgbg_emb_contrast_scale         = 0.05
+        emb_mfmb_contrast_scale         = 0.1
+        fgbg_emb_contrast_scale         = 0.2
         mfmb_contrast_score_margin            = 0.4
         subj_bg_contrast_at_mf_score_margin   = 0.4 * K_fg / K_bg     # 0.8
         bg_subj_contrast_at_mb_score_margin   = 0.4 * K_bg / K_fg     # 0.2
