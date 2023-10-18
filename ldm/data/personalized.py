@@ -502,8 +502,8 @@ class PersonalizedBase(Dataset):
             # common_placeholder_prefix is prepended to caption and caption_bg.
             # compos_placeholder_prefix is prepended to subj_prompt_single, subj_prompt_comps,
             # cls_prompt_single, cls_prompt_comps.
-            example["caption"]              = example["caption"]    + ", " + bg_prompt
-            example["caption_bg"]           = example["caption_bg"] + ", " + bg_prompt
+            example["caption"]              = example["caption"]    + ", in front of " + bg_prompt
+            example["caption_bg"]           = example["caption_bg"] + ", in front of " + bg_prompt
         
         example["do_wds_comp"]          = self.do_wds_comp
 
