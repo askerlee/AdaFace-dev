@@ -1235,7 +1235,7 @@ class EmbeddingManager(nn.Module):
             if token_is_bg:
                 # Why mask bg indices for bg ada? If bg embeddings accidentally attent to fg,
                 # then it will self-reinforce and contaminate the bg embeddings with fg features.
-                indices_list_to_mask = [self.placeholder_indices_fg, self.placeholder_indices_bg]  
+                indices_list_to_mask = [self.placeholder_indices_fg] #, self.placeholder_indices_bg]  
             else:
                 # Why not mask bg indices for fg ada? bg embeddings are supposed to be of a similar nature 
                 # as the extra compositional embeddings. Incorporating them in layer_static_extra_emb_mean

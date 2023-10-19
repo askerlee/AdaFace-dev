@@ -2224,12 +2224,13 @@ class LatentDiffusion(DDPM):
                 # delta_loss_emb_mask: [2, 77, 1] -> [2, 77].
                 comp_extra_mask = self.embedding_manager.delta_loss_emb_mask.clone().squeeze(-1)
                 comp_extra_mask[extra_info['subj_indices']] = 0
+                if self.iter_flags['use_background_token']:
+                    comp_extra_mask[extra_info['bg_indices']] = 0
+
                 # All extra embeddings in each instance, not just wds comp extra embeddings. 
                 # But self.iter_flags['do_wds_comp'] will mask out those non-wds instances.
                 wds_comp_extra_indices = torch.where(comp_extra_mask != 0)
                 wds_comp_extra_indices_by_inst = split_indices_by_instance(wds_comp_extra_indices)
-                if len(wds_comp_extra_indices_by_inst) != x_start.shape[0]:
-                    breakpoint()
 
                 # loss_fg_mask_align_wds is the same as above if an instance both do_wds_comp and use_background_token.
                 # Otherwise it's different. It's ok if the loss is double-counted sometimes.
