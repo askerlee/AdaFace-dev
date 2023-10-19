@@ -1215,31 +1215,7 @@ class EmbeddingManager(nn.Module):
         layer_static_embs   = layer_attn_components['static_embeddings']
         # layer_static_embs:   [4, 77, 768]. 
         # delta_loss_emb_mask: [4, 1, 77, 1] => [4, 77, 1].
-        emb_mask = self.delta_loss_emb_mask.squeeze(1).clone()
-        # Mask out the foreground embeddings.
-        emb_mask[self.placeholder_indices_fg] = 0
-        if self.placeholder_indices_bg is not None:
-            # Mask out the background embeddings.
-            emb_mask[self.placeholder_indices_bg] = 0
-
-        if layer_static_embs.shape[0] < emb_mask.shape[0]:
-            # In teacher filtering stage within prompt distillation iterations,
-            # there are more prompts (BS) than prompts containing subject tokens (BS/2). 
-            # So we take the first half instances of emb_mask 
-            # (the second half instances of emb_mask are the same as the first half)
-            emb_mask = emb_mask[:layer_static_embs.shape[0]]
-        elif layer_static_embs.shape[0] > emb_mask.shape[0]:
-            # This should only happen during inference, where the cond and uncond 
-            # static embeddings are combined as input, but emb_mask is only the 
-            # mask of the cond embeddings. 
-            # The batch structure is [4*cond, 4*uncond]. So we append 
-            # a zero tensor of size 4 to emb_mask to match the uncond embeddings.
-            emb_mask = torch.cat([emb_mask, torch.zeros_like(emb_mask)], dim=0)
-            
-        layer_static_extra_emb_mean = masked_mean(layer_static_embs, emb_mask, dim=1)
-        # Drop out the static embedding mean features with a probability of 0.2.
-        if self.training and random.random() < 0.2:
-            layer_static_extra_emb_mean.zero_()
+        emb_mask = self.delta_loss_emb_mask.squeeze(1)
 
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
@@ -1256,6 +1232,17 @@ class EmbeddingManager(nn.Module):
 
             placeholder_indices = keep_first_index_in_each_instance(placeholder_indices)
             token_is_bg = (placeholder_string == self.background_string)
+
+            # For fg subjects, mask fg indices. For bg subjects, mask both fg and bg indices.
+            # bg embeddings are of a similar nature as the extra compositional embeddings.
+            if token_is_bg:
+                indices_list_to_mask = [self.placeholder_indices_fg, self.placeholder_indices_bg]  
+            else:
+                indices_list_to_mask = [self.placeholder_indices_fg]
+            layer_static_extra_emb_mean = \
+                self.get_layer_static_emb_mean(layer_static_embs, emb_mask, 
+                                               indices_list_to_mask,
+                                               dropout_prob=0.2)
 
             # Clear the infeat_bg cache before generating subject embedding(s) of a subject token.
             # If the next token is the background token, the keep the cache, so that the background
@@ -1339,6 +1326,41 @@ class EmbeddingManager(nn.Module):
 
         self.set_delta_loss_emb_mask(delta_loss_emb_mask)
 
+    # layer_static_embs: [4, 77, 768].
+    # emb_mask:          [4, 77, 1].
+    # (Note sometimes the batch size of emb_mask is different from layer_static_embs).
+    def get_layer_static_emb_mean(self, layer_static_embs, emb_mask, 
+                                  indices_list_to_mask, dropout_prob=0.2):
+        emb_mask = emb_mask.clone()
+        valid_masked_indices_count = sum([ (masked_indices is not None) for masked_indices in indices_list_to_mask])
+        assert valid_masked_indices_count > 0
+
+        for masked_indices in indices_list_to_mask:
+            if masked_indices is not None:
+                # Mask out embeddings.
+                emb_mask[masked_indices] = 0
+
+        if layer_static_embs.shape[0] < emb_mask.shape[0]:
+            # In teacher filtering stage within prompt distillation iterations,
+            # there are more prompts (BS) than prompts containing subject tokens (BS/2). 
+            # So we take the first half instances of emb_mask 
+            # (the second half instances of emb_mask are the same as the first half)
+            emb_mask = emb_mask[:layer_static_embs.shape[0]]
+        elif layer_static_embs.shape[0] > emb_mask.shape[0]:
+            # This should only happen during inference, where the cond and uncond 
+            # static embeddings are combined as input, but emb_mask is only the 
+            # mask of the cond embeddings. 
+            # The batch structure is [4*cond, 4*uncond]. So we append 
+            # a zero tensor of size 4 to emb_mask to match the uncond embeddings.
+            emb_mask = torch.cat([emb_mask, torch.zeros_like(emb_mask)], dim=0)
+        
+        layer_static_extra_emb_mean = masked_mean(layer_static_embs, emb_mask, dim=1)
+        # Drop out the static embedding mean features with a probability of 0.2.
+        if self.training and random.random() < dropout_prob:
+            layer_static_extra_emb_mean.zero_()
+
+        return layer_static_extra_emb_mean
+    
     # If either subj_indices or bg_indices is None, then the corresponding placeholder indices
     # won't be updated.
     def set_placeholder_indices(self, subj_indices, bg_indices):
