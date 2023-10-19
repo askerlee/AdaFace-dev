@@ -1213,9 +1213,6 @@ class EmbeddingManager(nn.Module):
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
         layer_static_embs   = layer_attn_components['static_embeddings']
-        # layer_static_embs:   [4, 77, 768]. 
-        # delta_loss_emb_mask: [4, 1, 77, 1] => [4, 77, 1].
-        emb_mask = self.delta_loss_emb_mask.squeeze(1)
 
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
@@ -1234,13 +1231,21 @@ class EmbeddingManager(nn.Module):
             token_is_bg = (placeholder_string == self.background_string)
 
             # For fg subjects, mask fg indices. For bg subjects, mask both fg and bg indices.
-            # bg embeddings are of a similar nature as the extra compositional embeddings.
+            # bg embeddings are
             if token_is_bg:
+                # Why mask bg indices for bg ada? If bg embeddings accidentally attent to fg,
+                # then it will self-reinforce and contaminate the bg embeddings with fg features.
                 indices_list_to_mask = [self.placeholder_indices_fg, self.placeholder_indices_bg]  
             else:
+                # Why not mask bg indices for fg ada? bg embeddings are supposed to be of a similar nature 
+                # as the extra compositional embeddings. Incorporating them in layer_static_extra_emb_mean
+                # will make fg and bg embeddings more orthogonal (i.e., attend to different areas).
                 indices_list_to_mask = [self.placeholder_indices_fg]
+                
+            # layer_static_embs:   [4, 77, 768]. 
+            # delta_loss_emb_mask: [4, 77, 1].
             layer_static_extra_emb_mean = \
-                self.get_layer_static_emb_mean(layer_static_embs, emb_mask, 
+                self.get_layer_static_emb_mean(layer_static_embs, self.delta_loss_emb_mask, 
                                                indices_list_to_mask,
                                                dropout_prob=0.2)
 
@@ -1321,8 +1326,8 @@ class EmbeddingManager(nn.Module):
     def update_emb_mask(self, tokenized_text):
         # Exclude the starting and padding tokens from delta loss.
         delta_loss_emb_mask  = (tokenized_text != 49406 ) & (tokenized_text != 49407)
-        # [B, N] => [B, 1, N, 1]
-        delta_loss_emb_mask  = delta_loss_emb_mask.float().unsqueeze(1).unsqueeze(3)
+        # [B, N] => [B, N, 1]
+        delta_loss_emb_mask  = delta_loss_emb_mask.float().unsqueeze(2)
 
         self.set_delta_loss_emb_mask(delta_loss_emb_mask)
 
@@ -1849,6 +1854,8 @@ class EmbeddingManager(nn.Module):
             cls_delta    = static_cls_comp_emb  - static_cls_single_emb
             static_delta = static_subj_comp_emb - static_subj_single_emb
 
+        # delta_loss_emb_mask: [1, 77, 1] => [1, 1, 77, 1].
+        delta_loss_emb_mask = delta_loss_emb_mask.unsqueeze(1)
         static_delta_loss   = calc_delta_loss(static_delta, cls_delta, emb_mask=delta_loss_emb_mask,
                                               do_demean_first=True)
 

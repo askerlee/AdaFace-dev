@@ -784,6 +784,12 @@ def double_token_indices(token_indices, bs_offset):
     token_indices_x2 = (token_indices_B_x2, token_indices_T_x2)
     return token_indices_x2
 
+def split_indices_by_instance(indices):
+    indices_B, indices_N = indices
+    unique_indices_B = torch.unique(indices_B)
+    indices_by_instance = [ (indices_B[indices_B == uib], indices_N[indices_B == uib]) for uib in unique_indices_B ]
+    return indices_by_instance
+
 def normalize_dict_values(d):
     value_sum = np.sum(list(d.values()))
     # If d is empty, do nothing.
@@ -793,10 +799,12 @@ def normalize_dict_values(d):
     d2 = { k: v / value_sum for k, v in d.items() }
     return d2
 
-def masked_mean(ts, mask, dim=None, instance_weights=1):
+def masked_mean(ts, mask, dim=None, instance_weights=None):
+    if instance_weights is None:
+        instance_weights = 1
     if isinstance(instance_weights, torch.Tensor):
         instance_weights = instance_weights.view(list(instance_weights.shape) + [1] * (ts.ndim - instance_weights.ndim))
-
+        
     if mask is None:
         return (ts * instance_weights).mean()
     
