@@ -38,10 +38,10 @@ model:
     # typical loss_subj_comp_key_ortho is 0.2, * weight -> 2e-7
     subj_comp_key_ortho_loss_weight:          1e-3
     subj_comp_value_ortho_loss_weight:        1e-4
-    # typical loss_subj_comp_attn_comple is 0.4, * weight -> 2e-6
+    # typical loss_subj_comp_attn_comple is 0.4, * weight -> 2e-4
     subj_comp_attn_complementary_loss_weight: 5e-4
-    # typical prompt mix reg loss: 2, * weight -> 4e-4.
-    mix_prompt_distill_weight:          5e-4
+    # typical loss_mix_prompt_distill: 4, * weight -> 2e-34.
+    mix_prompt_distill_weight:          8e-4
     # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
     subj_attn_norm_distill_loss_scale:  2
     comp_fg_bg_preserve_loss_weight:    2e-4
