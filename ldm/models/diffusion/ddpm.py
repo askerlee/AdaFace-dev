@@ -2286,9 +2286,9 @@ class LatentDiffusion(DDPM):
 
                 fg_wds_comple_loss_scale = 0.25
                 # loss_wds_mask_align is not added, as wds embeddings are not optimizable.
+                # loss_fg_wds_mask_contrast is not added, as wds attention is not accurate.
                 loss += self.fg_wds_complementary_loss_weight \
-                         * (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
-                            + loss_fg_mask_align_wds + loss_fg_wds_mask_contrast)
+                         * (loss_fg_wds_complementary * fg_wds_comple_loss_scale + loss_fg_mask_align_wds)
 
             if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
                 instance_fg_weights = 1
