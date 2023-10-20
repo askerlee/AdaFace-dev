@@ -2196,6 +2196,7 @@ class LatentDiffusion(DDPM):
                                                                 bg_indices_by_instance,
                                                                 x_start.shape[0],
                                                                 img_mask,
+                                                                is_bg_learnable=True,
                                                                 fg_grad_scale=0.1,
                                                                 fg_mask=fg_mask,
                                                                 instance_mask=batch_have_fg_mask
@@ -2241,6 +2242,7 @@ class LatentDiffusion(DDPM):
                                                                 wds_comp_extra_indices_by_inst,
                                                                 x_start.shape[0],
                                                                 img_mask,
+                                                                is_bg_learnable=False,
                                                                 fg_grad_scale=0.1,
                                                                 fg_mask=fg_mask,
                                                                 instance_mask=self.iter_flags['do_wds_comp']
@@ -2260,24 +2262,37 @@ class LatentDiffusion(DDPM):
                             + loss_wds_mask_align + loss_fg_wds_mask_contrast)
 
             if not self.iter_flags['use_background_token'] and self.wds_comp_avail_ratio == 0:
+                instance_fg_weights = 1
                 # bg loss is ignored.
                 instance_bg_weights = 0
             else:
                 if self.wds_comp_avail_ratio > 0:
+                    # instance_fg_weights/instance_bg_weights are instanse-specific 1D tensors.
                     # Some instances are do_wds_comp, some are not. Only consider 
                     # the bg loss of the do_wds_comp instances, regardless of whether
                     # use_background_token is True or False.
-                    # instance_bg_weights is instanse-wise. So it's a 1D tensor.
+                    # an instance of  do_wds_comp: instance_bg_weight is 0.1, instance_fg_weight is 0.5.
+                    # an instance not do_wds_comp: instance_bg_weight is 0,   instance_fg_weight is 1.
+                    # NOTE: We discount the bg weight of the do_wds_comp instances, as bg areas are supposed 
+                    # to be attended with wds comp extra embeddings. However, the attention may not be perfect,
+                    # and subject embeddings may be tempted to attend to the background, which will mix the 
+                    # background features into the subject embeddings, which hurt both authenticity and compositionality.
+                    # NOTE: We discount the fg weight of the do_wds_comp instances, as they are less natural and
+                    # may incur too high loss to the model (even in the fg areas).
                     instance_bg_weights = self.iter_flags['do_wds_comp'].view(-1, 1, 1, 1) \
                                             * self.recon_bg_discount
+                    fg_half_weight = torch.ones(x_start.shape[0], device=x_start.device) * 0.5
+                    fg_full_weight = torch.ones(x_start.shape[0], device=x_start.device)
+                    instance_fg_weights = torch.where(self.iter_flags['do_wds_comp'], fg_half_weight, fg_full_weight)
                 else:
                     # use_background_token == True and wds_comp_avail_ratio == 0.
                     # bg loss is not discounted.
+                    instance_fg_weights = 1
                     instance_bg_weights = 1
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_recon, _ = self.calc_recon_loss(model_output, target, fg_mask, 
-                                                 instance_fg_weights=1,
+                                                 instance_fg_weights=instance_fg_weights,
                                                  instance_bg_weights=instance_bg_weights)
             loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
             loss += self.recon_loss_weight * loss_recon
@@ -2904,7 +2919,8 @@ class LatentDiffusion(DDPM):
     def calc_fg_bg_complementary_loss(self, unet_attns_or_scores, unet_attnscores,
                                       subj_indices, 
                                       bg_indices_by_instance,
-                                      BS, img_mask, fg_grad_scale=0.1,
+                                      BS, img_mask, is_bg_learnable,
+                                      fg_grad_scale=0.1,
                                       fg_mask=None, instance_mask=None):
         if subj_indices is None or bg_indices_by_instance is None or len(bg_indices_by_instance) == 0:
             return 0, 0, 0, 0
@@ -2998,14 +3014,29 @@ class LatentDiffusion(DDPM):
             # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
             # to make the two attention maps more complementary (expect the loss pushes the 
             # subject embedding to a more accurate point).
-            loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, subj_attn, 
-                                                      exponent=2,    
-                                                      do_demean_first=False,
-                                                      first_n_dims_to_flatten=2, 
-                                                      ref_grad_scale=fg_grad_scale,
-                                                      aim_to_align=False,
-                                                      debug=False)
-            
+            if is_bg_learnable:
+                # Use subj_attn as a reference, and scale down grad to fg attn, 
+                # to make fg embeddings more stable.
+                loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, subj_attn, 
+                                                            exponent=2,    
+                                                            do_demean_first=False,
+                                                            first_n_dims_to_flatten=2, 
+                                                            ref_grad_scale=fg_grad_scale,
+                                                            aim_to_align=False,
+                                                            debug=False)
+            else:
+                # When bg embeddings are compositional extra embeddings of WDS overlay instances.
+                # Use bg_attn as a reference, and do not scale down grad to fg attn.
+                # to optimize fg embeddings (since bg embeddings are not learnable)
+                # (ref_grad_scale doesn't matter, since there are no optimizable params in bg embeddings.)
+                loss_layer_fg_bg_comple = calc_delta_loss(subj_attn, bg_attn, 
+                                                            exponent=2,    
+                                                            do_demean_first=False,
+                                                            first_n_dims_to_flatten=2, 
+                                                            ref_grad_scale=fg_grad_scale,
+                                                            aim_to_align=False,
+                                                            debug=False)
+                                            
             # loss_fg_bg_complementary doesn't need fg_mask.
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_align_layer_weight
 
