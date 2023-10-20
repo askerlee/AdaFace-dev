@@ -477,19 +477,6 @@ class PersonalizedBase(Dataset):
             # Blend fg area with bg_img. fg_mask is 2D, so add 1D channel.
             wds_image = np.where(fg_mask[:, :, None] > 0, image, bg_img)
 
-            DEBUG_WDS = False
-            if DEBUG_WDS:
-                self.wds_sample_dir = "wds-samples"
-                os.makedirs(self.wds_sample_dir, exist_ok=True)
-                wds_sample_count = len(os.listdir(self.wds_sample_dir))
-                wds_sample_filepath = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
-                if os.path.exists(wds_sample_filepath):
-                    while os.path.exists(wds_sample_filepath):
-                        wds_sample_count += 1
-                        wds_sample_filepath = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
-                Image.fromarray(wds_image).save(wds_sample_filepath)
-                print("Saved wds sample to {}".format(wds_sample_filepath))
-
         example["aug_mask"]  = aug_mask
 
         # Also return the unnormalized numpy array image.
@@ -518,6 +505,30 @@ class PersonalizedBase(Dataset):
             example["wds_aug_mask"]     = example["aug_mask"]
             
         example["has_wds_comp"]         = has_wds_comp
+
+        DEBUG_WDS = False
+        if DEBUG_WDS and has_wds_comp:
+            self.wds_sample_dir = "wds-samples"
+            os.makedirs(self.wds_sample_dir, exist_ok=True)
+            wds_sample_count = len(os.listdir(self.wds_sample_dir))
+            wds_sample_filepath = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
+            if os.path.exists(wds_sample_filepath):
+                while os.path.exists(wds_sample_filepath):
+                    wds_sample_count += 1
+                    wds_sample_filepath = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
+            # Overlay wds_aug_mask on wds_image.
+            # Create a pure red image
+            red_image  = np.ones_like(wds_image) * 255
+            red_image[:, :, 1:] = 0
+            green_image = np.ones_like(wds_image) * 255
+            green_image[:, :, [0,2]] = 0
+
+            wds_image2 = wds_image * 0.9 \
+                        + wds_aug_mask[:, :, None] * green_image * 0.1 \
+                        + fg_mask[:, :, None]      * red_image   * 0.3
+            wds_image2 = np.clip(wds_image2, 0, 255).astype(np.uint8)
+            Image.fromarray(wds_image2).save(wds_sample_filepath)
+            print("Saved wds sample to {}".format(wds_sample_filepath))
 
         return example
 

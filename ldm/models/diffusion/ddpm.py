@@ -1291,19 +1291,12 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['is_compos_iter']:
                     p_use_wds_comp = 0
                 else:
-                    # 25% of recon iters will use wds_comp overlay images.
+                    # 20% of recon iters will use wds_comp overlay images.
                     p_use_wds_comp = 0.2
             else:
                 p_use_wds_comp = 0
             
             self.iter_flags['use_wds_comp'] = random.random() < p_use_wds_comp
-            if self.iter_flags['use_wds_comp']:
-                # Replace the image/caption/mask with the wds_comp image/caption/mask.
-                batch["image"] = batch["wds_image"]
-                batch["caption"]    = batch["wds_caption"]
-                batch["caption_bg"] = batch["wds_caption_bg"]
-                batch["aug_mask"]   = batch["wds_aug_mask"]
-                x, _ = self.get_input(batch, self.first_stage_key)
 
             # Mainly use background token on recon iters.
             # To avoid the backgound token taking too much of the foreground, 
@@ -1311,7 +1304,7 @@ class LatentDiffusion(DDPM):
             # force the foreground token to focus on the whole image.
             if not self.iter_flags['is_compos_iter']:
                 # If a batch is use_wds_comp, then only use background token 
-                # in the recon caption at 30%.
+                # in the recon caption at 50%.
                 if self.iter_flags['use_wds_comp']:
                     p_use_background_token  = 0.5
                 else:
@@ -1357,6 +1350,15 @@ class LatentDiffusion(DDPM):
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp'
                 CLS_PROMPT_COMP    = 'cls_prompt_comp'
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single'
+
+            if self.iter_flags['use_wds_comp']:
+                # Replace the image/caption/mask with the wds_comp image/caption/mask.
+                batch["image"]      = batch["wds_image"]
+                batch["aug_mask"]   = batch["wds_aug_mask"]
+                batch["caption"]    = batch["wds_caption"]
+                batch["caption_bg"] = batch["wds_caption_bg"]
+                # get_input() uses image, aug_mask and fg_mask.
+                x, _ = self.get_input(batch, self.first_stage_key)
 
             # Each prompt_comp consists of multiple prompts separated by "|".
             # Split them into a list of subj_comp_prompts/cls_comp_prompts.
@@ -2284,11 +2286,12 @@ class LatentDiffusion(DDPM):
                 if loss_fg_wds_mask_contrast > 0:
                     loss_dict.update({f'{prefix}/fg_wds_mask_contrast': loss_fg_wds_mask_contrast.mean().detach()})
 
-                fg_wds_comple_loss_scale = 0.25
+                fg_wds_comple_loss_scale = 1 #0.25
                 # loss_wds_mask_align is not added, as wds embeddings are not optimizable.
                 # loss_fg_wds_mask_contrast is not added, as wds attention is not accurate.
                 loss += self.fg_wds_complementary_loss_weight \
-                         * (loss_fg_wds_complementary * fg_wds_comple_loss_scale + loss_fg_mask_align_wds)
+                         * (loss_fg_wds_complementary * fg_wds_comple_loss_scale + \
+                            loss_fg_mask_align_wds + loss_fg_wds_mask_contrast)
 
             if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
                 instance_fg_weights = 1
@@ -2318,6 +2321,7 @@ class LatentDiffusion(DDPM):
                                                  instance_fg_weights=instance_fg_weights,
                                                  instance_bg_weights=instance_bg_weights)
             loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
+            # recon_loss_weight: 1.
             loss += self.recon_loss_weight * loss_recon
         ###### end of do_normal_recon ######
 
