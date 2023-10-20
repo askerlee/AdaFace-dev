@@ -156,7 +156,6 @@ class DDPM(pl.LightningModule):
         # If use_conv_attn, the subject is well expressed, and use_fp_trick is unnecessary 
         # (actually harmful).
         self.use_fp_trick                    = use_fp_trick
-        self.fg_mask_avail_ratio = 0
 
         self.cached_inits_available          = False
         self.cached_inits                    = None
@@ -463,6 +462,7 @@ class DDPM(pl.LightningModule):
                             # 'do_teacher_filter':        False,
                             # 'is_teachable':             False,
                             'use_background_token':         False,
+                            'use_wds_comp':                 False,  
                             'use_fp_trick':                 False,
                             'reuse_init_conds':             False,
                             'comp_init_with_fg_area':       False,
@@ -1246,11 +1246,10 @@ class LatentDiffusion(DDPM):
         # are only for image reconstruction iterations.
         x, captions = self.get_input(batch, self.first_stage_key)
 
-        batch_have_fg_mask       = batch['has_fg_mask']
-        self.fg_mask_avail_ratio = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
+        batch_have_fg_mask                      = batch['has_fg_mask']
+        self.iter_flags['fg_mask_avail_ratio']  = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
 
-        batch_do_wds_comp           = batch['do_wds_comp']
-        self.wds_comp_avail_ratio   = batch['do_wds_comp'].sum() / batch['do_wds_comp'].shape[0]
+        self.iter_flags['wds_comp_avail_ratio'] = batch['do_wds_comp'].sum() / batch['do_wds_comp'].shape[0]
 
         # If cached_inits_available, cached_inits are only used if do_mix_prompt_distillation = True.
         self.iter_flags['reuse_init_conds']  = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
@@ -1285,21 +1284,35 @@ class LatentDiffusion(DDPM):
             # if the previous iteration has comp_init_with_fg_area = True.
             self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
                                                           and not self.iter_flags['reuse_init_conds'] \
-                                                          and self.fg_mask_avail_ratio > 0 \
+                                                          and self.iter_flags['fg_mask_avail_ratio'] > 0 \
                                                           and random.random() < p_comp_init_with_fg_area
+
+            if self.iter_flags['wds_comp_avail_ratio'] > 0:
+                if self.iter_flags['is_compos_iter']:
+                    p_use_wds_comp = 0.1
+                else:
+                    # 25% of recon iters will use wds_comp overlay images.
+                    p_use_wds_comp = 0.25
+            else:
+                p_use_wds_comp = 0
+            
+            self.iter_flags['use_wds_comp'] = random.random() < p_use_wds_comp
+            if self.iter_flags['use_wds_comp']:
+                # Replace the image/caption/mask with the wds_comp image/caption/mask.
+                x = batch['wds_image']
+                batch["caption"]    = batch["wds_caption"]
+                batch["caption_bg"] = batch["wds_caption_bg"]
+                batch["aug_mask"]   = batch["wds_aug_mask"]
 
             # Mainly use background token on recon iters.
             # To avoid the backgound token taking too much of the foreground, 
             # we only use the background token on 90% of the training images, to 
             # force the foreground token to focus on the whole image.
             if not self.iter_flags['is_compos_iter']:
-                # If an instance has do_wds_comp, then always use background token in the recon caption.
-                # The presence of the background token may help recon the background areas, since the caption 
-                # may be insufficient for doing recon.
-                # The presence/absence of background tokens have to be consistent across all instances.
-                # Therefore we force use_background_token = True by setting p_use_background_token = 1.
-                if self.wds_comp_avail_ratio > 0:
-                    p_use_background_token = 1
+                # If a batch is use_wds_comp, then only use background token 
+                # in the recon caption at 30%.
+                if self.iter_flags['use_wds_comp']:
+                    p_use_background_token  = 0.3
                 else:
                     p_use_background_token  = 0.9
             else:
@@ -1384,6 +1397,7 @@ class LatentDiffusion(DDPM):
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
         else:
             delta_prompts = None
+            # use_background_token is never enabled in this branch.
             if self.iter_flags['use_background_token']:
                 captions = batch["caption_bg"]
 
@@ -1399,13 +1413,12 @@ class LatentDiffusion(DDPM):
             fg_mask = fg_mask.unsqueeze(1).to(x.device)
             fg_mask = F.interpolate(fg_mask, size=x.shape[-2:], mode='nearest')
         else:
-            assert self.fg_mask_avail_ratio == 0
+            assert self.iter_flags['fg_mask_avail_ratio'] == 0
             fg_mask = None
 
         self.iter_flags['img_mask']             = img_mask
         self.iter_flags['fg_mask']              = fg_mask
         self.iter_flags['batch_have_fg_mask']   = batch_have_fg_mask
-        self.iter_flags['do_wds_comp']          = batch_do_wds_comp
         self.iter_flags['delta_prompts']        = delta_prompts
 
         # reuse_init_conds, discard the prompts offered in shared_step().
@@ -1417,6 +1430,7 @@ class LatentDiffusion(DDPM):
             self.iter_flags['batch_have_fg_mask']       = self.cached_inits['batch_have_fg_mask']
             self.iter_flags['filtered_fg_mask']         = self.cached_inits['filtered_fg_mask']
             self.iter_flags['use_background_token']     = self.cached_inits['use_background_token']
+            self.iter_flags['use_wds_comp']             = self.cached_inits['use_wds_comp']
             self.iter_flags['comp_init_with_fg_area']   = self.cached_inits['comp_init_with_fg_area']
 
         loss = self(x, captions, **kwargs)
@@ -1972,7 +1986,7 @@ class LatentDiffusion(DDPM):
 
                 # If reuse_init_conds, and the previous iter has comp_init_with_fg_area=True, then 
                 # the current iter will also have comp_init_with_fg_area=True.
-                if self.iter_flags['comp_init_with_fg_area'] and self.fg_mask_avail_ratio > 0 \
+                if self.iter_flags['comp_init_with_fg_area'] and self.iter_flags['fg_mask_avail_ratio'] > 0 \
                   and not self.iter_flags['reuse_init_conds']:
                     # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
                     # Therefore, using fg_mask for comp_init_with_fg_area will force the model remember 
@@ -2023,7 +2037,7 @@ class LatentDiffusion(DDPM):
                 # Update masks to be a 4-fold structure.
                 img_mask, fg_mask, batch_have_fg_mask = \
                     repeat_selected_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, batch_have_fg_mask)
-                self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
+                self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
 
             else:
                 # do_mix_prompt_distillation. We need to compute CLIP scores for teacher filtering.
@@ -2079,7 +2093,7 @@ class LatentDiffusion(DDPM):
                     # won't discard part of them, but simply repeat them twice.
                     img_mask, fg_mask, batch_have_fg_mask = \
                         repeat_selected_instances(slice(0, 2 * BLOCK_SIZE), 2, img_mask, fg_mask, batch_have_fg_mask)
-                    self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
+                    self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
 
                 # Not self.iter_flags['do_teacher_filter']. This branch is do_mix_prompt_distillation.
                 # So it's either reuse_init_conds, or not do_clip_teacher_filtering (globally).
@@ -2104,7 +2118,7 @@ class LatentDiffusion(DDPM):
                     # Update masks to be a 1-repeat-4 structure.
                     img_mask, fg_mask, batch_have_fg_mask = \
                         repeat_selected_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, batch_have_fg_mask)
-                    self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
+                    self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
 
                     # use cached x_start and cond. cond already has the 4-type structure. 
                     # No change to cond here.
@@ -2145,9 +2159,10 @@ class LatentDiffusion(DDPM):
             BLOCK_SIZE = x_start.shape[0]
             # Increase t slightly to increase noise amount and increase robustness.
             inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.2))
-            # Do not add extra noise for do_wds_comp instances, since such instances are 
+            # Do not add extra noise for use_wds_comp instances, since such instances are 
             # kind of "Out-of-Domain" and are intrinsically difficult to denoise.
-            inj_noise_t = torch.where(self.iter_flags['do_wds_comp'], t, inj_noise_t)
+            # if self.iter_flags['use_wds_comp']:
+            #     inj_noise_t = t
             # No need to update masks.
 
         subj_indices, bg_indices = extra_info['subj_indices'], extra_info['bg_indices']
@@ -2227,7 +2242,7 @@ class LatentDiffusion(DDPM):
                          * (loss_fg_bg_complementary + loss_fg_mask_align \
                             + loss_bg_mask_align + loss_fg_bg_mask_contrast)
 
-            if self.wds_comp_avail_ratio > 0 and self.fg_wds_complementary_loss_weight > 0:
+            if self.iter_flags['use_wds_comp'] and self.fg_wds_complementary_loss_weight > 0:
                 # extra_info['subj_indices'] and extra_info['bg_indices'] are used, instead of
                 # extra_info['subj_indices_1b'] and extra_info['bg_indices_1b']. 
                 fg_wds_comple_attn_uses_scores = True
@@ -2240,12 +2255,10 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['use_background_token']:
                     comp_extra_mask[extra_info['bg_indices']] = 0
 
-                # All extra embeddings in each instance, not just wds comp extra embeddings. 
-                # But self.iter_flags['do_wds_comp'] will mask out those non-wds instances.
                 wds_comp_extra_indices = torch.where(comp_extra_mask != 0)
                 wds_comp_extra_indices_by_inst = split_indices_by_instance(wds_comp_extra_indices)
 
-                # loss_fg_mask_align_wds is the same as above if an instance both do_wds_comp and use_background_token.
+                # loss_fg_mask_align_wds is the same as above if an instance both use_wds_comp and use_background_token.
                 # Otherwise it's different. It's ok if the loss is double-counted sometimes.
                 loss_fg_wds_complementary, loss_fg_mask_align_wds, loss_wds_mask_align, loss_fg_wds_mask_contrast = \
                             self.calc_fg_bg_complementary_loss(extra_info[fg_wds_comple_attn_key], 
@@ -2257,7 +2270,7 @@ class LatentDiffusion(DDPM):
                                                                 is_bg_learnable=False,
                                                                 fg_grad_scale=0.1,
                                                                 fg_mask=fg_mask,
-                                                                instance_mask=self.iter_flags['do_wds_comp']
+                                                                instance_mask=None
                                                                )
 
                 loss_dict.update({f'{prefix}/fg_wds_complem': loss_fg_wds_complementary.mean().detach()})
@@ -2273,35 +2286,28 @@ class LatentDiffusion(DDPM):
                          * (loss_fg_wds_complementary + loss_fg_mask_align_wds \
                             + loss_wds_mask_align + loss_fg_wds_mask_contrast)
 
-            if not self.iter_flags['use_background_token'] and self.wds_comp_avail_ratio == 0:
+            if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
                 instance_fg_weights = 1
                 # bg loss is ignored.
                 instance_bg_weights = 0
             else:
-                if self.wds_comp_avail_ratio > 0:
+                if self.iter_flags['use_wds_comp']:
                     # instance_fg_weights/instance_bg_weights are instanse-specific 1D tensors.
-                    # Some instances are do_wds_comp, some are not. Only consider 
-                    # the bg loss of the do_wds_comp instances, regardless of whether
-                    # use_background_token is True or False.
-                    # an instance of  do_wds_comp: instance_bg_weight is 0.1, instance_fg_weight is 0.5.
-                    # an instance not do_wds_comp: instance_bg_weight is 0,   instance_fg_weight is 1.
-                    # NOTE: We discount the bg weight of the do_wds_comp instances, as bg areas are supposed 
+                    # an instance of  use_wds_comp: instance_bg_weight is 0.1, instance_fg_weight is 0.5.
+                    # an instance not use_wds_comp: instance_bg_weight is 1,   instance_fg_weight is 1.
+                    # NOTE: We discount the bg weight of the use_wds_comp instances, as bg areas are supposed 
                     # to be attended with wds comp extra embeddings. However, the attention may not be perfect,
                     # and subject embeddings may be tempted to attend to the background, which will mix the 
                     # background features into the subject embeddings, which hurt both authenticity and compositionality.
-                    # NOTE: We discount the fg weight of the do_wds_comp instances, as they are less natural and
+                    # NOTE: We discount the fg weight of the use_wds_comp instances, as they are less natural and
                     # may incur too high loss to the model (even in the fg areas).
-                    instance_bg_weights = self.iter_flags['do_wds_comp'].view(-1, 1, 1, 1) \
-                                            * self.recon_bg_discount
-                    fg_full_weight = torch.ones(x_start.shape[0], device=x_start.device)
-                    fg_half_weight = fg_full_weight * 0.5
-                    instance_fg_weights = torch.where(self.iter_flags['do_wds_comp'], fg_half_weight, fg_full_weight)
-                    instance_fg_weights = instance_fg_weights.view(-1, 1, 1, 1)
+                    instance_bg_weights = self.recon_bg_discount
+                    instance_fg_weights = 0.5
                 else:
-                    # use_background_token == True and wds_comp_avail_ratio == 0.
+                    # use_background_token == True and not self.iter_flags['use_wds_comp'].
                     # bg loss is not discounted.
-                    instance_fg_weights = 1
                     instance_bg_weights = 1
+                    instance_fg_weights = 1
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_recon, _ = self.calc_recon_loss(model_output, target, fg_mask, 
@@ -2460,7 +2466,7 @@ class LatentDiffusion(DDPM):
                     img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
                         repeat_selected_instances([better_cand_idx], 4, img_mask, fg_mask, 
                                                   filtered_fg_mask, batch_have_fg_mask)
-                    self.fg_mask_avail_ratio = batch_have_fg_mask.float().mean()
+                    self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
                     # since this x_recon was denoised under this cond.
@@ -2484,6 +2490,7 @@ class LatentDiffusion(DDPM):
                                           'batch_have_fg_mask':     batch_have_fg_mask,
                                           'filtered_fg_mask':       filtered_fg_mask,
                                           'use_background_token':   self.iter_flags['use_background_token'],
+                                          'use_wds_comp':           self.iter_flags['use_wds_comp'],
                                           'comp_init_with_fg_area': self.iter_flags['comp_init_with_fg_area'],
                                         }
                     
@@ -2670,7 +2677,7 @@ class LatentDiffusion(DDPM):
                 # fg_mask_avail_ratio may have been updated after doing teacher filtering 
                 # (since x_start has been filtered, masks are also filtered accordingly, 
                 # and the same as to fg_mask_avail_ratio). So we need to check it here.
-                if self.iter_flags['comp_init_with_fg_area'] and self.fg_mask_avail_ratio > 0 \
+                if self.iter_flags['comp_init_with_fg_area'] and self.iter_flags['fg_mask_avail_ratio'] > 0 \
                   and self.comp_fg_bg_preserve_loss_weight > 0:
                     # By default, attns_or_scores = 'unet_attnscores'
                     attns_or_scores = 'unet_attnscores' if self.comp_bg_attn_suppress_uses_scores \

@@ -178,12 +178,12 @@ class PersonalizedBase(Dataset):
         if self.is_training and (self.comp_wds_path is not None) and (num_valid_fg_masks > 0):
             self.comp_wds = wds.WebDataset(self.comp_wds_path).shuffle(100).decode("pil").to_tuple("jpg;png", "json")
             self.comp_wds_iter = iter(self.comp_wds)
-            self.p_wds_comp = 0.25
-            print(f"Composition webdataset {self.comp_wds_path} is enabled with prob {self.p_wds_comp}")
+            self.do_wds_comp = True
+            print(f"Composition webdataset {self.comp_wds_path} is enabled")
         else:
             self.comp_wds = None
             self.comp_wds_iter = None
-            self.p_wds_comp = 0.0
+            self.do_wds_comp = False
 
         self.placeholder_string  = placeholder_string
         self.background_string   = background_string
@@ -241,7 +241,7 @@ class PersonalizedBase(Dataset):
                                      ])
                 print(f"{set} images will be randomly scaled in range {rand_scale_range}")
             
-            if self.p_wds_comp > 0:
+            if self.do_wds_comp:
                 # rand_scale_range is (0.7, 1.0) by default. Here we use a smaller range, 
                 # i.e., more aggressive scaling.
                 self.random_small_scaler = transforms.Compose([
@@ -332,14 +332,14 @@ class PersonalizedBase(Dataset):
         else:
             scale_p = 0
 
-        if has_fg_mask and self.p_wds_comp > 0 and random.random() < self.p_wds_comp:
-            self.do_wds_comp = True
+        if has_fg_mask and self.do_wds_comp:
+            do_wds_comp = True
             # If do_wds_comp, and fg areas are large enough, then we do more aggressive scaling to fg,
             # so that fg won't dominate the whole image, which may help learning composition.
             random_scaler = self.random_small_scaler if mask_fg_percent > 0.1 else self.random_scaler
             scale_p = 1
         else:
-            self.do_wds_comp = False
+            do_wds_comp = False
 
         # Do random scaling with 50% chance. Not to do it all the time, 
         # as it seems to hurt (maybe introduced domain gap between training and inference?)
@@ -404,9 +404,9 @@ class PersonalizedBase(Dataset):
                     breakpoint()
         else:
             # If random scaling or wds composition is enabled, then even if no scaling happens
-            # or no overlay_mask is generated, we still need to put a all-1 'aug_mask' into the example.
+            # or no wds_image_mask is generated, we still need to put a all-1 'aug_mask' into the example.
             # 'aug_mask' has to be present in all examples, otherwise collation will encounter exceptions.
-            if self.random_scaler or self.p_wds_comp > 0:
+            if self.random_scaler or self.do_wds_comp:
                 aug_mask = np.ones_like(image_mask[:, :, 0])
             else:
                 # aug_mask will not be present in any examples, so set it to None.
@@ -426,7 +426,7 @@ class PersonalizedBase(Dataset):
         # 'fg_mask' has to be present in all examples, otherwise collation will cause exceptions.
         example["fg_mask"]      = fg_mask
 
-        if self.do_wds_comp:
+        if do_wds_comp:
             Found = False
             while not Found:
                 try:
@@ -452,7 +452,7 @@ class PersonalizedBase(Dataset):
             min_height, min_width = self.size, self.size
             scale = min(min_height / orig_h, min_width / orig_w)
             bg_h, bg_w   = int(orig_h * scale), int(orig_w * scale)
-            overlay_mask = np.ones((bg_h, bg_w), dtype=np.uint8)
+            wds_image_mask = np.ones((bg_h, bg_w), dtype=np.uint8)
 
             if bg_h < min_height:
                 h_pad_top = int((min_height - bg_h) / 2.0)
@@ -468,26 +468,26 @@ class PersonalizedBase(Dataset):
                 w_pad_left = 0
                 w_pad_right = 0
 
-            overlay_mask = np.pad(overlay_mask, ((h_pad_top, h_pad_bottom), (w_pad_left, w_pad_right)), mode='constant', constant_values=0)
-            assert overlay_mask.shape[0] == min_height and overlay_mask.shape[1] == min_width
+            wds_image_mask = np.pad(wds_image_mask, ((h_pad_top, h_pad_bottom), (w_pad_left, w_pad_right)), mode='constant', constant_values=0)
+            assert wds_image_mask.shape[0] == min_height and wds_image_mask.shape[1] == min_width
 
-            # Replace the original aug_mask to fg_mask + overlay_mask as the valid image area.
-            aug_mask = np.logical_or(fg_mask, overlay_mask).astype(np.uint8)
+            # Merge the original fg_mask and wds_image_mask as the valid image area of wds instances.
+            wds_aug_mask = np.logical_or(fg_mask, wds_image_mask).astype(np.uint8)
             # Blend fg area with bg_img. fg_mask is 2D, so add 1D channel.
-            image = np.where(fg_mask[:, :, None] > 0, image, bg_img)
+            wds_image = np.where(fg_mask[:, :, None] > 0, image, bg_img)
 
-            DEBUG_OVERLAY = False
-            if DEBUG_OVERLAY:
-                self.overlay_dir = "overlay-samples"
-                os.makedirs(self.overlay_dir, exist_ok=True)
-                overlay_sample_count = len(os.listdir(self.overlay_dir))
-                overlay_sample_filepath = os.path.join(self.overlay_dir, f'{overlay_sample_count:04}.jpg')
-                if os.path.exists(overlay_sample_filepath):
-                    while os.path.exists(overlay_sample_filepath):
-                        overlay_sample_count += 1
-                        overlay_sample_filepath = os.path.join(self.overlay_dir, f'{overlay_sample_count:04}.jpg')
-                Image.fromarray(image).save(overlay_sample_filepath)
-                print("Saved overlay sample to {}".format(overlay_sample_filepath))
+            DEBUG_WDS = False
+            if DEBUG_WDS:
+                self.wds_sample_dir = "wds-samples"
+                os.makedirs(self.wds_sample_dir, exist_ok=True)
+                wds_sample_count = len(os.listdir(self.wds_sample_dir))
+                wds_sample_filepath = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
+                if os.path.exists(wds_sample_filepath):
+                    while os.path.exists(wds_sample_filepath):
+                        wds_sample_count += 1
+                        wds_sample_filepath = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
+                Image.fromarray(wds_image).save(wds_sample_filepath)
+                print("Saved wds sample to {}".format(wds_sample_filepath))
 
         example["aug_mask"]  = aug_mask
 
@@ -498,14 +498,25 @@ class PersonalizedBase(Dataset):
         example["image"] = (image / 127.5 - 1.0).astype(np.float32)
         
         self.generate_prompts(example)
-        if self.do_wds_comp:
+        if do_wds_comp:
             # common_placeholder_prefix is prepended to caption and caption_bg.
             # compos_placeholder_prefix is prepended to subj_prompt_single, subj_prompt_comps,
-            # cls_prompt_single, cls_prompt_comps.
-            example["caption"]              = example["caption"]    + ", in front of " + bg_prompt
-            example["caption_bg"]           = example["caption_bg"] + ", in front of " + bg_prompt
-        
-        example["do_wds_comp"]          = self.do_wds_comp
+            # cls_prompt_single, cls_prompt_comps, which we don't need to change, as they are 
+            # for compositional distillation.
+            example["wds_caption"]      = example["caption"]    + ", in front of " + bg_prompt
+            example["wds_caption_bg"]   = example["caption_bg"] + ", in front of " + bg_prompt
+            example["wds_image_unnorm"] = wds_image
+            example["wds_image"]        = (wds_image / 127.5 - 1.0).astype(np.float32)
+            # fg_mask is the same as non-wds instances. So no need to assign.
+            example["wds_aug_mask"]     = wds_aug_mask
+        else:
+            example["wds_caption"]      = example["caption"]
+            example["wds_caption_bg"]   = example["caption_bg"]
+            example["wds_image_unnorm"] = example["image_unnorm"]
+            example["wds_image"]        = example["image"]
+            example["wds_aug_mask"]     = example["aug_mask"]
+            
+        example["do_wds_comp"]          = do_wds_comp
 
         return example
 
