@@ -1249,7 +1249,7 @@ class LatentDiffusion(DDPM):
         batch_have_fg_mask                      = batch['has_fg_mask']
         self.iter_flags['fg_mask_avail_ratio']  = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
 
-        self.iter_flags['wds_comp_avail_ratio'] = batch['do_wds_comp'].sum() / batch['do_wds_comp'].shape[0]
+        self.iter_flags['wds_comp_avail_ratio'] = batch['has_wds_comp'].sum() / batch['has_wds_comp'].shape[0]
 
         # If cached_inits_available, cached_inits are only used if do_mix_prompt_distillation = True.
         self.iter_flags['reuse_init_conds']  = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
@@ -1289,10 +1289,10 @@ class LatentDiffusion(DDPM):
 
             if self.iter_flags['wds_comp_avail_ratio'] > 0:
                 if self.iter_flags['is_compos_iter']:
-                    p_use_wds_comp = 0.1
+                    p_use_wds_comp = 0
                 else:
                     # 25% of recon iters will use wds_comp overlay images.
-                    p_use_wds_comp = 0.25
+                    p_use_wds_comp = 0.2
             else:
                 p_use_wds_comp = 0
             
@@ -1313,7 +1313,7 @@ class LatentDiffusion(DDPM):
                 # If a batch is use_wds_comp, then only use background token 
                 # in the recon caption at 30%.
                 if self.iter_flags['use_wds_comp']:
-                    p_use_background_token  = 0.3
+                    p_use_background_token  = 0.5
                 else:
                     p_use_background_token  = 0.9
             else:
@@ -1417,6 +1417,7 @@ class LatentDiffusion(DDPM):
             assert self.iter_flags['fg_mask_avail_ratio'] == 0
             fg_mask = None
 
+        # aug_mask is renamed as img_mask.
         self.iter_flags['img_mask']             = img_mask
         self.iter_flags['fg_mask']              = fg_mask
         self.iter_flags['batch_have_fg_mask']   = batch_have_fg_mask
@@ -2245,15 +2246,15 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['use_wds_comp'] and self.fg_wds_complementary_loss_weight > 0:
                 # extra_info['subj_indices'] and extra_info['bg_indices'] are used, instead of
                 # extra_info['subj_indices_1b'] and extra_info['bg_indices_1b']. 
-                fg_wds_comple_attn_uses_scores = True
+                fg_wds_comple_attn_uses_scores = False
                 fg_wds_comple_attn_key = 'unet_attnscores' if fg_wds_comple_attn_uses_scores \
                                          else 'unet_attns'
                 
                 # delta_loss_emb_mask: [2, 77, 1] -> [2, 77].
                 comp_extra_mask = self.embedding_manager.delta_loss_emb_mask.clone().squeeze(-1)
                 comp_extra_mask[extra_info['subj_indices']] = 0
-                #if self.iter_flags['use_background_token']:
-                #    comp_extra_mask[extra_info['bg_indices']] = 0
+                if self.iter_flags['use_background_token']:
+                    comp_extra_mask[extra_info['bg_indices']] = 0
 
                 wds_comp_extra_indices = torch.where(comp_extra_mask != 0)
                 wds_comp_extra_indices_by_inst = split_indices_by_instance(wds_comp_extra_indices)
@@ -2268,7 +2269,8 @@ class LatentDiffusion(DDPM):
                                                                 x_start.shape[0],
                                                                 img_mask,
                                                                 is_bg_learnable=False,
-                                                                fg_grad_scale=0.1,
+                            # fg_grad_scale is actually bg_grad_scale, since bg is used as a reference.
+                                                                fg_grad_scale=0, 
                                                                 fg_mask=fg_mask,
                                                                 instance_mask=None
                                                                )
@@ -2282,9 +2284,11 @@ class LatentDiffusion(DDPM):
                 if loss_fg_wds_mask_contrast > 0:
                     loss_dict.update({f'{prefix}/fg_wds_mask_contrast': loss_fg_wds_mask_contrast.mean().detach()})
 
+                fg_wds_comple_loss_scale = 0.25
+                # loss_wds_mask_align is not added, as wds embeddings are not optimizable.
                 loss += self.fg_wds_complementary_loss_weight \
-                         * (loss_fg_wds_complementary + loss_fg_mask_align_wds \
-                            + loss_wds_mask_align + loss_fg_wds_mask_contrast)
+                         * (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
+                            + loss_fg_mask_align_wds + loss_fg_wds_mask_contrast)
 
             if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
                 instance_fg_weights = 1

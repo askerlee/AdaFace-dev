@@ -810,7 +810,7 @@ def masked_mean(ts, mask, dim=None, instance_weights=None):
     
     mask_sum = mask.sum(dim=dim)
     mask_sum = torch.maximum( mask_sum, torch.ones_like(mask_sum) * 1e-6 )
-    return (ts * mask * instance_weights).sum(dim=dim) / mask_sum
+    return (ts * instance_weights * mask).sum(dim=dim) / mask_sum
 
 def anneal_value(training_percent, final_percent, value_range):
     assert 0 - 1e-6 <= training_percent <= 1 + 1e-6
