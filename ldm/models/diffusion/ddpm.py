@@ -1316,9 +1316,7 @@ class LatentDiffusion(DDPM):
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp'
             # not use_fp_trick and use_background_token.
             elif self.iter_flags['use_background_token']:
-                # If an instance has do_wds_comp, then don't use background token in the recon caption.
-                captions = [ batch["caption"][i] if batch['do_wds_comp'][i] else batch["caption_bg"][i] \
-                              for i in range(len(batch["caption"])) ]
+                captions = batch["caption_bg"]
                 
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_bg'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_bg'
@@ -1328,6 +1326,12 @@ class LatentDiffusion(DDPM):
             # or recon iters (not do_mix_prompt_distillation) and not use_background_token 
             # We don't use_fp_trick on training images. use_fp_trick is only for compositional regularization.
             else:
+                # If an instance has do_wds_comp, then always use background token in the recon caption.
+                # The presence of the background token may help recon the background areas, since the caption 
+                # may be insufficient for doing recon.
+                captions = [ batch["caption"][i] if not batch['do_wds_comp'][i] else batch["caption_bg"][i] \
+                              for i in range(len(batch["caption"])) ]
+                                
                 # Use the above captions returned by self.get_input().
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp'
