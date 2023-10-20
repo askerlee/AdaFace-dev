@@ -2281,7 +2281,7 @@ class LatentDiffusion(DDPM):
                     # may incur too high loss to the model (even in the fg areas).
                     instance_bg_weights = self.iter_flags['do_wds_comp'].view(-1, 1, 1, 1) \
                                             * self.recon_bg_discount
-                    fg_full_weight = torch.ones(x_start.shape[0].view(-1, 1, 1, 1), device=x_start.device)
+                    fg_full_weight = torch.ones(x_start.shape[0], device=x_start.device).view(-1, 1, 1, 1)
                     fg_half_weight = fg_full_weight * 0.5
                     instance_fg_weights = torch.where(self.iter_flags['do_wds_comp'], fg_half_weight, fg_full_weight)
                 else:
