@@ -1317,7 +1317,7 @@ class LatentDiffusion(DDPM):
             # not use_fp_trick and use_background_token.
             elif self.iter_flags['use_background_token']:
                 # If an instance has do_wds_comp, then don't use background token in the recon caption.
-                captions = [ batch["caption_bg"][i] if batch['do_wds_comp'][i] else batch["caption"][i] \
+                captions = [ batch["caption"][i] if batch['do_wds_comp'][i] else batch["caption_bg"][i] \
                               for i in range(len(batch["caption"])) ]
                 
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_bg'
