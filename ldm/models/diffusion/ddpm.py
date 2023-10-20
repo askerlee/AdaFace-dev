@@ -2159,11 +2159,10 @@ class LatentDiffusion(DDPM):
             assert self.iter_flags['do_normal_recon']
             BLOCK_SIZE = x_start.shape[0]
             # Increase t slightly to increase noise amount and increase robustness.
-            inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.2))
             # Do not add extra noise for use_wds_comp instances, since such instances are 
             # kind of "Out-of-Domain" and are intrinsically difficult to denoise.
-            # if self.iter_flags['use_wds_comp']:
-            #     inj_noise_t = t
+            if not self.iter_flags['use_wds_comp']:
+                inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.2))
             # No need to update masks.
 
         subj_indices, bg_indices = extra_info['subj_indices'], extra_info['bg_indices']
@@ -2253,8 +2252,8 @@ class LatentDiffusion(DDPM):
                 # delta_loss_emb_mask: [2, 77, 1] -> [2, 77].
                 comp_extra_mask = self.embedding_manager.delta_loss_emb_mask.clone().squeeze(-1)
                 comp_extra_mask[extra_info['subj_indices']] = 0
-                if self.iter_flags['use_background_token']:
-                    comp_extra_mask[extra_info['bg_indices']] = 0
+                #if self.iter_flags['use_background_token']:
+                #    comp_extra_mask[extra_info['bg_indices']] = 0
 
                 wds_comp_extra_indices = torch.where(comp_extra_mask != 0)
                 wds_comp_extra_indices_by_inst = split_indices_by_instance(wds_comp_extra_indices)

@@ -472,6 +472,7 @@ class PersonalizedBase(Dataset):
             assert wds_image_mask.shape[0] == min_height and wds_image_mask.shape[1] == min_width
 
             # Merge the original fg_mask and wds_image_mask as the valid image area of wds instances.
+            # fg_mask has been scaled to 0 or 1 above.
             wds_aug_mask = np.logical_or(fg_mask, wds_image_mask).astype(np.uint8)
             # Blend fg area with bg_img. fg_mask is 2D, so add 1D channel.
             wds_image = np.where(fg_mask[:, :, None] > 0, image, bg_img)
