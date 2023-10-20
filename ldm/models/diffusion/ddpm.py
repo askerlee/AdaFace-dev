@@ -1316,7 +1316,10 @@ class LatentDiffusion(DDPM):
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp'
             # not use_fp_trick and use_background_token.
             elif self.iter_flags['use_background_token']:
-                captions = batch["caption_bg"]
+                # If an instance has do_wds_comp, then don't use background token in the recon caption.
+                captions = [ batch["caption_bg"][i] if batch['do_wds_comp'][i] else batch["caption"][i] \
+                              for i in range(len(batch["caption"])) ]
+                
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_bg'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_bg'
                 CLS_PROMPT_COMP    = 'cls_prompt_comp_bg'
@@ -1389,8 +1392,8 @@ class LatentDiffusion(DDPM):
             assert self.fg_mask_avail_ratio == 0
             fg_mask = None
 
-        self.iter_flags['img_mask'] = img_mask
-        self.iter_flags['fg_mask']  = fg_mask
+        self.iter_flags['img_mask']             = img_mask
+        self.iter_flags['fg_mask']              = fg_mask
         self.iter_flags['batch_have_fg_mask']   = batch_have_fg_mask
         self.iter_flags['delta_prompts']        = delta_prompts
         self.iter_flags['do_wds_comp']          = batch['do_wds_comp']
@@ -1399,7 +1402,7 @@ class LatentDiffusion(DDPM):
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
             # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
-            delta_prompts = self.cached_inits['delta_prompts']
+            self.iter_flags['delta_prompts']            = self.cached_inits['delta_prompts']
             self.iter_flags['img_mask']                 = self.cached_inits['img_mask']
             self.iter_flags['fg_mask']                  = self.cached_inits['fg_mask']
             self.iter_flags['batch_have_fg_mask']       = self.cached_inits['batch_have_fg_mask']
