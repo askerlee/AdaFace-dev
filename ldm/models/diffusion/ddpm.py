@@ -1299,10 +1299,11 @@ class LatentDiffusion(DDPM):
             self.iter_flags['use_wds_comp'] = random.random() < p_use_wds_comp
             if self.iter_flags['use_wds_comp']:
                 # Replace the image/caption/mask with the wds_comp image/caption/mask.
-                x = batch['wds_image']
+                batch["image"] = batch["wds_image"]
                 batch["caption"]    = batch["wds_caption"]
                 batch["caption_bg"] = batch["wds_caption_bg"]
                 batch["aug_mask"]   = batch["wds_aug_mask"]
+                x, _ = self.get_input(batch, self.first_stage_key)
 
             # Mainly use background token on recon iters.
             # To avoid the backgound token taking too much of the foreground, 
