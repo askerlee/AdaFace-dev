@@ -1249,6 +1249,9 @@ class LatentDiffusion(DDPM):
         batch_have_fg_mask       = batch['has_fg_mask']
         self.fg_mask_avail_ratio = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
 
+        batch_do_wds_comp           = batch['do_wds_comp']
+        self.wds_comp_avail_ratio   = batch['do_wds_comp'].sum() / batch['do_wds_comp'].shape[0]
+
         # If cached_inits_available, cached_inits are only used if do_mix_prompt_distillation = True.
         self.iter_flags['reuse_init_conds']  = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
                                                 and self.cached_inits_available)
@@ -1290,7 +1293,15 @@ class LatentDiffusion(DDPM):
             # we only use the background token on 90% of the training images, to 
             # force the foreground token to focus on the whole image.
             if not self.iter_flags['is_compos_iter']:
-                p_use_background_token  = 0.9
+                # If an instance has do_wds_comp, then always use background token in the recon caption.
+                # The presence of the background token may help recon the background areas, since the caption 
+                # may be insufficient for doing recon.
+                # The presence/absence of background tokens have to be consistent across all instances.
+                # Therefore we force use_background_token = True by setting p_use_background_token = 1.
+                if self.wds_comp_avail_ratio > 0:
+                    p_use_background_token = 1
+                else:
+                    p_use_background_token  = 0.9
             else:
                 # When do_mix_prompt_distillation, we don't use background token.
                 p_use_background_token  = 0
@@ -1317,7 +1328,6 @@ class LatentDiffusion(DDPM):
             # not use_fp_trick and use_background_token.
             elif self.iter_flags['use_background_token']:
                 captions = batch["caption_bg"]
-                
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_bg'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_bg'
                 CLS_PROMPT_COMP    = 'cls_prompt_comp_bg'
@@ -1326,13 +1336,9 @@ class LatentDiffusion(DDPM):
             # or recon iters (not do_mix_prompt_distillation) and not use_background_token 
             # We don't use_fp_trick on training images. use_fp_trick is only for compositional regularization.
             else:
-                # If an instance has do_wds_comp, then always use background token in the recon caption.
-                # The presence of the background token may help recon the background areas, since the caption 
-                # may be insufficient for doing recon.
-                captions = [ batch["caption"][i] if not batch['do_wds_comp'][i] else batch["caption_bg"][i] \
-                              for i in range(len(batch["caption"])) ]
-                                
-                # Use the above captions returned by self.get_input().
+                # The above captions returned by self.get_input() is already batch["caption"].
+                # Reassign here for clarity.
+                captions = batch["caption"]
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp'
                 CLS_PROMPT_COMP    = 'cls_prompt_comp'
@@ -1399,9 +1405,8 @@ class LatentDiffusion(DDPM):
         self.iter_flags['img_mask']             = img_mask
         self.iter_flags['fg_mask']              = fg_mask
         self.iter_flags['batch_have_fg_mask']   = batch_have_fg_mask
+        self.iter_flags['do_wds_comp']          = batch_do_wds_comp
         self.iter_flags['delta_prompts']        = delta_prompts
-        self.iter_flags['do_wds_comp']          = batch['do_wds_comp']
-        self.wds_comp_avail_ratio               = batch['do_wds_comp'].sum() / batch['do_wds_comp'].shape[0]
 
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
