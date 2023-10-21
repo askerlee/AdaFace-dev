@@ -854,9 +854,10 @@ class LatentDiffusion(DDPM):
                     # The cache will be used in calc_prompt_emb_delta_loss().
                     self.embedding_manager.reset_prompt_embedding_caches()
                     # The image mask here is used when computing Ada embeddings in embedding_manager.
-                    # Do not consider mask on compositional reg iterations, as in such iters, 
-                    # the original pixels (out of the fg_mask) do not matter and can freely take any values.
-                    if self.iter_flags['is_compos_iter']:
+                    # Do not consider mask on compositional reg iterations (except use_wds_comp iters), 
+                    # as in such iters, the original pixels (out of the fg_mask) do not matter and 
+                    # can freely compose any contents.
+                    if self.iter_flags['is_compos_iter'] and not self.iter_flags['use_wds_comp']:
                         img_mask = None
 
                     # img_mask is used by the ada embedding generator. 
@@ -1245,7 +1246,7 @@ class LatentDiffusion(DDPM):
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
         # NOTE: captions (batch["caption"] or batch["caption_bg"])
         # are only for image reconstruction iterations.
-        x, _ = self.get_input(batch, self.first_stage_key)
+        x_start, _ = self.get_input(batch, self.first_stage_key)
 
         batch_have_fg_mask                      = batch['has_fg_mask']
         self.iter_flags['fg_mask_avail_ratio']  = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
@@ -1278,11 +1279,13 @@ class LatentDiffusion(DDPM):
                                                 and 'subj_prompt_single_fp' in batch \
                                                 and random.random() < p_use_fp_trick
 
-            if self.iter_flags['wds_comp_avail_ratio'] > 0:
+            # Only use_wds_comp iters if all instances have wds_comp image/prompt pairs.
+            # all instances have wds_comp <= all instances have fg_mask, i.e., fg_mask_avail_ratio = 1
+            if self.iter_flags['wds_comp_avail_ratio'] == 1:
                 if self.iter_flags['is_compos_iter']:
-                    # 20% of compositional distillation iters will be initialized with wds_comp overlay images.
+                    # 10% of compositional distillation iters will be initialized with wds_comp overlay images.
                     # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp overlay images.
-                    p_use_wds_comp = 0.2
+                    p_use_wds_comp = 0.1
                 else:
                     # 20% of recon iters will be initialized with wds_comp overlay images.
                     p_use_wds_comp = 0.2
@@ -1293,19 +1296,21 @@ class LatentDiffusion(DDPM):
 
             if self.iter_flags['use_wds_comp']:
                 # Replace the image/caption/mask with the wds_comp image/caption/mask.
-                # This block of code has to be before "captions = ..." below, to avoid wrong captions being used.
-                batch["image"]      = batch["wds_image"]
-                batch["aug_mask"]   = batch["wds_aug_mask"]
-                batch["caption"]    = batch["wds_caption"]
-                batch["caption_bg"] = batch["wds_caption_bg"]
-
+                # This block of code has to be before "captions = ..." below, 
+                # to avoid using wrong captions (some branches use batch['caption_bg']).
+                batch['image']      = batch['wds_image']
+                batch['aug_mask']   = batch['wds_aug_mask']
+                batch['caption']    = batch['wds_caption']
+                batch['caption_bg'] = batch['wds_caption_bg']
+                captions            = batch['wds_caption']
+                # first_stage_key: 'image'.
                 # get_input() uses image, aug_mask and fg_mask.
-                x, _ = self.get_input(batch, self.first_stage_key)
+                x_start, _ = self.get_input(batch, self.first_stage_key)
 
             # Slightly larger than 0.5, since comp_init_with_fg_area is disabled under reuse_init_conds.
             # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
-            # NOTE: If use_wds_comp, then always set comp_init_with_fg_area = True to preserve the foreground.
-            # In this case, we will not replace the background areas with random noises.
+            # NOTE: If use_wds_comp, then to preserve the foreground, we always enable comp_init_with_fg_area.
+            # But in this case, the background areas will not be replaced with random noises.
             p_comp_init_with_fg_area = 1 if self.iter_flags['use_wds_comp'] else 0.5
             # If reuse_init_conds, comp_init_with_fg_area may be set to True later
             # if the previous iteration has comp_init_with_fg_area = True.
@@ -1409,16 +1414,16 @@ class LatentDiffusion(DDPM):
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
             if self.iter_flags['use_wds_comp']:
-                # BUG: Currently only support REPEATS == 1.
+                # TODO: Currently only support REPEATS == 1.
                 assert REPEATS == 1
                 # wds_comp_extras is a list of wds compositional extra substrings.
                 wds_comp_extras     = batch["wds_comp_extra"]
                 # Replace the compositional extra substrings in the compositional prompts.
-                print(delta_prompts)
+                #print(delta_prompts)
                 subj_comp_prompts = replace_prompt_comp_extra(subj_comp_prompts, subj_single_prompts, wds_comp_extras)
                 cls_comp_prompts  = replace_prompt_comp_extra(cls_comp_prompts,  cls_single_prompts,  wds_comp_extras)
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-                print(delta_prompts)
+                #print(delta_prompts)
 
         else:
             delta_prompts = None
@@ -1428,15 +1433,15 @@ class LatentDiffusion(DDPM):
 
         if 'aug_mask' in batch:
             img_mask = batch['aug_mask']
-            img_mask = img_mask.unsqueeze(1).to(x.device)
-            img_mask = F.interpolate(img_mask, size=x.shape[-2:], mode='nearest')
+            img_mask = img_mask.unsqueeze(1).to(x_start.device)
+            img_mask = F.interpolate(img_mask, size=x_start.shape[-2:], mode='nearest')
         else:
             img_mask = None
 
         if 'fg_mask' in batch:
             fg_mask = batch['fg_mask']
-            fg_mask = fg_mask.unsqueeze(1).to(x.device)
-            fg_mask = F.interpolate(fg_mask, size=x.shape[-2:], mode='nearest')
+            fg_mask = fg_mask.unsqueeze(1).to(x_start.device)
+            fg_mask = F.interpolate(fg_mask, size=x_start.shape[-2:], mode='nearest')
         else:
             assert self.iter_flags['fg_mask_avail_ratio'] == 0
             fg_mask = None
@@ -1459,14 +1464,14 @@ class LatentDiffusion(DDPM):
             self.iter_flags['use_wds_comp']             = self.cached_inits['use_wds_comp']
             self.iter_flags['comp_init_with_fg_area']   = self.cached_inits['comp_init_with_fg_area']
 
-        loss = self(x, captions, **kwargs)
+        loss = self(x_start, captions, **kwargs)
 
         return loss
 
     # LatentDiffusion.forward() is only called during training, by shared_step().
     #LINK #shared_step
-    def forward(self, x, captions, *args, **kwargs):
-        t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
+    def forward(self, x_start, captions, *args, **kwargs):
+        t = torch.randint(0, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
 
         # Use >=, i.e., assign decay in all iterations after the first 100.
         # This is in case there are skips of iterations of global_step 
@@ -1474,7 +1479,7 @@ class LatentDiffusion(DDPM):
 
         if self.model.conditioning_key is not None:
             assert captions is not None
-            # get_learned_conditioning(): convert captions to a [B, 77, 768] tensor.
+            # get_learned_conditioning(): convert captions to a [16*B, 77, 768] tensor.
             if self.cond_stage_trainable:
                 # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
                 # or traditional TI.
@@ -1496,7 +1501,7 @@ class LatentDiffusion(DDPM):
                     #if self.iter_flags['use_background_token']:
                     #print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
-                    ORIG_BS  = len(x)
+                    ORIG_BS  = len(x_start)
                     N_EMBEDS = ORIG_BS * self.N_LAYERS
                     
                     # Recon iters don't do_ada_emb_delta_reg.
@@ -1651,7 +1656,8 @@ class LatentDiffusion(DDPM):
                             # generate embeddings from the captions from scratch.
                             # subj_indices and bg_indices in captions should be the same.
                             # Embeddings of subject prompts (including "captions") don't need patching.
-                            c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions)
+                            c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions,
+                                                                                         img_mask=self.iter_flags['img_mask'])
                             # print(captions)
 
                         # The prompts used to compute the static embeddings are 
@@ -1687,7 +1693,7 @@ class LatentDiffusion(DDPM):
                     # Not (self.do_static_prompt_delta_reg or 'do_mix_prompt_distillation').
                     # That is, non-compositional iter, or recon iter without static delta loss. 
                     # Keep the tuple cond unchanged. prompts: subject single.
-                    cond = self.get_learned_conditioning(captions)
+                    cond = self.get_learned_conditioning(captions, img_mask=self.iter_flags['img_mask'])
                     # cond[2]: extra_info. Here is only reached when do_static_prompt_delta_reg = False.
                     # Either prompt_emb_delta_reg_weight == 0 (ablation) or 
                     # it's called by self.validation_step().
@@ -1712,7 +1718,7 @@ class LatentDiffusion(DDPM):
 
         # self.model (UNetModel) is called in p_losses().
         #LINK #p_losses
-        return self.p_losses(x, cond, t, *args, **kwargs)
+        return self.p_losses(x_start, cond, t, *args, **kwargs)
 
     def _rescale_annotations(self, bboxes, crop_coordinates):  # TODO: move to dataset
         def rescale_bbox(bbox):
@@ -2006,7 +2012,8 @@ class LatentDiffusion(DDPM):
                 # Fresh compositional iter. May do teacher filtering.
                 t_tail = torch.randint(int(self.num_timesteps * 0.8), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
                 t = t_tail
-                # x_start is of ORIG_BS = 2. So BLOCK_SIZE=1.
+                # x_start is of ORIG_BS = 2. So BLOCK_SIZE=1. We can't afford BLOCK_SIZE=2,
+                # which will bloat to batch size of 8 for the 4-type prompts.
                 # Randomly choose t from the largest 150 timesteps, so as to match the completely noisy x_start.
                 BLOCK_SIZE  = max(x_start.shape[0] // 2, 1)
                 # At 60% of the chance, randomly initialize x_start and t. Note the batch size is still 2 here.
@@ -2651,7 +2658,7 @@ class LatentDiffusion(DDPM):
                 loss_subj_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_delta_distill = \
                                     self.calc_prompt_mix_loss(unet_feats, extra_info[subj_attn_delta_distill_key], 
                                                               extra_info['subj_indices_2b'],
-                                                              BLOCK_SIZE)
+                                                              BLOCK_SIZE, self.iter_flags['img_mask'])
 
                 if loss_feat_delta_distill > 0:
                     loss_dict.update({f'{prefix}/feat_delta_distill':       loss_feat_delta_distill.mean().detach()})
@@ -2767,7 +2774,8 @@ class LatentDiffusion(DDPM):
 
         return loss_recon, loss_recon_pixels
     
-    def calc_prompt_mix_loss(self, unet_feats, unet_attns_or_scores, placeholder_indices, BLOCK_SIZE):
+    def calc_prompt_mix_loss(self, unet_feats, unet_attns_or_scores, placeholder_indices, 
+                             BLOCK_SIZE, img_mask):
         # do_mix_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -2914,6 +2922,9 @@ class LatentDiffusion(DDPM):
                                                                                                   reversed=True)
                 spatial_weight = (spatial_weight_mix_comp + spatial_weight_subj_comp) / 2
 
+                img_mask = resize_mask_for_feat_or_attn(unet_feat, img_mask, "img_mask", mode="nearest|bilinear")
+                spatial_weight = spatial_weight * img_mask
+                
                 # spatial_attn_mix_comp, spatial_attn_subj_comp are returned for debugging purposes. 
                 # Delete them to release RAM.
                 del spatial_attn_mix_comp, spatial_attn_subj_comp
