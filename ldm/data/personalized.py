@@ -445,11 +445,14 @@ class PersonalizedBase(Dataset):
                 # Skip those image/prompt pairs that will cause parsing errors.
                 contains_special_token = self.placeholder_token   in bg_prompt_tokens \
                                          or self.background_token in bg_prompt_tokens
-                if re.search("man|woman|person|boy|girl|child|kid|baby|adult|guy|lady|gentleman|lady|male|female|human", bg_prompt):
+                single_human_pat = "man|woman|person|boy|girl|child|kid|baby|adult|guy|lady|gentleman|lady|male|female|human"
+                plural_human_pat = "men|women|people|boys|girls|children|kids|babies|adults|guys|ladies|gentlemen|ladies|males|females|humans"
+                human_pat = single_human_pat + "|" + plural_human_pat
+                if re.search(human_pat, bg_prompt):
                     contains_human = True
                 else:
                     contains_human = False
-                    
+
                 # Skip wds image/prompt pairs that contain humans.
                 Found = not contains_special_token and not contains_human
 
