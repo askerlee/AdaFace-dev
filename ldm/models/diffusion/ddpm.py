@@ -1273,12 +1273,12 @@ class LatentDiffusion(DDPM):
             # all instances have wds_comp <= all instances have fg_mask, i.e., fg_mask_avail_ratio = 1
             if self.iter_flags['wds_comp_avail_ratio'] == 1:
                 if self.iter_flags['is_compos_iter']:
-                    # 10% of compositional distillation iters will be initialized with wds_comp overlay images.
+                    # 5% of compositional distillation iters will be initialized with wds_comp overlay images.
                     # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp overlay images.
-                    p_use_wds_comp = 0.1
+                    p_use_wds_comp = 0.05
                 else:
-                    # 20% of recon iters will be initialized with wds_comp overlay images.
-                    p_use_wds_comp = 0.2
+                    # 25% of recon iters will be initialized with wds_comp overlay images.
+                    p_use_wds_comp = 0.25
             else:
                 p_use_wds_comp = 0
             
