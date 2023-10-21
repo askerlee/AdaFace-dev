@@ -2049,7 +2049,7 @@ class LatentDiffusion(DDPM):
                         x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
                     # Otherwise it's use_wds_comp, then x_start is kept intact (the noisy wds overlay images).
 
-                else:
+                elif not self.iter_flags['use_wds_comp']:
                     x_start.normal_()
 
             if not self.iter_flags['do_mix_prompt_distillation']:
