@@ -1317,7 +1317,7 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['use_wds_comp']:
                     # If a batch is use_wds_comp, then never use background tokens 
                     # in recon iters.
-                    p_use_background_token  = 0
+                    p_use_background_token  = 1
                 else:
                     p_use_background_token  = 0.9
             else:
@@ -2296,8 +2296,8 @@ class LatentDiffusion(DDPM):
                 # delta_loss_emb_mask: [2, 77, 1] -> [2, 77].
                 comp_extra_mask = self.embedding_manager.delta_loss_emb_mask.squeeze(-1).clone()
                 comp_extra_mask[extra_info['subj_indices']] = 0
-                if self.iter_flags['use_background_token']:
-                    comp_extra_mask[extra_info['bg_indices']] = 0
+                #if self.iter_flags['use_background_token']:
+                #    comp_extra_mask[extra_info['bg_indices']] = 0
 
                 wds_comp_extra_indices = torch.where(comp_extra_mask != 0)
                 wds_comp_extra_indices_by_inst = split_indices_by_instance(wds_comp_extra_indices)
@@ -2688,8 +2688,8 @@ class LatentDiffusion(DDPM):
                 if self.subj_comp_key_ortho_loss_weight > 0:
                     subj_comp_attn_comple_key = 'unet_attnscores' if self.subj_comp_attn_comple_loss_uses_scores \
                                                 else 'unet_attns'
-                    bg_indices = extra_info['bg_indices_2b'] if self.iter_flags['use_background_token'] \
-                                    else None
+                    bg_indices = None #extra_info['bg_indices_2b'] if self.iter_flags['use_background_token'] \
+                                      #else None
                     loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple = \
                         self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
                                                         extra_info[subj_comp_attn_comple_key],
