@@ -1423,6 +1423,7 @@ class LatentDiffusion(DDPM):
 
         if 'aug_mask' in batch:
             img_mask = batch['aug_mask']
+            # img_mask: [B, H, W] => [B, 1, H, W]
             img_mask = img_mask.unsqueeze(1).to(x_start.device)
             img_mask = F.interpolate(img_mask, size=x_start.shape[-2:], mode='nearest')
         else:
@@ -1430,6 +1431,7 @@ class LatentDiffusion(DDPM):
 
         if 'fg_mask' in batch:
             fg_mask = batch['fg_mask']
+            # fg_mask: [B, H, W] => [B, 1, H, W]
             fg_mask = fg_mask.unsqueeze(1).to(x_start.device)
             fg_mask = F.interpolate(fg_mask, size=x_start.shape[-2:], mode='nearest')
         else:

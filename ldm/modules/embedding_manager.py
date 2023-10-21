@@ -1366,10 +1366,15 @@ class EmbeddingManager(nn.Module):
 
         return layer_static_extra_emb_mean
     
+    # There are image margins after the original image is scaled down, or 
+    # after using wds overlay images as input.
+    # When doing attentional pooling / average pooling of image features, 
+    # the margin area contains no signal, so we use img_mask to mask it out. 
+    # Each image has its own img_mask, so img_mask has a shape of [B, 1, H, W].
     def set_volatile_ds(self, volatile_ds):
         self.placeholder_indices_fg = volatile_ds['subj_indices']
         self.placeholder_indices_bg = volatile_ds['bg_indices']
-        self.set_img_mask(volatile_ds['img_mask'])
+        self.img_mask = volatile_ds['img_mask']
 
     def clear_placeholder_indices(self, type='all'):
         if type == 'all':
@@ -1512,13 +1517,6 @@ class EmbeddingManager(nn.Module):
     def clear_delta_loss_emb_mask(self):
         self.delta_loss_emb_mask = None
  
-    # There are image margins after the original image is scaled down.
-    # When doing average pooling of image features, the margin area contains no signal, so we use 
-    # img_mask to mask it out. 
-    # Each image has its own img_mask, so img_mask has a shape of [B, 1, H, W].
-    def set_img_mask(self, img_mask):
-        self.img_mask = img_mask
-
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, ckpt_path):
         torch.save({ "string_to_token":                 self.string_to_token_dict,
