@@ -2286,7 +2286,7 @@ class LatentDiffusion(DDPM):
                             + loss_bg_mask_align + loss_fg_bg_mask_contrast)
 
             if self.iter_flags['use_wds_comp'] and self.fg_wds_complementary_loss_weight > 0:
-                print(c_in)
+                #print(c_in)
                 # extra_info['subj_indices'] and extra_info['bg_indices'] are used, instead of
                 # extra_info['subj_indices_1b'] and extra_info['bg_indices_1b']. 
                 fg_wds_comple_attn_uses_scores = False
