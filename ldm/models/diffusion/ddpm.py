@@ -1304,8 +1304,8 @@ class LatentDiffusion(DDPM):
 
             # Slightly larger than 0.5, since comp_init_with_fg_area is disabled under reuse_init_conds.
             # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
-            # NOTE: If use_wds_comp, then never comp_init_with_fg_area, as it will fill the background with noises.
-            p_comp_init_with_fg_area = 0 if self.iter_flags['use_wds_comp'] else 0.7
+            # NOTE: If use_wds_comp, then when comp_init_with_fg_area, it will not fill the background with noises.
+            p_comp_init_with_fg_area = 0.5
             # If reuse_init_conds, comp_init_with_fg_area may be set to True later
             # if the previous iteration has comp_init_with_fg_area = True.
             self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
@@ -2008,7 +2008,9 @@ class LatentDiffusion(DDPM):
                 # i.e., give prompts higher priority over the background.
 
                 # If reuse_init_conds, and the previous iter has comp_init_with_fg_area=True, then 
-                # the current iter will also have comp_init_with_fg_area=True.
+                # the current iter will also have comp_init_with_fg_area=True. 
+                # But x_start is the denoised result from the previous iteration (noises have been added above), 
+                # so we don't add noise to it again.
                 if self.iter_flags['comp_init_with_fg_area'] and self.iter_flags['fg_mask_avail_ratio'] > 0 \
                   and not self.iter_flags['reuse_init_conds']:
                     # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
@@ -2017,33 +2019,34 @@ class LatentDiffusion(DDPM):
                     # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
                     # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
                     filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
-                    # At background, fill x_start with random values (100% noise).
-                    # If no fg_mask is available, then fg_mask_or_allone is all 1, i.e., 
-                    # use the whole image to initialize x_start.
-                    x_start_origsize = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
-                    # Scale down the fg area to 60%-100% of the original size, to avoid it dominating the whole image.
-                    fg_rand_scale = np.random.uniform(0.6, 1.0)
-                    # Resize x_start_origsize and filtered_fg_mask by rand_scale. They have different numbers of channels,
-                    # so we need to concatenate them at dim 1, and then resize.
-                    x_mask = torch.cat([x_start_origsize, filtered_fg_mask], dim=1)
-                    x_mask_scaled = F.interpolate(x_mask, scale_factor=fg_rand_scale, mode='bilinear', align_corners=False)
+                    if not self.iter_flags['use_wds_comp']:
+                        # At background, fill x_start with random values (100% noise).
+                        x_start_origsize = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
+                        # Scale down the fg area to 60%-100% of the original size, to avoid it dominating the whole image.
+                        fg_rand_scale = np.random.uniform(0.6, 1.0)
+                        # Resize x_start_origsize and filtered_fg_mask by rand_scale. They have different numbers of channels,
+                        # so we need to concatenate them at dim 1, and then resize.
+                        x_mask = torch.cat([x_start_origsize, filtered_fg_mask], dim=1)
+                        x_mask_scaled = F.interpolate(x_mask, scale_factor=fg_rand_scale, mode='bilinear', align_corners=False)
 
-                    # Pad filtered_fg_mask_scaled to the original size, with left/right padding roughly equal
-                    pad_w1 = int((x_start.shape[3] - x_mask_scaled.shape[3]) / 2)
-                    pad_w2 =      x_start.shape[3] - x_mask_scaled.shape[3] - pad_w1
-                    pad_h1 = int((x_start.shape[2] - x_mask_scaled.shape[2]) / 2)
-                    pad_h2 =      x_start.shape[2] - x_mask_scaled.shape[2] - pad_h1
-                    x_mask_scaled_padded = F.pad(x_mask_scaled, 
-                                                 (pad_w1, pad_w2, pad_h1, pad_h2),
-                                                 mode='constant', value=0)
+                        # Pad filtered_fg_mask_scaled to the original size, with left/right padding roughly equal
+                        pad_w1 = int((x_start.shape[3] - x_mask_scaled.shape[3]) / 2)
+                        pad_w2 =      x_start.shape[3] - x_mask_scaled.shape[3] - pad_w1
+                        pad_h1 = int((x_start.shape[2] - x_mask_scaled.shape[2]) / 2)
+                        pad_h2 =      x_start.shape[2] - x_mask_scaled.shape[2] - pad_h1
+                        x_mask_scaled_padded = F.pad(x_mask_scaled, 
+                                                    (pad_w1, pad_w2, pad_h1, pad_h2),
+                                                    mode='constant', value=0)
 
-                    x_start_scaled_padded, filtered_fg_mask = x_mask_scaled_padded[:, :4], x_mask_scaled_padded[:, 4:]
+                        x_start_scaled_padded, filtered_fg_mask = x_mask_scaled_padded[:, :4], x_mask_scaled_padded[:, 4:]
 
-                    x_start = torch.where(filtered_fg_mask.bool(), x_start_scaled_padded, torch.randn_like(x_start))
-                    # Gradually increase the noise amount from 0.25 to 0.5.
-                    fg_noise_amount = rand_annealed(self.training_percent, final_percent=1, mean_range=(0.25, 0.5))
-                    # At foreground, keep 50% of the original x_start values and add 50% noise. 
-                    x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
+                        x_start = torch.where(filtered_fg_mask.bool(), x_start_scaled_padded, torch.randn_like(x_start))
+                        # Gradually increase the noise amount from 0.25 to 0.5.
+                        fg_noise_amount = rand_annealed(self.training_percent, final_percent=1, mean_range=(0.25, 0.5))
+                        # At foreground, keep 50% of the original x_start values and add 50% noise. 
+                        x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
+                    # Otherwise it's use_wds_comp, then x_start is kept intact (the noisy wds overlay images).
+
                 else:
                     x_start.normal_()
 
