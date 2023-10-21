@@ -2313,7 +2313,7 @@ class LatentDiffusion(DDPM):
                                                                 img_mask,
                                                                 is_bg_learnable=True,
                             # fg_grad_scale is actually bg_grad_scale, since bg is used as a reference.
-                                                                fg_grad_scale=0, 
+                                                                fg_grad_scale=0.1, 
                                                                 fg_mask=fg_mask,
                                                                 instance_mask=None
                                                                )

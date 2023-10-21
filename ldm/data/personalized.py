@@ -435,7 +435,7 @@ class PersonalizedBase(Dataset):
                     self.comp_wds_iter = iter(self.comp_wds)
                     bg_img, bg_json = next(self.comp_wds_iter)
 
-                bg_prompt = bg_json['caption']
+                bg_prompt = bg_json['caption'].lower()
                 bg_prompt_tokens = self.tokenizer(bg_prompt)['input_ids']
                 if self.placeholder_token is None:
                     self.placeholder_token = self.tokenizer(self.placeholder_string)['input_ids'][1]
@@ -443,8 +443,12 @@ class PersonalizedBase(Dataset):
                     self.background_token = self.tokenizer(self.background_string)['input_ids'][1]
 
                 # Skip those image/prompt pairs that will cause parsing errors.
-                Found = self.placeholder_token not in bg_prompt_tokens \
-                          and self.background_token not in bg_prompt_tokens
+                contains_special_token = self.placeholder_token   in bg_prompt_tokens \
+                                         or self.background_token in bg_prompt_tokens
+                if re.search("man|woman|person|boy|girl|child|kid|baby|adult|guy|lady|gentleman|lady|male|female|human", bg_prompt):
+                    contains_human = True
+                # Skip wds image/prompt pairs that contain humans.
+                Found = not contains_special_token and not contains_human
 
             # bg_img is PIL Image -> np.array (512, 512, 3)
             bg_img = np.array(bg_img).astype(np.uint8)
@@ -491,7 +495,7 @@ class PersonalizedBase(Dataset):
             # compos_placeholder_prefix is prepended to subj_prompt_single, subj_prompt_comps,
             # cls_prompt_single, cls_prompt_comps, which we don't need to change, as they are 
             # for compositional distillation.
-            wds_comp_extra = ", in front of " + bg_prompt.lower()
+            wds_comp_extra = ", in front of " + bg_prompt
             example["wds_comp_extra"]   = wds_comp_extra
             example["wds_caption"]      = example["caption"]    + wds_comp_extra
             example["wds_caption_bg"]   = example["caption_bg"] + wds_comp_extra
