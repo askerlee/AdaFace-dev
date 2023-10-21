@@ -1319,10 +1319,10 @@ class LatentDiffusion(DDPM):
             # we only use the background token on 90% of the training images, to 
             # force the foreground token to focus on the whole image.
             if not self.iter_flags['is_compos_iter']:
-                # If a batch is use_wds_comp, then only use background token 
-                # in the recon caption at 50%.
                 if self.iter_flags['use_wds_comp']:
-                    p_use_background_token  = 0.5
+                    # If a batch is use_wds_comp, then never use background tokens 
+                    # in recon iters.
+                    p_use_background_token  = 0
                 else:
                     p_use_background_token  = 0.9
             else:
@@ -1414,9 +1414,11 @@ class LatentDiffusion(DDPM):
                 # wds_comp_extras is a list of wds compositional extra substrings.
                 wds_comp_extras     = batch["wds_comp_extra"]
                 # Replace the compositional extra substrings in the compositional prompts.
+                print(delta_prompts)
                 subj_comp_prompts = replace_prompt_comp_extra(subj_comp_prompts, subj_single_prompts, wds_comp_extras)
                 cls_comp_prompts  = replace_prompt_comp_extra(cls_comp_prompts,  cls_single_prompts,  wds_comp_extras)
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+                print(delta_prompts)
 
         else:
             delta_prompts = None
@@ -1969,6 +1971,10 @@ class LatentDiffusion(DDPM):
                 # cond is already organized as (subj single, subj comp, mix single, mix comp). 
                 # No need to manipulate.
                 # noise will be kept as the sampled random noise at the beginning of p_losses(). 
+                # NOTE: If reuse_init_conds, and the previous iter has comp_init_with_fg_area=True, then 
+                # the current iter will also have comp_init_with_fg_area=True. 
+                # But x_start is the denoised result from the previous iteration (noises have been added above), 
+                # so we don't add noise to it again.
                 x_start = self.cached_inits['x_start']
                 prev_t  = self.cached_inits['t']
                 # Avoid the next mix iter to still use the cached inits.
@@ -2008,18 +2014,14 @@ class LatentDiffusion(DDPM):
                 # This may help the model ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
 
-                # If reuse_init_conds, and the previous iter has comp_init_with_fg_area=True, then 
-                # the current iter will also have comp_init_with_fg_area=True. 
-                # But x_start is the denoised result from the previous iteration (noises have been added above), 
-                # so we don't add noise to it again.
-                if self.iter_flags['comp_init_with_fg_area'] and self.iter_flags['fg_mask_avail_ratio'] > 0 \
-                  and not self.iter_flags['reuse_init_conds']:
+                if self.iter_flags['comp_init_with_fg_area'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
                     # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
                     # Therefore, using fg_mask for comp_init_with_fg_area will force the model remember 
                     # the background in the training images, which is not desirable.
                     # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
                     # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
                     filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
+                    # If use_wds_comp, then don't fill up the background with gaussian noise.
                     if not self.iter_flags['use_wds_comp']:
                         # At background, fill x_start with random values (100% noise).
                         x_start_origsize = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
@@ -2311,7 +2313,7 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/fg_wds_mask_contrast': loss_fg_wds_mask_contrast.mean().detach()})
 
                 fg_wds_comple_loss_scale    = 1
-                wds_mask_align_loss_scale   = 0.1
+                wds_mask_align_loss_scale   = 0 #0.1
                 # loss_wds_mask_align has a small scale of 0.1, since wds embeddings are basically fixed.
                 # But optimizing w.r.t. it may still guide the model to mix subject embeddings less (or orthogonally) with the wds embeddings.
                 loss += self.fg_wds_complementary_loss_weight \
