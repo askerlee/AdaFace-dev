@@ -1277,16 +1277,6 @@ class LatentDiffusion(DDPM):
                                                 and 'subj_prompt_single_fp' in batch \
                                                 and random.random() < p_use_fp_trick
 
-            # Slightly larger than 0.5, since comp_init_with_fg_area is disabled under reuse_init_conds.
-            # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
-            p_comp_init_with_fg_area = 0.7
-            # If reuse_init_conds, comp_init_with_fg_area may be set to True later
-            # if the previous iteration has comp_init_with_fg_area = True.
-            self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
-                                                          and not self.iter_flags['reuse_init_conds'] \
-                                                          and self.iter_flags['fg_mask_avail_ratio'] > 0 \
-                                                          and random.random() < p_comp_init_with_fg_area
-
             if self.iter_flags['wds_comp_avail_ratio'] > 0:
                 if self.iter_flags['is_compos_iter']:
                     # 20% of compositional distillation iters will be initialized with wds_comp overlay images.
@@ -1302,6 +1292,7 @@ class LatentDiffusion(DDPM):
 
             if self.iter_flags['use_wds_comp']:
                 # Replace the image/caption/mask with the wds_comp image/caption/mask.
+                # This block of code has to be before "captions = ..." below, to avoid wrong captions being used.
                 batch["image"]      = batch["wds_image"]
                 batch["aug_mask"]   = batch["wds_aug_mask"]
                 batch["caption"]    = batch["wds_caption"]
@@ -1309,6 +1300,18 @@ class LatentDiffusion(DDPM):
 
                 # get_input() uses image, aug_mask and fg_mask.
                 x, _ = self.get_input(batch, self.first_stage_key)
+
+
+            # Slightly larger than 0.5, since comp_init_with_fg_area is disabled under reuse_init_conds.
+            # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
+            # If use_wds_comp, then never comp_init_with_fg_area, as it will fill the background with noises.
+            p_comp_init_with_fg_area = 0 if self.iter_flags['use_wds_comp'] else 0.7
+            # If reuse_init_conds, comp_init_with_fg_area may be set to True later
+            # if the previous iteration has comp_init_with_fg_area = True.
+            self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
+                                                          and not self.iter_flags['reuse_init_conds'] \
+                                                          and self.iter_flags['fg_mask_avail_ratio'] > 0 \
+                                                          and random.random() < p_comp_init_with_fg_area
 
             # Mainly use background token on recon iters.
             # To avoid the backgound token taking too much of the foreground, 
