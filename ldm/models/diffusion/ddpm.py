@@ -1240,11 +1240,12 @@ class LatentDiffusion(DDPM):
     # 'caption' is not named 'subj_prompt_single' to keep it compatible with older code.
     # ANCHOR[id=shared_step]
     def shared_step(self, batch, **kwargs):
-        # captions = batch["caption"]
+        # captions = batch["caption"].
+        # Do not use the returned captions from get_input(). Assign the correct caption later.
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
         # NOTE: captions (batch["caption"] or batch["caption_bg"])
         # are only for image reconstruction iterations.
-        x, captions = self.get_input(batch, self.first_stage_key)
+        x, _ = self.get_input(batch, self.first_stage_key)
 
         batch_have_fg_mask                      = batch['has_fg_mask']
         self.iter_flags['fg_mask_avail_ratio']  = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
@@ -1301,7 +1302,6 @@ class LatentDiffusion(DDPM):
                 # get_input() uses image, aug_mask and fg_mask.
                 x, _ = self.get_input(batch, self.first_stage_key)
 
-
             # Slightly larger than 0.5, since comp_init_with_fg_area is disabled under reuse_init_conds.
             # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
             # If use_wds_comp, then never comp_init_with_fg_area, as it will fill the background with noises.
@@ -1336,12 +1336,14 @@ class LatentDiffusion(DDPM):
                                                         and random.random() < p_use_background_token
                         
             if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
+                captions = batch["caption"]
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp_bg'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp_bg'
                 CLS_PROMPT_COMP    = 'cls_prompt_comp_fp_bg'
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp_bg'
             # use_fp_trick but not use_background_token.
             elif self.iter_flags['use_fp_trick']:
+                captions = batch["caption"]
                 # Never use_fp_trick for recon iters. So no need to have "caption_fp" or "caption_fp_bg".
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp'
