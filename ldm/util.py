@@ -1010,7 +1010,7 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_half_N,
         #  0.1091, 0.1364, 0.1636, 0.1909, 0.2182, 0.2455, 0.2727, 0.3   ]
         emb_v_layers_cls_mix_scales = torch.ones(BS, N_LAYERS, device=c_static_emb.device) 
         emb_v_layers_cls_mix_scales[:, sync_layer_indices] = \
-            torch.arange(FIRST_LAYER_CLS_E_SCALE, FIRST_LAYER_CLS_E_SCALE + SCALE_STEP * len(sync_layer_indices), 
+            torch.arange(FIRST_LAYER_CLS_E_SCALE, FIRST_LAYER_CLS_E_SCALE + (SCALE_STEP * len(sync_layer_indices) -1 ), 
                          step=SCALE_STEP, device=c_static_emb.device).repeat(BS, 1)
     else:
         # Same scale for all layers.
