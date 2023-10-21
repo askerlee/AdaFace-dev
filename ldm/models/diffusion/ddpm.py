@@ -1304,7 +1304,7 @@ class LatentDiffusion(DDPM):
 
             # Slightly larger than 0.5, since comp_init_with_fg_area is disabled under reuse_init_conds.
             # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
-            # If use_wds_comp, then never comp_init_with_fg_area, as it will fill the background with noises.
+            # NOTE: If use_wds_comp, then never comp_init_with_fg_area, as it will fill the background with noises.
             p_comp_init_with_fg_area = 0 if self.iter_flags['use_wds_comp'] else 0.7
             # If reuse_init_conds, comp_init_with_fg_area may be set to True later
             # if the previous iteration has comp_init_with_fg_area = True.
@@ -1413,8 +1413,9 @@ class LatentDiffusion(DDPM):
                 # wds_comp_extras is a list of wds compositional extra substrings.
                 wds_comp_extras     = batch["wds_comp_extra"]
                 # Replace the compositional extra substrings in the compositional prompts.
-                batch[SUBJ_PROMPT_COMP] = replace_prompt_comp_extra(batch[SUBJ_PROMPT_COMP], batch[SUBJ_PROMPT_SINGLE], wds_comp_extras)
-                batch[CLS_PROMPT_COMP]  = replace_prompt_comp_extra(batch[CLS_PROMPT_COMP],  batch[CLS_PROMPT_SINGLE],  wds_comp_extras)
+                subj_comp_prompts = replace_prompt_comp_extra(subj_comp_prompts, subj_single_prompts, wds_comp_extras)
+                cls_comp_prompts  = replace_prompt_comp_extra(cls_comp_prompts,  cls_single_prompts,  wds_comp_extras)
+                delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
         else:
             delta_prompts = None
