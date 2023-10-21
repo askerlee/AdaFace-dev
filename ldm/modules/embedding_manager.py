@@ -1366,11 +1366,10 @@ class EmbeddingManager(nn.Module):
 
         return layer_static_extra_emb_mean
     
-    # If either subj_indices or bg_indices is None, then the corresponding placeholder indices
-    # won't be updated.
-    def set_placeholder_indices(self, subj_indices, bg_indices):
-        self.placeholder_indices_fg = subj_indices 
-        self.placeholder_indices_bg = bg_indices
+    def set_volatile_ds(self, volatile_ds):
+        self.placeholder_indices_fg = volatile_ds['subj_indices']
+        self.placeholder_indices_bg = volatile_ds['bg_indices']
+        self.set_img_mask(volatile_ds['img_mask'])
 
     def clear_placeholder_indices(self, type='all'):
         if type == 'all':

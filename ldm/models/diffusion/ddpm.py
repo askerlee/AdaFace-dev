@@ -853,16 +853,6 @@ class LatentDiffusion(DDPM):
                     # for each layer into the cache. 
                     # The cache will be used in calc_prompt_emb_delta_loss().
                     self.embedding_manager.reset_prompt_embedding_caches()
-                    # The image mask here is used when computing Ada embeddings in embedding_manager.
-                    # Do not consider mask on compositional reg iterations (except use_wds_comp iters), 
-                    # as in such iters, the original pixels (out of the fg_mask) do not matter and 
-                    # can freely compose any contents.
-                    if self.iter_flags['is_compos_iter'] and not self.iter_flags['use_wds_comp']:
-                        img_mask = None
-
-                    # img_mask is used by the ada embedding generator. 
-                    # So we pass img_mask to embedding_manager here.
-                    self.embedding_manager.set_img_mask(img_mask)
                     extra_info['ada_embedder'] = ada_embedder
 
                 c = (c, cond_in, extra_info)
@@ -1865,7 +1855,7 @@ class LatentDiffusion(DDPM):
     # unet_has_grad: when returning do_pixel_recon (e.g. to select the better instance by smaller clip loss), 
     # to speed up, no BP is done on these instances, so unet_has_grad=False.
     def guided_denoise(self, x_start, noise, t, cond, 
-                       subj_indices=None, bg_indices=None,
+                       emb_man_volatile_ds,
                        inj_noise_t=None, 
                        unet_has_grad=True, do_pixel_recon=False, cfg_scales=None):
         
@@ -1875,7 +1865,7 @@ class LatentDiffusion(DDPM):
         else:
             x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
-        self.embedding_manager.set_placeholder_indices(subj_indices, bg_indices)
+        self.embedding_manager.set_volatile_ds(emb_man_volatile_ds)
         # model_output is the predicted noise.
         # if not unet_has_grad, we save RAM by not storing the computation graph.
         if not unet_has_grad:
@@ -2210,9 +2200,24 @@ class LatentDiffusion(DDPM):
         # Disabling unet_has_grad for recon iters will greatly reduce performance,
         # although ada_bp_to_unet = False for recon iters.
         # (probably because gradients of static embeddings still need to go through UNet)
+
+        # The image mask here is used when computing Ada embeddings in embedding_manager.
+        # Do not consider mask on compositional reg iterations (except use_wds_comp iters), 
+        # as in such iters, the original pixels (out of the fg_mask) do not matter and 
+        # can freely compose any contents.
+        # img_mask is used by the ada embedding generator. 
+        # So we pass img_mask to embedding_manager here.
+        if self.iter_flags['is_compos_iter'] and not self.iter_flags['use_wds_comp']:
+            emb_man_img_mask = None
+        else:
+            emb_man_img_mask = img_mask
+        emb_man_volatile_ds = { 'subj_indices':   subj_indices,
+                                'bg_indices':     bg_indices,
+                                'img_mask':       emb_man_img_mask }
+                        
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
-                                subj_indices=subj_indices, bg_indices=bg_indices,
+                                emb_man_volatile_ds=emb_man_volatile_ds,
                                 inj_noise_t=inj_noise_t,
                                 unet_has_grad=not self.iter_flags['do_teacher_filter'], 
                                 # Reconstruct the images at the pixel level for CLIP loss.
@@ -2487,6 +2492,15 @@ class LatentDiffusion(DDPM):
                     # Update c_static_emb.
                     cond_orig_qv = (c_static_emb_orig_vk, cond_orig[1], extra_info)
 
+                    # Checking is_compos_iter is not necessary as this branch implies is_compos_iter.
+                    # Use here to keep it consistent with the previous emb_man_volatile_ds code.
+                    if self.iter_flags['is_compos_iter'] and not self.iter_flags['use_wds_comp']:
+                        emb_man_img_mask = None
+                    else:
+                        emb_man_img_mask = img_mask
+                    emb_man_volatile_ds = { 'subj_indices':   extra_info['subj_indices_2b'],
+                                            'bg_indices':     extra_info['bg_indices_2b'],
+                                            'img_mask':       emb_man_img_mask }              
                     # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
                     # on mix reg and ada embeddings is generated for the delta loss. 
                     # (The previous call to guided_denoise() didn't enable gradients, 
@@ -2499,8 +2513,7 @@ class LatentDiffusion(DDPM):
                     # student prompts are subject prompts.  
                     model_output, x_recon, ada_embeddings = \
                         self.guided_denoise(x_start_sel, noise_sel, t_sel, cond_orig_qv, 
-                                            subj_indices=extra_info['subj_indices_2b'],
-                                            bg_indices=extra_info['bg_indices_2b'],
+                                            emb_man_volatile_ds=emb_man_volatile_ds,
                                             unet_has_grad=True, 
                                             do_pixel_recon=True, cfg_scales=cfg_scales_for_clip_loss)
 
@@ -2922,9 +2935,10 @@ class LatentDiffusion(DDPM):
                                                                                                   reversed=True)
                 spatial_weight = (spatial_weight_mix_comp + spatial_weight_subj_comp) / 2
 
-                img_mask = resize_mask_for_feat_or_attn(unet_feat, img_mask, "img_mask", mode="nearest|bilinear")
-                spatial_weight = spatial_weight * img_mask
-                
+                if img_mask is not None:
+                    img_mask = resize_mask_for_feat_or_attn(unet_feat, img_mask, "img_mask", mode="nearest|bilinear")
+                    spatial_weight = spatial_weight * img_mask
+
                 # spatial_attn_mix_comp, spatial_attn_subj_comp are returned for debugging purposes. 
                 # Delete them to release RAM.
                 del spatial_attn_mix_comp, spatial_attn_subj_comp
