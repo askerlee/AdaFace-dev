@@ -1275,7 +1275,7 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['is_compos_iter']:
                     # 5% of compositional distillation iters will be initialized with wds_comp overlay images.
                     # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp overlay images.
-                    p_use_wds_comp = 0.05
+                    p_use_wds_comp = 0.1
                 else:
                     # 25% of recon iters will be initialized with wds_comp overlay images.
                     p_use_wds_comp = 0.25
@@ -2771,7 +2771,11 @@ class LatentDiffusion(DDPM):
                     loss_comp_fg_bg_preserve = 0
 
                 # Scale down loss_comp_fg_bg_preserve if reuse_init_conds.
-                comp_fg_bg_preserve_loss_scale = 0.25 if self.iter_flags['reuse_init_conds'] else 1
+                comp_fg_bg_preserve_loss_scale = 0.25 if self.iter_flags['reuse_init_conds'] else 0.5
+                # A large loss scale, since we have the synthetic ground truth.
+                if self.iter_flags['use_wds_comp']:
+                    comp_fg_bg_preserve_loss_scale *= 4
+                
                 loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                         * comp_fg_bg_preserve_loss_scale
 
