@@ -1176,3 +1176,11 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, K_fg, K_comp, BS,
                                                      first_n_dims_to_flatten=3,
                                                      ref_grad_scale=cls_grad_scale)
     return loss_layer_subj_comp_key_ortho
+
+def replace_prompt_comp_extra(comp_prompts, single_prompts, new_comp_extras):
+    new_comp_prompts = []
+    for i in range(len(comp_prompts)):
+        assert comp_prompts[i].startswith(single_prompts[i])
+        new_comp_prompts.append( single_prompts[i] + new_comp_extras[i] )
+    
+    return new_comp_prompts

@@ -491,13 +491,16 @@ class PersonalizedBase(Dataset):
             # compos_placeholder_prefix is prepended to subj_prompt_single, subj_prompt_comps,
             # cls_prompt_single, cls_prompt_comps, which we don't need to change, as they are 
             # for compositional distillation.
-            example["wds_caption"]      = example["caption"]    + ", in front of " + bg_prompt
-            example["wds_caption_bg"]   = example["caption_bg"] + ", in front of " + bg_prompt
+            wds_comp_extra = ", in front of " + bg_prompt
+            example["wds_comp_extra"]   = wds_comp_extra
+            example["wds_caption"]      = example["caption"]    + wds_comp_extra
+            example["wds_caption_bg"]   = example["caption_bg"] + wds_comp_extra
             example["wds_image_unnorm"] = wds_image
             example["wds_image"]        = (wds_image / 127.5 - 1.0).astype(np.float32)
             # fg_mask is the same as non-wds instances. So no need to assign.
             example["wds_aug_mask"]     = wds_aug_mask
         else:
+            example["wds_comp_extra"]   = ""
             example["wds_caption"]      = example["caption"]
             example["wds_caption_bg"]   = example["caption_bg"]
             example["wds_image_unnorm"] = example["image_unnorm"]

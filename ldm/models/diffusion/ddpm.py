@@ -29,7 +29,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        halve_token_indices, double_token_indices, split_indices_by_instance, \
                        normalize_dict_values, masked_mean, \
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
-                       anneal_t, rand_annealed, calc_layer_subj_comp_k_or_v_ortho_loss
+                       anneal_t, rand_annealed, calc_layer_subj_comp_k_or_v_ortho_loss, replace_prompt_comp_extra
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -1289,14 +1289,26 @@ class LatentDiffusion(DDPM):
 
             if self.iter_flags['wds_comp_avail_ratio'] > 0:
                 if self.iter_flags['is_compos_iter']:
-                    p_use_wds_comp = 0
+                    # 20% of compositional distillation iters will be initialized with wds_comp overlay images.
+                    # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp overlay images.
+                    p_use_wds_comp = 0.2
                 else:
-                    # 20% of recon iters will use wds_comp overlay images.
+                    # 20% of recon iters will be initialized with wds_comp overlay images.
                     p_use_wds_comp = 0.2
             else:
                 p_use_wds_comp = 0
             
             self.iter_flags['use_wds_comp'] = random.random() < p_use_wds_comp
+
+            if self.iter_flags['use_wds_comp']:
+                # Replace the image/caption/mask with the wds_comp image/caption/mask.
+                batch["image"]      = batch["wds_image"]
+                batch["aug_mask"]   = batch["wds_aug_mask"]
+                batch["caption"]    = batch["wds_caption"]
+                batch["caption_bg"] = batch["wds_caption_bg"]
+
+                # get_input() uses image, aug_mask and fg_mask.
+                x, _ = self.get_input(batch, self.first_stage_key)
 
             # Mainly use background token on recon iters.
             # To avoid the backgound token taking too much of the foreground, 
@@ -1351,15 +1363,6 @@ class LatentDiffusion(DDPM):
                 CLS_PROMPT_COMP    = 'cls_prompt_comp'
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single'
 
-            if self.iter_flags['use_wds_comp']:
-                # Replace the image/caption/mask with the wds_comp image/caption/mask.
-                batch["image"]      = batch["wds_image"]
-                batch["aug_mask"]   = batch["wds_aug_mask"]
-                batch["caption"]    = batch["wds_caption"]
-                batch["caption_bg"] = batch["wds_caption_bg"]
-                # get_input() uses image, aug_mask and fg_mask.
-                x, _ = self.get_input(batch, self.first_stage_key)
-
             # Each prompt_comp consists of multiple prompts separated by "|".
             # Split them into a list of subj_comp_prompts/cls_comp_prompts.
             subj_single_prompts = batch[SUBJ_PROMPT_SINGLE]
@@ -1398,6 +1401,16 @@ class LatentDiffusion(DDPM):
                 subj_single_prompts = subj_single_prompts * REPEATS
                 cls_single_prompts  = cls_single_prompts * REPEATS
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+
+            if self.iter_flags['use_wds_comp']:
+                # BUG: Currently only support REPEATS == 1.
+                assert REPEATS == 1
+                # wds_comp_extras is a list of wds compositional extra substrings.
+                wds_comp_extras     = batch["wds_comp_extra"]
+                # Replace the compositional extra substrings in the compositional prompts.
+                batch[SUBJ_PROMPT_COMP] = replace_prompt_comp_extra(batch[SUBJ_PROMPT_COMP], batch[SUBJ_PROMPT_SINGLE], wds_comp_extras)
+                batch[CLS_PROMPT_COMP]  = replace_prompt_comp_extra(batch[CLS_PROMPT_COMP],  batch[CLS_PROMPT_SINGLE],  wds_comp_extras)
+
         else:
             delta_prompts = None
             # use_background_token is never enabled in this branch.
@@ -1472,7 +1485,7 @@ class LatentDiffusion(DDPM):
                     subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
 
                     #if self.iter_flags['use_background_token']:
-                    #    print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+                    #print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
                     ORIG_BS  = len(x)
                     N_EMBEDS = ORIG_BS * self.N_LAYERS
