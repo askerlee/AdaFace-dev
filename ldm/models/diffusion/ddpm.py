@@ -1310,19 +1310,21 @@ class LatentDiffusion(DDPM):
                                                           and random.random() < p_comp_init_with_fg_area
 
             # Mainly use background token on recon iters.
-            # To avoid the backgound token taking too much of the foreground, 
-            # we only use the background token on 90% of the training images, to 
-            # force the foreground token to focus on the whole image.
             if not self.iter_flags['is_compos_iter']:
                 if self.iter_flags['use_wds_comp']:
-                    # If a batch is use_wds_comp, then never use background tokens 
-                    # in recon iters.
+                    # Always use background tokens in recon iters if use_wds_comp.
                     p_use_background_token  = 1
                 else:
+                    # To avoid the backgound token taking too much of the foreground, 
+                    # we only use the background token on 90% of the training images, to 
+                    # force the foreground token to focus on the whole image.
                     p_use_background_token  = 0.9
             else:
-                # When do_mix_prompt_distillation, we don't use background token.
-                p_use_background_token  = 0
+                # When do_mix_prompt_distillation, use background token if use_wds_comp.
+                if self.iter_flags['use_wds_comp']:
+                    p_use_background_token  = 1
+                else:
+                    p_use_background_token  = 0
 
             # Only use_background_token on recon iters.
             # No need to check do_mix_prompt_distillation, because if do_mix_prompt_distillation,
