@@ -2310,10 +2310,14 @@ class LatentDiffusion(DDPM):
                 if loss_fg_wds_mask_contrast > 0:
                     loss_dict.update({f'{prefix}/fg_wds_mask_contrast': loss_fg_wds_mask_contrast.mean().detach()})
 
-                fg_wds_comple_loss_scale = 1 #0.25
+                fg_wds_comple_loss_scale    = 1
+                wds_mask_align_loss_scale   = 0.1
+                # loss_wds_mask_align has a small scale of 0.1, since wds embeddings are basically fixed.
+                # But optimizing w.r.t. it may still guide the model to mix subject embeddings less (or orthogonally) with the wds embeddings.
                 loss += self.fg_wds_complementary_loss_weight \
-                         * (loss_fg_wds_complementary * fg_wds_comple_loss_scale + \
-                            loss_fg_mask_align_wds + loss_wds_mask_align + loss_fg_wds_mask_contrast)
+                         * (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
+                            + loss_wds_mask_align * wds_mask_align_loss_scale \
+                            + loss_fg_mask_align_wds + loss_fg_wds_mask_contrast)
 
             if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
                 instance_fg_weights = 1
