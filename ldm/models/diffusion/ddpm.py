@@ -2293,7 +2293,7 @@ class LatentDiffusion(DDPM):
                                          else 'unet_attns'
                 
                 # delta_loss_emb_mask: [2, 77, 1] -> [2, 77].
-                comp_extra_mask = self.embedding_manager.delta_loss_emb_mask.clone().squeeze(-1)
+                comp_extra_mask = self.embedding_manager.delta_loss_emb_mask.squeeze(-1).clone()
                 comp_extra_mask[extra_info['subj_indices']] = 0
                 if self.iter_flags['use_background_token']:
                     comp_extra_mask[extra_info['bg_indices']] = 0
@@ -2326,10 +2326,11 @@ class LatentDiffusion(DDPM):
                 if loss_fg_wds_mask_contrast > 0:
                     loss_dict.update({f'{prefix}/fg_wds_mask_contrast': loss_fg_wds_mask_contrast.mean().detach()})
 
-                fg_wds_comple_loss_scale    = 1
-                wds_mask_align_loss_scale   = 0 #0.1
-                # loss_wds_mask_align has a small scale of 0.1, since wds embeddings are basically fixed.
-                # But optimizing w.r.t. it may still guide the model to mix subject embeddings less (or orthogonally) with the wds embeddings.
+                fg_wds_comple_loss_scale    = 0.1
+                wds_mask_align_loss_scale   = 1
+                # loss_fg_wds_complementary has a small scale of 0.1, since wds embeddings 
+                # seem to align with the background quite poorly, and it's not very helpful to encourage
+                # the subject embeddings to be complementary to the wds embeddings.
                 loss += self.fg_wds_complementary_loss_weight \
                          * (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
                             + loss_wds_mask_align * wds_mask_align_loss_scale \
@@ -3367,7 +3368,7 @@ class LatentDiffusion(DDPM):
 
     # BS: BLOCK_SIZE, not batch size.    
     def calc_subj_comp_ortho_loss(self, unet_ks, unet_vs, unet_attns_or_scores,
-                                  subj_indices, delta_loss_emb_mask, 
+                                  subj_indices, bg_indices, delta_loss_emb_mask, 
                                   BS, cls_grad_scale=0.05):
 
         # Discard the first few bottom layers from the orthogonal loss.
@@ -3404,9 +3405,11 @@ class LatentDiffusion(DDPM):
         ind_cls_subj_B,  ind_cls_subj_N  = ind_subj_subj_B + 2 * BS, ind_subj_subj_N
 
         # delta_loss_emb_mask: [4, 77, 1] => [4, 77]
-        comp_extra_emb_mask = delta_loss_emb_mask[:, :, 0].clone()
+        comp_extra_emb_mask = delta_loss_emb_mask.squeeze(-1).clone()
         # Mask out the foreground embeddings.
         comp_extra_emb_mask[subj_indices] = 0
+        if bg_indices is not None:
+            comp_extra_emb_mask[bg_indices] = 0
         # comp_extra_emb_mask: subj single, subj comp, cls single, cls comp extra emb mask.
         # subj_comp_extra_emb_mask: [1, 77].
         subj_comp_extra_emb_mask = comp_extra_emb_mask.chunk(4)[1]
