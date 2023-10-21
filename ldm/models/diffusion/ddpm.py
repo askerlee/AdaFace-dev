@@ -2750,10 +2750,12 @@ class LatentDiffusion(DDPM):
                     # the background in the training images, which is not desirable.
                     # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
                     # excluding the instance from the fg_bg_preserve_loss.
+                    mix_fg_preserve_loss_scale = 1 if self.iter_flags['use_wds_comp'] else 0.1
                     loss_comp_subj_fg_feat_preserve, loss_comp_subj_fg_attn_preserve, loss_comp_subj_bg_attn_suppress = \
                         self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info[attns_or_scores], 
                                                             filtered_fg_mask, batch_have_fg_mask,
-                                                            extra_info['subj_indices_1b'], BLOCK_SIZE)
+                                                            extra_info['subj_indices_1b'], BLOCK_SIZE,
+                                                            mix_fg_preserve_loss_scale=mix_fg_preserve_loss_scale)
                     if loss_comp_subj_fg_feat_preserve > 0:
                         loss_dict.update({f'{prefix}/comp_subj_fg_feat_preserve': loss_comp_subj_fg_feat_preserve.mean().detach()})
                     if loss_comp_subj_fg_attn_preserve > 0:
@@ -3511,8 +3513,12 @@ class LatentDiffusion(DDPM):
     #            So features under comp prompts should be close to features under single prompts, at fg_mask areas.
     #            (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
     # BS: block size, not batch size.
+    # mix_fg_preserve_loss_scale: A small weight to the preservation loss on mix instances. 
+    # The requirement of preserving foreground features is not as strict as that of preserving
+    # subject features, as the former is only used to facilitate composition.
     def calc_comp_fg_bg_preserve_loss(self, unet_feats, unet_attns_or_scores, 
-                                      fg_mask, batch_have_fg_mask, subj_indices, BS):
+                                      fg_mask, batch_have_fg_mask, subj_indices, BS,
+                                      mix_fg_preserve_loss_scale=0.1):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0, 0
@@ -3586,10 +3592,6 @@ class LatentDiffusion(DDPM):
             # normalized_l2loss() or L2 loss (get_loss()) perform worse than ortho_l2loss().
             loss_layer_subj_fg_feat_preserve = ortho_l2loss(subj_comp_fg_feat, subj_single_fg_feat_gs, mean=True)
             loss_layer_mix_fg_feat_preserve  = ortho_l2loss(mix_comp_fg_feat,  mix_single_fg_feat_gs,  mean=True)
-            # A small weight to the preservation loss on mix instances. 
-            # The requirement of preserving foreground features is not as strict as that of preserving
-            # subject features, as the former is only used to facilitate composition.
-            mix_fg_preserve_loss_scale = 0.1
             loss_comp_subj_fg_feat_preserve += (loss_layer_subj_fg_feat_preserve 
                                                 + loss_layer_mix_fg_feat_preserve * mix_fg_preserve_loss_scale) \
                                                 * feat_distill_layer_weight
