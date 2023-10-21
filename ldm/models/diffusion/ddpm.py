@@ -2174,7 +2174,7 @@ class LatentDiffusion(DDPM):
                                          t_frac = t_frac, 
                                          use_layerwise_embedding = self.use_layerwise_embedding,
                                          N_LAYERS = self.N_LAYERS,
-                                         CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.7])
+                                         CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.85])
           
             # Update cond[0] to c_static_emb_vk.
             # Use cond[1] instead of c_in as part of the tuple, since c_in is changed in the
@@ -2489,7 +2489,7 @@ class LatentDiffusion(DDPM):
                                                  t_frac = t_frac, 
                                                  use_layerwise_embedding = self.use_layerwise_embedding,
                                                  N_LAYERS = self.N_LAYERS,
-                                                 CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.7])
+                                                 CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.85])
                     
                     extra_info['emb_v_mixer']                   = emb_v_mixer
                     # emb_v_layers_cls_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
