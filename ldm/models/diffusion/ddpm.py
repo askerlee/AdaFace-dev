@@ -2286,6 +2286,7 @@ class LatentDiffusion(DDPM):
                             + loss_bg_mask_align + loss_fg_bg_mask_contrast)
 
             if self.iter_flags['use_wds_comp'] and self.fg_wds_complementary_loss_weight > 0:
+                print(c_in)
                 # extra_info['subj_indices'] and extra_info['bg_indices'] are used, instead of
                 # extra_info['subj_indices_1b'] and extra_info['bg_indices_1b']. 
                 fg_wds_comple_attn_uses_scores = False
@@ -2310,7 +2311,7 @@ class LatentDiffusion(DDPM):
                                                                 wds_comp_extra_indices_by_inst,
                                                                 x_start.shape[0],
                                                                 img_mask,
-                                                                is_bg_learnable=False,
+                                                                is_bg_learnable=True,
                             # fg_grad_scale is actually bg_grad_scale, since bg is used as a reference.
                                                                 fg_grad_scale=0, 
                                                                 fg_mask=fg_mask,
@@ -2326,7 +2327,7 @@ class LatentDiffusion(DDPM):
                 if loss_fg_wds_mask_contrast > 0:
                     loss_dict.update({f'{prefix}/fg_wds_mask_contrast': loss_fg_wds_mask_contrast.mean().detach()})
 
-                fg_wds_comple_loss_scale    = 0.1
+                fg_wds_comple_loss_scale    = 1
                 wds_mask_align_loss_scale   = 1
                 # loss_fg_wds_complementary has a small scale of 0.1, since wds embeddings 
                 # seem to align with the background quite poorly, and it's not very helpful to encourage
