@@ -1304,8 +1304,9 @@ class LatentDiffusion(DDPM):
 
             # Slightly larger than 0.5, since comp_init_with_fg_area is disabled under reuse_init_conds.
             # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
-            # NOTE: If use_wds_comp, then when comp_init_with_fg_area, it will not fill the background with noises.
-            p_comp_init_with_fg_area = 0.5
+            # NOTE: If use_wds_comp, then always set comp_init_with_fg_area = True to preserve the foreground.
+            # In this case, we will not replace the background areas with random noises.
+            p_comp_init_with_fg_area = 1 if self.iter_flags['use_wds_comp'] else 0.5
             # If reuse_init_conds, comp_init_with_fg_area may be set to True later
             # if the previous iteration has comp_init_with_fg_area = True.
             self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
@@ -2038,6 +2039,7 @@ class LatentDiffusion(DDPM):
                                                     (pad_w1, pad_w2, pad_h1, pad_h2),
                                                     mode='constant', value=0)
 
+                        # Unpack x_start and filtered_fg_mask from x_mask_scaled_padded.
                         x_start_scaled_padded, filtered_fg_mask = x_mask_scaled_padded[:, :4], x_mask_scaled_padded[:, 4:]
 
                         x_start = torch.where(filtered_fg_mask.bool(), x_start_scaled_padded, torch.randn_like(x_start))
