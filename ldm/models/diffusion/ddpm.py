@@ -2697,28 +2697,7 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/subj_attn_delta_distill':  loss_subj_attn_delta_distill.mean().detach()})
                 if loss_subj_attn_norm_distill > 0:
                     loss_dict.update({f'{prefix}/subj_attn_norm_distill':   loss_subj_attn_norm_distill.mean().detach()})
-
-                loss_subj_comp_key_ortho = 0
-                if self.subj_comp_key_ortho_loss_weight > 0:
-                    subj_comp_attn_comple_key = 'unet_attnscores' if self.subj_comp_attn_comple_loss_uses_scores \
-                                                else 'unet_attns'
-                    bg_indices = None #extra_info['bg_indices_2b'] if self.iter_flags['use_background_token'] \
-                                      #else None
-                    loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple = \
-                        self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
-                                                        extra_info[subj_comp_attn_comple_key],
-                                                        extra_info['subj_indices_2b'],
-                                                        bg_indices,
-                                                        self.embedding_manager.delta_loss_emb_mask,
-                                                        BLOCK_SIZE, cls_grad_scale=0.05)
-
-                    if loss_subj_comp_key_ortho != 0:
-                        loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
-                    if loss_subj_comp_value_ortho != 0:
-                        loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
-                    if loss_subj_comp_attn_comple != 0:
-                        loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
-
+                    
                 subj_attn_delta_distill_loss_scale = 0.5
                 if self.subj_attn_delta_distill_uses_scores:
                     subj_attn_norm_distill_loss_scale = self.subj_attn_norm_distill_loss_scale
@@ -2739,10 +2718,35 @@ class LatentDiffusion(DDPM):
                                             
                 if loss_mix_prompt_distill > 0:
                     loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
-  
+
                 # mix_prompt_distill_weight: 2e-4.
-                loss += loss_mix_prompt_distill      * self.mix_prompt_distill_weight \
-                        + loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
+                loss += loss_mix_prompt_distill      * self.mix_prompt_distill_weight
+
+                if self.subj_comp_key_ortho_loss_weight > 0:
+                    subj_comp_attn_comple_key = 'unet_attnscores' if self.subj_comp_attn_comple_loss_uses_scores \
+                                                else 'unet_attns'
+                    bg_indices = None #extra_info['bg_indices_2b'] if self.iter_flags['use_background_token'] \
+                                      #else None
+                    loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple = \
+                        self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
+                                                        extra_info[subj_comp_attn_comple_key],
+                                                        extra_info['subj_indices_2b'],
+                                                        bg_indices,
+                                                        self.embedding_manager.delta_loss_emb_mask,
+                                                        BLOCK_SIZE, cls_grad_scale=0.05)
+
+                    if loss_subj_comp_key_ortho != 0:
+                        loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
+                    if loss_subj_comp_value_ortho != 0:
+                        loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
+                    if loss_subj_comp_attn_comple != 0:
+                        loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
+                else:
+                    loss_subj_comp_key_ortho   = 0
+                    loss_subj_comp_value_ortho = 0
+                    loss_subj_comp_attn_comple = 0  
+
+                loss +=   loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
                         + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
                         + loss_subj_comp_attn_comple * self.subj_comp_attn_complementary_loss_weight
                 
