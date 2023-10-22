@@ -884,51 +884,41 @@ class UNetModel(nn.Module):
 
                 # If static context is expanded by doing prompt mixing,
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
-                # 'mix_' in iter_type: could be "mix_hijk" (training or inference) 
-                # or "mix_concat_cls" (inference only).
-                if iter_type.startswith("mix_"):
+                # 'mix_' in iter_type: could be "mix_hijk" (training or inference).
+                if iter_type == 'mix_hijk':
                     if layer_ada_context.shape[1] != layer_static_context.shape[1] // 2:
                         breakpoint()
-                    if iter_type == 'mix_hijk':
-                        # iter_type == 'mix_hijk'. Separate layer_static_context into v and k.
-                        layer_static_context_v, layer_static_context_k = \
-                            layer_static_context.chunk(2, dim=1)
-                        # The second half of a mix_hijk batch is always the mix instances,
-                        # even for twin comp sets.
-                        subj_layer_ada_context, cls_layer_ada_context = layer_ada_context.chunk(2)
-                        # In ddpm, patch_multi_embeddings() is applied on a text embedding whose 1st dim is the 16 layers.
-                        # Here, the 1st dim of cls_layer_ada_context is the batch.
-                        # But we can still use patch_multi_embeddings() without specially processing, since patch_multi_embeddings
-                        # in both cases, the 2nd dim is the token dim, so patch_multi_embeddings() works in both cases.
-                        # subj_indices_N:      subject token indices within the subject single prompt (BS=1).
-                        # len(subj_indices_N): embedding number of the subject token.
-                        # cls_layer_ada_context: [2, 77, 768]. subj_indices_N: [6, 7, 8, 9, 6, 7, 8, 9]. 
-                        # Four embeddings (6,7,8,9) for each token.
-                        cls_layer_ada_context = patch_multi_embeddings(cls_layer_ada_context, 
-                                                                        subj_indices_N)
-                        if emb_v_mixer is not None:
-                            # Mix subj ada emb into mix ada emb, in the same way as to static embeddings.
-                            # emb_v_cls_mix_scale: [2, 1]
-                            emb_v_cls_mix_scale   = emb_v_layers_cls_mix_scales[:, [emb_idx]]
-                            # subj_layer_ada_context, cls_layer_ada_context: [2, 77, 768]
-                            # emb_v_mixer is a partial function that implies mix_indices=subj_indices_1b.                            
-                            mix_layer_ada_context_v = emb_v_mixer(cls_layer_ada_context, subj_layer_ada_context, 
-                                                                  c1_mix_scale=emb_v_cls_mix_scale)
-                        else:
-                            mix_layer_ada_context_v = cls_layer_ada_context
-                                
-                        layer_ada_context_v = th.cat([subj_layer_ada_context, mix_layer_ada_context_v], dim=0)
-                        # otherwise, iter_type == 'mix_recon'. The two instances in the batch are 
-                        # both subject single prompts. No need to patch_multi_embeddings().
-                else:
-                    layer_ada_context_v = layer_ada_context
+                    # iter_type == 'mix_hijk'. layer_static_context has been split into v and k above.
+                    # layer_static_context_v, layer_static_context_k = layer_static_context.chunk(2, dim=1)
+                    # The second half of a mix_hijk batch is always the mix instances,
+                    # even for twin comp sets.
+                    subj_layer_ada_context, cls_layer_ada_context = layer_ada_context.chunk(2)
+                    # In ddpm, patch_multi_embeddings() is applied on a text embedding whose 1st dim is the 16 layers.
+                    # Here, the 1st dim of cls_layer_ada_context is the batch.
+                    # But we can still use patch_multi_embeddings() without specially processing, since patch_multi_embeddings
+                    # in both cases, the 2nd dim is the token dim, so patch_multi_embeddings() works in both cases.
+                    # subj_indices_N:      subject token indices within the subject single prompt (BS=1).
+                    # len(subj_indices_N): embedding number of the subject token.
+                    # cls_layer_ada_context: [2, 77, 768]. subj_indices_N: [6, 7, 8, 9, 6, 7, 8, 9]. 
+                    # Four embeddings (6,7,8,9) for each token.
+                    cls_layer_ada_context = patch_multi_embeddings(cls_layer_ada_context, subj_indices_N)
+                    if emb_v_mixer is not None:
+                        # Mix subj ada emb into mix ada emb, in the same way as to static embeddings.
+                        # emb_v_cls_mix_scale: [2, 1]
+                        emb_v_cls_mix_scale   = emb_v_layers_cls_mix_scales[:, [emb_idx]]
+                        # subj_layer_ada_context, cls_layer_ada_context: [2, 77, 768]
+                        # emb_v_mixer is a partial function that implies mix_indices=subj_indices_1b.                            
+                        mix_layer_ada_context_v = emb_v_mixer(cls_layer_ada_context, subj_layer_ada_context, 
+                                                                c1_mix_scale=emb_v_cls_mix_scale)
+                    else:
+                        mix_layer_ada_context_v = cls_layer_ada_context
+                            
+                    layer_ada_context_v = th.cat([subj_layer_ada_context, mix_layer_ada_context_v], dim=0)
+                    # layer_static_context_v, layer_ada_context_v: [2, 77, 768]
+                    # layer_agg_context_v: aggregated (static and ada) layer context fed to the current UNet layer, [2, 77, 768]
+                    layer_agg_context_v = layer_static_context_v * static_emb_weight \
+                                           + layer_ada_context_v * ada_emb_weight
 
-                # layer_static_context_v, layer_ada_context_v: [2, 77, 768]
-                # layer_agg_context_v: aggregated (static and ada) layer context fed to the current UNet layer, [2, 77, 768]
-                layer_agg_context_v = layer_static_context_v * static_emb_weight \
-                                       + layer_ada_context_v * ada_emb_weight
-
-                if iter_type == 'mix_hijk':
                     if emb_k_mixer is not None:
                         # Mix subj ada emb into mix ada emb, in the same way as to static embeddings.
                         # emb_v_cls_mix_scale: [2, 1]
@@ -947,12 +937,14 @@ class UNetModel(nn.Module):
                                            + layer_ada_context_k * ada_emb_weight
                     # Pass both embeddings for hijacking the key of layer_agg_context_v by layer_context_k.
                     layer_context = (layer_agg_context_v, layer_agg_context_k)
+                # normal_recon iters. Only one copy of k/v.
                 else:
-                    # Both the key and the value are layer_agg_context_v.
-                    layer_context = layer_agg_context_v
-                # Otherwise, iter_type == 'mix_hijk' but layer_idx not in hijk_layer_indices.
-                # i.e., this layer is not mixed. In that case, 
-                # layer_context_k == layer_static_context_v, and we just ignore layer_context_k.
+                    layer_agg_context = layer_static_context * static_emb_weight \
+                                         + layer_ada_context * ada_emb_weight
+
+                    # Both the key and the value are layer_agg_context. Only provide one.
+                    layer_context = layer_agg_context
+
             else:
                 layer_context = layer_static_context
 
