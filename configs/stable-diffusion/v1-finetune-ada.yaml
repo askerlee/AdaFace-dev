@@ -51,7 +51,7 @@ model:
     # loss_fg_xlayer_consist ~ 0.2, loss_bg_xlayer_consist ~ 0.1. * weight -> 3e-4.
     fg_bg_xlayer_consist_loss_weight:   5e-4
     # loss_fg_mask_align, loss_bg_mask_align: 0.004, * weight -> 2e-6
-    recon_bg_discount:                  0.05
+    recon_bg_discount:                  0.1
     do_clip_teacher_filtering: True
     distill_deep_neg_prompt:  "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
     # To disable negative prompt used for distillation, set distill_deep_cfg_scale to 0.

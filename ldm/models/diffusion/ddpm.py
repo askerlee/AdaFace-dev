@@ -1273,9 +1273,9 @@ class LatentDiffusion(DDPM):
             # all instances have wds_comp <= all instances have fg_mask, i.e., fg_mask_avail_ratio = 1
             if self.iter_flags['wds_comp_avail_ratio'] == 1:
                 if self.iter_flags['is_compos_iter']:
-                    # 5% of compositional distillation iters will be initialized with wds_comp overlay images.
+                    # None of compositional distillation iters will be initialized with wds_comp overlay images.
                     # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp overlay images.
-                    p_use_wds_comp = 0.1
+                    p_use_wds_comp = 0
                 else:
                     # 25% of recon iters will be initialized with wds_comp overlay images.
                     p_use_wds_comp = 0.25
@@ -1313,14 +1313,14 @@ class LatentDiffusion(DDPM):
             if not self.iter_flags['is_compos_iter']:
                 if self.iter_flags['use_wds_comp']:
                     # Always use background tokens in recon iters if use_wds_comp.
-                    p_use_background_token  = 1
+                    p_use_background_token  = 0.98
                 else:
                     # To avoid the backgound token taking too much of the foreground, 
                     # we only use the background token on 90% of the training images, to 
                     # force the foreground token to focus on the whole image.
                     p_use_background_token  = 0.9
             else:
-                # When do_mix_prompt_distillation, use background token if use_wds_comp.
+                # When do_mix_prompt_distillation, always use background token if use_wds_comp.
                 if self.iter_flags['use_wds_comp']:
                     p_use_background_token  = 1
                 else:
