@@ -1275,7 +1275,7 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['is_compos_iter']:
                     # None of compositional distillation iters will be initialized with wds_comp overlay images.
                     # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp overlay images.
-                    p_use_wds_comp = 0
+                    p_use_wds_comp = 0.1
                 else:
                     # 25% of recon iters will be initialized with wds_comp overlay images.
                     p_use_wds_comp = 0.25
@@ -2168,21 +2168,26 @@ class LatentDiffusion(DDPM):
             # The subject indices are applied to every of the half-batch instances, 
             # so extra_info['subj_indices_1b'] is enough.
             # (extra_info['subj_indices_2b'][1] just repeats extra_info['subj_indices_1b'][1] twice.)
-            c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales = \
+            k_cls_scale_layerwise_range = [0.4, 0] if self.iter_flags['comp_init_with_fg_area'] else [1.0, 1.0]
+            c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, \
+                                          emb_k_mixer, emb_k_layers_cls_mix_scales = \
                 mix_static_vk_embeddings(cond[0], extra_info['subj_indices_1b'][1], 
                                          self.training_percent,
                                          t_frac = t_frac, 
                                          use_layerwise_embedding = self.use_layerwise_embedding,
                                          N_LAYERS = self.N_LAYERS,
-                                         CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.85])
+                                         V_CLS_SCALE_LAYERWISE_RANGE=[1.0, 0.7],
+                                         K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range)
           
             # Update cond[0] to c_static_emb_vk.
             # Use cond[1] instead of c_in as part of the tuple, since c_in is changed in the
             # 'do_teacher_filter' branch.
             cond = (c_static_emb_vk, cond[1], extra_info)
             extra_info['emb_v_mixer']                   = emb_v_mixer
+            extra_info['emb_k_mixer']                   = emb_k_mixer
             # emb_v_layers_cls_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
             extra_info['emb_v_layers_cls_mix_scales']  = emb_v_layers_cls_mix_scales            
+            extra_info['emb_k_layers_cls_mix_scales']   = emb_k_layers_cls_mix_scales
             
         # Otherwise, it's a recon iter (attentional or unweighted).
         else:
@@ -2478,23 +2483,30 @@ class LatentDiffusion(DDPM):
                     noise_sel   = noise[better_cand_idx].repeat(4, 1, 1, 1)
                     t_sel       = t[better_cand_idx].repeat(4)
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
+                    # If comp_init_with_fg_area, then in order to let mix prompts attend to fg areas, we let
+                    # the keys to be mostly subject embeddings, and the values are unchanged.
+                    k_cls_scale_layerwise_range = [0.4, 0] if self.iter_flags['comp_init_with_fg_area'] else [1.0, 1.0]
                     # Mix embeddings to get c_static_emb_orig_vk for cond_orig.
                     # Do mixing on saved cond_orig instead of the updated "cond".
                     # cond_orig is the 4-type prompt embeddings (subj single, subj comp, mix single, mix comp).
                     # but cond  has been re-organized as (subj comp, subj comp, mix comp, mix comp). 
                     # So we use cond_orig.
-                    c_static_emb_orig_vk, emb_v_mixer, emb_v_layers_cls_mix_scales = \
+                    c_static_emb_orig_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, \
+                                          emb_k_mixer, emb_k_layers_cls_mix_scales = \
                         mix_static_vk_embeddings(cond_orig[0], extra_info['subj_indices_1b'][1], 
                                                  self.training_percent,
                                                  t_frac = t_frac, 
                                                  use_layerwise_embedding = self.use_layerwise_embedding,
                                                  N_LAYERS = self.N_LAYERS,
-                                                 CLS_E_SCALE_LAYERWISE_RANGE=[1.0, 0.85])
+                                                 V_CLS_SCALE_LAYERWISE_RANGE=[1.0, 0.7],
+                                                 K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range)
                     
                     extra_info['emb_v_mixer']                   = emb_v_mixer
+                    extra_info['emb_k_mixer']                   = emb_k_mixer
                     # emb_v_layers_cls_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
                     # Different from the emb_v_layers_cls_mix_scales above, which is for the twin comp instances.
                     extra_info['emb_v_layers_cls_mix_scales']   = emb_v_layers_cls_mix_scales  
+                    extra_info['emb_k_layers_cls_mix_scales']   = emb_k_layers_cls_mix_scales
                     # Update c_static_emb.
                     cond_orig_qv = (c_static_emb_orig_vk, cond_orig[1], extra_info)
 
