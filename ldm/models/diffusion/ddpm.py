@@ -1275,10 +1275,10 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['is_compos_iter']:
                     # None of compositional distillation iters will be initialized with wds_comp overlay images.
                     # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp overlay images.
-                    p_use_wds_comp = 0.1
+                    p_use_wds_comp = 0.05
                 else:
                     # 25% of recon iters will be initialized with wds_comp overlay images.
-                    p_use_wds_comp = 0.25
+                    p_use_wds_comp = 0.1
             else:
                 p_use_wds_comp = 0
             
@@ -1322,7 +1322,7 @@ class LatentDiffusion(DDPM):
             else:
                 # When do_mix_prompt_distillation, always use background token if use_wds_comp.
                 if self.iter_flags['use_wds_comp']:
-                    p_use_background_token  = 1
+                    p_use_background_token  = 0.95
                 else:
                     p_use_background_token  = 0
 
@@ -2725,8 +2725,8 @@ class LatentDiffusion(DDPM):
                 if self.subj_comp_key_ortho_loss_weight > 0:
                     subj_comp_attn_comple_key = 'unet_attnscores' if self.subj_comp_attn_comple_loss_uses_scores \
                                                 else 'unet_attns'
-                    bg_indices = None #extra_info['bg_indices_2b'] if self.iter_flags['use_background_token'] \
-                                      #else None
+                    bg_indices = extra_info['bg_indices_2b'] if self.iter_flags['use_background_token'] \
+                                 else None
                     loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple = \
                         self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
                                                         extra_info[subj_comp_attn_comple_key],
