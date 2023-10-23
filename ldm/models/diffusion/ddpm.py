@@ -26,10 +26,13 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, ortho_l2loss, normalized_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, patch_multi_embeddings, fix_emb_scales, \
-                       halve_token_indices, double_token_indices, split_indices_by_instance, \
+                       halve_token_indices, double_token_indices, \
+                       split_indices_by_instance, extend_indices_N_by_n, extend_indices_B_by_n_times, \
                        normalize_dict_values, masked_mean, \
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
-                       anneal_t, rand_annealed, calc_layer_subj_comp_k_or_v_ortho_loss, replace_prompt_comp_extra
+                       anneal_t, rand_annealed, calc_layer_subj_comp_k_or_v_ortho_loss, \
+                       replace_prompt_comp_extra, sel_emb_attns_by_indices, \
+                       gen_comp_extra_indices_by_block
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -1231,10 +1234,10 @@ class LatentDiffusion(DDPM):
     # 'caption' is not named 'subj_prompt_single' to keep it compatible with older code.
     # ANCHOR[id=shared_step]
     def shared_step(self, batch, **kwargs):
-        # captions = batch["caption"].
+        # captions = batch['caption'].
         # Do not use the returned captions from get_input(). Assign the correct caption later.
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
-        # NOTE: captions (batch["caption"] or batch["caption_bg"])
+        # NOTE: captions (batch['caption'] or batch['caption_bg'])
         # are only for image reconstruction iterations.
         x_start, _ = self.get_input(batch, self.first_stage_key)
 
@@ -1273,12 +1276,13 @@ class LatentDiffusion(DDPM):
             # all instances have wds_comp <= all instances have fg_mask, i.e., fg_mask_avail_ratio = 1
             if self.iter_flags['wds_comp_avail_ratio'] == 1:
                 if self.iter_flags['is_compos_iter']:
-                    # None of compositional distillation iters will be initialized with wds_comp overlay images.
-                    # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp overlay images.
-                    p_use_wds_comp = 0.1
+                    # 5%  of compositional distillation iters will be initialized with wds_comp 
+                    # *background* images.
+                    # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp background images.
+                    p_use_wds_comp = 0.05
                 else:
-                    # 25% of recon iters will be initialized with wds_comp overlay images.
-                    p_use_wds_comp = 0.2
+                    # 10% of recon iters will be initialized with wds_comp overlay images.
+                    p_use_wds_comp = 0.1
             else:
                 p_use_wds_comp = 0
             
@@ -1289,13 +1293,19 @@ class LatentDiffusion(DDPM):
                 # This block of code has to be before "captions = ..." below, 
                 # to avoid using wrong captions (some branches use batch['caption_bg']).
                 if self.iter_flags['is_compos_iter']:
-                    batch['image']      = batch['wds_image_bgonly']
+                    batch['image']  = batch['wds_image_bgonly']
+                    batch['caption']    = batch['wds_caption']
+                    batch['caption_bg'] = batch['wds_caption_bg']
+                    self.iter_flags['use_wds_cls_captions'] = False
                 else:
-                    batch['image']      = batch['wds_image']
+                    batch['image']  = batch['wds_image']
+                    batch['caption']    = batch['wds_cls_caption']
+                    batch['caption_bg'] = batch['wds_cls_caption_bg']
+                    self.iter_flags['use_wds_cls_captions'] = True
+
                 batch['aug_mask']   = batch['wds_aug_mask']
-                batch['caption']    = batch['wds_caption']
-                batch['caption_bg'] = batch['wds_caption_bg']
-                captions            = batch['wds_caption']
+
+                captions            = batch['wds_cls_caption']
                 # first_stage_key: 'image'.
                 # get_input() uses image, aug_mask and fg_mask.
                 x_start, _ = self.get_input(batch, self.first_stage_key)
@@ -1316,7 +1326,7 @@ class LatentDiffusion(DDPM):
             if not self.iter_flags['is_compos_iter']:
                 if self.iter_flags['use_wds_comp']:
                     # Always use background tokens in recon iters if use_wds_comp.
-                    p_use_background_token  = 0.95
+                    p_use_background_token  = 0.9
                 else:
                     # To avoid the backgound token taking too much of the foreground, 
                     # we only use the background token on 90% of the training images, to 
@@ -1337,33 +1347,33 @@ class LatentDiffusion(DDPM):
                                                         and random.random() < p_use_background_token
                         
             if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
-                captions = batch["caption"]
+                captions = batch['caption_bg']
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp_bg'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp_bg'
-                CLS_PROMPT_COMP    = 'cls_prompt_comp_fp_bg'
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp_bg'
+                CLS_PROMPT_COMP    = 'cls_prompt_comp_fp_bg'
             # use_fp_trick but not use_background_token.
             elif self.iter_flags['use_fp_trick']:
-                captions = batch["caption"]
+                captions = batch['caption']
                 # Never use_fp_trick for recon iters. So no need to have "caption_fp" or "caption_fp_bg".
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp'
-                CLS_PROMPT_COMP    = 'cls_prompt_comp_fp'
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp'
+                CLS_PROMPT_COMP    = 'cls_prompt_comp_fp'
             # not use_fp_trick and use_background_token.
             elif self.iter_flags['use_background_token']:
-                captions = batch["caption_bg"]
+                captions = batch['caption_bg']
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single_bg'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp_bg'
-                CLS_PROMPT_COMP    = 'cls_prompt_comp_bg'
                 CLS_PROMPT_SINGLE  = 'cls_prompt_single_bg'
+                CLS_PROMPT_COMP    = 'cls_prompt_comp_bg'
             # Either do_mix_prompt_distillation but not (use_fp_trick_iter and broad_class == 1), 
             # or recon iters (not do_mix_prompt_distillation) and not use_background_token 
             # We don't use_fp_trick on training images. use_fp_trick is only for compositional regularization.
             else:
-                # The above captions returned by self.get_input() is already batch["caption"].
+                # The above captions returned by self.get_input() is already batch['caption'].
                 # Reassign here for clarity.
-                captions = batch["caption"]
+                captions = batch['caption']
                 SUBJ_PROMPT_SINGLE = 'subj_prompt_single'
                 SUBJ_PROMPT_COMP   = 'subj_prompt_comp'
                 CLS_PROMPT_COMP    = 'cls_prompt_comp'
@@ -1412,6 +1422,8 @@ class LatentDiffusion(DDPM):
                 # TODO: Currently only support REPEATS == 1.
                 assert REPEATS == 1
                 # wds_comp_extras is a list of wds compositional extra substrings.
+                # Never include the class token in wds_comp_extras, i.e. don't use wds_cls_comp_extra.
+                # Because the 4-type prompts are for distillation, which don't use the class token.
                 wds_comp_extras     = batch["wds_comp_extra"]
                 # Replace the compositional extra substrings in the compositional prompts.
                 #print(delta_prompts)
@@ -1424,7 +1436,7 @@ class LatentDiffusion(DDPM):
             delta_prompts = None
             # use_background_token is never enabled in this branch.
             if self.iter_flags['use_background_token']:
-                captions = batch["caption_bg"]
+                captions = batch['caption_bg']
 
         if 'aug_mask' in batch:
             img_mask = batch['aug_mask']
@@ -2251,11 +2263,6 @@ class LatentDiffusion(DDPM):
         else:
             raise NotImplementedError()
 
-        # Do not apply img_mask when it's a compositional iter.
-        if img_mask is not None and self.iter_flags['do_normal_recon']:
-            target       = target       * img_mask
-            model_output = model_output * img_mask
-
         loss = 0
 
         ###### do_normal_recon ######
@@ -2267,19 +2274,18 @@ class LatentDiffusion(DDPM):
                 fg_bg_comple_attn_uses_scores = True
                 fg_bg_comple_attn_key = 'unet_attnscores' if fg_bg_comple_attn_uses_scores \
                                         else 'unet_attns'
-                bg_indices_by_instance = split_indices_by_instance(extra_info['bg_indices'])
-                assert len(bg_indices_by_instance) == x_start.shape[0]
+
                 loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_mask_contrast = \
                             self.calc_fg_bg_complementary_loss(extra_info[fg_bg_comple_attn_key], 
                                                                 extra_info['unet_attnscores'],
                                                                 extra_info['subj_indices'],
-                                                                bg_indices_by_instance,
-                                                                x_start.shape[0],
-                                                                img_mask,
-                                                                is_bg_learnable=True,
+                                                                extra_info['bg_indices'],
+                                                                BS=x_start.shape[0],
+                                                                img_mask=img_mask,
                                                                 fg_grad_scale=0.1,
                                                                 fg_mask=fg_mask,
-                                                                instance_mask=batch_have_fg_mask
+                                                                instance_mask=batch_have_fg_mask,
+                                                                do_sqrt_norm=False
                                                                 )
 
                 loss_dict.update({f'{prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach()})
@@ -2305,27 +2311,31 @@ class LatentDiffusion(DDPM):
                 
                 # delta_loss_emb_mask: [2, 77, 1] -> [2, 77].
                 comp_extra_mask = self.embedding_manager.delta_loss_emb_mask.squeeze(-1).clone()
-                comp_extra_mask[extra_info['subj_indices']] = 0
-                #if self.iter_flags['use_background_token']:
-                #    comp_extra_mask[extra_info['bg_indices']] = 0
+                if self.iter_flags['use_wds_cls_captions']:
+                    subj_indices_ext = extend_indices_N_by_n(extra_info['subj_indices'], n=1)
+                else:
+                    subj_indices_ext = extra_info['subj_indices']
 
-                wds_comp_extra_indices = torch.where(comp_extra_mask != 0)
-                wds_comp_extra_indices_by_inst = split_indices_by_instance(wds_comp_extra_indices)
+                comp_extra_mask[subj_indices_ext] = 0
+
+                if self.iter_flags['use_background_token']:
+                    comp_extra_mask[extra_info['bg_indices']] = 0
+
+                wds_comp_extra_indices = comp_extra_mask.nonzero(as_tuple=True)
 
                 # loss_fg_mask_align_wds is the same as above if an instance both use_wds_comp and use_background_token.
                 # Otherwise it's different. It's ok if the loss is double-counted sometimes.
                 loss_fg_wds_complementary, loss_fg_mask_align_wds, loss_wds_mask_align, loss_fg_wds_mask_contrast = \
                             self.calc_fg_bg_complementary_loss(extra_info[fg_wds_comple_attn_key], 
                                                                 extra_info['unet_attnscores'],
-                                                                extra_info['subj_indices'],
-                                                                wds_comp_extra_indices_by_inst,
+                                                                subj_indices_ext,
+                                                                wds_comp_extra_indices,
                                                                 x_start.shape[0],
                                                                 img_mask,
-                                                                is_bg_learnable=True,
-                            # fg_grad_scale is actually bg_grad_scale, since bg is used as a reference.
                                                                 fg_grad_scale=0.1, 
                                                                 fg_mask=fg_mask,
-                                                                instance_mask=None
+                                                                instance_mask=batch_have_fg_mask,
+                                                                do_sqrt_norm=True
                                                                )
 
                 loss_dict.update({f'{prefix}/fg_wds_complem': loss_fg_wds_complementary.mean().detach()})
@@ -2371,7 +2381,7 @@ class LatentDiffusion(DDPM):
                     instance_fg_weights = 1
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-            loss_recon, _ = self.calc_recon_loss(model_output, target, fg_mask, 
+            loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
                                                  instance_fg_weights=instance_fg_weights,
                                                  instance_bg_weights=instance_bg_weights)
             loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
@@ -2725,34 +2735,6 @@ class LatentDiffusion(DDPM):
                 # mix_prompt_distill_weight: 2e-4.
                 loss += loss_mix_prompt_distill      * self.mix_prompt_distill_weight
 
-                if self.subj_comp_key_ortho_loss_weight > 0:
-                    subj_comp_attn_comple_key = 'unet_attnscores' if self.subj_comp_attn_comple_loss_uses_scores \
-                                                else 'unet_attns'
-                    bg_indices = extra_info['bg_indices_2b'] if self.iter_flags['use_background_token'] \
-                                 else None
-                    loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple = \
-                        self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
-                                                        extra_info[subj_comp_attn_comple_key],
-                                                        extra_info['subj_indices_2b'],
-                                                        bg_indices,
-                                                        self.embedding_manager.delta_loss_emb_mask,
-                                                        BLOCK_SIZE, cls_grad_scale=0.05)
-
-                    if loss_subj_comp_key_ortho != 0:
-                        loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
-                    if loss_subj_comp_value_ortho != 0:
-                        loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
-                    if loss_subj_comp_attn_comple != 0:
-                        loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
-                else:
-                    loss_subj_comp_key_ortho   = 0
-                    loss_subj_comp_value_ortho = 0
-                    loss_subj_comp_attn_comple = 0  
-
-                loss +=   loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
-                        + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
-                        + loss_subj_comp_attn_comple * self.subj_comp_attn_complementary_loss_weight
-                
                 # NOTE: loss_comp_fg_bg_preserve is applied only when this 
                 # iteration is teachable, because at such iterations the unet gradient is enabled.
                 # The current iteration may be a fresh iteration or a reuse_init_conds iteration.
@@ -2793,13 +2775,67 @@ class LatentDiffusion(DDPM):
 
                 # Scale down loss_comp_fg_bg_preserve if reuse_init_conds.
                 comp_fg_bg_preserve_loss_scale = 0.25 if self.iter_flags['reuse_init_conds'] else 0.5
-                # A large loss scale, since we have the synthetic ground truth.
-                if self.iter_flags['use_wds_comp']:
-                    comp_fg_bg_preserve_loss_scale *= 4
-                
+
                 loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                         * comp_fg_bg_preserve_loss_scale
 
+        if self.subj_comp_key_ortho_loss_weight > 0:
+            subj_comp_attn_comple_key = 'unet_attnscores' if self.subj_comp_attn_comple_loss_uses_scores \
+                                        else 'unet_attns'
+            if self.iter_flags['is_teachable']:
+                subj_indices_1b = extra_info['subj_indices_1b']
+                bg_indices_1b   = extra_info['bg_indices_1b'] if self.iter_flags['use_background_token'] \
+                                    else None
+                # subj_indices_ext: From subj_indices_2b to subj_indices_4b.
+                # bg_indices_ext:   From bg_indices_2b   to bg_indices_4b.
+                subj_indices_4b, subj_indices_4b_by_block = extend_indices_B_by_n_times(subj_indices_1b, n=4, offset=BLOCK_SIZE)
+                bg_indices_4b,   bg_indices_4b_by_block   = extend_indices_B_by_n_times(bg_indices_1b,   n=4, offset=BLOCK_SIZE)
+
+                comp_extra_indices_4b_by_block = \
+                    gen_comp_extra_indices_by_block(self.embedding_manager.delta_loss_emb_mask,
+                                                    subj_indices_4b, bg_indices_4b, block_size=BLOCK_SIZE)
+
+                loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple = \
+                    self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
+                                                    extra_info[subj_comp_attn_comple_key],
+                                                    subj_indices_4b_by_block, comp_extra_indices_4b_by_block,
+                                                    cls_grad_scale=0.05,
+                                                    is_4type_batch=True)
+                
+            elif self.iter_flags['do_normal_recon'] and self.iter_flags['use_wds_comp']:
+                if self.iter_flags['use_wds_cls_captions']:
+                    subj_indices_ext = extend_indices_N_by_n(extra_info['subj_indices_1b'], n=1)
+                else:
+                    subj_indices_ext = extra_info['subj_indices_1b']
+                bg_indices   = extra_info['bg_indices_1b'] if self.iter_flags['use_background_token'] \
+                                else None
+
+                comp_extra_indices_by_block = \
+                    gen_comp_extra_indices_by_block(self.embedding_manager.delta_loss_emb_mask,
+                                                    subj_indices_ext, bg_indices, block_size=BLOCK_SIZE)
+                                
+                loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple = \
+                    self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
+                                                    extra_info[subj_comp_attn_comple_key],
+                                                    [subj_indices_ext], comp_extra_indices_by_block,
+                                                    cls_grad_scale=0.05,
+                                                    is_4type_batch=False)
+            else:
+                loss_subj_comp_key_ortho   = 0
+                loss_subj_comp_value_ortho = 0
+                loss_subj_comp_attn_comple = 0  
+
+            if loss_subj_comp_key_ortho != 0:
+                loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
+            if loss_subj_comp_value_ortho != 0:
+                loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
+            if loss_subj_comp_attn_comple != 0:
+                loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
+
+            loss +=   loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
+                    + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
+                    + loss_subj_comp_attn_comple * self.subj_comp_attn_complementary_loss_weight
+                
         self.release_plosses_intermediates(locals())
         loss_dict.update({f'{prefix}/loss': loss.mean().detach()})
 
@@ -2807,12 +2843,15 @@ class LatentDiffusion(DDPM):
 
     # pixel-wise recon loss. 
     # instance_fg_weights, instance_bg_weights: could be 1D tensors of size BS, or scalars.
-    def calc_recon_loss(self, model_output, target, fg_mask, 
+    def calc_recon_loss(self, model_output, target, img_mask, fg_mask, 
                         instance_fg_weights=1, instance_bg_weights=1):
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+        model_output = model_output * img_mask
+        target       = target       * img_mask
         loss_recon_pixels = self.get_loss(model_output, target, mean=False)
-        weighted_fg_mask = fg_mask * instance_fg_weights
-        weighted_bg_mask = (1 - fg_mask) * instance_bg_weights
+
+        weighted_fg_mask = fg_mask       * img_mask * instance_fg_weights
+        weighted_bg_mask = (1 - fg_mask) * img_mask * instance_bg_weights
 
         # recon loss only on the foreground pixels.
         loss_recon = (  (loss_recon_pixels * weighted_fg_mask).sum()     \
@@ -3033,11 +3072,13 @@ class LatentDiffusion(DDPM):
     # the first block is the whole batch.
     def calc_fg_bg_complementary_loss(self, unet_attns_or_scores, unet_attnscores,
                                       subj_indices, 
-                                      bg_indices_by_instance,
-                                      BS, img_mask, is_bg_learnable,
+                                      bg_indices,
+                                      BS, img_mask, 
                                       fg_grad_scale=0.1,
-                                      fg_mask=None, instance_mask=None):
-        if subj_indices is None or bg_indices_by_instance is None or len(bg_indices_by_instance) == 0:
+                                      fg_mask=None, instance_mask=None,
+                                      do_sqrt_norm=False):
+        
+        if subj_indices is None or bg_indices is None or len(bg_indices) == 0:
             return 0, 0, 0, 0
         
         # Discard the first few bottom layers from alignment.
@@ -3073,29 +3114,15 @@ class LatentDiffusion(DDPM):
 
         # In each instance, subj_indices has K_fg times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
-        #                          [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
-        # bg_indices: ([0, 1, 2, 3, 4, 5, 6, 7], [11, 12, 34, 29, 11, 12, 34, 29]).
+        #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
+        # bg_indices: ([0, 1, 2, 3], [11, 12, 34, 29]).
         # BS = 2, so we only keep instances indexed by [0, 1].
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
         subj_indices = (subj_indices[0][:BS*K_fg], subj_indices[1][:BS*K_fg])
 
         #fg_attn_grad_scale  = 0.5
         #fg_attn_grad_scaler = gen_gradient_scaler(fg_attn_grad_scale)
-        do_sqrt_norm = False
 
-        def sel_emb_attns_by_instance_indices(attn_mat, indices_by_instance, do_sqrt_norm):
-            # bg_attn_i: [K_bg_i, 8, 64] -> [1, K_bg_i, 8, 64] sum among K_bg_i bg embeddings -> [1, 8, 64]
-            # 8: 8 attention heads. Last dim 64: number of image tokens.
-            emb_attns   = [ attn_mat[indices_by_instance[i]].reshape(1, -1, *attn_mat.shape[2:]).sum(dim=1) \
-                            for i in range(attn_mat.shape[0]) ]
-
-            if do_sqrt_norm:
-                emb_attns   = [ emb_attns[i] / torch.sqrt(len(indices_by_instance[i])) \
-                                for i in range(len(indices_by_instance)) ]
-            
-            emb_attns = torch.cat(emb_attns, dim=0)
-            return emb_attns
-        
         for unet_layer_idx, unet_attn in unet_attns_or_scores.items():
             if (unet_layer_idx not in attn_align_layer_weights):
                 continue
@@ -3104,11 +3131,11 @@ class LatentDiffusion(DDPM):
             # [2, 77, 8, 256] / [2, 77, 8, 64]
             attn_mat = unet_attn.permute(0, 3, 1, 2)
             # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
-            subj_attn = attn_mat[subj_indices].reshape(BS, K_fg, *attn_mat.shape[2:]).sum(dim=1)
-            if do_sqrt_norm:
-                subj_attn = subj_attn / torch.sqrt(K_fg)
-
-            bg_attn = sel_emb_attns_by_instance_indices(attn_mat, bg_indices_by_instance, do_sqrt_norm)
+            subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices, 
+                                                 do_sum=True, do_sqrt_norm=do_sqrt_norm)
+            
+            bg_attn   = sel_emb_attns_by_indices(attn_mat, bg_indices, 
+                                                 do_sum=True, do_sqrt_norm=do_sqrt_norm)
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
             
@@ -3129,40 +3156,28 @@ class LatentDiffusion(DDPM):
             # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
             # to make the two attention maps more complementary (expect the loss pushes the 
             # subject embedding to a more accurate point).
-            if is_bg_learnable:
-                # Use subj_attn as a reference, and scale down grad to fg attn, 
-                # to make fg embeddings more stable.
-                loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, subj_attn, 
-                                                            exponent=2,    
-                                                            do_demean_first=False,
-                                                            first_n_dims_to_flatten=2, 
-                                                            ref_grad_scale=fg_grad_scale,
-                                                            aim_to_align=False,
-                                                            debug=False)
-            else:
-                # When bg embeddings are compositional extra embeddings of WDS overlay instances.
-                # Use bg_attn as a reference, and do not scale down grad to fg attn.
-                # to optimize fg embeddings (since bg embeddings are not learnable)
-                # (ref_grad_scale doesn't matter, since there are no optimizable params in bg embeddings.)
-                loss_layer_fg_bg_comple = calc_delta_loss(subj_attn, bg_attn, 
-                                                            exponent=2,    
-                                                            do_demean_first=False,
-                                                            first_n_dims_to_flatten=2, 
-                                                            ref_grad_scale=fg_grad_scale,
-                                                            aim_to_align=False,
-                                                            debug=False)
-                                            
+
+            # Use subj_attn as a reference, and scale down grad to fg attn, 
+            # to make fg embeddings more stable.
+            loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, subj_attn, 
+                                                        exponent=2,    
+                                                        do_demean_first=False,
+                                                        first_n_dims_to_flatten=2, 
+                                                        ref_grad_scale=fg_grad_scale,
+                                                        aim_to_align=False,
+                                                        debug=False)
+
             # loss_fg_bg_complementary doesn't need fg_mask.
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_align_layer_weight
 
             if (fg_mask is not None) and (instance_mask is None or instance_mask.sum() > 0):
                 attnscore_mat = unet_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
                 # subj_score: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
-                subj_score = attnscore_mat[subj_indices].reshape(BS, K_fg, *attnscore_mat.shape[2:]).sum(dim=1)
-                if do_sqrt_norm:
-                    subj_score = subj_score / torch.sqrt(K_fg)
+                subj_score = sel_emb_attns_by_indices(attnscore_mat, subj_indices,
+                                                      do_sum=True, do_sqrt_norm=do_sqrt_norm)
                 # bg_score_i:   [K_bg_i, 8, 64] -> [1, K_bg_i, 8, 64] sum among K_bg_i bg embeddings -> [1, 8, 64]
-                bg_score   = sel_emb_attns_by_instance_indices(attnscore_mat, bg_indices_by_instance, do_sqrt_norm)
+                bg_score   = sel_emb_attns_by_indices(attnscore_mat, bg_indices, 
+                                                      do_sum=True, do_sqrt_norm=do_sqrt_norm)
 
                 fg_mask2 = resize_mask_for_feat_or_attn(subj_attn, fg_mask, "fg_mask", mode="nearest|bilinear")
                 # Repeat 8 times to match the number of attention heads.
@@ -3363,35 +3378,10 @@ class LatentDiffusion(DDPM):
                     bg_attn             = bg_attn           * img_mask2
                     bg_attn_xlayer      = bg_attn_xlayer    * img_mask2
 
-            # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
-            # But we don't want to only focus on large activations. So set it to 2.
-            # ref_grad_scale = 1: No gradient scaling will be applied to the reference embedding, e.g.,
-            # subj_attn_xlayer and bg_attn_xlayer, so that they will be optimized as well.
-            # do_demean_first=True: If not do_demean_first, then at low-attention locations of one attention map,
-            # the loss on the other attention map is small (the cosine loss is weighted by 
-            # both attention values, so if one of them is small, the loss at this location is small).
-            # After demeaning, there are no low-attention locations, so all locations are better aligned.
-            '''
-            loss_layer_fg_xlayer_consist = calc_delta_loss(subj_attn, subj_attn_xlayer, 
-                                                            exponent=2,    
-                                                            do_demean_first=True,
-                                                            first_n_dims_to_flatten=2, 
-                                                            ref_grad_scale=1,
-                                                            debug=False)
-            '''
             loss_layer_fg_xlayer_consist = ortho_l2loss(subj_attn, subj_attn_xlayer, mean=True)
             loss_fg_xlayer_consist += loss_layer_fg_xlayer_consist * attn_align_layer_weight
             
             if bg_indices is not None:
-                # do_demean_first=False: Regularizations are more relaxed on the background embeddings.
-                '''
-                loss_layer_bg_xlayer_consist = calc_delta_loss(bg_attn, bg_attn_xlayer,
-                                                                exponent=2,    
-                                                                do_demean_first=True,
-                                                                first_n_dims_to_flatten=2, 
-                                                                ref_grad_scale=1,
-                                                                debug=False)
-                '''
                 loss_layer_bg_xlayer_consist = ortho_l2loss(bg_attn, bg_attn_xlayer, mean=True)
                 loss_bg_xlayer_consist += loss_layer_bg_xlayer_consist * attn_align_layer_weight
 
@@ -3399,8 +3389,8 @@ class LatentDiffusion(DDPM):
 
     # BS: BLOCK_SIZE, not batch size.    
     def calc_subj_comp_ortho_loss(self, unet_ks, unet_vs, unet_attns_or_scores,
-                                  subj_indices, bg_indices, delta_loss_emb_mask, 
-                                  BS, cls_grad_scale=0.05):
+                                  subj_indices_by_block, comp_extra_indices_by_block, 
+                                  cls_grad_scale=0.05, is_4type_batch=True):
 
         # Discard the first few bottom layers from the orthogonal loss.
         k_ortho_layer_weights = { #7:  1., 8: 1.,
@@ -3419,46 +3409,11 @@ class LatentDiffusion(DDPM):
                                 19: 0.5, 20: 0.5, 
                                 21: 0.25, 22: 0.25, 
                                 23: 0.25, 24: 0.25,                                
-                               }
+                                }
         
         # Normalize the weights above so that each set sum to 1.
         k_ortho_layer_weights = normalize_dict_values(k_ortho_layer_weights)
         v_ortho_layer_weights = normalize_dict_values(v_ortho_layer_weights)
-        # K_fg: 4, number of embeddings per subject token.
-        K_fg   = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
-        # In each instance, subj_indices has K_fg times as many elements as bg_indices.
-        # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
-        #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
-        # ind_subj_subj_B, ind_subj_subj_N: [1, 1, 1, 1], [5, 6, 7, 8].
-        # Shift ind_subj_subj_B by BS, so that it points to subj comp embeddings.
-        ind_subj_subj_B, ind_subj_subj_N = subj_indices[0][:BS*K_fg] + BS, subj_indices[1][:BS*K_fg]
-        # Shift ind_subj_subj_B by 2 * BS, so that it points to cls comp embeddings.
-        ind_cls_subj_B,  ind_cls_subj_N  = ind_subj_subj_B + 2 * BS, ind_subj_subj_N
-
-        # delta_loss_emb_mask: [4, 77, 1] => [4, 77]
-        comp_extra_emb_mask = delta_loss_emb_mask.squeeze(-1).clone()
-        # Mask out the foreground embeddings.
-        comp_extra_emb_mask[subj_indices] = 0
-        if bg_indices is not None:
-            comp_extra_emb_mask[bg_indices] = 0
-        # comp_extra_emb_mask: subj single, subj comp, cls single, cls comp extra emb mask.
-        # subj_comp_extra_emb_mask: [1, 77].
-        subj_comp_extra_emb_mask = comp_extra_emb_mask.chunk(4)[1]
-        # subj_comp_extra_emb_indices: ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 
-        #                               [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21])
-        subj_comp_extra_emb_indices = torch.where(subj_comp_extra_emb_mask > 0)
-
-        # K_comp: 18.
-        K_comp = len(subj_comp_extra_emb_indices[0]) // len(torch.unique(subj_comp_extra_emb_indices[0]))
-        # BS = 1, so we only keep instances indexed by [0].
-        # subj_comp_extra_emb_indices: ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 
-        #                               [ 1,  2,  3,  4,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]).
-        # Shift batch indices by BS, so that it points to subj comp embeddings.
-        # ind_subj_comp_B, ind_subj_comp_N: ([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 
-        #                                    [ 1,  2,  3,  4,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]).
-        ind_subj_comp_B, ind_subj_comp_N = subj_comp_extra_emb_indices[0] + BS, subj_comp_extra_emb_indices[1]
-        # Shift ind_subj_comp_B by 2 * BS, so that it points to cls comp embeddings.
-        ind_cls_comp_B,  ind_cls_comp_N  = ind_subj_comp_B + 2 * BS, ind_subj_comp_N
 
         loss_subj_comp_key_ortho   = 0
         loss_subj_comp_value_ortho = 0
@@ -3466,24 +3421,35 @@ class LatentDiffusion(DDPM):
 
         emb_kq_do_demean_first = False
 
+        if is_4type_batch:
+            subj_subj_indices = subj_indices_by_block[1]
+            subj_comp_indices = comp_extra_indices_by_block[1]
+            cls_subj_indices  = subj_indices_by_block[3]
+            cls_comp_indices  = comp_extra_indices_by_block[3]
+        else:
+            subj_subj_indices = subj_indices_by_block[0]
+            subj_comp_indices = comp_extra_indices_by_block[0]
+            cls_subj_indices  = None
+            cls_comp_indices  = None
+
         for unet_layer_idx, unet_seq_k in unet_ks.items():
             if (unet_layer_idx not in k_ortho_layer_weights):
                 continue
 
             loss_layer_subj_comp_key_ortho = \
-                calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, K_fg, K_comp, BS,
-                                                        ind_subj_subj_B, ind_subj_subj_N, 
-                                                        ind_cls_subj_B,  ind_cls_subj_N, 
-                                                        ind_subj_comp_B, ind_subj_comp_N, 
-                                                        ind_cls_comp_B,  ind_cls_comp_N,
+                calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k,
+                                                        subj_subj_indices, 
+                                                        subj_comp_indices, 
+                                                        cls_subj_indices, 
+                                                        cls_comp_indices,
                                                         do_demean_first=emb_kq_do_demean_first, 
                                                         cls_grad_scale=cls_grad_scale)
             loss_layer_subj_comp_value_ortho = \
-                calc_layer_subj_comp_k_or_v_ortho_loss(unet_vs[unet_layer_idx], K_fg, K_comp, BS,
-                                                        ind_subj_subj_B, ind_subj_subj_N, 
-                                                        ind_cls_subj_B,  ind_cls_subj_N, 
-                                                        ind_subj_comp_B, ind_subj_comp_N, 
-                                                        ind_cls_comp_B,  ind_cls_comp_N,
+                calc_layer_subj_comp_k_or_v_ortho_loss(unet_vs[unet_layer_idx], 
+                                                        subj_subj_indices, 
+                                                        subj_comp_indices, 
+                                                        cls_subj_indices, 
+                                                        cls_comp_indices,
                                                         do_demean_first=emb_kq_do_demean_first, 
                                                         cls_grad_scale=cls_grad_scale)
                     
@@ -3497,21 +3463,36 @@ class LatentDiffusion(DDPM):
             attn_mat = unet_attns_or_scores[unet_layer_idx]
             attn_mat = attn_mat.permute(0, 3, 1, 2)
             # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]
-            subj_subj_attn = attn_mat[ind_subj_subj_B, ind_subj_subj_N].reshape(BS, K_fg, *attn_mat.shape[2:])
-            cls_subj_attn  = attn_mat[ind_cls_subj_B,  ind_cls_subj_N].reshape(BS,  K_fg,   *attn_mat.shape[2:])
+            subj_subj_attn = sel_emb_attns_by_indices(attn_mat, subj_subj_indices, 
+                                                      do_sum=False, do_sqrt_norm=True)
+
             # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 1, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
-            subj_comp_attn = attn_mat[ind_subj_comp_B, ind_subj_comp_N].reshape(BS, K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True)
-            cls_comp_attn  = attn_mat[ind_cls_comp_B,  ind_cls_comp_N].reshape(BS,  K_comp, *attn_mat.shape[2:]).sum(dim=1, keepdim=True)
+            # If not is_4type_batch, then this block contains > 1 instances. 
+            # K_comp of different instances may be different.
+            # In such cases, do_sum has to be True to avoid errors due to different shape.
+            subj_comp_attn_sum = sel_emb_attns_by_indices(attn_mat, subj_comp_indices,
+                                                      do_sum=True, do_sqrt_norm=True)
+            subj_comp_attn_sum = subj_comp_attn_sum.unsqueeze(1)
+
+            if is_4type_batch:
+                cls_subj_attn  = sel_emb_attns_by_indices(attn_mat, cls_subj_indices,
+                                                        do_sum=False, do_sqrt_norm=True)
+                cls_comp_attn_sum   = sel_emb_attns_by_indices(attn_mat, cls_comp_indices,
+                                                               do_sum=True, do_sqrt_norm=True)
+                cls_comp_attn_sum   = cls_comp_attn_sum.unsqueeze(1)
+            else:
+                cls_subj_attn       = torch.zeros_like(subj_subj_attn)
+                cls_comp_attn_sum   = torch.zeros_like(subj_comp_attn_sum)
 
             # The orthogonal projection of subj_subj_attn against subj_comp_attn.
             # subj_comp_attn will broadcast to the K_fg dimension.
             # ortho_subtract() is scale-invariant w.r.t. subj_comp_attn. So no need to normalize it.
-            subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn)
+            subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn_sum)
             # The orthogonal projection of cls_subj_attn against cls_comp_attn.
             # cls_comp_attn will broadcast to the K_fg dimension.
             # ortho_subtract() is scale-invariant w.r.t. cls_comp_attn.  So no need to normalize it.
-            cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn)
+            cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn_sum)
             # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
             # vary only along the direction of the orthogonal projections of class attention.
 
@@ -3919,7 +3900,7 @@ class LatentDiffusion(DDPM):
                 xc = self.cond_stage_model.decode(c)
                 log["conditioning"] = xc
             elif self.cond_stage_key in ["caption"]:
-                xc = log_txt_as_img((x.shape[2], x.shape[3]), batch["caption"])
+                xc = log_txt_as_img((x.shape[2], x.shape[3]), batch['caption'])
                 log["conditioning"] = xc
             elif self.cond_stage_key == 'class_label':
                 xc = log_txt_as_img((x.shape[2], x.shape[3]), batch["human_label"])

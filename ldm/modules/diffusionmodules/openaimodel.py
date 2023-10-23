@@ -857,7 +857,6 @@ class UNetModel(nn.Module):
             
             emb_idx = layer_idx2emb_idx[layer_idx]
             layer_static_context = context[emb_idx]
-            hijk_layer_indices = [7, 8, 12, 16, 17, 18]
 
             if iter_type.startswith("mix_"):
                 # layer_static_context is v, k concatenated. Separate it into v and k.

@@ -113,6 +113,10 @@ default_cls_delta_tokens = [ [ "bike", "person", "ball" ],
                              [ "person", "dog" ],
                              [ "mickey", "snoopy", "pikachu" ] ]
 
+single_human_pat = "man|woman|person|boy|girl|child|kid|baby|adult|guy|lady|gentleman|lady|male|female|human"
+plural_human_pat = "men|women|people|boys|girls|children|kids|babies|adults|guys|ladies|gentlemen|ladies|males|females|humans"
+human_pat = single_human_pat + "|" + plural_human_pat
+
 class PersonalizedBase(Dataset):
     def __init__(self,
                  data_root,
@@ -447,14 +451,11 @@ class PersonalizedBase(Dataset):
                 if self.placeholder_token is None:
                     self.placeholder_token = self.tokenizer(self.placeholder_string)['input_ids'][1]
                 if self.background_token is None:
-                    self.background_token = self.tokenizer(self.background_string)['input_ids'][1]
+                    self.background_token  = self.tokenizer(self.background_string)['input_ids'][1]
 
                 # Skip those image/prompt pairs that will cause parsing errors.
                 contains_special_token = self.placeholder_token   in bg_prompt_tokens \
                                          or self.background_token in bg_prompt_tokens
-                single_human_pat = "man|woman|person|boy|girl|child|kid|baby|adult|guy|lady|gentleman|lady|male|female|human"
-                plural_human_pat = "men|women|people|boys|girls|children|kids|babies|adults|guys|ladies|gentlemen|ladies|males|females|humans"
-                human_pat = single_human_pat + "|" + plural_human_pat
                 if re.search(human_pat, bg_prompt):
                     contains_human = True
                 else:
@@ -500,16 +501,21 @@ class PersonalizedBase(Dataset):
             # compos_placeholder_prefix is prepended to subj_prompt_single, subj_prompt_comps,
             # cls_prompt_single, cls_prompt_comps, which we don't need to change, as they are 
             # for compositional distillation.
-            wds_comp_extra = ", in front of " + bg_prompt
-            example["wds_comp_extra"]   = wds_comp_extra
+            wds_comp_extra      = ", in front of " + bg_prompt
+            wds_cls_comp_extra  = " " + self.cls_delta_token + wds_comp_extra
+            example["wds_comp_extra"]       = wds_comp_extra
+            example["wds_cls_comp_extra"]   = wds_cls_comp_extra
             example["wds_caption"]      = example["caption"]    + wds_comp_extra
             example["wds_caption_bg"]   = example["caption_bg"] + wds_comp_extra
+            example["wds_cls_caption"]  = example["caption"]    + wds_cls_comp_extra
+            example["wds_cls_caption_bg"] = example["caption_bg"] + wds_cls_comp_extra
             example["wds_image"]        = (wds_image / 127.5 - 1.0).astype(np.float32)
             example["wds_image_bgonly"] = (bg_img    / 127.5 - 1.0).astype(np.float32)
             # fg_mask of wds_image is the same as non-wds instances. So no need to assign.
             example["wds_aug_mask"]     = wds_aug_mask
         else:
-            example["wds_comp_extra"]   = ""
+            example["wds_comp_extra"]       = ""
+            example["wds_cls_comp_extra"]   = ""
             example["wds_caption"]      = example["caption"]
             example["wds_caption_bg"]   = example["caption_bg"]
             example["wds_image"]        = example["image"]
@@ -547,7 +553,7 @@ class PersonalizedBase(Dataset):
         placeholder_string = self.placeholder_string
 
         background_string  = self.background_string
-        cls_delta_token = random.choice(self.cls_delta_tokens)
+        self.cls_delta_token = random.choice(self.cls_delta_tokens)
         # If background_string is None, then cls_bg_delta_tokens should be None as well, 
         # and cls_bg_delta_token is None.
         cls_bg_delta_token = random.choice(self.cls_bg_delta_tokens) if self.cls_bg_delta_tokens is not None \
@@ -558,16 +564,16 @@ class PersonalizedBase(Dataset):
         # "girl" => "girl, , "
         # Need to leave a space between multiple ",,", otherwise they are treated as one token.
         if self.num_vectors_per_token > 1:
-            placeholder_string += ", " * (self.num_vectors_per_token - 1)
-            cls_delta_token    += ", " * (self.num_vectors_per_token - 1)
+            placeholder_string      += ", " * (self.num_vectors_per_token - 1)
+            self.cls_delta_token    += ", " * (self.num_vectors_per_token - 1)
         if self.num_vectors_per_bg_token > 1 and background_string is not None:
-            background_string += ", " * (self.num_vectors_per_bg_token - 1)
-            cls_bg_delta_token += ", " * (self.num_vectors_per_bg_token - 1)
+            background_string       += ", " * (self.num_vectors_per_bg_token - 1)
+            cls_bg_delta_token      += ", " * (self.num_vectors_per_bg_token - 1)
 
         if self.common_placeholder_prefixes is not None:
             common_placeholder_prefix = random.choice(self.common_placeholder_prefixes)
-            placeholder_string = common_placeholder_prefix + " " + placeholder_string
-            cls_delta_token    = common_placeholder_prefix + " " + cls_delta_token
+            placeholder_string      = common_placeholder_prefix + " " + placeholder_string
+            self.cls_delta_token    = common_placeholder_prefix + " " + self.cls_delta_token
         # common_placeholder_prefixes are specified for red_cartoon.
         # compos_placeholder_prefixes are specified for fixhand.
         # They usually won't be used together. 
@@ -576,10 +582,10 @@ class PersonalizedBase(Dataset):
         if self.compos_placeholder_prefixes is not None:
             compos_placeholder_prefix = random.choice(self.compos_placeholder_prefixes)
             compos_placeholder_string = compos_placeholder_prefix + " " + placeholder_string
-            compos_cls_delta_token    = compos_placeholder_prefix + " " + cls_delta_token
+            compos_cls_delta_token    = compos_placeholder_prefix + " " + self.cls_delta_token
         else:
             compos_placeholder_string = placeholder_string
-            compos_cls_delta_token    = cls_delta_token
+            compos_cls_delta_token    = self.cls_delta_token
 
         template = random.choice(imagenet_templates_small)
 
@@ -591,7 +597,7 @@ class PersonalizedBase(Dataset):
         cls_bg_suffix = " with background {}".format(cls_bg_delta_token) if cls_bg_delta_token is not None else ""
         # bug_suffix: " with background y". cls_bg_suffix: " with background grass/rock".
         placeholder_string_with_bg          = placeholder_string        + bg_suffix
-        cls_delta_token_with_bg             = cls_delta_token           + cls_bg_suffix
+        cls_delta_token_with_bg             = self.cls_delta_token      + cls_bg_suffix
         compos_placeholder_string_with_bg   = compos_placeholder_string + bg_suffix
         compos_cls_delta_token_with_bg      = compos_cls_delta_token    + cls_bg_suffix
 

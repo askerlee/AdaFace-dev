@@ -790,6 +790,44 @@ def split_indices_by_instance(indices):
     indices_by_instance = [ (indices_B[indices_B == uib], indices_N[indices_B == uib]) for uib in unique_indices_B ]
     return indices_by_instance
 
+def split_indices_by_block(indices, block_size):
+    indices_B, indices_N = indices
+    max_block_idx = indices_B.max() // block_size
+    for block_idx in range(max_block_idx + 1):
+        block_indices_B = indices_B[indices_B // block_size == block_idx]
+        block_indices_N = indices_N[indices_B // block_size == block_idx]
+        yield (block_indices_B, block_indices_N)
+
+def extend_indices_N_by_n(indices, n):
+    if indices is None:
+        return None
+    
+    device = indices[0].device
+    indices_by_instance = split_indices_by_instance(indices)
+    indices_by_instance_B_ext, indices_by_instance_N_ext = [], []
+    for inst_indices_B, inst_indices_N in indices_by_instance:
+        indices_by_instance_B_ext += [ inst_indices_B, torch.ones(n, dtype=int, device=device) * inst_indices_B[0] ]
+        indices_by_instance_N_ext += [ inst_indices_N, torch.arange(1, n + 1, dtype=int, device=device) + inst_indices_N[-1] ]
+    
+    indices_B_ext = torch.cat(indices_by_instance_B_ext, dim=0)
+    indices_N_ext = torch.cat(indices_by_instance_N_ext, dim=0)
+
+    return (indices_B_ext, indices_N_ext)
+
+def extend_indices_B_by_n_times(indices, n, offset):
+    if indices is None:
+        return None, None
+    
+    indices_B, indices_N = indices
+    indices_B_ext = [ indices_B + offset * i for i in range(n) ]
+    indices_N_ext = [ indices_N ] * n
+    indices_ext_by_block = list(zip(indices_B_ext, indices_N_ext))
+
+    indices_B_ext   = torch.cat(indices_B_ext, dim=0)
+    indices_N_ext   = torch.cat(indices_N_ext, dim=0)
+    indices_ext     = (indices_B_ext, indices_N_ext)
+    return indices_ext, indices_ext_by_block
+
 def normalize_dict_values(d):
     value_sum = np.sum(list(d.values()))
     # If d is empty, do nothing.
@@ -988,25 +1026,25 @@ def gen_emb_mixer(BS, subj_indices_1b, CLS_SCALE_LAYERWISE_RANGE, device, use_la
         # Linearly increase the scale of the subject embeddings from 0.0 to 0.3.
         # [0.    , 0.    , 0.    , 0.    , 0.    , 0.0273, 0.0545, 0.0818,
         #  0.1091, 0.1364, 0.1636, 0.1909, 0.2182, 0.2455, 0.2727, 0.3   ]
-        emb_v_layers_cls_mix_scales = torch.ones(BS, N_LAYERS, device=device) 
-        emb_v_layers_cls_mix_scales[:, sync_layer_indices] = \
+        emb_k_or_v_layers_cls_mix_scales = torch.ones(BS, N_LAYERS, device=device) 
+        emb_k_or_v_layers_cls_mix_scales[:, sync_layer_indices] = \
             CLS_FIRST_LAYER_SCALE + torch.arange(0, len(sync_layer_indices), device=device).repeat(BS, 1) * SCALE_STEP
     else:
         # Same scale for all layers.
-        # emb_v_layers_cls_mix_scales = [0.85, 0.85, ..., 0.85].
+        # emb_k_or_v_layers_cls_mix_scales = [0.85, 0.85, ..., 0.85].
         # i.e., the subject embedding scales are [0.15, 0.15, ..., 0.15].
         AVG_SCALE = (CLS_FIRST_LAYER_SCALE + CLS_FINAL_LAYER_SCALE) / 2
-        emb_v_layers_cls_mix_scales = AVG_SCALE * torch.ones(N_LAYERS, device=device).repeat(BS, 1)
+        emb_k_or_v_layers_cls_mix_scales = AVG_SCALE * torch.ones(N_LAYERS, device=device).repeat(BS, 1)
 
     # First mix the static embeddings.
     # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_1b,
-    # where they are subj_comp_emb * emb_v_layers_cls_mix_scales + cls_comp_emb * (1 - emb_v_layers_cls_mix_scales).
+    # where they are subj_comp_emb * emb_k_or_v_layers_cls_mix_scales + cls_comp_emb * (1 - emb_k_or_v_layers_cls_mix_scales).
     # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
     # Each is of a single instance. So only provides subj_indices_1b 
     # (multiple token indices of the same instance).
     # emb_v_mixer will be reused later to mix ada embeddings, so make it a functional.
     emb_v_mixer = partial(mix_embeddings, 'add', mix_indices=subj_indices_1b)
-    return emb_v_mixer, emb_v_layers_cls_mix_scales
+    return emb_v_mixer, emb_k_or_v_layers_cls_mix_scales
 
 # t_frac is a float scalar. 
 def mix_static_vk_embeddings(c_static_emb, subj_indices_1b, 
@@ -1143,42 +1181,54 @@ def keep_first_index_in_each_instance(token_indices):
     return (torch.tensor(token_indices_first_only[0], device=device), 
             torch.tensor(token_indices_first_only[1], device=device))
 
-# BS: BLOCK_SIZE, not batch size.
-def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, K_fg, K_comp, BS, 
-                                      ind_subj_subj_B, ind_subj_subj_N, 
-                                      ind_cls_subj_B,  ind_cls_subj_N, 
-                                      ind_subj_comp_B, ind_subj_comp_N, 
-                                      ind_cls_comp_B,  ind_cls_comp_N,
-                                      do_demean_first=True, cls_grad_scale=0.05):
+# cls_subj_indices, cls_comp_indices could be None. 
+# In that case, subj_comp_emb_diff is pushed towards 0.
+def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_comp_indices, 
+                                           cls_subj_indices, cls_comp_indices,
+                                           do_demean_first=True, cls_grad_scale=0.05):
 
-    # unet_seq_k: [B, H, N, D] = [2, 8, 77, 160].
-    # H = 8, number of attention heads. D: 160, number of image tokens.
-    H, D = unet_seq_k.shape[1], unet_seq_k.shape[-1]
-    # subj_subj_ks, cls_subj_ks: [4,  8, 160] => [1, 4,  8, 160] => [1, 8, 4, 160].
-    # subj_comp_ks, cls_comp_ks: [15, 8, 160] => [1, 15, 8, 160] => [1, 8, 15, 160].
     # Put the 4 subject embeddings in the 2nd to last dimension for torch.mm().
     # The ortho losses on different "instances" are computed separately 
     # and there's no interaction among them.
 
-    subj_subj_ks = unet_seq_k[ind_subj_subj_B, :, ind_subj_subj_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3)
-    cls_subj_ks  = unet_seq_k[ind_cls_subj_B,  :, ind_cls_subj_N].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3)
-    # subj_comp_ks, cls_comp_ks: [11, 16, 160] => [1, 11, 16, 160] => [1, 16, 11, 160].
-    subj_comp_ks = unet_seq_k[ind_subj_comp_B, :, ind_subj_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
-    cls_comp_ks  = unet_seq_k[ind_cls_comp_B,  :, ind_cls_comp_N].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
+    # unet_seq_k: [B, H, N, D] = [2, 8, 77, 160].
+    # H = 8, number of attention heads. D: 160, number of image tokens.
+    # unet_seq_k: [B, H, N, D] -> [B, N, H, D] = [2, 77, 8, 160].
+    unet_seq_k = unet_seq_k.permute(0, 2, 1, 3)
 
-    # subj_comp_ks_sum: [1, 8, 18, 160] => [1, 8, 1, 160]. 
-    # Sum over all extra 18 compositional embeddings and average by K_fg.
-    subj_comp_ks_sum = subj_comp_ks.sum(dim=2, keepdim=True)
-    # cls_comp_ks_sum:  [1, 8, 18, 160] => [1, 8, 1, 160]. 
-    # Sum over all extra 18 compositional embeddings and average by K_fg.
-    cls_comp_ks_sum  = cls_comp_ks.sum(dim=2, keepdim=True)
+    # subj_subj_ks, cls_subj_ks: [4,  8, 160] => [1, 4,  8, 160]
+    # subj_comp_ks, cls_comp_ks: [15, 8, 160] => [1, 15, 8, 160]
+    #subj_subj_ks = unet_seq_k[subj_subj_indices].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3)
+    #cls_subj_ks  = unet_seq_k[cls_subj_indices].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3)
+    # subj_comp_ks, cls_comp_ks: [11, 16, 160] => [1, 11, 16, 160] => [1, 16, 11, 160].
+    #subj_comp_ks = unet_seq_k[subj_comp_indices].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
+    #cls_comp_ks  = unet_seq_k[cls_comp_indices].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
+    subj_subj_ks = sel_emb_attns_by_indices(unet_seq_k, subj_subj_indices, 
+                                            do_sum=False, do_sqrt_norm=False)
+    subj_comp_ks_sum = sel_emb_attns_by_indices(unet_seq_k, subj_comp_indices,
+                                                do_sum=True, do_sqrt_norm=True)
+    # subj_comp_ks_sum, cls_comp_ks_sum: [1, 15, 8, 160] => [1, 1, 8, 160]. 
+    # Sum over all extra 15 compositional embeddings and be divided by sqrt(15).
+    subj_comp_ks_sum = subj_comp_ks_sum.unsqueeze(1)
+
+    if cls_subj_indices is not None:
+        cls_subj_ks     = sel_emb_attns_by_indices(unet_seq_k, cls_subj_indices,
+                                                   do_sum=False, do_sqrt_norm=False)
+        cls_comp_ks_sum = sel_emb_attns_by_indices(unet_seq_k, cls_comp_indices,
+                                                   do_sum=True, do_sqrt_norm=True)
+        cls_comp_ks_sum = cls_comp_ks_sum.unsqueeze(1)
+    else:
+        cls_subj_ks = torch.zeros_like(subj_subj_ks)
+        # if cls_subj_indices is None, cls_comp_ks_sum and cls_comp_emb_diff will be 0,
+        # i.e., subj_comp_emb_diff will be pushed towards 0.
+        cls_comp_ks_sum  = torch.zeros_like(subj_comp_ks_sum)
 
     # The orthogonal projection of subj_subj_ks against subj_comp_ks_sum.
     # subj_comp_ks_sum will broadcast to the K_fg dimension of subj_subj_ks.
-    subj_comp_emb_diff = normalized_ortho_subtract(subj_subj_ks, subj_comp_ks_sum)
+    subj_comp_emb_diff = ortho_subtract(subj_subj_ks, subj_comp_ks_sum)
     # The orthogonal projection of cls_subj_ks against cls_comp_ks_sum.
     # cls_comp_ks_sum will broadcast to the K_fg dimension of cls_subj_ks_mean.
-    cls_comp_emb_diff  = normalized_ortho_subtract(cls_subj_ks,  cls_comp_ks_sum)
+    cls_comp_emb_diff  = ortho_subtract(cls_subj_ks,  cls_comp_ks_sum)
     # The two orthogonal projections should be aligned. That is, each embedding in subj_subj_ks 
     # is allowed to vary only along the direction of the orthogonal projections of class embeddings.
 
@@ -1193,6 +1243,40 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, K_fg, K_comp, BS,
                                                      first_n_dims_to_flatten=3,
                                                      ref_grad_scale=cls_grad_scale)
     return loss_layer_subj_comp_key_ortho
+
+# If do_sum, returned emb_attns is 3D. Otherwise 4D.
+def sel_emb_attns_by_indices(attn_mat, indices, do_sum=True, do_sqrt_norm=False):
+
+    indices_by_instance = split_indices_by_instance(indices)
+
+    # bg_attn_i: [K_bg_i, 8, 64] -> [1, K_bg_i, 8, 64] 
+    # 8: 8 attention heads. Last dim 64: number of image tokens.
+    emb_attns   = [ attn_mat[indices_by_instance[i]].reshape(1, -1, *attn_mat.shape[2:]) \
+                    for i in range(len(indices_by_instance)) ]
+
+    # sum among K_bg_i bg embeddings -> [1, 8, 64]
+    if do_sum:
+        emb_attns   = [ emb_attns[i].sum(dim=1) for i in range(len(indices_by_instance)) ]
+        
+    if do_sqrt_norm:
+        emb_attns   = [ emb_attns[i] / np.sqrt(len(indices_by_instance[i][0])) \
+                        for i in range(len(indices_by_instance)) ]
+    
+    emb_attns = torch.cat(emb_attns, dim=0)
+    return emb_attns
+                
+def gen_comp_extra_indices_by_block(delta_loss_emb_mask, subj_indices, bg_indices, block_size):
+    # delta_loss_emb_mask: [4, 77, 1] => [4, 77]
+    comp_extra_mask = delta_loss_emb_mask.squeeze(-1).clone()
+    # Mask out the foreground embeddings.
+    comp_extra_mask[subj_indices] = 0
+    if bg_indices is not None:
+        comp_extra_mask[bg_indices] = 0
+
+    comp_extra_indices = comp_extra_mask.nonzero(as_tuple=True)
+    comp_extra_indices_by_block = split_indices_by_block(comp_extra_indices, block_size)
+    comp_extra_indices_by_block = list(comp_extra_indices_by_block)
+    return comp_extra_indices_by_block
 
 def replace_prompt_comp_extra(comp_prompts, single_prompts, new_comp_extras):
     new_comp_prompts = []
