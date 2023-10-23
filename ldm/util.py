@@ -1238,7 +1238,7 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
                                                         ref_grad_scale=cls_grad_scale)
     else:
         # Use L2 loss to push subj_comp_emb_diff towards 0.
-        loss_layer_subj_comp_key_ortho = F.mse_loss(subj_comp_emb_diff)
+        loss_layer_subj_comp_key_ortho = (subj_comp_emb_diff ** 2).mean()
     return loss_layer_subj_comp_key_ortho
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.
