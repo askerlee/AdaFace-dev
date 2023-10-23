@@ -1275,10 +1275,10 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['is_compos_iter']:
                     # None of compositional distillation iters will be initialized with wds_comp overlay images.
                     # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp overlay images.
-                    p_use_wds_comp = 0.05
+                    p_use_wds_comp = 0.1
                 else:
                     # 25% of recon iters will be initialized with wds_comp overlay images.
-                    p_use_wds_comp = 0.1
+                    p_use_wds_comp = 0.2
             else:
                 p_use_wds_comp = 0
             
@@ -1288,7 +1288,10 @@ class LatentDiffusion(DDPM):
                 # Replace the image/caption/mask with the wds_comp image/caption/mask.
                 # This block of code has to be before "captions = ..." below, 
                 # to avoid using wrong captions (some branches use batch['caption_bg']).
-                batch['image']      = batch['wds_image']
+                if self.iter_flags['is_compos_iter']:
+                    batch['image']      = batch['wds_image_bgonly']
+                else:
+                    batch['image']      = batch['wds_image']
                 batch['aug_mask']   = batch['wds_aug_mask']
                 batch['caption']    = batch['wds_caption']
                 batch['caption_bg'] = batch['wds_caption_bg']
@@ -1301,7 +1304,7 @@ class LatentDiffusion(DDPM):
             # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
             # NOTE: If use_wds_comp, then to preserve the foreground, we always enable comp_init_with_fg_area.
             # But in this case, the background areas will not be replaced with random noises.
-            p_comp_init_with_fg_area = 1 if self.iter_flags['use_wds_comp'] else 0.5
+            p_comp_init_with_fg_area = 0 if self.iter_flags['use_wds_comp'] else 0.5
             # If reuse_init_conds, comp_init_with_fg_area may be set to True later
             # if the previous iteration has comp_init_with_fg_area = True.
             self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
@@ -1320,9 +1323,9 @@ class LatentDiffusion(DDPM):
                     # force the foreground token to focus on the whole image.
                     p_use_background_token  = 0.9
             else:
-                # When do_mix_prompt_distillation, always use background token if use_wds_comp.
+                # When do_mix_prompt_distillation, don't use background token even if use_wds_comp.
                 if self.iter_flags['use_wds_comp']:
-                    p_use_background_token  = 0.95
+                    p_use_background_token  = 0
                 else:
                     p_use_background_token  = 0
 

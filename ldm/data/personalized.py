@@ -425,7 +425,14 @@ class PersonalizedBase(Dataset):
         # If no fg_mask is loaded from file. 'fg_mask' is all-1, and 'has_fg_mask' is set to False.
         # 'fg_mask' has to be present in all examples, otherwise collation will cause exceptions.
         example["fg_mask"]      = fg_mask
+        example["aug_mask"]     = aug_mask
 
+        # Also return the unnormalized numpy array image.
+        # example["image_unnorm"]: [0, 255]
+        example["image_unnorm"] = image
+        # example["image"]: [0, 255] -> [-1, 1]
+        example["image"]        = (image / 127.5 - 1.0).astype(np.float32)
+        
         if has_wds_comp:
             Found = False
             while not Found:
@@ -487,14 +494,6 @@ class PersonalizedBase(Dataset):
             # Blend fg area with bg_img. fg_mask is 2D, so add 1D channel.
             wds_image = np.where(fg_mask[:, :, None] > 0, image, bg_img)
 
-        example["aug_mask"]  = aug_mask
-
-        # Also return the unnormalized numpy array image.
-        # example["image_unnorm"]: [0, 255]
-        example["image_unnorm"] = image
-        # example["image"]: [0, 255] -> [-1, 1]
-        example["image"] = (image / 127.5 - 1.0).astype(np.float32)
-        
         self.generate_prompts(example)
         if has_wds_comp:
             # common_placeholder_prefix is prepended to caption and caption_bg.
@@ -505,15 +504,14 @@ class PersonalizedBase(Dataset):
             example["wds_comp_extra"]   = wds_comp_extra
             example["wds_caption"]      = example["caption"]    + wds_comp_extra
             example["wds_caption_bg"]   = example["caption_bg"] + wds_comp_extra
-            example["wds_image_unnorm"] = wds_image
             example["wds_image"]        = (wds_image / 127.5 - 1.0).astype(np.float32)
-            # fg_mask is the same as non-wds instances. So no need to assign.
+            example["wds_image_bgonly"] = (bg_img    / 127.5 - 1.0).astype(np.float32)
+            # fg_mask of wds_image is the same as non-wds instances. So no need to assign.
             example["wds_aug_mask"]     = wds_aug_mask
         else:
             example["wds_comp_extra"]   = ""
             example["wds_caption"]      = example["caption"]
             example["wds_caption_bg"]   = example["caption_bg"]
-            example["wds_image_unnorm"] = example["image_unnorm"]
             example["wds_image"]        = example["image"]
             example["wds_aug_mask"]     = example["aug_mask"]
             
