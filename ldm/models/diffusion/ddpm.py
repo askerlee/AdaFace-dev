@@ -2801,7 +2801,14 @@ class LatentDiffusion(DDPM):
                                                     subj_indices_4b_by_block, comp_extra_indices_4b_by_block,
                                                     cls_grad_scale=0.05,
                                                     is_4type_batch=True)
-                
+
+                if loss_subj_comp_key_ortho != 0:
+                    loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
+                if loss_subj_comp_value_ortho != 0:
+                    loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
+                if loss_subj_comp_attn_comple != 0:
+                    loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
+
             elif self.iter_flags['do_normal_recon'] and self.iter_flags['use_wds_comp']:
                 if self.iter_flags['use_wds_cls_captions']:
                     subj_indices_ext = extend_indices_N_by_n(extra_info['subj_indices_1b'], n=1)
@@ -2820,17 +2827,18 @@ class LatentDiffusion(DDPM):
                                                     [subj_indices_ext], comp_extra_indices_by_block,
                                                     cls_grad_scale=0.05,
                                                     is_4type_batch=False)
+                
+                if loss_subj_comp_key_ortho != 0:
+                    loss_dict.update({f'{prefix}/subj_wds_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
+                if loss_subj_comp_value_ortho != 0:
+                    loss_dict.update({f'{prefix}/subj_wds_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
+                if loss_subj_comp_attn_comple != 0:
+                    loss_dict.update({f'{prefix}/subj_wds_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
+
             else:
                 loss_subj_comp_key_ortho   = 0
                 loss_subj_comp_value_ortho = 0
                 loss_subj_comp_attn_comple = 0  
-
-            if loss_subj_comp_key_ortho != 0:
-                loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
-            if loss_subj_comp_value_ortho != 0:
-                loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
-            if loss_subj_comp_attn_comple != 0:
-                loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
 
             loss +=   loss_subj_comp_key_ortho   * self.subj_comp_key_ortho_loss_weight \
                     + loss_subj_comp_value_ortho * self.subj_comp_value_ortho_loss_weight \
