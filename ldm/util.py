@@ -1210,6 +1210,9 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
     # subj_comp_ks_sum, cls_comp_ks_sum: [1, 15, 8, 160] => [1, 1, 8, 160]. 
     # Sum over all extra 15 compositional embeddings and be divided by sqrt(15).
     subj_comp_ks_sum = subj_comp_ks_sum.unsqueeze(1)
+    # The orthogonal projection of subj_subj_ks against subj_comp_ks_sum.
+    # subj_comp_ks_sum will broadcast to the K_fg dimension of subj_subj_ks.
+    subj_comp_emb_diff = ortho_subtract(subj_subj_ks, subj_comp_ks_sum)
 
     if cls_subj_indices is not None:
         cls_subj_ks     = sel_emb_attns_by_indices(unet_seq_k, cls_subj_indices,
@@ -1217,31 +1220,25 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
         cls_comp_ks_sum = sel_emb_attns_by_indices(unet_seq_k, cls_comp_indices,
                                                    do_sum=True, do_sqrt_norm=True)
         cls_comp_ks_sum = cls_comp_ks_sum.unsqueeze(1)
+        # The orthogonal projection of cls_subj_ks against cls_comp_ks_sum.
+        # cls_comp_ks_sum will broadcast to the K_fg dimension of cls_subj_ks_mean.
+        cls_comp_emb_diff  = ortho_subtract(cls_subj_ks,  cls_comp_ks_sum)
+        # The two orthogonal projections should be aligned. That is, each embedding in subj_subj_ks 
+        # is allowed to vary only along the direction of the orthogonal projections of class embeddings.
+
+        # Don't compute the ortho loss on dress-type compositions, 
+        # such as "z wearing a santa hat / z that is red", because the attended areas 
+        # largely overlap with the subject, and making them orthogonal will 
+        # hurt their expression in the image (e.g., push the attributes to the background).
+        # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
+        loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
+                                                        batch_mask=None, exponent=2,
+                                                        do_demean_first=do_demean_first, 
+                                                        first_n_dims_to_flatten=3,
+                                                        ref_grad_scale=cls_grad_scale)
     else:
-        cls_subj_ks = torch.zeros_like(subj_subj_ks)
-        # if cls_subj_indices is None, cls_comp_ks_sum and cls_comp_emb_diff will be 0,
-        # i.e., subj_comp_emb_diff will be pushed towards 0.
-        cls_comp_ks_sum  = torch.zeros_like(subj_comp_ks_sum)
-
-    # The orthogonal projection of subj_subj_ks against subj_comp_ks_sum.
-    # subj_comp_ks_sum will broadcast to the K_fg dimension of subj_subj_ks.
-    subj_comp_emb_diff = ortho_subtract(subj_subj_ks, subj_comp_ks_sum)
-    # The orthogonal projection of cls_subj_ks against cls_comp_ks_sum.
-    # cls_comp_ks_sum will broadcast to the K_fg dimension of cls_subj_ks_mean.
-    cls_comp_emb_diff  = ortho_subtract(cls_subj_ks,  cls_comp_ks_sum)
-    # The two orthogonal projections should be aligned. That is, each embedding in subj_subj_ks 
-    # is allowed to vary only along the direction of the orthogonal projections of class embeddings.
-
-    # Don't compute the ortho loss on dress-type compositions, 
-    # such as "z wearing a santa hat / z that is red", because the attended areas 
-    # largely overlap with the subject, and making them orthogonal will 
-    # hurt their expression in the image (e.g., push the attributes to the background).
-    # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
-    loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
-                                                     batch_mask=None, exponent=2,
-                                                     do_demean_first=do_demean_first, 
-                                                     first_n_dims_to_flatten=3,
-                                                     ref_grad_scale=cls_grad_scale)
+        # Use L2 loss to push subj_comp_emb_diff towards 0.
+        loss_layer_subj_comp_key_ortho = F.mse_loss(subj_comp_emb_diff)
     return loss_layer_subj_comp_key_ortho
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.

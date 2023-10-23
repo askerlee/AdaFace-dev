@@ -3474,6 +3474,10 @@ class LatentDiffusion(DDPM):
             subj_comp_attn_sum = sel_emb_attns_by_indices(attn_mat, subj_comp_indices,
                                                       do_sum=True, do_sqrt_norm=True)
             subj_comp_attn_sum = subj_comp_attn_sum.unsqueeze(1)
+            # The orthogonal projection of subj_subj_attn against subj_comp_attn.
+            # subj_comp_attn will broadcast to the K_fg dimension.
+            # ortho_subtract() is scale-invariant w.r.t. subj_comp_attn. So no need to normalize it.
+            subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn_sum)
 
             if is_4type_batch:
                 cls_subj_attn  = sel_emb_attns_by_indices(attn_mat, cls_subj_indices,
@@ -3481,32 +3485,28 @@ class LatentDiffusion(DDPM):
                 cls_comp_attn_sum   = sel_emb_attns_by_indices(attn_mat, cls_comp_indices,
                                                                do_sum=True, do_sqrt_norm=True)
                 cls_comp_attn_sum   = cls_comp_attn_sum.unsqueeze(1)
+                # The orthogonal projection of cls_subj_attn against cls_comp_attn.
+                # cls_comp_attn will broadcast to the K_fg dimension.
+                # ortho_subtract() is scale-invariant w.r.t. cls_comp_attn.  So no need to normalize it.
+                cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn_sum)
+                # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
+                # vary only along the direction of the orthogonal projections of class attention.
+
+                # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
+                # But we don't want to only focus on large activations. So set it to 2.
+                # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
+                # to make the two attention maps more complementary (expect the loss pushes the 
+                # subject embedding to a more accurate point).
+                loss_layer_comp_attn_comple = calc_delta_loss(subj_comp_attn_diff, cls_comp_attn_diff, 
+                                                              exponent=2,    
+                                                              do_demean_first=False,
+                                                              first_n_dims_to_flatten=3, 
+                                                              ref_grad_scale=cls_grad_scale)
+                                
             else:
-                cls_subj_attn       = torch.zeros_like(subj_subj_attn)
-                cls_comp_attn_sum   = torch.zeros_like(subj_comp_attn_sum)
+                # Push subj_comp_attn_diff towards 0.
+                loss_layer_comp_attn_comple = self.get_loss(subj_comp_attn_diff, mean=True)
 
-            # The orthogonal projection of subj_subj_attn against subj_comp_attn.
-            # subj_comp_attn will broadcast to the K_fg dimension.
-            # ortho_subtract() is scale-invariant w.r.t. subj_comp_attn. So no need to normalize it.
-            subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn_sum)
-            # The orthogonal projection of cls_subj_attn against cls_comp_attn.
-            # cls_comp_attn will broadcast to the K_fg dimension.
-            # ortho_subtract() is scale-invariant w.r.t. cls_comp_attn.  So no need to normalize it.
-            cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn_sum)
-            # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
-            # vary only along the direction of the orthogonal projections of class attention.
-
-            # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
-            # But we don't want to only focus on large activations. So set it to 2.
-            # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
-            # to make the two attention maps more complementary (expect the loss pushes the 
-            # subject embedding to a more accurate point).
-            loss_layer_comp_attn_comple = calc_delta_loss(subj_comp_attn_diff, cls_comp_attn_diff, 
-                                                          exponent=2,    
-                                                          do_demean_first=False,
-                                                          first_n_dims_to_flatten=3, 
-                                                          ref_grad_scale=cls_grad_scale)
-            
             loss_subj_comp_attn_comple += loss_layer_comp_attn_comple * k_ortho_layer_weight   
 
         return loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple
