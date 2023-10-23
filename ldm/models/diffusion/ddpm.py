@@ -3505,7 +3505,7 @@ class LatentDiffusion(DDPM):
                                 
             else:
                 # Push subj_comp_attn_diff towards 0.
-                loss_layer_comp_attn_comple = self.get_loss(subj_comp_attn_diff, mean=True)
+                loss_layer_comp_attn_comple = (subj_comp_attn_diff ** 2).mean()
 
             loss_subj_comp_attn_comple += loss_layer_comp_attn_comple * k_ortho_layer_weight   
 
