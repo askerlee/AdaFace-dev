@@ -469,9 +469,18 @@ class PersonalizedBase(Dataset):
                     is_bad_size = True
                 else:
                     is_bad_size = False
-                    
+                
+                scale = min(self.size / orig_h, self.size / orig_w)
+                # scale is the scaling factor from the original image to the 512x512 image.
+                # If it's too large, then the original image is too small, and we skip it.
+                if scale > 2:
+                    is_too_small = True
+                else:
+                    is_too_small = False
+
                 # Skip wds image/prompt pairs that contain humans, special tokens or are of bad size.
-                Found = not contains_special_token and not contains_human and not is_bad_size
+                Found = not contains_special_token and not contains_human \
+                         and not is_bad_size and not is_too_small
 
             # bg_img is PIL Image -> np.array (512, 512, 3)
             bg_img = np.array(bg_img).astype(np.uint8)
