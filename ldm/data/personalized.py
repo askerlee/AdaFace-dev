@@ -254,7 +254,10 @@ class PersonalizedBase(Dataset):
                                             transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
                                            ])
                 print(f"{set} fg will be randomly scaled to (0.5, 0.8) before overlaying to bg images")
-
+                self.resize_and_crop = transforms.Compose([
+                                            transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
+                                            transforms.CenterCrop(size),
+                                        ])
         else:
             self.random_scaler = None
             self.flip = None
@@ -461,8 +464,14 @@ class PersonalizedBase(Dataset):
                 else:
                     contains_human = False
 
-                # Skip wds image/prompt pairs that contain humans.
-                Found = not contains_special_token and not contains_human
+                hw_ratio = bg_json['width'] / bg_json['height']
+                if hw_ratio >= 1.34 and hw_ratio < 0.75:
+                    is_bad_size = True
+                else:
+                    is_bad_size = False
+                    
+                # Skip wds image/prompt pairs that contain humans, special tokens or are of bad size.
+                Found = not contains_special_token and not contains_human and not is_bad_size
 
             # bg_img is PIL Image -> np.array (512, 512, 3)
             bg_img = np.array(bg_img).astype(np.uint8)
@@ -470,30 +479,29 @@ class PersonalizedBase(Dataset):
             min_height, min_width = self.size, self.size
             scale = min(min_height / orig_h, min_width / orig_w)
             bg_h, bg_w   = int(orig_h * scale), int(orig_w * scale)
-            wds_image_mask = np.ones((bg_h, bg_w), dtype=np.uint8)
 
             if bg_h < min_height:
                 h_pad_top = int((min_height - bg_h) / 2.0)
-                h_pad_bottom = min_height - bg_h - h_pad_top
             else:
                 h_pad_top = 0
-                h_pad_bottom = 0
 
             if bg_w < min_width:
                 w_pad_left = int((min_width - bg_w) / 2.0)
-                w_pad_right = min_width - bg_w - w_pad_left
             else:
                 w_pad_left = 0
-                w_pad_right = 0
 
-            wds_image_mask = np.pad(wds_image_mask, ((h_pad_top, h_pad_bottom), (w_pad_left, w_pad_right)), mode='constant', constant_values=0)
-            assert wds_image_mask.shape[0] == min_height and wds_image_mask.shape[1] == min_width
+            # Remove the padding from the original bg image. 
+            # bg_image_nopad: [bg_h, bg_w, 3]
+            bg_image_nopad = bg_img[h_pad_top:h_pad_top+bg_h, w_pad_left:w_pad_left+bg_w, :]
+            # Resize and crop to 512x512.
+            bg_image_512_obj = self.resize_and_crop(Image.fromarray(bg_image_nopad))
+            # Convert back to numpy array.
+            bg_image_512 = np.array(bg_image_512_obj).astype(np.uint8)
 
-            # Merge the original fg_mask and wds_image_mask as the valid image area of wds instances.
-            # fg_mask has been scaled to 0 or 1 above.
-            wds_aug_mask = np.logical_or(fg_mask, wds_image_mask).astype(np.uint8)
             # Blend fg area with bg_img. fg_mask is 2D, so add 1D channel.
-            wds_image = np.where(fg_mask[:, :, None] > 0, image, bg_img)
+            wds_image    = np.where(fg_mask[:, :, None] > 0, image, bg_image_512)
+            # wds_aug_mask: Full image mask (all pixels are valid).
+            wds_aug_mask = np.ones((self.size, self.size), dtype=np.uint8)
 
         self.generate_prompts(example)
         if has_wds_comp:
@@ -540,10 +548,14 @@ class PersonalizedBase(Dataset):
             green_image = np.ones_like(wds_image) * 255
             green_image[:, :, [0,2]] = 0
 
-            wds_image2 = wds_image * 0.9 \
-                        + wds_aug_mask[:, :, None] * green_image * 0.1 \
-                        + fg_mask[:, :, None]      * red_image   * 0.3
-            wds_image2 = np.clip(wds_image2, 0, 255).astype(np.uint8)
+            if random.random() < 0.5:
+                wds_image2 = wds_image * 0.9 \
+                            + wds_aug_mask[:, :, None] * green_image * 0.1 \
+                            + fg_mask[:, :, None]      * red_image   * 0.3
+                wds_image2 = np.clip(wds_image2, 0, 255).astype(np.uint8)
+            else:
+                wds_image2 = wds_image
+
             Image.fromarray(wds_image2).save(wds_sample_filepath)
             print("Saved wds sample to {}".format(wds_sample_filepath))
 

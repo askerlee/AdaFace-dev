@@ -3097,6 +3097,7 @@ class LatentDiffusion(DDPM):
 
     # Only compute the loss on the first block. If it's a normal_recon iter, 
     # the first block is the whole batch.
+    # bg_indices: we assume the bg tokens appear in all instances in the batch.
     def calc_fg_bg_complementary_loss(self, unet_attns_or_scores, unet_attnscores,
                                       subj_indices, 
                                       bg_indices,
@@ -3161,6 +3162,8 @@ class LatentDiffusion(DDPM):
             subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices, 
                                                  do_sum=True, do_sqrt_norm=do_sqrt_norm)
             
+            # sel_emb_attns_by_indices will split bg_indices to multiple instances,
+            # and select the corresponding attention rows for each instance.
             bg_attn   = sel_emb_attns_by_indices(attn_mat, bg_indices, 
                                                  do_sum=True, do_sqrt_norm=do_sqrt_norm)
 
