@@ -1302,9 +1302,14 @@ class LatentDiffusion(DDPM):
                     self.iter_flags['use_wds_cls_captions'] = False
                 else:
                     batch['image']  = batch['wds_image']
-                    batch['caption']    = batch['wds_cls_caption']
-                    batch['caption_bg'] = batch['wds_cls_caption_bg']
-                    self.iter_flags['use_wds_cls_captions'] = True
+                    # Use wds_cls_caption 50% of the time.
+                    self.iter_flags['use_wds_cls_captions'] = random.random() < 0.5
+                    if self.iter_flags['use_wds_cls_captions']:
+                        batch['caption']    = batch['wds_cls_caption']
+                        batch['caption_bg'] = batch['wds_cls_caption_bg']
+                    else:
+                        batch['caption']    = batch['wds_caption']
+                        batch['caption_bg'] = batch['wds_caption_bg']
 
                 batch['aug_mask']   = batch['wds_aug_mask']
                 captions            = batch['wds_cls_caption']
@@ -1325,7 +1330,14 @@ class LatentDiffusion(DDPM):
                                                           and random.random() < p_comp_init_with_fg_area
 
             # Mainly use background token on recon iters.
-            if not self.iter_flags['is_compos_iter']:
+            if self.iter_flags['is_compos_iter']:
+                # When do_mix_prompt_distillation, use background token on 80% if use_wds_comp.
+                if self.iter_flags['use_wds_comp']:
+                    p_use_background_token  = 0.8
+                else:
+                    p_use_background_token  = 0
+            else:
+                # Recon iters.
                 if self.iter_flags['use_wds_comp']:
                     # Always use background tokens in recon iters if use_wds_comp.
                     p_use_background_token  = 0.9
@@ -1334,12 +1346,6 @@ class LatentDiffusion(DDPM):
                     # we only use the background token on 90% of the training images, to 
                     # force the foreground token to focus on the whole image.
                     p_use_background_token  = 0.9
-            else:
-                # When do_mix_prompt_distillation, use background token on 80% if use_wds_comp.
-                if self.iter_flags['use_wds_comp']:
-                    p_use_background_token  = 0.8
-                else:
-                    p_use_background_token  = 0
 
             # Only use_background_token on recon iters.
             # No need to check do_mix_prompt_distillation, because if do_mix_prompt_distillation,
