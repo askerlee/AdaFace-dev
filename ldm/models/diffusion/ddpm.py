@@ -1335,9 +1335,9 @@ class LatentDiffusion(DDPM):
                     # force the foreground token to focus on the whole image.
                     p_use_background_token  = 0.9
             else:
-                # When do_mix_prompt_distillation, don't use background token even if use_wds_comp.
+                # When do_mix_prompt_distillation, use background token on 80% if use_wds_comp.
                 if self.iter_flags['use_wds_comp']:
-                    p_use_background_token  = 0
+                    p_use_background_token  = 0.8
                 else:
                     p_use_background_token  = 0
 
