@@ -473,7 +473,7 @@ class PersonalizedBase(Dataset):
                 scale = min(self.size / orig_h, self.size / orig_w)
                 # scale is the scaling factor from the original image to the 512x512 image.
                 # If it's too large, then the original image is too small, and we skip it.
-                if scale > 2:
+                if scale >= 1.6:
                     is_too_small = True
                 else:
                     is_too_small = False
@@ -509,8 +509,6 @@ class PersonalizedBase(Dataset):
 
             # Blend fg area with bg_img. fg_mask is 2D, so add 1D channel.
             wds_image    = np.where(fg_mask[:, :, None] > 0, image, bg_image_512)
-            # wds_aug_mask: Full image mask (all pixels are valid).
-            wds_aug_mask = np.ones((self.size, self.size), dtype=np.uint8)
 
         self.generate_prompts(example)
         if has_wds_comp:
@@ -526,10 +524,10 @@ class PersonalizedBase(Dataset):
             example["wds_caption_bg"]   = example["caption_bg"] + wds_comp_extra
             example["wds_cls_caption"]  = example["caption"]    + wds_cls_comp_extra
             example["wds_cls_caption_bg"] = example["caption_bg"] + wds_cls_comp_extra
-            example["wds_image"]        = (wds_image / 127.5 - 1.0).astype(np.float32)
-            example["wds_image_bgonly"] = (bg_img    / 127.5 - 1.0).astype(np.float32)
+            example["wds_image"]        = (wds_image    / 127.5 - 1.0).astype(np.float32)
+            example["wds_image_bgonly"] = (bg_image_512 / 127.5 - 1.0).astype(np.float32)
             # fg_mask of wds_image is the same as non-wds instances. So no need to assign.
-            example["wds_aug_mask"]     = wds_aug_mask
+            example["wds_aug_mask"]     = aug_mask
         else:
             example["wds_comp_extra"]       = ""
             example["wds_cls_comp_extra"]   = ""
