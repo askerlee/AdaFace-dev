@@ -1271,6 +1271,7 @@ def gen_comp_extra_indices_by_block(delta_loss_emb_mask, subj_indices, bg_indice
         comp_extra_mask[bg_indices] = 0
 
     comp_extra_indices = comp_extra_mask.nonzero(as_tuple=True)
+    # split_indices_by_block() returns a generator. Convert to a list.
     comp_extra_indices_by_block = split_indices_by_block(comp_extra_indices, block_size)
     comp_extra_indices_by_block = list(comp_extra_indices_by_block)
     return comp_extra_indices_by_block

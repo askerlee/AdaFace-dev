@@ -466,6 +466,7 @@ class DDPM(pl.LightningModule):
                             # 'is_teachable':             False,
                             'use_background_token':         False,
                             'use_wds_comp':                 False,  
+                            'use_wds_cls_captions':         False,
                             'use_fp_trick':                 False,
                             'reuse_init_conds':             False,
                             'comp_init_with_fg_area':       False,
@@ -1277,12 +1278,12 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['wds_comp_avail_ratio'] == 1:
                 if self.iter_flags['is_compos_iter']:
                     # 5%  of compositional distillation iters will be initialized with wds_comp 
-                    # *background* images.
+                    # *background* images (subject not overlaid).
                     # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp background images.
-                    p_use_wds_comp = 0.05
+                    p_use_wds_comp = 0.025
                 else:
                     # 10% of recon iters will be initialized with wds_comp overlay images.
-                    p_use_wds_comp = 0.1
+                    p_use_wds_comp = 0.05
             else:
                 p_use_wds_comp = 0
             
@@ -1293,7 +1294,9 @@ class LatentDiffusion(DDPM):
                 # This block of code has to be before "captions = ..." below, 
                 # to avoid using wrong captions (some branches use batch['caption_bg']).
                 if self.iter_flags['is_compos_iter']:
-                    batch['image']  = batch['wds_image_bgonly']
+                    batch['image']      = batch['wds_image_bgonly']
+                    # In compositional distillation iterations, captions are not used, 
+                    # so it doesn't really matter which captions are used.
                     batch['caption']    = batch['wds_caption']
                     batch['caption_bg'] = batch['wds_caption_bg']
                     self.iter_flags['use_wds_cls_captions'] = False
@@ -1304,7 +1307,6 @@ class LatentDiffusion(DDPM):
                     self.iter_flags['use_wds_cls_captions'] = True
 
                 batch['aug_mask']   = batch['wds_aug_mask']
-
                 captions            = batch['wds_cls_caption']
                 # first_stage_key: 'image'.
                 # get_input() uses image, aug_mask and fg_mask.
@@ -2183,9 +2185,9 @@ class LatentDiffusion(DDPM):
             # The subject indices are applied to every of the half-batch instances, 
             # so extra_info['subj_indices_1b'] is enough.
             # (extra_info['subj_indices_2b'][1] just repeats extra_info['subj_indices_1b'][1] twice.)
-            k_cls_scale_layerwise_range = [0.8, 0.5] if self.iter_flags['comp_init_with_fg_area'] else [1.0, 1.0]
+            k_cls_scale_layerwise_range = [0.85, 0.6] if self.iter_flags['comp_init_with_fg_area'] else [1.0, 1.0]
             c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, \
-                                          emb_k_mixer, emb_k_layers_cls_mix_scales = \
+                             emb_k_mixer, emb_k_layers_cls_mix_scales = \
                 mix_static_vk_embeddings(cond[0], extra_info['subj_indices_1b'][1], 
                                          self.training_percent,
                                          t_frac = t_frac, 
@@ -2201,7 +2203,7 @@ class LatentDiffusion(DDPM):
             extra_info['emb_v_mixer']                   = emb_v_mixer
             extra_info['emb_k_mixer']                   = emb_k_mixer
             # emb_v_layers_cls_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
-            extra_info['emb_v_layers_cls_mix_scales']  = emb_v_layers_cls_mix_scales            
+            extra_info['emb_v_layers_cls_mix_scales']   = emb_v_layers_cls_mix_scales            
             extra_info['emb_k_layers_cls_mix_scales']   = emb_k_layers_cls_mix_scales
             
         # Otherwise, it's a recon iter (attentional or unweighted).
@@ -2285,7 +2287,7 @@ class LatentDiffusion(DDPM):
                                                                 fg_grad_scale=0.1,
                                                                 fg_mask=fg_mask,
                                                                 instance_mask=batch_have_fg_mask,
-                                                                do_sqrt_norm=False
+                                                                do_sqrt_norm=True
                                                                 )
 
                 loss_dict.update({f'{prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach()})
@@ -2311,13 +2313,17 @@ class LatentDiffusion(DDPM):
                 
                 # delta_loss_emb_mask: [2, 77, 1] -> [2, 77].
                 comp_extra_mask = self.embedding_manager.delta_loss_emb_mask.squeeze(-1).clone()
+                # use_wds_cls_captions: cls token follows the subject tokens, and 
+                # precedes wds extra tokens.
+                # So we extend the subject indices by 1, to include the cls embedding as part of 
+                # the subject embeddings.
+                subj_indices_ext = extra_info['subj_indices']
                 if self.iter_flags['use_wds_cls_captions']:
-                    subj_indices_ext = extend_indices_N_by_n(extra_info['subj_indices'], n=1)
-                else:
-                    subj_indices_ext = extra_info['subj_indices']
-
+                    subj_indices_ext = extend_indices_N_by_n(subj_indices_ext, n=1)
+                # Mask out subject embeddings.
                 comp_extra_mask[subj_indices_ext] = 0
-
+                # Mask out background embeddings as well, as we want to encourage the subject embeddings
+                # to be complementary to the wds embeddings, without considering the background embeddings.
                 if self.iter_flags['use_background_token']:
                     comp_extra_mask[extra_info['bg_indices']] = 0
 
@@ -2330,8 +2336,8 @@ class LatentDiffusion(DDPM):
                                                                 extra_info['unet_attnscores'],
                                                                 subj_indices_ext,
                                                                 wds_comp_extra_indices,
-                                                                x_start.shape[0],
-                                                                img_mask,
+                                                                BS=x_start.shape[0],
+                                                                img_mask=img_mask,
                                                                 fg_grad_scale=0.1, 
                                                                 fg_mask=fg_mask,
                                                                 instance_mask=batch_have_fg_mask,
@@ -2498,7 +2504,7 @@ class LatentDiffusion(DDPM):
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
                     # If comp_init_with_fg_area, then in order to let mix prompts attend to fg areas, we let
                     # the keys to be mostly subject embeddings, and the values are unchanged.
-                    k_cls_scale_layerwise_range = [0.8, 0.5] if self.iter_flags['comp_init_with_fg_area'] else [1.0, 1.0]
+                    k_cls_scale_layerwise_range = [0.85, 0.6] if self.iter_flags['comp_init_with_fg_area'] else [1.0, 1.0]
                     # Mix embeddings to get c_static_emb_orig_vk for cond_orig.
                     # Do mixing on saved cond_orig instead of the updated "cond".
                     # cond_orig is the 4-type prompt embeddings (subj single, subj comp, mix single, mix comp).
@@ -2786,8 +2792,8 @@ class LatentDiffusion(DDPM):
                 subj_indices_1b = extra_info['subj_indices_1b']
                 bg_indices_1b   = extra_info['bg_indices_1b'] if self.iter_flags['use_background_token'] \
                                     else None
-                # subj_indices_ext: From subj_indices_2b to subj_indices_4b.
-                # bg_indices_ext:   From bg_indices_2b   to bg_indices_4b.
+                # subj_indices_4b: Extend subj_indices_1b to subj_indices_4b, by adding offset to batch indices.
+                # bg_indices_4b:   Extend bg_indices_1b   to bg_indices_4b,   by adding offset to batch indices.
                 subj_indices_4b, subj_indices_4b_by_block = extend_indices_B_by_n_times(subj_indices_1b, n=4, offset=BLOCK_SIZE)
                 bg_indices_4b,   bg_indices_4b_by_block   = extend_indices_B_by_n_times(bg_indices_1b,   n=4, offset=BLOCK_SIZE)
 
@@ -2810,13 +2816,17 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_comple.mean().detach()})
 
             elif self.iter_flags['do_normal_recon'] and self.iter_flags['use_wds_comp']:
+                subj_indices_ext = extra_info['subj_indices_1b']
                 if self.iter_flags['use_wds_cls_captions']:
-                    subj_indices_ext = extend_indices_N_by_n(extra_info['subj_indices_1b'], n=1)
-                else:
-                    subj_indices_ext = extra_info['subj_indices_1b']
+                    # cls token is in the captions. Extend subj_indices_1b to include it as part of 
+                    # subj_indices (the attention of these subject embeddings will be more accurate).
+                    subj_indices_ext = extend_indices_N_by_n(subj_indices_ext, n=1)
+                    
                 bg_indices   = extra_info['bg_indices_1b'] if self.iter_flags['use_background_token'] \
                                 else None
 
+                # BLOCK_SIZE = 2, the whole batch size.
+                # comp_extra_indices_by_block is a list that contains 1 block only.
                 comp_extra_indices_by_block = \
                     gen_comp_extra_indices_by_block(self.embedding_manager.delta_loss_emb_mask,
                                                     subj_indices_ext, bg_indices, block_size=BLOCK_SIZE)
@@ -2824,8 +2834,11 @@ class LatentDiffusion(DDPM):
                 loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_comple = \
                     self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
                                                     extra_info[subj_comp_attn_comple_key],
+                                                    # Param subj_indices_by_block is a list of blocks.
+                                                    # subj_indices_ext is only 1 block. So put it in a list.
                                                     [subj_indices_ext], comp_extra_indices_by_block,
                                                     cls_grad_scale=0.05,
+                                                    # is_4type_batch=False: reference cls prompts are unavailable.
                                                     is_4type_batch=False)
                 
                 if loss_subj_comp_key_ortho != 0:
@@ -3084,7 +3097,7 @@ class LatentDiffusion(DDPM):
                                       BS, img_mask, 
                                       fg_grad_scale=0.1,
                                       fg_mask=None, instance_mask=None,
-                                      do_sqrt_norm=False):
+                                      do_sqrt_norm=True):
         
         if subj_indices is None or bg_indices is None or len(bg_indices) == 0:
             return 0, 0, 0, 0
@@ -3432,9 +3445,13 @@ class LatentDiffusion(DDPM):
         if is_4type_batch:
             subj_subj_indices = subj_indices_by_block[1]
             subj_comp_indices = comp_extra_indices_by_block[1]
+            # cls blocks are available, so the ortho loss has to align the delta with the cls delta.
             cls_subj_indices  = subj_indices_by_block[3]
             cls_comp_indices  = comp_extra_indices_by_block[3]
         else:
+            # Only 1 block in the batch, as well as in 
+            # subj_indices_by_block / comp_extra_indices_by_block.
+            # cls blocks are unavailable, so the ortho loss has to push the delta towards 0.
             subj_subj_indices = subj_indices_by_block[0]
             subj_comp_indices = comp_extra_indices_by_block[0]
             cls_subj_indices  = None
@@ -3444,6 +3461,8 @@ class LatentDiffusion(DDPM):
             if (unet_layer_idx not in k_ortho_layer_weights):
                 continue
 
+            # No need to pass is_4type_batch to calc_layer_subj_comp_k_or_v_ortho_loss().
+            # It can decide by checking whether cls_subj_indices/cls_comp_indices are None.
             loss_layer_subj_comp_key_ortho = \
                 calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k,
                                                         subj_subj_indices, 
@@ -3470,32 +3489,33 @@ class LatentDiffusion(DDPM):
             # attn_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
             attn_mat = unet_attns_or_scores[unet_layer_idx]
             attn_mat = attn_mat.permute(0, 3, 1, 2)
-            # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]
-            subj_subj_attn = sel_emb_attns_by_indices(attn_mat, subj_subj_indices, 
-                                                      do_sum=False, do_sqrt_norm=True)
+            # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64].
+            # do_sum=False, to allow broadcasting to subj_comp_attn_sum.
+            subj_subj_attn      = sel_emb_attns_by_indices(attn_mat, subj_subj_indices, 
+                                                           do_sum=False, do_sqrt_norm=True)
 
             # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 1, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
             # If not is_4type_batch, then this block contains > 1 instances. 
             # K_comp of different instances may be different.
             # In such cases, do_sum has to be True to avoid errors due to different shape.
-            subj_comp_attn_sum = sel_emb_attns_by_indices(attn_mat, subj_comp_indices,
-                                                      do_sum=True, do_sqrt_norm=True)
+            subj_comp_attn_sum  = sel_emb_attns_by_indices(attn_mat, subj_comp_indices,
+                                                           do_sum=True, do_sqrt_norm=True)
+            # do_sum reduces dim 1, so we add it back to be prepared for broadcasting.
             subj_comp_attn_sum = subj_comp_attn_sum.unsqueeze(1)
             # The orthogonal projection of subj_subj_attn against subj_comp_attn.
             # subj_comp_attn will broadcast to the K_fg dimension.
-            # ortho_subtract() is scale-invariant w.r.t. subj_comp_attn. So no need to normalize it.
             subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn_sum)
 
             if is_4type_batch:
-                cls_subj_attn  = sel_emb_attns_by_indices(attn_mat, cls_subj_indices,
-                                                        do_sum=False, do_sqrt_norm=True)
+                cls_subj_attn       = sel_emb_attns_by_indices(attn_mat, cls_subj_indices,
+                                                               do_sum=False, do_sqrt_norm=True)
                 cls_comp_attn_sum   = sel_emb_attns_by_indices(attn_mat, cls_comp_indices,
                                                                do_sum=True, do_sqrt_norm=True)
+                # do_sum reduces dim 1, so we add it back to be prepared for broadcasting.
                 cls_comp_attn_sum   = cls_comp_attn_sum.unsqueeze(1)
                 # The orthogonal projection of cls_subj_attn against cls_comp_attn.
                 # cls_comp_attn will broadcast to the K_fg dimension.
-                # ortho_subtract() is scale-invariant w.r.t. cls_comp_attn.  So no need to normalize it.
                 cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn_sum)
                 # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
                 # vary only along the direction of the orthogonal projections of class attention.
@@ -3512,7 +3532,8 @@ class LatentDiffusion(DDPM):
                                                               ref_grad_scale=cls_grad_scale)
                                 
             else:
-                # Push subj_comp_attn_diff towards 0.
+                # cls_comp_attn_diff is unavailable. 
+                # So push subj_comp_attn_diff towards 0.
                 loss_layer_comp_attn_comple = (subj_comp_attn_diff ** 2).mean()
 
             loss_subj_comp_attn_comple += loss_layer_comp_attn_comple * k_ortho_layer_weight   
