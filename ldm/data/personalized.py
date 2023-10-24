@@ -470,10 +470,11 @@ class PersonalizedBase(Dataset):
                 else:
                     is_bad_size = False
                 
+                orig_h, orig_w = bg_json['original_height'], bg_json['original_width']
                 scale = min(self.size / orig_h, self.size / orig_w)
                 # scale is the scaling factor from the original image to the 512x512 image.
                 # If it's too large, then the original image is too small, and we skip it.
-                if scale >= 1.6:
+                if scale >= 1.4:
                     is_too_small = True
                 else:
                     is_too_small = False
