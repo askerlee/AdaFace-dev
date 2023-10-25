@@ -189,10 +189,10 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--placeholder_string", 
         type=str, default="z",
-        help="Placeholder string which will be used in prompts to denote the concept.")
+        help="Placeholder string which will be used in prompts to represent the concept.")
     parser.add_argument("--background_string", 
         type=str, default=None,
-        help="Background string which will be used in prompts to denote the background in training images.")
+        help="Background string which will be used in prompts to represent the background in training images.")
     parser.add_argument("--common_placeholder_prefix",
         type=str, default=None,
         help="Prefix of the placeholder string for all types of prompts. Default: None.")
@@ -273,9 +273,12 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
 
-    # --comp_wds_path
-    parser.add_argument("--comp_wds_path", type=str, default=None,
+    # --wds_comp_db_path
+    parser.add_argument("--wds_comp_db_path", type=str, default=None,
                         help="Path to the composition webdatabase .tar file")
+    parser.add_argument("--wds_background_string", 
+        type=str, default=None,
+        help="Background string which will be used in wds prompts to represent the background in wds training images.")
     
     parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
                         help="Relative weights of the skip connections of the last few layers of CLIP text embedder. " 
@@ -752,8 +755,10 @@ if __name__ == "__main__":
         config.data.params.train.params.num_vectors_per_bg_token        = opt.num_vectors_per_bg_token
         config.data.params.validation.params.num_vectors_per_bg_token   = opt.num_vectors_per_bg_token
 
-        config.data.params.train.params.comp_wds_path                   = opt.comp_wds_path
-        
+        config.data.params.train.params.wds_comp_db_path                   = opt.wds_comp_db_path
+        if opt.wds_comp_db_path is not None and opt.wds_background_string is None:
+            # Set default wds_background_string to "w".
+            opt.wds_background_string = "w"
         # Currently, only supports one group of initial words and weights.
         if opt.init_words:
             config.model.params.personalization_config.params.initializer_words[0] = opt.init_words
@@ -763,11 +768,18 @@ if __name__ == "__main__":
         if opt.background_string:
             config.model.params.use_background_token = True
             config.model.params.personalization_config.params.placeholder_strings.append(opt.background_string)
-            config.model.params.personalization_config.params.background_string = opt.background_string
+            config.model.params.personalization_config.params.background_strings = [opt.background_string]
             # The background token can also be represented with 1 or more embeddings.
             config.model.params.personalization_config.params.num_vectors_per_token[opt.background_string] = opt.num_vectors_per_bg_token
-            config.data.params.train.params.background_string      = opt.background_string
-            config.data.params.validation.params.background_string = opt.background_string
+            if opt.wds_background_string:
+                config.model.params.personalization_config.params.placeholder_strings.append(opt.wds_background_string)
+                config.model.params.personalization_config.params.background_strings.append(opt.wds_background_string)
+                config.model.params.personalization_config.params.num_vectors_per_token[opt.wds_background_string] = opt.num_vectors_per_bg_token
+
+            config.data.params.train.params.background_string           = opt.background_string
+            config.data.params.train.params.wds_background_string       = opt.wds_background_string
+            config.data.params.validation.params.background_string      = opt.background_string
+            config.data.params.validation.params.wds_background_string  = opt.wds_background_string
 
             if opt.bg_init_words:
                 config.model.params.personalization_config.params.initializer_words.append(opt.bg_init_words)

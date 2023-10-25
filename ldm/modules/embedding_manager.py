@@ -812,7 +812,8 @@ class EmbeddingManager(nn.Module):
             self,
             text_embedder,              
             placeholder_strings=None,
-            background_string=None,
+            # If background_strings are specified, they are part of the list placeholder_strings.
+            background_strings=None,
             initializer_words=None,
             initializer_weights=None,
             # num_vectors_per_token: how many vectors in each layer are allocated to model 
@@ -870,13 +871,13 @@ class EmbeddingManager(nn.Module):
         # and AdaPrompt also supports it for more expressive modeling.
         self.token2num_vectors = {}
         self.set_num_vectors_per_token(num_vectors_per_token, placeholder_strings)
-        self.background_string = background_string
+        self.background_strings = background_strings
 
         # hasattr(text_embedder, 'tokenizer') -> True
         if hasattr(text_embedder, 'tokenizer'): # using Stable Diffusion's CLIP encoder
             self.is_clip = True
-            get_tokens_for_string = partial(get_clip_tokens_for_string, text_embedder.tokenizer)
-            get_embeddings_for_tokens = partial(get_embeddings_for_clip_tokens, text_embedder.transformer.text_model.embeddings)
+            get_tokens_for_string       = partial(get_clip_tokens_for_string,       text_embedder.tokenizer)
+            get_embeddings_for_tokens   = partial(get_embeddings_for_clip_tokens,   text_embedder.transformer.text_model.embeddings)
             self.token_dim = 768
         else: # using LDM's BERT encoder
             self.is_clip = False
@@ -966,7 +967,7 @@ class EmbeddingManager(nn.Module):
                 fg_emb_count = num_vectors_per_token // 2
                 bg_emb_count = num_vectors_per_token - 1 - fg_emb_count
 
-                use_cached_bg = (placeholder_string == self.background_string)
+                use_cached_bg = (placeholder_string in self.background_strings)
 
                 token_ada_embedder  = AdaEmbedding(self.num_layers_per_embedder, 
                                                    num_vectors_per_token, 
@@ -1015,8 +1016,8 @@ class EmbeddingManager(nn.Module):
         self.placeholder_indices_bg = None
         self.placeholder_indices_fg = None
 
-        print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_string={}".format(
-               placeholder_strings, num_vectors_per_token, layerwise_lora_rank, ada_emb_weight, self.background_string))
+        print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}".format(
+               placeholder_strings, num_vectors_per_token, layerwise_lora_rank, ada_emb_weight, self.background_strings))
             
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
@@ -1106,14 +1107,6 @@ class EmbeddingManager(nn.Module):
             placeholder_indices = torch.where(tokenized_text == placeholder_token.to(device))
             # No placeholder token is found in the current batch.
             if placeholder_indices[0].numel() == 0:
-                # If is_bg_token, then set placeholder_indices_bg to None.
-                # Otherwise it's fg token, but we don't set placeholder_indices_fg to None, 
-                # as there may be multiple fg tokens.
-                # During inference, self.background_string is not set.
-                # So even if placeholder_token is bg token, still placeholder_string != self.background_string,
-                # and we do nothing (but bg indices have been set to None above).
-                if placeholder_string == self.background_string:
-                    self.clear_placeholder_indices(type='bg')
                 continue
             
             # If multiple occurrences are found in a prompt, only keep the first as the subject.
@@ -1188,10 +1181,10 @@ class EmbeddingManager(nn.Module):
             # to replace in 16 layers. 
             # But we need them without repetitions for mix prompt distillation.
             # If num_vectors_per_token > 1, then repeat the indices and add to offsets.
-            # If background_string is None, then always update the indices. Otherwise, 
+            # If background_strings is None, then always update the indices. Otherwise, 
             # skip updating placeholder indices of the background string.
             self.update_placeholder_indices(orig_tokenized_text, placeholder_token, self.token2num_vectors[placeholder_string],
-                                            is_bg_token=(placeholder_string == self.background_string))
+                                            is_bg_token=(placeholder_string in self.background_strings))
 
         return embedded_text, static_subj_embs_dict
 
@@ -1228,7 +1221,7 @@ class EmbeddingManager(nn.Module):
                 continue
 
             placeholder_indices = keep_first_index_in_each_instance(placeholder_indices)
-            token_is_bg = (placeholder_string == self.background_string)
+            token_is_bg = (placeholder_string in self.background_strings)
 
             # For fg subjects, mask fg indices. For bg subjects, mask both fg and bg indices.
             # bg embeddings are

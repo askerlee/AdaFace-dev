@@ -129,6 +129,7 @@ class PersonalizedBase(Dataset):
                  set="train",
                  placeholder_string="z",
                  background_string=None,
+                 wds_background_string=None,
                  # placeholder_prefix for all types of prompts. Could be a list of strings, separated by ",".
                  common_placeholder_prefix=None,   
                  # placeholder_prefix for compositional prompts. Could be a list of strings, separated by ",".
@@ -145,7 +146,7 @@ class PersonalizedBase(Dataset):
                  center_crop=False,
                  num_compositions_per_image=1,
                  broad_class=1,
-                 comp_wds_path=None,    # Path to the composition webdatabase .tar file
+                 wds_comp_db_path=None,    # Path to the composition webdatabase .tar file
                  verbose=False,
                  ):
 
@@ -177,13 +178,13 @@ class PersonalizedBase(Dataset):
             self.is_training = False
             self._length = self.num_images 
 
-        self.comp_wds_path = comp_wds_path
+        self.wds_comp_db_path = wds_comp_db_path
         # wds composition is enabled if there are fg masks.
-        if self.is_training and (self.comp_wds_path is not None) and (num_valid_fg_masks > 0):
-            self.comp_wds = wds.WebDataset(self.comp_wds_path).shuffle(100).decode("pil").to_tuple("jpg;png", "json")
+        if self.is_training and (self.wds_comp_db_path is not None) and (num_valid_fg_masks > 0):
+            self.comp_wds = wds.WebDataset(self.wds_comp_db_path).shuffle(100).decode("pil").to_tuple("jpg;png", "json")
             self.comp_wds_iter = iter(self.comp_wds)
             self.has_wds_comp = True
-            print(f"Composition webdataset {self.comp_wds_path} is enabled")
+            print(f"Composition webdataset {self.wds_comp_db_path} is enabled")
         else:
             self.comp_wds = None
             self.comp_wds_iter = None
@@ -191,6 +192,7 @@ class PersonalizedBase(Dataset):
 
         self.placeholder_string  = placeholder_string
         self.background_string   = background_string
+        self.wds_background_string = wds_background_string
         self.broad_class = broad_class
 
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
@@ -522,12 +524,12 @@ class PersonalizedBase(Dataset):
             wds_cls_comp_extra  = " " + self.cls_delta_token + wds_comp_extra
             example["wds_comp_extra"]       = wds_comp_extra
             example["wds_cls_comp_extra"]   = wds_cls_comp_extra
-            example["wds_caption"]      = example["caption"]    + wds_comp_extra
-            example["wds_caption_bg"]   = example["caption_bg"] + wds_comp_extra
-            example["wds_cls_caption"]  = example["caption"]    + wds_cls_comp_extra
-            example["wds_cls_caption_bg"] = example["caption_bg"] + wds_cls_comp_extra
-            example["wds_image"]        = (wds_image    / 127.5 - 1.0).astype(np.float32)
-            example["wds_image_bgonly"] = (bg_image_512 / 127.5 - 1.0).astype(np.float32)
+            example["wds_caption"]          = example["caption"]    + wds_comp_extra
+            example["wds_cls_caption"]      = example["caption"]    + wds_cls_comp_extra
+            example["wds_caption_bg"]       = self.repl_bg_as_wbg(example["caption_bg"]) + wds_comp_extra
+            example["wds_cls_caption_bg"]   = self.repl_bg_as_wbg(example["caption_bg"]) + wds_cls_comp_extra
+            example["wds_image"]            = (wds_image    / 127.5 - 1.0).astype(np.float32)
+            example["wds_image_bgonly"]     = (bg_image_512 / 127.5 - 1.0).astype(np.float32)
             # fg_mask of wds_image is the same as non-wds instances. So no need to assign.
             example["wds_aug_mask"]     = aug_mask
         else:
@@ -697,3 +699,12 @@ class PersonalizedBase(Dataset):
         # comps_are_appearances is a list of length num_compositions_per_image. So in the collated batch, 
         # "comps_are_appearances" is a list of lists and needs concat.
         example["comps_are_appearances"]    = comps_are_appearances
+
+    def repl_bg_as_wbg(self, prompt):
+        if self.wds_background_string is None:
+            return prompt
+        # Replace singleton 'y' with 'w'.
+        prompt2 = re.sub(rf"(?<=(\W|^)){self.background_string}(?=(\W|$))", 
+                         self.wds_background_string, prompt)
+        return prompt2
+    

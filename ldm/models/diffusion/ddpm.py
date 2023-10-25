@@ -1733,6 +1733,10 @@ class LatentDiffusion(DDPM):
                 # q_sample() calls apply_model(), which estimates the latent code of the image.
                 cond = self.q_sample(x_start=captions, t=tc, noise=torch.randn_like(captions.float()))
 
+        # Disable deep_neg_context if use_wds_comp is enabled.
+        if self.iter_flags['use_wds_comp']:
+            extra_info['deep_cfg_scale'] = 0
+
         # self.model (UNetModel) is called in p_losses().
         #LINK #p_losses
         return self.p_losses(x_start, cond, t, *args, **kwargs)
