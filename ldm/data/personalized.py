@@ -460,7 +460,10 @@ class PersonalizedBase(Dataset):
 
                 # Skip those image/prompt pairs that will cause parsing errors.
                 contains_special_token = self.placeholder_token   in bg_prompt_tokens \
-                                         or self.background_token in bg_prompt_tokens
+                                         or self.background_token in bg_prompt_tokens \
+                                         or (self.wds_background_string is not None \
+                                             and self.wds_background_string in bg_prompt_tokens)
+                
                 if re.search(human_pat, bg_prompt):
                     contains_human = True
                 else:
