@@ -339,16 +339,15 @@ class PersonalizedBase(Dataset):
             # If has_wds_comp, and fg areas are large enough, then we do more aggressive scaling to fg,
             # so that fg won't dominate the whole image, which may help learning composition.
             random_scaler = self.random_small_scaler if mask_fg_percent > 0.1 else self.random_scaler
-            scale_p = 1
-            shift_p = 1
         else:
             has_wds_comp = False
             random_scaler = self.random_scaler
-            if random_scaler is not None:
-                scale_p = 0.5
-            else:
-                scale_p = 0
-            shift_p = 0.5
+            
+        if random_scaler is not None:
+            scale_p = 1
+        else:
+            scale_p = 0
+        shift_p = 1
 
         # Do random scaling with 50% chance. Not to do it all the time, 
         # as it seems to hurt (maybe introduced domain gap between training and inference?)
