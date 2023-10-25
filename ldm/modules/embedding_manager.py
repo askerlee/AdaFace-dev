@@ -828,7 +828,7 @@ class EmbeddingManager(nn.Module):
             layerwise_lora_rank_token_ratio=2,
             layerwise_lora_rank=-1,
             # If no initializer words are specified, then default LoRA rank = 2.
-            layerwise_lora_default_rank=2,
+            layerwise_lora_default_rank=5,
             layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                   17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             ada_emb_weight=0.5, 
@@ -890,6 +890,7 @@ class EmbeddingManager(nn.Module):
 
         # Save this function to be used in load() when doing placeholder substitution.
         self.get_tokens_for_string = get_tokens_for_string
+        str2lora_rank = {}
 
         for idx, placeholder_string in enumerate(placeholder_strings):
             # get_token_for_string <= get_clip_token_for_string.
@@ -925,6 +926,7 @@ class EmbeddingManager(nn.Module):
                 init_word_embeddings = None
                 init_word_weights    = None
 
+            str2lora_rank[placeholder_string] = layerwise_lora_rank
             self.string_to_token_dict[placeholder_string] = token
             # initial_embeddings are only used to compute the regularization loss.
             # Wrap with Parameter so that they will be saved to checkpoints.
@@ -1020,7 +1022,7 @@ class EmbeddingManager(nn.Module):
         self.placeholder_indices_fg = None
 
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}".format(
-               placeholder_strings, num_vectors_per_token, layerwise_lora_rank, ada_emb_weight, self.background_strings))
+               placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings))
             
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
