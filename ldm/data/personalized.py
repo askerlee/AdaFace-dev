@@ -9,7 +9,7 @@ from torchvision.transforms import InterpolationMode
 from .compositions import sample_compositions
 import random
 import torch
-import re
+import regex as re
 import webdataset as wds
 
 
