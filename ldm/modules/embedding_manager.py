@@ -871,7 +871,10 @@ class EmbeddingManager(nn.Module):
         # and AdaPrompt also supports it for more expressive modeling.
         self.token2num_vectors = {}
         self.set_num_vectors_per_token(num_vectors_per_token, placeholder_strings)
-        self.background_strings = background_strings
+        if background_strings is not None:
+            self.background_strings = background_strings
+        else:
+            self.background_strings = []
 
         # hasattr(text_embedder, 'tokenizer') -> True
         if hasattr(text_embedder, 'tokenizer'): # using Stable Diffusion's CLIP encoder
