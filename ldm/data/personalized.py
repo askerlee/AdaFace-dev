@@ -333,11 +333,6 @@ class PersonalizedBase(Dataset):
             image_mask_obj = self.flip(image_mask_obj)
         
         image_mask = np.array(image_mask_obj)
-        random_scaler = self.random_scaler
-        if random_scaler is not None:
-            scale_p = 0.5
-        else:
-            scale_p = 0
 
         if has_fg_mask and self.has_wds_comp:
             has_wds_comp = True
@@ -345,8 +340,15 @@ class PersonalizedBase(Dataset):
             # so that fg won't dominate the whole image, which may help learning composition.
             random_scaler = self.random_small_scaler if mask_fg_percent > 0.1 else self.random_scaler
             scale_p = 1
+            shift_p = 1
         else:
             has_wds_comp = False
+            random_scaler = self.random_scaler
+            if random_scaler is not None:
+                scale_p = 0.5
+            else:
+                scale_p = 0
+            shift_p = 0.5
 
         # Do random scaling with 50% chance. Not to do it all the time, 
         # as it seems to hurt (maybe introduced domain gap between training and inference?)
@@ -364,7 +366,6 @@ class PersonalizedBase(Dataset):
                 # NOTE: random shifting DISABLED, as it seems to hurt.
                 # ??% chance to randomly roll towards right and bottom (), 
                 # and ??% chance to keep the valid area at the center.
-                shift_p = 0.5
                 if random.random() < shift_p:
                     # count number of empty lines at the left, right, top, bottom edges of image_ext.
                     # aug_mask = image_ext[3] is uint8, so all pixels >= 0. 
