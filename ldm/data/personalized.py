@@ -114,8 +114,10 @@ default_cls_delta_tokens = [ [ "bike", "person", "ball" ],
                              [ "mickey", "snoopy", "pikachu" ] ]
 
 single_human_pat = "man|woman|person|boy|girl|child|kid|baby|adult|guy|lady|gentleman|lady|male|female|human"
+single_role_pat  = "cook|chef|waiter|waitress|doctor|nurse|policeman|policewoman|fireman|firewoman|firefighter|teacher|student|professor|driver|pilot|farmer|worker|artist|painter|photographer|dancer|singer|musician|player|athlete|player|biker|cyclist|bicyclist"
 plural_human_pat = "men|women|people|boys|girls|children|kids|babies|adults|guys|ladies|gentlemen|ladies|males|females|humans"
-human_pat = single_human_pat + "|" + plural_human_pat
+plural_role_pat  = "cooks|chefs|waiters|waitresses|doctors|nurses|policemen|policewomen|firemen|firewomen|firefighters|teachers|students|professors|drivers|pilots|farmers|workers|artists|painters|photographers|dancers|singers|musicians|players|athletes|players|bikers|cyclists|bicyclists"
+human_pat = "|".join([single_human_pat, single_role_pat, plural_human_pat, plural_role_pat])
 
 class PersonalizedBase(Dataset):
     def __init__(self,
@@ -452,6 +454,9 @@ class PersonalizedBase(Dataset):
                     bg_img, bg_json = next(self.comp_wds_iter)
 
                 bg_prompt = bg_json['caption'].lower()
+                # Skip too short prompts.
+                if len(bg_prompt.strip()) < 5:
+                    continue
                 bg_prompt_tokens = self.tokenizer(bg_prompt)['input_ids']
                 if self.placeholder_token is None:
                     self.placeholder_token = self.tokenizer(self.placeholder_string)['input_ids'][1]
