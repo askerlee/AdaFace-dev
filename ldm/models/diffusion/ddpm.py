@@ -1280,7 +1280,7 @@ class LatentDiffusion(DDPM):
                     # 5%  of compositional distillation iters will be initialized with wds_comp 
                     # *background* images (subject not overlaid).
                     # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp background images.
-                    p_use_wds_comp = 0.05
+                    p_use_wds_comp = 0
                 else:
                     # 10% of recon iters will be initialized with wds_comp overlay images.
                     p_use_wds_comp = 0.1
