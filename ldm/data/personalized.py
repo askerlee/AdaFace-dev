@@ -471,10 +471,11 @@ class PersonalizedBase(Dataset):
                     is_bad_size = False
                 
                 orig_h, orig_w = bg_json['original_height'], bg_json['original_width']
-                scale = min(self.size / orig_h, self.size / orig_w)
-                # scale is the scaling factor from the original image to the 512x512 image.
-                # If it's too large, then the original image is too small, and we skip it.
-                if scale >= 1.4:
+                # Here we use max() instead of min() as below, to filter on the smaller dimension.
+                edge_ratio = max(self.size / orig_h, self.size / orig_w)
+                # edge_ratio is the ratio between the target 512x512 image and the shorter edge of the original image.
+                # If it's too large, it means the original image is too small, and we skip it.
+                if edge_ratio >= 1.3:
                     is_too_small = True
                 else:
                     is_too_small = False
@@ -558,8 +559,8 @@ class PersonalizedBase(Dataset):
 
             if random.random() < 0.5:
                 wds_image2 = wds_image * 0.9 \
-                            + wds_aug_mask[:, :, None] * green_image * 0.1 \
-                            + fg_mask[:, :, None]      * red_image   * 0.3
+                            + aug_mask[:, :, None] * green_image * 0.1 \
+                            + fg_mask[:, :, None]  * red_image   * 0.3
                 wds_image2 = np.clip(wds_image2, 0, 255).astype(np.uint8)
             else:
                 wds_image2 = wds_image
