@@ -1765,8 +1765,8 @@ class EmbeddingManager(nn.Module):
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_bg_q.weight, loss_type=euc_loss_type)
 
                     for i, map in enumerate(embobj.layer_chan_weights_maps):
-                        loss_ada_chan_weights_map_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
-                        loss_ada_chan_weights_map_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
+                        loss_ada_chan_weights_map_weight += selective_reg_loss(map[0].weight, loss_type=euc_loss_type)
+                        loss_ada_chan_weights_map_bias   += selective_reg_loss(map[0].bias,   loss_type=euc_loss_type)
 
                 if type(loss_bias) == int:
                     breakpoint()
