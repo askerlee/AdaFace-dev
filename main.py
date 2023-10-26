@@ -756,9 +756,9 @@ if __name__ == "__main__":
         config.data.params.validation.params.num_vectors_per_bg_token   = opt.num_vectors_per_bg_token
 
         config.data.params.train.params.wds_comp_db_path                   = opt.wds_comp_db_path
-        if opt.wds_comp_db_path is not None and opt.wds_background_string is None:
-            # Set default wds_background_string to "w".
-            opt.wds_background_string = "w"
+        #if opt.wds_comp_db_path is not None and opt.wds_background_string is None:
+        #    # Set default wds_background_string to "w".
+        #    opt.wds_background_string = "w"
         # Currently, only supports one group of initial words and weights.
         if opt.init_words:
             config.model.params.personalization_config.params.initializer_words[0] = opt.init_words
