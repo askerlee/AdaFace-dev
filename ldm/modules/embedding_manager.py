@@ -632,7 +632,12 @@ class AdaEmbedding(nn.Module):
                 nn.Sequential(nn.Linear(self.attn_infeat_dims[i] * H, layer_lora_dim, bias=True),
                               nn.Linear(layer_lora_dim, self.attn_infeat_dims[i],     bias=True),
                               nn.Sigmoid()) )
-            
+            # Reduce the initial weights of the Linear layers, to avoid too large outputs.
+            layer_chan_weights_maps[-1][0].weight.data *= 0.1
+            layer_chan_weights_maps[-1][1].weight.data *= 0.1
+            layer_chan_weights_maps[-1][0].bias.data.zero_()
+            layer_chan_weights_maps[-1][1].bias.data.zero_()
+
         self.layer_coeff_maps   = nn.ModuleList(layer_coeff_maps)
         self.layers_out_lns     = nn.ModuleList(layers_out_lns)
         self.layer_lncat3s      = nn.ModuleList(layer_lncat3s)

@@ -1064,10 +1064,7 @@ class UNetModel(nn.Module):
                 # skip_chan_weights contains instance-specific, channel-specific weights.
                 # Its mean value is 0.5, so multiply it by 2 to make its mean at 1.0.
                 if skip_chan_weights is not None:
-                    try:
-                        skip_h = 2 * skip_h * skip_chan_weights.view(*skip_chan_weights.shape, 1, 1)
-                    except:
-                        breakpoint()
+                    skip_h = 2 * skip_h * skip_chan_weights.view(*skip_chan_weights.shape, 1, 1)
                 #print(f"layer {skip_layer_idx} skip_chan_weights:\n")
                 #print(skip_chan_weights)
 
