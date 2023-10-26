@@ -28,7 +28,7 @@ model:
     use_layerwise_embedding:  True
     use_ada_embedding:        True
     use_fp_trick:             True
-    composition_regs_iter_gap:          2
+    composition_regs_iter_gap:          3
     # typical loss_static_emb_reg is ~2e-3, * weight -> 2e-6.
     static_embedding_reg_weight:        1e-3
     # typical loss_ada_em_reg is ~5e-2, * weight -> 1e-4.

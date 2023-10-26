@@ -802,6 +802,8 @@ class UNetModel(nn.Module):
         ), "must specify y if and only if the model is class-conditional"
         
         hs = []
+        skip_layer_indices = []
+
         distill_feats = {}
         distill_attns = {}
         distill_attnscores = {}
@@ -830,6 +832,7 @@ class UNetModel(nn.Module):
 
         # If uncond (null) condition is active, then subj_indices = None.
         subj_indices_B, subj_indices_N = subj_indices if subj_indices is not None else (None, None)
+        layer2skip_chan_weights = {}
 
         if use_layerwise_context:
             B = x.shape[0]
@@ -877,9 +880,10 @@ class UNetModel(nn.Module):
                 #              'an illustration of a dirty cat, , ,  swimming in the ocean, with backlight', 
                 #              'an illustration of a dirty cat, , ,  swimming in the ocean, with backlight']
                 # The 1st and 2nd, and 3rd and 4th prompts are the same, if it's a do_teacher_filter iteration.
-                layer_ada_context, ada_emb_weight \
+                layer_ada_context, skip_chan_weights, ada_emb_weight \
                     = ada_embedder(context_in, layer_idx, layer_attn_components, emb, ada_bp_to_unet)
                 static_emb_weight = 1 - ada_emb_weight
+                layer2skip_chan_weights[layer_idx] = skip_chan_weights
 
                 # If static context is expanded by doing prompt mixing,
                 # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
@@ -952,9 +956,9 @@ class UNetModel(nn.Module):
             return layer_context, subj_indices
 
 
-        deep_neg_trans_flag_dict = {'deep_neg_context':         deep_neg_context,
-                                    'deep_cfg_scale':           deep_cfg_scale,
-                                    'disable_deep_neg_context': disable_deep_neg_context,
+        deep_neg_trans_flag_dict = { 'deep_neg_context':         deep_neg_context,
+                                     'deep_cfg_scale':           deep_cfg_scale,
+                                     'disable_deep_neg_context': disable_deep_neg_context,
                                    } if deep_neg_context is not None else None
         # If using deep_neg_context, only apply it on the middle-level layers, i.e., 
         # layers 7, 8, 12, 16, 17.
@@ -962,24 +966,26 @@ class UNetModel(nn.Module):
 
         ca_flags_stack = []
         old_ca_flags, old_trans_flags = \
-            self.set_cross_attn_flags( ca_flag_dict   ={'use_conv_attn': use_conv_attn},
-                                       trans_flag_dict=deep_neg_trans_flag_dict,
-                                       trans_layer_indices=deep_neg_trans_layer_indices )
+            self.set_cross_attn_flags( ca_flag_dict   = {'use_conv_attn': use_conv_attn},
+                                       trans_flag_dict = deep_neg_trans_flag_dict,
+                                       trans_layer_indices = deep_neg_trans_layer_indices )
 
+        # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).
+        # None here means ca_flags have been applied to all layers.
         ca_flags_stack.append([ old_ca_flags, None, old_trans_flags, deep_neg_trans_layer_indices ])
 
         if ca_align_suppress_scale < 1:
             _, old_trans_flags2 = \
-                self.set_cross_attn_flags( ca_flag_dict   =None,
-                                           trans_flag_dict={ 'ca_align_suppress_scale':  ca_align_suppress_scale },
-                                           trans_layer_indices=None )
+                self.set_cross_attn_flags( ca_flag_dict    = None,
+                                           trans_flag_dict = { 'ca_align_suppress_scale':  ca_align_suppress_scale },
+                                           trans_layer_indices = None )
             ca_flags_stack.append([ None, None, old_trans_flags2, None ])
 
         if iter_type.startswith("mix_") or capture_distill_attn or debug_attn:
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
             distill_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
-            distill_old_ca_flags, _ = self.set_cross_attn_flags(ca_flag_dict={'save_attn_vars': True}, 
-                                                                ca_layer_indices=distill_layer_indices)
+            distill_old_ca_flags, _ = self.set_cross_attn_flags(ca_flag_dict = {'save_attn_vars': True}, 
+                                                                ca_layer_indices = distill_layer_indices)
             ca_flags_stack.append([ distill_old_ca_flags, distill_layer_indices, None, None ])
         else:
             distill_layer_indices = []
@@ -1012,6 +1018,8 @@ class UNetModel(nn.Module):
             # emb: [2, 1280], time embedding.
             h = module(h, emb, get_layer_idx_context, mask=img_mask)
             hs.append(h)
+            skip_layer_indices.append(layer_idx)
+
             if layer_idx in distill_layer_indices:
                     distill_attns[layer_idx]        = module[1].transformer_blocks[0].attn2.cached_attn_mat 
                     distill_attnscores[layer_idx]   = module[1].transformer_blocks[0].attn2.cached_attn_scores
@@ -1048,8 +1056,22 @@ class UNetModel(nn.Module):
         
         for module in self.output_blocks:
             get_layer_idx_context = partial(get_layer_context, layer_idx)
+            skip_h = hs.pop()
+            skip_layer_idx = skip_layer_indices.pop()
 
-            h = th.cat([h, hs.pop()], dim=1)
+            if skip_layer_idx in layer2skip_chan_weights:
+                skip_chan_weights = layer2skip_chan_weights[skip_layer_idx]
+                # skip_chan_weights contains instance-specific, channel-specific weights.
+                # Its mean value is 0.5, so multiply it by 2 to make its mean at 1.0.
+                if skip_chan_weights is not None:
+                    try:
+                        skip_h = 2 * skip_h * skip_chan_weights.view(*skip_chan_weights.shape, 1, 1)
+                    except:
+                        breakpoint()
+                #print(f"layer {skip_layer_idx} skip_chan_weights:\n")
+                #print(skip_chan_weights)
+
+            h = th.cat([h, skip_h], dim=1)
 
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, get_layer_idx_context, mask=img_mask)

@@ -502,8 +502,9 @@ class AdaEmbedding(nn.Module):
                  fg_emb_count=1, bg_emb_count=0, use_cached_bg=False,
                  out_emb_dim=768, r=12, 
                  init_words=None, init_vecs=None, 
-                 attn_infeat_dims = [ 320, 320, 640, 640, 1280, 1280, 1280, 1280, 
-                                      1280, 1280, 640, 640, 640, 320, 320, 320 ],
+                 # 16 cross-attention layers.
+                 attn_infeat_dims = [ 320,  320,  640, 640, 1280, 1280, 1280, 1280, 
+                                      1280, 1280, 640, 640, 640,  320,  320,  320 ],
                  # skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15],
                  layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                             17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },
@@ -601,11 +602,12 @@ class AdaEmbedding(nn.Module):
 
         self.poolers = nn.ModuleList(poolers)
 
-        layer_maps = []
+        layer_coeff_maps = []
         layers_out_lns  = []
         # LNCat3s: multiple cat(LN(infeat), LN(time_emb), LN(static_emb)).
         # If self.in_static_emb_dim == 0, then static_emb is not used as input to the Linear.
         layer_lncat3s = []
+        layer_chan_weights_maps = []
         self.TDs = []
 
         for i in range(num_layers):
@@ -618,17 +620,25 @@ class AdaEmbedding(nn.Module):
             # output dim: r * K, will be reshaped to [K, r].
             # This Linear outputs K sets of r-dim vectors, 
             # each set being the coefficients of the r basis vectors. 
-            layer_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD + self.in_static_emb_dim, 
+            layer_coeff_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD + self.in_static_emb_dim, 
                                          r * self.K, bias=True) )
             layer_lncat3s.append(LNCat3(self.attn_infeat_dims[i] * H, TD, self.in_static_emb_dim))
             # A specific LayerNorm is applied on each of the K embeddings in each layer.
             layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
             layers_out_lns.append(layer_out_lns)
 
-        self.layer_maps     = nn.ModuleList(layer_maps)
-        self.layers_out_lns = nn.ModuleList(layers_out_lns)
-        self.layer_lncat3s  = nn.ModuleList(layer_lncat3s)
-        #self.mask_layer_map_weights()
+            layer_chan_weights_maps.append( 
+                nn.Sequential(nn.Linear(self.attn_infeat_dims[i] * H, 
+                                        self.attn_infeat_dims[i], 
+                                        bias=True),
+                              nn.Sigmoid()) )
+            
+        self.layer_coeff_maps   = nn.ModuleList(layer_coeff_maps)
+        self.layers_out_lns     = nn.ModuleList(layers_out_lns)
+        self.layer_lncat3s      = nn.ModuleList(layer_lncat3s)
+        self.layer_chan_weights_maps = nn.ModuleList(layer_chan_weights_maps)
+
+        #self.mask_layer_coeff_map_weights()
 
         self.has_bias = has_bias
         if has_bias:
@@ -643,7 +653,7 @@ class AdaEmbedding(nn.Module):
 
     # If masked_layer_idx is specified, then only mask for one layer. Otherwise, mask for all layers.
     # When generating ada embeddings for each layer in turn, only masking one layer will reduce processing time.
-    def mask_layer_map_weights(self, masked_layer_idx=None):
+    def mask_layer_coeff_map_weights(self, masked_layer_idx=None):
         # Currently only supports H = 1 or 2.
         # Skip masking if is_one_stream_only.
         if self.H == 1:
@@ -656,11 +666,11 @@ class AdaEmbedding(nn.Module):
         for layer_idx in layer_range:
             SINGLE_D = self.attn_infeat_dims[layer_idx]
             TD       = self.TDs[layer_idx]
-            assert self.layer_maps[layer_idx].in_features == SINGLE_D * 2 + TD + self.in_static_emb_dim
-            layer_map_weight = self.layer_maps[layer_idx].weight.data
+            assert self.layer_coeff_maps[layer_idx].in_features == SINGLE_D * 2 + TD + self.in_static_emb_dim
+            layer_coeff_map_weight = self.layer_coeff_maps[layer_idx].weight.data
             # The weight of Linear has shape [out_features, in_features]. 
             # Split the first dim, out_features => [K, r].
-            layer_map_weight_embs = layer_map_weight.view(self.K, self.r, -1)
+            layer_coeff_map_weight_embs = layer_coeff_map_weight.view(self.K, self.r, -1)
 
             EXTRA = TD + self.in_static_emb_dim
             # cand_fg_bg_masks is applied is on the input features.
@@ -668,12 +678,13 @@ class AdaEmbedding(nn.Module):
                                  torch.cat([ torch.zeros(SINGLE_D), torch.ones(SINGLE_D),  torch.ones(EXTRA) ]),
                                  torch.ones(SINGLE_D * 2 + EXTRA) ]
             
-            # fg_bg_mask: [K, in_features]. Mask part of the input features.
+            # fg_bg_mask: [K, in_features]. Mask part of the input coefficients 
+            # corresponding to fg/bg embeddings.
             fg_bg_mask = torch.stack([ cand_fg_bg_masks[emb_infeat_type] for emb_infeat_type in self.emb_infeat_types ], dim=0)
-            fg_bg_mask = fg_bg_mask.to(layer_map_weight_embs.device)
-            # layer_map_weight_embs: [K, 2*r, in_features]. fg_bg_mask: [K, 1, in_features]
-            layer_map_weight_embs *= fg_bg_mask.unsqueeze(1)
-            # Suppose layer_map_weight: [12, 720]. 320 fg + 320 bg + 80 time.
+            fg_bg_mask = fg_bg_mask.to(layer_coeff_map_weight_embs.device)
+            # layer_coeff_map_weight_embs: [K, 2*r, in_features]. fg_bg_mask: [K, 1, in_features]
+            layer_coeff_map_weight_embs *= fg_bg_mask.unsqueeze(1)
+            # Suppose layer_coeff_map_weight: [12, 720]. 320 fg + 320 bg + 80 time.
             # After masking, [:6] will be like [nonzero * 320, 0       * 320, nonzero * 80],
             # and            [6:] will be like [0       * 320, nonzero * 320, nonzero * 80].
 
@@ -688,7 +699,7 @@ class AdaEmbedding(nn.Module):
         # Some Linears only use either fg or bg features. 
         # So we mask weights at the unused half, since the corresponding weights are 
         # updated during BP and become nonzero. 
-        #self.mask_layer_map_weights(ca_layer_idx)
+        #self.mask_layer_coeff_map_weights(ca_layer_idx)
         if not self.is_fg_only and self.use_cached_bg:
             # cached_infeat_bg must be provided when use_cached_bg.
             if cached_infeat_bg is None:
@@ -765,7 +776,7 @@ class AdaEmbedding(nn.Module):
 
             # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
             # Consider the last dim. 
-            basis_dyn_coeffs = self.layer_maps[ca_layer_idx](infeat_time_semb).reshape(-1, self.K, self.r)
+            basis_dyn_coeffs = self.layer_coeff_maps[ca_layer_idx](infeat_time_semb).reshape(-1, self.K, self.r)
 
             # bias: [1, K, 768]
             bias = self.bias[ca_layer_idx].unsqueeze(0)
@@ -788,6 +799,8 @@ class AdaEmbedding(nn.Module):
             # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
             out_vecs  = out_vecs0 + bias
 
+            layer_chan_weights = self.layer_chan_weights_maps[ca_layer_idx](infeat_pooled)
+
             if 'call_count' not in self.__dict__:
                 self.call_count = 0
 
@@ -803,7 +816,7 @@ class AdaEmbedding(nn.Module):
                 self.call_count += 1
 
         # Return infeat_bg to be used by another ada_embedder that specializes on the background.
-        return out_vecs, infeat_bg
+        return out_vecs, layer_chan_weights, infeat_bg
 
 # text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -1016,6 +1029,7 @@ class EmbeddingManager(nn.Module):
         self.text_embedder  = text_embedder
         self.ada_prompt_embedding_cache     = None
         self.static_prompt_embedding_cache  = None
+        self.layer_idx2chan_weights = {}
         self.ada_bp_to_unet = False
         self.force_grad     = False
         self.placeholder_indices_bg = None
@@ -1051,6 +1065,7 @@ class EmbeddingManager(nn.Module):
                                        tokenized_text, embedded_text, self.ada_bp_to_unet)
             if self.training:
                 for k in ada_subj_embs_dict:
+                    # token2ada_emb_cache is used to compute EMA of ada embeddings.
                     if k in self.token2ada_emb_cache:
                         ada_temp_emb = self.token2ada_emb_cache[k]
                         ca_layer_idx = self.layer_idx2ca_layer_idx[self.layer_idx]
@@ -1062,7 +1077,6 @@ class EmbeddingManager(nn.Module):
 
             # Release ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
-
             return ada_embedded_text
 
         else:
@@ -1073,7 +1087,7 @@ class EmbeddingManager(nn.Module):
             self.placeholder_indices = None
             # We need to clone embedded_text, as sometimes (when it's not layerwise, such as TI) 
             # the modification in get_static_embedding() is in-place. 
-            static_embeddings, static_subj_embs_dict = \
+            static_embeded_text, static_subj_embs_dict = \
                             self.get_static_embedding(tokenized_text, embedded_text.clone(), 
                                                       self.string_to_static_embedder_dict,
                                                       B, N, self.num_unet_ca_layers, device)
@@ -1081,7 +1095,7 @@ class EmbeddingManager(nn.Module):
             for k in static_subj_embs_dict:
                 self.static_subj_embs_dict[k] = static_subj_embs_dict[k]
 
-            return static_embeddings
+            return static_embeded_text
     
     # N: length of sequence (including padding).
     def get_static_embedding(self, tokenized_text, embedded_text, embedder_dict, 
@@ -1206,17 +1220,19 @@ class EmbeddingManager(nn.Module):
             ada_bp_to_unet=False
     ):
         BS, device = tokenized_text.shape[0], tokenized_text.device
-        ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         ada_subj_embs_dict = {}
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
         layer_static_embs   = layer_attn_components['static_embeddings']
+
+        self.set_layer_chan_weights(layer_idx, None)
 
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
         # This order ensures that the background Ada embedder can always use 
         # cached_infeat_bg produced by the previous subject Ada embedder.
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
+            token_is_bg = (placeholder_string in self.background_strings)
             # There's only one vector per token, we can do a simple replacement
             # embedded_text: [B, N, 768].
             # tokenized_text: [B, N].
@@ -1226,7 +1242,6 @@ class EmbeddingManager(nn.Module):
                 continue
 
             placeholder_indices = keep_first_index_in_each_instance(placeholder_indices)
-            token_is_bg = (placeholder_string in self.background_strings)
 
             # For fg subjects, mask fg indices. For bg subjects, mask both fg and bg indices.
             # bg embeddings are
@@ -1286,7 +1301,7 @@ class EmbeddingManager(nn.Module):
             # So this assumption should always hold.
             # For background Ada embedder, cached_infeat_bg is only used when
             # use_cached_bg. Otherwise, it's ignored.
-            placeholder_embedding, infeat_bg = \
+            placeholder_embedding, layer_chan_weights, infeat_bg = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
                                      layer_static_subj_emb,
                                      layer_static_extra_emb_mean, 
@@ -1302,7 +1317,9 @@ class EmbeddingManager(nn.Module):
                 # Cache the bg infeat computed by the first (fg) ada embedder, 
                 # to be used by the second Ada embedder and the background Ada embedder.
                 # NOTE: this assumes the background token always appears after the subject tokens.
-                self.cached_infeat_bg[layer_idx] = infeat_bg
+                self.cached_infeat_bg[layer_idx]        = infeat_bg
+                #self.set_layer_chan_weights(layer_idx, layer_chan_weights)
+                #print(f"layer {layer_idx} {layer_attn_components['x'].shape} {layer_chan_weights.shape}")
 
             for k in range(self.token2num_vectors[placeholder_string]):
                 # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
@@ -1420,6 +1437,12 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight = self.ada_emb_weight        
         return ada_emb_weight
     
+    def set_layer_chan_weights(self, layer_idx, layer_chan_weights):
+        self.layer_idx2chan_weights[layer_idx] = layer_chan_weights
+    
+    def get_layer_chan_weights(self, layer_idx):
+        return self.layer_idx2chan_weights[layer_idx]
+    
     def set_ada_emb_weight(self, ada_emb_weight, is_first_time_print=False):
         if is_first_time_print:
             print(f"Setting ada_emb_weight = {ada_emb_weight}")
@@ -1451,6 +1474,7 @@ class EmbeddingManager(nn.Module):
     def reset_prompt_embedding_caches(self):
         self.ada_prompt_embedding_cache     = [ None for i in range(self.num_unet_ca_layers) ]
         self.static_prompt_embedding_cache  = [ None for i in range(self.num_unet_ca_layers) ]
+        self.layer_idx2chan_weights         = {}
 
         for k, ada_temp_emb in self.token2ada_emb_cache.items():
             # If all layers of ada embeddings have been cached in ada_temp_emb,
@@ -1727,9 +1751,11 @@ class EmbeddingManager(nn.Module):
                 loss_ada_maps_weight = 0.
                 loss_ada_maps_bias   = 0.
                 loss_ada_attn_pooler = 0.
-                
+                loss_ada_chan_weights_map_weight = 0.
+                loss_ada_chan_weights_map_bias = 0.
+
                 if isinstance(embobj, AdaEmbedding):
-                    for i, map in enumerate(embobj.layer_maps):
+                    for i, map in enumerate(embobj.layer_coeff_maps):
                         loss_ada_maps_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
                         loss_ada_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
                     if self.ada_use_attn_pooler:
@@ -1737,7 +1763,11 @@ class EmbeddingManager(nn.Module):
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_k.weight, loss_type=euc_loss_type)
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_fg_q.weight, loss_type=euc_loss_type)
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_bg_q.weight, loss_type=euc_loss_type)
-                            
+
+                    for i, map in enumerate(embobj.layer_chan_weights_maps):
+                        loss_ada_chan_weights_map_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
+                        loss_ada_chan_weights_map_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
+
                 if type(loss_bias) == int:
                     breakpoint()
 
@@ -1750,7 +1780,9 @@ class EmbeddingManager(nn.Module):
                              + loss_pre_vecs         * pre_vecs_reg_weight \
                              + loss_ada_maps_weight  * ada_maps_weight_reg_weight \
                              + loss_ada_maps_bias    * ada_maps_bias_reg_weight ) * embobj.K \
-                             + loss_ada_attn_pooler  * ada_attn_poolers_reg_weight
+                             + loss_ada_attn_pooler  * ada_attn_poolers_reg_weight \
+                             + loss_ada_chan_weights_map_weight * ada_maps_weight_reg_weight \
+                             + loss_ada_chan_weights_map_bias   * ada_maps_bias_reg_weight
                 
                 debug = True
                 if debug and self.loss_call_count % 100 == 0:
