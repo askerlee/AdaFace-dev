@@ -627,10 +627,10 @@ class AdaEmbedding(nn.Module):
             layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
             layers_out_lns.append(layer_out_lns)
 
+            layer_lora_dim = max(self.attn_infeat_dims[i] // 8, 40)
             layer_chan_weights_maps.append( 
-                nn.Sequential(nn.Linear(self.attn_infeat_dims[i] * H, 
-                                        self.attn_infeat_dims[i], 
-                                        bias=True),
+                nn.Sequential(nn.Linear(self.attn_infeat_dims[i] * H, layer_lora_dim, bias=True),
+                              nn.Linear(layer_lora_dim, self.attn_infeat_dims[i],     bias=True),
                               nn.Sigmoid()) )
             
         self.layer_coeff_maps   = nn.ModuleList(layer_coeff_maps)
@@ -1766,7 +1766,9 @@ class EmbeddingManager(nn.Module):
 
                     for i, map in enumerate(embobj.layer_chan_weights_maps):
                         loss_ada_chan_weights_map_weight += selective_reg_loss(map[0].weight, loss_type=euc_loss_type)
+                        loss_ada_chan_weights_map_weight += selective_reg_loss(map[1].weight, loss_type=euc_loss_type)
                         loss_ada_chan_weights_map_bias   += selective_reg_loss(map[0].bias,   loss_type=euc_loss_type)
+                        loss_ada_chan_weights_map_bias   += selective_reg_loss(map[1].bias,   loss_type=euc_loss_type)
 
                 if type(loss_bias) == int:
                     breakpoint()
