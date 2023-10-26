@@ -641,7 +641,7 @@ class AdaEmbedding(nn.Module):
         self.layer_coeff_maps   = nn.ModuleList(layer_coeff_maps)
         self.layers_out_lns     = nn.ModuleList(layers_out_lns)
         self.layer_lncat3s      = nn.ModuleList(layer_lncat3s)
-        self.layer_chan_weights_maps = nn.ModuleList(layer_chan_weights_maps)
+        # self.layer_chan_weights_maps = nn.ModuleList(layer_chan_weights_maps)
 
         #self.mask_layer_coeff_map_weights()
 
@@ -804,7 +804,8 @@ class AdaEmbedding(nn.Module):
             # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
             out_vecs  = out_vecs0 + bias
 
-            layer_chan_weights = self.layer_chan_weights_maps[ca_layer_idx](infeat_pooled)
+            # layer_chan_weights = self.layer_chan_weights_maps[ca_layer_idx](infeat_pooled)
+            layer_chan_weights = None
 
             if 'call_count' not in self.__dict__:
                 self.call_count = 0
@@ -1769,11 +1770,12 @@ class EmbeddingManager(nn.Module):
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_fg_q.weight, loss_type=euc_loss_type)
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_bg_q.weight, loss_type=euc_loss_type)
 
-                    for i, map in enumerate(embobj.layer_chan_weights_maps):
-                        loss_ada_chan_weights_map_weight += selective_reg_loss(map[0].weight, loss_type=euc_loss_type)
-                        loss_ada_chan_weights_map_weight += selective_reg_loss(map[1].weight, loss_type=euc_loss_type)
-                        loss_ada_chan_weights_map_bias   += selective_reg_loss(map[0].bias,   loss_type=euc_loss_type)
-                        loss_ada_chan_weights_map_bias   += selective_reg_loss(map[1].bias,   loss_type=euc_loss_type)
+                    if 'layer_chan_weights_maps' in dir(embobj):
+                        for i, map in enumerate(embobj.layer_chan_weights_maps):
+                            loss_ada_chan_weights_map_weight += selective_reg_loss(map[0].weight, loss_type=euc_loss_type)
+                            loss_ada_chan_weights_map_weight += selective_reg_loss(map[1].weight, loss_type=euc_loss_type)
+                            loss_ada_chan_weights_map_bias   += selective_reg_loss(map[0].bias,   loss_type=euc_loss_type)
+                            loss_ada_chan_weights_map_bias   += selective_reg_loss(map[1].bias,   loss_type=euc_loss_type)
 
                 if type(loss_bias) == int:
                     breakpoint()
