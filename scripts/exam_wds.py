@@ -12,7 +12,8 @@ single_human_pat = "man|woman|person|boy|girl|child|kid|baby|adult|guy|lady|gent
 single_role_pat  = "cook|chef|waiter|waitress|doctor|nurse|policeman|policewoman|fireman|firewoman|firefighter|teacher|student|professor|driver|pilot|farmer|worker|artist|painter|photographer|dancer|singer|musician|player|athlete|player|biker|cyclist|bicyclist"
 plural_human_pat = "men|women|people|boys|girls|children|kids|babies|adults|guys|ladies|gentlemen|ladies|males|females|humans"
 plural_role_pat  = "cooks|chefs|waiters|waitresses|doctors|nurses|policemen|policewomen|firemen|firewomen|firefighters|teachers|students|professors|drivers|pilots|farmers|workers|artists|painters|photographers|dancers|singers|musicians|players|athletes|players|bikers|cyclists|bicyclists"
-human_pat = "|".join([single_human_pat, single_role_pat, plural_human_pat, plural_role_pat])
+animal_pat       = "cat|cats|dog|dogs"
+human_pat = "|".join([single_human_pat, single_role_pat, plural_human_pat, plural_role_pat, animal_pat])
 
 for bg_img, bg_json in comp_wds_iter:
     bg_prompt = bg_json['caption'].lower()
