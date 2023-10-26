@@ -3573,7 +3573,9 @@ class LatentDiffusion(DDPM):
                                                               do_demean_first=False,
                                                               first_n_dims_to_flatten=3, 
                                                               ref_grad_scale=cls_grad_scale)
-                                
+            else:
+                loss_layer_comp_attn_ortho = 0
+                
             # Push subj_comp_attn_align towards 0.
             loss_layer_comp_attn_align = (subj_comp_attn_align ** 2).mean()
 
