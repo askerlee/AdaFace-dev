@@ -1335,7 +1335,7 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['is_compos_iter']:
                 # When do_mix_prompt_distillation, use background token on 80% if use_wds_comp.
                 if self.iter_flags['use_wds_comp']:
-                    p_use_background_token  = 0.8
+                    p_use_background_token  = 0
                 else:
                     p_use_background_token  = 0
             else:
