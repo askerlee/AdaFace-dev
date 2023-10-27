@@ -346,8 +346,12 @@ class PersonalizedBase(Dataset):
             # so that fg won't dominate the whole image, which may help learning composition.
         else:
             gen_wds_comp = False
+
+        if self.is_training:    
+            random_scaler = self.random_small_scaler if mask_fg_percent > 0.1 else self.random_scaler
+        else:
+            random_scaler = None
             
-        random_scaler = self.random_small_scaler if mask_fg_percent > 0.1 else self.random_scaler
         if random_scaler is not None:
             scale_p = 1
         else:
