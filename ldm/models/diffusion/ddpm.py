@@ -2824,7 +2824,7 @@ class LatentDiffusion(DDPM):
                 if loss_subj_comp_value_align != 0:
                     loss_dict.update({f'{prefix}/subj_comp_value_align': loss_subj_comp_value_align.mean().detach()})
                 if loss_subj_comp_attn_align != 0:
-                    loss_dict.update({f'{prefix}/subj_comp_attn_comple': loss_subj_comp_attn_align.mean().detach()})
+                    loss_dict.update({f'{prefix}/subj_comp_attn_align': loss_subj_comp_attn_align.mean().detach()})
                 if loss_subj_comp_key_ortho != 0:
                     loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
                 if loss_subj_comp_value_ortho != 0:
@@ -2864,7 +2864,7 @@ class LatentDiffusion(DDPM):
                 if loss_subj_comp_value_align != 0:
                     loss_dict.update({f'{prefix}/subj_wds_value_align': loss_subj_comp_value_align.mean().detach()})
                 if loss_subj_comp_attn_align != 0:
-                    loss_dict.update({f'{prefix}/subj_wds_attn_comple': loss_subj_comp_attn_align.mean().detach()})
+                    loss_dict.update({f'{prefix}/subj_wds_attn_align':  loss_subj_comp_attn_align.mean().detach()})
                 if loss_subj_comp_key_ortho != 0:
                     loss_dict.update({f'{prefix}/subj_wds_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
                 if loss_subj_comp_value_ortho != 0:
