@@ -59,7 +59,7 @@ set -q _flag_min_rand_scaling; and set min_rand_scaling $_flag_min_rand_scaling;
 #set fish_trace 1
 
 # default bb_type is v15.
-set -q _flag_bb_type; or set _flag_bb_type 'v15-dste'
+set -q _flag_bb_type; or set _flag_bb_type 'v15-dste8'
 
 if [ "$_flag_bb_type" = 'v15' ]
     set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned.ckpt
@@ -69,6 +69,8 @@ else if [ "$_flag_bb_type" = 'v15-ema' ]
     set sd_ckpt models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt
 else if [ "$_flag_bb_type" = 'v15-dste' ]
     set sd_ckpt models/stable-diffusion-v-1-5/v1-5-dste.ckpt
+else if [ "$_flag_bb_type" = 'v15-dste8' ]
+    set sd_ckpt models/stable-diffusion-v-1-5/v1-5-dste8.ckpt
 else if [ "$_flag_bb_type" = 'v15-arte' ]
     set sd_ckpt models/stable-diffusion-v-1-5/v1-5-arte.ckpt
 else if [ "$_flag_bb_type" = 'v15-rvte' ]
