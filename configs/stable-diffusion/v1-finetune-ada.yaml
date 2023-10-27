@@ -42,7 +42,7 @@ model:
     subj_comp_attn_complementary_loss_weight: 5e-4
     # typical loss_mix_prompt_distill: 4, * weight -> 2e-34.
     mix_prompt_distill_weight:          5e-4
-    attn_delta_distill_on_subjects_only: Falseu
+    attn_delta_distill_on_subjects_only: False
     # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
     subj_attn_norm_distill_loss_scale:  3
     comp_fg_bg_preserve_loss_weight:    2e-4

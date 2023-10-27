@@ -218,7 +218,7 @@ def ortho_subtract(a, b):
     w_optimal = dot_a_b / (dot_b_b + 1e-6)
     return a - b * w_optimal.unsqueeze(-1)
 
-# Extract the component of a that aligns with b.
+# Extract the components of a that aligns and orthos with b, respectively.
 def decomp_align_ortho(a, b):
     ortho = ortho_subtract(a, b)
     align = a - ortho
