@@ -2748,9 +2748,7 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/comp_attn_delta_distill':  loss_comp_attn_delta_distill.mean().detach()})
 
             subj_attn_delta_distill_loss_scale = 0.5
-            # comp_attn_delta_distill_loss uses L2 loss, which tends to be in small magnitudes.
-            # So we scale it up by 4x.
-            comp_attn_delta_distill_loss_scale = 5
+            comp_attn_delta_distill_loss_scale = 1
 
             if self.subj_attn_delta_distill_uses_scores:
                 subj_attn_norm_distill_loss_scale = self.subj_attn_norm_distill_loss_scale
