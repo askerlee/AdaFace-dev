@@ -186,12 +186,12 @@ class PersonalizedBase(Dataset):
         if self.is_training and (self.wds_comp_db_path is not None) and (num_valid_fg_masks > 0):
             self.comp_wds = wds.WebDataset(self.wds_comp_db_path).shuffle(100).decode("pil").to_tuple("jpg;png", "json")
             self.comp_wds_iter = iter(self.comp_wds)
-            self.has_wds_comp = True
+            self.do_wds_comp = True
             print(f"Composition webdataset {self.wds_comp_db_path} is enabled")
         else:
             self.comp_wds = None
             self.comp_wds_iter = None
-            self.has_wds_comp = False
+            self.do_wds_comp = False
 
         self.placeholder_string  = placeholder_string
         self.background_string   = background_string
@@ -250,11 +250,11 @@ class PersonalizedBase(Dataset):
                                      ])
                 print(f"{set} images will be randomly scaled in range {rand_scale_range}")
             
-            if self.has_wds_comp:
+            if self.do_wds_comp:
                 # rand_scale_range is (0.7, 1.0) by default. Here we use a smaller range, 
                 # i.e., more aggressive scaling.
                 self.random_small_scaler = transforms.Compose([
-                                            transforms.RandomAffine(degrees=0, shear=0, scale=(0.5, 0.8),
+                                            transforms.RandomAffine(degrees=0, shear=0, scale=(0.4, 0.9),
                                                                     interpolation=InterpolationMode.NEAREST),
                                             transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
                                            ])
@@ -339,15 +339,14 @@ class PersonalizedBase(Dataset):
         
         image_mask = np.array(image_mask_obj)
 
-        if has_fg_mask and self.has_wds_comp:
-            has_wds_comp = True
-            # If has_wds_comp, and fg areas are large enough, then we do more aggressive scaling to fg,
+        if has_fg_mask and self.do_wds_comp:
+            gen_wds_comp = True
+            # If do_wds_comp, and fg areas are large enough, then we do more aggressive scaling to fg,
             # so that fg won't dominate the whole image, which may help learning composition.
-            random_scaler = self.random_small_scaler if mask_fg_percent > 0.1 else self.random_scaler
         else:
-            has_wds_comp = False
-            random_scaler = self.random_scaler
+            gen_wds_comp = False
             
+        random_scaler = self.random_small_scaler if mask_fg_percent > 0.1 else self.random_scaler
         if random_scaler is not None:
             scale_p = 1
         else:
@@ -418,7 +417,7 @@ class PersonalizedBase(Dataset):
             # If random scaling or wds composition is enabled, then even if no scaling happens
             # or no wds_image_mask is generated, we still need to put a all-1 'aug_mask' into the example.
             # 'aug_mask' has to be present in all examples, otherwise collation will encounter exceptions.
-            if self.random_scaler or self.has_wds_comp:
+            if self.random_scaler or self.do_wds_comp:
                 aug_mask = np.ones_like(image_mask[:, :, 0])
             else:
                 # aug_mask will not be present in any examples, so set it to None.
@@ -445,7 +444,7 @@ class PersonalizedBase(Dataset):
         # example["image"]: [0, 255] -> [-1, 1]
         example["image"]        = (image / 127.5 - 1.0).astype(np.float32)
         
-        if has_wds_comp:
+        if gen_wds_comp:
             Found = False
             while not Found:
                 try:
@@ -524,7 +523,7 @@ class PersonalizedBase(Dataset):
             wds_image    = np.where(fg_mask[:, :, None] > 0, image, bg_image_512)
 
         self.generate_prompts(example)
-        if has_wds_comp:
+        if gen_wds_comp:
             # common_placeholder_prefix is prepended to caption and caption_bg.
             # compos_placeholder_prefix is prepended to subj_prompt_single, subj_prompt_comps,
             # cls_prompt_single, cls_prompt_comps, which we don't need to change, as they are 
@@ -549,10 +548,10 @@ class PersonalizedBase(Dataset):
             example["wds_image"]        = example["image"]
             example["wds_aug_mask"]     = example["aug_mask"]
             
-        example["has_wds_comp"]         = has_wds_comp
+        example["has_wds_comp"]         = gen_wds_comp
 
         DEBUG_WDS = False
-        if DEBUG_WDS and has_wds_comp:
+        if DEBUG_WDS and gen_wds_comp:
             self.wds_sample_dir = "wds-samples"
             os.makedirs(self.wds_sample_dir, exist_ok=True)
             wds_sample_count = len(os.listdir(self.wds_sample_dir))
