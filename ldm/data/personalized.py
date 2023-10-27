@@ -249,15 +249,16 @@ class PersonalizedBase(Dataset):
                                         transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
                                      ])
                 print(f"{set} images will be randomly scaled in range {rand_scale_range}")
-            
-            if self.do_wds_comp:
-                # rand_scale_range is (0.7, 1.0) by default. Here we use a smaller range, 
-                # i.e., more aggressive scaling.
+
                 self.random_small_scaler = transforms.Compose([
                                             transforms.RandomAffine(degrees=0, shear=0, scale=(0.4, 0.9),
                                                                     interpolation=InterpolationMode.NEAREST),
                                             transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
                                            ])
+            
+            if self.do_wds_comp:
+                # rand_scale_range is (0.7, 1.0) by default. Here we use a smaller range, 
+                # i.e., more aggressive scaling.
                 print(f"{set} fg will be randomly scaled to (0.5, 0.8) before overlaying to bg images")
                 self.resize_and_crop = transforms.Compose([
                                             transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
