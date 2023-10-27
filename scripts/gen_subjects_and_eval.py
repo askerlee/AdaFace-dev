@@ -121,10 +121,10 @@ def parse_args():
     parser.add_argument("--compare_with_pardir", type=str, default=None,
                         help="Parent folder of subject images used for computing similarity with generated samples")
 
-    parser.add_argument("--bb_type", type=str, default="v15-dste", 
-                        choices=["v14", "v15", "v15-ema", "v15-dste", "v15-arte", "v15-rvte",
+    parser.add_argument("--bb_type", type=str, default="v15-dste8", 
+                        choices=["v14", "v15", "v15-ema", "v15-dste", "v15-dste8", "v15-arte", "v15-rvte",
                                  "dreamshaper-v5", "dreamshaper-v6", "ar-v16", "rv-v4"],
-                        help="Type of checkpoints to use (default: v15)")
+                        help="Type of checkpoints to use (default: v15-dste8)")
 
     parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5, 0.5],
                         help="Weight of the skip connections of the last few layers of CLIP text embedder. " 
@@ -293,6 +293,8 @@ if __name__ == "__main__":
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt"
             elif args.bb_type == 'v15-dste':
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste.ckpt"
+            elif args.bb_type == 'v15-dste8':
+                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste8.ckpt"
             elif args.bb_type == 'v15-arte':
                 ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-arte.ckpt"
             elif args.bb_type == 'v15-rvte':
