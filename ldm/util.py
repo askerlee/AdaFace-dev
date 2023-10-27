@@ -767,28 +767,20 @@ def chunk_list(lst, num_chunks):
     for i in range(0, len(lst), chunk_size): 
         yield lst[i:i + chunk_size]
 
+def join_list_of_indices(*indices_list):
+    list_of_indices_B, list_of_indices_N = [], []
+    for indices_B, indices_N in indices_list:
+        list_of_indices_B.append(indices_B)
+        list_of_indices_N.append(indices_N)
+        
+    indices_B = torch.cat(list_of_indices_B, dim=0)
+    indices_N = torch.cat(list_of_indices_N, dim=0)
+    return (indices_B, indices_N)
+
 def halve_token_indices(token_indices):
     token_indices_half_B  = token_indices[0].chunk(2)[0]
     token_indices_half_N  = token_indices[1].chunk(2)[0]
     return (token_indices_half_B, token_indices_half_N)
-
-def double_token_indices(token_indices, bs_offset):
-    if token_indices is None:
-        return None
-    
-    orig_token_ind_B, orig_token_ind_T = token_indices
-    # The class prompts are at the latter half of the batch.
-    # So we need to add two blocks (BLOCK_SIZE * 2) to the batch indices of the subject prompts, 
-    # to locate the corresponding class prompts.
-    shifted_block_token_ind_B = orig_token_ind_B + bs_offset
-    # Concatenate the token indices of the subject prompts and class prompts.
-    token_indices_B_x2 = torch.cat([orig_token_ind_B, shifted_block_token_ind_B ], dim=0)
-    token_indices_T_x2 = torch.cat([orig_token_ind_T, orig_token_ind_T],           dim=0)
-    # token_indices: 
-    # ( tensor([0,  0,   1, 1,   2, 2,   3, 3]), 
-    #   tensor([6,  7,   6, 7,   6, 7,   6, 7]) )
-    token_indices_x2 = (token_indices_B_x2, token_indices_T_x2)
-    return token_indices_x2
 
 def split_indices_by_instance(indices):
     indices_B, indices_N = indices
@@ -833,6 +825,27 @@ def extend_indices_B_by_n_times(indices, n, offset):
     indices_N_ext   = torch.cat(indices_N_ext, dim=0)
     indices_ext     = (indices_B_ext, indices_N_ext)
     return indices_ext, indices_ext_by_block
+
+def double_token_indices(token_indices, bs_offset):
+    if token_indices is None:
+        return None
+    
+    token_indices_x2, token_indices_x2_by_block = \
+        extend_indices_B_by_n_times(token_indices, 2, bs_offset)
+    
+    return token_indices_x2
+
+def repeat_selected_instances(sel_indices, REPEAT, *args):
+    rep_args = []
+    for arg in args:
+        if arg is not None:
+            arg2 = arg[sel_indices].repeat([REPEAT] + [1] * (arg.ndim - 1))
+        else:
+            arg2 = None
+        rep_args.append(arg2)
+
+    return rep_args
+
 
 def normalize_dict_values(d):
     value_sum = np.sum(list(d.values()))
@@ -1253,16 +1266,16 @@ def sel_emb_attns_by_indices(attn_mat, indices, do_sum=True, do_sqrt_norm=False)
 
     # bg_attn_i: [K_bg_i, 8, 64] -> [1, K_bg_i, 8, 64] 
     # 8: 8 attention heads. Last dim 64: number of image tokens.
-    emb_attns   = [ attn_mat[indices_by_instance[i]].reshape(1, -1, *attn_mat.shape[2:]) \
-                    for i in range(len(indices_by_instance)) ]
+    emb_attns   = [ attn_mat[inst_indices].unsqueeze(0) for inst_indices in indices_by_instance ]
 
     # sum among K_bg_i bg embeddings -> [1, 8, 64]
     if do_sum:
         emb_attns   = [ emb_attns[i].sum(dim=1) for i in range(len(indices_by_instance)) ]
         
     if do_sqrt_norm:
-        emb_attns   = [ emb_attns[i] / np.sqrt(len(indices_by_instance[i][0])) \
-                        for i in range(len(indices_by_instance)) ]
+        # Normalize each embedding by sqrt(K_bg_i).
+        emb_attns   = [ emb_attns[i] / np.sqrt(len(inst_indices[0])) \
+                        for i, inst_indices in enumerate(indices_by_instance) ]
     
     emb_attns = torch.cat(emb_attns, dim=0)
     return emb_attns
