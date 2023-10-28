@@ -1577,7 +1577,7 @@ class EmbeddingManager(nn.Module):
 
             if "emb_global_scale_score" in ckpt:
                 self.emb_global_scale_score = ckpt["emb_global_scale_score"]
-                
+
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
                     k2 = placeholder_mapper[k]
@@ -1614,7 +1614,9 @@ class EmbeddingManager(nn.Module):
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def optimized_parameters(self):
         params = list(self.string_to_static_embedder_dict.parameters()) \
-               + list(self.string_to_ada_embedder_dict.parameters())
+               + list(self.string_to_ada_embedder_dict.parameters()) \
+               + list(self.string_to_ada_ema_emb_dict.parameters()) \
+               + [self.emb_global_scale_score]
         
         return params
         
