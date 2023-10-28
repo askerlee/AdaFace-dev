@@ -31,7 +31,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        extend_indices_N_by_n, extend_indices_B_by_n_times, \
                        normalize_dict_values, masked_mean, \
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
-                       anneal_t, rand_annealed, calc_layer_subj_comp_k_or_v_ortho_loss, \
+                       anneal_t, rand_annealed, anneal_value, calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block
 
@@ -1285,8 +1285,8 @@ class LatentDiffusion(DDPM):
                     # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp background images.
                     p_use_wds_comp = 0.2
                 else:
-                    # 5% of recon iters will be initialized with wds_comp overlay images.
-                    p_use_wds_comp = 0.05
+                    # 10% of recon iters will be initialized with wds_comp overlay images.
+                    p_use_wds_comp = 0.1
             else:
                 p_use_wds_comp = 0
             
@@ -1305,9 +1305,11 @@ class LatentDiffusion(DDPM):
                     self.iter_flags['use_wds_cls_captions'] = False
                 else:
                     batch['image']  = batch['wds_image']
-                    ## Use wds_cls_caption 50% of the time.
-                    # Disable wds_cls_caption. It causes double subjects in the image.
-                    self.iter_flags['use_wds_cls_captions'] = random.random() < 0
+                    # Use wds_cls_caption at decreasing probability over training.
+                    # From 0.9 to 0.1 over first 50% of the training, then keep at 0.1.
+                    # Using it more frequently may cause double subjects in the image.
+                    p_use_wds_cls_captions = anneal_value(self.training_percent, 0.5, (0.9, 0.1))
+                    self.iter_flags['use_wds_cls_captions'] = random.random() < p_use_wds_cls_captions
                     if self.iter_flags['use_wds_cls_captions']:
                         batch['caption']    = batch['wds_cls_caption']
                         batch['caption_bg'] = batch['wds_cls_caption_bg']
@@ -1335,16 +1337,12 @@ class LatentDiffusion(DDPM):
 
             # Mainly use background token on recon iters.
             if self.iter_flags['is_compos_iter']:
-                # When do_mix_prompt_distillation, use background token on 80% if use_wds_comp.
-                if self.iter_flags['use_wds_comp']:
-                    p_use_background_token  = 0
-                else:
-                    p_use_background_token  = 0
+                p_use_background_token  = 0
             else:
                 # Recon iters.
                 if self.iter_flags['use_wds_comp']:
-                    # Always use background tokens in recon iters if use_wds_comp.
-                    p_use_background_token  = 0.9
+                    # At 95% of the time, use background tokens in recon iters if use_wds_comp.
+                    p_use_background_token  = 0.95
                 else:
                     # To avoid the backgound token taking too much of the foreground, 
                     # we only use the background token on 90% of the training images, to 
