@@ -870,7 +870,7 @@ class UNetModel(nn.Module):
             if use_ada_context:
                 ada_embedder   = extra_info['ada_embedder']
                 ada_bp_to_unet = extra_info.get('ada_bp_to_unet', False)
-                layer_attn_components['static_embeddings'] = layer_static_context_v
+                layer_attn_components['static_prompt_embeddings'] = layer_static_context_v
                 # emb: time embedding. h: features from the previous layer.
                 # context_in: ['an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
                 #              'an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
