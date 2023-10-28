@@ -1327,7 +1327,7 @@ class LatentDiffusion(DDPM):
             # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
             # NOTE: If use_wds_comp, then to preserve the foreground, we always enable comp_init_with_fg_area.
             # But in this case, the background areas will not be replaced with random noises.
-            p_comp_init_with_fg_area = 0 if self.iter_flags['use_wds_comp'] else 0.5
+            p_comp_init_with_fg_area = 0.1 if self.iter_flags['use_wds_comp'] else 0.5
             # If reuse_init_conds, comp_init_with_fg_area may be set to True later
             # if the previous iteration has comp_init_with_fg_area = True.
             self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
@@ -2800,12 +2800,11 @@ class LatentDiffusion(DDPM):
                 # the background in the training images, which is not desirable.
                 # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
                 # excluding the instance from the fg_bg_preserve_loss.
-                mix_fg_preserve_loss_scale = 1 if self.iter_flags['use_wds_comp'] else 0.1
                 loss_comp_subj_fg_feat_preserve, loss_comp_subj_fg_attn_preserve, loss_comp_subj_bg_attn_suppress = \
                     self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info[attns_or_scores], 
                                                         filtered_fg_mask, batch_have_fg_mask,
                                                         extra_info['subj_indices_1b'], BLOCK_SIZE,
-                                                        mix_fg_preserve_loss_scale=mix_fg_preserve_loss_scale)
+                                                        mix_fg_preserve_loss_scale=0.1)
                 if loss_comp_subj_fg_feat_preserve > 0:
                     loss_dict.update({f'{prefix}/comp_subj_fg_feat_preserve': loss_comp_subj_fg_feat_preserve.mean().detach()})
                 if loss_comp_subj_fg_attn_preserve > 0:
@@ -2813,9 +2812,10 @@ class LatentDiffusion(DDPM):
                 if loss_comp_subj_bg_attn_suppress > 0:
                     loss_dict.update({f'{prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach()})
 
+                comp_subj_fg_feat_preserve_loss_scale = 0.1 if self.iter_flags['use_wds_comp'] else 1
                 bg_attn_suppress_loss_scale = 0.5
-                loss_comp_fg_bg_preserve = loss_comp_subj_fg_feat_preserve \
-                                            + loss_comp_subj_fg_attn_preserve \
+                loss_comp_fg_bg_preserve = (loss_comp_subj_fg_feat_preserve + loss_comp_subj_fg_attn_preserve) \
+                                            * comp_subj_fg_feat_preserve_loss_scale \
                                             + loss_comp_subj_bg_attn_suppress * bg_attn_suppress_loss_scale
             else:
                 loss_comp_fg_bg_preserve = 0
