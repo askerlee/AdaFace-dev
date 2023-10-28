@@ -2051,10 +2051,16 @@ class LatentDiffusion(DDPM):
                     if not self.iter_flags['use_wds_comp']:
                         # At background, fill x_start with random values (100% noise).
                         x_start_origsize = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
-                        # Scale down the fg area to 40%-100% of the original size, to avoid it dominating the whole image.
-                        # fg_mask_percent = filtered_fg_mask.float().sum() / (255 * fg_mask.size)
+                        fg_mask_percent = filtered_fg_mask.float().sum() / filtered_fg_mask.numel()
+                        # print(fg_mask_percent)
+                        if fg_mask_percent > 0.1:
+                            # fg areas are quite large. Scale down the fg area to 40%-70% of 
+                            # the original size, to avoid it dominating the whole image.
+                            fg_rand_scale = np.random.uniform(0.4, 0.7)
+                        else:
+                            # fg areas are small. Scale up the fg area to 50%-100% of the original size.
+                            fg_rand_scale = np.random.uniform(0.6, 1.0)
 
-                        fg_rand_scale = np.random.uniform(0.4, 1.0)
                         # Resize x_start_origsize and filtered_fg_mask by rand_scale. They have different numbers of channels,
                         # so we need to concatenate them at dim 1, and then resize.
                         x_mask = torch.cat([x_start_origsize, filtered_fg_mask], dim=1)
