@@ -557,7 +557,7 @@ class PersonalizedBase(Dataset):
 
         example["has_wds_comp"]         = gen_wds_comp
 
-        DEBUG_WDS = True
+        DEBUG_WDS = False
         if DEBUG_WDS and gen_wds_comp:
             self.wds_sample_dir = "wds-samples"
             os.makedirs(self.wds_sample_dir, exist_ok=True)
