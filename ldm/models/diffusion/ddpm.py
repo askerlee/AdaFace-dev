@@ -2227,10 +2227,13 @@ class LatentDiffusion(DDPM):
         else:
             assert self.iter_flags['do_normal_recon']
             BLOCK_SIZE = x_start.shape[0]
-            # Increase t slightly to increase noise amount and increase robustness.
-            # Do not add extra noise for use_wds_comp instances, since such instances are 
-            # kind of "Out-of-Domain" and are intrinsically difficult to denoise.
-            if not self.iter_flags['use_wds_comp']:
+            if self.iter_flags['use_wds_comp']:
+                # Decrease t slightly to decrease noise amount and preserve more semantics.
+                # Do not add extra noise for use_wds_comp instances, since such instances are 
+                # kind of "Out-of-Domain" at the background, and are intrinsically difficult to denoise.
+                inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0))
+            else:
+                # Increase t slightly to increase noise amount and increase robustness.
                 inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.2))
             # No need to update masks.
 
@@ -2376,36 +2379,31 @@ class LatentDiffusion(DDPM):
 
                 fg_wds_comple_loss_scale    = 1
                 wds_mask_align_loss_scale   = 1
-                # loss_fg_wds_complementary has a small scale of 0.1, since wds embeddings 
-                # seem to align with the background quite poorly, and it's not very helpful to encourage
-                # the subject embeddings to be complementary to the wds embeddings.
                 loss += self.fg_wds_complementary_loss_weight \
                          * (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
-                            + loss_wds_mask_align * wds_mask_align_loss_scale \
+                            + loss_wds_mask_align     * wds_mask_align_loss_scale \
                             + loss_fg_mask_align_wds + loss_fg_wds_mask_contrast)
 
+            instance_fg_weights = 1
             if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
-                instance_fg_weights = 1
                 # bg loss is ignored.
                 instance_bg_weights = 0
             else:
                 if self.iter_flags['use_wds_comp']:
                     # instance_fg_weights/instance_bg_weights are instanse-specific 1D tensors.
-                    # an instance of  use_wds_comp: instance_bg_weight is 0.1, instance_fg_weight is 0.5.
-                    # an instance not use_wds_comp: instance_bg_weight is 1,   instance_fg_weight is 1.
+                    # an instance of  use_wds_comp: instance_bg_weight is 0.05, instance_fg_weight is 1.
+                    # an instance not use_wds_comp: instance_bg_weight is 1,    instance_fg_weight is 1.
                     # NOTE: We discount the bg weight of the use_wds_comp instances, as bg areas are supposed 
                     # to be attended with wds comp extra embeddings. However, the attention may not be perfect,
                     # and subject embeddings may be tempted to attend to the background, which will mix the 
                     # background features into the subject embeddings, which hurt both authenticity and compositionality.
-                    # NOTE: We discount the fg weight of the use_wds_comp instances, as they are less natural and
-                    # may incur too high loss to the model (even in the fg areas).
+                    ## NOTE: We discount the fg weight of the use_wds_comp instances, as they are less natural and
+                    ## may incur too high loss to the model (even in the fg areas).
                     instance_bg_weights = self.recon_bg_discount
-                    instance_fg_weights = 0.5
                 else:
                     # use_background_token == True and not self.iter_flags['use_wds_comp'].
-                    # bg loss is not discounted.
-                    instance_bg_weights = 1
-                    instance_fg_weights = 1
+                    # bg loss is somewhat discounted.
+                    instance_bg_weights = 0.25
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
