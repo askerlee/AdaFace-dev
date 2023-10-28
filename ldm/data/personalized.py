@@ -118,7 +118,7 @@ single_role_pat  = "cook|chef|waiter|waitress|doctor|nurse|policeman|policewoman
 plural_human_pat = "men|women|people|boys|girls|children|kids|babies|adults|guys|ladies|gentlemen|ladies|males|females|humans"
 plural_role_pat  = "cooks|chefs|waiters|waitresses|doctors|nurses|policemen|policewomen|firemen|firewomen|firefighters|teachers|students|professors|drivers|pilots|farmers|workers|artists|painters|photographers|dancers|singers|musicians|players|athletes|players|bikers|cyclists|bicyclists"
 animal_pat       = "cat|cats|dog|dogs"
-human_pat = "|".join([single_human_pat, single_role_pat, plural_human_pat, plural_role_pat, animal_pat])
+human_animal_pat = "|".join([single_human_pat, single_role_pat, plural_human_pat, plural_role_pat, animal_pat])
 
 class PersonalizedBase(Dataset):
     def __init__(self,
@@ -474,7 +474,7 @@ class PersonalizedBase(Dataset):
                                          or (self.wds_background_string is not None \
                                              and self.wds_background_string in bg_prompt_tokens)
                 
-                if re.search(human_pat, bg_prompt):
+                if re.search(human_animal_pat, bg_prompt):
                     contains_human = True
                 else:
                     contains_human = False
@@ -557,7 +557,7 @@ class PersonalizedBase(Dataset):
 
         example["has_wds_comp"]         = gen_wds_comp
 
-        DEBUG_WDS = False
+        DEBUG_WDS = True
         if DEBUG_WDS and gen_wds_comp:
             self.wds_sample_dir = "wds-samples"
             os.makedirs(self.wds_sample_dir, exist_ok=True)
@@ -567,8 +567,8 @@ class PersonalizedBase(Dataset):
                 while os.path.exists(wds_sample_image_filepath):
                     wds_sample_count += 1
                     wds_sample_image_filepath   = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
-                    wds_sample_prompt_filepath  = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.txt')
-
+            
+            wds_sample_caption_filepath = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.txt')
             # Overlay wds_aug_mask on wds_image.
             # Create a pure red image
             red_image  = np.ones_like(wds_image) * 255
@@ -586,6 +586,9 @@ class PersonalizedBase(Dataset):
 
             Image.fromarray(wds_image2).save(wds_sample_image_filepath)
             print("Saved wds sample to {}".format(wds_sample_image_filepath))
+            wds_sample_caption = example['cls_prompt_single'] + wds_comp_extra
+            with open(wds_sample_caption_filepath, 'w') as f:
+                f.write(wds_sample_caption)
 
         return example
 

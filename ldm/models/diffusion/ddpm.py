@@ -2293,6 +2293,8 @@ class LatentDiffusion(DDPM):
                 fg_bg_comple_attn_key = 'unet_attnscores' if fg_bg_comple_attn_uses_scores \
                                         else 'unet_attns'
 
+                # do_sqrt_norm=False: we only care about the sum of fg attn scores vs. bg attn scores. 
+                # So we don't do sqrt norm.
                 loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_mask_contrast = \
                             self.calc_fg_bg_complementary_loss(extra_info[fg_bg_comple_attn_key], 
                                                                 extra_info['unet_attnscores'],
@@ -2303,7 +2305,7 @@ class LatentDiffusion(DDPM):
                                                                 fg_grad_scale=0.1,
                                                                 fg_mask=fg_mask,
                                                                 instance_mask=batch_have_fg_mask,
-                                                                do_sqrt_norm=True
+                                                                do_sqrt_norm=False
                                                                 )
 
                 loss_dict.update({f'{prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach()})
@@ -2347,6 +2349,8 @@ class LatentDiffusion(DDPM):
 
                 # loss_fg_mask_align_wds is the same as above if an instance both use_wds_comp and use_background_token.
                 # Otherwise it's different. It's ok if the loss is double-counted sometimes.
+                # do_sqrt_norm=True: wds_comp_extra prompts are usually much longer, so we do sqrt norm to scale down 
+                # wds_comp_extra attn scores.
                 loss_fg_wds_complementary, loss_fg_mask_align_wds, loss_wds_mask_align, loss_fg_wds_mask_contrast = \
                             self.calc_fg_bg_complementary_loss(extra_info[fg_wds_comple_attn_key], 
                                                                 extra_info['unet_attnscores'],
@@ -3167,7 +3171,7 @@ class LatentDiffusion(DDPM):
                                       BS, img_mask, 
                                       fg_grad_scale=0.1,
                                       fg_mask=None, instance_mask=None,
-                                      do_sqrt_norm=True):
+                                      do_sqrt_norm=False):
         
         if subj_indices is None or bg_indices is None or len(bg_indices) == 0:
             return 0, 0, 0, 0
