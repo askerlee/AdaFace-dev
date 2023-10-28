@@ -880,12 +880,13 @@ class LatentDiffusion(DDPM):
         # DO NOT call sample_last_layers_skip_weights() here, to make the ada embeddings are generated with 
         # CLIP skip weights consistent with the static embeddings.
         ada_embedded_text = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
-        layer_chan_weights = self.embedding_manager.get_layer_chan_weights(layer_idx)
-        ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_fg)
+        emb_global_scale  = self.embedding_manager.get_emb_global_scale()
+        ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_fg, 
+                                           extra_scale=emb_global_scale)
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, reset_prompt_embedding_caches() should have been called somewhere.
         self.embedding_manager.cache_ada_prompt_embedding(layer_idx, ada_embedded_text)
-        return ada_embedded_text, layer_chan_weights, self.embedding_manager.get_ada_emb_weight() #, self.embedding_manager.token_attn_weights
+        return ada_embedded_text, self.embedding_manager.get_ada_emb_weight() #, self.embedding_manager.token_attn_weights
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)

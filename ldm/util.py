@@ -648,7 +648,8 @@ def patch_multi_embeddings(text_embedding, placeholder_indices_N, divide_scheme=
 # text_embedding: [B, N, D]
 # If text_embedding is static embedding, then num_layers=16, 
 # we need to reshape it to [B0, num_layers, N, D].
-def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1, scale=-1):
+def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1, 
+                   scale=-1, extra_scale=1):
     if placeholder_indices is None:
         return text_embedding
     placeholder_indices_B, placeholder_indices_N = placeholder_indices
@@ -661,6 +662,8 @@ def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1, scale=-1):
     if scale == -1:
         scale = 1 / np.sqrt(M)
 
+    scale = scale * extra_scale
+    
     # scale == 1: No need to do scaling.
     if scale == 1:
         return text_embedding

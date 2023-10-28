@@ -55,9 +55,6 @@ def parse_args():
     # --deep_cfg_scale
     parser.add_argument("--deep_cfg_scale", type=float, default=1.3,
                         help="scale of deep negative prompts")
-    # --ca_align_suppress_scale
-    parser.add_argument("--ca_align_suppress_scale", type=float, default=argparse.SUPPRESS,
-                        help="orthogonal enhancement of cross-attn features")
     # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.
     parser.add_argument("--z_suffix_type", default=argparse.SUPPRESS, 
                         help="Append this string to the subject placeholder token during inference "
@@ -455,10 +452,7 @@ if __name__ == "__main__":
             command_line += f" --use_deep_neg_prompt --deep_cfg_scale {args.deep_cfg_scale}"
         if args.use_first_gt_img_as_init:
             command_line += f" --use_first_gt_img_as_init --init_img_weight {args.init_img_weight}"
-            
-        if hasattr(args, 'ca_align_suppress_scale'):
-            command_line += f" --ca_align_suppress_scale {args.ca_align_suppress_scale}"
-            
+
         if args.compare_with_pardir:
             # Do evaluation on authenticity/composition.
             subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)

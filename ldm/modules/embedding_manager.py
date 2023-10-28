@@ -607,7 +607,6 @@ class AdaEmbedding(nn.Module):
         # LNCat3s: multiple cat(LN(infeat), LN(time_emb), LN(static_emb)).
         # If self.in_static_emb_dim == 0, then static_emb is not used as input to the Linear.
         layer_lncat3s = []
-        layer_chan_weights_maps = []
         self.TDs = []
 
         for i in range(num_layers):
@@ -627,21 +626,9 @@ class AdaEmbedding(nn.Module):
             layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
             layers_out_lns.append(layer_out_lns)
 
-            layer_lora_dim = max(self.attn_infeat_dims[i] // 8, 40)
-            layer_chan_weights_maps.append( 
-                nn.Sequential(nn.Linear(self.attn_infeat_dims[i] * H, layer_lora_dim, bias=True),
-                              nn.Linear(layer_lora_dim, self.attn_infeat_dims[i],     bias=True),
-                              nn.Sigmoid()) )
-            # Reduce the initial weights of the Linear layers, to avoid too large outputs.
-            layer_chan_weights_maps[-1][0].weight.data *= 0.1
-            layer_chan_weights_maps[-1][1].weight.data *= 0.1
-            layer_chan_weights_maps[-1][0].bias.data.zero_()
-            layer_chan_weights_maps[-1][1].bias.data.zero_()
-
         self.layer_coeff_maps   = nn.ModuleList(layer_coeff_maps)
         self.layers_out_lns     = nn.ModuleList(layers_out_lns)
         self.layer_lncat3s      = nn.ModuleList(layer_lncat3s)
-        # self.layer_chan_weights_maps = nn.ModuleList(layer_chan_weights_maps)
 
         #self.mask_layer_coeff_map_weights()
 
@@ -804,9 +791,6 @@ class AdaEmbedding(nn.Module):
             # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
             out_vecs  = out_vecs0 + bias
 
-            # layer_chan_weights = self.layer_chan_weights_maps[ca_layer_idx](infeat_pooled)
-            layer_chan_weights = None
-
             if 'call_count' not in self.__dict__:
                 self.call_count = 0
 
@@ -822,7 +806,7 @@ class AdaEmbedding(nn.Module):
                 self.call_count += 1
 
         # Return infeat_bg to be used by another ada_embedder that specializes on the background.
-        return out_vecs, layer_chan_weights, infeat_bg
+        return out_vecs, infeat_bg
 
 # text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -853,7 +837,6 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight=0.5, 
             ada_use_attn_pooler=True,
             ada_ema_as_static_emb_weight=0.,
-            adj_layer_skip_weight=0.,
             **kwargs
     ):
         super().__init__()
@@ -868,8 +851,9 @@ class EmbeddingManager(nn.Module):
         self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
         self.set_ada_ema_as_static_emb_weight(ada_ema_as_static_emb_weight, is_first_time_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
-        self.adj_layer_skip_weight = adj_layer_skip_weight
         
+        self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
+
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
         self.num_unet_ca_layers = num_unet_ca_layers
@@ -1231,8 +1215,6 @@ class EmbeddingManager(nn.Module):
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
         layer_static_embs   = layer_attn_components['static_embeddings']
 
-        self.set_layer_chan_weights(layer_idx, None)
-
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
         # This order ensures that the background Ada embedder can always use 
@@ -1307,7 +1289,7 @@ class EmbeddingManager(nn.Module):
             # So this assumption should always hold.
             # For background Ada embedder, cached_infeat_bg is only used when
             # use_cached_bg. Otherwise, it's ignored.
-            placeholder_embedding, layer_chan_weights, infeat_bg = \
+            placeholder_embedding, infeat_bg = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
                                      layer_static_subj_emb,
                                      layer_static_extra_emb_mean, 
@@ -1324,8 +1306,6 @@ class EmbeddingManager(nn.Module):
                 # to be used by the second Ada embedder and the background Ada embedder.
                 # NOTE: this assumes the background token always appears after the subject tokens.
                 self.cached_infeat_bg[layer_idx]        = infeat_bg
-                #self.set_layer_chan_weights(layer_idx, layer_chan_weights)
-                #print(f"layer {layer_idx} {layer_attn_components['x'].shape} {layer_chan_weights.shape}")
 
             for k in range(self.token2num_vectors[placeholder_string]):
                 # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
@@ -1443,11 +1423,17 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight = self.ada_emb_weight        
         return ada_emb_weight
     
-    def set_layer_chan_weights(self, layer_idx, layer_chan_weights):
-        self.layer_idx2chan_weights[layer_idx] = layer_chan_weights
-    
-    def get_layer_chan_weights(self, layer_idx):
-        return self.layer_idx2chan_weights[layer_idx]
+    def get_emb_global_scale(self):
+        # emb_global_scale_score = 0  -> emb_global_scale = 1, 
+        # emb_global_scale_score = 1  -> emb_global_scale = 1.23
+        # emb_global_scale_score = -1 -> emb_global_scale = 0.77
+        emb_global_scale = self.emb_global_scale_score.sigmoid() + 0.5
+        if self.training:
+            # 1 -> uniform in [0.8, 1.4]. Inject randomness to reduce overfitting.
+            emb_global_scale = emb_global_scale * np.random.uniform(0.8, 1.4)
+        else:
+            emb_global_scale = emb_global_scale        
+        return emb_global_scale
     
     def set_ada_emb_weight(self, ada_emb_weight, is_first_time_print=False):
         if is_first_time_print:
@@ -1552,6 +1538,7 @@ class EmbeddingManager(nn.Module):
                      "string_to_ada_embedder":          self.string_to_ada_embedder_dict,
                      "string_to_ada_ema_emb_dict":      self.string_to_ada_ema_emb_dict,
                      "token2num_vectors":               self.token2num_vectors,
+                     "emb_global_scale_score":          self.emb_global_scale_score,
                      "ada_emb_weight":                  self.ada_emb_weight,  
                      "ada_ema_as_static_emb_weight":    self.ada_ema_as_static_emb_weight,
                    }, 
@@ -1588,6 +1575,9 @@ class EmbeddingManager(nn.Module):
             if "ada_ema_as_static_emb_weight" in ckpt:
                 self.set_ada_ema_as_static_emb_weight(ckpt["ada_ema_as_static_emb_weight"], is_first_time_print=False)
 
+            if "emb_global_scale_score" in ckpt:
+                self.emb_global_scale_score = ckpt["emb_global_scale_score"]
+                
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
                     k2 = placeholder_mapper[k]
@@ -1769,13 +1759,6 @@ class EmbeddingManager(nn.Module):
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_k.weight, loss_type=euc_loss_type)
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_fg_q.weight, loss_type=euc_loss_type)
                             loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_bg_q.weight, loss_type=euc_loss_type)
-
-                    if 'layer_chan_weights_maps' in dir(embobj):
-                        for i, map in enumerate(embobj.layer_chan_weights_maps):
-                            loss_ada_chan_weights_map_weight += selective_reg_loss(map[0].weight, loss_type=euc_loss_type)
-                            loss_ada_chan_weights_map_weight += selective_reg_loss(map[1].weight, loss_type=euc_loss_type)
-                            loss_ada_chan_weights_map_bias   += selective_reg_loss(map[0].bias,   loss_type=euc_loss_type)
-                            loss_ada_chan_weights_map_bias   += selective_reg_loss(map[1].bias,   loss_type=euc_loss_type)
 
                 if type(loss_bias) == int:
                     breakpoint()
