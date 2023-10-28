@@ -1304,8 +1304,9 @@ class LatentDiffusion(DDPM):
                     self.iter_flags['use_wds_cls_captions'] = False
                 else:
                     batch['image']  = batch['wds_image']
-                    # Use wds_cls_caption 50% of the time.
-                    self.iter_flags['use_wds_cls_captions'] = random.random() < 0.5
+                    ## Use wds_cls_caption 50% of the time.
+                    # Disable wds_cls_caption. It causes double subjects in the image.
+                    self.iter_flags['use_wds_cls_captions'] = random.random() < 0
                     if self.iter_flags['use_wds_cls_captions']:
                         batch['caption']    = batch['wds_cls_caption']
                         batch['caption_bg'] = batch['wds_cls_caption_bg']
