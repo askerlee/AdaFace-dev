@@ -684,7 +684,7 @@ class AdaEmbedding(nn.Module):
     # layer_idx: 0 ~ 24. ca_layer_idx: 0 ~ 15.
     # time_emb: [B, 1280].
     def forward(self, layer_idx, layer_attn_components, time_emb, 
-                layer_static_subj_emb, layer_static_extra_emb_mean, 
+                layer_subj_static_emb, layer_static_extra_emb_mean, 
                 img_mask=None, bp_to_unet=False, cached_infeat_bg=None):
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         pooler  = self.poolers[ca_layer_idx]
@@ -715,11 +715,11 @@ class AdaEmbedding(nn.Module):
                 # Do not mask weights in this case, as infeat_pooled only contains bg features, and 
                 # H = 1, i.e., the in_features of the Linear is not doubled.
             else:
-                # layer_static_subj_emb should be quite similar to the ada embedding at this layer.
-                # So we use layer_static_subj_emb as an approximate query to do the attention-based pooling.
-                # layer_static_subj_emb: [768]. layer_static_extra_emb_mean: [2, 768].
+                # layer_subj_static_emb should be quite similar to the ada embedding at this layer.
+                # So we use layer_subj_static_emb as an approximate query to do the attention-based pooling.
+                # layer_subj_static_emb: [768]. layer_static_extra_emb_mean: [2, 768].
                 infeat_pooled    = pooler(layer_attn_components, 
-                                          fg_q_emb=layer_static_subj_emb, 
+                                          fg_q_emb=layer_subj_static_emb, 
                                           bg_q_emb=layer_static_extra_emb_mean,
                                           img_mask=img_mask, bp_to_unet=bp_to_unet)
 
@@ -1123,15 +1123,15 @@ class EmbeddingManager(nn.Module):
             # composition image overlay is used).
             placeholder_indices = keep_first_index_in_each_instance(placeholder_indices)
             # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
-            # Non-layerwise: embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [1, K, 768].
+            # Non-layerwise: embedded_text[placeholder_indices]: [2, 768].  subj_static_embedding: [1, K, 768].
             # layerwise: placeholder_indices =  
             # (tensor([ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]), 
             #  tensor([ 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]))
-            # embedded_text[placeholder_indices]: [32, 768]. placeholder_embedding: [16, K, 768].
+            # embedded_text[placeholder_indices]: [32, 768]. subj_static_embedding: [16, K, 768].
             # The first 16 elements (0-8) in embedded_text[placeholder_indices] correspond to the 16 layers of the 
             # first instance in the batch.
-            # 16 layers of placeholder_embedding are repeated REAL_OCCURS_IN_BATCH times.
-            # placeholder_embedding: [16, 768] repeat=> [32, 768]
+            # 16 layers of subj_static_embedding are repeated REAL_OCCURS_IN_BATCH times.
+            # subj_static_embedding: [16, 768] repeat=> [32, 768]
             # LINK #init_embed
 
             # REAL_OCCURS_IN_BATCH: the real number of occurrences of the placeholder in the current batch,
@@ -1141,16 +1141,16 @@ class EmbeddingManager(nn.Module):
             if self.ada_ema_as_static_emb_weight < 1:
                 static_embedder = embedder_dict[placeholder_string].to(device)
                 if isinstance(static_embedder, StaticLayerwiseEmbedding):
-                    # Generate the actual placeholder_embedding on the fly.
+                    # Generate the actual subj_static_embedding on the fly.
                     # The 16 static subject embeddings are formed by linearly combining the basis vectors.
                     # The matrix operations are done on the fly.
-                    # placeholder_embedding: [16, K, 768].
-                    placeholder_embedding = static_embedder()
+                    # subj_static_embedding: [16, K, 768].
+                    subj_static_embedding = static_embedder()
                 else:
                     # static_embedder is already the embeddings.
-                    placeholder_embedding = static_embedder
+                    subj_static_embedding = static_embedder
             else:
-                placeholder_embedding = 0
+                subj_static_embedding = 0
 
             if self.ada_ema_as_static_emb_weight > 0:
                 ada_ema_emb = self.string_to_ada_ema_emb_dict[placeholder_string]
@@ -1165,9 +1165,9 @@ class EmbeddingManager(nn.Module):
                 ada_ema_emb_gs = 0
 
             # By default, ada_ema_as_static_emb_weight = 0.
-            placeholder_embedding = placeholder_embedding * (1 - self.ada_ema_as_static_emb_weight) \
-                                                        + ada_ema_emb_gs      * self.ada_ema_as_static_emb_weight
-            static_subj_embs_dict[placeholder_string] = placeholder_embedding
+            subj_static_embedding = subj_static_embedding * (1 - self.ada_ema_as_static_emb_weight) \
+                                    + ada_ema_emb_gs      * self.ada_ema_as_static_emb_weight
+            static_subj_embs_dict[placeholder_string] = subj_static_embedding
 
             for k in range(self.token2num_vectors[placeholder_string]):
                 placeholder_indices_k = (placeholder_indices[0], placeholder_indices[1] + k)
@@ -1176,13 +1176,13 @@ class EmbeddingManager(nn.Module):
                 # to each other across the batch dim:
                 # [b1_l1, ..., b1_l16, b2_l1, ..., b2_l16, ..., bB_l1, ..., bB_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
-                # The first dim of placeholder_embedding is the layer dim (size = 16). 
-                # So we repeat the 16 layers of the k-th embedding, placeholder_embedding[:, k], 
+                # The first dim of subj_static_embedding is the layer dim (size = 16). 
+                # So we repeat the 16 layers of the k-th embedding, subj_static_embedding[:, k], 
                 # REAL_OCCURS_IN_BATCH times, to match 16*REAL_OCCURS_IN_BATCH.
                 # After repeat, the RHS is
                 # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
-                embedded_text[placeholder_indices_k] = placeholder_embedding[:, k].repeat(REAL_OCCURS_IN_BATCH, 1)
+                embedded_text[placeholder_indices_k] = subj_static_embedding[:, k].repeat(REAL_OCCURS_IN_BATCH, 1)
 
             # Cache the placeholder indices for mix prompt distillation.
             # Note placeholder_indices are recomputed in update_placeholder_indices(), 
@@ -1277,21 +1277,21 @@ class EmbeddingManager(nn.Module):
             # BS/2: In distillation iterations, only half instances of the batch contain the subject token.
             # If (BS/2) > 1 or K > 1, then take the mean embedding of the K embeddings.
             # Even if BS/2 > 1, the K static embeddings of different instances are the same.
-            # layer_static_subj_emb: [768].
+            # layer_subj_static_emb: [768].
             curr_subj_indices = self.placeholder_indices_fg if not token_is_bg else self.placeholder_indices_bg
 
-            layer_static_subj_emb = layer_static_embs[curr_subj_indices].mean(dim=0)
-            # Generate the actual placeholder_embedding on the fly.
-            # placeholder_embedding: [B, K, 768]. B: 2 or 4 (regularization batches).
+            layer_subj_static_emb = layer_static_embs[curr_subj_indices].mean(dim=0)
+            # Generate the actual subj_ada_embedding on the fly.
+            # subj_ada_embedding: [B, K, 768]. B: 2 or 4 (regularization batches).
             # Before this call, we assume static_subj_embs has been generated by 
             # a call to get_static_embedding(). 
             # The pipeline is generate static embeddings first, then generate the ada embeddings. 
             # So this assumption should always hold.
             # For background Ada embedder, cached_infeat_bg is only used when
             # use_cached_bg. Otherwise, it's ignored.
-            placeholder_embedding, infeat_bg = \
+            subj_ada_embedding, infeat_bg = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
-                                     layer_static_subj_emb,
+                                     layer_subj_static_emb,
                                      layer_static_extra_emb_mean, 
                                      self.img_mask, ada_bp_to_unet, 
                                      self.cached_infeat_bg[layer_idx])
@@ -1299,7 +1299,7 @@ class EmbeddingManager(nn.Module):
             if self.img_mask is not None and self.img_mask.max() > 1:
                 breakpoint()
 
-            ada_subj_embs_dict[placeholder_string] = placeholder_embedding
+            ada_subj_embs_dict[placeholder_string] = subj_ada_embedding
 
             if not token_is_bg:
                 # Cache the bg infeat computed by the first (fg) ada embedder, 
@@ -1309,17 +1309,17 @@ class EmbeddingManager(nn.Module):
 
             for k in range(self.token2num_vectors[placeholder_string]):
                 # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
-                # embedded_text[placeholder_indices]: [2, 768].  placeholder_embedding: [2, 768].
+                # embedded_text[placeholder_indices]: [2, 768].  subj_ada_embedding: [2, 768].
                 # Sometimes (e.g. during inference, some instances contain the placeholder token but
                 # others don't. tokenized_text has a batch size of those containing the placeholder token only.
-                # But layer_infeat is still of the full batch size. So placeholder_embedding has a batch size 
+                # But layer_infeat is still of the full batch size. So subj_ada_embedding has a batch size 
                 # larger than the number of instances containing the placeholder token. We need to index
-                # placeholder_embedding with placeholder_indices[0] to get the matching new placeholder_embedding.
+                # subj_ada_embedding with placeholder_indices[0] to get the matching new subj_ada_embedding.
                 # We can save some computation by generating embeddings only for the instances containing 
                 # the placeholder token. But that requires complex processing so not pursued now.
                 placeholder_indices_k = (placeholder_indices[0], placeholder_indices[1] + k)
-                # placeholder_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
-                embedded_text[placeholder_indices_k] = placeholder_embedding[placeholder_indices[0], k]
+                # subj_ada_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
+                embedded_text[placeholder_indices_k] = subj_ada_embedding[placeholder_indices[0], k]
                 
         return embedded_text, ada_subj_embs_dict
 
