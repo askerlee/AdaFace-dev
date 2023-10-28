@@ -1577,7 +1577,7 @@ class EmbeddingManager(nn.Module):
 
             if "emb_global_scale_score" in ckpt:
                 self.emb_global_scale_score = ckpt["emb_global_scale_score"]
-                print(f"Set emb_global_scale = {self.get_emb_global_scale(do_perturb=False)}")
+                print(f"Set emb_global_scale = {self.get_emb_global_scale(do_perturb=False):.4f}")
 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
