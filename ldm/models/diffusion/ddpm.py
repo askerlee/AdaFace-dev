@@ -1285,8 +1285,8 @@ class LatentDiffusion(DDPM):
                     # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp background images.
                     p_use_wds_comp = 0.2
                 else:
-                    # 10% of recon iters will be initialized with wds_comp overlay images.
-                    p_use_wds_comp = 0.1
+                    # 5% of recon iters will be initialized with wds_comp overlay images.
+                    p_use_wds_comp = 0.05
             else:
                 p_use_wds_comp = 0
             
