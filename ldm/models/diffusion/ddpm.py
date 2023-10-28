@@ -1308,7 +1308,7 @@ class LatentDiffusion(DDPM):
                     # Use wds_cls_caption at decreasing probability over training.
                     # From 0.9 to 0.1 over first 50% of the training, then keep at 0.1.
                     # Using it more frequently may cause double subjects in the image.
-                    p_use_wds_cls_captions = anneal_value(self.training_percent, 0.5, (0.9, 0.1))
+                    p_use_wds_cls_captions = anneal_value(self.training_percent, 0.5, (0.6, 0.1))
                     self.iter_flags['use_wds_cls_captions'] = random.random() < p_use_wds_cls_captions
                     if self.iter_flags['use_wds_cls_captions']:
                         batch['caption']    = batch['wds_cls_caption']
@@ -1327,7 +1327,7 @@ class LatentDiffusion(DDPM):
             # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
             # NOTE: If use_wds_comp, then to preserve the foreground, we always enable comp_init_with_fg_area.
             # But in this case, the background areas will not be replaced with random noises.
-            p_comp_init_with_fg_area = 0.1 if self.iter_flags['use_wds_comp'] else 0.5
+            p_comp_init_with_fg_area = 0 if self.iter_flags['use_wds_comp'] else 0.5
             # If reuse_init_conds, comp_init_with_fg_area may be set to True later
             # if the previous iteration has comp_init_with_fg_area = True.
             self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
