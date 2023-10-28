@@ -369,7 +369,16 @@ def main(opt):
 
     if not opt.eval_blip:
         config = OmegaConf.load(f"{opt.config}")
-        
+
+        if opt.use_conv_attn:
+            assert opt.num_vectors_per_token in [4, 9, 16], \
+                    f"Only support 4/9/16 embeddings per token but got {opt.num_vectors_per_token}. " \
+                    "4 = 2*2 kernel, 9 = 3*3, 16 = 4*4."
+            config.model.params.use_conv_attn = True
+            kernel_desc_map = {4: "2x2", 9: "3x3", 16: "4x4"}
+            kernel_desc = kernel_desc_map[opt.num_vectors_per_token]
+            print(f"Use {kernel_desc} Conv Attention with subject embeddings")
+
         model  = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
             model.embedding_manager.load(opt.embedding_paths)
@@ -384,15 +393,6 @@ def main(opt):
             ckpt_num_vectors_per_token = model.embedding_manager.token2num_vectors[opt.placeholder_string]
             assert ckpt_num_vectors_per_token == opt.num_vectors_per_token, \
                    f"Number of vectors per token mismatch: command line {opt.num_vectors_per_token} != ckpt {ckpt_num_vectors_per_token}."
-
-        if opt.use_conv_attn:
-            assert opt.num_vectors_per_token in [4, 9, 16], \
-                    f"Only support 4/9/16 embeddings per token but got {opt.num_vectors_per_token}. " \
-                    "4 = 2*2 kernel, 9 = 3*3, 16 = 4*4."
-            config.model.params.use_conv_attn = True
-            kernel_desc_map = {4: "2x2", 9: "3x3", 16: "4x4"}
-            kernel_desc = kernel_desc_map[opt.num_vectors_per_token]
-            print(f"Use {kernel_desc} Conv Attention with subject embeddings")
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight

@@ -1012,6 +1012,8 @@ if __name__ == "__main__":
             print(f"Setting learning rate to {model.learning_rate:.2e}")
         
         model.weight_decay = weight_decay
+        model.model.diffusion_model.debug_attn = opt.debug
+
         # model.create_clip_evaluator(f"cuda:{trainer.root_gpu}")
 
         # allow checkpointing via USR1

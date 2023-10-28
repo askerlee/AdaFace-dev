@@ -505,6 +505,7 @@ class UNetModel(nn.Module):
         self.num_head_channels = num_head_channels
         self.num_heads_upsample = num_heads_upsample
         self.predict_codebook_ids = n_embed is not None
+        self.debug_attn = False
 
         self.backup_vars = { 
                             'use_conv_attn':            False,
@@ -819,7 +820,6 @@ class UNetModel(nn.Module):
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
-        debug_attn            = extra_info.get('debug_attn', False)            if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
         emb_k_mixer           = extra_info.get('emb_k_mixer', None)            if extra_info is not None else None
@@ -829,6 +829,7 @@ class UNetModel(nn.Module):
         deep_cfg_scale        = extra_info.get('deep_cfg_scale', 1.5)          if extra_info is not None else None
         disable_deep_neg_context = extra_info.get('disable_deep_neg_context', False) if extra_info is not None else False
         ca_align_suppress_scale  = extra_info.get('ca_align_suppress_scale', 1.0) if extra_info is not None else False
+        debug_attn            = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
 
         # If uncond (null) condition is active, then subj_indices = None.
         subj_indices_B, subj_indices_N = subj_indices if subj_indices is not None else (None, None)

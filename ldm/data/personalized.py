@@ -544,15 +544,17 @@ class PersonalizedBase(Dataset):
             example["wds_image"]            = (wds_image    / 127.5 - 1.0).astype(np.float32)
             example["wds_image_bgonly"]     = (bg_image_512 / 127.5 - 1.0).astype(np.float32)
             # fg_mask of wds_image is the same as non-wds instances. So no need to assign.
-            example["wds_aug_mask"]     = aug_mask
+            example["wds_aug_mask"]         = aug_mask
         else:
             example["wds_comp_extra"]       = ""
             example["wds_cls_comp_extra"]   = ""
-            example["wds_caption"]      = example["caption"]
-            example["wds_caption_bg"]   = example["caption_bg"]
-            example["wds_image"]        = example["image"]
-            example["wds_aug_mask"]     = example["aug_mask"]
-            
+            example["wds_caption"]          = example["caption"]
+            example["wds_caption_bg"]       = example["caption_bg"]
+            example["wds_image"]            = example["image"]
+            example["wds_aug_mask"]         = example["aug_mask"]
+            # No wds_cls_caption, wds_cls_caption_bg, wds_image_bgonly. 
+            # They are only accessed when 'has_wds_comp' is True.
+
         example["has_wds_comp"]         = gen_wds_comp
 
         DEBUG_WDS = False
@@ -560,11 +562,13 @@ class PersonalizedBase(Dataset):
             self.wds_sample_dir = "wds-samples"
             os.makedirs(self.wds_sample_dir, exist_ok=True)
             wds_sample_count = len(os.listdir(self.wds_sample_dir))
-            wds_sample_filepath = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
-            if os.path.exists(wds_sample_filepath):
-                while os.path.exists(wds_sample_filepath):
+            wds_sample_image_filepath = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
+            if os.path.exists(wds_sample_image_filepath):
+                while os.path.exists(wds_sample_image_filepath):
                     wds_sample_count += 1
-                    wds_sample_filepath = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
+                    wds_sample_image_filepath   = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
+                    wds_sample_prompt_filepath  = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.txt')
+
             # Overlay wds_aug_mask on wds_image.
             # Create a pure red image
             red_image  = np.ones_like(wds_image) * 255
@@ -572,7 +576,7 @@ class PersonalizedBase(Dataset):
             green_image = np.ones_like(wds_image) * 255
             green_image[:, :, [0,2]] = 0
 
-            if random.random() < 0.5:
+            if random.random() < 0:
                 wds_image2 = wds_image * 0.9 \
                             + aug_mask[:, :, None] * green_image * 0.1 \
                             + fg_mask[:, :, None]  * red_image   * 0.3
@@ -580,8 +584,8 @@ class PersonalizedBase(Dataset):
             else:
                 wds_image2 = wds_image
 
-            Image.fromarray(wds_image2).save(wds_sample_filepath)
-            print("Saved wds sample to {}".format(wds_sample_filepath))
+            Image.fromarray(wds_image2).save(wds_sample_image_filepath)
+            print("Saved wds sample to {}".format(wds_sample_image_filepath))
 
         return example
 
