@@ -1423,12 +1423,12 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight = self.ada_emb_weight        
         return ada_emb_weight
     
-    def get_emb_global_scale(self):
+    def get_emb_global_scale(self, do_perturb=True):
         # emb_global_scale_score = 0  -> emb_global_scale = 1, 
         # emb_global_scale_score = 1  -> emb_global_scale = 1.23
         # emb_global_scale_score = -1 -> emb_global_scale = 0.77
         emb_global_scale = self.emb_global_scale_score.sigmoid() + 0.5
-        if self.training:
+        if self.training and do_perturb:
             # 1 -> uniform in [0.8, 1.4]. Inject randomness to reduce overfitting.
             emb_global_scale = emb_global_scale * np.random.uniform(0.8, 1.4)
         else:
@@ -1577,6 +1577,7 @@ class EmbeddingManager(nn.Module):
 
             if "emb_global_scale_score" in ckpt:
                 self.emb_global_scale_score = ckpt["emb_global_scale_score"]
+                print(f"Set emb_global_scale = {self.get_emb_global_scale(do_perturb=False)}")
 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
