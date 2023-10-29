@@ -2272,6 +2272,9 @@ class LatentDiffusion(DDPM):
                                 cfg_scales=cfg_scales_for_clip_loss)
 
         extra_info['capture_distill_attn'] = False
+        if 'hyb_context_ks' in extra_info:
+            self.embedding_manager.cache_hybrid_prompt_embeddings(extra_info['hyb_context_ks'])
+            self.embedding_manager.update_emb_ema(extra_info['subj_indices'], extra_info['bg_indices'])
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
@@ -2402,7 +2405,7 @@ class LatentDiffusion(DDPM):
                 else:
                     # use_background_token == True and not self.iter_flags['use_wds_comp'].
                     # bg loss is somewhat discounted.
-                    instance_bg_weights = 0.25
+                    instance_bg_weights = 0.2
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 

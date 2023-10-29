@@ -808,6 +808,7 @@ class UNetModel(nn.Module):
         distill_attnscores = {}
         distill_ks      = {}
         distill_vs      = {}
+        hyb_context_ks  = {}
 
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
@@ -870,7 +871,7 @@ class UNetModel(nn.Module):
             if use_ada_context:
                 ada_embedder   = extra_info['ada_embedder']
                 ada_bp_to_unet = extra_info.get('ada_bp_to_unet', False)
-                layer_attn_components['static_prompt_embeddings'] = layer_static_context_v
+                layer_attn_components['layer_static_prompt_embs'] = layer_static_context_v
                 # emb: time embedding. h: features from the previous layer.
                 # context_in: ['an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
                 #              'an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
@@ -914,8 +915,9 @@ class UNetModel(nn.Module):
                             
                     layer_ada_context_v = th.cat([subj_layer_ada_context, mix_layer_ada_context_v], dim=0)
                     # layer_static_context_v, layer_ada_context_v: [2, 77, 768]
-                    # layer_agg_context_v: aggregated (static and ada) layer context fed to the current UNet layer, [2, 77, 768]
-                    layer_agg_context_v = layer_static_context_v * static_emb_weight \
+                    # layer_hyb_context_v: hybrid (static and ada) layer context 
+                    # fed to the current UNet layer, [2, 77, 768]
+                    layer_hyb_context_v = layer_static_context_v * static_emb_weight \
                                            + layer_ada_context_v * ada_emb_weight
 
                     if emb_k_mixer is not None:
@@ -932,18 +934,25 @@ class UNetModel(nn.Module):
                     layer_ada_context_k = th.cat([subj_layer_ada_context, mix_layer_ada_context_k], dim=0)
 
                     # Replace layer_static_context with layer_static_context_k.
-                    layer_agg_context_k = layer_static_context_k * static_emb_weight \
+                    layer_hyb_context_k = layer_static_context_k * static_emb_weight \
                                            + layer_ada_context_k * ada_emb_weight
                     
-                    # Pass both embeddings for hijacking the key of layer_agg_context_v by layer_context_k.
-                    layer_context = (layer_agg_context_v, layer_agg_context_k)
-                # normal_recon iters. Only one copy of k/v.
+                    # Pass both embeddings for hijacking the key of layer_hyb_context_v by layer_context_k.
+                    layer_context = (layer_hyb_context_v, layer_hyb_context_k)
+                    # Only cache the hybrid context_k corresponding to the subj instances.
+                    subj_layer_hyb_context_k = layer_hyb_context_k.chunk(2)[0]
                 else:
-                    layer_agg_context = layer_static_context * static_emb_weight \
+                    # normal_recon iters. Only one copy of k/v.
+                    layer_hyb_context = layer_static_context * static_emb_weight \
                                          + layer_ada_context * ada_emb_weight
 
-                    # Both the key and the value are layer_agg_context. Only provide one.
-                    layer_context = layer_agg_context
+                    # Both the key and the value are layer_hyb_context. Only provide one.
+                    layer_context = layer_hyb_context
+                    # No class instances in normal_recon iters. So the 
+                    # whole layer_hyb_context will be cached.
+                    subj_layer_hyb_context_k = layer_hyb_context
+
+                hyb_context_ks[layer_idx] = subj_layer_hyb_context_k.detach()
 
             else:
                 layer_context = layer_static_context
@@ -1064,6 +1073,7 @@ class UNetModel(nn.Module):
         extra_info['unet_attnscores']   = distill_attnscores
         extra_info['unet_ks']           = distill_ks
         extra_info['unet_vs']           = distill_vs
+        extra_info['hyb_context_ks']    = hyb_context_ks
 
         if debug_attn:
             breakpoint()
