@@ -3275,7 +3275,7 @@ class LatentDiffusion(DDPM):
                                                       do_sum=True, do_sqrt_norm=do_sqrt_norm)
 
                 fg_mask2 = resize_mask_for_feat_or_attn(subj_attn, fg_mask, "fg_mask", mode="nearest|bilinear")
-                # Repeat 8 times to match the number of attention heads.
+                # Repeat 8 times to match the number of attention heads (for normalization).
                 fg_mask2 = fg_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 fg_mask3 = torch.zeros_like(fg_mask2)
                 fg_mask3[fg_mask2 >  1e-6] = 1.
@@ -3290,12 +3290,12 @@ class LatentDiffusion(DDPM):
 
                 if (fg_mask3.sum(dim=(1, 2)) == 0).any():
                     # Very rare cases. Safe to skip.
-                    print("WARNING: fg_mask3 has all-one masks.")
+                    print("WARNING: fg_mask3 has all-zero masks.")
                     continue
                 if (bg_mask3.sum(dim=(1, 2)) == 0).any():
-                    # Should never happen.
-                    print("WARNING: bg_mask3 has all-one masks.")
-                    breakpoint()
+                    # Very rare cases. Safe to skip.
+                    print("WARNING: bg_mask3 has all-zero masks.")
+                    continue
 
                 # subj_score_at_mf: [BS, 8, 64].
                 # subj, bg: subject embedding,         background embedding.
@@ -3303,8 +3303,8 @@ class LatentDiffusion(DDPM):
                 # sum(dim=(1,2)): avoid summing across the batch dimension. 
                 # It's meaningless to average among the instances.
                 subj_score_at_mf = subj_score * fg_mask3
-                subj_score_at_mb = subj_score * bg_mask3
                 bg_score_at_mf   = bg_score   * fg_mask3
+                subj_score_at_mb = subj_score * bg_mask3
                 bg_score_at_mb   = bg_score   * bg_mask3
 
                 # fg_mask3: [BS, 8, 64]
