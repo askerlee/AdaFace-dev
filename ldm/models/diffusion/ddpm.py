@@ -1286,6 +1286,8 @@ class LatentDiffusion(DDPM):
                     p_use_wds_comp = 0.2
                 else:
                     # 5% of recon iters will be initialized with wds_comp overlay images.
+                    # If we set p_use_wds_comp >= 0.1, then the subject embeddings will tend to
+                    # attend to and reconstruct the overlay background, leading to inferior results.
                     p_use_wds_comp = 0.05
             else:
                 p_use_wds_comp = 0
