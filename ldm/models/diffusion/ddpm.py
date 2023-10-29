@@ -2276,7 +2276,7 @@ class LatentDiffusion(DDPM):
         extra_info['capture_distill_attn'] = False
         if 'hyb_context_ks' in extra_info:
             self.embedding_manager.cache_hybrid_prompt_embeddings(extra_info['hyb_context_ks'])
-            self.embedding_manager.update_emb_ema(extra_info['subj_indices'], extra_info['bg_indices'])
+            self.embedding_manager.update_emb_ema(subj_indices, bg_indices)
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'

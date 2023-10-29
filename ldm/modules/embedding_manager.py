@@ -1247,12 +1247,13 @@ class EmbeddingManager(nn.Module):
             # layer_subj_emb_probe: [768].
             curr_subj_indices = self.placeholder_indices_fg if not token_is_bg else self.placeholder_indices_bg
 
-            if self.emb_ema_as_pooling_probe:
+            # Don't use emb_ema_as_pooling_probe for background Ada embedder.
+            if self.emb_ema_as_pooling_probe and not token_is_bg:
                 token_emb_ema = self.string_to_emb_ema_dict[placeholder_string]
                 if token_emb_ema is None:
                     # In the first iteration, the token EMA hasn't been initialized. 
                     # So we use static embeddings in place of the token EMA.
-                    # Mean is taken across instances.
+                    # Mean is taken across the batch instances and K embeddings.
                     layer_subj_emb_probe = layer_static_prompt_embs[curr_subj_indices].mean(dim=0)
                 else:                  
                     # static_embedder is an Embedding3d within a LitEma. Get the actual embedding.
@@ -1292,7 +1293,7 @@ class EmbeddingManager(nn.Module):
                 # Cache the bg infeat computed by the first (fg) ada embedder, 
                 # to be used by the second Ada embedder and the background Ada embedder.
                 # NOTE: this assumes the background token always appears after the subject tokens.
-                self.cached_infeat_bg[layer_idx]        = infeat_bg
+                self.cached_infeat_bg[layer_idx]    = infeat_bg
 
             for k in range(self.token2num_vectors[placeholder_string]):
                 # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
