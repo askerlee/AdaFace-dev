@@ -39,7 +39,10 @@ def parse_args():
     parser.add_argument("--use_conv_attn",
                         action="store_true", 
                         help="Use convolutional attention at subject tokens")
-                            
+    parser.add_argument("--emb_ema_as_pooling_probe",
+                        action="store_true", default=argparse.SUPPRESS,
+                        help="Use EMA embedding as the pooling probe")
+                                
     parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
     
@@ -439,7 +442,9 @@ if __name__ == "__main__":
             command_line += f" --placeholder_string {args.orig_placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
         if args.use_conv_attn:
             command_line += f" --use_conv_attn"
-        
+        if hasattr(args, 'emb_ema_as_pooling_probe'):
+            command_line += f" --emb_ema_as_pooling_probe"
+            
         if args.background_string and args.include_bg_string:
             command_line += f" --background_string {args.background_string}"
 
