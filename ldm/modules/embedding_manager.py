@@ -1473,7 +1473,7 @@ class EmbeddingManager(nn.Module):
             # then it's time to update EMA embeddings.
             # This should happen after the previous training iteration finishes and 
             # before the current training iteration begins.
-            if self.training and self.ada_ema_as_static_emb_weight > 0 \
+            if self.training and self.ada_ema_as_static_emb_weight >= 0 \
               and (len(ada_temp_emb.cached_layer) == ada_temp_emb.num_layers):
                 # Update EMA embeddings.
                 self.string_to_ada_ema_emb_dict[k](ada_temp_emb)
@@ -1602,7 +1602,7 @@ class EmbeddingManager(nn.Module):
                         km2 = km.replace(k, k2)
                         self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
                         self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
-                        if self.ada_ema_as_static_emb_weight > 0:
+                        if self.ada_ema_as_static_emb_weight >= 0:
                             self.string_to_ada_ema_emb_dict[km2]     = ckpt["string_to_ada_ema_emb_dict"][km]
                         
                         if km in ckpt["token2num_vectors"]:
