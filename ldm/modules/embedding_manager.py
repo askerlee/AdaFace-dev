@@ -1555,6 +1555,7 @@ class EmbeddingManager(nn.Module):
                      "token2num_vectors":               self.token2num_vectors,
                      "emb_global_scale_score":          self.emb_global_scale_score,
                      "ada_emb_weight":                  self.ada_emb_weight,  
+                     "emb_ema_as_pooling_probe":        self.emb_ema_as_pooling_probe
                    }, 
                     ckpt_path)
 
@@ -1565,7 +1566,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_token_dict           = {}
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
-        self.string_to_emb_ema_dict     = nn.ModuleDict()
+        self.string_to_emb_ema_dict         = nn.ModuleDict()
         token2num_vectors                   = {}
 
         if isinstance(ckpt_paths, str):
@@ -1591,6 +1592,10 @@ class EmbeddingManager(nn.Module):
                 self.emb_global_scale_score = ckpt["emb_global_scale_score"]
                 print(f"Set emb_global_scale = {self.get_emb_global_scale(do_perturb=False):.4f}")
 
+            if "emb_ema_as_pooling_probe" in ckpt:
+                self.emb_ema_as_pooling_probe = ckpt["emb_ema_as_pooling_probe"]
+                print(f"Set emb_ema_as_pooling_probe = {self.emb_ema_as_pooling_probe}")
+
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
                     k2 = placeholder_mapper[k]
@@ -1613,8 +1618,7 @@ class EmbeddingManager(nn.Module):
                         km2 = km.replace(k, k2)
                         self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
                         self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
-                        if self.emb_ema_as_pooling_probe:
-                            self.string_to_emb_ema_dict[km2]     = ckpt["string_to_emb_ema_dict"][km]
+                        self.string_to_emb_ema_dict[km2]         = ckpt["string_to_emb_ema_dict"][km]
                         
                         if km in ckpt["token2num_vectors"]:
                             token2num_vectors[km2] = ckpt["token2num_vectors"][km]

@@ -277,7 +277,10 @@ def parse_args():
     parser.add_argument("--use_conv_attn",
                         action="store_true", 
                         help="Use convolutional attention at subject tokens")
-                        
+    parser.add_argument("--emb_ema_as_pooling_probe",
+                        action="store_true", default=argparse.SUPPRESS,
+                        help="Use EMA embedding as the pooling probe")
+    
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
     parser.add_argument("--bb_type", type=str, default="")
@@ -388,6 +391,9 @@ def main(opt):
             ckpt_num_vectors_per_token = model.embedding_manager.token2num_vectors[opt.placeholder_string]
             assert ckpt_num_vectors_per_token == opt.num_vectors_per_token, \
                    f"Number of vectors per token mismatch: command line {opt.num_vectors_per_token} != ckpt {ckpt_num_vectors_per_token}."
+
+        if hasattr(opt, 'emb_ema_as_pooling_probe'):
+            model.embedding_manager.emb_ema_as_pooling_probe = opt.emb_ema_as_pooling_probe
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
