@@ -393,7 +393,7 @@ def main(opt):
                    f"Number of vectors per token mismatch: command line {opt.num_vectors_per_token} != ckpt {ckpt_num_vectors_per_token}."
 
         if hasattr(opt, 'emb_ema_as_pooling_probe'):
-            model.embedding_manager.emb_ema_as_pooling_probe = opt.emb_ema_as_pooling_probe
+            model.embedding_manager.set_emb_ema_as_pooling_probe(opt.emb_ema_as_pooling_probe)
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight

@@ -1430,6 +1430,10 @@ class EmbeddingManager(nn.Module):
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
 
+    def set_emb_ema_as_pooling_probe(self, emb_ema_as_pooling_probe):
+        self.emb_ema_as_pooling_probe = emb_ema_as_pooling_probe
+        print(f"Setting emb_ema_as_pooling_probe = {emb_ema_as_pooling_probe}")
+
     # Cache features used to compute ada embeddings.
     def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
         self.gen_ada_embedding = True
@@ -1593,8 +1597,7 @@ class EmbeddingManager(nn.Module):
                 print(f"Set emb_global_scale = {self.get_emb_global_scale(do_perturb=False):.4f}")
 
             if "emb_ema_as_pooling_probe" in ckpt:
-                self.emb_ema_as_pooling_probe = ckpt["emb_ema_as_pooling_probe"]
-                print(f"Set emb_ema_as_pooling_probe = {self.emb_ema_as_pooling_probe}")
+                self.set_emb_ema_as_pooling_probe(ckpt["emb_ema_as_pooling_probe"])
 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
