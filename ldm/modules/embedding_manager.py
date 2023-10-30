@@ -1272,6 +1272,8 @@ class EmbeddingManager(nn.Module):
                     # the layer subj embedding is of [9, 768]. So average across the K embeddings.
                     layer_subj_emb_ema = token_emb_ema_embedding[ca_layer_idx].mean(dim=0)
 
+                # Although layer_subj_emb_ema cannot be updated through SGD, 
+                # layer_static_subj_emb is updateable. So the probe will still adapt to the learning objective.
                 layer_subj_emb_probe = (1 - emb_ema_as_pooling_probe_weight) * layer_static_subj_emb \
                                         + emb_ema_as_pooling_probe_weight    * layer_subj_emb_ema
                 
