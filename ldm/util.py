@@ -211,12 +211,27 @@ def parallel_data_prefetch(
 # a, b are n-dimensional tensors. Subtraction happens at the last dim.
 # ortho_subtract(a, b) is not symmetric w.r.t. a and b, nor is ortho_l2loss(a, b).
 # NOTE: always choose a to be something we care about, and b to be something as a reference.
-def ortho_subtract(a, b):
+def ortho_subtract(a, b, on_last_n_dims=1):
     assert a.ndim == b.ndim, "Tensors a and b must have the same number of dimensions"
-    dot_a_b = torch.einsum('...i,...i->...', a, b)
-    dot_b_b = torch.einsum('...i,...i->...', b, b)
+    if on_last_n_dims > 1:
+        # Do not support broadcasting if on_last_n_dims > 1.
+        assert a.shape == b.shape, "Tensors a and b must have the same shape"
+        orig_shape = a.shape
+        a2 = a.reshape(*a.shape[:-on_last_n_dims], -1)
+        b2 = b.reshape(*b.shape[:-on_last_n_dims], -1)
+    else:
+        a2 = a
+        b2 = b
+
+    dot_a_b = torch.einsum('...i,...i->...', a2, b2)
+    dot_b_b = torch.einsum('...i,...i->...', b2, b2)
     w_optimal = dot_a_b / (dot_b_b + 1e-6)
-    return a - b * w_optimal.unsqueeze(-1)
+    result = a2 - b2 * w_optimal.unsqueeze(-1)
+
+    if on_last_n_dims > 1:
+        result = result.reshape(orig_shape)
+
+    return result
 
 # Extract the components of a that aligns and orthos with b, respectively.
 def decomp_align_ortho(a, b):

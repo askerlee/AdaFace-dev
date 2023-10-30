@@ -7,7 +7,7 @@ from functools import partial
 
 from ldm.modules.diffusionmodules.util import make_ddim_sampling_parameters, make_ddim_timesteps, noise_like, \
     extract_into_tensor
-
+from ldm.util import ortho_subtract
 
 class DDIMSampler(object):
     def __init__(self, model, schedule="linear", **kwargs):
@@ -243,7 +243,13 @@ class DDIMSampler(object):
             # model.apply_model() -> DiffusionWrapper.forward() -> UNetModel.forward().
             e_t, e_t_uncond = self.model.apply_model(x_in, t_in, c2).chunk(2)
             # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
-            e_t = e_t_uncond + unconditional_guidance_scale * (e_t - e_t_uncond)
+            # cfg_use_ortho_subtract is disabled, as it doesn't bring consistent improvement.
+            cfg_use_ortho_subtract = False
+            if cfg_use_ortho_subtract:
+                # e_t, e_t_uncond: [4, 4, 64, 64]
+                e_t = e_t_uncond + unconditional_guidance_scale * ortho_subtract(e_t, e_t_uncond, on_last_n_dims=2)
+            else:
+                e_t = e_t_uncond + unconditional_guidance_scale * (e_t - e_t_uncond)
 
         # score_corrector is None.
         if score_corrector is not None:
