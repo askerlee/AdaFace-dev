@@ -177,10 +177,10 @@ class AttentionalPooler(nn.Module):
     # which aggregates the original UNet layer input features x.
     def forward(self, layer_attn_components, fg_q_emb, bg_q_emb=None, img_mask=None, bp_to_unet=False):
         # Use 'q' instead of 'x' as ada layer_infeat. x and q have the same shape.
-        layer_infeat, layer_inquery, layer_to_k, layer_infeat_size, \
-            attn_score_scale = layer_attn_components['q'], layer_attn_components['q'], \
-                                layer_attn_components['to_k'], layer_attn_components['infeat_size'], \
-                                layer_attn_components['scale']
+        layer_infeat, layer_inquery, layer_to_k, layer_infeat_size \
+                = layer_attn_components['x'], layer_attn_components['q'], \
+                  layer_attn_components['to_k'], layer_attn_components['infeat_size']
+                           
 
         if bp_to_unet:
             if self.infeat_grad_scale < 1:
@@ -203,8 +203,14 @@ class AttentionalPooler(nn.Module):
         # k: query from the UNet attention layer. Used as key here.
         # No need to go through to_k() here, as it's already the query from the UNet attention layer.
         k = self.ln_k(k)
-        # v: simply normalized x (layer_infeat).
-        v = self.ln_x(x)
+        # x is x1 in BasicTransformerBlock, which is added with x_ca, a transformation of cross-attn v.
+        # cross-attn v is the projection of the prompt embedding. So in order to provide proper x_ca,
+        # we include x as the input to the attentional pooler (which provides input to the ada embedder).
+        # On the other hand, k is cross-attn q, which is multiplied with the 
+        # cross-attn k (projection of the prompt embedding). In order to provide proper cross-attn k,
+        # we include k as the input to the attentional pooler.
+        # Therefore, v = x + k. We can also concat(x, k), but it will double the feature dimension.
+        v = self.ln_x(x + k)
 
         # Use to_k of the UNet attention layer as to_q here, 
         # as the subject embedding is used as the key in UNet.
