@@ -854,6 +854,9 @@ class EmbeddingManager(nn.Module):
         self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
         self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight
+        self.emb_ema_grad_scale = 0.1
+        self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
+        self.emb_ema_sgd_able = False
 
         self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
 
@@ -1271,6 +1274,10 @@ class EmbeddingManager(nn.Module):
                     # We only need one embedding of [768]. But
                     # the layer subj embedding is of [9, 768]. So average across the K embeddings.
                     layer_subj_emb_ema = token_emb_ema_embedding[ca_layer_idx].mean(dim=0)
+                    # emb_ema_sgd_able is set in ddpm.py:LatentDiffusion.p_losses(). 
+                    # Alternate between EMA update and EMA sgd update.
+                    if not self.emb_ema_sgd_able:
+                        layer_subj_emb_ema = layer_subj_emb_ema.detach()
 
                 # Although layer_subj_emb_ema cannot be updated through SGD, 
                 # layer_static_subj_emb is updateable. So the probe will still adapt to the learning objective.
@@ -1458,6 +1465,11 @@ class EmbeddingManager(nn.Module):
         self.layer_idx2chan_weights         = {}
 
     def update_emb_ema(self, fg_indices, bg_indices):
+        # Don't update EMA embeddings in SGD-enabled iterations.
+        # Otherwise it will cause computation graph error.
+        if self.emb_ema_sgd_able:
+            return
+        
         if fg_indices is None and bg_indices is None:
             return
         
@@ -1499,8 +1511,8 @@ class EmbeddingManager(nn.Module):
                     if self.string_to_emb_ema_dict[k] is None:
                         # First iteration, initialize the LitEma object.
                         print("Initializing LitEma for token", k)
-                        # requires_grad=False, as there are technical difficulties to update EMA weights.
-                        self.string_to_emb_ema_dict[k] = LitEma(token_emb_cache_obj, decay=0.995, requires_grad=False)
+                        # requires_grad=True, to allow EMA embeddings to be updated by SGD.
+                        self.string_to_emb_ema_dict[k] = LitEma(token_emb_cache_obj, decay=0.99, requires_grad=True)
                         # Put the newly initialized LitEma object on CUDA.
                         self.string_to_emb_ema_dict[k].to(token_embs.device)
                     else:

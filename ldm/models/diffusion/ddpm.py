@@ -2258,6 +2258,10 @@ class LatentDiffusion(DDPM):
         emb_man_volatile_ds = { 'subj_indices':   subj_indices,
                                 'bg_indices':     bg_indices,
                                 'img_mask':       emb_man_img_mask }
+
+        # Iterate between emb ema update and emb ema sgd update.
+        # At the first step 0, emb_ema_sgd_able is False, so emb ema update is performed.
+        self.embedding_manager.emb_ema_sgd_able = (self.global_step % 2 == 1)
                         
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
