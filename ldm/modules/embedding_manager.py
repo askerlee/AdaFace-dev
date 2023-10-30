@@ -639,7 +639,7 @@ class AdaEmbedding(nn.Module):
         self.layers_out_lns     = nn.ModuleList(layers_out_lns)
         self.layer_lncat3s      = nn.ModuleList(layer_lncat3s)
 
-        #self.mask_layer_coeff_map_weights()
+        self.mask_layer_coeff_map_weights()
 
         self.has_bias = has_bias
         if has_bias:
@@ -700,7 +700,7 @@ class AdaEmbedding(nn.Module):
         # Some Linears only use either fg or bg features. 
         # So we mask weights at the unused half, since the corresponding weights are 
         # updated during BP and become nonzero. 
-        #self.mask_layer_coeff_map_weights(ca_layer_idx)
+        self.mask_layer_coeff_map_weights(ca_layer_idx)
         if not self.is_fg_only and self.use_cached_bg:
             # cached_infeat_bg must be provided when use_cached_bg.
             if cached_infeat_bg is None:
@@ -1217,7 +1217,7 @@ class EmbeddingManager(nn.Module):
                 ## Why not mask bg indices for fg ada? bg embeddings are supposed to be of a similar nature 
                 ## as the extra compositional embeddings. Incorporating them in layer_static_extra_emb_mean
                 ## will make fg and bg embeddings more orthogonal (i.e., attend to different areas).
-                list_of_indices_to_mask = [self.placeholder_indices_fg, self.placeholder_indices_bg]
+                list_of_indices_to_mask = [self.placeholder_indices_fg] #, self.placeholder_indices_bg]
                 
             # layer_static_prompt_embs:   [4, 77, 768]. 
             # delta_loss_emb_mask: [4, 77, 1].
