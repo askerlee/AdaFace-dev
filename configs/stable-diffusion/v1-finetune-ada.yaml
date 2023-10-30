@@ -84,7 +84,7 @@ model:
         layerwise_lora_rank_token_ratio: 2
         ada_emb_weight: 0.5
         ada_use_attn_pooler: True
-        emb_ema_as_pooling_probe: True
+        emb_ema_as_pooling_probe: False
         
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
