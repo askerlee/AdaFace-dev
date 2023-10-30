@@ -1824,7 +1824,7 @@ class EmbeddingManager(nn.Module):
                              + loss_ada_chan_weights_map_weight * ada_maps_weight_reg_weight \
                              + loss_ada_chan_weights_map_bias   * ada_maps_bias_reg_weight
                 
-                debug = True
+                debug = False
                 if debug and self.loss_call_count % 100 == 0:
                     print_str = f'reg_bias={loss_bias.item():.4f}, ' \
                                 f'reg_basis={loss_basis.item():.4f}, '
