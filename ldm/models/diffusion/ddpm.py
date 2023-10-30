@@ -1909,11 +1909,8 @@ class LatentDiffusion(DDPM):
 
         # Save ada embeddings generated during apply_model(), to be used in delta loss. 
         # Otherwise it will be overwritten by uncond denoising.
-        if self.embedding_manager.ada_prompt_embedding_cache is not None:
-            # ada_embeddings: [4, 16, 77, 768]
-            ada_embeddings = torch.stack(self.embedding_manager.ada_prompt_embedding_cache, dim=1)
-        else:
-            ada_embeddings = None
+        # ada_embeddings: [4, 16, 77, 768] or None, if subj token doesn't appear in the prompts.
+        ada_embeddings = self.embedding_manager.get_cached_ada_prompt_embeddings()
 
         # Get model output of both conditioned and uncond prompts.
         # Unconditional prompts and reconstructed images are never involved in optimization.
@@ -2274,9 +2271,6 @@ class LatentDiffusion(DDPM):
                                 cfg_scales=cfg_scales_for_clip_loss)
 
         extra_info['capture_distill_attn'] = False
-        if 'hyb_context_ks' in extra_info:
-            self.embedding_manager.cache_hybrid_prompt_embeddings(extra_info['hyb_context_ks'])
-            self.embedding_manager.update_emb_ema(subj_indices, bg_indices)
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'

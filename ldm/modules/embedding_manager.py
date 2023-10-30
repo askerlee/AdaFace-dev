@@ -1015,8 +1015,7 @@ class EmbeddingManager(nn.Module):
         self.loss_call_count = 0
         # Store the text_embedder to compute the delta loss.
         self.text_embedder  = text_embedder
-        self.ada_prompt_embedding_cache     = None
-        self.hybrid_prompt_embeddings_cache = None
+        self.ada_prompt_embeddings_cache = None
         self.layer_idx2chan_weights = {}
         self.ada_bp_to_unet = False
         self.force_grad     = False
@@ -1448,16 +1447,18 @@ class EmbeddingManager(nn.Module):
         self.ada_bp_to_unet = ada_bp_to_unet
         self.layer_attn_components = layer_attn_components
 
-    # self.ada_prompt_embedding_cache is a cache for the prompt embeddings of all layers, 
+    # self.ada_prompt_embeddings_cache is a cache for the prompt embeddings of all layers, 
     # for computing the prompt delta loss.
     # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
     # not just the ada or static embeddings of the subject.
     def reset_prompt_embedding_caches(self):
-        self.ada_prompt_embedding_cache     = [ None for i in range(self.num_unet_ca_layers) ]
-        self.hybrid_prompt_embeddings_cache = {}
+        self.ada_prompt_embeddings_cache    = {}
         self.layer_idx2chan_weights         = {}
 
     def update_emb_ema(self, fg_indices, bg_indices):
+        if fg_indices is None and bg_indices is None:
+            return
+        
         if self.training and self.emb_ema_as_pooling_probe_weight > 0:
             for k, token_emb_cache_obj in self.token2emb_cache.items():
                 # If all layers of ada embeddings have been cached in token_emb_cache_obj,
@@ -1476,11 +1477,16 @@ class EmbeddingManager(nn.Module):
                 if token_indices is None:
                     continue
 
-                for ca_layer_idx, hybrid_prompt_embs in self.hybrid_prompt_embeddings_cache.items():
-                    # hybrid_prompt_embs: [2, 77, 768].
-                    # hybrid_prompt_embs[token_indices]: [18, 768] => [2, 9, 768].
-                    token_embs = hybrid_prompt_embs[token_indices].reshape(
-                        hybrid_prompt_embs.shape[0], -1, hybrid_prompt_embs.shape[2])
+                for ca_layer_idx, ada_prompt_embs in self.ada_prompt_embeddings_cache.items():
+                    # token_indices may only contain the indices of some (not all) instances in the batch.
+                    # ada_prompt_embs: [2, 77, 768].
+                    # ada_prompt_embs[token_indices]: [18, 768] => [2, 9, 768].
+                    VALID_BS = token_indices[0].unique().shape[0]
+                    try:
+                        token_embs = ada_prompt_embs[token_indices].reshape(
+                            VALID_BS, -1, ada_prompt_embs.shape[2])
+                    except:
+                        breakpoint()
                     # LitEma requires an nn.Module to do updating. 
                     # So we use token_emb_cache_obj as a dummy Embedding3d to update the EMA embedding.
                     # We can update after the ada embeddings of all layers are cached into token_emb_cache_obj.
@@ -1506,12 +1512,23 @@ class EmbeddingManager(nn.Module):
     # not just the ada or static embeddings of the subject.
     def cache_ada_prompt_embedding(self, layer_idx, embedding):
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
-        self.ada_prompt_embedding_cache[ca_layer_idx] = embedding
+        self.ada_prompt_embeddings_cache[ca_layer_idx] = embedding
+        if len(self.ada_prompt_embeddings_cache) == self.num_layers_per_embedder:
+            self.update_emb_ema(self.placeholder_indices_fg, self.placeholder_indices_bg)
 
-    def cache_hybrid_prompt_embeddings(self, hyb_prompt_embs_dict):
-        for layer_idx, embedding in hyb_prompt_embs_dict.items():
-            ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
-            self.hybrid_prompt_embeddings_cache[ca_layer_idx] = embedding
+    def get_cached_ada_prompt_embeddings(self):
+        # No tokens appear in the current prompt. So the ada prompt embedding cache is empty.
+        if len(self.ada_prompt_embeddings_cache) == 0:
+            return None
+        
+        if len(self.ada_prompt_embeddings_cache) != self.num_layers_per_embedder:
+            breakpoint()
+        # Stack the cached prompt embeddings of all layers into a tensor.
+        ada_prompt_embeddings = [ self.ada_prompt_embeddings_cache[ca_layer_idx] 
+                                  for ca_layer_idx in range(self.num_layers_per_embedder) ]
+        # ada_prompt_embeddings: [BS, 16, 77, 768]. BS: batch size (2 or 4). 16: num layers.
+        ada_prompt_embeddings = torch.stack(ada_prompt_embeddings, dim=1)
+        return ada_prompt_embeddings
 
     def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings=None):
         if num_vectors_per_token is None or type(num_vectors_per_token) == int:
@@ -1540,8 +1557,8 @@ class EmbeddingManager(nn.Module):
         self.layer_attn_components  = None
         self.time_emb       = None
         
-    def clear_ada_prompt_embedding_cache(self):
-        self.ada_prompt_embedding_cache = None
+    def clear_ada_prompt_embeddings_cache(self):
+        self.ada_prompt_embeddings_cache = None
 
     # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
     # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
@@ -1946,7 +1963,7 @@ class EmbeddingManager(nn.Module):
             ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, emb_mask=delta_loss_emb_mask2,
                                              do_demean_first=True)
             # The cached ada embeddings are useless now, release them.
-            self.clear_ada_prompt_embedding_cache()
+            self.clear_ada_prompt_embeddings_cache()
         else:
             ada_delta_loss = 0
 
