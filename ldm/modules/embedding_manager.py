@@ -854,6 +854,8 @@ class EmbeddingManager(nn.Module):
         self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
         self.emb_ema_as_pooling_probe   = emb_ema_as_pooling_probe
+        # Allow SGD on emb ema embedding, but reduce the learning rate.
+        self.emb_ema_grad_scale         = 0.1
 
         self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
 
@@ -1255,7 +1257,7 @@ class EmbeddingManager(nn.Module):
                     # In the first iteration, the token EMA hasn't been initialized. 
                     # So we use static embeddings in place of the token EMA.
                     # Mean is taken across the batch instances and K embeddings.
-                    layer_subj_emb_probe = layer_static_prompt_embs[curr_subj_indices].mean(dim=0)
+                    layer_subj_emb_probe_gs = layer_static_prompt_embs[curr_subj_indices].mean(dim=0)
                 else:                  
                     # static_embedder is an Embedding3d within a LitEma. Get the actual embedding.
                     # LitEma copies the member variables of the wrapped Embedding3d. 
@@ -1268,9 +1270,11 @@ class EmbeddingManager(nn.Module):
                     # We only need one embedding of [768]. But
                     # the layer subj embedding is of [9, 768]. So average across the K embeddings.
                     layer_subj_emb_probe = token_emb_ema_embedding[ca_layer_idx].mean(dim=0)
+                    emb_ema_grad_scaler = GradientScaler(self.emb_ema_grad_scale)
+                    layer_subj_emb_probe_gs = emb_ema_grad_scaler.scale(layer_subj_emb_probe)
             else:
                 # Average across both the batch instances and K embeddings.
-                layer_subj_emb_probe = layer_static_prompt_embs[curr_subj_indices].mean(dim=0)
+                layer_subj_emb_probe_gs = layer_static_prompt_embs[curr_subj_indices].mean(dim=0)
 
             # Generate the actual subj_ada_embedding on the fly.
             # subj_ada_embedding: [B, K, 768]. B: 2 or 4 (regularization batches).
@@ -1282,7 +1286,7 @@ class EmbeddingManager(nn.Module):
             # use_cached_bg. Otherwise, it's ignored.
             subj_ada_embedding, infeat_bg = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
-                                     layer_subj_emb_probe,
+                                     layer_subj_emb_probe_gs,
                                      layer_static_extra_emb_mean, 
                                      self.img_mask, ada_bp_to_unet, 
                                      self.cached_infeat_bg[layer_idx])
@@ -1487,7 +1491,8 @@ class EmbeddingManager(nn.Module):
                     if self.string_to_emb_ema_dict[k] is None:
                         # First iteration, initialize the LitEma object.
                         print("Initializing LitEma for token", k)
-                        self.string_to_emb_ema_dict[k] = LitEma(token_emb_cache_obj, decay=0.995)
+                        # requires_grad=True is required for LitEma to be updated by SGD.
+                        self.string_to_emb_ema_dict[k] = LitEma(token_emb_cache_obj, decay=0.995, requires_grad=True)
                         # Put the newly initialized LitEma object on CUDA.
                         self.string_to_emb_ema_dict[k].to(token_embs.device)
                     else:
