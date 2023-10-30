@@ -860,7 +860,7 @@ class EmbeddingManager(nn.Module):
         self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
         self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight
-        self.emb_ema_grad_scale = 0.1
+        self.emb_ema_grad_scale = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
         self.emb_ema_sgd_able = False
 
@@ -1518,7 +1518,7 @@ class EmbeddingManager(nn.Module):
                         # First iteration, initialize the LitEma object.
                         print("Initializing LitEma for token", k)
                         # requires_grad=True, to allow EMA embeddings to be updated by SGD.
-                        self.string_to_emb_ema_dict[k] = LitEma(token_emb_cache_obj, decay=0.99, requires_grad=True)
+                        self.string_to_emb_ema_dict[k] = LitEma(token_emb_cache_obj, decay=0.995, requires_grad=True)
                         # Put the newly initialized LitEma object on CUDA.
                         self.string_to_emb_ema_dict[k].to(token_embs.device)
                     else:
