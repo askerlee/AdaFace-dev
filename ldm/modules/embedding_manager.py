@@ -177,7 +177,7 @@ class AttentionalPooler(nn.Module):
     # which aggregates the original UNet layer input features x.
     def forward(self, layer_attn_components, fg_q_emb, bg_q_emb=None, img_mask=None, bp_to_unet=False):
         # x and q have the same shape.
-        ca_x, ca_q, layer_to_k, ca_x_size \
+        ca_x, ca_q, ca_to_k, ca_x_size \
                 = layer_attn_components['x'], layer_attn_components['q'], \
                   layer_attn_components['to_k'], layer_attn_components['infeat_size']
                            
@@ -194,13 +194,14 @@ class AttentionalPooler(nn.Module):
             # But if attentional pooler is used, it will also not be BPed into and not updated.
             # When not bp_to_unet, completely cut off the gradient flow into the UNet.
             # bp_to_unet is enabled when doing composition regularization iterations. 
-            ca_x_gs  = ca_x.detach()
+            ca_x_gs = ca_x.detach()
             ca_q_gs = ca_q.detach()
 
         x = ca_x_gs
         k = ca_q_gs
         # k: query from the UNet attention layer. Used as key here.
-        # No need to go through to_k() here, as it's already the query from the UNet attention layer.
+        # No need to go through ca_to_k() here, as it's already the projected query 
+        # in UNet cross-attn layer.
         k = self.ln_k(k)
         # x is x1 in BasicTransformerBlock, which is added with x_ca, a transformation of cross-attn v.
         # cross-attn v is the projection of the prompt embedding. So in order to provide proper x_ca,
@@ -213,7 +214,7 @@ class AttentionalPooler(nn.Module):
 
         # Use to_k of the UNet attention layer as to_q here, 
         # as the subject embedding is used as the key in UNet.
-        to_q = layer_to_k
+        to_q = ca_to_k
         # Simplify the flow by avoiding checking whether bg_q_emb is None later.
 
         # fg_q_emb: [768] => [1, 768].
@@ -263,7 +264,7 @@ class AttentionalPooler(nn.Module):
         # lora_fg_q, lora_bg_q: [B, 128, 1]    -> [B, 1, 128]
         # lora_k:               [8, 128, 4096] -> [8, 4096, 128]
         lora_fg_q, lora_bg_q, lora_k = map(lambda t: t.permute(0, 2, 1), (lora_fg_q, lora_bg_q, lora_k))
-        # lora_q: [B, 2, 128].
+        # lora_q: [B, 2, 128]. Two artificial tokens, each with 128 dims.
         lora_q = torch.cat([lora_fg_q, lora_bg_q], dim=1)
 
         # Dot product of the last dim. sim_scores: [B, 2, 4096].
@@ -285,8 +286,10 @@ class AttentionalPooler(nn.Module):
 
         # attn: [B, 2, 4096]
         attn = sim_scores.softmax(dim=-1)
+        # attn_fg, attn_bg: [B, 1, 4096].
         attn_fg, attn_bg = attn.split(1, dim=1)
 
+        # Do attentional feature pooling on v.
         # fg_out: [B, 1, 320]. 320: feature dimension. 
         fg_out = einsum('b i j, b j d -> b i d', attn_fg, v)
         fg_out = self.ln_fg_out(fg_out)
@@ -300,8 +303,6 @@ class AttentionalPooler(nn.Module):
             bg_out = einsum('b i j, b j d -> b i d', attn_bg, v)
 
         bg_out = self.ln_bg_out(bg_out)
-        # out: [2, 1, 768], [2, 1, 768] => [2, 1, 1536] => [2, 1536].
-        # out = torch.cat([fg_out, bg_out], dim=-1)
         # out: N, 1, D -> N, D, i.e., ([2, 768], [2, 768]).
         # Make the output shape consistent with MaskedAvgPool2d.
         return fg_out.squeeze(1), bg_out.squeeze(1)
@@ -1213,10 +1214,10 @@ class EmbeddingManager(nn.Module):
                 # then it will self-reinforce and contaminate the bg embeddings with fg features.
                 list_of_indices_to_mask = [self.placeholder_indices_fg] #, self.placeholder_indices_bg]  
             else:
-                # Why not mask bg indices for fg ada? bg embeddings are supposed to be of a similar nature 
-                # as the extra compositional embeddings. Incorporating them in layer_static_extra_emb_mean
-                # will make fg and bg embeddings more orthogonal (i.e., attend to different areas).
-                list_of_indices_to_mask = [self.placeholder_indices_fg]
+                ## Why not mask bg indices for fg ada? bg embeddings are supposed to be of a similar nature 
+                ## as the extra compositional embeddings. Incorporating them in layer_static_extra_emb_mean
+                ## will make fg and bg embeddings more orthogonal (i.e., attend to different areas).
+                list_of_indices_to_mask = [self.placeholder_indices_fg, self.placeholder_indices_bg]
                 
             # layer_static_prompt_embs:   [4, 77, 768]. 
             # delta_loss_emb_mask: [4, 77, 1].

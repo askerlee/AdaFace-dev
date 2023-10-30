@@ -1688,7 +1688,7 @@ class LatentDiffusion(DDPM):
                         # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
                         extra_info['subj_indices'] = extra_info['subj_indices_1b']
                         extra_info['bg_indices']   = extra_info['bg_indices_1b']
-
+                        extra_info['ada_bp_to_unet'] = True
                         # In normal_recon iters, at 50% chance, apply positive prompts and deep_neg_context. 
                         #              At the other 50% chance, apply only the positive prompts.
                         if (self.distill_deep_neg_context is not None) and (random.random() < 0.5):
