@@ -2704,8 +2704,9 @@ class LatentDiffusion(DDPM):
             if loss_bg_xlayer_consist > 0:
                 loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach()})
 
-            # bg attention is more flexible and could be less consistent across layers.
-            bg_xlayer_consist_loss_scale = 0.2
+            # bg attention is flexible and allowed to be less consistent across layers.
+            # Setting scale = 0.01 basically disables the bg_xlayer_consist loss.
+            bg_xlayer_consist_loss_scale = 0.01
             loss += self.fg_bg_xlayer_consist_loss_weight * \
                             (loss_fg_xlayer_consist + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale)
 
