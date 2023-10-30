@@ -176,7 +176,7 @@ class AttentionalPooler(nn.Module):
     # Use UNet feature query as k, and subject token as q, to compute the attention, 
     # which aggregates the original UNet layer input features x.
     def forward(self, layer_attn_components, fg_q_emb, bg_q_emb=None, img_mask=None, bp_to_unet=False):
-        # Use 'q' instead of 'x' as ada layer_infeat.
+        # Use 'q' instead of 'x' as ada layer_infeat. x and q have the same shape.
         layer_infeat, layer_inquery, layer_to_k, layer_infeat_size, \
             attn_score_scale = layer_attn_components['q'], layer_attn_components['q'], \
                                 layer_attn_components['to_k'], layer_attn_components['infeat_size'], \
@@ -1271,7 +1271,7 @@ class EmbeddingManager(nn.Module):
                     # the layer subj embedding is of [9, 768]. So average across the K embeddings.
                     layer_subj_emb_probe = token_emb_ema_embedding[ca_layer_idx].mean(dim=0)
                     emb_ema_grad_scaler = GradientScaler(self.emb_ema_grad_scale)
-                    layer_subj_emb_probe_gs = emb_ema_grad_scaler.scale(layer_subj_emb_probe)
+                    layer_subj_emb_probe_gs = emb_ema_grad_scaler(layer_subj_emb_probe)
             else:
                 # Average across both the batch instances and K embeddings.
                 layer_subj_emb_probe_gs = layer_static_prompt_embs[curr_subj_indices].mean(dim=0)
