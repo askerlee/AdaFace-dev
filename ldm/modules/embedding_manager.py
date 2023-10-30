@@ -176,30 +176,29 @@ class AttentionalPooler(nn.Module):
     # Use UNet feature query as k, and subject token as q, to compute the attention, 
     # which aggregates the original UNet layer input features x.
     def forward(self, layer_attn_components, fg_q_emb, bg_q_emb=None, img_mask=None, bp_to_unet=False):
-        # Use 'q' instead of 'x' as ada layer_infeat. x and q have the same shape.
-        layer_infeat, layer_inquery, layer_to_k, layer_infeat_size \
+        # x and q have the same shape.
+        ca_x, ca_q, layer_to_k, ca_x_size \
                 = layer_attn_components['x'], layer_attn_components['q'], \
                   layer_attn_components['to_k'], layer_attn_components['infeat_size']
                            
-
         if bp_to_unet:
             if self.infeat_grad_scale < 1:
                 #grad_scaler = grad_scaler.cuda()
-                layer_infeat_gs  = self.infeat_grad_scaler(layer_infeat)
-                layer_inquery_gs = self.infeat_grad_scaler(layer_inquery)
+                ca_x_gs  = self.infeat_grad_scaler(ca_x)
+                ca_q_gs = self.infeat_grad_scaler(ca_q)
             else:
-                layer_infeat_gs  = layer_infeat
-                layer_inquery_gs = layer_inquery
+                ca_x_gs  = ca_x
+                ca_q_gs = ca_q
         else:
             # Ordinary image reconstruction iterations. No BP into the UNet.
             # But if attentional pooler is used, it will also not be BPed into and not updated.
             # When not bp_to_unet, completely cut off the gradient flow into the UNet.
             # bp_to_unet is enabled when doing composition regularization iterations. 
-            layer_infeat_gs  = layer_infeat.detach()
-            layer_inquery_gs = layer_inquery.detach()
+            ca_x_gs  = ca_x.detach()
+            ca_q_gs = ca_q.detach()
 
-        x = layer_infeat_gs
-        k = layer_inquery_gs
+        x = ca_x_gs
+        k = ca_q_gs
         # k: query from the UNet attention layer. Used as key here.
         # No need to go through to_k() here, as it's already the query from the UNet attention layer.
         k = self.ln_k(k)
@@ -272,7 +271,7 @@ class AttentionalPooler(nn.Module):
 
         if img_mask is not None:
             # img_mask: [B, 1, 64, 64] 
-            img_mask = F.interpolate(img_mask, size=layer_infeat_size, mode='nearest')
+            img_mask = F.interpolate(img_mask, size=ca_x_size, mode='nearest')
             # N, 1, H, W -> N, 1, L=H*W
             # => [B, 1, 4096]
             img_mask = rearrange(img_mask, 'b ... -> b 1 (...)')
@@ -689,7 +688,7 @@ class AdaEmbedding(nn.Module):
             # After masking, [:6] will be like [nonzero * 320, 0       * 320, nonzero * 80],
             # and            [6:] will be like [0       * 320, nonzero * 320, nonzero * 80].
 
-    # layer_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
+    # ca_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. ca_layer_idx: 0 ~ 15.
     # time_emb: [B, 1280].
     def forward(self, layer_idx, layer_attn_components, time_emb, 
@@ -714,7 +713,7 @@ class AdaEmbedding(nn.Module):
             # So cut off the gradient flow here to reduce RAM and compute.
             # The gradient is cut off within pooler.
 
-            # Even if layer_infeat is grad-scaled, the pooler still receives the full gradient.
+            # Even if ca_infeat is grad-scaled, the pooler still receives the full gradient.
             # But the grad is scaled when it's further passed to the UNet.
 
             if self.use_attn_pooler and self.is_bg_only and self.use_cached_bg:
@@ -1054,7 +1053,7 @@ class EmbeddingManager(nn.Module):
         # AdaPrompt combines static and ada embeddings. So the static embedding replacement 
         # code below is always called, and delta_loss_emb_mask is always calculated.
         if self.gen_ada_embedding:
-            # self.layer_idx, self.layer_infeat, self.time_emb were cached by 
+            # self.layer_idx, self.ca_infeat, self.time_emb were cached by 
             # a previous call of  cache_layer_features_for_ada() from UNet.
             ada_embedded_text = \
                 self.get_ada_embedding(self.layer_idx, self.layer_attn_components, self.time_emb,
@@ -1319,7 +1318,7 @@ class EmbeddingManager(nn.Module):
                 # embedded_text[placeholder_indices]: [2, 768].  subj_ada_embedding: [2, 768].
                 # Sometimes (e.g. during inference, some instances contain the placeholder token but
                 # others don't. tokenized_text has a batch size of those containing the placeholder token only.
-                # But layer_infeat is still of the full batch size. So subj_ada_embedding has a batch size 
+                # But ca_infeat is still of the full batch size. So subj_ada_embedding has a batch size 
                 # larger than the number of instances containing the placeholder token. We need to index
                 # subj_ada_embedding with placeholder_indices[0] to get the matching new subj_ada_embedding.
                 # We can save some computation by generating embeddings only for the instances containing 
