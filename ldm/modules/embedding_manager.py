@@ -639,7 +639,7 @@ class AdaEmbedding(nn.Module):
         self.layers_out_lns     = nn.ModuleList(layers_out_lns)
         self.layer_lncat3s      = nn.ModuleList(layer_lncat3s)
 
-        self.mask_layer_coeff_map_weights()
+        self.reduce_fg_bg_cross_weights()
 
         self.has_bias = has_bias
         if has_bias:
@@ -654,7 +654,7 @@ class AdaEmbedding(nn.Module):
 
     # If masked_layer_idx is specified, then only mask for one layer. Otherwise, mask for all layers.
     # When generating ada embeddings for each layer in turn, only masking one layer will reduce processing time.
-    def mask_layer_coeff_map_weights(self, masked_layer_idx=None):
+    def reduce_fg_bg_cross_weights(self, masked_layer_idx=None):
         # Currently only supports H = 1 or 2.
         # Skip masking if is_one_stream_only.
         if self.H == 1:
@@ -663,6 +663,7 @@ class AdaEmbedding(nn.Module):
         assert self.H == 2
 
         layer_range = range(self.num_layers) if masked_layer_idx is None else [masked_layer_idx]
+        cross_weight_max_ratio = 0.3
 
         for layer_idx in layer_range:
             SINGLE_D = self.attn_infeat_dims[layer_idx]
@@ -671,23 +672,28 @@ class AdaEmbedding(nn.Module):
             layer_coeff_map_weight = self.layer_coeff_maps[layer_idx].weight.data
             # The weight of Linear has shape [out_features, in_features]. 
             # Split the first dim, out_features => [K, r].
+            # layer_coeff_map_weight_embs: [K, r, in_features].
             layer_coeff_map_weight_embs = layer_coeff_map_weight.view(self.K, self.r, -1)
 
-            EXTRA = TD + self.in_static_emb_dim
-            # cand_fg_bg_masks is applied is on the input features.
-            cand_fg_bg_masks = [ torch.cat([ torch.ones(SINGLE_D),  torch.zeros(SINGLE_D), torch.ones(EXTRA) ]),
-                                 torch.cat([ torch.zeros(SINGLE_D), torch.ones(SINGLE_D),  torch.ones(EXTRA) ]),
-                                 torch.ones(SINGLE_D * 2 + EXTRA) ]
-            
-            # fg_bg_mask: [K, in_features]. Mask part of the input coefficients 
-            # corresponding to fg/bg embeddings.
-            fg_bg_mask = torch.stack([ cand_fg_bg_masks[emb_infeat_type] for emb_infeat_type in self.emb_infeat_types ], dim=0)
-            fg_bg_mask = fg_bg_mask.to(layer_coeff_map_weight_embs.device)
-            # layer_coeff_map_weight_embs: [K, 2*r, in_features]. fg_bg_mask: [K, 1, in_features]
-            layer_coeff_map_weight_embs *= fg_bg_mask.unsqueeze(1)
-            # Suppose layer_coeff_map_weight: [12, 720]. 320 fg + 320 bg + 80 time.
-            # After masking, [:6] will be like [nonzero * 320, 0       * 320, nonzero * 80],
-            # and            [6:] will be like [0       * 320, nonzero * 320, nonzero * 80].
+            for emb_idx in range(self.K):
+                # layer_coeff_map_weight_emb: [r, in_features].
+                layer_coeff_map_weight_emb = layer_coeff_map_weight_embs[emb_idx]
+                # self.emb_infeat_types: [0, 0, 0, 0, 1, 1, 1, 1, 2]. 0 = fg, 1 = bg, 2 = fg_bg
+                emb_infeat_type = self.emb_infeat_types[emb_idx]
+                if emb_infeat_type == 0:
+                    fg_in_mean_weight   = layer_coeff_map_weight_emb[:, :SINGLE_D].abs().mean().item()
+                    f2b_mean_weight     = layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2].abs().mean().item()
+                    f2b_down_scale      = min(1, cross_weight_max_ratio * fg_in_mean_weight / (f2b_mean_weight + 1e-6))
+                    layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2] *= f2b_down_scale
+                    #print(f"Layer {layer_idx} emb {emb_idx} fg_in_mean_weight {fg_in_mean_weight:.3f} f2b_mean_weight {f2b_mean_weight:.3f} f2b_down_scale {f2b_down_scale:.3f}")
+                elif emb_infeat_type == 1:
+                    bg_in_mean_weight   = layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2].abs().mean().item()
+                    b2f_mean_weight     = layer_coeff_map_weight_emb[:, :SINGLE_D].abs().mean().item()
+                    b2f_down_scale      = min(1, cross_weight_max_ratio * bg_in_mean_weight / (b2f_mean_weight + 1e-6))
+                    layer_coeff_map_weight_emb[:, :SINGLE_D] *= b2f_down_scale
+                    #print(f"Layer {layer_idx} emb {emb_idx} bg_in_mean_weight {bg_in_mean_weight:.3f} b2f_mean_weight {b2f_mean_weight:.3f} b2f_down_scale {b2f_down_scale:.3f}")
+                # Otherwise, emb_infeat_type == 2, no scaling is needed.
+
 
     # ca_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. ca_layer_idx: 0 ~ 15.
@@ -700,7 +706,7 @@ class AdaEmbedding(nn.Module):
         # Some Linears only use either fg or bg features. 
         # So we mask weights at the unused half, since the corresponding weights are 
         # updated during BP and become nonzero. 
-        self.mask_layer_coeff_map_weights(ca_layer_idx)
+        self.reduce_fg_bg_cross_weights(ca_layer_idx)
         if not self.is_fg_only and self.use_cached_bg:
             # cached_infeat_bg must be provided when use_cached_bg.
             if cached_infeat_bg is None:
