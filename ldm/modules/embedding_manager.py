@@ -1253,7 +1253,7 @@ class EmbeddingManager(nn.Module):
             # Don't use emb_ema_as_pooling_probe for background Ada embedder.
             if self.emb_ema_as_pooling_probe_weight > 0 and not token_is_bg:
                 # Use the first embedding of K embeddings as the probe.
-                layer_static_subj_emb = layer_static_prompt_embs[curr_subj_indices][0]
+                layer_static_subj_emb = layer_static_prompt_embs[curr_subj_indices].mean(dim=0)
                 token_emb_ema = self.string_to_emb_ema_dict[placeholder_string]
                 if token_emb_ema is None:
                     # In the first iteration, the token EMA hasn't been initialized. 
@@ -1273,7 +1273,7 @@ class EmbeddingManager(nn.Module):
                     # layer_subj_emb_probe: [16, 9, 768] => [9, 768] => [768].
                     # We only need one embedding of [768]. But
                     # the layer subj embedding is of [9, 768]. So we take the first embedding.
-                    layer_subj_emb_ema = token_emb_ema_embedding[ca_layer_idx][0]
+                    layer_subj_emb_ema = token_emb_ema_embedding[ca_layer_idx].mean(dim=0)
                     # emb_ema_sgd_able is set in ddpm.py:LatentDiffusion.p_losses(). 
                     # Alternate between EMA update and EMA sgd update.
                     if not self.emb_ema_sgd_able:
