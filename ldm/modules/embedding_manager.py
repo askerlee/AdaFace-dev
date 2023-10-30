@@ -176,8 +176,9 @@ class AttentionalPooler(nn.Module):
     # Use UNet feature query as k, and subject token as q, to compute the attention, 
     # which aggregates the original UNet layer input features x.
     def forward(self, layer_attn_components, fg_q_emb, bg_q_emb=None, img_mask=None, bp_to_unet=False):
+        # Use 'q' instead of 'x' as ada layer_infeat.
         layer_infeat, layer_inquery, layer_to_k, layer_infeat_size, \
-            attn_score_scale = layer_attn_components['x'], layer_attn_components['q'], \
+            attn_score_scale = layer_attn_components['q'], layer_attn_components['q'], \
                                 layer_attn_components['to_k'], layer_attn_components['infeat_size'], \
                                 layer_attn_components['scale']
 
