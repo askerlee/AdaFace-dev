@@ -225,10 +225,15 @@ class CrossAttention(nn.Module):
             mask = repeat(mask.bool(), 'b j -> (b h) () j', h=h)
             sim.masked_fill_(~mask, max_neg_value)
 
+        # sim: [64, 4096, 77]. 64: bs * h.
         # attention, what we cannot get enough of
+        # NOTE: the normalization is done across tokens, not across pixels.
+        # So for each pixel, the sum of attention scores across tokens is 1.
         attn = sim.softmax(dim=-1)
 
+        # v: [64, 77, 40]. 40: dim of each head. out: [64, 4096, 40].
         out = einsum('b i j, b j d -> b i d', attn, v)
+        # [64, 4096, 40] -> [8, 4096, 320].
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
         out = self.to_out(out)
 

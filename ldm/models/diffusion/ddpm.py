@@ -33,7 +33,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
                        anneal_t, rand_annealed, anneal_value, calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
-                       gen_comp_extra_indices_by_block, dampen_large_loss
+                       gen_comp_extra_indices_by_block
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -2421,7 +2421,7 @@ class LatentDiffusion(DDPM):
 
             # recon_loss_weight: 1.
             # dampen_large_loss(): Scale down overly large loss_recon, to avoid surge of gradients.
-            loss += self.recon_loss_weight * dampen_large_loss(loss_recon)
+            loss += self.recon_loss_weight * loss_recon
         ###### end of do_normal_recon ######
 
         ###### begin of preparation for is_compos_iter ######
@@ -2782,11 +2782,12 @@ class LatentDiffusion(DDPM):
             # the attn magnitude may become slightly larger. So we scale up delta loss by 2x.
             if 'deep_neg_context' in extra_info:
                 subj_attn_norm_distill_loss_scale *= 2
+            feat_delta_distill_scale = 2
 
             loss_mix_prompt_distill =  (loss_subj_attn_delta_distill + loss_comp_attn_delta_distill * comp_attn_delta_distill_loss_scale) \
                                         * subj_attn_delta_distill_loss_scale \
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
-                                        + dampen_large_loss(loss_feat_delta_distill)
+                                        + loss_feat_delta_distill * feat_delta_distill_scale
                                         
             if loss_mix_prompt_distill > 0:
                 loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
