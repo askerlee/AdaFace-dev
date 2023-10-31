@@ -1479,6 +1479,10 @@ class LatentDiffusion(DDPM):
             self.iter_flags['use_wds_comp']             = self.cached_inits['use_wds_comp']
             self.iter_flags['comp_init_with_fg_area']   = self.cached_inits['comp_init_with_fg_area']
 
+        # Gradually reduce recon_loss_weight from 1 to 0.5 over the whole course of training.
+        self.iter_flags['recon_loss_weight'] = anneal_value(self.training_percent, 1, (1.0, 0.5)) \
+                                                * self.recon_loss_weight 
+
         loss = self(x_start, captions, **kwargs)
 
         return loss
@@ -2420,9 +2424,8 @@ class LatentDiffusion(DDPM):
 
             loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
 
-            # recon_loss_weight: 1.
-            # dampen_large_loss(): Scale down overly large loss_recon, to avoid surge of gradients.
-            loss += self.recon_loss_weight * loss_recon
+            # iter_flags['recon_loss_weight']: gradually decrease from 1 to 0.5 during the course of training.
+            loss += self.iter_flags['recon_loss_weight'] * loss_recon
         ###### end of do_normal_recon ######
 
         ###### begin of preparation for is_compos_iter ######

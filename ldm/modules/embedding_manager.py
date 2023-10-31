@@ -983,10 +983,11 @@ class EmbeddingManager(nn.Module):
 
                 # Reserve 1 embedding to take both fg and cached-bg infeat. 
                 # Half of the embeddings are fg embeddings, and (the other half - 1) are bg embeddings.
-                # If num_vectors_per_token == 1, then fg_emb_count = 0, bg_emb_count = 0.
+                # If num_vectors_per_token == 1, then fg_emb_count = 0, bg_emb_count = 0. fg_bg_emb_count = 1.
                 # If num_vectors_per_token >= 2, then fg_emb_count = K//2, bg_emb_count = K - 1 - fg_emb_count.
                 # For example, if num_vectors_per_token = 2, then fg_emb_count = 1, bg_emb_count = 0.
                 # If num_vectors_per_token = 3, then fg_emb_count = 1, bg_emb_count = 1.
+                # Almost always fg_bg_emb_count = 1.
                 fg_emb_count = num_vectors_per_token // 2
                 bg_emb_count = num_vectors_per_token - 1 - fg_emb_count
 
