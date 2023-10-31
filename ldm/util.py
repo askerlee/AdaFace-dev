@@ -1327,3 +1327,9 @@ def replace_prompt_comp_extra(comp_prompts, single_prompts, new_comp_extras):
             new_comp_prompts.append( comp_prompts[i] )
     
     return new_comp_prompts
+
+def dampen_large_loss(loss, max_magnitude=1.):
+    if loss > max_magnitude:
+        loss = loss * max_magnitude / loss.item()
+
+    return loss
