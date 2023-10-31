@@ -284,7 +284,7 @@ class BasicTransformerBlock(nn.Module):
             # Disable save_attn_vars, so that the saved attn vars given the 
             # normal context are not overwritten.
             self.attn2.save_attn_vars = False
-            x_neg_ca = self.attn2(self.norm2(x1), context=self.deep_neg_context)
+            x_neg_ca = self.attn2(self.norm2(x_ca), context=self.deep_neg_context)
             x2_neg = x1 + x_neg_ca
             x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
 
