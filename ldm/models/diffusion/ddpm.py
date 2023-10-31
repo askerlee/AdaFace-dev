@@ -1672,6 +1672,7 @@ class LatentDiffusion(DDPM):
                         # c_static_emb from captions.
                         if captions == subj_single_prompts:
                             c_static_emb  = subj_single_emb
+                            extra_info0   = extra_info
                         else:
                             # We are unable to reuse the static embeddings of the 4-type prompts, so 
                             # generate embeddings from the captions from scratch.
