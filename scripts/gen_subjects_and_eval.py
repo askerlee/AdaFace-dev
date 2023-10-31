@@ -55,6 +55,9 @@ def parse_args():
     # --use_deep_neg_prompt, use deep negative prompts
     parser.add_argument("--use_deep_neg_prompt", action='store_true',
                         help="use deep negative prompts")    
+    parser.add_argument("--learnable_deep_neg_token", type=str, default=None,
+                        help="If specified, the learnable token in a deep negative prompt")
+        
     # --deep_cfg_scale
     parser.add_argument("--deep_cfg_scale", type=float, default=1.3,
                         help="scale of deep negative prompts")
@@ -455,6 +458,9 @@ if __name__ == "__main__":
 
         if args.use_deep_neg_prompt:
             command_line += f" --use_deep_neg_prompt --deep_cfg_scale {args.deep_cfg_scale}"
+        if args.learnable_deep_neg_token is not None:
+            command_line += f" --learnable_deep_neg_token {args.learnable_deep_neg_token}"
+            
         if args.use_first_gt_img_as_init:
             command_line += f" --use_first_gt_img_as_init --init_img_weight {args.init_img_weight}"
 
