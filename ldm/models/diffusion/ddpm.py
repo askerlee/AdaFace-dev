@@ -723,14 +723,6 @@ class LatentDiffusion(DDPM):
             self.create_clip_evaluator(next(self.parameters()).device)
             with torch.no_grad():
                 self.uncond_context             = self.get_learned_conditioning([""] * 2)
-                if (self.distill_deep_cfg_scale > 1) and (self.distill_deep_neg_prompt is not None):
-                    # distill_deep_neg_context is generated with a batch size of 1. 
-                    # Need to repeat it BLOCK_SIZE times to match the distillation batch size later.
-                    distill_deep_neg_context   = self.get_learned_conditioning([self.distill_deep_neg_prompt])
-                    # Only use the static embeddings of distill_deep_neg_prompt.
-                    self.distill_deep_neg_context = distill_deep_neg_context[0]
-                else:
-                    self.distill_deep_neg_context   = None
 
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
@@ -1502,6 +1494,16 @@ class LatentDiffusion(DDPM):
             assert captions is not None
             # get_learned_conditioning(): convert captions to a [16*B, 77, 768] tensor.
             if self.cond_stage_trainable:
+
+                if (self.distill_deep_cfg_scale > 1) and (self.distill_deep_neg_prompt is not None):
+                    # distill_deep_neg_context is generated with a batch size of 1. 
+                    # Need to repeat it BLOCK_SIZE times to match the distillation batch size later.
+                    distill_deep_neg_context   = self.get_learned_conditioning([self.distill_deep_neg_prompt])
+                    # Only use the static embeddings of distill_deep_neg_prompt.
+                    self.distill_deep_neg_context = distill_deep_neg_context[0]
+                else:
+                    self.distill_deep_neg_context   = None
+
                 # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
                 # or traditional TI.
                 # do_ada_emb_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.

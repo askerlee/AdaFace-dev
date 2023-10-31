@@ -852,6 +852,7 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight=0.5, 
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
+            ema_excluded_tokens=None,
             **kwargs
     ):
         super().__init__()
@@ -869,6 +870,7 @@ class EmbeddingManager(nn.Module):
         self.emb_ema_grad_scale = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
         self.emb_ema_sgd_able = False
+        self.ema_excluded_tokens = [] if ema_excluded_tokens is None else ema_excluded_tokens
 
         self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
 
@@ -1487,6 +1489,9 @@ class EmbeddingManager(nn.Module):
         
         if self.training and self.emb_ema_as_pooling_probe_weight > 0:
             for k, token_emb_cache_obj in self.token2emb_cache.items():
+                if k in self.ema_excluded_tokens:
+                    continue
+
                 # If all layers of ada embeddings have been cached in token_emb_cache_obj,
                 # then it's time to update EMA embeddings.
                 # This should happen after the previous training iteration finishes and 
@@ -1508,11 +1513,8 @@ class EmbeddingManager(nn.Module):
                     # ada_prompt_embs: [2, 77, 768].
                     # ada_prompt_embs[token_indices]: [18, 768] => [2, 9, 768].
                     VALID_BS = token_indices[0].unique().shape[0]
-                    try:
-                        token_embs = ada_prompt_embs[token_indices].reshape(
-                            VALID_BS, -1, ada_prompt_embs.shape[2])
-                    except:
-                        breakpoint()
+                    token_embs = ada_prompt_embs[token_indices].reshape(
+                                        VALID_BS, -1, ada_prompt_embs.shape[2])
                     # LitEma requires an nn.Module to do updating. 
                     # So we use token_emb_cache_obj as a dummy Embedding3d to update the EMA embedding.
                     # We can update after the ada embeddings of all layers are cached into token_emb_cache_obj.
