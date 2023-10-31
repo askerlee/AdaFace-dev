@@ -1643,9 +1643,11 @@ class LatentDiffusion(DDPM):
                         extra_info['subj_indices'] = extra_info['subj_indices_2b']
                         extra_info['bg_indices']   = extra_info['bg_indices_2b']                            
 
+                        p_deep_neg_context_in_comp_iters = 0.8
                         # In distillation iters, at 50% chance, apply positive prompts and deep_neg_context. 
                         #              At the other 50% chance, apply only the positive prompts.
-                        if (self.distill_deep_neg_context is not None) and (random.random() < 0.5):
+                        if (self.distill_deep_neg_context is not None) \
+                          and (random.random() < p_deep_neg_context_in_comp_iters):
                             extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(BLOCK_SIZE * 4, 1, 1)
                             extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
 
