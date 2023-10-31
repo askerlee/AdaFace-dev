@@ -852,7 +852,7 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight=0.5, 
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
-            ema_excluded_tokens=None,
+            static_only_tokens=None,
             **kwargs
     ):
         super().__init__()
@@ -870,7 +870,7 @@ class EmbeddingManager(nn.Module):
         self.emb_ema_grad_scale = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
         self.emb_ema_sgd_able = False
-        self.ema_excluded_tokens = [] if ema_excluded_tokens is None else ema_excluded_tokens
+        self.set_static_only_tokens(static_only_tokens)
 
         self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
 
@@ -1462,6 +1462,11 @@ class EmbeddingManager(nn.Module):
         self.emb_ema_as_pooling_probe_weight = emb_ema_as_pooling_probe_weight
         print(f"Setting emb_ema_as_pooling_probe_weight = {emb_ema_as_pooling_probe_weight}")
 
+    def set_static_only_tokens(self, static_only_tokens):
+        self.static_only_tokens = [] if static_only_tokens is None else static_only_tokens
+        if len(self.static_only_tokens) > 0:
+            print(f"Setting static_only_tokens = {static_only_tokens}")
+
     # Cache features used to compute ada embeddings.
     def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
         self.gen_ada_embedding = True
@@ -1489,7 +1494,8 @@ class EmbeddingManager(nn.Module):
         
         if self.training and self.emb_ema_as_pooling_probe_weight > 0:
             for k, token_emb_cache_obj in self.token2emb_cache.items():
-                if k in self.ema_excluded_tokens:
+                # If a token doesn't have Ada component, then no need to update its EMA embedding.
+                if k in self.static_only_tokens:
                     continue
 
                 # If all layers of ada embeddings have been cached in token_emb_cache_obj,
@@ -1611,7 +1617,9 @@ class EmbeddingManager(nn.Module):
                      "token2num_vectors":               self.token2num_vectors,
                      "emb_global_scale_score":          self.emb_global_scale_score,
                      "ada_emb_weight":                  self.ada_emb_weight,  
-                     "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight
+                     "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
+                     # learnable token in the deep negative prompt.
+                     "static_only_tokens":             self.static_only_tokens,
                    }, 
                     ckpt_path)
 
@@ -1650,6 +1658,9 @@ class EmbeddingManager(nn.Module):
 
             if "emb_ema_as_pooling_probe_weight" in ckpt:
                 self.set_emb_ema_as_pooling_probe_weight(ckpt["emb_ema_as_pooling_probe_weight"])
+
+            if "static_only_tokens" in ckpt:
+                self.set_static_only_tokens(ckpt["static_only_tokens"])
 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):

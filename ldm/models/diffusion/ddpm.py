@@ -723,6 +723,8 @@ class LatentDiffusion(DDPM):
             self.create_clip_evaluator(next(self.parameters()).device)
             with torch.no_grad():
                 self.uncond_context             = self.get_learned_conditioning([""] * 2)
+                # Do not use deep neg context for unconditional context.
+                self.uncond_context[2]['disable_deep_neg_context'] = True
 
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
@@ -1498,9 +1500,7 @@ class LatentDiffusion(DDPM):
                 if (self.distill_deep_cfg_scale > 1) and (self.distill_deep_neg_prompt is not None):
                     # distill_deep_neg_context is generated with a batch size of 1. 
                     # Need to repeat it BLOCK_SIZE times to match the distillation batch size later.
-                    distill_deep_neg_context   = self.get_learned_conditioning([self.distill_deep_neg_prompt])
-                    # Only use the static embeddings of distill_deep_neg_prompt.
-                    self.distill_deep_neg_context = distill_deep_neg_context[0]
+                    self.distill_deep_neg_context, _, _   = self.get_learned_conditioning([self.distill_deep_neg_prompt])
                 else:
                     self.distill_deep_neg_context   = None
 
@@ -1933,14 +1933,13 @@ class LatentDiffusion(DDPM):
                 x_noisy_ = self.q_sample(x_start=x_start_, t=t_, noise=noise_)
                 # Clear the cached placeholder indices, as they are for conditional embeddings.
                 self.embedding_manager.clear_placeholder_indices()
-                # Do not apply deep neg prompts on unconditional embeddings. 
-                # It will cancel out the effect of unconditional embeddings.
-                cond[2]['disable_deep_neg_context'] = True
-                # self.uncond_context: precomputed unconditional embeddings.
+                # self.uncond_context: precomputed unconditional embedding and other info.
+                # This statement (executed above) disables deep neg prompts on unconditional embeddings. 
+                # Otherwise, it will cancel out the effect of unconditional embeddings.
+                # self.uncond_context[2]['disable_deep_neg_context'] = True
                 model_output_uncond = self.apply_model(x_noisy_, t_, self.uncond_context)
                 # model_output_uncond: [2, 4, 64, 64] -> [4, 4, 64, 64]
                 model_output_uncond = model_output_uncond.repeat(2, 1, 1, 1)
-                cond[2]['disable_deep_neg_context'] = False
             # Classifier-free guidance to make the contents in the 
             # generated images more pronounced => smaller CLIP loss.
             if cfg_scales is not None:

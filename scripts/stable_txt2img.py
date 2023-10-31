@@ -55,6 +55,11 @@ def parse_args():
         action='store_true',
         help="use deep negative prompts",
     )    
+    parser.add_argument(
+        "--learnable_deep_neg_token", type=str, default=None,
+        help="If specified, the insert a learnable token in the deep negative prompt"
+    )
+
     # --deep_cfg_scale
     parser.add_argument(
         "--deep_cfg_scale",
@@ -587,7 +592,12 @@ def main(opt):
                 uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt])
 
                 if opt.use_deep_neg_prompt:
-                    deep_neg_context = model.get_learned_conditioning(batch_size * [predefined_negative_prompt])
+                    if opt.learnable_deep_neg_token is not None:
+                        deep_negative_prompt = opt.learnable_deep_neg_token + ", " + predefined_negative_prompt
+                    else:
+                        deep_negative_prompt = predefined_negative_prompt
+
+                    deep_neg_context = model.get_learned_conditioning(batch_size * [deep_negative_prompt])
                     deep_neg_context = (deep_neg_context[0], opt.deep_cfg_scale)
                     if os.environ.get('IGNORE_NEG_PROMPT'):
                         print("Deep negative prompts IGNORED")
