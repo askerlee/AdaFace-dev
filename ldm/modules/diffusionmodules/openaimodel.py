@@ -969,10 +969,15 @@ class UNetModel(nn.Module):
         # If using deep_neg_context, only apply it on the middle-level layers, i.e., 
         # layers 7, 8, 12, 16, 17.
         deep_neg_trans_layer_indices = [7, 8, 12, 16, 17] 
+        # 1:  64,  2: 64,  4: 32,  5: 32,  7: 16,  8: 16, 12: 8, 16: 16, 17: 16, 18: 16, 
+        # 19: 32, 20: 32, 21: 32, 22: 64, 23: 64, 24: 64.
+        # layer 12 has 8x8 feature maps, so we don't do conv attn (3x3) on it.
+        conv_attn_layer_indices      = [1, 2, 4, 5, 7, 8, 16, 17, 18, 19, 20, 21, 22, 23, 24]
 
         ca_flags_stack = []
         old_ca_flags, old_trans_flags = \
             self.set_cross_attn_flags( ca_flag_dict   = {'use_conv_attn': use_conv_attn},
+                                       ca_layer_indices = conv_attn_layer_indices,
                                        trans_flag_dict = deep_neg_trans_flag_dict,
                                        trans_layer_indices = deep_neg_trans_layer_indices )
 
