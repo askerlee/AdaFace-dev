@@ -2412,11 +2412,11 @@ class LatentDiffusion(DDPM):
             loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
                                                  instance_fg_weights=instance_fg_weights,
                                                  instance_bg_weights=instance_bg_weights)
+
+            loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
             if loss_recon > 1:
                 # Scale down overly large loss_recon, to avoid surge of gradients.
                 loss_recon = loss_recon / (loss_recon.item())
-
-            loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
 
             # recon_loss_weight: 1.
             loss += self.recon_loss_weight * loss_recon
