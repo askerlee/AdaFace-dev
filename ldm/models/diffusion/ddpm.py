@@ -1672,7 +1672,8 @@ class LatentDiffusion(DDPM):
                         # c_static_emb from captions.
                         if captions == subj_single_prompts:
                             c_static_emb  = subj_single_emb
-                            extra_info0   = extra_info
+                            extra_info['subj_indices'] = extra_info['subj_indices_1b']
+                            extra_info['bg_indices']   = extra_info['bg_indices_1b']                            
                         else:
                             # We are unable to reuse the static embeddings of the 4-type prompts, so 
                             # generate embeddings from the captions from scratch.
@@ -1681,14 +1682,15 @@ class LatentDiffusion(DDPM):
                             c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions,
                                                                                          img_mask=self.iter_flags['img_mask'])
                             # print(captions)
-
+                            extra_info['subj_indices'] = extra_info0['subj_indices']
+                            extra_info['bg_indices']   = extra_info0['bg_indices']
+                        
                         # The prompts used to compute the static embeddings are 
                         # (subj single, subj comp, cls single, cls comp).
                         # But only the subj single block is used for recon.
                         # The blocks as input to get_learned_conditioning() are not halved. 
                         # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
-                        extra_info['subj_indices'] = extra_info0['subj_indices']
-                        extra_info['bg_indices']   = extra_info0['bg_indices']
+
                         extra_info['ada_bp_to_unet'] = True
                         # In normal_recon iters, at 50% chance, apply positive prompts and deep_neg_context. 
                         #              At the other 50% chance, apply only the positive prompts.
