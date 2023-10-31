@@ -983,7 +983,8 @@ class UNetModel(nn.Module):
                                    }
         # If using deep_neg_context, only apply it on the middle-level layers, i.e., 
         # layers 7, 8, 12, 16, 17.
-        deep_neg_trans_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24] 
+        # deep_neg_trans_layer_indices = None: apply deep_neg_context to all cross attn layers.
+        deep_neg_trans_layer_indices = None #[7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24] 
         # 1:  64,  2: 64,  4: 32,  5: 32,  7: 16,  8: 16, 12: 8, 16: 16, 17: 16, 18: 16, 
         # 19: 32, 20: 32, 21: 32, 22: 64, 23: 64, 24: 64.
         # layer 12 has 8x8 feature maps, so we don't do conv attn (3x3) on it.
