@@ -1686,8 +1686,8 @@ class LatentDiffusion(DDPM):
                         # But only the subj single block is used for recon.
                         # The blocks as input to get_learned_conditioning() are not halved. 
                         # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
-                        extra_info['subj_indices'] = extra_info['subj_indices_1b']
-                        extra_info['bg_indices']   = extra_info['bg_indices_1b']
+                        extra_info['subj_indices'] = extra_info0['subj_indices']
+                        extra_info['bg_indices']   = extra_info0['bg_indices']
                         extra_info['ada_bp_to_unet'] = True
                         # In normal_recon iters, at 50% chance, apply positive prompts and deep_neg_context. 
                         #              At the other 50% chance, apply only the positive prompts.
@@ -1720,6 +1720,7 @@ class LatentDiffusion(DDPM):
                     # it's called by self.validation_step().
                     assert self.iter_flags['do_normal_recon']
                     cond[2]['iter_type'] = 'normal_recon'
+                    extra_info['ada_bp_to_unet'] = True
 
                     # In recon iter without static delta loss, 
                     # At 50% chance,           apply positive prompts and deep_neg_context. 
@@ -2411,7 +2412,12 @@ class LatentDiffusion(DDPM):
             loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
                                                  instance_fg_weights=instance_fg_weights,
                                                  instance_bg_weights=instance_bg_weights)
+            if loss_recon > 1:
+                # Scale down overly large loss_recon, to avoid surge of gradients.
+                loss_recon = loss_recon / (loss_recon.item())
+
             loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
+
             # recon_loss_weight: 1.
             loss += self.recon_loss_weight * loss_recon
         ###### end of do_normal_recon ######

@@ -978,7 +978,7 @@ class UNetModel(nn.Module):
         old_ca_flags, old_trans_flags = \
             self.set_cross_attn_flags( ca_flag_dict   = {'use_conv_attn': use_conv_attn},
                                        ca_layer_indices = conv_attn_layer_indices,
-                                       trans_flag_dict = deep_neg_trans_flag_dict,
+                                       trans_flag_dict  = deep_neg_trans_flag_dict,
                                        trans_layer_indices = deep_neg_trans_layer_indices )
 
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).
