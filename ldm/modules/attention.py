@@ -289,7 +289,7 @@ class BasicTransformerBlock(nn.Module):
             x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
 
             self.attn2.save_attn_vars = attn2_save_attn_vars
-            cfg_use_ortho_subtract = True
+            cfg_use_ortho_subtract = False
             if cfg_use_ortho_subtract:
                 # ortho_residual is orthogonal to x3, whose scale is proportional to the scale of x3_neg.
                 # ortho_residual is invariant to scales of x3. 
