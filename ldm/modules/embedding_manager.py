@@ -1874,19 +1874,13 @@ class EmbeddingManager(nn.Module):
 
                     print(print_str)
 
-                # default: l2
-                if euc_loss_type   == 'l2':
-                    if isinstance(embobj, AdaEmbedding):
-                        loss_boost = ada_l2_loss_boost      # 10
-                    else:
-                        loss_boost = static_l2_loss_boost   # 5
-                else:
-                    # l1 loss is numerically much larger than l2 loss, 
-                    # hence it has smaller weight than l2 loss.
-                    loss_boost = 1.
-
                 if isinstance(embobj, StaticLayerwiseEmbedding):
-                    loss_static = loss_static + curr_loss * static_l2_loss_boost
+                    if key in self.static_only_tokens:
+                        static_only_loss_discount = 0.2
+                    else:
+                        static_only_loss_discount = 1.
+
+                    loss_static = loss_static + curr_loss * static_l2_loss_boost * static_only_loss_discount
                 else:
                     loss_ada = loss_ada + curr_loss * ada_l2_loss_boost
 
