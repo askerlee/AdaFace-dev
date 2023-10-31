@@ -1505,8 +1505,12 @@ class LatentDiffusion(DDPM):
                     # distill_deep_neg_context is generated with a batch size of 1. 
                     # Need to repeat it BLOCK_SIZE times to match the distillation batch size later.
                     self.distill_deep_neg_context, _, _   = self.get_learned_conditioning([self.distill_deep_neg_prompt])
+                    p_deep_neg_context_in_recon_iters = 0.5
+                    p_deep_neg_context_in_comp_iters = 0.8
                 else:
                     self.distill_deep_neg_context   = None
+                    p_deep_neg_context_in_recon_iters = 0
+                    p_deep_neg_context_in_comp_iters = 0
 
                 # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
                 # or traditional TI.
@@ -1643,11 +1647,9 @@ class LatentDiffusion(DDPM):
                         extra_info['subj_indices'] = extra_info['subj_indices_2b']
                         extra_info['bg_indices']   = extra_info['bg_indices_2b']                            
 
-                        p_deep_neg_context_in_comp_iters = 0.8
                         # In distillation iters, at 50% chance, apply positive prompts and deep_neg_context. 
                         #              At the other 50% chance, apply only the positive prompts.
-                        if (self.distill_deep_neg_context is not None) \
-                          and (random.random() < p_deep_neg_context_in_comp_iters):
+                        if random.random() < p_deep_neg_context_in_comp_iters:
                             extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(BLOCK_SIZE * 4, 1, 1)
                             extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
 
@@ -1699,7 +1701,7 @@ class LatentDiffusion(DDPM):
                         extra_info['ada_bp_to_unet'] = True
                         # In normal_recon iters, at 50% chance, apply positive prompts and deep_neg_context. 
                         #              At the other 50% chance, apply only the positive prompts.
-                        if (self.distill_deep_neg_context is not None) and (random.random() < 0.5):
+                        if random.random() < p_deep_neg_context_in_recon_iters:
                             extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(ORIG_BS, 1, 1)
                             extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
                         ##### End of normal_recon with static delta loss iters. #####
