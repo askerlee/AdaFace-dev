@@ -1717,13 +1717,16 @@ class LatentDiffusion(DDPM):
                     # Not (self.do_static_prompt_delta_reg or 'do_mix_prompt_distillation').
                     # That is, non-compositional iter, or recon iter without static delta loss. 
                     # Keep the tuple cond unchanged. prompts: subject single.
-                    cond = self.get_learned_conditioning(captions, img_mask=self.iter_flags['img_mask'])
-                    # cond[2]: extra_info. Here is only reached when do_static_prompt_delta_reg = False.
-                    # Either prompt_emb_delta_reg_weight == 0 (ablation) or 
+                    # This branch is only reached when do_static_prompt_delta_reg = False.
+                    # Either prompt_emb_delta_reg_weight == 0 (ablation only) or 
                     # it's called by self.validation_step().
                     assert self.iter_flags['do_normal_recon']
-                    cond[2]['iter_type'] = 'normal_recon'
-                    extra_info['ada_bp_to_unet'] = True
+                    cond = self.get_learned_conditioning(captions, img_mask=self.iter_flags['img_mask'])
+                    # cond[2]: extra_info. 
+                    extra_info['subj_indices']      = cond[2]['subj_indices']
+                    extra_info['bg_indices']        = cond[2]['bg_indices']
+                    extra_info['ada_bp_to_unet']    = True
+                    extra_info['iter_type']         = 'normal_recon'
 
                     # In recon iter without static delta loss, 
                     # At 50% chance,           apply positive prompts and deep_neg_context. 
@@ -1732,6 +1735,7 @@ class LatentDiffusion(DDPM):
                         extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(ORIG_BS, 1, 1)
                         extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
 
+                    cond = (cond[0], cond[1], extra_info)
                     ##### End of normal_recon without static delta loss iters. #####
 
             # shorten_cond_schedule: False. Skipped.
