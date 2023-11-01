@@ -161,17 +161,17 @@ class PersonalizedBase(Dataset):
         fg_mask_paths       = [ os.path.splitext(x)[0] + "_mask.png" for x in self.image_paths ]
         self.fg_mask_paths  = list(map(lambda x: x if x in image_paths else None, fg_mask_paths))
         num_valid_fg_masks  = sum([ 1 if x is not None else 0 for x in self.fg_mask_paths ])
-        annot_paths         = [ os.path.splitext(x)[0] + ".txt" for x in self.image_paths ]
-        self.annot_paths    = list(map(lambda x: x if x in image_paths else None, annot_paths))
-        num_valid_annots    = sum([ 1 if x is not None else 0 for x in self.annot_paths ])
+        caption_paths       = [ os.path.splitext(x)[0] + ".txt" for x in self.image_paths ]
+        self.caption_paths  = list(map(lambda x: x if x in image_paths else None, caption_paths))
+        num_valid_captions  = sum([ 1 if x is not None else 0 for x in self.caption_paths ])
 
         if verbose:
-            print("{} images, {} fg masks, {} annotations found in '{}'".format( \
-                  len(self.image_paths), num_valid_fg_masks, num_valid_annots, self.data_root))
+            print("{} images, {} fg masks, {} captions found in '{}'".format( \
+                  len(self.image_paths), num_valid_fg_masks, num_valid_captions, self.data_root))
             if num_valid_fg_masks > 0 and num_valid_fg_masks < len(self.image_paths):
                 print("WARNING: {} fg masks are missing!".format(len(self.image_paths) - num_valid_fg_masks))
-            if num_valid_annots > 0 and num_valid_annots < len(self.image_paths):
-                print("WARNING: {} annotations are missing!".format(len(self.image_paths) - num_valid_annots))
+            if num_valid_captions > 0 and num_valid_captions < len(self.image_paths):
+                print("WARNING: {} captions are missing!".format(len(self.image_paths) - num_valid_captions))
 
         self.num_images = len(self.image_paths)
         if set == "train":
@@ -279,7 +279,7 @@ class PersonalizedBase(Dataset):
         example = {}
         image_path = self.image_paths[index % self.num_images]
         fg_mask_path  = self.fg_mask_paths[index % self.num_images] 
-        annot_path    = self.annot_paths[index % self.num_images]
+        caption_path  = self.caption_paths[index % self.num_images]
 
         image_obj = Image.open(image_path)
         if not image_obj.mode == "RGB":
