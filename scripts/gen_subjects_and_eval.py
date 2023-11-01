@@ -3,7 +3,8 @@ import os
 import re
 import numpy as np
 import csv
-from evaluation.eval_utils import parse_subject_file, parse_range_str, get_prompt_list, find_first_match
+from evaluation.eval_utils import parse_subject_file, parse_range_str, \
+                                  get_prompt_list, find_first_match
 
 def str2bool(v):
     if isinstance(v, bool):
