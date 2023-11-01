@@ -1699,8 +1699,8 @@ class EmbeddingManager(nn.Module):
     def optimized_parameters(self):
         params = list(self.string_to_static_embedder_dict.parameters()) \
                + list(self.string_to_ada_embedder_dict.parameters()) \
-               + [self.emb_global_scale_score]
-               # + list(self.string_to_emb_ema_dict.parameters()) \
+               + [self.emb_global_scale_score] \
+               + list(self.string_to_emb_ema_dict.parameters())
         
         return params
         
