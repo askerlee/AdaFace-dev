@@ -885,9 +885,8 @@ class EmbeddingManager(nn.Module):
 
         self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
         self.default_conv_attn_weight = default_conv_attn_weight
-        self.layerwise_conv_attn_weights = \
-            nn.Parameter(torch.ones(self.num_layers_per_embedder) * self.default_conv_attn_weight, 
-                                    requires_grad=True)
+
+        self.initialize_layerwise_conv_attn_weights(self.default_conv_attn_weight)
 
         # num_vectors_per_token: an int or a dict. How many vectors in each layer 
         # are allocated to model the subject (represented as the subject token).        
@@ -1617,6 +1616,24 @@ class EmbeddingManager(nn.Module):
     def clear_delta_loss_emb_mask(self):
         self.delta_loss_emb_mask = None
  
+    def initialize_layerwise_conv_attn_weights(self, default_conv_attn_weight, layerwise_conv_attn_weights=None):
+        if layerwise_conv_attn_weights is not None:
+            self.layerwise_conv_attn_weights = nn.Parameter(layerwise_conv_attn_weights,
+                                                            requires_grad=True)            
+            print(f"Change layerwise_conv_attn_weights = {self.layerwise_conv_attn_weights}")
+
+        else:
+            self.layerwise_conv_attn_weights = \
+                nn.Parameter(torch.ones(self.num_layers_per_embedder) * default_conv_attn_weight, 
+                                        requires_grad=True)
+            if self.use_layerwise_embedding:
+                # 0~5: weight 0.5, 6~15: weight 0.25.
+                # This setting is based on the empirical observations of 
+                # the learned layerwise_conv_attn_weights.
+                self.layerwise_conv_attn_weights.data[6:] *= 0.5
+
+            print(f"Initialize layerwise_conv_attn_weights = {self.layerwise_conv_attn_weights}")
+
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, ckpt_path):
         torch.save({ "string_to_token":                 self.string_to_token_dict,
@@ -1641,9 +1658,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
         self.string_to_emb_ema_dict         = nn.ModuleDict()
-        self.layerwise_conv_attn_weights    = \
-            nn.Parameter(torch.ones(self.num_layers_per_embedder) * self.default_conv_attn_weight, 
-                                    requires_grad=True)
+        self.initialize_layerwise_conv_attn_weights(self.default_conv_attn_weight)
         
         token2num_vectors                   = {}
 
@@ -1674,8 +1689,9 @@ class EmbeddingManager(nn.Module):
                 self.set_emb_ema_as_pooling_probe_weight(ckpt["emb_ema_as_pooling_probe_weight"])
 
             if "layerwise_conv_attn_weights" in ckpt:
-                self.layerwise_conv_attn_weights = ckpt["layerwise_conv_attn_weights"]
-                print(f"Set layerwise_conv_attn_weights = {self.layerwise_conv_attn_weights}")
+                # default_conv_attn_weight is provided but not used here.
+                self.initialize_layerwise_conv_attn_weights(self.default_conv_attn_weight, 
+                                                            ckpt["layerwise_conv_attn_weights"])
 
             if "static_only_tokens" in ckpt:
                 self.set_static_only_tokens(ckpt["static_only_tokens"])
