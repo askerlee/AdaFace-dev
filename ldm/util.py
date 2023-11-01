@@ -479,7 +479,7 @@ def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=Tr
 
 # infeat_size: (h, w) of the input feature map (before flattening).
 # H: number of heads.
-def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_scale):
+def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_scale, conv_attn_weight=0.5):
     # input features x: [4, 4096, 320].
     # attn_mat: [32, 4096, 77]. 32: b * h. b = 4, h = 8.
     # q: [32, 4096, 40]. k: [32, 77, 40]. 32: b * h.
@@ -615,8 +615,10 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
         # attn_mat2: [4, 8, 4096, 77], [B, H, N, T]. 
         # B: the whole batch (>=BS). H: number of heads. 
         # N: number of visual tokens. T: number of text tokens.
-        # attn_mat2[[0], :, :, [6,7,8,9]]: [4, 8, 4096]
-        attn_mat2[indices_b, :, :, indices_n] = subj_attn_dxys
+        # attn_mat2[[0,0,0,0], :, :, [6,7,8,9]]: [4, 8, 4096]
+        # Linearly combine the old (pointwise) and new (convolutional) attn scores.
+        attn_mat2[indices_b, :, :, indices_n] = attn_mat2[indices_b, :, :, indices_n] * (1 - conv_attn_weight) \
+                                                + subj_attn_dxys * conv_attn_weight
 
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)

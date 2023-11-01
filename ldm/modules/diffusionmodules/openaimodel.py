@@ -509,6 +509,7 @@ class UNetModel(nn.Module):
 
         self.backup_vars = { 
                             'use_conv_attn':            False,
+                            'conv_attn_weight':         0.5,
                             'save_attn_vars':           False,
                             'deep_neg_context:layerwise':  None,
                             'deep_cfg_scale':                   1.5,
@@ -831,6 +832,7 @@ class UNetModel(nn.Module):
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
+        conv_attn_weight      = extra_info.get('conv_attn_weight', 0.5)        if extra_info is not None else 0.5
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
@@ -987,12 +989,15 @@ class UNetModel(nn.Module):
         deep_neg_trans_layer_indices = None #[7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24] 
         # 1:  64,  2: 64,  4: 32,  5: 32,  7: 16,  8: 16, 12: 8, 16: 16, 17: 16, 18: 16, 
         # 19: 32, 20: 32, 21: 32, 22: 64, 23: 64, 24: 64.
-        # layer 12 has 8x8 feature maps, so we don't do conv attn (3x3) on it.
-        conv_attn_layer_indices      = [1, 2, 4, 5, 7, 8, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+        ## Apply conv attn on all layers. 
+        # Although layer 12 has small 8x8 feature maps, since we linearly combine 
+        # pointwise attn with conv attn, we still apply conv attn (3x3) on it.
+        conv_attn_layer_indices      = None #[1, 2, 4, 5, 7, 8, 16, 17, 18, 19, 20, 21, 22, 23, 24]
 
         ca_flags_stack = []
         old_ca_flags, old_trans_flags = \
-            self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn': use_conv_attn },
+            self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn': use_conv_attn,
+                                                          'conv_attn_weight': conv_attn_weight },
                                        ca_layer_indices = conv_attn_layer_indices,
                                        trans_flag_dict  = deep_neg_trans_flag_dict,
                                        trans_layer_indices = deep_neg_trans_layer_indices )
