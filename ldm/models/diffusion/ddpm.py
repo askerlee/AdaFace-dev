@@ -1487,8 +1487,9 @@ class LatentDiffusion(DDPM):
             self.iter_flags['comp_init_with_fg_area']   = self.cached_inits['comp_init_with_fg_area']
 
         # Gradually reduce recon_loss_weight from 1 to 0.5 over the whole course of training.
-        self.iter_flags['recon_loss_weight'] = anneal_value(self.training_percent, 1, (1.0, 0.5)) \
-                                                * self.recon_loss_weight 
+        self.iter_flags['recon_loss_weight'] = self.recon_loss_weight 
+                                                # anneal_value(self.training_percent, 1, (1.0, 0.5)) \
+                                                # * self.recon_loss_weight 
 
         loss = self(x_start, captions, **kwargs)
 
