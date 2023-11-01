@@ -3639,8 +3639,8 @@ class LatentDiffusion(DDPM):
             # subj_comp_attn_align: [1, 9, 8, 64].
             loss_layer_comp_attn_align = (subj_comp_attn_align ** 2).mean()
 
-            loss_subj_comp_attn_align += loss_layer_comp_attn_align * k_ortho_layer_weight   
-            loss_subj_comp_attn_ortho += loss_layer_comp_attn_ortho * k_ortho_layer_weight * L2_boost_scale
+            loss_subj_comp_attn_align += loss_layer_comp_attn_align * k_ortho_layer_weight * L2_boost_scale
+            loss_subj_comp_attn_ortho += loss_layer_comp_attn_ortho * k_ortho_layer_weight
 
         return loss_subj_comp_key_align, loss_subj_comp_value_align, \
                loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, \
