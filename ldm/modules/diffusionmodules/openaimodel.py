@@ -508,13 +508,13 @@ class UNetModel(nn.Module):
         self.debug_attn = False
 
         self.backup_vars = { 
-                            'use_conv_attn':                            False,
-                            'default_conv_attn_weight':                 0.5,
-                            'layerwise_conv_attn_weights:layerwise':    None,
-                            'save_attn_vars':                           False,
-                            'deep_neg_context:layerwise':               None,
-                            'deep_cfg_scale':                           1.5,
-                            'disable_deep_neg_context':                 False,
+                            'use_conv_attn':                 False,
+                            'default_conv_attn_weight':      0.5,
+                            'conv_attn_weight:layerwise':    None,
+                            'save_attn_vars':                False,
+                            'deep_neg_context:layerwise':    None,
+                            'deep_cfg_scale':                1.5,
+                            'disable_deep_neg_context':      False,
                            }
 
         time_embed_dim = model_channels * 4
@@ -842,7 +842,7 @@ class UNetModel(nn.Module):
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
         default_conv_attn_weight = extra_info.get('default_conv_attn_weight', 0.5)   if extra_info is not None else 0.5
-        layerwise_conv_attn_weights = extra_info.get('layerwise_conv_attn_weights', None)        if extra_info is not None else None
+        layerwise_conv_attn_weights = extra_info.get('layerwise_conv_attn_weights', None)   if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
@@ -1006,7 +1006,7 @@ class UNetModel(nn.Module):
         ca_flags_stack = []
         old_ca_flags, old_trans_flags = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn': use_conv_attn,
-                                                          'layerwise_conv_attn_weights:layerwise': layerwise_conv_attn_weights },
+                                                          'conv_attn_weight:layerwise': layerwise_conv_attn_weights },
                                        ca_layer_indices = conv_attn_layer_indices,
                                        trans_flag_dict  = deep_neg_trans_flag_dict,
                                        trans_layer_indices = deep_neg_trans_layer_indices )
