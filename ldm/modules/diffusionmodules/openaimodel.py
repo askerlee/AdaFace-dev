@@ -1002,11 +1002,13 @@ class UNetModel(nn.Module):
         # Here layerwise_conv_attn_weights is a list of scalars, not a learnable tensor.
         if layerwise_conv_attn_weights is None:
             # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
-            # 6~15 (12, 16, 17, 18, 19, 20, 2, 22, 23, 24): weight 0.125.
+            # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0.1.
+            # 13~15 (22, 23, 24):                           weight 0.2.
             # This setting is based on the empirical observations of 
-            # the learned layerwise_conv_attn_weights.            
-            layerwise_conv_attn_weights = [default_conv_attn_weight] * 6 \
-                                          + [default_conv_attn_weight / 4] * 10
+            # the learned layerwise_conv_attn_weights.      
+            layerwise_conv_attn_weights = [default_conv_attn_weight]         * 6 \
+                                          + [default_conv_attn_weight / 5]   * 7 \
+                                          + [default_conv_attn_weight / 2.5] * 3
 
         ca_flags_stack = []
         old_ca_flags, old_trans_flags = \

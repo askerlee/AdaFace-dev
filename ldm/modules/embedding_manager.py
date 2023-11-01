@@ -1632,10 +1632,12 @@ class EmbeddingManager(nn.Module):
                                         requires_grad=learnable)
             if self.use_layerwise_embedding:
                 # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
-                # 6~15 (12, 16, 17, 18, 19, 20, 2, 22, 23, 24): weight 0.125.
+                # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0.1.
+                # 13~15 (22, 23, 24):                           weight 0.2.
                 # This setting is based on the empirical observations of 
                 # the learned layerwise_conv_attn_weights.
-                self.layerwise_conv_attn_weights.data[6:] /= 4
+                self.layerwise_conv_attn_weights.data[6:13] /= 5
+                self.layerwise_conv_attn_weights.data[13:]  /= 2.5
 
             print(f"Initialize layerwise_conv_attn_weights = {self.layerwise_conv_attn_weights}")
 
