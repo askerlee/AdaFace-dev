@@ -88,6 +88,26 @@ class CLIPEvaluator(object):
         else:
             raise NotImplementedError
 
+    def text_pairwise_similarity(self, textset1, textset2, reduction='mean'):
+        textset1_features = [ self.get_text_features(t) for t in textset1 ]
+        textset2_features = [ self.get_text_features(t) for t in textset2 ]
+        textset1_features = torch.cat(textset1_features, dim=0)
+        textset2_features = torch.cat(textset2_features, dim=0)
+
+        sim_scores = textset1_features @ textset2_features.T
+        if reduction == 'mean':
+            return sim_scores.mean()
+        elif reduction == 'diag':
+            assert len(textset1) == len(textset2), f"Number of text set 1 {len(textset1)} != Number of text set 2 {len(textset2)}"
+            return sim_scores.diag()
+        elif reduction == 'diagmean':
+            assert len(textset1) == len(textset2), f"Number of text set 1 {len(textset1)} != Number of text set 2 {len(textset2)}"
+            return sim_scores.diag().mean()
+        elif reduction == 'none':
+            return sim_scores
+        else:
+            raise NotImplementedError        
+
     # The gradient is cut to prevent from going back to get_text_features(). 
     # So if text-image similarity is used as loss,
     # the text embedding from the compared input text will not be updated. 
