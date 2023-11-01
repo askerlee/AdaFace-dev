@@ -832,7 +832,6 @@ class UNetModel(nn.Module):
         distill_attnscores = {}
         distill_ks      = {}
         distill_vs      = {}
-        hyb_context_ks  = {}
 
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
@@ -933,9 +932,10 @@ class UNetModel(nn.Module):
                         # subj_layer_ada_context, cls_layer_ada_context: [2, 77, 768]
                         # emb_v_mixer is a partial function that implies mix_indices=subj_indices_1b.                            
                         mix_layer_ada_context_v = emb_v_mixer(cls_layer_ada_context, subj_layer_ada_context, 
-                                                                c1_mix_scale=emb_v_cls_mix_scale)
+                                                              c1_mix_scale=emb_v_cls_mix_scale)
                     else:
                         mix_layer_ada_context_v = cls_layer_ada_context
+                        emb_v_cls_mix_scale = 0
                             
                     layer_ada_context_v = th.cat([subj_layer_ada_context, mix_layer_ada_context_v], dim=0)
                     # layer_static_context_v, layer_ada_context_v: [2, 77, 768]
@@ -954,6 +954,7 @@ class UNetModel(nn.Module):
                                                               c1_mix_scale=emb_k_cls_mix_scale)
                     else:
                         mix_layer_ada_context_k = cls_layer_ada_context 
+                        emb_k_cls_mix_scale = 0
 
                     layer_ada_context_k = th.cat([subj_layer_ada_context, mix_layer_ada_context_k], dim=0)
 
@@ -963,8 +964,6 @@ class UNetModel(nn.Module):
                     
                     # Pass both embeddings for hijacking the key of layer_hyb_context_v by layer_context_k.
                     layer_context = (layer_hyb_context_v, layer_hyb_context_k)
-                    # Only cache the hybrid context_k corresponding to the subj instances.
-                    subj_layer_hyb_context_k = layer_hyb_context_k.chunk(2)[0]
                 else:
                     # normal_recon iters. Only one copy of k/v.
                     layer_hyb_context = layer_static_context * static_emb_weight \
@@ -972,11 +971,6 @@ class UNetModel(nn.Module):
 
                     # Both the key and the value are layer_hyb_context. Only provide one.
                     layer_context = layer_hyb_context
-                    # No class instances in normal_recon iters. So the 
-                    # whole layer_hyb_context will be cached.
-                    subj_layer_hyb_context_k = layer_hyb_context
-
-                hyb_context_ks[layer_idx] = subj_layer_hyb_context_k.detach()
 
             else:
                 layer_context = layer_static_context
@@ -1114,7 +1108,6 @@ class UNetModel(nn.Module):
         extra_info['unet_attnscores']   = distill_attnscores
         extra_info['unet_ks']           = distill_ks
         extra_info['unet_vs']           = distill_vs
-        extra_info['hyb_context_ks']    = hyb_context_ks
 
         if debug_attn:
             breakpoint()

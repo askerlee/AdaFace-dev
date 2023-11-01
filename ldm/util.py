@@ -479,6 +479,8 @@ def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=Tr
 
 # infeat_size: (h, w) of the input feature map (before flattening).
 # H: number of heads.
+# Return a new attn_mat with the same shape as attn_mat, but with the attention scores at subj_indices
+# replaced by the convolutional attention scores.
 def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_scale, conv_attn_weight=0.5):
     # input features x: [4, 4096, 320].
     # attn_mat: [32, 4096, 77]. 32: b * h. b = 4, h = 8.
