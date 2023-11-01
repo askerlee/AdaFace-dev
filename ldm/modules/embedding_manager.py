@@ -1625,12 +1625,13 @@ class EmbeddingManager(nn.Module):
         else:
             self.layerwise_conv_attn_weights = \
                 nn.Parameter(torch.ones(self.num_layers_per_embedder) * default_conv_attn_weight, 
-                                        requires_grad=True)
+                                        requires_grad=False)
             if self.use_layerwise_embedding:
-                # 0~5: weight 0.5, 6~15: weight 0.25.
+                # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
+                # 6~15 (12, 16, 17, 18, 19, 20, 2, 22, 23, 24): weight 0.125.
                 # This setting is based on the empirical observations of 
                 # the learned layerwise_conv_attn_weights.
-                self.layerwise_conv_attn_weights.data[6:] *= 0.5
+                self.layerwise_conv_attn_weights.data[6:] /= 4
 
             print(f"Initialize layerwise_conv_attn_weights = {self.layerwise_conv_attn_weights}")
 
@@ -1733,7 +1734,7 @@ class EmbeddingManager(nn.Module):
         params = list(self.string_to_static_embedder_dict.parameters()) \
                + list(self.string_to_ada_embedder_dict.parameters()) \
                + list(self.string_to_emb_ema_dict.parameters()) \
-               + [ self.emb_global_scale_score, self.layerwise_conv_attn_weights ]
+               + [ self.emb_global_scale_score ] #, self.layerwise_conv_attn_weights ]
         
         return params
         
