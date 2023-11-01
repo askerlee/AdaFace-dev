@@ -226,6 +226,9 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--use_conv_attn",
         action="store_true", 
         help="Use convolutional attention at subject tokens")
+    parser.add_argument("--conv_attn_weight",
+        type=float, default=0.5,
+        help="Weight of convolutional attention (to be combined with pointwise attention)")
     
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=-1,
@@ -802,9 +805,10 @@ if __name__ == "__main__":
                     f"Only support 4/9/16 embeddings per token but got {opt.num_vectors_per_token}. " \
                     "4 = 2*2 kernel, 9 = 3*3, 16 = 4*4."
             config.model.params.use_conv_attn = True
+            config.model.params.conv_attn_weight = opt.conv_attn_weight
             kernel_desc_map = {4: "2x2", 9: "3x3", 16: "4x4"}
             kernel_desc = kernel_desc_map[opt.num_vectors_per_token]
-            print(f"Use {kernel_desc} Conv Attention with subject embeddings")
+            print(f"Use {kernel_desc} Conv Attention (weight {opt.conv_attn_weight}) by subject embeddings")
 
         if hasattr(opt, 'composition_regs_iter_gap'):
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap

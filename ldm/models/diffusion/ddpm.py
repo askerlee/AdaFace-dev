@@ -115,6 +115,7 @@ class DDPM(pl.LightningModule):
                  distill_deep_cfg_scale=0.,
                  use_background_token=False,
                  use_conv_attn=False,
+                 conv_attn_weight=0.5,
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
                  use_fp_trick=True,      
                  ):
@@ -156,6 +157,7 @@ class DDPM(pl.LightningModule):
         self.recon_bg_discount                  = recon_bg_discount
         
         self.use_conv_attn                   = use_conv_attn
+        self.conv_attn_weight                = conv_attn_weight
         self.use_background_token            = use_background_token
         # If use_conv_attn, the subject is well expressed, and use_fp_trick is unnecessary 
         # (actually harmful).

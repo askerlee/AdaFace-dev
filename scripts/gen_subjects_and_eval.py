@@ -39,6 +39,10 @@ def parse_args():
     parser.add_argument("--use_conv_attn",
                         action="store_true", 
                         help="Use convolutional attention at subject tokens")
+    parser.add_argument("--conv_attn_weight",
+                        type=float, default=0.5,
+                        help="Weight of convolutional attention (to be combined with pointwise attention)")
+                
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
@@ -444,7 +448,7 @@ if __name__ == "__main__":
         if hasattr(args, 'num_vectors_per_token'):
             command_line += f" --placeholder_string {args.orig_placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
         if args.use_conv_attn:
-            command_line += f" --use_conv_attn"
+            command_line += f" --use_conv_attn --conv_attn_weight {args.conv_attn_weight}"
         if hasattr(args, 'emb_ema_as_pooling_probe'):
             command_line += f" --emb_ema_as_pooling_probe"
             
