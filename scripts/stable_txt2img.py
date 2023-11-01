@@ -368,8 +368,9 @@ def main(opt):
         torch.backends.cuda.matmul.allow_tf32 = True
 
     seed_everything(opt.seed)
-    predefined_negative_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
-
+    # predefined_negative_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
+    predefined_negative_prompt = "duplicate, out of frame, cropped, mutilated, bad anatomy, deformed"
+    
     if not opt.eval_blip:
         config = OmegaConf.load(f"{opt.config}")
 
