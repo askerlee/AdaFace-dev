@@ -5,10 +5,15 @@ import os
 import re
 
 ckpt_sig = sys.argv[1]
+if len(sys.argv) > 2:
+    extra_sig = sys.argv[2]
+else:
+    extra_sig = ""
+
 all_ckpt_names = os.listdir("logs")
 # Sort all_ckpt_names by name (actually by timestamp in the name), so that most recent first.
 all_ckpt_names.sort(reverse=True)
-ckpt_name  = find_first_match(all_ckpt_names, ckpt_sig)
+ckpt_name  = find_first_match(all_ckpt_names, ckpt_sig, extra_sig=extra_sig)
 # embeddings_gs-{ckpt_iter}.pt
 emb_folder    = f"logs/{ckpt_name}/checkpoints/"
 iter2path = {}
