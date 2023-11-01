@@ -29,9 +29,10 @@ model:
         initializer_words: ["sculpture"]
         num_vectors_per_token: 1
         use_layerwise_embedding: True
+        layerwise_lora_rank_token_ratio: 2
         ada_emb_weight: 0.5
         ada_use_attn_pooler: True
-        ada_ema_as_static_emb_weight: 0.
+        emb_ema_as_pooling_probe_weight: 0.5
                 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

@@ -852,6 +852,7 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight=0.5, 
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
+            default_conv_attn_weight=0.5,
             static_only_tokens=None,
             **kwargs
     ):
@@ -872,8 +873,6 @@ class EmbeddingManager(nn.Module):
         self.emb_ema_sgd_able = False
         self.set_static_only_tokens(static_only_tokens)
 
-        self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
-
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
         self.num_unet_ca_layers = num_unet_ca_layers
@@ -883,6 +882,12 @@ class EmbeddingManager(nn.Module):
             self.num_layers_per_embedder = num_unet_ca_layers
         else:
             self.num_layers_per_embedder = 1
+
+        self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
+        self.default_conv_attn_weight = default_conv_attn_weight
+        self.layerwise_conv_attn_weights = \
+            nn.Parameter(torch.ones(self.num_layers_per_embedder) * self.default_conv_attn_weight, 
+                                    requires_grad=True)
 
         # num_vectors_per_token: an int or a dict. How many vectors in each layer 
         # are allocated to model the subject (represented as the subject token).        
@@ -1439,6 +1444,9 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight = self.ada_emb_weight        
         return ada_emb_weight
     
+    def get_layerwise_conv_attn_weights(self):
+        return self.layerwise_conv_attn_weights
+    
     def get_emb_global_scale(self, do_perturb=True):
         # emb_global_scale_score = 0  -> emb_global_scale = 1, 
         # emb_global_scale_score = 1  -> emb_global_scale = 1.23
@@ -1619,6 +1627,7 @@ class EmbeddingManager(nn.Module):
                      "emb_global_scale_score":          self.emb_global_scale_score,
                      "ada_emb_weight":                  self.ada_emb_weight,  
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
+                     "layerwise_conv_attn_weights":     self.layerwise_conv_attn_weights,
                      # learnable token in the deep negative prompt.
                      "static_only_tokens":             self.static_only_tokens,
                    }, 
@@ -1632,6 +1641,10 @@ class EmbeddingManager(nn.Module):
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
         self.string_to_emb_ema_dict         = nn.ModuleDict()
+        self.layerwise_conv_attn_weights    = \
+            nn.Parameter(torch.ones(self.num_layers_per_embedder) * self.default_conv_attn_weight, 
+                                    requires_grad=True)
+        
         token2num_vectors                   = {}
 
         if isinstance(ckpt_paths, str):
@@ -1659,6 +1672,10 @@ class EmbeddingManager(nn.Module):
 
             if "emb_ema_as_pooling_probe_weight" in ckpt:
                 self.set_emb_ema_as_pooling_probe_weight(ckpt["emb_ema_as_pooling_probe_weight"])
+
+            if "layerwise_conv_attn_weights" in ckpt:
+                self.layerwise_conv_attn_weights = ckpt["layerwise_conv_attn_weights"]
+                print(f"Set layerwise_conv_attn_weights = {self.layerwise_conv_attn_weights}")
 
             if "static_only_tokens" in ckpt:
                 self.set_static_only_tokens(ckpt["static_only_tokens"])
@@ -1699,8 +1716,8 @@ class EmbeddingManager(nn.Module):
     def optimized_parameters(self):
         params = list(self.string_to_static_embedder_dict.parameters()) \
                + list(self.string_to_ada_embedder_dict.parameters()) \
-               + [self.emb_global_scale_score] \
-               + list(self.string_to_emb_ema_dict.parameters())
+               + list(self.string_to_emb_ema_dict.parameters()) \
+               + [ self.emb_global_scale_score, self.layerwise_conv_attn_weights ]
         
         return params
         
