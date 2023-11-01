@@ -3537,6 +3537,7 @@ class LatentDiffusion(DDPM):
         loss_subj_comp_attn_align  = 0
         loss_subj_comp_attn_ortho  = 0
 
+        L2_boost_scale = 10
         emb_kq_do_demean_first = False
 
         if is_4type_batch:
@@ -3624,19 +3625,22 @@ class LatentDiffusion(DDPM):
                 # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
                 # to make the two attention maps more complementary (expect the loss pushes the 
                 # subject embedding to a more accurate point).
+                # subj_comp_attn_ortho, cls_comp_attn_ortho: [1, 9, 8, 64]
                 loss_layer_comp_attn_ortho = calc_delta_loss(subj_comp_attn_ortho, cls_comp_attn_ortho, 
-                                                              exponent=2,    
-                                                              do_demean_first=False,
-                                                              first_n_dims_to_flatten=3, 
-                                                              ref_grad_scale=cls_grad_scale)
+                                                             exponent=2,    
+                                                             do_demean_first=False,
+                                                             first_n_dims_to_flatten=3, 
+                                                             ref_grad_scale=cls_grad_scale)
             else:
                 loss_layer_comp_attn_ortho = 0
 
             # Push subj_comp_attn_align towards 0.
+            # subj_comp_attn_align is a component of subj_subj_attn (attention scores).
+            # subj_comp_attn_align: [1, 9, 8, 64].
             loss_layer_comp_attn_align = (subj_comp_attn_align ** 2).mean()
 
             loss_subj_comp_attn_align += loss_layer_comp_attn_align * k_ortho_layer_weight   
-            loss_subj_comp_attn_ortho += loss_layer_comp_attn_ortho * k_ortho_layer_weight
+            loss_subj_comp_attn_ortho += loss_layer_comp_attn_ortho * k_ortho_layer_weight * L2_boost_scale
 
         return loss_subj_comp_key_align, loss_subj_comp_value_align, \
                loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, \
