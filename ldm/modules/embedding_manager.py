@@ -1616,16 +1616,18 @@ class EmbeddingManager(nn.Module):
     def clear_delta_loss_emb_mask(self):
         self.delta_loss_emb_mask = None
  
-    def initialize_layerwise_conv_attn_weights(self, default_conv_attn_weight, layerwise_conv_attn_weights=None):
+    def initialize_layerwise_conv_attn_weights(self, default_conv_attn_weight, 
+                                               layerwise_conv_attn_weights=None,
+                                               learable=False):
         if layerwise_conv_attn_weights is not None:
             self.layerwise_conv_attn_weights = nn.Parameter(layerwise_conv_attn_weights,
-                                                            requires_grad=True)            
+                                                            requires_grad=learable)            
             print(f"Change layerwise_conv_attn_weights = {self.layerwise_conv_attn_weights}")
 
         else:
             self.layerwise_conv_attn_weights = \
                 nn.Parameter(torch.ones(self.num_layers_per_embedder) * default_conv_attn_weight, 
-                                        requires_grad=False)
+                                        requires_grad=learable)
             if self.use_layerwise_embedding:
                 # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
                 # 6~15 (12, 16, 17, 18, 19, 20, 2, 22, 23, 24): weight 0.125.
