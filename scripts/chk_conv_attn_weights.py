@@ -22,7 +22,9 @@ print("emb_folder:", emb_folder)
 for emb_path in os.listdir(emb_folder):
     if re.match(r"embeddings_gs-(\d+).pt", emb_path):
         ckpt_iter = re.match(r"embeddings_gs-(\d+).pt", emb_path).group(1)
-        iter2path[int(ckpt_iter)] = emb_path
+        ckpt_iter = int(ckpt_iter)
+        if ckpt_iter % 500 == 0:
+            iter2path[ckpt_iter] = emb_path
 
 iterations = sorted(iter2path.keys())
 
@@ -32,19 +34,28 @@ for idx, iteration in enumerate(iterations):
     emb_ckpt = torch.load(emb_path)
     print(emb_ckpt['layerwise_conv_attn_weights'])
 
-for idx, iteration in enumerate(iterations):
-    emb_path = os.path.join(emb_folder, iter2path[iteration])
-    emb_ckpt = torch.load(emb_path)
-    if idx == 0:
-        prev_emb_ckpt = emb_ckpt
+tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
+
+for k in tokens:
+    if k in emb_ckpt['static_only_tokens']:
         continue
 
-    prev_iteration = iterations[idx-1]
+    print(f"Token: {k}")
 
-    for k in emb_ckpt['string_to_emb_ema_dict']:
+    for idx, iteration in enumerate(iterations):
+        emb_path = os.path.join(emb_folder, iter2path[iteration])
+        emb_ckpt = torch.load(emb_path)
+        if idx == 0:
+            prev_emb_ckpt = emb_ckpt
+            continue
+
+        prev_iteration = iterations[idx-1]
+
         emb_ema = emb_ckpt['string_to_emb_ema_dict'][k]
         prev_emb_ema = prev_emb_ckpt['string_to_emb_ema_dict'][k]
+        curr_mean = emb_ema.embedding.abs().mean()
+        prev_mean = prev_emb_ema.embedding.abs().mean()
         delta = (emb_ema.embedding - prev_emb_ema.embedding).abs().mean()
-        print(f"{prev_iteration} -> {iteration} delta for {k}: {delta}")
+        print(f"{prev_iteration} -> {iteration}: {curr_mean:.4f}, {prev_mean:.4f}, {delta:.4f}")
 
-    prev_emb_ckpt = emb_ckpt
+        prev_emb_ckpt = emb_ckpt

@@ -1270,8 +1270,8 @@ class EmbeddingManager(nn.Module):
             curr_subj_indices = self.placeholder_indices_fg if not token_is_bg else self.placeholder_indices_bg
             layer_static_subj_emb = layer_static_prompt_embs[curr_subj_indices].mean(dim=0)
 
-            # Don't use emb_ema_as_pooling_probe for background Ada embedder.
-            if self.emb_ema_as_pooling_probe_weight > 0 and not token_is_bg:
+            ## Don't use emb_ema_as_pooling_probe for background Ada embedder.
+            if self.emb_ema_as_pooling_probe_weight > 0:
                 # Use the first embedding of K embeddings as the probe.
                 token_emb_ema = self.string_to_emb_ema_dict[placeholder_string]
                 if token_emb_ema is None:
