@@ -982,11 +982,12 @@ class UNetModel(nn.Module):
             # 12, 16, 17, 18, 19, 20, 21 feature maps: 8, 16, 16, 16, 32, 32, 32.
             # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0 (disabled).
             # 22, 23, 24                 feature maps: 64, 64, 64.
-            # 13~15 (22, 23, 24):                           weight 0 (disabled).
+            # 13~15 (22, 23, 24):                           weight -0.1.
             # This setting is based on the empirical observations of 
             # the learned layerwise_point_conv_attn_mix_weights.      
             layerwise_point_conv_attn_mix_weights = [default_point_conv_attn_mix_weight]    * 6 \
-                                                    + [0]                                   * 10
+                                                    + [0]                                   * 7 \
+                                                    + [-0.1]                                * 3
 
         ca_flags_stack = []
         old_ca_flags, _ = \

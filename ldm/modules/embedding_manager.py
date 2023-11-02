@@ -870,6 +870,7 @@ class EmbeddingManager(nn.Module):
         self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight
         self.emb_ema_grad_scale = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
+        self.emb_ema_sgd_able = False
         self.set_static_only_tokens(static_only_tokens)
 
         self.use_layerwise_embedding = use_layerwise_embedding
@@ -1036,8 +1037,7 @@ class EmbeddingManager(nn.Module):
         self.loss_call_count = 0
         # Store the text_embedder to compute the delta loss.
         self.text_embedder  = text_embedder
-        self.ada_prompt_embeddings_cache = {}
-        self.ada_token_indices_cache = {}
+        self.ada_prompt_embeddings_cache = None
         self.ada_bp_to_unet = False
         self.force_grad     = False
         self.placeholder_indices_bg = None
@@ -1292,6 +1292,10 @@ class EmbeddingManager(nn.Module):
                     # We only need one embedding of [768]. But
                     # the layer subj embedding is of [9, 768]. So we take the first embedding.
                     layer_subj_emb_ema = token_emb_ema_embedding[ca_layer_idx].mean(dim=0)
+                    # emb_ema_sgd_able is set in ddpm.py:LatentDiffusion.p_losses(). 
+                    # Alternate between EMA update and EMA sgd update.
+                    if not self.emb_ema_sgd_able:
+                        layer_subj_emb_ema = layer_subj_emb_ema.detach()
 
                 # Although layer_subj_emb_ema cannot be updated through SGD, 
                 # layer_static_subj_emb is updateable. So the probe will still adapt to the learning objective.
@@ -1467,6 +1471,11 @@ class EmbeddingManager(nn.Module):
         self.emb_ema_as_pooling_probe_weight = emb_ema_as_pooling_probe_weight
         print(f"Setting emb_ema_as_pooling_probe_weight = {emb_ema_as_pooling_probe_weight}")
 
+    def set_static_only_tokens(self, static_only_tokens):
+        self.static_only_tokens = [] if static_only_tokens is None else static_only_tokens
+        if len(self.static_only_tokens) > 0:
+            print(f"Setting static_only_tokens = {static_only_tokens}")
+
     # Cache features used to compute ada embeddings.
     def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
         self.gen_ada_embedding = True
@@ -1476,6 +1485,11 @@ class EmbeddingManager(nn.Module):
         self.layer_attn_components = layer_attn_components
 
     def update_emb_ema(self, fg_indices, bg_indices):
+        # Don't update EMA embeddings in SGD-enabled iterations.
+        # Otherwise it will cause computation graph error.
+        if self.emb_ema_sgd_able:
+            return
+        
         if fg_indices is None and bg_indices is None:
             return
         
@@ -1528,21 +1542,16 @@ class EmbeddingManager(nn.Module):
 
                     token_emb_cache_obj.reset_cached_layer_tracker()
 
-    def set_static_only_tokens(self, static_only_tokens):
-        self.static_only_tokens = [] if static_only_tokens is None else static_only_tokens
-        if len(self.static_only_tokens) > 0:
-            print(f"Setting static_only_tokens = {static_only_tokens}")
 
     # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
     # not just the ada or static embeddings of the subject.
     def cache_ada_prompt_embedding(self, layer_idx, embedding):
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         self.ada_prompt_embeddings_cache[ca_layer_idx] = embedding
-        # If there are multiple layers of embeddings, only the last indices_fg/bg will be cached.
-        self.ada_token_indices_cache['fg'] = self.placeholder_indices_fg
-        self.ada_token_indices_cache['bg'] = self.placeholder_indices_bg
-        
-    def get_cached_ada_prompt_embeddings_as_tensor(self):
+        if len(self.ada_prompt_embeddings_cache) == self.num_layers_per_embedder:
+            self.update_emb_ema(self.placeholder_indices_fg, self.placeholder_indices_bg)
+
+    def get_cached_ada_prompt_embeddings(self):
         # No tokens appear in the current prompt. So the ada prompt embedding cache is empty.
         if len(self.ada_prompt_embeddings_cache) == 0:
             return None
@@ -1555,20 +1564,6 @@ class EmbeddingManager(nn.Module):
         # ada_prompt_embeddings: [BS, 16, 77, 768]. BS: batch size (2 or 4). 16: num layers.
         ada_prompt_embeddings = torch.stack(ada_prompt_embeddings, dim=1)
         return ada_prompt_embeddings
-        
-    # self.ada_prompt_embeddings_cache is a cache for the prompt embeddings of all layers, 
-    # for computing the prompt delta loss and updating the EMA embeddings.
-    # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
-    # not just the ada or static embeddings of the subject returned from the embedders.
-    def clear_ada_prompt_embeddings_cache(self):
-        if len(self.ada_prompt_embeddings_cache) == self.num_layers_per_embedder:
-            self.update_emb_ema(self.ada_token_indices_cache['fg'], 
-                                self.ada_token_indices_cache['bg'])
-
-        self.ada_prompt_embeddings_cache = {}
-        self.ada_token_indices_cache = {'fg': None, 'bg': None}
-        #if self.string_to_emb_ema_dict['z'] is not None:
-        #    print(self.string_to_emb_ema_dict['z'].num_updates)
 
     def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings=None):
         if num_vectors_per_token is None or type(num_vectors_per_token) == int:
@@ -1596,6 +1591,13 @@ class EmbeddingManager(nn.Module):
         self.layer_idx      = -1
         self.layer_attn_components  = None
         self.time_emb       = None
+        
+    # self.ada_prompt_embeddings_cache is a cache for the prompt embeddings of all layers, 
+    # for computing the prompt delta loss.
+    # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
+    # not just the ada or static embeddings of the subject.
+    def clear_ada_prompt_embeddings_cache(self):
+        self.ada_prompt_embeddings_cache = {}
 
     # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
     # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
@@ -1626,10 +1628,11 @@ class EmbeddingManager(nn.Module):
             if self.use_layerwise_embedding:
                 # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
                 # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0 (disabled).
-                # 13~15 (22, 23, 24):                           weight 0 (disabled).
+                # 13~15 (22, 23, 24):                           weight -0.1.
                 # This setting is based on the empirical observations of 
                 # the learned layerwise_point_conv_attn_mix_weights.
-                self.layerwise_point_conv_attn_mix_weights.data[6:] = 0
+                self.layerwise_point_conv_attn_mix_weights.data[6:13]  = 0
+                self.layerwise_point_conv_attn_mix_weights.data[13:]  /= -5
 
             print(f"Initialize layerwise_point_conv_attn_mix_weights = {self.layerwise_point_conv_attn_mix_weights}")
 
