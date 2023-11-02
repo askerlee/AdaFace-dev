@@ -126,6 +126,10 @@ if set -q misc_train_opts
     set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 $misc_train_opts
 end
 
+if set -q misc_infer_opts
+    set EXTRA_EVAL_ARGS0 $EXTRA_EVAL_ARGS0 $misc_infer_opts
+end
+
 echo Training on $subjects[$indices]
 
 # $0 0 1 13: alexachung .. masatosakai, on GPU0

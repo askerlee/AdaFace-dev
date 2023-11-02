@@ -35,3 +35,4 @@ set -g maxiters         2500       3500              2500
 set -g db_suffix           ""
 set -g data_folder         dbeval-dataset
 set -g misc_train_opts     --use_fp_trick 0
+set -g misc_infer_opts     --use_pre_neg_prompt
