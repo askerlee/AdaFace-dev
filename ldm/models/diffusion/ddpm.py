@@ -1913,7 +1913,7 @@ class LatentDiffusion(DDPM):
         # Save ada embeddings generated during apply_model(), to be used in delta loss. 
         # Otherwise it will be overwritten by uncond denoising.
         # ada_embeddings: [4, 16, 77, 768] or None, if subj token doesn't appear in the prompts.
-        ada_embeddings = self.embedding_manager.get_cached_ada_prompt_embeddings()
+        ada_embeddings = self.embedding_manager.get_cached_ada_prompt_embeddings_as_tensor()
 
         # Get model output of both conditioned and uncond prompts.
         # Unconditional prompts and reconstructed images are never involved in optimization.
@@ -2260,10 +2260,6 @@ class LatentDiffusion(DDPM):
                                 'bg_indices':     bg_indices,
                                 'img_mask':       emb_man_img_mask }
 
-        # Iterate between emb ema update and emb ema sgd update.
-        # At the first step 0, emb_ema_sgd_able is False, so emb ema update is performed.
-        self.embedding_manager.emb_ema_sgd_able = (self.global_step % 2 == 1)
-                        
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
                                 emb_man_volatile_ds=emb_man_volatile_ds,

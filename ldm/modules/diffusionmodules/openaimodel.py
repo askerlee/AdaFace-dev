@@ -977,8 +977,11 @@ class UNetModel(nn.Module):
         # layerwise_point_conv_attn_mix_weights are not specified. So use the default value 0.5.
         # Here layerwise_point_conv_attn_mix_weights is a list of scalars, not a learnable tensor.
         if layerwise_point_conv_attn_mix_weights is None:
+            # 1, 2, 4, 5, 7, 8           feature maps: 64, 64, 32, 32, 16, 16.
             # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
+            # 12, 16, 17, 18, 19, 20, 21 feature maps: 8, 16, 16, 16, 32, 32, 32.
             # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0 (disabled).
+            # 22, 23, 24                 feature maps: 64, 64, 64.
             # 13~15 (22, 23, 24):                           weight 0.1.
             # This setting is based on the empirical observations of 
             # the learned layerwise_point_conv_attn_mix_weights.      
