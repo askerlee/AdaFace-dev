@@ -216,7 +216,10 @@ class CrossAttention(nn.Module):
         # by attention scores computed with a convolutional attention mechanism.
         # If uncond (null condition) is active, then returned subj_indices = None.
         # Don't do conv attn if uncond is active.
-        if context_provided and self.use_conv_attn and self.point_conv_attn_mix_weight != 0 \
+        # abs(self.point_conv_attn_mix_weight) >= 1e-6: 
+        # Sometimes point_conv_attn_mix_weight is a tiny negative number, and checking for equality with 0.0
+        # will fail.
+        if context_provided and self.use_conv_attn and abs(self.point_conv_attn_mix_weight) >= 1e-6 \
           and subj_indices is not None:
             # infeat_size is set in SpatialTransformer.forward().
             sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, h, self.scale,
