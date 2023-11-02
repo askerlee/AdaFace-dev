@@ -434,8 +434,7 @@ def main(opt):
 
         device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
         model  = model.to(device)
-        model.cond_stage_
-        model.device = device
+        model.cond_stage_model.device = device
                                 
         if opt.plms:
             sampler = PLMSSampler(model)
