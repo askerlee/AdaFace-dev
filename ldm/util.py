@@ -620,7 +620,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
         # N: number of visual tokens. T: number of text tokens.
         # attn_mat2[[0,0,0,0], :, :, [6,7,8,9]]: [4, 8, 4096]
         # Linearly combine the old (pointwise) and new (convolutional) attn scores.
-        attn_mat2[indices_b, :, :, indices_n] = attn_mat2[indices_b, :, :, indices_n] * (1 - point_conv_attn_mix_weight) \
+        attn_mat2[indices_b, :, :, indices_n] = attn_mat[indices_b, :, :, indices_n] * (1 - point_conv_attn_mix_weight) \
                                                 + subj_attn_dxys * point_conv_attn_mix_weight
 
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].

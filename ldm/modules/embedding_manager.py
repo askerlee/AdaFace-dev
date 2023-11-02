@@ -1748,7 +1748,7 @@ class EmbeddingManager(nn.Module):
         params = list(self.string_to_static_embedder_dict.parameters()) \
                + list(self.string_to_ada_embedder_dict.parameters()) \
                + list(self.string_to_emb_ema_dict.parameters()) \
-               + [ self.emb_global_scale_score ] #, self.layerwise_point_conv_attn_mix_weights ]
+               + [ self.emb_global_scale_score, self.layerwise_point_conv_attn_mix_weights ]
         
         return params
         
