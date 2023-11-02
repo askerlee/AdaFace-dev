@@ -26,7 +26,7 @@ end
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'use_conv_attn' 'eval' 'use_deep_neg_prompt' 'do_flip_v' 'learnable_deep_neg_token=' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'use_conv_attn' 'eval' 'use_deep_neg_prompt' 'do_flip_half_v' 'learnable_deep_neg_token=' -- $argv
 or begin
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] [--use_conv_attn] (ada|ti|db) [low-high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
@@ -98,9 +98,9 @@ if set -q _flag_learnable_deep_neg_token
     set EXTRA_EVAL_ARGS0 $EXTRA_EVAL_ARGS0   --learnable_deep_neg_token $_flag_learnable_deep_neg_token
 end
 
-if set -q _flag_do_flip_v
-    set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --do_flip_v
-    set EXTRA_EVAL_ARGS0 $EXTRA_EVAL_ARGS0   --do_flip_v
+if set -q _flag_do_flip_half_v
+    set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --do_flip_half_v
+    set EXTRA_EVAL_ARGS0 $EXTRA_EVAL_ARGS0   --do_flip_half_v
 end
 
 if set -q _flag_num_vectors_per_token

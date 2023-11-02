@@ -1339,7 +1339,7 @@ class LatentDiffusion(DDPM):
             # Mainly use background token on recon iters.
             if self.iter_flags['is_compos_iter']:
                 p_use_background_token  = 0
-                p_do_flip_v = 0.9
+                p_do_flip_half_v = 0.9
             else:
                 # Recon iters.
                 if self.iter_flags['use_wds_comp']:
@@ -1351,10 +1351,10 @@ class LatentDiffusion(DDPM):
                     # force the foreground token to focus on the whole image.
                     p_use_background_token  = 0.9
 
-                p_do_flip_v = 0.3
+                p_do_flip_half_v = 0.3
 
-            self.iter_flags['p_do_flip_v'] = self.embedding_manager.do_flip_v \
-                                             and random.random() < p_do_flip_v
+            self.iter_flags['p_do_flip_half_v'] = self.embedding_manager.do_flip_half_v \
+                                                    and random.random() < p_do_flip_half_v
             # Only use_background_token on recon iters.
             # No need to check do_mix_prompt_distillation, because if do_mix_prompt_distillation,
             # in most iterations p_use_background_token = 0, except for 50% of the iterations when

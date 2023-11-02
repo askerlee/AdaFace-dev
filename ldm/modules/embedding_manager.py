@@ -854,7 +854,7 @@ class EmbeddingManager(nn.Module):
             emb_ema_as_pooling_probe_weight=0,
             default_point_conv_attn_mix_weight=0.5,
             static_only_tokens=None,
-            do_flip_v=False,
+            do_flip_half_v=False,
             **kwargs
     ):
         super().__init__()
@@ -872,7 +872,7 @@ class EmbeddingManager(nn.Module):
         self.emb_ema_grad_scale = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
         self.set_static_only_tokens(static_only_tokens)
-        self.set_do_flip_v(do_flip_v)
+        self.set_do_flip_half_v(do_flip_half_v)
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
@@ -1474,9 +1474,9 @@ class EmbeddingManager(nn.Module):
         if len(self.static_only_tokens) > 0:
             print(f"Setting static_only_tokens = {static_only_tokens}")
 
-    def set_do_flip_v(self, do_flip_v):
-        self.do_flip_v = do_flip_v
-        print(f"Setting do_flip_v = {do_flip_v}")
+    def set_do_flip_half_v(self, do_flip_half_v):
+        self.do_flip_half_v = do_flip_half_v
+        print(f"Setting do_flip_half_v = {do_flip_half_v}")
         
     # Cache features used to compute ada embeddings.
     def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
@@ -1653,7 +1653,7 @@ class EmbeddingManager(nn.Module):
                      "layerwise_point_conv_attn_mix_weights":   self.layerwise_point_conv_attn_mix_weights,
                      # learnable token in the deep negative prompt.
                      "static_only_tokens":              self.static_only_tokens,
-                     "do_flip_v":                       self.do_flip_v,
+                     "do_flip_half_v":                  self.do_flip_half_v,
                    }, 
                     ckpt_path)
 
@@ -1705,8 +1705,8 @@ class EmbeddingManager(nn.Module):
             if "static_only_tokens" in ckpt:
                 self.set_static_only_tokens(ckpt["static_only_tokens"])
 
-            if "do_flip_v" in ckpt:
-                self.set_do_flip_v(ckpt["do_flip_v"])
+            if "do_flip_half_v" in ckpt:
+                self.set_do_flip_half_v(ckpt["do_flip_half_v"])
 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):

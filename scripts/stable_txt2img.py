@@ -300,9 +300,9 @@ def parse_args():
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
-    # If do_flip_v is not specified, then use the 'do_flip_v' in the checkpoint.
-    # If 'do_flip_v' doesn't exist in the checkpoint, then do_flip_v is False.
-    parser.add_argument("--do_flip_v", type=str2bool, nargs="?", const=True, default=argparse.SUPPRESS,
+    # If do_flip_half_v is not specified, then use the 'do_flip_half_v' in the checkpoint.
+    # If 'do_flip_half_v' doesn't exist in the checkpoint, then do_flip_half_v is False.
+    parser.add_argument("--do_flip_half_v", type=str2bool, nargs="?", const=True, default=argparse.SUPPRESS,
                         help="Whether to flip half of the subject embedding v vectors")
         
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
@@ -427,10 +427,10 @@ def main(opt):
         if opt.background_string is not None:
             model.embedding_manager.background_strings = [opt.background_string]
 
-        # command line --do_flip_v overrides the checkpoint.
-        if hasattr(opt, 'do_flip_v') and opt.do_flip_v != model.embedding_manager.do_flip_v:
-            print(f"Overriding do_flip_v in the checkpoint ({model.embedding_manager.do_flip_v}) with {opt.do_flip_v}")
-            model.embedding_manager.do_flip_v = opt.do_flip_v
+        # command line --do_flip_half_v overrides the checkpoint.
+        if hasattr(opt, 'do_flip_half_v') and opt.do_flip_half_v != model.embedding_manager.do_flip_half_v:
+            print(f"Overriding do_flip_half_v in the checkpoint ({model.embedding_manager.do_flip_half_v}) with {opt.do_flip_half_v}")
+            model.embedding_manager.do_flip_half_v = opt.do_flip_half_v
 
         device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
         model  = model.to(device)
@@ -715,7 +715,7 @@ def main(opt):
                                 # c / ref_c are tuples of (cond, prompts, extra_info).
                                 c = (c0_mix, c[1], c[2])
 
-                            c[2]['do_flip_v'] = model.embedding_manager.do_flip_v
+                            c[2]['do_flip_half_v'] = model.embedding_manager.do_flip_half_v
                             if opt.debug and ref_c is None:
                                 c[2]['debug_attn'] = True
 
