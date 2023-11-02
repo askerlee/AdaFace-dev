@@ -44,7 +44,7 @@ for idx, iteration in enumerate(iterations):
     for k in emb_ckpt['string_to_emb_ema_dict']:
         emb_ema = emb_ckpt['string_to_emb_ema_dict'][k]
         prev_emb_ema = prev_emb_ckpt['string_to_emb_ema_dict'][k]
-        delta = (emb_ema - prev_emb_ema).abs().mean()
+        delta = (emb_ema.embedding - prev_emb_ema.embedding).abs().mean()
         print(f"{prev_iteration} -> {iteration} delta for {k}: {delta}")
 
     prev_emb_ckpt = emb_ckpt
