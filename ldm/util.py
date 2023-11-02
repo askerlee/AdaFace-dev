@@ -1338,3 +1338,25 @@ def dampen_large_loss(loss, max_magnitude=1.):
         loss = loss * max_magnitude / loss.item()
 
     return loss
+
+def extract_second_half_of_indices(token_indices):
+    if token_indices is None:
+        return None
+    
+    indiv_indices = split_indices_by_instance(token_indices)
+    indiv_indices_half_B2, indiv_indices_half_N2 = [], []
+    for indices_B, indices_N in indiv_indices:
+        indices_B2 = indices_B.chunk(2)[1]
+        indices_N2 = indices_N.chunk(2)[1]
+        indiv_indices_half_B2.append(indices_B2)
+        indiv_indices_half_N2.append(indices_N2)
+
+    token_indices_half_B2 = torch.cat(indiv_indices_half_B2, dim=0)
+    token_indices_half_N2 = torch.cat(indiv_indices_half_N2, dim=0)
+    return (token_indices_half_B2, token_indices_half_N2)
+
+def flip_v_by_indices(v, indices):
+    v_flipped = v.clone()
+    v_flipped[indices] = -v_flipped[indices]
+    return v_flipped
+

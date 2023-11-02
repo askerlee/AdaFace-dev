@@ -2,7 +2,7 @@ from abc import abstractmethod
 from functools import partial
 import math
 from typing import Iterable
-from ldm.util import patch_multi_embeddings
+from ldm.util import patch_multi_embeddings, extract_second_half_of_indices
 
 import numpy as np
 import torch as th
@@ -868,7 +868,7 @@ class UNetModel(nn.Module):
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
             # Simply return None, as the context is not used anyway.
             if layer_idx not in layer_idx2ca_layer_idx:
-                return None, None
+                return None, None, None
             
             emb_idx = layer_idx2ca_layer_idx[layer_idx]
             layer_static_context = context[emb_idx]
@@ -966,9 +966,10 @@ class UNetModel(nn.Module):
             else:
                 layer_context = layer_static_context
 
+            flip_v_indices = extract_second_half_of_indices(subj_indices)
             # subj_indices is passed from extra_info, which was obtained when generating static embeddings.
             # Return subj_indices to cross attention layers for conv attn computation.
-            return layer_context, subj_indices
+            return layer_context, subj_indices, flip_v_indices
 
         # Apply conv attn on all layers. 
         # Although layer 12 has small 8x8 feature maps, since we linearly combine 

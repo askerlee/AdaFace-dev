@@ -6,7 +6,7 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn, ortho_subtract
+from ldm.util import replace_rows_by_conv_attn, flip_v_by_indices
 
 def exists(val):
     return val is not None
@@ -190,9 +190,9 @@ class CrossAttention(nn.Module):
             # Don't do conv attn if uncond is active.
             layer_attn_components = { 'x': x, 'q': q, 'to_k': self.to_k, 
                                       'infeat_size': self.infeat_size, 'scale': self.scale }
-            context, subj_indices = context(layer_attn_components)
+            context, subj_indices, flip_v_indices = context(layer_attn_components)
         else:
-            subj_indices = None
+            subj_indices, flip_v_indices = None, None
 
         if type(context) == tuple:
             v_context, k_context  = context
@@ -203,6 +203,8 @@ class CrossAttention(nn.Module):
         v = self.to_v(v_context)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
+        if flip_v_indices is not None:
+            v = flip_v_by_indices(v, flip_v_indices)
 
         sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
                 
