@@ -1632,7 +1632,7 @@ class EmbeddingManager(nn.Module):
                 # This setting is based on the empirical observations of 
                 # the learned layerwise_point_conv_attn_mix_weights.
                 self.layerwise_point_conv_attn_mix_weights.data[6:13]  = 0
-                self.layerwise_point_conv_attn_mix_weights.data[13:]  /= -5
+                self.layerwise_point_conv_attn_mix_weights.data[13:]   = 0
 
             print(f"Initialize layerwise_point_conv_attn_mix_weights = {self.layerwise_point_conv_attn_mix_weights}")
 

@@ -987,7 +987,7 @@ class UNetModel(nn.Module):
             # the learned layerwise_point_conv_attn_mix_weights.      
             layerwise_point_conv_attn_mix_weights = [default_point_conv_attn_mix_weight]    * 6 \
                                                     + [0]                                   * 7 \
-                                                    + [-0.1]                                * 3
+                                                    + [0]                                   * 3
 
         ca_flags_stack = []
         old_ca_flags, _ = \
