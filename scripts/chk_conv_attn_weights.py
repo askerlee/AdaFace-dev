@@ -58,6 +58,6 @@ for k in tokens:
         curr_mean = emb_ema.embedding.abs().mean()
         prev_mean = prev_emb_ema.embedding.abs().mean()
         delta = (emb_ema.embedding - prev_emb_ema.embedding).abs().mean()
-        print(f"{prev_iteration} -> {iteration}: {curr_mean:.4f}, {prev_mean:.4f}, {delta:.4f}")
+        print(f"{prev_iteration} -> {iteration}: {prev_mean:.4f}, {curr_mean:.4f}, {delta:.4f}")
 
         prev_emb_ckpt = emb_ckpt
