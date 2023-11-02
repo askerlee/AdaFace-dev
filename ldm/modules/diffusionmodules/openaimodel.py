@@ -508,13 +508,13 @@ class UNetModel(nn.Module):
         self.debug_attn = False
 
         self.backup_vars = { 
-                            'use_conv_attn':                 False,
-                            'default_conv_attn_weight':      0.5,
-                            'conv_attn_weight:layerwise':    None,
-                            'save_attn_vars':                False,
-                            'deep_neg_context:layerwise':    None,
-                            'deep_cfg_scale':                1.5,
-                            'disable_deep_neg_context':      False,
+                            'use_conv_attn':                            False,
+                            'default_point_conv_attn_mix_weight':       0.5,
+                            'point_conv_attn_mix_weight:layerwise':     None,
+                            'save_attn_vars':                           False,
+                            'deep_neg_context:layerwise':               None,
+                            'deep_cfg_scale':                           1.5,
+                            'disable_deep_neg_context':                 False,
                            }
 
         time_embed_dim = model_channels * 4
@@ -841,8 +841,8 @@ class UNetModel(nn.Module):
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
-        default_conv_attn_weight = extra_info.get('default_conv_attn_weight', 0.5)   if extra_info is not None else 0.5
-        layerwise_conv_attn_weights = extra_info.get('layerwise_conv_attn_weights', None)   if extra_info is not None else None
+        default_point_conv_attn_mix_weight      = extra_info.get('default_point_conv_attn_mix_weight', 0.5)     if extra_info is not None else 0.5
+        layerwise_point_conv_attn_mix_weights   = extra_info.get('layerwise_point_conv_attn_mix_weights', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
@@ -998,22 +998,23 @@ class UNetModel(nn.Module):
         # Although layer 12 has small 8x8 feature maps, since we linearly combine 
         # pointwise attn with conv attn, we still apply conv attn (3x3) on it.
         conv_attn_layer_indices      = None #[1, 2, 4, 5, 7, 8, 16, 17, 18, 19, 20, 21, 22, 23, 24]
-        # layerwise_conv_attn_weights are not specified. So use the default value 0.5.
-        # Here layerwise_conv_attn_weights is a list of scalars, not a learnable tensor.
-        if layerwise_conv_attn_weights is None:
+        # layerwise_point_conv_attn_mix_weights are not specified. So use the default value 0.5.
+        # Here layerwise_point_conv_attn_mix_weights is a list of scalars, not a learnable tensor.
+        if layerwise_point_conv_attn_mix_weights is None:
             # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
             # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0.1.
             # 13~15 (22, 23, 24):                           weight 0.2.
             # This setting is based on the empirical observations of 
-            # the learned layerwise_conv_attn_weights.      
-            layerwise_conv_attn_weights = [default_conv_attn_weight]         * 6 \
-                                          + [default_conv_attn_weight / 5]   * 7 \
-                                          + [default_conv_attn_weight / 2.5] * 3
+            # the learned layerwise_point_conv_attn_mix_weights.      
+            layerwise_point_conv_attn_mix_weights = [default_point_conv_attn_mix_weight]         * 6 \
+                                                    + [default_point_conv_attn_mix_weight / 5]   * 7 \
+                                                    + [default_point_conv_attn_mix_weight / 2.5] * 3
 
         ca_flags_stack = []
         old_ca_flags, old_trans_flags = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn': use_conv_attn,
-                                                          'conv_attn_weight:layerwise': layerwise_conv_attn_weights },
+                                                          'point_conv_attn_mix_weight:layerwise': \
+                                                           layerwise_point_conv_attn_mix_weights },
                                        ca_layer_indices = conv_attn_layer_indices,
                                        trans_flag_dict  = deep_neg_trans_flag_dict,
                                        trans_layer_indices = deep_neg_trans_layer_indices )

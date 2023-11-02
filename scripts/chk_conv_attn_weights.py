@@ -32,7 +32,7 @@ for idx, iteration in enumerate(iterations):
     print(iteration)
     emb_path = os.path.join(emb_folder, iter2path[iteration])
     emb_ckpt = torch.load(emb_path)
-    print(emb_ckpt['layerwise_conv_attn_weights'])
+    print(emb_ckpt['layerwise_poinit_conv_attn_mix_weights'])
 
 tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
 

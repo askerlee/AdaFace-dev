@@ -170,7 +170,7 @@ class CrossAttention(nn.Module):
         self.save_attn_vars = False
         self.use_conv_attn = False
         self.infeat_size   = None
-        self.conv_attn_weight = 0.5
+        self.point_conv_attn_mix_weight = 0.5
         
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -213,7 +213,7 @@ class CrossAttention(nn.Module):
         if context_provided and self.use_conv_attn and subj_indices is not None:
             # infeat_size is set in SpatialTransformer.forward().
             sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, h, self.scale,
-                                            self.conv_attn_weight)
+                                            self.point_conv_attn_mix_weight)
 
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].

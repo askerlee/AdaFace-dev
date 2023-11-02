@@ -481,7 +481,8 @@ def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=Tr
 # H: number of heads.
 # Return a new attn_mat with the same shape as attn_mat, but with the attention scores at subj_indices
 # replaced by the convolutional attention scores.
-def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_scale, conv_attn_weight=0.5):
+def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, 
+                              sim_scale, point_conv_attn_mix_weight=0.5):
     # input features x: [4, 4096, 320].
     # attn_mat: [32, 4096, 77]. 32: b * h. b = 4, h = 8.
     # q: [32, 4096, 40]. k: [32, 77, 40]. 32: b * h.
@@ -619,8 +620,8 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, sim_
         # N: number of visual tokens. T: number of text tokens.
         # attn_mat2[[0,0,0,0], :, :, [6,7,8,9]]: [4, 8, 4096]
         # Linearly combine the old (pointwise) and new (convolutional) attn scores.
-        attn_mat2[indices_b, :, :, indices_n] = attn_mat2[indices_b, :, :, indices_n] * (1 - conv_attn_weight) \
-                                                + subj_attn_dxys * conv_attn_weight
+        attn_mat2[indices_b, :, :, indices_n] = attn_mat2[indices_b, :, :, indices_n] * (1 - point_conv_attn_mix_weight) \
+                                                + subj_attn_dxys * point_conv_attn_mix_weight
 
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)
