@@ -978,13 +978,13 @@ class UNetModel(nn.Module):
         # Here layerwise_point_conv_attn_mix_weights is a list of scalars, not a learnable tensor.
         if layerwise_point_conv_attn_mix_weights is None:
             # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
-            # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0.1.
-            # 13~15 (22, 23, 24):                           weight 0.2.
+            # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0 (disabled).
+            # 13~15 (22, 23, 24):                           weight 0.1.
             # This setting is based on the empirical observations of 
             # the learned layerwise_point_conv_attn_mix_weights.      
             layerwise_point_conv_attn_mix_weights = [default_point_conv_attn_mix_weight]         * 6 \
-                                                    + [default_point_conv_attn_mix_weight / 5]   * 7 \
-                                                    + [default_point_conv_attn_mix_weight / 2.5] * 3
+                                                    + [0]   * 7 \
+                                                    + [default_point_conv_attn_mix_weight / 5]   * 3
 
         ca_flags_stack = []
         old_ca_flags, _ = \
