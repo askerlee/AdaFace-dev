@@ -1467,11 +1467,6 @@ class EmbeddingManager(nn.Module):
         self.emb_ema_as_pooling_probe_weight = emb_ema_as_pooling_probe_weight
         print(f"Setting emb_ema_as_pooling_probe_weight = {emb_ema_as_pooling_probe_weight}")
 
-    def set_static_only_tokens(self, static_only_tokens):
-        self.static_only_tokens = [] if static_only_tokens is None else static_only_tokens
-        if len(self.static_only_tokens) > 0:
-            print(f"Setting static_only_tokens = {static_only_tokens}")
-
     # Cache features used to compute ada embeddings.
     def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
         self.gen_ada_embedding = True
@@ -1533,6 +1528,10 @@ class EmbeddingManager(nn.Module):
 
                     token_emb_cache_obj.reset_cached_layer_tracker()
 
+    def set_static_only_tokens(self, static_only_tokens):
+        self.static_only_tokens = [] if static_only_tokens is None else static_only_tokens
+        if len(self.static_only_tokens) > 0:
+            print(f"Setting static_only_tokens = {static_only_tokens}")
 
     # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
     # not just the ada or static embeddings of the subject.
@@ -1542,7 +1541,7 @@ class EmbeddingManager(nn.Module):
         # If there are multiple layers of embeddings, only the last indices_fg/bg will be cached.
         self.ada_token_indices_cache['fg'] = self.placeholder_indices_fg
         self.ada_token_indices_cache['bg'] = self.placeholder_indices_bg
-
+        
     def get_cached_ada_prompt_embeddings_as_tensor(self):
         # No tokens appear in the current prompt. So the ada prompt embedding cache is empty.
         if len(self.ada_prompt_embeddings_cache) == 0:
@@ -1568,7 +1567,9 @@ class EmbeddingManager(nn.Module):
 
         self.ada_prompt_embeddings_cache = {}
         self.ada_token_indices_cache = {'fg': None, 'bg': None}
-        
+        #if self.string_to_emb_ema_dict['z'] is not None:
+        #    print(self.string_to_emb_ema_dict['z'].num_updates)
+
     def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings=None):
         if num_vectors_per_token is None or type(num_vectors_per_token) == int:
             # If token2num_vectors is not specified, then set all tokens to have 1 vector.
@@ -1625,11 +1626,10 @@ class EmbeddingManager(nn.Module):
             if self.use_layerwise_embedding:
                 # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
                 # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0 (disabled).
-                # 13~15 (22, 23, 24):                           weight 0.1.
+                # 13~15 (22, 23, 24):                           weight 0 (disabled).
                 # This setting is based on the empirical observations of 
                 # the learned layerwise_point_conv_attn_mix_weights.
-                self.layerwise_point_conv_attn_mix_weights.data[6:13] = 0
-                self.layerwise_point_conv_attn_mix_weights.data[13:]  /= 5
+                self.layerwise_point_conv_attn_mix_weights.data[6:] = 0
 
             print(f"Initialize layerwise_point_conv_attn_mix_weights = {self.layerwise_point_conv_attn_mix_weights}")
 
