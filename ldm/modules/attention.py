@@ -204,7 +204,11 @@ class CrossAttention(nn.Module):
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
         if flip_v_indices is not None:
+            # v: [64, 77, 40]. 64: bs = 8 * h = 8. 77: num of tokens in text prompt. 40: dim of each head.
+            # v: [8, 77, 320]
+            v = rearrange(v, '(b h) n d -> b n (h d)', h=h)
             v = flip_v_by_indices(v, flip_v_indices)
+            v = rearrange(v, 'b n (h d) -> (b h) n d', h=h)
 
         sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
                 
