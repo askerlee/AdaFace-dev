@@ -1443,6 +1443,10 @@ class EmbeddingManager(nn.Module):
         return ada_emb_weight
     
     def get_layerwise_point_conv_attn_mix_weights(self):
+        # Sometimes some of the weights are pushed to be negative. But it will lead to
+        # reduced performance. So we clip the weights to be non-negative.
+        self.layerwise_point_conv_attn_mix_weights = \
+            torch.clip(self.layerwise_point_conv_attn_mix_weights, min=0, max=1)
         return self.layerwise_point_conv_attn_mix_weights
     
     def get_emb_global_scale(self, do_perturb=True):
