@@ -290,6 +290,9 @@ def parse_args():
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
     
+    parser.add_argument("--do_flip_v", action="store_true", default=False,
+                        help="Whether to flip half of the subject embedding v vectors")
+        
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
     parser.add_argument("--bb_type", type=str, default="")
@@ -695,6 +698,7 @@ def main(opt):
                                 # c / ref_c are tuples of (cond, prompts, extra_info).
                                 c = (c0_mix, c[1], c[2])
 
+                            c[2]['do_flip_v'] = opt.do_flip_v
                             if opt.debug and ref_c is None:
                                 c[2]['debug_attn'] = True
 
