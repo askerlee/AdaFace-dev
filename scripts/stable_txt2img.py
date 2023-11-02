@@ -415,11 +415,17 @@ def main(opt):
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
         if opt.background_string is not None:
             model.embedding_manager.background_strings = [opt.background_string]
-            
+
+        # command line --do_flip_v overrides the checkpoint.
+        if hasattr(opt, 'do_flip_v') and opt.do_flip_v != model.embedding_manager.do_flip_v:
+            print(f"Overriding do_flip_v in the checkpoint ({model.embedding_manager.do_flip_v}) with {opt.do_flip_v}")
+            model.embedding_manager.do_flip_v = opt.do_flip_v
+
         device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
         model  = model.to(device)
-        model.cond_stage_model.device = device
-
+        model.cond_stage_
+        model.device = device
+                                
         if opt.plms:
             sampler = PLMSSampler(model)
         else:
@@ -699,12 +705,7 @@ def main(opt):
                                 # c / ref_c are tuples of (cond, prompts, extra_info).
                                 c = (c0_mix, c[1], c[2])
 
-                            if hasattr(opt, 'do_flip_v'):
-                                # command line --do_flip_v overrides the checkpoint.
-                                c[2]['do_flip_v'] = opt.do_flip_v
-                            else:
-                                c[2]['do_flip_v'] = model.embedding_manager.do_flip_v
-
+                            c[2]['do_flip_v'] = model.embedding_manager.do_flip_v
                             if opt.debug and ref_c is None:
                                 c[2]['debug_attn'] = True
 
