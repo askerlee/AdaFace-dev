@@ -275,7 +275,9 @@ def get_parser(**parser_kwargs):
     # are all equavalent.
     parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
-
+    parser.add_argument("--do_flip_v", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to flip half of the subject embedding v vectors")
+    
     parser.add_argument("--learnable_deep_neg_token", type=str, default=None,
                         help="If specified, the learnable token in a deep negative prompt")
     
@@ -732,13 +734,14 @@ if __name__ == "__main__":
         config.model.params.cond_stage_config.params.last_layers_skip_weights    = opt.clip_last_layers_skip_weights
         config.model.params.cond_stage_config.params.randomize_clip_skip_weights = opt.randomize_clip_skip_weights
         config.model.params.use_fp_trick = opt.use_fp_trick
-        
+
         if len(opt.init_word_weights) > 0:
             assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_words))
 
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
         config.model.params.personalization_config.params.placeholder_strings = [opt.placeholder_string]
         config.model.params.personalization_config.params.num_vectors_per_token = { opt.placeholder_string: opt.num_vectors_per_token}
+        config.model.params.personalization_config.params.do_flip_v = opt.do_flip_v
 
         # placeholder_string
         config.data.params.train.params.placeholder_string       = opt.placeholder_string

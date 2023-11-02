@@ -841,6 +841,7 @@ class UNetModel(nn.Module):
         default_point_conv_attn_mix_weight      = extra_info.get('default_point_conv_attn_mix_weight', 0.5)     if extra_info is not None else 0.5
         layerwise_point_conv_attn_mix_weights   = extra_info.get('layerwise_point_conv_attn_mix_weights', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
+        do_flip_v             = extra_info.get('do_flip_v', False)             if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
         emb_k_mixer           = extra_info.get('emb_k_mixer', None)            if extra_info is not None else None
@@ -966,7 +967,10 @@ class UNetModel(nn.Module):
             else:
                 layer_context = layer_static_context
 
-            flip_v_indices = extract_second_half_of_indices(subj_indices)
+            if do_flip_v:
+                flip_v_indices = extract_second_half_of_indices(subj_indices)
+            else:
+                flip_v_indices = None
             # subj_indices is passed from extra_info, which was obtained when generating static embeddings.
             # Return subj_indices to cross attention layers for conv attn computation.
             return layer_context, subj_indices, flip_v_indices

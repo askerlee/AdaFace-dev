@@ -854,6 +854,7 @@ class EmbeddingManager(nn.Module):
             emb_ema_as_pooling_probe_weight=0,
             default_point_conv_attn_mix_weight=0.5,
             static_only_tokens=None,
+            do_flip_v=False,
             **kwargs
     ):
         super().__init__()
@@ -870,8 +871,8 @@ class EmbeddingManager(nn.Module):
         self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight
         self.emb_ema_grad_scale = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
-        self.emb_ema_sgd_able = False
         self.set_static_only_tokens(static_only_tokens)
+        self.set_do_flip_v(do_flip_v)
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
@@ -1292,10 +1293,6 @@ class EmbeddingManager(nn.Module):
                     # We only need one embedding of [768]. But
                     # the layer subj embedding is of [9, 768]. So we take the first embedding.
                     layer_subj_emb_ema = token_emb_ema_embedding[ca_layer_idx].mean(dim=0)
-                    # emb_ema_sgd_able is set in ddpm.py:LatentDiffusion.p_losses(). 
-                    # Alternate between EMA update and EMA sgd update.
-                    if not self.emb_ema_sgd_able:
-                        layer_subj_emb_ema = layer_subj_emb_ema.detach()
 
                 # Although layer_subj_emb_ema cannot be updated through SGD, 
                 # layer_static_subj_emb is updateable. So the probe will still adapt to the learning objective.
@@ -1476,6 +1473,10 @@ class EmbeddingManager(nn.Module):
         if len(self.static_only_tokens) > 0:
             print(f"Setting static_only_tokens = {static_only_tokens}")
 
+    def set_do_flip_v(self, do_flip_v):
+        self.do_flip_v = do_flip_v
+        print(f"Setting do_flip_v = {do_flip_v}")
+        
     # Cache features used to compute ada embeddings.
     def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
         self.gen_ada_embedding = True
@@ -1487,9 +1488,6 @@ class EmbeddingManager(nn.Module):
     def update_emb_ema(self, fg_indices, bg_indices):
         # Don't update EMA embeddings in SGD-enabled iterations.
         # Otherwise it will cause computation graph error.
-        if self.emb_ema_sgd_able:
-            return
-        
         if fg_indices is None and bg_indices is None:
             return
         
@@ -1648,7 +1646,8 @@ class EmbeddingManager(nn.Module):
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
                      "layerwise_point_conv_attn_mix_weights":   self.layerwise_point_conv_attn_mix_weights,
                      # learnable token in the deep negative prompt.
-                     "static_only_tokens":             self.static_only_tokens,
+                     "static_only_tokens":              self.static_only_tokens,
+                     "do_flip_v":                       self.do_flip_v,
                    }, 
                     ckpt_path)
 
@@ -1699,6 +1698,9 @@ class EmbeddingManager(nn.Module):
 
             if "static_only_tokens" in ckpt:
                 self.set_static_only_tokens(ckpt["static_only_tokens"])
+
+            if "do_flip_v" in ckpt:
+                self.set_do_flip_v(ckpt["do_flip_v"])
 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
