@@ -1038,7 +1038,8 @@ class EmbeddingManager(nn.Module):
         self.loss_call_count = 0
         # Store the text_embedder to compute the delta loss.
         self.text_embedder  = text_embedder
-        self.ada_prompt_embeddings_cache = None
+        self.ada_prompt_embeddings_cache = {}
+        self.ada_prompt_token_indices_cache = {}
         self.ada_bp_to_unet = False
         self.force_grad     = False
         self.placeholder_indices_bg = None
@@ -1546,9 +1547,10 @@ class EmbeddingManager(nn.Module):
     def cache_ada_prompt_embedding(self, layer_idx, embedding):
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         self.ada_prompt_embeddings_cache[ca_layer_idx] = embedding
-        if len(self.ada_prompt_embeddings_cache) == self.num_layers_per_embedder:
-            self.update_emb_ema(self.placeholder_indices_fg, self.placeholder_indices_bg)
-
+        # If there are multiple layers, only the last placeholder_indices are cached.
+        self.ada_prompt_token_indices_cache = { 'fg': self.placeholder_indices_fg,
+                                                'bg': self.placeholder_indices_bg }
+        
     def get_cached_ada_prompt_embeddings_as_tensor(self):
         # No tokens appear in the current prompt. So the ada prompt embedding cache is empty.
         if len(self.ada_prompt_embeddings_cache) == 0:
@@ -1562,6 +1564,26 @@ class EmbeddingManager(nn.Module):
         # ada_prompt_embeddings: [BS, 16, 77, 768]. BS: batch size (2 or 4). 16: num layers.
         ada_prompt_embeddings = torch.stack(ada_prompt_embeddings, dim=1)
         return ada_prompt_embeddings
+
+    # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
+    # which will be enabled again through cache_layer_features_for_ada() in ddpm.py.
+    def clear_ada_layer_temp_info(self):
+        self.gen_ada_embedding = False
+        self.last_layer_idx = self.layer_idx
+        self.layer_idx      = -1
+        self.layer_attn_components  = None
+        self.time_emb       = None
+        
+    # self.ada_prompt_embeddings_cache is a cache for the prompt embeddings of all layers, 
+    # for computing the prompt delta loss.
+    # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
+    # not just the ada or static embeddings of the subject.
+    def clear_ada_prompt_embeddings_cache(self):
+        if len(self.ada_prompt_embeddings_cache) == self.num_layers_per_embedder:
+            self.update_emb_ema(self.ada_prompt_token_indices_cache['fg'],
+                                self.ada_prompt_token_indices_cache['bg'])
+
+        self.ada_prompt_embeddings_cache = {}
 
     def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings=None):
         if num_vectors_per_token is None or type(num_vectors_per_token) == int:
@@ -1580,22 +1602,6 @@ class EmbeddingManager(nn.Module):
         else:
             self.token2num_vectors = num_vectors_per_token
         print(f"Set token2num_vectors: {self.token2num_vectors}")
-
-    # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
-    # which will be enabled again through cache_layer_features_for_ada() in ddpm.py.
-    def clear_ada_layer_temp_info(self):
-        self.gen_ada_embedding = False
-        self.last_layer_idx = self.layer_idx
-        self.layer_idx      = -1
-        self.layer_attn_components  = None
-        self.time_emb       = None
-        
-    # self.ada_prompt_embeddings_cache is a cache for the prompt embeddings of all layers, 
-    # for computing the prompt delta loss.
-    # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
-    # not just the ada or static embeddings of the subject.
-    def clear_ada_prompt_embeddings_cache(self):
-        self.ada_prompt_embeddings_cache = {}
 
     # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
     # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
