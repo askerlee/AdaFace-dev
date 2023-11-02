@@ -47,7 +47,7 @@ def parse_args():
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
-    parser.add_argument("--do_flip_v", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--do_flip_v", action="store_true", default=False,
                         help="Whether to flip half of the subject embedding v vectors")
                                     
     parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],

@@ -275,7 +275,7 @@ def get_parser(**parser_kwargs):
     # are all equavalent.
     parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
-    parser.add_argument("--do_flip_v", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--do_flip_v", action="store_true", default=False,
                         help="Whether to flip half of the subject embedding v vectors")
     
     parser.add_argument("--learnable_deep_neg_token", type=str, default=None,
