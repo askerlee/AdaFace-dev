@@ -1620,7 +1620,7 @@ class EmbeddingManager(nn.Module):
  
     def initialize_layerwise_conv_attn_weights(self, default_conv_attn_weight, 
                                                layerwise_conv_attn_weights=None,
-                                               learnable=False):
+                                               learnable=True):
         if layerwise_conv_attn_weights is not None:
             self.layerwise_conv_attn_weights = nn.Parameter(layerwise_conv_attn_weights,
                                                             requires_grad=learnable)            

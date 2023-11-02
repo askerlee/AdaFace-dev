@@ -24,8 +24,27 @@ for emb_path in os.listdir(emb_folder):
         ckpt_iter = re.match(r"embeddings_gs-(\d+).pt", emb_path).group(1)
         iter2path[int(ckpt_iter)] = emb_path
 
-for iterations in sorted(iter2path.keys()):
-    print(iterations)
-    emb_path = os.path.join(emb_folder, iter2path[iterations])
+iterations = sorted(iter2path.keys())
+
+for idx, iteration in enumerate(iterations):
+    print(iteration)
+    emb_path = os.path.join(emb_folder, iter2path[iteration])
     emb_ckpt = torch.load(emb_path)
     print(emb_ckpt['layerwise_conv_attn_weights'])
+
+for idx, iteration in enumerate(iterations):
+    emb_path = os.path.join(emb_folder, iter2path[iteration])
+    emb_ckpt = torch.load(emb_path)
+    if idx == 0:
+        prev_emb_ckpt = emb_ckpt
+        continue
+
+    prev_iteration = iterations[idx-1]
+
+    for k in emb_ckpt['string_to_emb_ema_dict']:
+        emb_ema = emb_ckpt['string_to_emb_ema_dict'][k]
+        prev_emb_ema = prev_emb_ckpt['string_to_emb_ema_dict'][k]
+        delta = (emb_ema - prev_emb_ema).abs().mean()
+        print(f"{prev_iteration} -> {iteration} delta for {k}: {delta}")
+
+    prev_emb_ckpt = emb_ckpt
