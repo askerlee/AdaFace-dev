@@ -429,7 +429,7 @@ def main(opt):
 
         # command line --do_flip_half_v overrides the checkpoint.
         if hasattr(opt, 'do_flip_half_v') and opt.do_flip_half_v != model.embedding_manager.do_flip_half_v:
-            print(f"Overriding do_flip_half_v in the checkpoint ({model.embedding_manager.do_flip_half_v}) with {opt.do_flip_half_v}")
+            print(f"Override do_flip_half_v in checkpoint ({model.embedding_manager.do_flip_half_v} or absent) with {opt.do_flip_half_v}")
             model.embedding_manager.do_flip_half_v = opt.do_flip_half_v
 
         device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
