@@ -1551,7 +1551,7 @@ class EmbeddingManager(nn.Module):
         if len(self.ada_prompt_embeddings_cache) == self.num_layers_per_embedder:
             self.update_emb_ema(self.placeholder_indices_fg, self.placeholder_indices_bg)
 
-    def get_cached_ada_prompt_embeddings(self):
+    def get_cached_ada_prompt_embeddings_as_tensor(self):
         # No tokens appear in the current prompt. So the ada prompt embedding cache is empty.
         if len(self.ada_prompt_embeddings_cache) == 0:
             return None
