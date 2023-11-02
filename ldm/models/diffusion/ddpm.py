@@ -725,8 +725,6 @@ class LatentDiffusion(DDPM):
             self.create_clip_evaluator(next(self.parameters()).device)
             with torch.no_grad():
                 self.uncond_context             = self.get_learned_conditioning([""] * 2)
-                # Do not use deep neg context for unconditional context.
-                self.uncond_context[2]['disable_deep_neg_context'] = True
 
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
@@ -1451,6 +1449,18 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['use_background_token']:
                 captions = batch['caption_bg']
 
+
+        if self.distill_deep_neg_prompt is not None:
+            p_deep_neg_prompt_in_recon_iters = 0.8
+            p_deep_neg_prompt_in_comp_iters = 0.5
+        else:
+            p_deep_neg_prompt_in_recon_iters = 0
+            p_deep_neg_prompt_in_comp_iters = 0
+
+        if self.iter_flags['is_compos_iter'] and random.random() < p_deep_neg_prompt_in_comp_iters \
+            or (not self.iter_flags['is_compos_iter']) and random.random() < p_deep_neg_prompt_in_recon_iters:
+                pass
+        
         if 'aug_mask' in batch:
             img_mask = batch['aug_mask']
             # img_mask: [B, H, W] => [B, 1, H, W]
@@ -1508,18 +1518,6 @@ class LatentDiffusion(DDPM):
             assert captions is not None
             # get_learned_conditioning(): convert captions to a [16*B, 77, 768] tensor.
             if self.cond_stage_trainable:
-
-                if (self.distill_deep_cfg_scale > 1) and (self.distill_deep_neg_prompt is not None):
-                    # distill_deep_neg_context is generated with a batch size of 1. 
-                    # Need to repeat it BLOCK_SIZE times to match the distillation batch size later.
-                    self.distill_deep_neg_context, _, _   = self.get_learned_conditioning([self.distill_deep_neg_prompt])
-                    p_deep_neg_context_in_recon_iters = 0.5
-                    p_deep_neg_context_in_comp_iters = 0.8
-                else:
-                    self.distill_deep_neg_context   = None
-                    p_deep_neg_context_in_recon_iters = 0
-                    p_deep_neg_context_in_comp_iters = 0
-
                 # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
                 # or traditional TI.
                 # do_ada_emb_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
@@ -1655,12 +1653,6 @@ class LatentDiffusion(DDPM):
                         extra_info['subj_indices'] = extra_info['subj_indices_2b']
                         extra_info['bg_indices']   = extra_info['bg_indices_2b']                            
 
-                        # In distillation iters, at 50% chance, apply positive prompts and deep_neg_context. 
-                        #              At the other 50% chance, apply only the positive prompts.
-                        if random.random() < p_deep_neg_context_in_comp_iters:
-                            extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(BLOCK_SIZE * 4, 1, 1)
-                            extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
-
                     # This iter is a simple ada prompt delta loss iter, without prompt mixing loss. 
                     # This branch is reached only if prompt mixing is not enabled.
                     # "and not self.iter_flags['do_mix_prompt_distillation']" is redundant, because it's at an "elif" branch.
@@ -1707,11 +1699,6 @@ class LatentDiffusion(DDPM):
                         
 
                         extra_info['ada_bp_to_unet'] = True
-                        # In normal_recon iters, at 50% chance, apply positive prompts and deep_neg_context. 
-                        #              At the other 50% chance, apply only the positive prompts.
-                        if random.random() < p_deep_neg_context_in_recon_iters:
-                            extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(ORIG_BS, 1, 1)
-                            extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
                         ##### End of normal_recon with static delta loss iters. #####
 
                     extra_info['cls_single_prompts'] = cls_single_prompts
@@ -1742,13 +1729,6 @@ class LatentDiffusion(DDPM):
                     extra_info['bg_indices']        = cond[2]['bg_indices']
                     extra_info['ada_bp_to_unet']    = True
                     extra_info['iter_type']         = 'normal_recon'
-
-                    # In recon iter without static delta loss, 
-                    # At 50% chance,           apply positive prompts and deep_neg_context. 
-                    # At the other 50% chance, apply only the positive prompts.
-                    if (self.distill_deep_neg_context is not None) and (random.random() < 0.5):
-                        extra_info['deep_neg_context'] = self.distill_deep_neg_context.repeat(ORIG_BS, 1, 1)
-                        extra_info['deep_cfg_scale']   = self.distill_deep_cfg_scale
 
                     cond = (cond[0], cond[1], extra_info)
                     ##### End of normal_recon without static delta loss iters. #####
@@ -1952,7 +1932,6 @@ class LatentDiffusion(DDPM):
                 # self.uncond_context: precomputed unconditional embedding and other info.
                 # This statement (executed above) disables deep neg prompts on unconditional embeddings. 
                 # Otherwise, it will cancel out the effect of unconditional embeddings.
-                # self.uncond_context[2]['disable_deep_neg_context'] = True
                 model_output_uncond = self.apply_model(x_noisy_, t_, self.uncond_context)
                 # model_output_uncond: [2, 4, 64, 64] -> [4, 4, 64, 64]
                 model_output_uncond = model_output_uncond.repeat(2, 1, 1, 1)
@@ -2792,12 +2771,7 @@ class LatentDiffusion(DDPM):
                 # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
                 # smaller magnitudes than the delta loss. So we scale it up by 4x.
                 subj_attn_norm_distill_loss_scale = self.subj_attn_norm_distill_loss_scale * 4
-            # If deep_neg_context is used 
-            # (If self.distill_deep_neg_context is not None, 50% of the chance we will use deep_neg_context 
-            # by assigning it to extra_info['deep_neg_context']), 
-            # the attn magnitude may become slightly larger. So we scale up delta loss by 2x.
-            if 'deep_neg_context' in extra_info:
-                subj_attn_norm_distill_loss_scale *= 2
+
             feat_delta_distill_scale = 2
 
             loss_mix_prompt_distill =  (loss_subj_attn_delta_distill + loss_comp_attn_delta_distill * comp_attn_delta_distill_loss_scale) \
