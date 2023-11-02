@@ -1351,10 +1351,13 @@ def extract_second_half_of_indices(token_indices):
         indiv_indices_half_B2.append(indices_B2)
         indiv_indices_half_N2.append(indices_N2)
 
+    # If token_indices contain 9 indices for each instance, 
+    # then the second chunk of 4 indices will be returned.
     token_indices_half_B2 = torch.cat(indiv_indices_half_B2, dim=0)
     token_indices_half_N2 = torch.cat(indiv_indices_half_N2, dim=0)
     return (token_indices_half_B2, token_indices_half_N2)
 
+# Reverse the sign of v at indices.
 def flip_v_by_indices(v, indices):
     v_flipped = v.clone()
     v_flipped[indices] = -v_flipped[indices]
