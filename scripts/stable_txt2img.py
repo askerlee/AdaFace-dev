@@ -26,6 +26,17 @@ from ldm.data.personalized import PersonalizedBase
 
 from safetensors.torch import load_file as safetensors_load_file
 
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
+
 def parse_args():
     parser = argparse.ArgumentParser()
 
@@ -291,7 +302,7 @@ def parse_args():
                         help="Use EMA embedding as the pooling probe")
     # If do_flip_v is not specified, then use the 'do_flip_v' in the checkpoint.
     # If 'do_flip_v' doesn't exist in the checkpoint, then do_flip_v is False.
-    parser.add_argument("--do_flip_v", action="store_true", default=argparse.SUPPRESS,
+    parser.add_argument("--do_flip_v", type=str2bool, nargs="?", const=True, default=argparse.SUPPRESS,
                         help="Whether to flip half of the subject embedding v vectors")
         
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
