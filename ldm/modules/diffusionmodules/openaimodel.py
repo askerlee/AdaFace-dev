@@ -512,9 +512,6 @@ class UNetModel(nn.Module):
                             'default_point_conv_attn_mix_weight':       0.5,
                             'point_conv_attn_mix_weight:layerwise':     None,
                             'save_attn_vars':                           False,
-                            'deep_neg_context:layerwise':               None,
-                            'deep_cfg_scale':                           1.5,
-                            'disable_deep_neg_context':                 False,
                            }
 
         time_embed_dim = model_channels * 4
@@ -849,9 +846,6 @@ class UNetModel(nn.Module):
         emb_k_mixer           = extra_info.get('emb_k_mixer', None)            if extra_info is not None else None
         emb_v_layers_cls_mix_scales = extra_info.get('emb_v_layers_cls_mix_scales', None)   if extra_info is not None else None
         emb_k_layers_cls_mix_scales = extra_info.get('emb_k_layers_cls_mix_scales', None)   if extra_info is not None else None
-        deep_neg_context      = extra_info.get('deep_neg_context', None)       if extra_info is not None else None
-        deep_cfg_scale        = extra_info.get('deep_cfg_scale', 1.5)          if extra_info is not None else None
-        disable_deep_neg_context = extra_info.get('disable_deep_neg_context', False) if extra_info is not None else False
         debug_attn            = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
 
         # If uncond (null) condition is active, then subj_indices = None.
@@ -862,9 +856,6 @@ class UNetModel(nn.Module):
             # If use_layerwise_context, then context is static layerwise embeddings.
             # context: [16*B, N, 768] reshape => [B, 16, N, 768] permute => [16, B, N, 768]
             context = context.reshape(B, 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
-            if deep_neg_context is not None:
-                # deep_neg_context: [16*B, 77, 768] reshape => [B, 16, 77, 768] permute => [16, B, 77, 768]
-                deep_neg_context = deep_neg_context.reshape(B, 16, -1, deep_neg_context.shape[-1]).permute(1, 0, 2, 3)
 
         def get_layer_context(layer_idx, layer_attn_components):
             # print(h.shape)
@@ -979,22 +970,7 @@ class UNetModel(nn.Module):
             # Return subj_indices to cross attention layers for conv attn computation.
             return layer_context, subj_indices
 
-
-        # deep_neg_context:layerwise: assign the corresponding layer's deep_neg_context 
-        # in self.set_cross_attn_flags(). The actual variable name is 'deep_neg_context'.
-        # deep_neg_context: [16, B, 77, 768]. BasicTransformerBlock[i] will use deep_neg_context[i]
-        # as its deep neg context, whose size is [B, 77, 768].
-        deep_neg_trans_flag_dict = { 'deep_neg_context:layerwise': deep_neg_context,
-                                     'deep_cfg_scale':             deep_cfg_scale,
-                                     'disable_deep_neg_context':   disable_deep_neg_context,
-                                   }
-        # If using deep_neg_context, only apply it on the middle-level layers, i.e., 
-        # layers 7, 8, 12, 16, 17.
-        # deep_neg_trans_layer_indices = None: apply deep_neg_context to all cross attn layers.
-        deep_neg_trans_layer_indices = None #[7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24] 
-        # 1:  64,  2: 64,  4: 32,  5: 32,  7: 16,  8: 16, 12: 8, 16: 16, 17: 16, 18: 16, 
-        # 19: 32, 20: 32, 21: 32, 22: 64, 23: 64, 24: 64.
-        ## Apply conv attn on all layers. 
+        # Apply conv attn on all layers. 
         # Although layer 12 has small 8x8 feature maps, since we linearly combine 
         # pointwise attn with conv attn, we still apply conv attn (3x3) on it.
         conv_attn_layer_indices      = None #[1, 2, 4, 5, 7, 8, 16, 17, 18, 19, 20, 21, 22, 23, 24]
@@ -1011,17 +987,15 @@ class UNetModel(nn.Module):
                                                     + [default_point_conv_attn_mix_weight / 2.5] * 3
 
         ca_flags_stack = []
-        old_ca_flags, old_trans_flags = \
+        old_ca_flags, _ = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn': use_conv_attn,
                                                           'point_conv_attn_mix_weight:layerwise': \
                                                            layerwise_point_conv_attn_mix_weights },
-                                       ca_layer_indices = conv_attn_layer_indices,
-                                       trans_flag_dict  = deep_neg_trans_flag_dict,
-                                       trans_layer_indices = deep_neg_trans_layer_indices )
+                                       ca_layer_indices = conv_attn_layer_indices )
             
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).
         # None here means ca_flags have been applied to all layers.
-        ca_flags_stack.append([ old_ca_flags, None, old_trans_flags, deep_neg_trans_layer_indices ])
+        ca_flags_stack.append([ old_ca_flags, None, None, None ])
 
         if iter_type.startswith("mix_") or capture_distill_attn or debug_attn:
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.

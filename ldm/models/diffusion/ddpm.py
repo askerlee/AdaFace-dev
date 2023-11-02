@@ -858,7 +858,7 @@ class LatentDiffusion(DDPM):
                     # self.get_layer_ada_embedding() will store the ada embedding 
                     # for each layer into the cache. 
                     # The cache will be used in calc_prompt_emb_delta_loss().
-                    self.embedding_manager.reset_prompt_embedding_caches()
+                    self.embedding_manager.clear_ada_prompt_embeddings_cache()
                     extra_info['ada_embedder'] = ada_embedder
 
                 c = (c, cond_in, extra_info)
@@ -885,7 +885,7 @@ class LatentDiffusion(DDPM):
         ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_fg, 
                                            extra_scale=emb_global_scale)
         # Cache the computed ada embedding of the current layer for delta loss computation.
-        # Before this call, reset_prompt_embedding_caches() should have been called somewhere.
+        # Before this call, clear_ada_prompt_embeddings_cache() should have been called somewhere.
         self.embedding_manager.cache_ada_prompt_embedding(layer_idx, ada_embedded_text)
         return ada_embedded_text, self.embedding_manager.get_ada_emb_weight() #, self.embedding_manager.token_attn_weights
 
@@ -2536,8 +2536,8 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['do_teacher_filter'] and self.iter_flags['is_teachable']:
                     # No need the intermediates of the twin-comp instances. Release them to save RAM.
                     self.release_plosses_intermediates(locals())
-                    # reset_prompt_embedding_caches() will implicitly clear the cache.
-                    self.embedding_manager.reset_prompt_embedding_caches()
+                    # clear_ada_prompt_embeddings_cache() will implicitly clear the cache.
+                    self.embedding_manager.clear_ada_prompt_embeddings_cache()
 
                     better_cand_idx = torch.argmax(loss_diffs_subj_mix)
 

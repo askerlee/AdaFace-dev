@@ -264,9 +264,6 @@ class BasicTransformerBlock(nn.Module):
         self.norm2 = nn.LayerNorm(dim)
         self.norm3 = nn.LayerNorm(dim)
         self.checkpoint = checkpoint
-        self.deep_neg_context = None
-        self.deep_cfg_scale = 1.5
-        self.disable_deep_neg_context = False
 
     def forward(self, x, context=None, mask=None):
         return checkpoint(self._forward, (x, context, mask), self.parameters(), self.checkpoint)
@@ -281,33 +278,6 @@ class BasicTransformerBlock(nn.Module):
 
         x3 = self.ff(self.norm3(x2)) + x2
 
-        if (not self.disable_deep_neg_context) and (self.deep_neg_context is not None) and self.deep_cfg_scale != 1:
-            attn2_save_attn_vars = self.attn2.save_attn_vars
-            # Disable save_attn_vars, so that the saved attn vars given the 
-            # normal context are not overwritten.
-            self.attn2.save_attn_vars = False
-            x_neg_ca = self.attn2(self.norm2(x_ca), context=self.deep_neg_context)
-            x2_neg = x1 + x_neg_ca
-            x3_neg = self.ff(self.norm3(x2_neg)) + x2_neg
-
-            self.attn2.save_attn_vars = attn2_save_attn_vars
-            cfg_use_ortho_subtract = False
-            if cfg_use_ortho_subtract:
-                # ortho_residual is orthogonal to x3, whose scale is proportional to the scale of x3_neg.
-                # ortho_residual is invariant to scales of x3. 
-                ortho_residual = ortho_subtract(x3_neg * (self.deep_cfg_scale - 1), x3)
-                # Subtraction "adds" (instead of removes, but adds in an opposite direction) 
-                # the orthogonal residual to x3, and at the same time the information in x3 is intact.
-                # Do not multiply x3 by self.deep_cfg_scale, because ortho_residual is orthogonal to x3,
-                # and subtracting them will only increase the magnitude of x3.
-                x3_cfg = x3 - ortho_residual
-            else:
-                x3_cfg = x3 * self.deep_cfg_scale - x3_neg * (self.deep_cfg_scale - 1)
-
-            cond_mask = self.deep_neg_context.abs().sum(dim=(1,2), keepdim=True) > 0
-            x3_masked = torch.where(cond_mask, x3_cfg, x3)
-            return x3_masked
-        
         return x3
 
 class SpatialTransformer(nn.Module):

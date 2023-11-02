@@ -1038,7 +1038,6 @@ class EmbeddingManager(nn.Module):
         # Store the text_embedder to compute the delta loss.
         self.text_embedder  = text_embedder
         self.ada_prompt_embeddings_cache = None
-        self.layer_idx2chan_weights = {}
         self.ada_bp_to_unet = False
         self.force_grad     = False
         self.placeholder_indices_bg = None
@@ -1485,14 +1484,6 @@ class EmbeddingManager(nn.Module):
         self.ada_bp_to_unet = ada_bp_to_unet
         self.layer_attn_components = layer_attn_components
 
-    # self.ada_prompt_embeddings_cache is a cache for the prompt embeddings of all layers, 
-    # for computing the prompt delta loss.
-    # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
-    # not just the ada or static embeddings of the subject.
-    def reset_prompt_embedding_caches(self):
-        self.ada_prompt_embeddings_cache    = {}
-        self.layer_idx2chan_weights         = {}
-
     def update_emb_ema(self, fg_indices, bg_indices):
         # Don't update EMA embeddings in SGD-enabled iterations.
         # Otherwise it will cause computation graph error.
@@ -1601,8 +1592,12 @@ class EmbeddingManager(nn.Module):
         self.layer_attn_components  = None
         self.time_emb       = None
         
+    # self.ada_prompt_embeddings_cache is a cache for the prompt embeddings of all layers, 
+    # for computing the prompt delta loss.
+    # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
+    # not just the ada or static embeddings of the subject.
     def clear_ada_prompt_embeddings_cache(self):
-        self.ada_prompt_embeddings_cache = None
+        self.ada_prompt_embeddings_cache = {}
 
     # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
     # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
