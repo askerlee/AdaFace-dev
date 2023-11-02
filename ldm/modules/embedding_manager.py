@@ -1270,8 +1270,8 @@ class EmbeddingManager(nn.Module):
             curr_subj_indices = self.placeholder_indices_fg if not token_is_bg else self.placeholder_indices_bg
             layer_static_subj_emb = layer_static_prompt_embs[curr_subj_indices].mean(dim=0)
 
-            ## Don't use emb_ema_as_pooling_probe for background Ada embedder.
-            if self.emb_ema_as_pooling_probe_weight > 0:
+            # Don't use emb_ema_as_pooling_probe for background Ada embedder.
+            if self.emb_ema_as_pooling_probe_weight > 0 and not token_is_bg:
                 # Use the first embedding of K embeddings as the probe.
                 token_emb_ema = self.string_to_emb_ema_dict[placeholder_string]
                 if token_emb_ema is None:
@@ -1542,7 +1542,7 @@ class EmbeddingManager(nn.Module):
                         # First iteration, initialize the LitEma object.
                         print("Initializing LitEma for token", k)
                         # requires_grad=True, to allow EMA embeddings to be updated by SGD.
-                        self.string_to_emb_ema_dict[k] = LitEma(token_emb_cache_obj, decay=0.995, requires_grad=True)
+                        self.string_to_emb_ema_dict[k] = LitEma(token_emb_cache_obj, decay=0.998, requires_grad=True)
                         # Put the newly initialized LitEma object on CUDA.
                         self.string_to_emb_ema_dict[k].to(token_embs.device)
                     else:
@@ -1700,7 +1700,7 @@ class EmbeddingManager(nn.Module):
             if "layerwise_point_conv_attn_mix_weights" in ckpt:
                 # default_point_conv_attn_mix_weight is provided but not used here.
                 self.initialize_layerwise_point_conv_attn_mix_weights(self.default_point_conv_attn_mix_weight, 
-                                                            ckpt["layerwise_point_conv_attn_mix_weights"])
+                                                                      ckpt["layerwise_point_conv_attn_mix_weights"])
 
             if "static_only_tokens" in ckpt:
                 self.set_static_only_tokens(ckpt["static_only_tokens"])

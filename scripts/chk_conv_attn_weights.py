@@ -23,8 +23,8 @@ for emb_path in os.listdir(emb_folder):
     if re.match(r"embeddings_gs-(\d+).pt", emb_path):
         ckpt_iter = re.match(r"embeddings_gs-(\d+).pt", emb_path).group(1)
         ckpt_iter = int(ckpt_iter)
-        if ckpt_iter % 500 == 0:
-            iter2path[ckpt_iter] = emb_path
+        #if ckpt_iter % 500 == 0:
+        iter2path[ckpt_iter] = emb_path
 
 iterations = sorted(iter2path.keys())
 
@@ -32,7 +32,9 @@ for idx, iteration in enumerate(iterations):
     print(iteration)
     emb_path = os.path.join(emb_folder, iter2path[iteration])
     emb_ckpt = torch.load(emb_path)
-    print(emb_ckpt['layerwise_poinit_conv_attn_mix_weights'])
+    for weight_name in ('layerwise_point_conv_attn_mix_weights', 'layerwise_conv_attn_weights'):
+        if weight_name in emb_ckpt:
+            print(emb_ckpt[weight_name])
 
 tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
 
