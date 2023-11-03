@@ -1231,7 +1231,7 @@ class EmbeddingManager(nn.Module):
                 ## Why not mask bg indices for fg ada? bg embeddings are supposed to be of a similar nature 
                 ## as the extra compositional embeddings. Incorporating them in layer_static_extra_emb_mean
                 ## will make fg and bg embeddings more orthogonal (i.e., attend to different areas).
-                list_of_indices_to_mask = [self.placeholder_indices_fg] #, self.placeholder_indices_bg]
+                list_of_indices_to_mask = [self.placeholder_indices_fg, self.placeholder_indices_bg]
                 
             # layer_static_prompt_embs:   [4, 77, 768]. 
             # delta_loss_emb_mask: [4, 77, 1].
@@ -1568,15 +1568,6 @@ class EmbeddingManager(nn.Module):
         ada_prompt_embeddings = torch.stack(ada_prompt_embeddings, dim=1)
         return ada_prompt_embeddings
 
-    # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
-    # which will be enabled again through cache_layer_features_for_ada() in ddpm.py.
-    def clear_ada_layer_temp_info(self):
-        self.gen_ada_embedding = False
-        self.last_layer_idx = self.layer_idx
-        self.layer_idx      = -1
-        self.layer_attn_components  = None
-        self.time_emb       = None
-        
     # self.ada_prompt_embeddings_cache is a cache for the prompt embeddings of all layers, 
     # for computing the prompt delta loss.
     # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
@@ -1588,6 +1579,15 @@ class EmbeddingManager(nn.Module):
 
         self.ada_prompt_embeddings_cache = {}
 
+    # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
+    # which will be enabled again through cache_layer_features_for_ada() in ddpm.py.
+    def clear_ada_layer_temp_info(self):
+        self.gen_ada_embedding = False
+        self.last_layer_idx = self.layer_idx
+        self.layer_idx      = -1
+        self.layer_attn_components  = None
+        self.time_emb       = None
+        
     def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings=None):
         if num_vectors_per_token is None or type(num_vectors_per_token) == int:
             # If token2num_vectors is not specified, then set all tokens to have 1 vector.
