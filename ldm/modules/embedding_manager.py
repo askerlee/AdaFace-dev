@@ -1252,14 +1252,7 @@ class EmbeddingManager(nn.Module):
                 ## as the extra compositional embeddings. Incorporating them in layer_static_extra_emb_mean
                 ## will make fg and bg embeddings more orthogonal (i.e., attend to different areas).
                 list_of_indices_to_mask = [self.placeholder_indices_fg]
-                if self.placeholder_indices_bg is not None:
-                    # During training, exclude the bg embeddings from computing 
-                    # the static_extra_emb mean at 50% chance.
-                    # No bg tokens in mix distillation iters, so this behavior only impacts recon iters.
-                    # During inference, usually there's no background token, so no need to mask.
-                    if self.training and (random.random() < 0.5):
-                        list_of_indices_to_mask.append(self.placeholder_indices_bg)
-                
+
             # layer_static_prompt_embs:   [4, 77, 768]. 
             # delta_loss_emb_mask: [4, 77, 1].
             layer_static_extra_emb_mean = \

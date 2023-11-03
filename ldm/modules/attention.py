@@ -6,7 +6,7 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn, flip_v_by_indices
+from ldm.util import replace_rows_by_conv_attn, flip_v_by_indices, normalize_attn_at_indices
 
 def exists(val):
     return val is not None
@@ -169,6 +169,7 @@ class CrossAttention(nn.Module):
         )
         self.save_attn_vars = False
         self.use_conv_attn = False
+        self.normalize_subj_attn = False
         self.infeat_size   = None
         self.point_conv_attn_mix_weight = 0.5
         
@@ -224,6 +225,9 @@ class CrossAttention(nn.Module):
             # infeat_size is set in SpatialTransformer.forward().
             sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, h, self.scale,
                                             self.point_conv_attn_mix_weight)
+
+        if context_provided and self.normalize_subj_attn and subj_indices is not None:
+            sim = normalize_attn_at_indices(sim, subj_indices, h)
 
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].
