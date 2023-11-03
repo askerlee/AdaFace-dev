@@ -662,8 +662,8 @@ class AdaEmbedding(nn.Module):
         # Therefore, "fg infeat" is of the background.
         # "bg infeat" is the cached bg infeat produced by the previous fg embedder, so it's also bg infeat.
         # Therefore, no need to scale the weights.        
-        if self.token_is_bg:
-            return
+        #if self.token_is_bg:
+        #    return
         
         # Currently only supports H = 1 or 2.
         # Skip masking if is_one_stream_only.
@@ -673,7 +673,7 @@ class AdaEmbedding(nn.Module):
         assert self.H == 2
 
         layer_range = range(self.num_layers) if masked_layer_idx is None else [masked_layer_idx]
-        cross_weight_max_ratio = 0.3
+        cross_weight_max_ratio = 0.25
 
         for layer_idx in layer_range:
             SINGLE_D = self.attn_infeat_dims[layer_idx]
@@ -1483,13 +1483,13 @@ class EmbeddingManager(nn.Module):
                 #self.layerwise_point_conv_attn_mix_weights.data[6:13]   = 0
                 #self.layerwise_point_conv_attn_mix_weights.data[13:]   /= 5
                 pass
-            
+
             print(f"Initialize layerwise_point_conv_attn_mix_weights = {self.layerwise_point_conv_attn_mix_weights}")
 
     def get_layerwise_point_conv_attn_mix_weights(self):
         # Sometimes some of the weights are pushed to be negative. But it will lead to
         # reduced performance. So we clip the weights to be non-negative.
-        self.layerwise_point_conv_attn_mix_weights.data.clamp_(min=0)
+        self.layerwise_point_conv_attn_mix_weights.data.clamp_(min=0, max=1)
         return self.layerwise_point_conv_attn_mix_weights
     
     def get_emb_global_scale(self, do_perturb=True):
