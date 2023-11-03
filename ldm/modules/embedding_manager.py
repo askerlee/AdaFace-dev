@@ -688,12 +688,18 @@ class AdaEmbedding(nn.Module):
                     layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2] *= f2b_down_scale
                     #print(f"Layer {layer_idx} emb {emb_idx} fg_in_mean_weight {fg_in_mean_weight:.3f} f2b_mean_weight {f2b_mean_weight:.3f} f2b_down_scale {f2b_down_scale:.3f}")
                 elif emb_infeat_type == 1:
+                    # bg embeddings. "fg infeat" is the infeat pooled by the "fg" (here actually bg) embedding.
+                    # "bg feat" is the cached bg infeat produced by the previous fg embedder, so it's also bg infeat.
+                    # Therefore, no need to scale the weights.
+                    continue
+                    '''
                     # bg embeddings. Take full bg infeat and 0.3 of fg infeat as input.
                     bg_in_mean_weight   = layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2].abs().mean().item()
                     b2f_mean_weight     = layer_coeff_map_weight_emb[:, :SINGLE_D].abs().mean().item()
                     b2f_down_scale      = min(1, cross_weight_max_ratio * bg_in_mean_weight / (b2f_mean_weight + 1e-6))
                     layer_coeff_map_weight_emb[:, :SINGLE_D] *= b2f_down_scale
                     #print(f"Layer {layer_idx} emb {emb_idx} bg_in_mean_weight {bg_in_mean_weight:.3f} b2f_mean_weight {b2f_mean_weight:.3f} b2f_down_scale {b2f_down_scale:.3f}")
+                    '''
                 # Otherwise, emb_infeat_type == 2, no scaling is needed.
 
 
@@ -1244,8 +1250,9 @@ class EmbeddingManager(nn.Module):
                 ## will make fg and bg embeddings more orthogonal (i.e., attend to different areas).
                 list_of_indices_to_mask = [self.placeholder_indices_fg]
                 if self.placeholder_indices_bg is not None:
-                    # During training, exclude the bg embeddings from computing the static_extra_emb 
-                    # mean at 50% chance.
+                    # During training, exclude the bg embeddings from computing 
+                    # the static_extra_emb mean at 50% chance.
+                    # No bg tokens in mix distillation iters, so this behavior only impacts recon iters.
                     # During inference, usually there's no background token, so no need to mask.
                     if self.training and (random.random() < 0.5):
                         list_of_indices_to_mask.append(self.placeholder_indices_bg)
