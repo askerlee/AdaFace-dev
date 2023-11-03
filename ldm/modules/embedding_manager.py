@@ -987,14 +987,13 @@ class EmbeddingManager(nn.Module):
                     self.token2emb_cache[placeholder_string] = token_emb_cache
 
                 # Reserve 1 embedding to take both fg and cached-bg infeat. 
-                # Half of the embeddings are fg embeddings, and (the other half - 1) are bg embeddings.
-                # If num_vectors_per_token == 1, then fg_emb_count = 0, bg_emb_count = 0. fg_bg_emb_count = 1.
-                # If num_vectors_per_token >= 2, then fg_emb_count = K//2, bg_emb_count = K - 1 - fg_emb_count.
-                # For example, if num_vectors_per_token = 2, then fg_emb_count = 1, bg_emb_count = 0.
-                # If num_vectors_per_token = 3, then fg_emb_count = 1, bg_emb_count = 1.
-                # Almost always fg_bg_emb_count = 1.
-                fg_emb_count = num_vectors_per_token // 2
-                bg_emb_count = num_vectors_per_token - 1 - fg_emb_count
+                # 2/3 of the embeddings are fg embeddings, and 1/3 are bg embeddings.
+                # Note fg embeddings still take 0.3 of bg infeat, and bg embeddings still take 0.3 of fg infeat.
+                # No embeddings are fg-bg embeddings, which take fg and bg infeat with equal weights.
+                # If num_vectors_per_token == 1, then fg_emb_count = 1, bg_emb_count = 0.
+                # If num_vectors_per_token == 9, then fg_emb_count = 6, bg_emb_count = 3.
+                fg_emb_count = max(1, num_vectors_per_token * 2 // 3)
+                bg_emb_count = num_vectors_per_token - fg_emb_count
 
                 use_cached_bg = (placeholder_string in self.background_strings)
 
