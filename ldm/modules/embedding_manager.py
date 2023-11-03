@@ -1246,9 +1246,8 @@ class EmbeddingManager(nn.Module):
                 if self.placeholder_indices_bg is not None:
                     # During training, exclude the bg embeddings from computing the static_extra_emb 
                     # mean at 50% chance.
-                    # During inference, always exclude the bg embeddings.
-                    if self.training and (random.random() < 0.5) \
-                      or not self.training:
+                    # During inference, usually there's no background token, so no need to mask.
+                    if self.training and (random.random() < 0.5):
                         list_of_indices_to_mask.append(self.placeholder_indices_bg)
                 
             # layer_static_prompt_embs:   [4, 77, 768]. 
