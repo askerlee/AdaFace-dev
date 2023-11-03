@@ -518,7 +518,7 @@ class AdaEmbedding(nn.Module):
                  layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                             17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },
                  has_bias=True, use_attn_pooler=True,
-                 device_type="cuda", token_string=""):
+                 token_string="", token_is_bg=False, device_type="cuda"):
         super().__init__()
         self.token_string = token_string
         assert num_layers == len(layer_idx2ca_layer_idx), f"num_layers={num_layers} != len(layer_idx2ca_layer_idx)={len(layer_idx2ca_layer_idx)}"
@@ -531,7 +531,9 @@ class AdaEmbedding(nn.Module):
         assert fg_emb_count + bg_emb_count <= self.K, \
             f"fg_emb_count={fg_emb_count} + bg_emb_count={bg_emb_count} > num_vectors_per_token={self.K}"
 
-        self.use_cached_bg = use_cached_bg
+        # token_is_bg: is this token trying to model the background?
+        self.token_is_bg    = token_is_bg
+        self.use_cached_bg  = use_cached_bg
         if self.use_cached_bg:
             self.cached_bg_weight = nn.Parameter(torch.tensor(0.5), requires_grad=True)
 
@@ -655,6 +657,14 @@ class AdaEmbedding(nn.Module):
     # If masked_layer_idx is specified, then only mask for one layer. Otherwise, mask for all layers.
     # When generating ada embeddings for each layer in turn, only masking one layer will reduce processing time.
     def reduce_fg_bg_cross_weights(self, masked_layer_idx=None):
+        # If token_is_bg: 
+        # its "fg infeat" is the attn pooled infeat using the main embedding, in this case, the bg embedding.
+        # Therefore, "fg infeat" is of the background.
+        # "bg infeat" is the cached bg infeat produced by the previous fg embedder, so it's also bg infeat.
+        # Therefore, no need to scale the weights.        
+        if self.token_is_bg:
+            return
+        
         # Currently only supports H = 1 or 2.
         # Skip masking if is_one_stream_only.
         if self.H == 1:
@@ -688,18 +698,12 @@ class AdaEmbedding(nn.Module):
                     layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2] *= f2b_down_scale
                     #print(f"Layer {layer_idx} emb {emb_idx} fg_in_mean_weight {fg_in_mean_weight:.3f} f2b_mean_weight {f2b_mean_weight:.3f} f2b_down_scale {f2b_down_scale:.3f}")
                 elif emb_infeat_type == 1:
-                    # bg embeddings. "fg infeat" is the infeat pooled by the "fg" (here actually bg) embedding.
-                    # "bg feat" is the cached bg infeat produced by the previous fg embedder, so it's also bg infeat.
-                    # Therefore, no need to scale the weights.
-                    continue
-                    '''
                     # bg embeddings. Take full bg infeat and 0.3 of fg infeat as input.
                     bg_in_mean_weight   = layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2].abs().mean().item()
                     b2f_mean_weight     = layer_coeff_map_weight_emb[:, :SINGLE_D].abs().mean().item()
                     b2f_down_scale      = min(1, cross_weight_max_ratio * bg_in_mean_weight / (b2f_mean_weight + 1e-6))
                     layer_coeff_map_weight_emb[:, :SINGLE_D] *= b2f_down_scale
                     #print(f"Layer {layer_idx} emb {emb_idx} bg_in_mean_weight {bg_in_mean_weight:.3f} b2f_mean_weight {b2f_mean_weight:.3f} b2f_down_scale {b2f_down_scale:.3f}")
-                    '''
                 # Otherwise, emb_infeat_type == 2, no scaling is needed.
 
 
@@ -1024,7 +1028,8 @@ class EmbeddingManager(nn.Module):
                                                    init_words,
                                                    init_word_embeddings,
                                                    use_attn_pooler=ada_use_attn_pooler,
-                                                   token_string=placeholder_string)
+                                                   token_string=placeholder_string,
+                                                   token_is_bg=token_is_bg)
             else:
                 # Degenerate to Textual Inversion. 
                 # ANCHOR[id=init_embed] : 16*K vectors are initialized with the same embedding.
