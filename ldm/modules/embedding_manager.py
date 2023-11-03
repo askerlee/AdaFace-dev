@@ -1001,7 +1001,7 @@ class EmbeddingManager(nn.Module):
                 # If num_vectors_per_token == 9, then fg_emb_count = 6, bg_emb_count = 3.
                 if token_is_bg:
                     bg_emb_count = max(1, num_vectors_per_token * 2 // 3)
-                    fg_emb_count = num_vectors_per_token - fg_emb_count
+                    fg_emb_count = num_vectors_per_token - bg_emb_count
                 else:
                     fg_emb_count = max(1, num_vectors_per_token * 2 // 3)
                     bg_emb_count = num_vectors_per_token - fg_emb_count
