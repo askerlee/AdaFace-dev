@@ -407,6 +407,7 @@ def main(opt):
         model  = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
             model.embedding_manager.load(opt.embedding_paths)
+            model.embedding_manager.eval()
             opt.subj_model_path = opt.embedding_paths[0]
         else:
             opt.subj_model_path = opt.ckpt
