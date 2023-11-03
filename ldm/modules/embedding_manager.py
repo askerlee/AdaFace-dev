@@ -1743,6 +1743,7 @@ class EmbeddingManager(nn.Module):
                         km2 = km.replace(k, k2)
                         self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
                         self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
+
                         # Compatible with old checkpoints.
                         if 'layer_maps' in ckpt["string_to_ada_embedder"][km]._modules:
                             self.string_to_ada_embedder_dict[km2].layer_coeff_maps = \
@@ -1754,6 +1755,8 @@ class EmbeddingManager(nn.Module):
                         if km in ckpt["token2num_vectors"]:
                             token2num_vectors[km2] = ckpt["token2num_vectors"][km]
                         print(f"Loaded {km}->{km2} from {ckpt_path}")
+                        ada = self.string_to_ada_embedder_dict[km2]
+                        print(f"km2: {ada.fg_emb_count}/{ada.bg_emb_count}/{ada.K} fg/bg/total embeddings")
 
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
