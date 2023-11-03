@@ -848,6 +848,7 @@ class LatentDiffusion(DDPM):
                                 'delta_loss_emb_mask':   copy.copy(self.embedding_manager.delta_loss_emb_mask),
                                 'default_point_conv_attn_mix_weight':     self.default_point_conv_attn_mix_weight,
                                 'layerwise_point_conv_attn_mix_weights':  layerwise_point_conv_attn_mix_weights,
+                                'normalize_subj_attn':   self.embedding_manager.normalize_subj_attn,
                              }
                 
                 if self.use_ada_embedding:
@@ -1349,8 +1350,6 @@ class LatentDiffusion(DDPM):
                     # we only use the background token on 90% of the training images, to 
                     # force the foreground token to focus on the whole image.
                     p_use_background_token  = 0.9
-
-            self.iter_flags['normalize_subj_attn'] = self.embedding_manager.normalize_subj_attn
 
             # Only use_background_token on recon iters.
             # No need to check do_mix_prompt_distillation, because if do_mix_prompt_distillation,
