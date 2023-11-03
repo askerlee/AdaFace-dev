@@ -715,11 +715,9 @@ class AdaEmbedding(nn.Module):
                 img_mask=None, bp_to_unet=False, cached_infeat_bg=None):
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         pooler  = self.poolers[ca_layer_idx]
-        # Some Linears only use either fg or bg features. 
-        # So we mask weights at the unused half, since the corresponding weights are 
-        # updated during BP and become nonzero. 
-        if self.training:
-            self.reduce_fg_bg_cross_weights(ca_layer_idx)
+        ## Some Linears mainly use either fg or bg features. So we reduce cross weights.
+        #if self.training:
+        #    self.reduce_fg_bg_cross_weights(ca_layer_idx)
 
         if not self.is_fg_only and self.use_cached_bg:
             # cached_infeat_bg must be provided when use_cached_bg.
