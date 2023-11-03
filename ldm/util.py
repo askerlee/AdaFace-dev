@@ -1206,23 +1206,19 @@ def repeat_selected_instances(sel_indices, REPEAT, *args):
 
     return rep_args
 
+# Extract the index to the first token in each instance.
 # token_indices is a tuple of two 1D tensors: (token_indices_B, token_indices_T).
-def keep_first_index_in_each_instance(token_indices):
-    device = token_indices[0].device
-    seen_batch_indices = {}
-    token_indices_first_only = [], []
-
-    if token_indices[0].numel() == 0:
-        return token_indices
+def extract_first_index_in_each_instance(token_indices):
+    token_indices_by_instance = split_indices_by_instance(token_indices)
+    token_indices_B_first_only = []
+    token_indices_T_first_only = []
+    for token_indices_B, token_indices_T in token_indices_by_instance:
+        token_indices_B_first_only.append(token_indices_B[0])
+        token_indices_T_first_only.append(token_indices_T[0])
     
-    for token_ind_B, token_ind_T in zip(*token_indices):
-        if token_ind_B.item() not in seen_batch_indices:
-            token_indices_first_only[0].append(token_ind_B)
-            token_indices_first_only[1].append(token_ind_T)
-            seen_batch_indices[token_ind_B.item()] = True
-
-    return (torch.tensor(token_indices_first_only[0], device=device), 
-            torch.tensor(token_indices_first_only[1], device=device))
+    token_indices_B_first_only = torch.stack(token_indices_B_first_only, dim=0)
+    token_indices_T_first_only = torch.stack(token_indices_T_first_only, dim=0)
+    return (token_indices_B_first_only, token_indices_T_first_only)
 
 # cls_subj_indices, cls_comp_indices could be None. 
 # In that case, subj_comp_emb_align is pushed towards 0.

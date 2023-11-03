@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler, masked_mean, \
-                     gen_gradient_scaler, keep_first_index_in_each_instance
+                     gen_gradient_scaler, extract_first_index_in_each_instance
 from functools import partial
 from collections import OrderedDict
 import random
@@ -1043,7 +1043,6 @@ class EmbeddingManager(nn.Module):
         self.clear_ada_layer_temp_info()
         self.clear_delta_loss_emb_mask()
         self.img_mask = None
-        self.cached_infeat_bg = {}
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
         self.loss_call_count = 0
         # Store the text_embedder to compute the delta loss.
@@ -1140,7 +1139,7 @@ class EmbeddingManager(nn.Module):
             # If multiple occurrences are found in a prompt, only keep the first as the subject.
             # Other occurrences are treated as part of the background prompt (this may happen if
             # composition image overlay is used).
-            placeholder_indices = keep_first_index_in_each_instance(placeholder_indices)
+            placeholder_indices = extract_first_index_in_each_instance(placeholder_indices)
             # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
             # Non-layerwise: embedded_text[placeholder_indices]: [2, 768].  subj_static_embedding: [1, K, 768].
             # layerwise: placeholder_indices =  
@@ -1211,6 +1210,7 @@ class EmbeddingManager(nn.Module):
             ada_bp_to_unet=False
     ):
         BS, device = tokenized_text.shape[0], tokenized_text.device
+        cached_infeat_bg = None
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
         layer_static_prompt_embs   = layer_attn_components['layer_static_prompt_embs']
@@ -1229,7 +1229,8 @@ class EmbeddingManager(nn.Module):
             if placeholder_indices[0].numel() == 0:
                 continue
 
-            placeholder_indices = keep_first_index_in_each_instance(placeholder_indices)
+            # extract_first_index_in_each_instance(): Get the index to the first token in each instance.
+            placeholder_indices_1st = extract_first_index_in_each_instance(placeholder_indices)
 
             # For fg subjects, exclude fg embeddings from computing the embedding mean. 
             # For bg subjects, exclude fg from computing the embedding mean.
@@ -1241,20 +1242,22 @@ class EmbeddingManager(nn.Module):
                 ## Why not mask bg indices for fg ada? bg embeddings are supposed to be of a similar nature 
                 ## as the extra compositional embeddings. Incorporating them in layer_static_extra_emb_mean
                 ## will make fg and bg embeddings more orthogonal (i.e., attend to different areas).
-                list_of_indices_to_mask = [self.placeholder_indices_fg, self.placeholder_indices_bg]
+                list_of_indices_to_mask = [self.placeholder_indices_fg]
+                # Exclude the bg embeddings from computing the static_extra_emb mean at 50% chance.
+                if (self.placeholder_indices_bg is not None) and (random.random() < 0.5):
+                    list_of_indices_to_mask.append(self.placeholder_indices_bg)
                 
             # layer_static_prompt_embs:   [4, 77, 768]. 
             # delta_loss_emb_mask: [4, 77, 1].
             layer_static_extra_emb_mean = \
-                self.get_layer_static_extra_emb_mean(layer_static_prompt_embs, self.delta_loss_emb_mask, 
-                                                     list_of_indices_to_mask,
-                                                     dropout_prob=0.2)
+                self.calc_layer_static_extra_emb_mean(layer_static_prompt_embs, self.delta_loss_emb_mask, 
+                                                      list_of_indices_to_mask, dropout_prob=0.2)
 
             # Clear the infeat_bg cache before generating subject embedding(s) of a subject token.
             # If the next token is the background token, the keep the cache, so that the background
             # token will reuse the infeat_bg computed by the previous subject token.
             if not token_is_bg:
-                self.cached_infeat_bg[layer_idx] = None
+                cached_infeat_bg = None
 
             ada_embedder = self.string_to_ada_embedder_dict[placeholder_string].to(device)
             assert isinstance(ada_embedder, AdaEmbedding)
@@ -1263,14 +1266,14 @@ class EmbeddingManager(nn.Module):
             # should have been computed by the previous subject Ada embedder. 
             # Otherwise it's a bug.
             if token_is_bg \
-              and ada_embedder.use_cached_bg and self.cached_infeat_bg[layer_idx] is None:
+              and ada_embedder.use_cached_bg and cached_infeat_bg is None:
                 breakpoint()
 
-            # placeholder_indices obtained above is different from self.placeholder_indices_fg.
+            # placeholder_indices_1st obtained above is different from self.placeholder_indices_fg.
             # self.placeholder_indices_fg contains the indices for the succeeding commas.
-            # placeholder_indices contains the indices for the current subject token ("z") only.
+            # placeholder_indices_1st contains the indices for the first subject token ("z") only.
             if not token_is_bg \
-                   and (self.placeholder_indices_fg[0].unique().shape != placeholder_indices[0].shape):
+                   and (self.placeholder_indices_fg[0].unique().shape != placeholder_indices_1st[0].shape):
                 breakpoint()
 
             # static_subj_embs_dict[placeholder_string]: static_subj_embeddings, [(BS/2)*K, 768].
@@ -1325,7 +1328,7 @@ class EmbeddingManager(nn.Module):
                                      layer_subj_emb_probe,
                                      layer_static_extra_emb_mean, 
                                      self.img_mask, ada_bp_to_unet, 
-                                     self.cached_infeat_bg[layer_idx])
+                                     cached_infeat_bg)
 
             if self.img_mask is not None and self.img_mask.max() > 1:
                 breakpoint()
@@ -1334,22 +1337,23 @@ class EmbeddingManager(nn.Module):
                 # Cache the bg infeat computed by the first (fg) ada embedder, 
                 # to be used by the second Ada embedder and the background Ada embedder.
                 # NOTE: this assumes the background token always appears after the subject tokens.
-                self.cached_infeat_bg[layer_idx]    = infeat_bg
+                # Otherwise the cached_infeat_bg is not available when the background Ada embedder accesses it.
+                cached_infeat_bg    = infeat_bg
 
             for k in range(self.token2num_vectors[placeholder_string]):
-                # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
-                # embedded_text[placeholder_indices]: [2, 768].  subj_ada_embedding: [2, 768].
+                # embedded_text[placeholder_indices_1st] indexes the embedding at each instance in the batch.
+                # embedded_text[placeholder_indices_1st]: [2, 768].  subj_ada_embedding: [2, 768].
                 # Sometimes (e.g. during inference, some instances contain the placeholder token but
                 # others don't. tokenized_text has a batch size of those containing the placeholder token only.
                 # But ca_infeat is still of the full batch size. So subj_ada_embedding has a batch size 
                 # larger than the number of instances containing the placeholder token. We need to index
-                # subj_ada_embedding with placeholder_indices[0] to get the matching new subj_ada_embedding.
+                # subj_ada_embedding with placeholder_indices_1st[0] to get the matching new subj_ada_embedding.
                 # We can save some computation by generating embeddings only for the instances containing 
                 # the placeholder token. But that requires complex processing so not pursued now.
-                placeholder_indices_k = (placeholder_indices[0], placeholder_indices[1] + k)
+                placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k)
                 # subj_ada_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
-                embedded_text[placeholder_indices_k] = subj_ada_embedding[placeholder_indices[0], k]
-                
+                embedded_text[placeholder_indices_k] = subj_ada_embedding[placeholder_indices_1st[0], k]
+
         return embedded_text
 
     # Update token embedding mask.
@@ -1364,8 +1368,8 @@ class EmbeddingManager(nn.Module):
     # layer_static_prompt_embs: [4, 77, 768].
     # emb_mask:          [4, 77, 1].
     # (Note sometimes the batch size of emb_mask is different from layer_static_prompt_embs).
-    def get_layer_static_extra_emb_mean(self, layer_static_prompt_embs, emb_mask, 
-                                        list_of_indices_to_mask, dropout_prob=0.2):
+    def calc_layer_static_extra_emb_mean(self, layer_static_prompt_embs, emb_mask, 
+                                         list_of_indices_to_mask, dropout_prob=0.2):
         emb_mask = emb_mask.clone()
         count_of_masked_indices = sum([ (indices_to_mask is not None) for indices_to_mask in list_of_indices_to_mask])
         assert count_of_masked_indices > 0
@@ -1417,7 +1421,7 @@ class EmbeddingManager(nn.Module):
 
     def update_placeholder_indices(self, tokenized_text, placeholder_token, num_vectors_per_token, token_is_bg):
         placeholder_indices = torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
-        placeholder_indices_B, placeholder_indices_N = keep_first_index_in_each_instance(placeholder_indices)
+        placeholder_indices_B, placeholder_indices_N = extract_first_index_in_each_instance(placeholder_indices)
 
         if len(placeholder_indices_B) == 0:
             if token_is_bg:
