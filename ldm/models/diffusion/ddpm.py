@@ -157,7 +157,7 @@ class DDPM(pl.LightningModule):
         self.recon_bg_discount                  = recon_bg_discount
         
         self.use_conv_attn                   = use_conv_attn
-        self.default_point_conv_attn_mix_weight        = default_point_conv_attn_mix_weight
+        self.default_point_conv_attn_mix_weight = default_point_conv_attn_mix_weight
         self.use_background_token            = use_background_token
         # If use_conv_attn, the subject is well expressed, and use_fp_trick is unnecessary 
         # (actually harmful).
@@ -1339,7 +1339,6 @@ class LatentDiffusion(DDPM):
             # Mainly use background token on recon iters.
             if self.iter_flags['is_compos_iter']:
                 p_use_background_token  = 0
-                p_do_flip_half_v = 1 
             else:
                 # Recon iters.
                 if self.iter_flags['use_wds_comp']:
@@ -1351,10 +1350,8 @@ class LatentDiffusion(DDPM):
                     # force the foreground token to focus on the whole image.
                     p_use_background_token  = 0.9
 
-                p_do_flip_half_v = 0.2
+            self.iter_flags['normalize_subj_attn'] = self.embedding_manager.normalize_subj_attn
 
-            self.iter_flags['p_do_flip_half_v'] = self.embedding_manager.do_flip_half_v \
-                                                    and random.random() < p_do_flip_half_v
             # Only use_background_token on recon iters.
             # No need to check do_mix_prompt_distillation, because if do_mix_prompt_distillation,
             # in most iterations p_use_background_token = 0, except for 50% of the iterations when

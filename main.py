@@ -275,8 +275,8 @@ def get_parser(**parser_kwargs):
     # are all equavalent.
     parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
-    parser.add_argument("--do_flip_half_v", type=str2bool, nargs="?", const=True, default=argparse.SUPPRESS,
-                        help="Whether to flip half of the subject embedding v vectors")
+    parser.add_argument("--normalize_subj_attn", type=str2bool, nargs="?", const=True, default=argparse.SUPPRESS,
+                        help="Whether to normalize the subject embedding attention scores")
     
     parser.add_argument("--learnable_deep_neg_token", type=str, default=None,
                         help="If specified, the learnable token in a deep negative prompt")
@@ -741,8 +741,8 @@ if __name__ == "__main__":
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
         config.model.params.personalization_config.params.placeholder_strings = [opt.placeholder_string]
         config.model.params.personalization_config.params.num_vectors_per_token = { opt.placeholder_string: opt.num_vectors_per_token}
-        if hasattr(opt, 'do_flip_half_v'):
-            config.model.params.personalization_config.params.do_flip_half_v = opt.do_flip_half_v
+        if hasattr(opt, 'normalize_subj_attn'):
+            config.model.params.personalization_config.params.normalize_subj_attn = opt.normalize_subj_attn
 
         # placeholder_string
         config.data.params.train.params.placeholder_string       = opt.placeholder_string

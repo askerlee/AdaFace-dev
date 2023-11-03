@@ -6,7 +6,7 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn, flip_v_by_indices, normalize_attn_at_indices
+from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices
 
 def exists(val):
     return val is not None
@@ -169,7 +169,7 @@ class CrossAttention(nn.Module):
         )
         self.save_attn_vars = False
         self.use_conv_attn = False
-        self.normalize_subj_attn = False
+        self.normalize_subj_attn = True
         self.infeat_size   = None
         self.point_conv_attn_mix_weight = 0.5
         
@@ -191,9 +191,9 @@ class CrossAttention(nn.Module):
             # Don't do conv attn if uncond is active.
             layer_attn_components = { 'x': x, 'q': q, 'to_k': self.to_k, 
                                       'infeat_size': self.infeat_size, 'scale': self.scale }
-            context, subj_indices, flip_v_indices = context(layer_attn_components)
+            context, subj_indices = context(layer_attn_components)
         else:
-            subj_indices, flip_v_indices = None, None
+            subj_indices = None
 
         if type(context) == tuple:
             v_context, k_context  = context
@@ -204,13 +204,6 @@ class CrossAttention(nn.Module):
         v = self.to_v(v_context)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
-        if flip_v_indices is not None:
-            # v: [64, 77, 40]. 64: bs = 8 * h = 8. 77: num of tokens in text prompt. 40: dim of each head.
-            # v: [8, 77, 320]
-            v = rearrange(v, '(b h) n d -> b n (h d)', h=h)
-            v = flip_v_by_indices(v, flip_v_indices)
-            v = rearrange(v, 'b n (h d) -> (b h) n d', h=h)
-
         sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
                 
         # In-place replacement of the row(s) in the attention matrix sim corresponding to the subject tokens, 

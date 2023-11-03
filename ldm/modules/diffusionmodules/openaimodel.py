@@ -509,6 +509,7 @@ class UNetModel(nn.Module):
 
         self.backup_vars = { 
                             'use_conv_attn':                            False,
+                            'normalize_subj_attn':                      False,
                             'default_point_conv_attn_mix_weight':       0.5,
                             'point_conv_attn_mix_weight:layerwise':     None,
                             'save_attn_vars':                           False,
@@ -841,7 +842,7 @@ class UNetModel(nn.Module):
         default_point_conv_attn_mix_weight      = extra_info.get('default_point_conv_attn_mix_weight', 0.5)     if extra_info is not None else 0.5
         layerwise_point_conv_attn_mix_weights   = extra_info.get('layerwise_point_conv_attn_mix_weights', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
-        do_flip_half_v        = extra_info.get('do_flip_half_v', False)        if extra_info is not None else False
+        normalize_subj_attn   = extra_info.get('normalize_subj_attn', False)   if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
         emb_k_mixer           = extra_info.get('emb_k_mixer', None)            if extra_info is not None else None
@@ -967,18 +968,14 @@ class UNetModel(nn.Module):
             else:
                 layer_context = layer_static_context
 
-            if do_flip_half_v:
-                flip_v_indices = extract_last_chunk_of_indices(subj_indices, total_num_chunks=3)
-            else:
-                flip_v_indices = None
             # subj_indices is passed from extra_info, which was obtained when generating static embeddings.
             # Return subj_indices to cross attention layers for conv attn computation.
-            return layer_context, subj_indices, flip_v_indices
+            return layer_context, subj_indices
 
         # Apply conv attn on all layers. 
         # Although layer 12 has small 8x8 feature maps, since we linearly combine 
         # pointwise attn with conv attn, we still apply conv attn (3x3) on it.
-        conv_attn_layer_indices      = None #[1, 2, 4, 5, 7, 8, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+        ca_flag_layer_indices      = None #[1, 2, 4, 5, 7, 8, 16, 17, 18, 19, 20, 21, 22, 23, 24]
         # layerwise_point_conv_attn_mix_weights are not specified. So use the default value 0.5.
         # Here layerwise_point_conv_attn_mix_weights is a list of scalars, not a learnable tensor.
         if layerwise_point_conv_attn_mix_weights is None:
@@ -997,9 +994,10 @@ class UNetModel(nn.Module):
         ca_flags_stack = []
         old_ca_flags, _ = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn': use_conv_attn,
+                                                          'normalize_subj_attn': normalize_subj_attn,
                                                           'point_conv_attn_mix_weight:layerwise': \
                                                            layerwise_point_conv_attn_mix_weights },
-                                       ca_layer_indices = conv_attn_layer_indices )
+                                       ca_layer_indices = ca_flag_layer_indices )
             
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).
         # None here means ca_flags have been applied to all layers.
