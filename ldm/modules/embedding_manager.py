@@ -681,12 +681,14 @@ class AdaEmbedding(nn.Module):
                 # self.emb_infeat_types: [0, 0, 0, 0, 1, 1, 1, 1, 2]. 0 = fg, 1 = bg, 2 = fg_bg
                 emb_infeat_type = self.emb_infeat_types[emb_idx]
                 if emb_infeat_type == 0:
+                    # fg embeddings. Take full fg infeat and 0.3 of bg infeat as input.
                     fg_in_mean_weight   = layer_coeff_map_weight_emb[:, :SINGLE_D].abs().mean().item()
                     f2b_mean_weight     = layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2].abs().mean().item()
                     f2b_down_scale      = min(1, cross_weight_max_ratio * fg_in_mean_weight / (f2b_mean_weight + 1e-6))
                     layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2] *= f2b_down_scale
                     #print(f"Layer {layer_idx} emb {emb_idx} fg_in_mean_weight {fg_in_mean_weight:.3f} f2b_mean_weight {f2b_mean_weight:.3f} f2b_down_scale {f2b_down_scale:.3f}")
                 elif emb_infeat_type == 1:
+                    # bg embeddings. Take full bg infeat and 0.3 of fg infeat as input.
                     bg_in_mean_weight   = layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2].abs().mean().item()
                     b2f_mean_weight     = layer_coeff_map_weight_emb[:, :SINGLE_D].abs().mean().item()
                     b2f_down_scale      = min(1, cross_weight_max_ratio * bg_in_mean_weight / (b2f_mean_weight + 1e-6))
@@ -706,7 +708,9 @@ class AdaEmbedding(nn.Module):
         # Some Linears only use either fg or bg features. 
         # So we mask weights at the unused half, since the corresponding weights are 
         # updated during BP and become nonzero. 
-        self.reduce_fg_bg_cross_weights(ca_layer_idx)
+        if self.training:
+            self.reduce_fg_bg_cross_weights(ca_layer_idx)
+
         if not self.is_fg_only and self.use_cached_bg:
             # cached_infeat_bg must be provided when use_cached_bg.
             if cached_infeat_bg is None:
@@ -986,16 +990,23 @@ class EmbeddingManager(nn.Module):
                                                   init_embedding=None)
                     self.token2emb_cache[placeholder_string] = token_emb_cache
 
-                # Reserve 1 embedding to take both fg and cached-bg infeat. 
-                # 2/3 of the embeddings are fg embeddings, and 1/3 are bg embeddings.
+                token_is_bg =  (placeholder_string in self.background_strings)
+                # For subject embeddings:    2/3 of the embeddings are fg embeddings (focus on fg infeat), 
+                # and 1/3 are bg embeddings (focus on bg infeat).
+                # For background embeddings: 2/3 of the embeddings are bg embeddings (focus on bg infeat), 
+                # and 1/3 are fg embeddings (focus on fg infeat).
                 # Note fg embeddings still take 0.3 of bg infeat, and bg embeddings still take 0.3 of fg infeat.
                 # No embeddings are fg-bg embeddings, which take fg and bg infeat with equal weights.
                 # If num_vectors_per_token == 1, then fg_emb_count = 1, bg_emb_count = 0.
                 # If num_vectors_per_token == 9, then fg_emb_count = 6, bg_emb_count = 3.
-                fg_emb_count = max(1, num_vectors_per_token * 2 // 3)
-                bg_emb_count = num_vectors_per_token - fg_emb_count
+                if token_is_bg:
+                    bg_emb_count = max(1, num_vectors_per_token * 2 // 3)
+                    fg_emb_count = num_vectors_per_token - fg_emb_count
+                else:
+                    fg_emb_count = max(1, num_vectors_per_token * 2 // 3)
+                    bg_emb_count = num_vectors_per_token - fg_emb_count
 
-                use_cached_bg = (placeholder_string in self.background_strings)
+                use_cached_bg = token_is_bg
 
                 token_ada_embedder  = AdaEmbedding(self.num_layers_per_embedder, 
                                                    num_vectors_per_token, 
@@ -1220,8 +1231,8 @@ class EmbeddingManager(nn.Module):
 
             placeholder_indices = keep_first_index_in_each_instance(placeholder_indices)
 
-            # For fg subjects, mask fg indices. For bg subjects, mask both fg and bg indices.
-            # bg embeddings are
+            # For fg subjects, exclude fg embeddings from computing the embedding mean. 
+            # For bg subjects, exclude fg from computing the embedding mean.
             if token_is_bg:
                 # Why mask bg indices for bg ada? If bg embeddings accidentally attent to fg,
                 # then it will self-reinforce and contaminate the bg embeddings with fg features.
