@@ -987,9 +987,9 @@ class UNetModel(nn.Module):
             # 13~15 (22, 23, 24):                           weight 0.1.
             # This setting is based on the empirical observations of 
             # the learned layerwise_point_conv_attn_mix_weights.      
-            layerwise_point_conv_attn_mix_weights =   [default_point_conv_attn_mix_weight]       * 6 \
-                                                    + [0]                                        * 7 \
-                                                    + [default_point_conv_attn_mix_weight / 5]   * 3
+            layerwise_point_conv_attn_mix_weights =   [default_point_conv_attn_mix_weight]       * 16 #\
+                                                    #+ [0]                                        * 7 \
+                                                    #+ [default_point_conv_attn_mix_weight / 5]   * 3
 
         ca_flags_stack = []
         old_ca_flags, _ = \

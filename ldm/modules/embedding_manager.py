@@ -1461,7 +1461,31 @@ class EmbeddingManager(nn.Module):
         else:
             ada_emb_weight = self.ada_emb_weight        
         return ada_emb_weight
-    
+ 
+    def initialize_layerwise_point_conv_attn_mix_weights(self, default_point_conv_attn_mix_weight, 
+                                                         layerwise_point_conv_attn_mix_weights=None,
+                                                         learnable=True):
+        if layerwise_point_conv_attn_mix_weights is not None:
+            self.layerwise_point_conv_attn_mix_weights = nn.Parameter(layerwise_point_conv_attn_mix_weights,
+                                                                      requires_grad=learnable)            
+            print(f"Change layerwise_point_conv_attn_mix_weights = {self.layerwise_point_conv_attn_mix_weights}")
+
+        else:
+            self.layerwise_point_conv_attn_mix_weights = \
+                nn.Parameter(torch.ones(self.num_layers_per_embedder) * default_point_conv_attn_mix_weight, 
+                                        requires_grad=learnable)
+            if self.use_layerwise_embedding:
+                # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
+                # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0 (disabled).
+                # 13~15 (22, 23, 24):                           weight 0.1.
+                # This setting is based on the empirical observations of 
+                # the learned layerwise_point_conv_attn_mix_weights.
+                #self.layerwise_point_conv_attn_mix_weights.data[6:13]   = 0
+                #self.layerwise_point_conv_attn_mix_weights.data[13:]   /= 5
+                pass
+            
+            print(f"Initialize layerwise_point_conv_attn_mix_weights = {self.layerwise_point_conv_attn_mix_weights}")
+
     def get_layerwise_point_conv_attn_mix_weights(self):
         # Sometimes some of the weights are pushed to be negative. But it will lead to
         # reduced performance. So we clip the weights to be non-negative.
@@ -1639,29 +1663,6 @@ class EmbeddingManager(nn.Module):
 
     def clear_delta_loss_emb_mask(self):
         self.delta_loss_emb_mask = None
- 
-    def initialize_layerwise_point_conv_attn_mix_weights(self, default_point_conv_attn_mix_weight, 
-                                                        layerwise_point_conv_attn_mix_weights=None,
-                                                        learnable=True):
-        if layerwise_point_conv_attn_mix_weights is not None:
-            self.layerwise_point_conv_attn_mix_weights = nn.Parameter(layerwise_point_conv_attn_mix_weights,
-                                                                      requires_grad=learnable)            
-            print(f"Change layerwise_point_conv_attn_mix_weights = {self.layerwise_point_conv_attn_mix_weights}")
-
-        else:
-            self.layerwise_point_conv_attn_mix_weights = \
-                nn.Parameter(torch.ones(self.num_layers_per_embedder) * default_point_conv_attn_mix_weight, 
-                                        requires_grad=learnable)
-            if self.use_layerwise_embedding:
-                # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
-                # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0 (disabled).
-                # 13~15 (22, 23, 24):                           weight 0.1.
-                # This setting is based on the empirical observations of 
-                # the learned layerwise_point_conv_attn_mix_weights.
-                self.layerwise_point_conv_attn_mix_weights.data[6:13]   = 0
-                self.layerwise_point_conv_attn_mix_weights.data[13:]   /= 5
-
-            print(f"Initialize layerwise_point_conv_attn_mix_weights = {self.layerwise_point_conv_attn_mix_weights}")
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, ckpt_path):
