@@ -2,7 +2,7 @@ from abc import abstractmethod
 from functools import partial
 import math
 from typing import Iterable
-from ldm.util import patch_multi_embeddings, extract_second_half_of_indices
+from ldm.util import patch_multi_embeddings, extract_last_chunk_of_indices
 
 import numpy as np
 import torch as th
@@ -968,7 +968,7 @@ class UNetModel(nn.Module):
                 layer_context = layer_static_context
 
             if do_flip_half_v:
-                flip_v_indices = extract_second_half_of_indices(subj_indices)
+                flip_v_indices = extract_last_chunk_of_indices(subj_indices, total_num_chunks=3)
             else:
                 flip_v_indices = None
             # subj_indices is passed from extra_info, which was obtained when generating static embeddings.

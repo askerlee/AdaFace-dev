@@ -1339,15 +1339,20 @@ def dampen_large_loss(loss, max_magnitude=1.):
 
     return loss
 
-def extract_second_half_of_indices(token_indices):
+def extract_last_chunk_of_indices(token_indices, total_num_chunks=3):
     if token_indices is None:
         return None
     
     indiv_indices = split_indices_by_instance(token_indices)
     indiv_indices_half_B2, indiv_indices_half_N2 = [], []
     for indices_B, indices_N in indiv_indices:
-        indices_B2 = indices_B.chunk(2)[1]
-        indices_N2 = indices_N.chunk(2)[1]
+        indices_B2_chunks = indices_B.chunk(total_num_chunks)
+        indices_N2_chunks = indices_N.chunk(total_num_chunks)
+        # Not enough chunks. Skip this instance.
+        if len(indices_B2_chunks) < total_num_chunks:
+            continue
+        indices_B2 = indices_B2_chunks[-1]
+        indices_N2 = indices_N2_chunks[-1]
         indiv_indices_half_B2.append(indices_B2)
         indiv_indices_half_N2.append(indices_N2)
 
