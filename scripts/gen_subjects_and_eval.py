@@ -457,7 +457,10 @@ if __name__ == "__main__":
         if hasattr(args, 'emb_ema_as_pooling_probe'):
             command_line += f" --emb_ema_as_pooling_probe"
         if hasattr(args, 'normalize_subj_attn'):
-            command_line += f" --normalize_subj_attn"
+            if args.normalize_subj_attn:
+                command_line += f" --normalize_subj_attn"
+            else:
+                command_line += f" --normalize_subj_attn 0"
 
         if args.background_string and args.include_bg_string:
             command_line += f" --background_string {args.background_string}"
