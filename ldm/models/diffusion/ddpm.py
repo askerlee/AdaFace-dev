@@ -3571,28 +3571,29 @@ class LatentDiffusion(DDPM):
             # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64].
             # do_sum=False, to allow broadcasting to subj_comp_attn_sum.
             subj_subj_attn      = sel_emb_attns_by_indices(attn_mat, subj_subj_indices, 
-                                                           do_sum=False, do_sqrt_norm=True)
+                                                           do_sum=True, do_sqrt_norm=False)
 
             # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 1, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
             # If not is_4type_batch, then this block contains > 1 instances. 
             # K_comp of different instances may be different.
             # In such cases, do_sum has to be True to avoid errors due to different shape.
+            # decomp_align_ortho is scale-invariant to the output. So we don't need to sqrt_norm.
             subj_comp_attn_sum  = sel_emb_attns_by_indices(attn_mat, subj_comp_indices,
-                                                           do_sum=True, do_sqrt_norm=True)
+                                                           do_sum=True, do_sqrt_norm=False)
             # do_sum reduces dim 1, so we add it back to be prepared for broadcasting.
-            subj_comp_attn_sum = subj_comp_attn_sum.unsqueeze(1)
+            #subj_comp_attn_sum = subj_comp_attn_sum.unsqueeze(1)
             # The orthogonal projection of subj_subj_attn against subj_comp_attn.
             # subj_comp_attn will broadcast to the K_fg dimension.
             subj_comp_attn_align, subj_comp_attn_ortho = decomp_align_ortho(subj_subj_attn, subj_comp_attn_sum)
 
             if is_4type_batch:
                 cls_subj_attn       = sel_emb_attns_by_indices(attn_mat, cls_subj_indices,
-                                                               do_sum=False, do_sqrt_norm=True)
+                                                               do_sum=True, do_sqrt_norm=False)
                 cls_comp_attn_sum   = sel_emb_attns_by_indices(attn_mat, cls_comp_indices,
-                                                               do_sum=True, do_sqrt_norm=True)
+                                                               do_sum=True, do_sqrt_norm=False)
                 # do_sum reduces dim 1, so we add it back to be prepared for broadcasting.
-                cls_comp_attn_sum   = cls_comp_attn_sum.unsqueeze(1)
+                #cls_comp_attn_sum   = cls_comp_attn_sum.unsqueeze(1)
                 # The orthogonal projection of cls_subj_attn against cls_comp_attn.
                 # cls_comp_attn will broadcast to the K_fg dimension.
                 cls_comp_attn_ortho  = ortho_subtract(cls_subj_attn,  cls_comp_attn_sum)
