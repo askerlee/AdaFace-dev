@@ -1262,9 +1262,9 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
     #subj_comp_ks = unet_seq_k[subj_comp_indices].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
     #cls_comp_ks  = unet_seq_k[cls_comp_indices].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
     subj_subj_ks        = sel_emb_attns_by_indices(unet_seq_k, subj_subj_indices, 
-                                                    do_sum=True, do_sqrt_norm=False)
+                                                    do_sum=False, do_mean=True, do_sqrt_norm=False)
     subj_comp_ks_sum    = sel_emb_attns_by_indices(unet_seq_k, subj_comp_indices,
-                                                    do_sum=True, do_sqrt_norm=False)
+                                                    do_sum=False, do_mean=True, do_sqrt_norm=False)
     # subj_comp_ks_sum, cls_comp_ks_sum: [1, 15, 8, 160] => [1, 1, 8, 160]. 
     # Sum over all extra 15 compositional embeddings and be divided by sqrt(15).
     #subj_comp_ks_sum = subj_comp_ks_sum.unsqueeze(1)
@@ -1274,9 +1274,9 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
     
     if cls_subj_indices is not None:
         cls_subj_ks     = sel_emb_attns_by_indices(unet_seq_k, cls_subj_indices,
-                                                   do_sum=True, do_sqrt_norm=False)
+                                                   do_sum=False, do_mean=True, do_sqrt_norm=False)
         cls_comp_ks_sum = sel_emb_attns_by_indices(unet_seq_k, cls_comp_indices,
-                                                   do_sum=True, do_sqrt_norm=False)
+                                                   do_sum=False, do_mean=True, do_sqrt_norm=False)
         #cls_comp_ks_sum = cls_comp_ks_sum.unsqueeze(1)
         # The orthogonal projection of cls_subj_ks against cls_comp_ks_sum.
         # cls_comp_ks_sum will broadcast to the K_fg dimension of cls_subj_ks_mean.
@@ -1312,7 +1312,7 @@ def sel_emb_attns_by_indices(attn_mat, indices, do_sum=True, do_mean=False, do_s
         emb_attns   = [ emb_attns[i].sum(dim=1) for i in range(len(indices_by_instance)) ]
     elif do_mean:
         emb_attns   = [ emb_attns[i].mean(dim=1) for i in range(len(indices_by_instance)) ]
-        
+
     if do_sqrt_norm:
         # Normalize each embedding by sqrt(K_bg_i).
         emb_attns   = [ emb_attns[i] / np.sqrt(len(inst_indices[0])) \

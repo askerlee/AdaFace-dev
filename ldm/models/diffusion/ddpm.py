@@ -3233,12 +3233,12 @@ class LatentDiffusion(DDPM):
             attn_mat = unet_attn.permute(0, 3, 1, 2)
             # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
             subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices, 
-                                                 do_sum=True, do_sqrt_norm=do_sqrt_norm)
+                                                 do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
             
             # sel_emb_attns_by_indices will split bg_indices to multiple instances,
             # and select the corresponding attention rows for each instance.
             bg_attn   = sel_emb_attns_by_indices(attn_mat, bg_indices, 
-                                                 do_sum=True, do_sqrt_norm=do_sqrt_norm)
+                                                 do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
             
@@ -3277,10 +3277,10 @@ class LatentDiffusion(DDPM):
                 attnscore_mat = unet_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
                 # subj_score: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
                 subj_score = sel_emb_attns_by_indices(attnscore_mat, subj_indices,
-                                                      do_sum=True, do_sqrt_norm=do_sqrt_norm)
+                                                      do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
                 # bg_score_i:   [K_bg_i, 8, 64] -> [1, K_bg_i, 8, 64] sum among K_bg_i bg embeddings -> [1, 8, 64]
                 bg_score   = sel_emb_attns_by_indices(attnscore_mat, bg_indices, 
-                                                      do_sum=True, do_sqrt_norm=do_sqrt_norm)
+                                                      do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
 
                 fg_mask2 = resize_mask_for_feat_or_attn(subj_attn, fg_mask, "fg_mask", mode="nearest|bilinear")
                 # Repeat 8 times to match the number of attention heads (for normalization).
