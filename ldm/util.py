@@ -1291,13 +1291,15 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
                                                          do_demean_first=do_demean_first, 
                                                          first_n_dims_to_flatten=3,
                                                          ref_grad_scale=cls_grad_scale)
+        
+        loss_layer_cls_comp_key_align = (cls_comp_emb_align ** 2).mean()
     else:
         loss_layer_subj_comp_key_ortho = 0
     # Use L2 loss to push subj_comp_emb_align towards 0
     # =>
     # encourage subj_subj_ks be orthogonal with subj_comp_ks_sum.
     loss_layer_subj_comp_key_align = (subj_comp_emb_align ** 2).mean()
-    return loss_layer_subj_comp_key_align, loss_layer_subj_comp_key_ortho
+    return loss_layer_subj_comp_key_align, loss_layer_subj_comp_key_ortho, loss_layer_cls_comp_key_align
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.
 def sel_emb_attns_by_indices(attn_mat, indices, do_sum=True, do_mean=False, do_sqrt_norm=False):

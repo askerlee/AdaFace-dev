@@ -2845,6 +2845,7 @@ class LatentDiffusion(DDPM):
                                                     subj_indices_4b, bg_indices_4b, block_size=BLOCK_SIZE)
 
                 loss_subj_comp_key_align,  loss_subj_comp_value_align, \
+                loss_cls_comp_key_align,   loss_cls_comp_value_align,  \
                 loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho, \
                 loss_subj_comp_attn_align, loss_subj_comp_attn_ortho,  \
                 loss_cls_comp_attn_align = \
@@ -2866,7 +2867,12 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
                 if loss_subj_comp_attn_ortho != 0:
                     loss_dict.update({f'{prefix}/subj_comp_attn_ortho':  loss_subj_comp_attn_ortho.mean().detach()})
-                # loss_cls_comp_attn_align is not optimized, but just monitored as a reference for loss_subj_comp_attn_align.
+                # loss_cls_comp_key_align, loss_cls_comp_value_align, loss_cls_comp_attn_align are not optimized.
+                # They are just monitored as a reference for loss_subj_comp_*.
+                if loss_cls_comp_key_align != 0:
+                    loss_dict.update({f'{prefix}/cls_comp_key_align':   loss_cls_comp_key_align.mean().detach()})
+                if loss_cls_comp_value_align != 0:
+                    loss_dict.update({f'{prefix}/cls_comp_value_align': loss_cls_comp_value_align.mean().detach()})
                 if loss_cls_comp_attn_align != 0:
                     loss_dict.update({f'{prefix}/cls_comp_attn_align':   loss_cls_comp_attn_align.mean().detach()})
 
@@ -2887,6 +2893,7 @@ class LatentDiffusion(DDPM):
                                                     subj_indices_ext, bg_indices, block_size=BLOCK_SIZE)
                                 
                 loss_subj_comp_key_align,  loss_subj_comp_value_align, \
+                loss_cls_comp_key_align,   loss_cls_comp_value_align,  \
                 loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho, \
                 loss_subj_comp_attn_align, loss_subj_comp_attn_ortho,  \
                 loss_cls_comp_attn_align = \
@@ -2910,7 +2917,12 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/subj_wds_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
                 if loss_subj_comp_attn_ortho != 0:
                     loss_dict.update({f'{prefix}/subj_wds_attn_ortho':  loss_subj_comp_attn_ortho.mean().detach()})
-                # loss_cls_comp_attn_align is not optimized, but just monitored as a reference for loss_subj_comp_attn_align.
+                # loss_cls_comp_key_align, loss_cls_comp_value_align, loss_cls_comp_attn_align are not optimized.
+                # They are just monitored as a reference for loss_subj_comp_*.
+                if loss_cls_comp_key_align != 0:
+                    loss_dict.update({f'{prefix}/cls_wds_key_align':   loss_cls_comp_key_align.mean().detach()})
+                if loss_cls_comp_value_align != 0:
+                    loss_dict.update({f'{prefix}/cls_wds_value_align': loss_cls_comp_value_align.mean().detach()})
                 if loss_cls_comp_attn_align != 0:
                     loss_dict.update({f'{prefix}/cls_wds_attn_align':   loss_cls_comp_attn_align.mean().detach()})
 
@@ -3525,6 +3537,8 @@ class LatentDiffusion(DDPM):
         loss_subj_comp_value_align = 0
         loss_subj_comp_attn_align  = 0
         loss_subj_comp_attn_ortho  = 0
+        loss_cls_comp_key_align    = 0
+        loss_cls_comp_value_align  = 0        
         loss_cls_comp_attn_align   = 0
 
         emb_kq_do_demean_first = False
@@ -3550,7 +3564,8 @@ class LatentDiffusion(DDPM):
 
             # No need to pass is_4type_batch to calc_layer_subj_comp_k_or_v_ortho_loss().
             # It can decide by checking whether cls_subj_indices/cls_comp_indices are None.
-            loss_layer_subj_comp_key_align, loss_layer_subj_comp_key_ortho = \
+            loss_layer_subj_comp_key_align, loss_layer_subj_comp_key_ortho, \
+            loss_layer_cls_comp_key_align = \
                 calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k,
                                                         subj_subj_indices, 
                                                         subj_comp_indices, 
@@ -3558,7 +3573,8 @@ class LatentDiffusion(DDPM):
                                                         cls_comp_indices,
                                                         do_demean_first=emb_kq_do_demean_first, 
                                                         cls_grad_scale=cls_grad_scale)
-            loss_layer_subj_comp_value_align, loss_layer_subj_comp_value_ortho = \
+            loss_layer_subj_comp_value_align, loss_layer_subj_comp_value_ortho, \
+            loss_layer_cls_comp_value_align = \
                 calc_layer_subj_comp_k_or_v_ortho_loss(unet_vs[unet_layer_idx], 
                                                         subj_subj_indices, 
                                                         subj_comp_indices, 
@@ -3573,7 +3589,9 @@ class LatentDiffusion(DDPM):
             loss_subj_comp_value_ortho += loss_layer_subj_comp_value_ortho * v_ortho_layer_weight
             loss_subj_comp_key_align   += loss_layer_subj_comp_key_align   * k_ortho_layer_weight
             loss_subj_comp_value_align += loss_layer_subj_comp_value_align * v_ortho_layer_weight
-
+            loss_cls_comp_key_align    += loss_layer_cls_comp_key_align    * k_ortho_layer_weight
+            loss_cls_comp_value_align  += loss_layer_cls_comp_value_align  * v_ortho_layer_weight
+            
             ###########   loss_subj_comp_attn_align   ###########
             # attn_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
             attn_mat = unet_attns_or_scores[unet_layer_idx]
@@ -3636,6 +3654,7 @@ class LatentDiffusion(DDPM):
             loss_cls_comp_attn_align  += loss_layer_cls_comp_attn_align  * k_ortho_layer_weight
 
         return loss_subj_comp_key_align, loss_subj_comp_value_align, \
+               loss_cls_comp_key_align,  loss_cls_comp_value_align, \
                loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, \
                loss_subj_comp_attn_align, loss_subj_comp_attn_ortho, loss_cls_comp_attn_align
 
