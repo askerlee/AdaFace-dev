@@ -2661,7 +2661,7 @@ class LatentDiffusion(DDPM):
                                     num_embed_layers=self.N_LAYERS,
                                     )
 
-            if ada_embeddings is not None:
+            if self.iter_flags['do_ada_emb_delta_reg'] and ada_embeddings is not None:
                 # The cached ada prompt embeddings are useless now, release them.
                 self.embedding_manager.clear_ada_prompt_embeddings_cache()
 
