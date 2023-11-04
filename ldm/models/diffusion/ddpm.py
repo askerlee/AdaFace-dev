@@ -2767,8 +2767,8 @@ class LatentDiffusion(DDPM):
             if self.subj_attn_delta_distill_uses_scores:
                 subj_attn_norm_distill_loss_scale = self.subj_attn_norm_distill_loss_scale
             else:
-                # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
-                # smaller magnitudes than the delta loss. So we scale it up by 4x.
+                # loss_subj_attn_norm_distill uses attention probs, which tends to be in 
+                # smaller magnitudes than using scores. So we scale it up by 4x.
                 subj_attn_norm_distill_loss_scale = self.subj_attn_norm_distill_loss_scale * 4
 
             feat_delta_distill_scale = 2
@@ -3641,7 +3641,7 @@ class LatentDiffusion(DDPM):
                                                              do_demean_first=False,
                                                              first_n_dims_to_flatten=3, 
                                                              ref_grad_scale=cls_grad_scale)
-                loss_layer_cls_comp_attn_align = (cls_comp_attn_align_coeffs ** 2).mean()
+                loss_layer_cls_comp_attn_align = cls_comp_attn_align_coeffs.abs().mean()
             else:
                 loss_layer_comp_attn_ortho = 0
                 loss_layer_cls_comp_attn_align = 0
@@ -3649,7 +3649,7 @@ class LatentDiffusion(DDPM):
             # Push subj_comp_attn_align towards 0.
             # subj_comp_attn_align is a component of subj_subj_attn (attention scores).
             # subj_comp_attn_align: [1, 9, 8, 64].
-            loss_layer_subj_comp_attn_align = (subj_comp_attn_align_coeffs ** 2).mean()
+            loss_layer_subj_comp_attn_align = subj_comp_attn_align_coeffs.abs().mean()
 
             loss_subj_comp_attn_align += loss_layer_subj_comp_attn_align * k_ortho_layer_weight
             loss_subj_comp_attn_ortho += loss_layer_comp_attn_ortho      * k_ortho_layer_weight

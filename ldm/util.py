@@ -239,28 +239,6 @@ def ortho_subtract(a, b, on_last_n_dims=1, return_align_coeffs=False):
     else:
         return result
 
-def get_align_coeffs(a, b, on_last_n_dims=1):
-    assert a.ndim == b.ndim, "Tensors a and b must have the same number of dimensions"
-    if on_last_n_dims > 1:
-        # Do not support broadcasting if on_last_n_dims > 1.
-        assert a.shape == b.shape, "Tensors a and b must have the same shape"
-        orig_shape = list(a.shape)
-        a2 = a.reshape(*a.shape[:-on_last_n_dims], -1)
-        b2 = b.reshape(*b.shape[:-on_last_n_dims], -1)
-    else:
-        a2 = a
-        b2 = b
-
-    dot_a_b = torch.einsum('...i,...i->...', a2, b2)
-    dot_b_b = torch.einsum('...i,...i->...', b2, b2)
-    w_optimal = dot_a_b / (dot_b_b + 1e-6)
-    # Append N=on_last_n_dims empty dimensions to w_optimal.
-    if on_last_n_dims > 1:
-        orig_shape[-on_last_n_dims:] = [1] * on_last_n_dims
-        w_optimal = w_optimal.reshape(orig_shape)
-
-    return w_optimal
-
 # Extract the components of a that aligns and orthos with b, respectively.
 def decomp_align_ortho(a, b, return_align_coeffs=False):
     if return_align_coeffs:
@@ -284,6 +262,28 @@ def directional_suppress(a, b, align_suppress_scale=1):
 
 def align_suppressed_add(a, b, align_suppress_scale=1):
     return a + directional_suppress(b, a, align_suppress_scale)
+
+def get_align_coeffs(a, b, on_last_n_dims=1):
+    assert a.ndim == b.ndim, "Tensors a and b must have the same number of dimensions"
+    if on_last_n_dims > 1:
+        # Do not support broadcasting if on_last_n_dims > 1.
+        assert a.shape == b.shape, "Tensors a and b must have the same shape"
+        orig_shape = list(a.shape)
+        a2 = a.reshape(*a.shape[:-on_last_n_dims], -1)
+        b2 = b.reshape(*b.shape[:-on_last_n_dims], -1)
+    else:
+        a2 = a
+        b2 = b
+
+    dot_a_b = torch.einsum('...i,...i->...', a2, b2)
+    dot_b_b = torch.einsum('...i,...i->...', b2, b2)
+    w_optimal = dot_a_b / (dot_b_b + 1e-6)
+    # Append N=on_last_n_dims empty dimensions to w_optimal.
+    if on_last_n_dims > 1:
+        orig_shape[-on_last_n_dims:] = [1] * on_last_n_dims
+        w_optimal = w_optimal.reshape(orig_shape)
+
+    return w_optimal
 
 # Normalize a, b to unit vectors, then do orthogonal subtraction.
 # Only used in calc_layer_subj_comp_k_or_v_ortho_loss, to balance the scales of subj and comp embeddings.
@@ -1327,13 +1327,13 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
                                                          first_n_dims_to_flatten=3,
                                                          ref_grad_scale=cls_grad_scale)
         
-        loss_layer_cls_comp_key_align = (cls_comp_emb_align_coeffs ** 2).mean()
+        loss_layer_cls_comp_key_align = cls_comp_emb_align_coeffs.abs().mean()
     else:
         loss_layer_subj_comp_key_ortho = 0
     # Use L2 loss to push subj_comp_emb_align towards 0
     # =>
     # encourage subj_subj_ks be orthogonal with subj_comp_ks_sum.
-    loss_layer_subj_comp_key_align = (subj_comp_emb_align_coeffs ** 2).mean()
+    loss_layer_subj_comp_key_align = subj_comp_emb_align_coeffs.abs().mean()
     return loss_layer_subj_comp_key_align, loss_layer_subj_comp_key_ortho, loss_layer_cls_comp_key_align
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.
