@@ -1476,14 +1476,16 @@ class EmbeddingManager(nn.Module):
                 nn.Parameter(torch.ones(self.num_layers_per_embedder) * default_point_conv_attn_mix_weight, 
                                         requires_grad=learnable)
             if self.use_layerwise_embedding:
+                # 1, 2, 4, 5, 7, 8           feature maps: 64, 64, 32, 32, 16, 16.
                 # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
-                # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0 (disabled).
-                # 13~15 (22, 23, 24):                           weight 0.1.
+                # 12, 16, 17, 18, 19, 20, 21 feature maps: 8, 16, 16, 16, 32, 32, 32.
+                # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 1.
+                # 22, 23, 24                 feature maps: 64, 64, 64.
+                # 13~15 (22, 23, 24):                           weight 1.                
                 # This setting is based on the empirical observations of 
                 # the learned layerwise_point_conv_attn_mix_weights.
-                #self.layerwise_point_conv_attn_mix_weights.data[6:13]   = 0
-                #self.layerwise_point_conv_attn_mix_weights.data[13:]   /= 5
-                pass
+                self.layerwise_point_conv_attn_mix_weights.data[6:13]  *= 2
+                self.layerwise_point_conv_attn_mix_weights.data[13:]   *= 2
 
             print(f"Initialize layerwise_point_conv_attn_mix_weights = {self.layerwise_point_conv_attn_mix_weights}")
 
