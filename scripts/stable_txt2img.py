@@ -60,24 +60,6 @@ def parse_args():
         action='store_true',
         help="use predefined negative prompts",
     )
-    # --use_deep_neg_prompt, use deep negative prompts
-    parser.add_argument(
-        "--use_deep_neg_prompt",
-        action='store_true',
-        help="use deep negative prompts",
-    )    
-    parser.add_argument(
-        "--learnable_deep_neg_token", type=str, default=None,
-        help="If specified, the insert a learnable token in the deep negative prompt"
-    )
-
-    # --deep_cfg_scale
-    parser.add_argument(
-        "--deep_cfg_scale",
-        type=float,
-        default=1.3,
-        help="scale of deep negative prompts",
-    )
 
     parser.add_argument(
         "--outdir",
@@ -618,29 +600,10 @@ def main(opt):
         if opt.scale != 1.0:
             try:
                 uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt])
-
-                if opt.use_deep_neg_prompt:
-                    if opt.learnable_deep_neg_token is not None:
-                        deep_negative_prompt = opt.learnable_deep_neg_token + ", " + predefined_negative_prompt
-                    else:
-                        deep_negative_prompt = predefined_negative_prompt
-
-                    deep_neg_context = model.get_learned_conditioning(batch_size * [deep_negative_prompt])
-                    deep_neg_context = (deep_neg_context[0], opt.deep_cfg_scale)
-                    if os.environ.get('IGNORE_NEG_PROMPT'):
-                        print("Deep negative prompts IGNORED")
-                        deep_neg_context = None
-                    else:
-                        print("Deep negative prompts USED")
-                else:
-                    deep_neg_context = None
-                    print("Deep negative prompts NOT USED")
-
             except:
                 breakpoint()
         else:
             uc = None
-            deep_neg_context = None
     else:
         # eval_blip
         use_layerwise_embedding = False
@@ -740,8 +703,7 @@ def main(opt):
                                                             eta=opt.ddim_eta,
                                                             x0=None,
                                                             mask=None,
-                                                            x_T=start_code,
-                                                            deep_neg_context=deep_neg_context)
+                                                            x_T=start_code)
 
                             x_samples_ddim = model.decode_first_stage(samples_ddim)
                             # x_samples_ddim: -1 ~ +1 -> 0 ~ 1.
@@ -861,8 +823,6 @@ def main(opt):
                         experiment_sig += "-" + opt.bb_type
                     if opt.neg_prompt != "":
                         experiment_sig += "-" + "neg"
-                    if opt.use_deep_neg_prompt:
-                        experiment_sig += "-" + "deepneg"
 
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                     if opt.from_file:

@@ -277,10 +277,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to use the 'face portrait' trick for the subject")
     parser.add_argument("--normalize_subj_attn", type=str2bool, nargs="?", const=True, default=argparse.SUPPRESS,
                         help="Whether to normalize the subject embedding attention scores")
-    
-    parser.add_argument("--learnable_deep_neg_token", type=str, default=None,
-                        help="If specified, the learnable token in a deep negative prompt")
-    
+
     # --wds_comp_db_path
     parser.add_argument("--wds_comp_db_path", type=str, default=None,
                         help="Path to the composition webdatabase .tar file")
@@ -796,13 +793,6 @@ if __name__ == "__main__":
                 config.model.params.personalization_config.params.initializer_weights.append([1.0] * len(re.split("\s+", opt.bg_init_words)))
                 config.data.params.train.params.cls_bg_delta_tokens      = re.split(r"\s+", opt.bg_init_words)
                 config.data.params.validation.params.cls_bg_delta_tokens = re.split(r"\s+", opt.bg_init_words)
-
-        if opt.learnable_deep_neg_token:
-            config.model.params.personalization_config.params.placeholder_strings.append(opt.learnable_deep_neg_token)
-            config.model.params.personalization_config.params.num_vectors_per_token[opt.learnable_deep_neg_token] = 1
-            config.model.params.personalization_config.params.static_only_tokens = [opt.learnable_deep_neg_token]
-            config.model.params.distill_deep_neg_prompt = opt.learnable_deep_neg_token + ", " \
-                                                          + config.model.params.distill_deep_neg_prompt 
 
         if opt.use_conv_attn:
             assert opt.num_vectors_per_token in [4, 9, 16], \

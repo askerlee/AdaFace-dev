@@ -109,10 +109,8 @@ class DDPM(pl.LightningModule):
                  fg_bg_complementary_loss_weight=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
-                 recon_bg_discount=1.,
+                 wds_bg_recon_discount=1.,
                  do_clip_teacher_filtering=False,
-                 distill_deep_neg_prompt=None,
-                 distill_deep_cfg_scale=0.,
                  use_background_token=False,
                  use_conv_attn=False,
                  default_point_conv_attn_mix_weight=0.5,
@@ -151,10 +149,8 @@ class DDPM(pl.LightningModule):
         self.fg_wds_complementary_loss_weight   = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight   = fg_bg_xlayer_consist_loss_weight
         self.do_clip_teacher_filtering          = do_clip_teacher_filtering
-        self.distill_deep_neg_prompt            = distill_deep_neg_prompt
-        self.distill_deep_cfg_scale             = distill_deep_cfg_scale
         self.prompt_mix_scheme                  = 'mix_hijk'
-        self.recon_bg_discount                  = recon_bg_discount
+        self.wds_bg_recon_discount              = wds_bg_recon_discount
         
         self.use_conv_attn                   = use_conv_attn
         self.default_point_conv_attn_mix_weight = default_point_conv_attn_mix_weight
@@ -1452,18 +1448,6 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['use_background_token']:
                 captions = batch['caption_bg']
 
-
-        if self.distill_deep_neg_prompt is not None:
-            p_deep_neg_prompt_in_recon_iters = 0.8
-            p_deep_neg_prompt_in_comp_iters = 0.5
-        else:
-            p_deep_neg_prompt_in_recon_iters = 0
-            p_deep_neg_prompt_in_comp_iters = 0
-
-        if self.iter_flags['is_compos_iter'] and random.random() < p_deep_neg_prompt_in_comp_iters \
-            or (not self.iter_flags['is_compos_iter']) and random.random() < p_deep_neg_prompt_in_recon_iters:
-                pass
-        
         if 'aug_mask' in batch:
             img_mask = batch['aug_mask']
             # img_mask: [B, H, W] => [B, 1, H, W]
@@ -2401,7 +2385,7 @@ class LatentDiffusion(DDPM):
                     # background features into the subject embeddings, which hurt both authenticity and compositionality.
                     ## NOTE: We discount the fg weight of the use_wds_comp instances, as they are less natural and
                     ## may incur too high loss to the model (even in the fg areas).
-                    instance_bg_weights = self.recon_bg_discount
+                    instance_bg_weights = self.wds_bg_recon_discount
                 else:
                     # use_background_token == True and not self.iter_flags['use_wds_comp'].
                     # bg loss is somewhat discounted.
