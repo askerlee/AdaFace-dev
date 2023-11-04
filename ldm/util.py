@@ -1436,3 +1436,101 @@ def flip_v_by_indices(v, indices):
     v_flipped[indices] = -v_flipped[indices]
     return v_flipped
 
+# Textual inversion is supported, where static_embeddings is only one embedding.
+# static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
+# embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
+def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, delta_loss_emb_mask,
+                                do_ada_prompt_delta_reg, align_padding_tokens=True, 
+                                num_embed_layers=16):
+    # num_unet_ca_layers = 16. 
+    # If do_ada_prompt_delta_reg, then static_embeddings: [64, 77, 768]. 
+    # So BS = 1.
+    # static_embeddings / ada_embeddings contain 4 types of embeddings:
+    # subj_single, subj_comp, cls_single, cls_comp.
+    BS = static_embeddings.shape[0] // (4 * num_embed_layers)
+    # static_embeddings: [64, 77, 768] => [4, 16, 77, 768]
+    static_embeddings = static_embeddings.view(BS * 4, num_embed_layers, *static_embeddings.shape[1:])
+
+    # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
+    # Each is [1, 16, 77, 768]
+    static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
+            static_embeddings.chunk(4)
+
+    if delta_loss_emb_mask is not None:
+        subj_single_mask, subj_comp_mask, cls_single_mask, cls_comp_mask = \
+            delta_loss_emb_mask.chunk(4)
+        
+        # cls_single_mask == subj_single_mask, cls_comp_mask == subj_comp_mask
+        # So only compute using subj_single_mask and subj_comp_mask.
+        delta_loss_emb_mask_agg = subj_single_mask + subj_comp_mask
+        # If a token appears both in single and comp prompts (all tokens in the single prompts), 
+        # the mask value is 2. Convert to 1.
+        # If a token appears in only comp prompts (the extra compositional part), 
+        # the mask value is 1. Convert to 0.25.
+        # If a token is useless (z suffix or padding), the mask value is 0. Convert to 0.
+        delta_loss_emb_mask_weighted = delta_loss_emb_mask_agg.pow(2) / 4            
+        # delta_loss_emb_mask_weighted: [1, 77, 1] => [1, 1, 77, 1].
+        delta_loss_emb_mask_weighted = delta_loss_emb_mask_weighted.unsqueeze(1)
+
+        padding_mask = 1 - torch.cat([subj_single_mask, subj_comp_mask], dim=0)
+        # padding_mask: [2, 77, 1] => [2, 1, 77, 1]
+        padding_mask = padding_mask.unsqueeze(1)
+    else:
+        delta_loss_emb_mask_weighted = None
+        padding_mask = None
+
+    use_ortho_subtract = True
+    # cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
+    # Delta embedding between class single and comp embeddings.
+    # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
+    # static_delta: [1, 16, 77, 768]. Different values for each layer along dim=1.
+    # Delta embedding between subject single and comp embeddings.
+    # static_delta / ada_delta should be aligned with cls_delta.
+    if use_ortho_subtract:
+        cls_delta    = ortho_subtract(static_cls_comp_emb,  static_cls_single_emb)
+        static_delta = ortho_subtract(static_subj_comp_emb, static_subj_single_emb)
+    else:
+        cls_delta    = static_cls_comp_emb  - static_cls_single_emb
+        static_delta = static_subj_comp_emb - static_subj_single_emb
+
+    loss_static_prompt_delta   = calc_delta_loss(static_delta, cls_delta, 
+                                                    emb_mask=delta_loss_emb_mask_weighted,
+                                                    do_demean_first=True)
+
+    if align_padding_tokens and padding_mask is not None:
+        static_subj_embs, static_cls_embs = static_embeddings.chunk(2)
+        # static_padding_delta: [2, 16, 77, 768].
+        static_padding_delta = (static_subj_embs - static_cls_embs).abs()
+        loss_static_padding_align = masked_mean(static_padding_delta, padding_mask)
+    else:
+        # If no padding_mask, then no need to specifically align the padding tokens,
+        # since we don't know which tokens are padding tokens.
+        loss_static_padding_align = 0
+
+    if do_ada_prompt_delta_reg and ada_embeddings is not None:
+        # ada_embeddings: [4, 16, 77, 768]
+        # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
+        # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
+        # the subject token.
+        ada_subj_single_emb, ada_subj_comp_emb, ada_cls_single_emb, ada_cls_comp_emb \
+            = ada_embeddings.chunk(4)
+
+        if use_ortho_subtract:
+            ada_delta = ortho_subtract(ada_subj_comp_emb, ada_subj_single_emb)
+        else:
+            ada_delta = ada_subj_comp_emb - ada_subj_single_emb
+
+        loss_ada_prompt_delta = calc_delta_loss(ada_delta, cls_delta, emb_mask=delta_loss_emb_mask_weighted,
+                                                do_demean_first=True)
+
+        if align_padding_tokens and padding_mask is not None:
+            ada_subj_embs, ada_cls_embs = ada_embeddings.chunk(2)
+            ada_padding_delta = (ada_subj_embs - ada_cls_embs).abs()
+            loss_ada_padding_align = masked_mean(ada_padding_delta, padding_mask)
+        else:
+            loss_ada_padding_align = 0
+    else:
+        loss_ada_prompt_delta = 0
+        loss_ada_padding_align = 0
+
+    return loss_static_prompt_delta, loss_ada_prompt_delta, loss_static_padding_align, loss_ada_padding_align

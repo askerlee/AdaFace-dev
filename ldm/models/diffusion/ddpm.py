@@ -33,7 +33,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
                        anneal_t, rand_annealed, anneal_value, calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
-                       gen_comp_extra_indices_by_block
+                       gen_comp_extra_indices_by_block, calc_prompt_emb_delta_loss
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -2669,14 +2669,17 @@ class LatentDiffusion(DDPM):
             # subject embeddings from each block, and compare two such blocks.
             loss_static_prompt_delta,  loss_ada_prompt_delta, \
             loss_static_padding_align, loss_ada_padding_align \
-                = self.embedding_manager.calc_prompt_emb_delta_loss( 
+                = calc_prompt_emb_delta_loss( 
                                     extra_info['c_static_emb_4b'], ada_embeddings,
                                     extra_info['delta_loss_emb_mask'],
                                     self.iter_flags['do_ada_emb_delta_reg'],
-                                    align_padding_tokens=True
+                                    align_padding_tokens=True,
+                                    num_embed_layers=self.N_LAYERS,
                                     )
 
-            
+            # The cached ada prompt embeddings are useless now, release them.
+            self.embedding_manager.clear_ada_prompt_embeddings_cache()
+
             loss_dict.update({f'{prefix}/static_prompt_delta':      loss_static_prompt_delta.mean().detach()})
             if loss_ada_prompt_delta != 0:
                 loss_dict.update({f'{prefix}/ada_prompt_delta':     loss_ada_prompt_delta.mean().detach()})
