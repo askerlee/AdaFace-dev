@@ -2661,8 +2661,9 @@ class LatentDiffusion(DDPM):
                                     num_embed_layers=self.N_LAYERS,
                                     )
 
-            # The cached ada prompt embeddings are useless now, release them.
-            self.embedding_manager.clear_ada_prompt_embeddings_cache()
+            if ada_embeddings is not None:
+                # The cached ada prompt embeddings are useless now, release them.
+                self.embedding_manager.clear_ada_prompt_embeddings_cache()
 
             loss_dict.update({f'{prefix}/static_prompt_delta':      loss_static_prompt_delta.mean().detach()})
             if loss_ada_prompt_delta != 0:
