@@ -900,7 +900,7 @@ class EmbeddingManager(nn.Module):
         self.default_point_conv_attn_mix_weight = default_point_conv_attn_mix_weight
 
         self.initialize_layerwise_point_conv_attn_mix_weights(self.default_point_conv_attn_mix_weight, 
-                                                              learnable=False)
+                                                              learnable=True)
 
         # num_vectors_per_token: an int or a dict. How many vectors in each layer 
         # are allocated to model the subject (represented as the subject token).        
@@ -1693,7 +1693,8 @@ class EmbeddingManager(nn.Module):
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
         self.string_to_emb_ema_dict         = nn.ModuleDict()
-        self.initialize_layerwise_point_conv_attn_mix_weights(self.default_point_conv_attn_mix_weight, learnable=False)
+        self.initialize_layerwise_point_conv_attn_mix_weights(self.default_point_conv_attn_mix_weight, 
+                                                              learnable=True)
         
         token2num_vectors                   = {}
 
@@ -2019,7 +2020,7 @@ class EmbeddingManager(nn.Module):
             delta_loss_emb_mask_weighted = delta_loss_emb_mask_agg.pow(2) / 4            
             # delta_loss_emb_mask_weighted: [1, 77, 1] => [1, 1, 77, 1].
             delta_loss_emb_mask_weighted = delta_loss_emb_mask_weighted.unsqueeze(1)
-            
+
             padding_mask = 1 - torch.cat([subj_single_mask, subj_comp_mask], dim=0)
             # padding_mask: [2, 77, 1] => [2, 1, 77, 1]
             padding_mask = padding_mask.unsqueeze(1)
