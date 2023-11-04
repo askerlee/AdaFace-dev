@@ -1984,7 +1984,7 @@ class EmbeddingManager(nn.Module):
     # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
     # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
     def calc_prompt_emb_delta_loss(self, static_embeddings, ada_embeddings, delta_loss_emb_mask,
-                                   do_ada_prompt_delta_reg):
+                                   do_ada_prompt_delta_reg, align_padding_tokens=True):
         if self.use_layerwise_embedding:
             num_embed_layers = self.num_unet_ca_layers
         else:
@@ -2006,20 +2006,26 @@ class EmbeddingManager(nn.Module):
 
         if delta_loss_emb_mask is not None:
             subj_single_mask, subj_comp_mask, cls_single_mask, cls_comp_mask = \
-                    delta_loss_emb_mask.chunk(4)
+                delta_loss_emb_mask.chunk(4)
             
             # cls_single_mask == subj_single_mask, cls_comp_mask == subj_comp_mask
             # So only compute using subj_single_mask and subj_comp_mask.
-            delta_loss_emb_mask = subj_single_mask + subj_comp_mask
+            delta_loss_emb_mask_agg = subj_single_mask + subj_comp_mask
             # If a token appears both in single and comp prompts (all tokens in the single prompts), 
             # the mask value is 2. Convert to 1.
             # If a token appears in only comp prompts (the extra compositional part), 
             # the mask value is 1. Convert to 0.25.
             # If a token is useless (z suffix or padding), the mask value is 0. Convert to 0.
-            delta_loss_emb_mask = delta_loss_emb_mask.pow(2) / 4
-
+            delta_loss_emb_mask_weighted = delta_loss_emb_mask_agg.pow(2) / 4            
+            # delta_loss_emb_mask_weighted: [1, 77, 1] => [1, 1, 77, 1].
+            delta_loss_emb_mask_weighted = delta_loss_emb_mask_weighted.unsqueeze(1)
+            
+            padding_mask = 1 - torch.cat([subj_single_mask, subj_comp_mask], dim=0)
+            # padding_mask: [2, 77, 1] => [2, 1, 77, 1]
+            padding_mask = padding_mask.unsqueeze(1)
         else:
-            delta_loss_emb_mask = None
+            delta_loss_emb_mask_weighted = None
+            padding_mask = None
 
         use_ortho_subtract = True
         # cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
@@ -2035,55 +2041,48 @@ class EmbeddingManager(nn.Module):
             cls_delta    = static_cls_comp_emb  - static_cls_single_emb
             static_delta = static_subj_comp_emb - static_subj_single_emb
 
-        # delta_loss_emb_mask: [1, 77, 1] => [1, 1, 77, 1].
-        delta_loss_emb_mask = delta_loss_emb_mask.unsqueeze(1)
-        static_delta_loss   = calc_delta_loss(static_delta, cls_delta, emb_mask=delta_loss_emb_mask,
-                                              do_demean_first=True)
+        loss_static_prompt_delta   = calc_delta_loss(static_delta, cls_delta, 
+                                                     emb_mask=delta_loss_emb_mask_weighted,
+                                                     do_demean_first=True)
+
+        if align_padding_tokens and padding_mask is not None:
+            static_subj_embs, static_cls_embs = static_embeddings.chunk(2)
+            # static_padding_delta: [2, 16, 77, 768].
+            static_padding_delta = (static_subj_embs - static_cls_embs).abs()
+            loss_static_padding_align = masked_mean(static_padding_delta, padding_mask)
+        else:
+            # If no padding_mask, then no need to specifically align the padding tokens,
+            # since we don't know which tokens are padding tokens.
+            loss_static_padding_align = 0
 
         if do_ada_prompt_delta_reg and ada_embeddings is not None:
             # ada_embeddings: [4, 16, 77, 768]
-            if isinstance(ada_embeddings, (list, tuple)):
-                # ada_embeddings contains twin embeddings, both of which are non-teachable.
-                # twin_single_ada_embeddings: [2, 16, 77, 768]
-                # twin_comp_ada_embeddings:   [4, 16, 77, 768]
-                # twin_single_ada_embeddings correspond to 2 subj single instances,
-                # twin_comp_ada_embeddings correspond to 2 subj comp, 2 mix comp instances.
-                # All 4 comp ada embeddings are generated with the same 1 subj comp prompt.
-                # mix comp ada embeddings are generated with the same comp prompts as subj comp.
-                # But some layers of the static embeddings are different, so the ada embeddings
-                # are different from above layer 5.
-                twin_single_ada_embeddings, twin_comp_ada_embeddings = ada_embeddings
-                # ada_subj_comp_emb: [2, 16, 77, 768]
-                ada_subj_comp_emb, ada_cls_comp_emb \
-                    = twin_comp_ada_embeddings.chunk(2)
-                # ada_subj_single_emb: [2, 16, 77, 768].
-                ada_subj_single_emb = twin_single_ada_embeddings
-                # static embeddings for the twins in the batch are the same, as the prompts are the same.
-                # They only differ on initial noises.
-                # So simply repeat cls_delta at the batch dim to match the twin ada embeddings.
-                cls_delta = cls_delta.repeat(2, 1, 1, 1)
-                delta_loss_emb_mask2 = delta_loss_emb_mask.repeat(2, 1, 1, 1)
-            else:
-                # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
-                # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
-                # the subject token.
-                ada_subj_single_emb, ada_subj_comp_emb, ada_cls_single_emb, ada_cls_comp_emb \
-                    = ada_embeddings.chunk(4)
-                delta_loss_emb_mask2 = delta_loss_emb_mask
+            # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
+            # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
+            # the subject token.
+            ada_subj_single_emb, ada_subj_comp_emb, ada_cls_single_emb, ada_cls_comp_emb \
+                = ada_embeddings.chunk(4)
 
             if use_ortho_subtract:
                 ada_delta = ortho_subtract(ada_subj_comp_emb, ada_subj_single_emb)
             else:
                 ada_delta = ada_subj_comp_emb - ada_subj_single_emb
 
-            ada_delta_loss = calc_delta_loss(ada_delta, cls_delta, emb_mask=delta_loss_emb_mask2,
-                                             do_demean_first=True)
+            loss_ada_prompt_delta = calc_delta_loss(ada_delta, cls_delta, emb_mask=delta_loss_emb_mask_weighted,
+                                                    do_demean_first=True)
             # The cached ada embeddings are useless now, release them.
             self.clear_ada_prompt_embeddings_cache()
+            if align_padding_tokens and padding_mask is not None:
+                ada_subj_embs, ada_cls_embs = ada_embeddings.chunk(2)
+                ada_padding_delta = (ada_subj_embs - ada_cls_embs).abs()
+                loss_ada_padding_align = masked_mean(ada_padding_delta, padding_mask)
+            else:
+                loss_ada_padding_align = 0
         else:
-            ada_delta_loss = 0
+            loss_ada_prompt_delta = 0
+            loss_ada_padding_align = 0
 
-        return static_delta_loss, ada_delta_loss
+        return loss_static_prompt_delta, loss_ada_prompt_delta, loss_static_padding_align, loss_ada_padding_align
 
 if __name__ == '__main__':
     # The example code below is obsolete.    

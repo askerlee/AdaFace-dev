@@ -2667,24 +2667,32 @@ class LatentDiffusion(DDPM):
             # do_ada_emb_delta_reg controls whether to do ada comp delta reg here.
             # Use subj_indices_1b here, since this index is used to extract 
             # subject embeddings from each block, and compare two such blocks.
-            loss_static_delta, loss_ada_delta \
-            = self.embedding_manager.calc_prompt_emb_delta_loss( 
+            loss_static_prompt_delta,  loss_ada_prompt_delta, \
+            loss_static_padding_align, loss_ada_padding_align \
+                = self.embedding_manager.calc_prompt_emb_delta_loss( 
                                     extra_info['c_static_emb_4b'], ada_embeddings,
                                     extra_info['delta_loss_emb_mask'],
-                                    self.iter_flags['do_ada_emb_delta_reg']
+                                    self.iter_flags['do_ada_emb_delta_reg'],
+                                    align_padding_tokens=True
                                     )
 
-            loss_dict.update({f'{prefix}/static_delta': loss_static_delta.mean().detach()})
-            if loss_ada_delta != 0:
-                loss_dict.update({f'{prefix}/ada_delta': loss_ada_delta.mean().detach()})
+            
+            loss_dict.update({f'{prefix}/static_prompt_delta':      loss_static_prompt_delta.mean().detach()})
+            if loss_ada_prompt_delta != 0:
+                loss_dict.update({f'{prefix}/ada_prompt_delta':     loss_ada_prompt_delta.mean().detach()})
+            if loss_static_padding_align != 0:
+                loss_dict.update({f'{prefix}/static_padding_align': loss_static_padding_align.mean().detach()})
+            if loss_ada_padding_align != 0:
+                loss_dict.update({f'{prefix}/ada_padding_align':    loss_ada_padding_align.mean().detach()})
 
-            # The prompt delta loss for ada embeddings is only applied 
-            # every self.composition_regs_iter_gap iterations. So the ada loss 
-            # should be boosted proportionally to composition_regs_iter_gap. 
+            # loss_ada_prompt_delta is only applied every self.composition_regs_iter_gap iterations. 
+            # So it should be scaled up proportionally to composition_regs_iter_gap. 
             # Divide it by 2 to reduce the proportion of ada emb loss relative to 
-            # static emb loss in the total loss.                
+            # loss_static_prompt_delta in the total loss.
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            loss_prompt_delta_reg = loss_static_delta + loss_ada_delta * ada_comp_loss_boost_ratio
+            loss_prompt_delta_reg = loss_static_prompt_delta \
+                                    + loss_static_padding_align + loss_ada_padding_align \
+                                    + loss_ada_prompt_delta * ada_comp_loss_boost_ratio
             
             loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
         

@@ -949,7 +949,11 @@ def masked_mean(ts, mask, dim=None, instance_weights=None):
         
     if mask is None:
         return (ts * instance_weights).mean()
-    
+    else:
+        # Broadcast mask to the same shape as ts. 
+        # Without this step, mask_sum will be wrong.
+        mask = mask.expand(ts.shape)
+
     mask_sum = mask.sum(dim=dim)
     mask_sum = torch.maximum( mask_sum, torch.ones_like(mask_sum) * 1e-6 )
     return (ts * instance_weights * mask).sum(dim=dim) / mask_sum
