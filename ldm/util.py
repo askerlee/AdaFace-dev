@@ -645,8 +645,9 @@ def normalize_attn_at_indices(attn_mat, subj_indices, H, shift_n_sigma=1):
     return attn_mat2.reshape(attn_mat_shape)
 
 
+# Distribute an embedding to M positions, each with sqrt(M) fraction of the original embedding.
 # text_embedding: [B, N, D]
-def spread_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):
+def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):
     if placeholder_indices_N is None:
         return text_embedding
     
