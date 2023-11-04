@@ -2,7 +2,7 @@ from abc import abstractmethod
 from functools import partial
 import math
 from typing import Iterable
-from ldm.util import patch_multi_embeddings, extract_last_chunk_of_indices
+from ldm.util import spread_embedding_to_M_tokens
 
 import numpy as np
 import torch as th
@@ -909,15 +909,15 @@ class UNetModel(nn.Module):
                     # The second half of a mix_hijk batch is always the mix instances,
                     # even for twin comp sets.
                     subj_layer_ada_context, cls_layer_ada_context = layer_ada_context.chunk(2)
-                    # In ddpm, patch_multi_embeddings() is applied on a text embedding whose 1st dim is the 16 layers.
+                    # In ddpm, spread_embedding_to_M_tokens() is applied on a text embedding whose 1st dim is the 16 layers.
                     # Here, the 1st dim of cls_layer_ada_context is the batch.
-                    # But we can still use patch_multi_embeddings() without specially processing, since patch_multi_embeddings
-                    # in both cases, the 2nd dim is the token dim, so patch_multi_embeddings() works in both cases.
+                    # But we can still use spread_embedding_to_M_tokens() without special processing, since
+                    # in both cases, the 2nd dim is the token dim, so spread_embedding_to_M_tokens() works in both cases.
                     # subj_indices_N:      subject token indices within the subject single prompt (BS=1).
                     # len(subj_indices_N): embedding number of the subject token.
                     # cls_layer_ada_context: [2, 77, 768]. subj_indices_N: [6, 7, 8, 9, 6, 7, 8, 9]. 
                     # Four embeddings (6,7,8,9) for each token.
-                    cls_layer_ada_context = patch_multi_embeddings(cls_layer_ada_context, subj_indices_N)
+                    cls_layer_ada_context = spread_embedding_to_M_tokens(cls_layer_ada_context, subj_indices_N)
                     if emb_v_mixer is not None:
                         # Mix subj ada emb into mix ada emb, in the same way as to static embeddings.
                         # emb_v_cls_mix_scale: [2, 1]

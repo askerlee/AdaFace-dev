@@ -26,7 +26,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, decomp_align_ortho, ortho_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, join_list_of_indices, \
-                       patch_multi_embeddings, fix_emb_scales, \
+                       spread_embedding_to_M_tokens, fix_emb_scales, \
                        halve_token_indices, double_token_indices, \
                        extend_indices_N_by_n, extend_indices_B_by_n_times, \
                        normalize_dict_values, masked_mean, \
@@ -881,6 +881,8 @@ class LatentDiffusion(DDPM):
         # CLIP skip weights consistent with the static embeddings.
         ada_embedded_text = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         emb_global_scale  = self.embedding_manager.get_emb_global_scale()
+        # ada embeddings and static embeddings are scale-fixed separately.
+        # static embeddings are scale-fixed in get_learned_conditioning().
         ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_fg, 
                                            extra_scale=emb_global_scale)
         # Cache the computed ada embedding of the current layer for delta loss computation.
@@ -1597,12 +1599,12 @@ class LatentDiffusion(DDPM):
                     # in the class prompts are "class , , ,", 
                     # therefore the embeddings of "," need to be patched.
                     # BUG: if the batch size of a mix batch > 4, then the subj_indices_half_N
-                    # corresponds to the indices in more than one instance. But patch_multi_embeddings()
+                    # corresponds to the indices in more than one instance. But spread_embedding_to_M_tokens()
                     # treat the indices as if they are always in the same instance.
                     # len(subj_indices_half_N): embedding number of the subject token.
                     if len(subj_indices_half_N) > 1:
-                        cls_single_emb = patch_multi_embeddings(cls_single_emb, subj_indices_half_N)
-                        cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   subj_indices_half_N)
+                        cls_single_emb = spread_embedding_to_M_tokens(cls_single_emb, subj_indices_half_N)
+                        cls_comp_emb   = spread_embedding_to_M_tokens(cls_comp_emb,   subj_indices_half_N)
 
                     # In mix reg iters, background tokens only appear 10% of the time 
                     # to provide delta reg on ada embeddings of bg tokens.
@@ -1621,8 +1623,8 @@ class LatentDiffusion(DDPM):
                         bg_indices_half_N = extra_info['bg_indices_2b'][1]
                         # Patch background embeddings when the number of background embeddings > 1.
                         if len(bg_indices_half_N) > 1:
-                            cls_single_emb = patch_multi_embeddings(cls_single_emb, bg_indices_half_N)
-                            cls_comp_emb   = patch_multi_embeddings(cls_comp_emb,   bg_indices_half_N)
+                            cls_single_emb = spread_embedding_to_M_tokens(cls_single_emb, bg_indices_half_N)
+                            cls_comp_emb   = spread_embedding_to_M_tokens(cls_comp_emb,   bg_indices_half_N)
                     else:
                         extra_info['bg_indices_4b'] = None
                         extra_info['bg_indices_2b'] = None

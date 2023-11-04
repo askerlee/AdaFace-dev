@@ -646,7 +646,7 @@ def normalize_attn_at_indices(attn_mat, subj_indices, H, shift_n_sigma=1):
 
 
 # text_embedding: [B, N, D]
-def patch_multi_embeddings(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):
+def spread_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):
     if placeholder_indices_N is None:
         return text_embedding
     
