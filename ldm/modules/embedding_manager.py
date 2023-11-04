@@ -1463,7 +1463,7 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight = self.ada_emb_weight        
         return ada_emb_weight
  
-    def initialize_layerwise_point_conv_attn_mix_weights(self, default_point_conv_attn_mix_weight, 
+    def initialize_layerwise_point_conv_attn_mix_weights(self, default_point_conv_attn_mix_weight=0.5, 
                                                          layerwise_point_conv_attn_mix_weights=None,
                                                          learnable=True):
         if layerwise_point_conv_attn_mix_weights is not None:
@@ -1479,13 +1479,13 @@ class EmbeddingManager(nn.Module):
                 # 1, 2, 4, 5, 7, 8           feature maps: 64, 64, 32, 32, 16, 16.
                 # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
                 # 12, 16, 17, 18, 19, 20, 21 feature maps: 8, 16, 16, 16, 32, 32, 32.
-                # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 1.
+                # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0.8.
                 # 22, 23, 24                 feature maps: 64, 64, 64.
-                # 13~15 (22, 23, 24):                           weight 1.                
+                # 13~15 (22, 23, 24):                           weight 0.8.                
                 # This setting is based on the empirical observations of 
                 # the learned layerwise_point_conv_attn_mix_weights.
-                self.layerwise_point_conv_attn_mix_weights.data[6:13]  *= 2
-                self.layerwise_point_conv_attn_mix_weights.data[13:]   *= 2
+                self.layerwise_point_conv_attn_mix_weights.data[6:13]  *= 1.6
+                self.layerwise_point_conv_attn_mix_weights.data[13:]   *= 1.6
 
             print(f"Initialize layerwise_point_conv_attn_mix_weights = {self.layerwise_point_conv_attn_mix_weights}")
 

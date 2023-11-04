@@ -510,7 +510,6 @@ class UNetModel(nn.Module):
         self.backup_vars = { 
                             'use_conv_attn':                            False,
                             'normalize_subj_attn':                      False,
-                            'default_point_conv_attn_mix_weight':       0.5,
                             'point_conv_attn_mix_weight:layerwise':     None,
                             'save_attn_vars':                           False,
                            }
@@ -839,7 +838,6 @@ class UNetModel(nn.Module):
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
-        default_point_conv_attn_mix_weight      = extra_info.get('default_point_conv_attn_mix_weight', 0.5)     if extra_info is not None else 0.5
         layerwise_point_conv_attn_mix_weights   = extra_info.get('layerwise_point_conv_attn_mix_weights', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
         normalize_subj_attn   = extra_info.get('normalize_subj_attn', False)   if extra_info is not None else False
@@ -982,14 +980,14 @@ class UNetModel(nn.Module):
             # 1, 2, 4, 5, 7, 8           feature maps: 64, 64, 32, 32, 16, 16.
             # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
             # 12, 16, 17, 18, 19, 20, 21 feature maps: 8, 16, 16, 16, 32, 32, 32.
-            # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 1.
+            # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0.8.
             # 22, 23, 24                 feature maps: 64, 64, 64.
-            # 13~15 (22, 23, 24):                           weight 1.
+            # 13~15 (22, 23, 24):                           weight 0.8.
             # This setting is based on the empirical observations of 
             # the learned layerwise_point_conv_attn_mix_weights.      
-            layerwise_point_conv_attn_mix_weights =   [default_point_conv_attn_mix_weight]       * 6 \
-                                                    + [default_point_conv_attn_mix_weight * 2]   * 7 \
-                                                    + [default_point_conv_attn_mix_weight * 2]   * 3
+            layerwise_point_conv_attn_mix_weights =   [0.5]   * 6 \
+                                                    + [0.8]   * 7 \
+                                                    + [0.8]   * 3
 
         ca_flags_stack = []
         old_ca_flags, _ = \
