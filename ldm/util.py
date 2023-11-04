@@ -1299,7 +1299,7 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
     return loss_layer_subj_comp_key_align, loss_layer_subj_comp_key_ortho
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.
-def sel_emb_attns_by_indices(attn_mat, indices, do_sum=True, do_sqrt_norm=False):
+def sel_emb_attns_by_indices(attn_mat, indices, do_sum=True, do_mean=False, do_sqrt_norm=False):
 
     indices_by_instance = split_indices_by_instance(indices)
 
@@ -1310,6 +1310,8 @@ def sel_emb_attns_by_indices(attn_mat, indices, do_sum=True, do_sqrt_norm=False)
     # sum among K_bg_i bg embeddings -> [1, 8, 64]
     if do_sum:
         emb_attns   = [ emb_attns[i].sum(dim=1) for i in range(len(indices_by_instance)) ]
+    elif do_mean:
+        emb_attns   = [ emb_attns[i].mean(dim=1) for i in range(len(indices_by_instance)) ]
         
     if do_sqrt_norm:
         # Normalize each embedding by sqrt(K_bg_i).
