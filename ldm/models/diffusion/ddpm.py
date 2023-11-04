@@ -2706,11 +2706,7 @@ class LatentDiffusion(DDPM):
             if loss_bg_xlayer_consist > 0:
                 loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach()})
 
-            # bg attention is flexible and allowed to be less consistent across layers.
-            # Setting bg_xlayer_consist_loss_scale=0.01 will lead to slight drop in performance.
-            bg_xlayer_consist_loss_scale = 0.2
-            loss += self.fg_bg_xlayer_consist_loss_weight * \
-                            (loss_fg_xlayer_consist + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale)
+            loss += self.fg_bg_xlayer_consist_loss_weight * (loss_fg_xlayer_consist + loss_bg_xlayer_consist)
 
         self.subj_attn_delta_distill_uses_scores    = True
         self.subj_comp_attn_comple_loss_uses_scores = True
@@ -2936,6 +2932,9 @@ class LatentDiffusion(DDPM):
 
             # ortho losses are less effecive, so scale them down.
             ortho_loss_scale = 0.1
+            # subj_comp_key_ortho_loss_weight:          5e-4, 
+            # subj_comp_value_ortho_loss_weight:        0, disabled.
+            # subj_comp_attn_complementary_loss_weight: 5e-4.
             loss +=   (loss_subj_comp_key_align   + loss_subj_comp_key_ortho   * ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
                     + (loss_subj_comp_value_align + loss_subj_comp_value_ortho * ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight \
                     + (loss_subj_comp_attn_align  + loss_subj_comp_attn_ortho  * ortho_loss_scale) * self.subj_comp_attn_complementary_loss_weight
