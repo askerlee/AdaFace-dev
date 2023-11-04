@@ -211,7 +211,7 @@ def parallel_data_prefetch(
 # a, b are n-dimensional tensors. Subtraction happens at the last dim.
 # ortho_subtract(a, b) is not symmetric w.r.t. a and b, nor is ortho_l2loss(a, b).
 # NOTE: always choose a to be something we care about, and b to be something as a reference.
-def ortho_subtract(a, b, on_last_n_dims=1):
+def ortho_subtract(a, b, on_last_n_dims=1, return_align_coeffs=False):
     assert a.ndim == b.ndim, "Tensors a and b must have the same number of dimensions"
     if on_last_n_dims > 1:
         # Do not support broadcasting if on_last_n_dims > 1.
@@ -230,14 +230,47 @@ def ortho_subtract(a, b, on_last_n_dims=1):
 
     if on_last_n_dims > 1:
         result = result.reshape(orig_shape)
+        w_orig_shape = list(orig_shape)
+        w_orig_shape[-on_last_n_dims:] = [1] * on_last_n_dims
+        w_optimal = w_optimal.reshape(w_orig_shape)
 
-    return result
+    if return_align_coeffs:
+        return result, w_optimal
+    else:
+        return result
+
+def get_align_coeffs(a, b, on_last_n_dims=1):
+    assert a.ndim == b.ndim, "Tensors a and b must have the same number of dimensions"
+    if on_last_n_dims > 1:
+        # Do not support broadcasting if on_last_n_dims > 1.
+        assert a.shape == b.shape, "Tensors a and b must have the same shape"
+        orig_shape = list(a.shape)
+        a2 = a.reshape(*a.shape[:-on_last_n_dims], -1)
+        b2 = b.reshape(*b.shape[:-on_last_n_dims], -1)
+    else:
+        a2 = a
+        b2 = b
+
+    dot_a_b = torch.einsum('...i,...i->...', a2, b2)
+    dot_b_b = torch.einsum('...i,...i->...', b2, b2)
+    w_optimal = dot_a_b / (dot_b_b + 1e-6)
+    # Append N=on_last_n_dims empty dimensions to w_optimal.
+    if on_last_n_dims > 1:
+        orig_shape[-on_last_n_dims:] = [1] * on_last_n_dims
+        w_optimal = w_optimal.reshape(orig_shape)
+
+    return w_optimal
 
 # Extract the components of a that aligns and orthos with b, respectively.
-def decomp_align_ortho(a, b):
-    ortho = ortho_subtract(a, b)
-    align = a - ortho
-    return align, ortho
+def decomp_align_ortho(a, b, return_align_coeffs=False):
+    if return_align_coeffs:
+        ortho, align_coeffs = ortho_subtract(a, b, return_align_coeffs=True)
+        align = a - ortho
+        return align, ortho, align_coeffs
+    else:
+        ortho = ortho_subtract(a, b)
+        align = a - ortho
+        return align, ortho
 
 # Decompose a as ortho (w.r.t. b) and align (w.r.t. b) components.
 # Scale down the align component by align_suppress_scale.
@@ -1271,7 +1304,8 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
     #subj_comp_ks_sum = subj_comp_ks_sum.unsqueeze(1)
     # The orthogonal projection of subj_subj_ks against subj_comp_ks_sum.
     # subj_comp_ks_sum will broadcast to the K_fg dimension of subj_subj_ks.
-    subj_comp_emb_align, subj_comp_emb_ortho = decomp_align_ortho(subj_subj_ks, subj_comp_ks_sum)
+    subj_comp_emb_align, subj_comp_emb_ortho, subj_comp_emb_align_coeffs \
+          = decomp_align_ortho(subj_subj_ks, subj_comp_ks_sum, return_align_coeffs=True)
     
     if cls_subj_indices is not None:
         cls_subj_ks     = sel_emb_attns_by_indices(unet_seq_k, cls_subj_indices,
@@ -1281,7 +1315,8 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
         #cls_comp_ks_sum = cls_comp_ks_sum.unsqueeze(1)
         # The orthogonal projection of cls_subj_ks against cls_comp_ks_sum.
         # cls_comp_ks_sum will broadcast to the K_fg dimension of cls_subj_ks_mean.
-        cls_comp_emb_align, cls_comp_emb_ortho  = decomp_align_ortho(cls_subj_ks,  cls_comp_ks_sum)
+        cls_comp_emb_align, cls_comp_emb_ortho, cls_comp_emb_align_coeffs \
+            = decomp_align_ortho(cls_subj_ks,  cls_comp_ks_sum, return_align_coeffs=True)
         # The two orthogonal projections should be aligned. That is, each embedding in subj_subj_ks 
         # is allowed to vary only along the direction of the orthogonal projections of class embeddings.
 
@@ -1292,13 +1327,13 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
                                                          first_n_dims_to_flatten=3,
                                                          ref_grad_scale=cls_grad_scale)
         
-        loss_layer_cls_comp_key_align = (cls_comp_emb_align ** 2).mean()
+        loss_layer_cls_comp_key_align = (cls_comp_emb_align_coeffs ** 2).mean()
     else:
         loss_layer_subj_comp_key_ortho = 0
     # Use L2 loss to push subj_comp_emb_align towards 0
     # =>
     # encourage subj_subj_ks be orthogonal with subj_comp_ks_sum.
-    loss_layer_subj_comp_key_align = (subj_comp_emb_align ** 2).mean()
+    loss_layer_subj_comp_key_align = (subj_comp_emb_align_coeffs ** 2).mean()
     return loss_layer_subj_comp_key_align, loss_layer_subj_comp_key_ortho, loss_layer_cls_comp_key_align
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.

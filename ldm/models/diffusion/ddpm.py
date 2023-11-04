@@ -3613,7 +3613,8 @@ class LatentDiffusion(DDPM):
             #subj_comp_attn_sum = subj_comp_attn_sum.unsqueeze(1)
             # The orthogonal projection of subj_subj_attn against subj_comp_attn.
             # subj_comp_attn will broadcast to the K_fg dimension.
-            subj_comp_attn_align, subj_comp_attn_ortho = decomp_align_ortho(subj_subj_attn, subj_comp_attn_sum)
+            subj_comp_attn_align, subj_comp_attn_ortho, subj_comp_attn_align_coeffs \
+                  = decomp_align_ortho(subj_subj_attn, subj_comp_attn_sum, return_align_coeffs=True)
 
             if is_4type_batch:
                 cls_subj_attn       = sel_emb_attns_by_indices(attn_mat, cls_subj_indices,
@@ -3624,7 +3625,8 @@ class LatentDiffusion(DDPM):
                 #cls_comp_attn_sum   = cls_comp_attn_sum.unsqueeze(1)
                 # The orthogonal projection of cls_subj_attn against cls_comp_attn.
                 # cls_comp_attn will broadcast to the K_fg dimension.
-                cls_comp_attn_align,  cls_comp_attn_ortho  = decomp_align_ortho(cls_subj_attn,  cls_comp_attn_sum)
+                cls_comp_attn_align,  cls_comp_attn_ortho, cls_comp_attn_align_coeffs \
+                    = decomp_align_ortho(cls_subj_attn,  cls_comp_attn_sum, return_align_coeffs=True)
                 # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
                 # vary only along the direction of the orthogonal projections of class attention.
 
@@ -3639,7 +3641,7 @@ class LatentDiffusion(DDPM):
                                                              do_demean_first=False,
                                                              first_n_dims_to_flatten=3, 
                                                              ref_grad_scale=cls_grad_scale)
-                loss_layer_cls_comp_attn_align = (cls_comp_attn_align ** 2).mean()
+                loss_layer_cls_comp_attn_align = (cls_comp_attn_align_coeffs ** 2).mean()
             else:
                 loss_layer_comp_attn_ortho = 0
                 loss_layer_cls_comp_attn_align = 0
@@ -3647,7 +3649,7 @@ class LatentDiffusion(DDPM):
             # Push subj_comp_attn_align towards 0.
             # subj_comp_attn_align is a component of subj_subj_attn (attention scores).
             # subj_comp_attn_align: [1, 9, 8, 64].
-            loss_layer_subj_comp_attn_align = (subj_comp_attn_align ** 2).mean()
+            loss_layer_subj_comp_attn_align = (subj_comp_attn_align_coeffs ** 2).mean()
 
             loss_subj_comp_attn_align += loss_layer_subj_comp_attn_align * k_ortho_layer_weight
             loss_subj_comp_attn_ortho += loss_layer_comp_attn_ortho      * k_ortho_layer_weight
