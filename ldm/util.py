@@ -654,7 +654,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
         # N: number of visual tokens. T: number of text tokens.
         # attn_mat2[[0,0,0,0], :, :, [6,7,8,9]]: [4, 8, 4096]
         # Linearly combine the old (pointwise) and new (convolutional) attn scores.
-        debug = True
+        debug = False
         if debug:
             calc_and_print_stats(attn_mat[indices_b, :, :, indices_n], "pointwise attn")
             calc_and_print_stats(subj_attn_dxys, "conv attn")
