@@ -1467,6 +1467,9 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, delta_loss_emb
         delta_loss_emb_mask_weighted = delta_loss_emb_mask_weighted.unsqueeze(1)
 
         padding_mask = 1 - torch.cat([subj_single_mask, subj_comp_mask], dim=0)
+        # "start" token always receives the highest attention, which is the normal behavior.
+        # So we exclude the "start" token from the align padding loss.
+        padding_mask[:, 0] = 0
         # padding_mask: [2, 77, 1] => [2, 1, 77, 1]
         padding_mask = padding_mask.unsqueeze(1)
     else:
