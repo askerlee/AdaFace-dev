@@ -444,10 +444,10 @@ def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
     loss /= batch_mask.sum()
     return loss
 
-def calc_stats(ts, ts_name=None):
+def calc_and_print_stats(ts, ts_name=None):
     if ts_name is not None:
-        print("%s: " %ts_name, end='')
-    print("max: %.4f, min: %.4f, mean: %.4f, std: %.4f" %(ts.max(), ts.min(), ts.mean(), ts.std()))
+        print(f"{ts_name}: ", end='')
+    print("max: %.4f, min: %.4f, mean: %.4f, std: %.4f" %(ts.max(), ts.min(), ts.abs().mean(), ts.std()))
 
 def rand_like(x):
     # Collapse all dimensions except the last one (channel dimension).
@@ -571,6 +571,10 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
     # Clone to make attn_mat2 a non-leaf node. Otherwise, 
     # we can't do in-place assignment like attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.
     attn_mat2 = attn_mat.clone()
+    # Scale down conv attn scores by NORM. It's not M since the attention scores of different embeddings 
+    # tend to cancel each other a little bit, so the sum of the attn scores is smaller than M * pointwise attn score.
+    # If M = 9, NORM = 5.2. M / NORM = 1.73.
+    NORM = M ** 0.75
 
     for b in range(BS):
         subj_attn_dxys = []
@@ -602,11 +606,10 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
         #              H |   s3 s4)
         #                    _____ W
         # subj_attn: [1, 8, 64, 64]
-        # Note to scale attention scores by sim_scale, and divide by M.
+        # Note to scale attention scores by sim_scale, and further divide by NORM = M ** 0.75.
         # sim_scale is to keep consistent to the original cross attention scores.
-        # Scale down attention scores by M.
         subj_attn = F.conv2d(subj_q_padded, subj_k.reshape(H, C, ks, ks), 
-                             bias=None, groups=H) * sim_scale / M
+                             bias=None, groups=H) * sim_scale / NORM
         # Shift subj_attn (with 0 padding) to yield ks*ks slightly different attention maps 
         # for the M embeddings.
         # dx, dy: the relative position of a subject token to the center subject token.
@@ -651,6 +654,11 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
         # N: number of visual tokens. T: number of text tokens.
         # attn_mat2[[0,0,0,0], :, :, [6,7,8,9]]: [4, 8, 4096]
         # Linearly combine the old (pointwise) and new (convolutional) attn scores.
+        debug = True
+        if debug:
+            calc_and_print_stats(attn_mat[indices_b, :, :, indices_n], "pointwise attn")
+            calc_and_print_stats(subj_attn_dxys, "conv attn")
+
         attn_mat2[indices_b, :, :, indices_n] = attn_mat[indices_b, :, :, indices_n] * (1 - point_conv_attn_mix_weight) \
                                                 + subj_attn_dxys * point_conv_attn_mix_weight
 
