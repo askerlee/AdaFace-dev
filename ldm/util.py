@@ -1430,12 +1430,6 @@ def extract_last_chunk_of_indices(token_indices, total_num_chunks=3):
     token_indices_half_N2 = torch.cat(indiv_indices_half_N2, dim=0)
     return (token_indices_half_B2, token_indices_half_N2)
 
-# Reverse the sign of v at indices.
-def flip_v_by_indices(v, indices):
-    v_flipped = v.clone()
-    v_flipped[indices] = -v_flipped[indices]
-    return v_flipped
-
 # Textual inversion is supported, where static_embeddings is only one embedding.
 # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
 # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
