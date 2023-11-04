@@ -1330,6 +1330,7 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
         loss_layer_cls_comp_key_align = cls_comp_emb_align_coeffs.abs().mean()
     else:
         loss_layer_subj_comp_key_ortho = 0
+        loss_layer_cls_comp_key_align  = 0
     # Use L2 loss to push subj_comp_emb_align towards 0
     # =>
     # encourage subj_subj_ks be orthogonal with subj_comp_ks_sum.
