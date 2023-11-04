@@ -2886,7 +2886,7 @@ class LatentDiffusion(DDPM):
                                 
                 loss_subj_comp_key_align,  loss_subj_comp_value_align, \
                 loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho, \
-                loss_subj_comp_attn_align, loss_subj_comp_attn_ortho,
+                loss_subj_comp_attn_align, loss_subj_comp_attn_ortho,  \
                 loss_cls_comp_attn_align = \
                     self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
                                                     extra_info[subj_comp_attn_comple_key],
