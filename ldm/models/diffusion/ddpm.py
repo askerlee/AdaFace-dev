@@ -3516,7 +3516,7 @@ class LatentDiffusion(DDPM):
         loss_subj_comp_attn_align  = 0
         loss_subj_comp_attn_ortho  = 0
 
-        L2_boost_scale = 10
+        L2_boost_scale = 1
         emb_kq_do_demean_first = False
 
         if is_4type_batch:
