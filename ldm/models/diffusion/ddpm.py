@@ -100,6 +100,7 @@ class DDPM(pl.LightningModule):
                  static_embedding_reg_weight=0.,
                  ada_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
+                 padding_align_loss_boost_ratio=5,
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_value_ortho_loss_weight=0.,
                  subj_comp_attn_complementary_loss_weight=0.,
@@ -139,6 +140,7 @@ class DDPM(pl.LightningModule):
 
         self.composition_regs_iter_gap          = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
+        self.padding_align_loss_boost_ratio     = padding_align_loss_boost_ratio
         self.subj_comp_key_ortho_loss_weight    = subj_comp_key_ortho_loss_weight
         self.subj_comp_value_ortho_loss_weight  = subj_comp_value_ortho_loss_weight
         self.subj_comp_attn_complementary_loss_weight = subj_comp_attn_complementary_loss_weight
@@ -2678,10 +2680,9 @@ class LatentDiffusion(DDPM):
             # Divide it by 2 to reduce the proportion of ada emb loss relative to 
             # loss_static_prompt_delta in the total loss.
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            padding_align_loss_boost_ratio = 10
             loss_prompt_delta_reg = loss_static_prompt_delta \
                                     + (loss_static_padding_align + loss_ada_padding_align) \
-                                      * padding_align_loss_boost_ratio \
+                                      * self.padding_align_loss_boost_ratio \
                                     + loss_ada_prompt_delta * ada_comp_loss_boost_ratio
             
             loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
