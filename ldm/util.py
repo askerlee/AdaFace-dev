@@ -1491,8 +1491,8 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, delta_loss_emb
         static_delta = static_subj_comp_emb - static_subj_single_emb
 
     loss_static_prompt_delta   = calc_delta_loss(static_delta, cls_delta, 
-                                                    emb_mask=delta_loss_emb_mask_weighted,
-                                                    do_demean_first=True)
+                                                 emb_mask=delta_loss_emb_mask_weighted,
+                                                 do_demean_first=True)
 
     if align_padding_tokens and padding_mask is not None:
         static_subj_embs, static_cls_embs = static_embeddings.chunk(2)
@@ -1522,6 +1522,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, delta_loss_emb
 
         if align_padding_tokens and padding_mask is not None:
             ada_subj_embs, ada_cls_embs = ada_embeddings.chunk(2)
+            # ada_padding_delta: [2, 16, 77, 768]. padding_mask: [2, 1, 77, 1].
             ada_padding_delta = (ada_subj_embs - ada_cls_embs).abs()
             loss_ada_padding_align = masked_mean(ada_padding_delta, padding_mask)
         else:
