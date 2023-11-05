@@ -23,9 +23,10 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
-                       ortho_subtract, decomp_align_ortho, ortho_l2loss, gen_gradient_scaler, \
+                       ortho_subtract, decomp_align_ortho, get_align_coeffs, \
+                       ortho_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
-                       save_grid, chunk_list, join_list_of_indices, \
+                       save_grid, chunk_list, join_list_of_indices, split_indices_by_instance, \
                        distribute_embedding_to_M_tokens, fix_emb_scales, \
                        halve_token_indices, double_token_indices, \
                        extend_indices_N_by_n, extend_indices_B_by_n_times, \
@@ -100,7 +101,7 @@ class DDPM(pl.LightningModule):
                  static_embedding_reg_weight=0.,
                  ada_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
-                 padding_align_loss_boost_ratio=5,
+                 padding_embs_align_loss_weight=0.,
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_value_ortho_loss_weight=0.,
                  subj_comp_attn_complementary_loss_weight=0.,
@@ -140,7 +141,7 @@ class DDPM(pl.LightningModule):
 
         self.composition_regs_iter_gap          = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
-        self.padding_align_loss_boost_ratio     = padding_align_loss_boost_ratio
+        self.padding_embs_align_loss_weight   = padding_embs_align_loss_weight
         self.subj_comp_key_ortho_loss_weight    = subj_comp_key_ortho_loss_weight
         self.subj_comp_value_ortho_loss_weight  = subj_comp_value_ortho_loss_weight
         self.subj_comp_attn_complementary_loss_weight = subj_comp_attn_complementary_loss_weight
@@ -1595,8 +1596,9 @@ class LatentDiffusion(DDPM):
                     # In mix reg iters, background tokens only appear 10% of the time 
                     # to provide delta reg on ada embeddings of bg tokens.
                     if self.iter_flags['use_background_token']:
-                        # Sometimes (when bg_init_words is not speicified), all 4 types of prompts 
-                        # have the same background token. Then placeholder_indices_bg == bg_indices_4b.
+                        # Sometimes (when bg_init_words is not speicified, due to the logic in the dataloader), 
+                        # all 4 types of prompts have the same background token. 
+                        # Then placeholder_indices_bg == bg_indices_4b.
                         # Otherwise, 'bg_indices_4b' is absent in extra_info.
                         if extra_info['bg_indices'][0].unique().numel() == 4 * BLOCK_SIZE:
                             extra_info['bg_indices_4b'] = extra_info['bg_indices']
@@ -1619,8 +1621,10 @@ class LatentDiffusion(DDPM):
                     # These embeddings are patched. So combine them back into c_static_emb.
                     c_static_emb = torch.cat([subj_single_emb, subj_comp_emb, 
                                               cls_single_emb, cls_comp_emb], dim=0)
-                    extra_info['c_static_emb_4b'] = c_static_emb
-
+                    
+                    # [64, 77, 768] => [16, 4, 77, 768].
+                    extra_info['c_static_emb_4b'] = c_static_emb.reshape(4 * BLOCK_SIZE, self.N_LAYERS, 
+                                                                         *c_static_emb.shape[1:])
                     # if do_ada_emb_delta_reg, then do_mix_prompt_distillation 
                     # may be True or False, depending whether mix reg is enabled.
                     if self.iter_flags['do_mix_prompt_distillation']:
@@ -1687,6 +1691,8 @@ class LatentDiffusion(DDPM):
                             extra_info['bg_indices']   = extra_info0['bg_indices']
                         
 
+                        extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_LAYERS, 
+                                                                             *c_static_emb.shape[1:])
                         extra_info['ada_bp_to_unet'] = True
                         ##### End of normal_recon with static delta loss iters. #####
 
@@ -1712,14 +1718,17 @@ class LatentDiffusion(DDPM):
                     # Either prompt_emb_delta_reg_weight == 0 (ablation only) or 
                     # it's called by self.validation_step().
                     assert self.iter_flags['do_normal_recon']
-                    cond = self.get_learned_conditioning(captions, img_mask=self.iter_flags['img_mask'])
-                    # cond[2]: extra_info. 
-                    extra_info['subj_indices']      = cond[2]['subj_indices']
-                    extra_info['bg_indices']        = cond[2]['bg_indices']
+                    c_static_emb, c_in, extra_info0 = \
+                        self.get_learned_conditioning(captions, img_mask=self.iter_flags['img_mask'])
+                    extra_info['subj_indices']      = extra_info0['subj_indices']
+                    extra_info['bg_indices']        = extra_info0['bg_indices']
+                    extra_info['c_static_emb_1b']   = c_static_emb.reshape(ORIG_BS, self.N_LAYERS, 
+                                                                           *c_static_emb.shape[1:])
+                                        
                     extra_info['ada_bp_to_unet']    = True
                     extra_info['iter_type']         = 'normal_recon'
 
-                    cond = (cond[0], cond[1], extra_info)
+                    cond = (c_static_emb, c_in, extra_info)
                     ##### End of normal_recon without static delta loss iters. #####
 
             # shorten_cond_schedule: False. Skipped.
@@ -2653,14 +2662,11 @@ class LatentDiffusion(DDPM):
             # do_ada_emb_delta_reg controls whether to do ada comp delta reg here.
             # Use subj_indices_1b here, since this index is used to extract 
             # subject embeddings from each block, and compare two such blocks.
-            loss_static_prompt_delta,  loss_ada_prompt_delta, \
-            loss_static_padding_align, loss_ada_padding_align \
+            loss_static_prompt_delta,  loss_ada_prompt_delta \
                 = calc_prompt_emb_delta_loss( 
                                     extra_info['c_static_emb_4b'], ada_embeddings,
                                     extra_info['delta_loss_emb_mask'],
-                                    self.iter_flags['do_ada_emb_delta_reg'],
-                                    align_padding_tokens=True,
-                                    num_embed_layers=self.N_LAYERS,
+                                    self.iter_flags['do_ada_emb_delta_reg']
                                     )
 
             if self.iter_flags['do_ada_emb_delta_reg'] and ada_embeddings is not None:
@@ -2670,23 +2676,49 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{prefix}/static_prompt_delta':      loss_static_prompt_delta.mean().detach()})
             if loss_ada_prompt_delta != 0:
                 loss_dict.update({f'{prefix}/ada_prompt_delta':     loss_ada_prompt_delta.mean().detach()})
-            if loss_static_padding_align != 0:
-                loss_dict.update({f'{prefix}/static_padding_align': loss_static_padding_align.mean().detach()})
-            if loss_ada_padding_align != 0:
-                loss_dict.update({f'{prefix}/ada_padding_align':    loss_ada_padding_align.mean().detach()})
 
             # loss_ada_prompt_delta is only applied every self.composition_regs_iter_gap iterations. 
             # So it should be scaled up proportionally to composition_regs_iter_gap. 
             # Divide it by 2 to reduce the proportion of ada emb loss relative to 
             # loss_static_prompt_delta in the total loss.
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            loss_prompt_delta_reg = loss_static_prompt_delta \
-                                    + (loss_static_padding_align + loss_ada_padding_align) \
-                                      * self.padding_align_loss_boost_ratio \
-                                    + loss_ada_prompt_delta * ada_comp_loss_boost_ratio
             
-            loss += (self.prompt_emb_delta_reg_weight * loss_prompt_delta_reg)
+            loss += (loss_static_prompt_delta + loss_ada_prompt_delta * ada_comp_loss_boost_ratio) \
+                     * self.prompt_emb_delta_reg_weight
         
+            if self.padding_embs_align_loss_weight > 0:
+                if self.iter_flags['do_normal_recon']:
+                    subj_indices        = extra_info['subj_indices_1b']
+                    static_embeddings   = extra_info['c_static_emb_1b']
+                    # SSB_SIZE: subject sub-batch size.
+                    # If do_normal_recon, then both instances are subject instances. 
+                    # The subject sub-batch size SSB_SIZE = 2 (1 * BLOCK_SIZE).
+                    # If is_compos_iter, then subject sub-batch size SSB_SIZE = 2 * BLOCK_SIZE. 
+                    # (subj-single and subj-comp instances).
+                    # BLOCK_SIZE = 1, SSB_SIZE = 1.
+                    SSB_SIZE = BLOCK_SIZE
+                else:
+                    subj_indices        = extra_info['subj_indices_2b']
+                    static_embeddings   = extra_info['c_static_emb_4b']
+                    # BLOCK_SIZE = 1, SSB_SIZE = 2.
+                    SSB_SIZE = 2 * BLOCK_SIZE
+
+                loss_padding_subj_embs_align, loss_padding_cls_embs_align = \
+                    self.calc_padding_embs_align_loss(static_embeddings, ada_embeddings,
+                                                      extra_info['delta_loss_emb_mask'],
+                                                      subj_indices, SSB_SIZE, 
+                                                      self.iter_flags['is_compos_iter'])
+
+                if loss_padding_subj_embs_align != 0:
+                    loss_dict.update({f'{prefix}/padding_subj_embs_align': loss_padding_subj_embs_align.mean().detach()})
+                # Monitor loss_padding_cls_embs_align as a reference to loss_padding_subj_embs_align.
+                # We don't optimize loss_padding_cls_embs_align.
+                if loss_padding_cls_embs_align != 0:
+                    loss_dict.update({f'{prefix}/padding_cls_embs_align': loss_padding_cls_embs_align.mean().detach()})
+                    loss_padding_cls_embs_align = 0
+
+                loss += loss_padding_subj_embs_align * self.padding_embs_align_loss_weight
+
         if self.fg_bg_xlayer_consist_loss_weight > 0:
             # SSB_SIZE: subject sub-batch size.
             # If do_normal_recon, then both instances are subject instances. 
@@ -2735,7 +2767,7 @@ class LatentDiffusion(DDPM):
                                                           comp_extra_indices_4b_by_block[3])
 
             subj_attn_delta_distill_key = 'unet_attnscores' if self.subj_attn_delta_distill_uses_scores \
-                                        else 'unet_attns'
+                                          else 'unet_attns'
             # subj_indices_2b is used in calc_prompt_mix_loss(), as it's used 
             # to index subj single and subj comp embeddings.
             # The indices will be shifted along the batch dimension (size doubled) 
@@ -3802,6 +3834,83 @@ class LatentDiffusion(DDPM):
                                                 * feat_distill_layer_weight
                     
         return loss_comp_subj_fg_feat_preserve, loss_comp_subj_fg_attn_preserve, loss_comp_subj_bg_attn_suppress
+
+    # SSB_SIZE: subject sub-batch size.
+    # If do_normal_recon, then both instances are subject instances. 
+    # The subject sub-batch size SSB_SIZE = 2 (1 * BLOCK_SIZE).
+    # If is_compos_iter, then subject sub-batch size SSB_SIZE = 2 * BLOCK_SIZE. 
+    # (subj-single and subj-comp instances).
+    def calc_padding_embs_align_loss(self, static_prompt_embeddings, ada_embeddings, 
+                                     delta_loss_emb_mask, subj_indices, 
+                                     SSB_SIZE, is_compos_iter):
+        # If do_normal_recon:
+        # static_prompt_embeddings: [8, 16, 77, 768].
+        # ada_embeddings:           [2, 16, 77, 768].
+        # delta_loss_emb_mask:      [8, 77, 1].
+        # Otherwise, is_compos_iter:
+        # static_prompt_embeddings: [4, 16, 77, 768].
+        # ada_embeddings:           [4, 16, 77, 768].
+        # delta_loss_emb_mask:      [4, 77,   1].
+
+        if ada_embeddings is not None:
+            # During training, ada_emb_weight is randomly drawn from [0.4, 0.7].
+            ada_emb_weight = self.embedding_manager.get_ada_emb_weight() 
+            cond_prompt_embeddings = static_prompt_embeddings * (1 - ada_emb_weight) \
+                                      + ada_embeddings * ada_emb_weight
+        else:
+            cond_prompt_embeddings = static_prompt_embeddings
+        
+        padding_mask = 1 - delta_loss_emb_mask
+        # "start" token always receives the highest attention, which is the normal behavior.
+        # So we exclude the "start" token from the align padding loss.
+        padding_mask[:, 0] = 0
+        # padding_mask: [2/4, 77, 1] => [2/4, 77]
+        padding_mask = padding_mask.squeeze(-1)
+        subj_padding_indices = padding_mask[:SSB_SIZE].nonzero(as_tuple=True)
+        subj_embs_grad_scale  = 0.05
+        subj_embs_grad_scaler = gen_gradient_scaler(subj_embs_grad_scale)
+
+        subj_subj_indices_B, subj_subj_indices_N = subj_indices
+
+        K_fg = len(subj_subj_indices_B) // len(torch.unique(subj_subj_indices_B))
+        # subj_embs: [2*9, 768].
+        subj_subj_embs = cond_prompt_embeddings[subj_subj_indices_B, :, subj_subj_indices_N]
+        # subj_subj_embs: [18, 16, 768] => [2, 9, 16, 768] => [2, 1, 768]. "1" is for broadcasting.
+        subj_subj_embs = subj_subj_embs.reshape(SSB_SIZE, K_fg, self.N_LAYERS, -1).sum(dim=1, keepdim=True)
+        subj_subj_embs_gs = subj_embs_grad_scaler(subj_subj_embs)
+        EMB_DIM = subj_subj_embs.shape[-1]
+
+        loss_padding_subj_embs_align = 0
+        loss_padding_cls_embs_align  = 0
+
+        subj_padding_indices_by_instance = split_indices_by_instance(subj_padding_indices)
+
+        for i in range(len(subj_padding_indices_by_instance)):
+            subj_padding_indices_i = subj_padding_indices_by_instance[i]
+            subj_padding_embs_i = cond_prompt_embeddings[subj_padding_indices_i[0], :, subj_padding_indices_i[1]]
+            # subj_subj_embs_gs_i: [1, 768].
+            subj_subj_embs_gs_i = subj_subj_embs_gs[i]
+            padding_subj_embs_align_coeffs_i  = get_align_coeffs(subj_padding_embs_i, subj_subj_embs_gs_i)
+            loss_padding_subj_embs_align += padding_subj_embs_align_coeffs_i.abs().mean()
+
+        if is_compos_iter:
+            cls_subj_indices_B, cls_subj_indices_N = subj_subj_indices_B + SSB_SIZE, subj_subj_indices_N
+            cls_subj_embs = cond_prompt_embeddings[cls_subj_indices_B, :, cls_subj_indices_N]
+            cls_subj_embs = cls_subj_embs.reshape(SSB_SIZE, K_fg, self.N_LAYERS, -1).sum(dim=1, keepdim=True)
+            cls_padding_indices = padding_mask[SSB_SIZE:].nonzero(as_tuple=True)
+            cls_padding_indices_by_instance = split_indices_by_instance(cls_padding_indices)
+
+            for i in range(len(cls_padding_indices_by_instance)):
+                cls_padding_indices_i = cls_padding_indices_by_instance[i]
+                cls_padding_embs_i = cond_prompt_embeddings[cls_padding_indices_i[0], :, cls_padding_indices_i[1]]
+                cls_subj_embs_i = cls_subj_embs[i]
+                padding_cls_embs_align_coeffs_i  = get_align_coeffs(cls_padding_embs_i, cls_subj_embs_i)
+                loss_padding_cls_embs_align += padding_cls_embs_align_coeffs_i.abs().mean()
+
+        else:
+            loss_padding_cls_embs_align = 0
+
+        return loss_padding_subj_embs_align, loss_padding_cls_embs_align
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):

@@ -1434,17 +1434,10 @@ def extract_last_chunk_of_indices(token_indices, total_num_chunks=3):
 # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
 # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
 def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, delta_loss_emb_mask,
-                                do_ada_prompt_delta_reg, align_padding_tokens=True, 
-                                num_embed_layers=16):
-    # num_unet_ca_layers = 16. 
-    # If do_ada_prompt_delta_reg, then static_embeddings: [64, 77, 768]. 
-    # So BS = 1.
+                               do_ada_prompt_delta_reg):
     # static_embeddings / ada_embeddings contain 4 types of embeddings:
     # subj_single, subj_comp, cls_single, cls_comp.
-    BS = static_embeddings.shape[0] // (4 * num_embed_layers)
-    # static_embeddings: [64, 77, 768] => [4, 16, 77, 768]
-    static_embeddings = static_embeddings.view(BS * 4, num_embed_layers, *static_embeddings.shape[1:])
-
+    # static_embeddings: [4, 16, 77, 768].
     # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
     # Each is [1, 16, 77, 768]
     static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
@@ -1465,16 +1458,8 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, delta_loss_emb
         delta_loss_emb_mask_weighted = delta_loss_emb_mask_agg.pow(2) / 4            
         # delta_loss_emb_mask_weighted: [1, 77, 1] => [1, 1, 77, 1].
         delta_loss_emb_mask_weighted = delta_loss_emb_mask_weighted.unsqueeze(1)
-
-        padding_mask = 1 - torch.cat([subj_single_mask, subj_comp_mask], dim=0)
-        # "start" token always receives the highest attention, which is the normal behavior.
-        # So we exclude the "start" token from the align padding loss.
-        padding_mask[:, 0] = 0
-        # padding_mask: [2, 77, 1] => [2, 1, 77, 1]
-        padding_mask = padding_mask.unsqueeze(1)
     else:
         delta_loss_emb_mask_weighted = None
-        padding_mask = None
 
     use_ortho_subtract = True
     # cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
@@ -1494,16 +1479,6 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, delta_loss_emb
                                                  emb_mask=delta_loss_emb_mask_weighted,
                                                  do_demean_first=True)
 
-    if align_padding_tokens and padding_mask is not None:
-        static_subj_embs, static_cls_embs = static_embeddings.chunk(2)
-        # static_padding_delta: [2, 16, 77, 768].
-        static_padding_delta = (static_subj_embs - static_cls_embs).abs()
-        loss_static_padding_align = masked_mean(static_padding_delta, padding_mask)
-    else:
-        # If no padding_mask, then no need to specifically align the padding tokens,
-        # since we don't know which tokens are padding tokens.
-        loss_static_padding_align = 0
-
     if do_ada_prompt_delta_reg and ada_embeddings is not None:
         # ada_embeddings: [4, 16, 77, 768]
         # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
@@ -1520,15 +1495,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, delta_loss_emb
         loss_ada_prompt_delta = calc_delta_loss(ada_delta, cls_delta, emb_mask=delta_loss_emb_mask_weighted,
                                                 do_demean_first=True)
 
-        if align_padding_tokens and padding_mask is not None:
-            ada_subj_embs, ada_cls_embs = ada_embeddings.chunk(2)
-            # ada_padding_delta: [2, 16, 77, 768]. padding_mask: [2, 1, 77, 1].
-            ada_padding_delta = (ada_subj_embs - ada_cls_embs).abs()
-            loss_ada_padding_align = masked_mean(ada_padding_delta, padding_mask)
-        else:
-            loss_ada_padding_align = 0
     else:
         loss_ada_prompt_delta = 0
-        loss_ada_padding_align = 0
 
-    return loss_static_prompt_delta, loss_ada_prompt_delta, loss_static_padding_align, loss_ada_padding_align
+    return loss_static_prompt_delta, loss_ada_prompt_delta

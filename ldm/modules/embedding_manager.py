@@ -1242,8 +1242,8 @@ class EmbeddingManager(nn.Module):
             # extract_first_index_in_each_instance(): Get the index to the first token in each instance.
             placeholder_indices_1st = extract_first_index_in_each_instance(placeholder_indices)
 
-            # For fg subjects, exclude fg embeddings from computing the embedding mean. 
-            # For bg subjects, exclude fg from computing the embedding mean.
+            # For fg (subject) tokens, exclude fg embeddings from computing layer_static_extra_emb_mean. 
+            # For bg (junk) tokens,    exclude fg embeddings from computing layer_static_extra_emb_mean.
             if token_is_bg:
                 # Why mask bg indices for bg ada? If bg embeddings accidentally attent to fg,
                 # then it will self-reinforce and contaminate the bg embeddings with fg features.
