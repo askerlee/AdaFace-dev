@@ -1392,6 +1392,13 @@ class EmbeddingManager(nn.Module):
             # If zeros_like(tokenized_text).float(), then subj_tokens_mask is of type float32.
             subj_tokens_mask = torch.zeros_like(tokenized_text).float()
             subj_tokens_mask[self.placeholder_indices_fg] = 1
+            # A batch with 4 types of sub-blocks. Only the subject half is the subject prompts. 
+            # The other half is the class prompts. But for better alignment, 
+            # we still mask the class tokens.
+            if len(self.placeholder_indices_fg[0].unique()) == B // 2:
+                cls_indices = (self.placeholder_indices_fg[0] + B // 2, self.placeholder_indices_fg[1])
+                subj_tokens_mask[cls_indices] = 1
+                
             # subj_tokens_mask: [B, N] => [B, N, 1]. 
             # padding_tokens_mask: [B, N] => [B, 1, N].
             # subj_padding_interact_mask: [B, N, N].
