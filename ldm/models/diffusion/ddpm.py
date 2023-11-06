@@ -3106,6 +3106,7 @@ class LatentDiffusion(DDPM):
                 mix_comp_comp_attn_gs   = mix_attn_grad_scaler(mix_comp_comp_attn)
 
                 if attn_delta_distill_layer_weight > 0:
+                    # deltas obtained from ortho_subtract() are scale-invariant to input attns.
                     single_subj_attn_delta = ortho_subtract(subj_single_subj_attn, mix_single_subj_attn_gs)
                     comp_subj_attn_delta   = ortho_subtract(subj_comp_subj_attn,   mix_comp_subj_attn_gs)
                     comp_attn_delta        = ortho_subtract(subj_comp_comp_attn,   mix_comp_comp_attn_gs)
@@ -3113,14 +3114,14 @@ class LatentDiffusion(DDPM):
                     # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
                     # towards class embeddings, hurting authenticity.
                     loss_layer_subj_attn_delta = calc_delta_loss(single_subj_attn_delta, comp_subj_attn_delta, 
-                                                                 exponent=3,
+                                                                 exponent=2,
                                                                  do_demean_first=False,
                                                                  first_n_dims_to_flatten=2, 
                                                                  ref_grad_scale=1)
                     
                     loss_subj_attn_delta_distill  += loss_layer_subj_attn_delta * attn_delta_distill_layer_weight
                     # pow(3): focus on large differences. pow(0.33): reduce the grad scale.
-                    loss_layer_comp_attn_delta      = power_loss(comp_attn_delta, exponent=3)
+                    loss_layer_comp_attn_delta      = power_loss(comp_attn_delta, exponent=2)
                     loss_comp_attn_delta_distill   += loss_layer_comp_attn_delta
 
                 # Align the attention corresponding to each embedding individually.

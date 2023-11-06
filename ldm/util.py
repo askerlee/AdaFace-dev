@@ -321,7 +321,7 @@ def normalized_l2loss(a, b, mean=True):
     return loss
 
 # pow(1/exponent): limit the scale of the loss.
-def power_loss(a, exponent=3):
+def power_loss(a, exponent=2):
     loss = a.abs().pow(exponent).abs().mean().pow(1/exponent)
     return loss
 
