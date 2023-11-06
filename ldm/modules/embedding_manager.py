@@ -1385,7 +1385,7 @@ class EmbeddingManager(nn.Module):
         assert N == N2
 
         # Block the interaction between the subject and padding tokens with a probability of 0.5.
-        p_block_subj_padding_interaction = 0.5
+        p_block_subj_padding_interaction = 0.5 if self.training else 0
 
         # prompt_token_attn_mask: [B, N, N]
         if self.placeholder_indices_fg is not None and random.random() < p_block_subj_padding_interaction:
