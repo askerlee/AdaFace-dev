@@ -27,9 +27,12 @@ def combine_inf_mask_with_binary_mask(inf_mask1, binary_mask2, dtype):
     if inf_mask1 is None and binary_mask2 is None:
         return None
     
+    _MASKING_VALUE = torch.finfo(dtype).min
+    
     if inf_mask1 is None:
+        binary_mask2 = binary_mask2.to(dtype)
         # inf_mask2: map 1 to -inf, 0 to 0.
-        inf_mask2 = binary_mask2.masked_fill(binary_mask2.to(torch.bool), torch.finfo(dtype).min)
+        inf_mask2 = binary_mask2.masked_fill(binary_mask2.to(torch.bool), _MASKING_VALUE)
         return inf_mask2
     
     if binary_mask2 is None:
@@ -37,7 +40,7 @@ def combine_inf_mask_with_binary_mask(inf_mask1, binary_mask2, dtype):
     
     # Both masks are not None.
     # inf_mask1: map 1 in binary_mask1 to -inf, 0 to 0.
-    return inf_mask1.masked_fill(binary_mask2.to(torch.bool), torch.finfo(dtype).min)
+    return inf_mask1.masked_fill(binary_mask2.to(torch.bool), _MASKING_VALUE)
 
 
 def _build_causal_attention_mask(bsz, seq_len, dtype):
