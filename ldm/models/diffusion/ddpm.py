@@ -34,7 +34,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
                        anneal_t, rand_annealed, anneal_value, calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
-                       gen_comp_extra_indices_by_block, calc_prompt_emb_delta_loss
+                       gen_comp_extra_indices_by_block, calc_prompt_emb_delta_loss, power_loss
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -3119,8 +3119,8 @@ class LatentDiffusion(DDPM):
                                                                  ref_grad_scale=1)
                     
                     loss_subj_attn_delta_distill  += loss_layer_subj_attn_delta * attn_delta_distill_layer_weight
-                
-                    loss_layer_comp_attn_delta      = comp_attn_delta.abs().mean()
+                    # pow(3): focus on large differences. pow(0.33): reduce the grad scale.
+                    loss_layer_comp_attn_delta      = power_loss(comp_attn_delta, exponent=3)
                     loss_comp_attn_delta_distill   += loss_layer_comp_attn_delta
 
                 # Align the attention corresponding to each embedding individually.
@@ -3675,7 +3675,7 @@ class LatentDiffusion(DDPM):
                                                              do_demean_first=False,
                                                              first_n_dims_to_flatten=3, 
                                                              ref_grad_scale=cls_grad_scale)
-                loss_layer_cls_comp_attn_align = cls_comp_attn_align_coeffs.abs().mean()
+                loss_layer_cls_comp_attn_align = power_loss(cls_comp_attn_align_coeffs, exponent=2)
             else:
                 loss_layer_comp_attn_ortho = 0
                 loss_layer_cls_comp_attn_align = 0
@@ -3683,7 +3683,7 @@ class LatentDiffusion(DDPM):
             # Push subj_comp_attn_align towards 0.
             # subj_comp_attn_align is a component of subj_subj_attn (attention scores).
             # subj_comp_attn_align: [1, 9, 8, 64].
-            loss_layer_subj_comp_attn_align = subj_comp_attn_align_coeffs.abs().mean()
+            loss_layer_subj_comp_attn_align = power_loss(subj_comp_attn_align_coeffs, exponent=2)
 
             loss_subj_comp_attn_align += loss_layer_subj_comp_attn_align * k_ortho_layer_weight
             loss_subj_comp_attn_ortho += loss_layer_comp_attn_ortho      * k_ortho_layer_weight
@@ -3897,7 +3897,7 @@ class LatentDiffusion(DDPM):
             subj_subj_embs_gs_i = subj_subj_embs_gs[i]
             # padding_subj_embs_align_coeffs_i: [63, 16]
             padding_subj_embs_align_coeffs_i  = get_align_coeffs(subj_padding_embs_i, subj_subj_embs_gs_i)
-            loss_padding_subj_embs_align += padding_subj_embs_align_coeffs_i.abs().mean()
+            loss_padding_subj_embs_align += power_loss(padding_subj_embs_align_coeffs_i, exponent=2)
 
         if is_compos_iter:
             cls_subj_indices_B, cls_subj_indices_N = subj_subj_indices_B + SSB_SIZE, subj_subj_indices_N
@@ -3914,7 +3914,7 @@ class LatentDiffusion(DDPM):
                 cls_subj_embs_i = cls_subj_embs[i]
                 # padding_cls_embs_align_coeffs_i: [63, 16]
                 padding_cls_embs_align_coeffs_i  = get_align_coeffs(cls_padding_embs_i, cls_subj_embs_i)
-                loss_padding_cls_embs_align += padding_cls_embs_align_coeffs_i.abs().mean()
+                loss_padding_cls_embs_align += power_loss(padding_cls_embs_align_coeffs_i, exponent=2)
 
         else:
             loss_padding_cls_embs_align = 0

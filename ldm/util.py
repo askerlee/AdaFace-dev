@@ -320,6 +320,11 @@ def normalized_l2loss(a, b, mean=True):
         loss = loss.mean()
     return loss
 
+# pow(1/exponent): limit the scale of the loss.
+def power_loss(a, exponent=3):
+    loss = a.abs().pow(exponent).abs().mean().pow(1/exponent)
+    return loss
+
 def demean(x):
     return x - x.mean(dim=-1, keepdim=True)
 
@@ -1339,14 +1344,14 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
                                                          first_n_dims_to_flatten=3,
                                                          ref_grad_scale=cls_grad_scale)
         
-        loss_layer_cls_comp_key_align = cls_comp_emb_align_coeffs.abs().mean()
+        loss_layer_cls_comp_key_align = power_loss(cls_comp_emb_align_coeffs, exponent=2)
     else:
         loss_layer_subj_comp_key_ortho = 0
         loss_layer_cls_comp_key_align  = 0
     # Use L2 loss to push subj_comp_emb_align towards 0
     # =>
     # encourage subj_subj_ks be orthogonal with subj_comp_ks_sum.
-    loss_layer_subj_comp_key_align = subj_comp_emb_align_coeffs.abs().mean()
+    loss_layer_subj_comp_key_align = power_loss(subj_comp_emb_align_coeffs, exponent=2)
     return loss_layer_subj_comp_key_align, loss_layer_subj_comp_key_ortho, loss_layer_cls_comp_key_align
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.
