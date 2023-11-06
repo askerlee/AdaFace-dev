@@ -898,7 +898,6 @@ class EmbeddingManager(nn.Module):
 
         self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
         self.default_point_conv_attn_mix_weight = default_point_conv_attn_mix_weight
-
         self.initialize_layerwise_point_conv_attn_mix_weights(self.default_point_conv_attn_mix_weight, 
                                                               learnable=True)
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
@@ -1729,8 +1728,6 @@ class EmbeddingManager(nn.Module):
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
         self.string_to_emb_ema_dict         = nn.ModuleDict()
-        self.initialize_layerwise_point_conv_attn_mix_weights(self.default_point_conv_attn_mix_weight, 
-                                                              learnable=True)
         
         token2num_vectors                   = {}
 
