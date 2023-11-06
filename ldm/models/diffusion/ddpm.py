@@ -2813,7 +2813,7 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
 
             # mix_prompt_distill_weight: 2e-4.
-            loss += loss_mix_prompt_distill      * self.mix_prompt_distill_weight
+            loss += loss_mix_prompt_distill * self.mix_prompt_distill_weight
 
             # NOTE: loss_comp_fg_bg_preserve is applied only when this 
             # iteration is teachable, because at such iterations the unet gradient is enabled.
@@ -3120,8 +3120,8 @@ class LatentDiffusion(DDPM):
                     
                     loss_subj_attn_delta_distill  += loss_layer_subj_attn_delta * attn_delta_distill_layer_weight
                 
-                    loss_layer_comp_attn_delta = (comp_attn_delta**2).mean()
-                    loss_comp_attn_delta_distill  += loss_layer_comp_attn_delta
+                    loss_layer_comp_attn_delta      = comp_attn_delta.abs().mean()
+                    loss_comp_attn_delta_distill   += loss_layer_comp_attn_delta
 
                 # Align the attention corresponding to each embedding individually.
                 # Note mix_*subj_attn use *_gs versions.
