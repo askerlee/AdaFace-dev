@@ -2686,7 +2686,8 @@ class LatentDiffusion(DDPM):
             loss += (loss_static_prompt_delta + loss_ada_prompt_delta * ada_comp_loss_boost_ratio) \
                      * self.prompt_emb_delta_reg_weight
         
-            if self.padding_embs_align_loss_weight > 0:
+            # Even if padding_embs_align_loss_weight is disabled, we still monitor loss_padding_subj_embs_align.
+            if self.padding_embs_align_loss_weight >= 0:
                 if self.iter_flags['do_normal_recon']:
                     subj_indices        = extra_info['subj_indices_1b']
                     # c_static_emb_1b is generated from batch['captions']. 
