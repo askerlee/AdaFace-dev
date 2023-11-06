@@ -141,7 +141,7 @@ class DDPM(pl.LightningModule):
 
         self.composition_regs_iter_gap          = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
-        self.padding_embs_align_loss_weight   = padding_embs_align_loss_weight
+        self.padding_embs_align_loss_weight     = padding_embs_align_loss_weight
         self.subj_comp_key_ortho_loss_weight    = subj_comp_key_ortho_loss_weight
         self.subj_comp_value_ortho_loss_weight  = subj_comp_value_ortho_loss_weight
         self.subj_comp_attn_complementary_loss_weight = subj_comp_attn_complementary_loss_weight
@@ -844,7 +844,7 @@ class LatentDiffusion(DDPM):
                                 # we also set it up here just in case.
                                 'subj_indices':          copy.copy(self.embedding_manager.placeholder_indices_fg),
                                 'bg_indices':            copy.copy(self.embedding_manager.placeholder_indices_bg),
-                                'delta_loss_emb_mask':   copy.copy(self.embedding_manager.delta_loss_emb_mask),
+                                'prompt_emb_mask':   copy.copy(self.embedding_manager.prompt_emb_mask),
                                 'default_point_conv_attn_mix_weight':     self.default_point_conv_attn_mix_weight,
                                 'layerwise_point_conv_attn_mix_weights':  layerwise_point_conv_attn_mix_weights,
                                 'normalize_subj_attn':   self.embedding_manager.normalize_subj_attn,
@@ -2330,8 +2330,8 @@ class LatentDiffusion(DDPM):
                 fg_wds_comple_attn_key = 'unet_attnscores' if fg_wds_comple_attn_uses_scores \
                                          else 'unet_attns'
                 
-                # delta_loss_emb_mask: [2, 77, 1] -> [2, 77].
-                comp_extra_mask = self.embedding_manager.delta_loss_emb_mask.squeeze(-1).clone()
+                # prompt_emb_mask: [2, 77, 1] -> [2, 77].
+                comp_extra_mask = self.embedding_manager.prompt_emb_mask.squeeze(-1).clone()
                 # use_wds_cls_captions: cls token follows the subject tokens, and 
                 # precedes wds extra tokens.
                 # So we extend the subject indices by 1, to include the cls embedding as part of 
@@ -2665,7 +2665,7 @@ class LatentDiffusion(DDPM):
             loss_static_prompt_delta,  loss_ada_prompt_delta \
                 = calc_prompt_emb_delta_loss( 
                                     extra_info['c_static_emb_4b'], ada_embeddings,
-                                    extra_info['delta_loss_emb_mask'],
+                                    extra_info['prompt_emb_mask'],
                                     self.iter_flags['do_ada_emb_delta_reg']
                                     )
 
@@ -2689,6 +2689,8 @@ class LatentDiffusion(DDPM):
             if self.padding_embs_align_loss_weight > 0:
                 if self.iter_flags['do_normal_recon']:
                     subj_indices        = extra_info['subj_indices_1b']
+                    # c_static_emb_1b is generated from batch['captions']. 
+                    # Do not use c_static_emb_4b, which corresponds to the 4-type prompts.
                     static_embeddings   = extra_info['c_static_emb_1b']
                     # SSB_SIZE: subject sub-batch size.
                     # If do_normal_recon, then both instances are subject instances. 
@@ -2698,6 +2700,7 @@ class LatentDiffusion(DDPM):
                     # BLOCK_SIZE = 1, SSB_SIZE = 1.
                     SSB_SIZE = BLOCK_SIZE
                 else:
+                    # Both static_embeddings and ada_embeddings are 4-type embeddings.
                     subj_indices        = extra_info['subj_indices_2b']
                     static_embeddings   = extra_info['c_static_emb_4b']
                     # BLOCK_SIZE = 1, SSB_SIZE = 2.
@@ -2705,13 +2708,13 @@ class LatentDiffusion(DDPM):
 
                 loss_padding_subj_embs_align, loss_padding_cls_embs_align = \
                     self.calc_padding_embs_align_loss(static_embeddings, ada_embeddings,
-                                                      extra_info['delta_loss_emb_mask'],
+                                                      extra_info['prompt_emb_mask'],
                                                       subj_indices, SSB_SIZE, 
                                                       self.iter_flags['is_compos_iter'])
 
                 if loss_padding_subj_embs_align != 0:
                     loss_dict.update({f'{prefix}/padding_subj_embs_align': loss_padding_subj_embs_align.mean().detach()})
-                # Monitor loss_padding_cls_embs_align as a reference to loss_padding_subj_embs_align.
+                # Monitor loss_padding_cls_embs_align, viewed as a reference to loss_padding_subj_embs_align.
                 # We don't optimize loss_padding_cls_embs_align.
                 if loss_padding_cls_embs_align != 0:
                     loss_dict.update({f'{prefix}/padding_cls_embs_align': loss_padding_cls_embs_align.mean().detach()})
@@ -2759,7 +2762,7 @@ class LatentDiffusion(DDPM):
             bg_indices_4b,   bg_indices_4b_by_block   = extend_indices_B_by_n_times(bg_indices_1b,   n=4, offset=BLOCK_SIZE)
 
             comp_extra_indices_4b_by_block = \
-                gen_comp_extra_indices_by_block(self.embedding_manager.delta_loss_emb_mask,
+                gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
                                                 subj_indices_4b, bg_indices_4b, block_size=BLOCK_SIZE)
             # block[0] and block[2] are the indices within the subj single and class single blocks.
             # So they are empty and useless, and we only need block[1] and block[3].
@@ -2868,7 +2871,7 @@ class LatentDiffusion(DDPM):
                 bg_indices_4b,   bg_indices_4b_by_block   = extend_indices_B_by_n_times(bg_indices_1b,   n=4, offset=BLOCK_SIZE)
 
                 comp_extra_indices_4b_by_block = \
-                    gen_comp_extra_indices_by_block(self.embedding_manager.delta_loss_emb_mask,
+                    gen_comp_extra_indices_by_block(self.embedding_manager.prompt_emb_mask,
                                                     subj_indices_4b, bg_indices_4b, block_size=BLOCK_SIZE)
 
                 loss_subj_comp_key_align,  loss_subj_comp_value_align, \
@@ -2916,7 +2919,7 @@ class LatentDiffusion(DDPM):
                 # BLOCK_SIZE = 2, the whole batch size.
                 # comp_extra_indices_1b_by_block is a list that contains 1 block only.
                 comp_extra_indices_1b_by_block = \
-                    gen_comp_extra_indices_by_block(self.embedding_manager.delta_loss_emb_mask,
+                    gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
                                                     subj_indices_ext, bg_indices, block_size=BLOCK_SIZE)
                                 
                 loss_subj_comp_key_align,  loss_subj_comp_value_align, \
@@ -3841,16 +3844,16 @@ class LatentDiffusion(DDPM):
     # If is_compos_iter, then subject sub-batch size SSB_SIZE = 2 * BLOCK_SIZE. 
     # (subj-single and subj-comp instances).
     def calc_padding_embs_align_loss(self, static_prompt_embeddings, ada_embeddings, 
-                                     delta_loss_emb_mask, subj_indices, 
+                                     prompt_emb_mask, subj_indices, 
                                      SSB_SIZE, is_compos_iter):
         # If do_normal_recon:
         # static_prompt_embeddings: [8, 16, 77, 768].
         # ada_embeddings:           [2, 16, 77, 768].
-        # delta_loss_emb_mask:      [8, 77, 1].
+        # prompt_emb_mask:          [8, 77, 1].
         # Otherwise, is_compos_iter:
         # static_prompt_embeddings: [4, 16, 77, 768].
         # ada_embeddings:           [4, 16, 77, 768].
-        # delta_loss_emb_mask:      [4, 77,   1].
+        # prompt_emb_mask:          [4, 77,   1].
 
         if ada_embeddings is not None:
             # During training, ada_emb_weight is randomly drawn from [0.4, 0.7].
@@ -3860,7 +3863,7 @@ class LatentDiffusion(DDPM):
         else:
             cond_prompt_embeddings = static_prompt_embeddings
         
-        padding_mask = 1 - delta_loss_emb_mask
+        padding_mask = 1 - prompt_emb_mask
         # "start" token always receives the highest attention, which is the normal behavior.
         # So we exclude the "start" token from the align padding loss.
         padding_mask[:, 0] = 0
@@ -3875,7 +3878,7 @@ class LatentDiffusion(DDPM):
         K_fg = len(subj_subj_indices_B) // len(torch.unique(subj_subj_indices_B))
         # subj_embs: [2*9, 768].
         subj_subj_embs = cond_prompt_embeddings[subj_subj_indices_B, :, subj_subj_indices_N]
-        # subj_subj_embs: [18, 16, 768] => [2, 9, 16, 768] => [2, 1, 768]. "1" is for broadcasting.
+        # subj_subj_embs: [18, 16, 768] => [2, 9, 16, 768] => [2, 1, 16, 768]. "1" is for broadcasting.
         subj_subj_embs = subj_subj_embs.reshape(SSB_SIZE, K_fg, self.N_LAYERS, -1).sum(dim=1, keepdim=True)
         subj_subj_embs_gs = subj_embs_grad_scaler(subj_subj_embs)
         EMB_DIM = subj_subj_embs.shape[-1]
@@ -3887,9 +3890,11 @@ class LatentDiffusion(DDPM):
 
         for i in range(len(subj_padding_indices_by_instance)):
             subj_padding_indices_i = subj_padding_indices_by_instance[i]
+            # subj_padding_embs_i: [63, 16, 768].
             subj_padding_embs_i = cond_prompt_embeddings[subj_padding_indices_i[0], :, subj_padding_indices_i[1]]
-            # subj_subj_embs_gs_i: [1, 768].
+            # subj_subj_embs_gs_i: [1,  16, 768].
             subj_subj_embs_gs_i = subj_subj_embs_gs[i]
+            # padding_subj_embs_align_coeffs_i: [63, 16]
             padding_subj_embs_align_coeffs_i  = get_align_coeffs(subj_padding_embs_i, subj_subj_embs_gs_i)
             loss_padding_subj_embs_align += padding_subj_embs_align_coeffs_i.abs().mean()
 
@@ -3902,8 +3907,11 @@ class LatentDiffusion(DDPM):
 
             for i in range(len(cls_padding_indices_by_instance)):
                 cls_padding_indices_i = cls_padding_indices_by_instance[i]
+                # cls_padding_embs_i: [63, 16, 768].
                 cls_padding_embs_i = cond_prompt_embeddings[cls_padding_indices_i[0], :, cls_padding_indices_i[1]]
+                # cls_subj_embs_i:    [1, 16, 768].
                 cls_subj_embs_i = cls_subj_embs[i]
+                # padding_cls_embs_align_coeffs_i: [63, 16]
                 padding_cls_embs_align_coeffs_i  = get_align_coeffs(cls_padding_embs_i, cls_subj_embs_i)
                 loss_padding_cls_embs_align += padding_cls_embs_align_coeffs_i.abs().mean()
 

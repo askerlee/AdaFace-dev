@@ -52,7 +52,7 @@ def get_embeddings_for_clip_tokens(embedder, tokens):
     # RETURN: [N, 768]
     return embedder(tokens)[0]
 
-def selective_reg_loss(x, loss_type='l2', selector=None):
+def reg_loss(x, loss_type='l2', selector=None):
     if selector is not None:
         # If selector(x) is False, the gradient flow is cut off.
         x = x * selector(x).float()
@@ -860,7 +860,7 @@ class EmbeddingManager(nn.Module):
             # If no initializer words are specified, then default LoRA rank = 2.
             layerwise_lora_default_rank=5,
             layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
-                                  17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
+                                       17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             ada_emb_weight=0.5, 
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
@@ -901,6 +901,7 @@ class EmbeddingManager(nn.Module):
 
         self.initialize_layerwise_point_conv_attn_mix_weights(self.default_point_conv_attn_mix_weight, 
                                                               learnable=True)
+        self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
 
         # num_vectors_per_token: an int or a dict. How many vectors in each layer 
         # are allocated to model the subject (represented as the subject token).        
@@ -1051,19 +1052,16 @@ class EmbeddingManager(nn.Module):
         self.layer_idx = -1
         self.static_subj_embs_dict = {}            
         self.clear_ada_layer_temp_info()
-        self.clear_delta_loss_emb_mask()
+        self.clear_placeholder_indices(placeholder_type='all')
+        self.clear_prompt_masks()
         self.img_mask = None
-        self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
         self.loss_call_count = 0
         # Store the text_embedder to compute the delta loss.
         self.text_embedder  = text_embedder
-        self.ada_prompt_embeddings_cache = {}
+        self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_token_indices_cache = {}
-        self.ada_bp_to_unet = False
         self.force_grad     = False
-        self.placeholder_indices_bg = None
-        self.placeholder_indices_fg = None
-        
+
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}".format(
                placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings))
             
@@ -1082,10 +1080,10 @@ class EmbeddingManager(nn.Module):
         B, N, device = *tokenized_text.shape, tokenized_text.device
 
         # gen_ada_embedding is dynamically switched on/off by  cache_layer_features_for_ada()/clear_ada_layer_temp_info().
-        # No need to calculate delta_loss_emb_mask here, as the mask for ada embeddings is 
+        # No need to calculate prompt_emb_mask here, as the mask for ada embeddings is 
         # the same as for the static embeddings. 
         # AdaPrompt combines static and ada embeddings. So the static embedding replacement 
-        # code below is always called, and delta_loss_emb_mask is always calculated.
+        # code below is always called, and prompt_emb_mask is always calculated.
         if self.gen_ada_embedding:
             # self.layer_idx, self.ca_infeat, self.time_emb were cached by 
             # a previous call of  cache_layer_features_for_ada() from UNet.
@@ -1095,23 +1093,27 @@ class EmbeddingManager(nn.Module):
 
             # Release ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
+            # No prompt repeating happened in get_ada_embedding(), 
+            # so pass the original tokenized_text as tokenized_text_repeated.
+            self.update_prompt_masks(tokenized_text, tokenized_text)
             return ada_embedded_text
 
         else:
-            # Update the token embedding mask used in embedding loss computation.
-            self.update_emb_mask(tokenized_text)
-            # Clear the cached placeholder indices, and store the new ones computed 
-            # in the current function call.
-            self.placeholder_indices = None
+            self.clear_placeholder_indices(placeholder_type='all')
+            self.clear_prompt_masks()
             # We need to clone embedded_text, as sometimes (when it's not layerwise, such as TI) 
             # the modification in get_static_embedding() is in-place. 
-            static_embeded_text, static_subj_embs_dict = \
+            static_embeded_text, tokenized_text_repeated, static_subj_embs_dict = \
                             self.get_static_embedding(tokenized_text, embedded_text.clone(), 
                                                       self.string_to_static_embedder_dict,
                                                       B, N, self.num_unet_ca_layers, device)
             # Cache the static embeddings to be used in ada embedding computation later.
             for k in static_subj_embs_dict:
                 self.static_subj_embs_dict[k] = static_subj_embs_dict[k]
+            
+            # Update the prompt token embedding mask.
+            # tokenized_text_repeated is repeated 16 times along the batch dimension.
+            self.update_prompt_masks(tokenized_text, tokenized_text_repeated)
 
             return static_embeded_text
     
@@ -1136,8 +1138,6 @@ class EmbeddingManager(nn.Module):
             tokenized_text = tokenized_text.unsqueeze(1).repeat(1, num_unet_ca_layers, 1).view(B * num_unet_ca_layers, N)
             # mirror-reflect the embedding along the layer dimension, to make it symmetric 
             # in the encoder & decoder.
-
-        self.clear_placeholder_indices(type='all')
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             # If there's only one vector per token, we can do a simple replacement
@@ -1205,7 +1205,7 @@ class EmbeddingManager(nn.Module):
             self.update_placeholder_indices(orig_tokenized_text, placeholder_token, self.token2num_vectors[placeholder_string],
                                             token_is_bg=(placeholder_string in self.background_strings))
 
-        return embedded_text, static_subj_embs_dict
+        return embedded_text, tokenized_text, static_subj_embs_dict
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # As the output embedding is only generated for a particular layer, 
@@ -1255,9 +1255,9 @@ class EmbeddingManager(nn.Module):
                 list_of_indices_to_mask = [self.placeholder_indices_fg]
 
             # layer_static_prompt_embs:   [4, 77, 768]. 
-            # delta_loss_emb_mask: [4, 77, 1].
+            # prompt_emb_mask: [4, 77, 1].
             layer_static_extra_emb_mean = \
-                self.calc_layer_static_extra_emb_mean(layer_static_prompt_embs, self.delta_loss_emb_mask, 
+                self.calc_layer_static_extra_emb_mean(layer_static_prompt_embs, self.prompt_emb_mask, 
                                                       list_of_indices_to_mask, dropout_prob=0.2)
 
             # Clear the infeat_bg cache before generating subject embedding(s) of a subject token.
@@ -1363,15 +1363,50 @@ class EmbeddingManager(nn.Module):
 
         return embedded_text
 
-    # Update token embedding mask.
-    def update_emb_mask(self, tokenized_text):
-        # Exclude the starting and padding tokens from delta loss.
-        delta_loss_emb_mask  = (tokenized_text != 49406 ) & (tokenized_text != 49407)
+    # Update prompt_emb_mask and prompt_token_attn_mask.
+    # tokenized_text: [B, N] = [2/4, 77].
+    # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
+    # -> .get_learned_conditioning() -> .cond_stage_model.encode()
+    # -> EmbeddingManager.forward() -> here.
+    # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
+    # Occasionally, image_logger is called, which calls LatentDiffusion.log_images ->
+    # .get_learned_conditioning() -> ... -> here.
+    # Such prompt_emb_mask won't be used in calc_prompt_emb_delta_loss() and won't be cleared.
+    # prompt_emb_mask: [B, N, 1], where N=77 is the prompt length after padding.
+    def update_prompt_masks(self, tokenized_text, tokenized_text_repeated=False):
+        # Exclude the starting (49406) and padding tokens (49047) from delta loss.
+        prompt_emb_mask  = (tokenized_text != 49406 ) & (tokenized_text != 49407)
         # [B, N] => [B, N, 1]
-        delta_loss_emb_mask  = delta_loss_emb_mask.float().unsqueeze(2)
+        self.prompt_emb_mask  = prompt_emb_mask.float().unsqueeze(2)
+        # prompt_token_attn_mask: [B, N]
+        padding_tokens_mask = (tokenized_text == 49407).float()
+        B,  N  = tokenized_text.shape
+        B2, N2 = tokenized_text_repeated.shape
+        assert N == N2
 
-        self.set_delta_loss_emb_mask(delta_loss_emb_mask)
+        # prompt_token_attn_mask: [B, N, N]
+        if self.placeholder_indices_fg is not None:
+            # subj_tokens_mask: [B, N].
+            # If zeros_like(tokenized_text, dtype=float), then subj_tokens_mask is of type float64, 
+            # inconsistent with padding_tokens_mask.
+            # If zeros_like(tokenized_text).float(), then subj_tokens_mask is of type float32.
+            subj_tokens_mask = torch.zeros_like(tokenized_text).float()
+            subj_tokens_mask[self.placeholder_indices_fg] = 1
+            # subj_tokens_mask: [B, N] => [B, N, 1]. 
+            # padding_tokens_mask: [B, N] => [B, 1, N].
+            # subj_padding_interact_mask: [B, N, N].
+            subj_padding_interact_mask = torch.matmul(subj_tokens_mask.unsqueeze(2), padding_tokens_mask.unsqueeze(1))
+            # Repeat subj_padding_interact_mask 16 times along the batch dimension: 
+            # [B, N, N] => [B, 1, N, N] => [B, 16, N, N] => [16*B, N, N].
+            if B2 > B:
+                assert B2 % B == 0
+                REPEAT = B2 // B
+                subj_padding_interact_mask = subj_padding_interact_mask.unsqueeze(1).repeat(1, REPEAT, 1, 1).view(B2, N, N)
 
+            self.prompt_token_attn_mask = subj_padding_interact_mask
+        else:
+            self.prompt_token_attn_mask = None
+            
     # layer_static_prompt_embs: [4, 77, 768].
     # emb_mask:          [4, 77, 1].
     # (Note sometimes the batch size of emb_mask is different from layer_static_prompt_embs).
@@ -1407,24 +1442,18 @@ class EmbeddingManager(nn.Module):
 
         return layer_static_extra_emb_mean
     
-    # There are image margins after the original image is scaled down, or 
-    # after using wds overlay images as input.
-    # When doing attentional pooling / average pooling of image features, 
-    # the margin area contains no signal, so we use img_mask to mask it out. 
-    # Each image has its own img_mask, so img_mask has a shape of [B, 1, H, W].
-    def set_volatile_ds(self, volatile_ds):
-        self.placeholder_indices_fg = volatile_ds['subj_indices']
-        self.placeholder_indices_bg = volatile_ds['bg_indices']
-        self.img_mask = volatile_ds['img_mask']
+    def clear_placeholder_indices(self, placeholder_type='all'):
+        if placeholder_type == 'all':
+            self.placeholder_indices_fg = None
+            self.placeholder_indices_bg = None
+        elif placeholder_type == 'fg':
+            self.placeholder_indices_fg = None
+        elif placeholder_type == 'bg':
+            self.placeholder_indices_bg = None
 
-    def clear_placeholder_indices(self, type='all'):
-        if type == 'all':
-            self.placeholder_indices_fg = None
-            self.placeholder_indices_bg = None
-        elif type == 'fg':
-            self.placeholder_indices_fg = None
-        elif type == 'bg':
-            self.placeholder_indices_bg = None
+    def clear_prompt_masks(self):
+        self.prompt_emb_mask = None
+        self.prompt_token_attn_mask = None
 
     def update_placeholder_indices(self, tokenized_text, placeholder_token, num_vectors_per_token, token_is_bg):
         placeholder_indices = torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
@@ -1531,11 +1560,65 @@ class EmbeddingManager(nn.Module):
         
     # Cache features used to compute ada embeddings.
     def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
-        self.gen_ada_embedding = True
-        self.layer_idx      = layer_idx
-        self.time_emb       = time_emb
-        self.ada_bp_to_unet = ada_bp_to_unet
-        self.layer_attn_components = layer_attn_components
+        self.gen_ada_embedding      = True
+        self.layer_idx              = layer_idx
+        self.time_emb               = time_emb
+        self.ada_bp_to_unet         = ada_bp_to_unet
+        self.layer_attn_components  = layer_attn_components
+
+    # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
+    # which will be enabled again through cache_layer_features_for_ada() in ddpm.py.
+    def clear_ada_layer_temp_info(self):
+        self.gen_ada_embedding      = False
+        self.layer_idx              = -1
+        self.time_emb               = None
+        self.ada_bp_to_unet         = False
+        self.layer_attn_components  = None
+
+    # Set volatile data structures for computing ada embeddings.
+    def set_volatile_ds(self, volatile_ds):
+        self.placeholder_indices_fg = volatile_ds['subj_indices']
+        self.placeholder_indices_bg = volatile_ds['bg_indices']
+        # There are image margins after the original image is scaled down, or 
+        # after using wds overlay images as input.
+        # When doing attentional pooling / average pooling of image features, 
+        # the margin area contains no signal, so we use img_mask to mask it out. 
+        # Each image has its own img_mask, so img_mask has a shape of [B, 1, H, W].
+        self.img_mask = volatile_ds['img_mask']
+
+    # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
+    # not just the ada or static embeddings of the subject.
+    def cache_ada_prompt_embedding(self, layer_idx, embedding):
+        ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
+        self.ada_prompt_embeddings_cache[ca_layer_idx] = embedding
+        # If there are multiple layers, only the last placeholder_indices are cached.
+        self.ada_prompt_token_indices_cache = { 'fg': self.placeholder_indices_fg,
+                                                'bg': self.placeholder_indices_bg }
+
+    def get_cached_ada_prompt_embeddings_as_tensor(self):
+        # No tokens appear in the current prompt. So the ada prompt embedding cache is empty.
+        if len(self.ada_prompt_embeddings_cache) == 0:
+            return None
+        
+        if len(self.ada_prompt_embeddings_cache) != self.num_layers_per_embedder:
+            breakpoint()
+        # Stack the cached prompt embeddings of all layers into a tensor.
+        ada_prompt_embeddings = [ self.ada_prompt_embeddings_cache[ca_layer_idx] 
+                                  for ca_layer_idx in range(self.num_layers_per_embedder) ]
+        # ada_prompt_embeddings: [BS, 16, 77, 768]. BS: batch size (2 or 4). 16: num layers.
+        ada_prompt_embeddings = torch.stack(ada_prompt_embeddings, dim=1)
+        return ada_prompt_embeddings
+
+    # self.ada_prompt_embeddings_cache is a cache for the prompt embeddings of all layers, 
+    # for computing the prompt delta loss.
+    # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
+    # not just the ada or static embeddings of the subject.
+    def clear_ada_prompt_embeddings_cache(self):
+        if len(self.ada_prompt_embeddings_cache) == self.num_layers_per_embedder:
+            self.update_emb_ema(self.ada_prompt_token_indices_cache['fg'],
+                                self.ada_prompt_token_indices_cache['bg'])
+
+        self.ada_prompt_embeddings_cache = {}
 
     def update_emb_ema(self, fg_indices, bg_indices):
         # Don't update EMA embeddings in SGD-enabled iterations.
@@ -1593,49 +1676,6 @@ class EmbeddingManager(nn.Module):
                     token_emb_cache_obj.reset_cached_layer_tracker()
 
 
-    # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
-    # not just the ada or static embeddings of the subject.
-    def cache_ada_prompt_embedding(self, layer_idx, embedding):
-        ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
-        self.ada_prompt_embeddings_cache[ca_layer_idx] = embedding
-        # If there are multiple layers, only the last placeholder_indices are cached.
-        self.ada_prompt_token_indices_cache = { 'fg': self.placeholder_indices_fg,
-                                                'bg': self.placeholder_indices_bg }
-        
-    def get_cached_ada_prompt_embeddings_as_tensor(self):
-        # No tokens appear in the current prompt. So the ada prompt embedding cache is empty.
-        if len(self.ada_prompt_embeddings_cache) == 0:
-            return None
-        
-        if len(self.ada_prompt_embeddings_cache) != self.num_layers_per_embedder:
-            breakpoint()
-        # Stack the cached prompt embeddings of all layers into a tensor.
-        ada_prompt_embeddings = [ self.ada_prompt_embeddings_cache[ca_layer_idx] 
-                                  for ca_layer_idx in range(self.num_layers_per_embedder) ]
-        # ada_prompt_embeddings: [BS, 16, 77, 768]. BS: batch size (2 or 4). 16: num layers.
-        ada_prompt_embeddings = torch.stack(ada_prompt_embeddings, dim=1)
-        return ada_prompt_embeddings
-
-    # self.ada_prompt_embeddings_cache is a cache for the prompt embeddings of all layers, 
-    # for computing the prompt delta loss.
-    # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
-    # not just the ada or static embeddings of the subject.
-    def clear_ada_prompt_embeddings_cache(self):
-        if len(self.ada_prompt_embeddings_cache) == self.num_layers_per_embedder:
-            self.update_emb_ema(self.ada_prompt_token_indices_cache['fg'],
-                                self.ada_prompt_token_indices_cache['bg'])
-
-        self.ada_prompt_embeddings_cache = {}
-
-    # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
-    # which will be enabled again through cache_layer_features_for_ada() in ddpm.py.
-    def clear_ada_layer_temp_info(self):
-        self.gen_ada_embedding = False
-        self.last_layer_idx = self.layer_idx
-        self.layer_idx      = -1
-        self.layer_attn_components  = None
-        self.time_emb       = None
-        
     def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings=None):
         if num_vectors_per_token is None or type(num_vectors_per_token) == int:
             # If token2num_vectors is not specified, then set all tokens to have 1 vector.
@@ -1653,20 +1693,6 @@ class EmbeddingManager(nn.Module):
         else:
             self.token2num_vectors = num_vectors_per_token
         print(f"Set token2num_vectors: {self.token2num_vectors}")
-
-    # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
-    # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
-    # -> .get_learned_conditioning() -> .cond_stage_model.encode()
-    # -> EmbeddingManager.forward() -> here.
-    # Occasionally, image_logger is called, which calls LatentDiffusion.log_images ->
-    # .get_learned_conditioning() -> ... -> here.
-    # Such delta_loss_emb_mask won't be used in calc_prompt_emb_delta_loss() and won't be cleared.
-    # delta_loss_emb_mask: [B, N, 768], where N is the padded prompt length.
-    def set_delta_loss_emb_mask(self, delta_loss_emb_mask):
-        self.delta_loss_emb_mask = delta_loss_emb_mask
-
-    def clear_delta_loss_emb_mask(self):
-        self.delta_loss_emb_mask = None
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, ckpt_path):
@@ -1892,7 +1918,7 @@ class EmbeddingManager(nn.Module):
                 # pre_vecs are updated through BP. Therefore, loss_pre_vecs prevents pre_vecs 
                 # from drifting too far from init_vecs.
                 if embobj.has_bias:
-                    loss_bias        = selective_reg_loss(embobj.bias, loss_type=euc_loss_type)
+                    loss_bias        = reg_loss(embobj.bias, loss_type=euc_loss_type)
                     # bias_reg_weight is computed dynamically. But it's detached from the graph.
                     # embobj.bias: now [Layers, K, 768].
                     bias_reg_weight  = bias_reg_weight_base  * torch.norm(embobj.bias, dim=-1).mean().item() ** T
@@ -1900,7 +1926,7 @@ class EmbeddingManager(nn.Module):
                     loss_bias        = 0.
                     bias_reg_weight  = 0.
 
-                loss_basis       = selective_reg_loss(embobj.basis_vecs, loss_type=euc_loss_type)
+                loss_basis       = reg_loss(embobj.basis_vecs, loss_type=euc_loss_type)
                 # Like bias_reg_weight, basis_reg_weight is also computed dynamically 
                 # and detached from the graph.
                 # basis_vecs: now [K, r-N, 768] for Ada embedder, or [r-N, 768] for Static embedder.
@@ -1909,7 +1935,7 @@ class EmbeddingManager(nn.Module):
                 # N: number of pre_vecs (init_vecs).
                 if embobj.N > 0:
                     # If pre_vecs has a K dim (shape [K, 1, 768]), then init_vecs is automatically broadcasted.
-                    loss_pre_vecs = selective_reg_loss(embobj.pre_vecs - init_vecs, loss_type=euc_loss_type)
+                    loss_pre_vecs = reg_loss(embobj.pre_vecs - init_vecs, loss_type=euc_loss_type)
                 else:
                     loss_pre_vecs = 0.
 
@@ -1921,13 +1947,13 @@ class EmbeddingManager(nn.Module):
 
                 if isinstance(embobj, AdaEmbedding):
                     for i, map in enumerate(embobj.layer_coeff_maps):
-                        loss_ada_maps_weight += selective_reg_loss(map.weight, loss_type=euc_loss_type)
-                        loss_ada_maps_bias   += selective_reg_loss(map.bias,   loss_type=euc_loss_type)
+                        loss_ada_maps_weight += reg_loss(map.weight, loss_type=euc_loss_type)
+                        loss_ada_maps_bias   += reg_loss(map.bias,   loss_type=euc_loss_type)
                     if self.ada_use_attn_pooler:
                         for i, pooler in enumerate(embobj.poolers):
-                            loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_k.weight, loss_type=euc_loss_type)
-                            loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_fg_q.weight, loss_type=euc_loss_type)
-                            loss_ada_attn_pooler  += selective_reg_loss(pooler.lora_to_bg_q.weight, loss_type=euc_loss_type)
+                            loss_ada_attn_pooler  += reg_loss(pooler.lora_to_k.weight, loss_type=euc_loss_type)
+                            loss_ada_attn_pooler  += reg_loss(pooler.lora_to_fg_q.weight, loss_type=euc_loss_type)
+                            loss_ada_attn_pooler  += reg_loss(pooler.lora_to_bg_q.weight, loss_type=euc_loss_type)
 
                 if type(loss_bias) == int:
                     breakpoint()

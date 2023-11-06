@@ -1372,9 +1372,9 @@ def sel_emb_attns_by_indices(attn_mat, indices, do_sum=True, do_mean=False, do_s
     emb_attns = torch.cat(emb_attns, dim=0)
     return emb_attns
                 
-def gen_comp_extra_indices_by_block(delta_loss_emb_mask, subj_indices, bg_indices, block_size):
-    # delta_loss_emb_mask: [4, 77, 1] => [4, 77]
-    comp_extra_mask = delta_loss_emb_mask.squeeze(-1).clone()
+def gen_comp_extra_indices_by_block(prompt_emb_mask, subj_indices, bg_indices, block_size):
+    # prompt_emb_mask: [4, 77, 1] => [4, 77]
+    comp_extra_mask = prompt_emb_mask.squeeze(-1).clone()
     # Mask out the foreground embeddings.
     comp_extra_mask[subj_indices] = 0
     if bg_indices is not None:
@@ -1433,7 +1433,7 @@ def extract_last_chunk_of_indices(token_indices, total_num_chunks=3):
 # Textual inversion is supported, where static_embeddings is only one embedding.
 # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
 # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
-def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, delta_loss_emb_mask,
+def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mask,
                                do_ada_prompt_delta_reg):
     # static_embeddings / ada_embeddings contain 4 types of embeddings:
     # subj_single, subj_comp, cls_single, cls_comp.
@@ -1443,23 +1443,23 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, delta_loss_emb
     static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
             static_embeddings.chunk(4)
 
-    if delta_loss_emb_mask is not None:
+    if prompt_emb_mask is not None:
         subj_single_mask, subj_comp_mask, cls_single_mask, cls_comp_mask = \
-            delta_loss_emb_mask.chunk(4)
+            prompt_emb_mask.chunk(4)
         
         # cls_single_mask == subj_single_mask, cls_comp_mask == subj_comp_mask
         # So only compute using subj_single_mask and subj_comp_mask.
-        delta_loss_emb_mask_agg = subj_single_mask + subj_comp_mask
+        prompt_emb_mask_agg = subj_single_mask + subj_comp_mask
         # If a token appears both in single and comp prompts (all tokens in the single prompts), 
         # the mask value is 2. Convert to 1.
         # If a token appears in only comp prompts (the extra compositional part), 
         # the mask value is 1. Convert to 0.25.
         # If a token is useless (z suffix or padding), the mask value is 0. Convert to 0.
-        delta_loss_emb_mask_weighted = delta_loss_emb_mask_agg.pow(2) / 4            
-        # delta_loss_emb_mask_weighted: [1, 77, 1] => [1, 1, 77, 1].
-        delta_loss_emb_mask_weighted = delta_loss_emb_mask_weighted.unsqueeze(1)
+        prompt_emb_mask_weighted = prompt_emb_mask_agg.pow(2) / 4            
+        # prompt_emb_mask_weighted: [1, 77, 1] => [1, 1, 77, 1].
+        prompt_emb_mask_weighted = prompt_emb_mask_weighted.unsqueeze(1)
     else:
-        delta_loss_emb_mask_weighted = None
+        prompt_emb_mask_weighted = None
 
     use_ortho_subtract = True
     # cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
@@ -1476,7 +1476,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, delta_loss_emb
         static_delta = static_subj_comp_emb - static_subj_single_emb
 
     loss_static_prompt_delta   = calc_delta_loss(static_delta, cls_delta, 
-                                                 emb_mask=delta_loss_emb_mask_weighted,
+                                                 emb_mask=prompt_emb_mask_weighted,
                                                  do_demean_first=True)
 
     if do_ada_prompt_delta_reg and ada_embeddings is not None:
@@ -1492,7 +1492,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, delta_loss_emb
         else:
             ada_delta = ada_subj_comp_emb - ada_subj_single_emb
 
-        loss_ada_prompt_delta = calc_delta_loss(ada_delta, cls_delta, emb_mask=delta_loss_emb_mask_weighted,
+        loss_ada_prompt_delta = calc_delta_loss(ada_delta, cls_delta, emb_mask=prompt_emb_mask_weighted,
                                                 do_demean_first=True)
 
     else:
