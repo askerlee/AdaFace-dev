@@ -1384,8 +1384,11 @@ class EmbeddingManager(nn.Module):
         B2, N2 = tokenized_text_repeated.shape
         assert N == N2
 
+        # Block the interaction between the subject and padding tokens with a probability of 0.5.
+        p_block_subj_padding_interaction = 0.5
+
         # prompt_token_attn_mask: [B, N, N]
-        if self.placeholder_indices_fg is not None:
+        if self.placeholder_indices_fg is not None and random.random() < p_block_subj_padding_interaction:
             # subj_tokens_mask: [B, N].
             # If zeros_like(tokenized_text, dtype=float), then subj_tokens_mask is of type float64, 
             # inconsistent with padding_tokens_mask.
@@ -1395,10 +1398,10 @@ class EmbeddingManager(nn.Module):
             # A batch with 4 types of sub-blocks. Only the subject half is the subject prompts. 
             # The other half is the class prompts. But for better alignment, 
             # we still mask the class tokens.
-            if len(self.placeholder_indices_fg[0].unique()) == B // 2:
-                cls_indices = (self.placeholder_indices_fg[0] + B // 2, self.placeholder_indices_fg[1])
-                subj_tokens_mask[cls_indices] = 1
-                
+            #if len(self.placeholder_indices_fg[0].unique()) == B // 2:
+            #    cls_indices = (self.placeholder_indices_fg[0] + B // 2, self.placeholder_indices_fg[1])
+            #    subj_tokens_mask[cls_indices] = 1
+
             # subj_tokens_mask: [B, N] => [B, N, 1]. 
             # padding_tokens_mask: [B, N] => [B, 1, N].
             # subj_padding_interact_mask: [B, N, N].

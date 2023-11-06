@@ -3057,7 +3057,7 @@ class LatentDiffusion(DDPM):
         K_fg = len(fg_indices_2b[0]) // len(torch.unique(fg_indices_2b[0]))
         fg_indices_4b = double_token_indices(fg_indices_2b, BLOCK_SIZE * 2)
 
-        mix_feat_grad_scale = 0.1
+        mix_feat_grad_scale  = 0.1
         mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
         # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to teacher attn. 
         # Setting to 0 may prevent the graph from being released and OOM.
