@@ -1449,6 +1449,8 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
             static_embeddings.chunk(4)
 
     if prompt_emb_mask is not None:
+        prompt_emb_mask[prompt_emb_mask == 0] = 0.25
+        prompt_emb_mask[:, 0] = 0
         subj_single_mask, subj_comp_mask, cls_single_mask, cls_comp_mask = \
             prompt_emb_mask.chunk(4)
         
@@ -1456,10 +1458,10 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
         # So only compute using subj_single_mask and subj_comp_mask.
         prompt_emb_mask_agg = subj_single_mask + subj_comp_mask
         # If a token appears both in single and comp prompts (all tokens in the single prompts), 
-        # the mask value is 2. Convert to 1.
+        # the aggregated mask value is 2. Convert to 1.
         # If a token appears in only comp prompts (the extra compositional part), 
-        # the mask value is 1. Convert to 0.25.
-        # If a token is useless (z suffix or padding), the mask value is 0. Convert to 0.
+        # the aggregated mask value is 1. Convert to 0.25.
+        # If a token is padding, the aggregated mask value is 0.5. Convert to 0.0625.
         prompt_emb_mask_weighted = prompt_emb_mask_agg.pow(2) / 4            
         # prompt_emb_mask_weighted: [1, 77, 1] => [1, 1, 77, 1].
         prompt_emb_mask_weighted = prompt_emb_mask_weighted.unsqueeze(1)
