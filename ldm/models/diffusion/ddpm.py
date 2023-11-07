@@ -3133,7 +3133,7 @@ class LatentDiffusion(DDPM):
                     
                     loss_subj_attn_delta_distill  += loss_layer_subj_attn_delta * attn_delta_distill_layer_weight
                     # pow(3): focus on large differences. pow(0.33): reduce the grad scale.
-                    loss_layer_comp_attn_delta      = power_loss(comp_attn_delta, exponent=2)
+                    loss_layer_comp_attn_delta      = power_loss(comp_attn_delta, exponent=2, rev_pow=True)
                     loss_comp_attn_delta_distill   += loss_layer_comp_attn_delta
 
                 # Align the attention corresponding to each embedding individually.
