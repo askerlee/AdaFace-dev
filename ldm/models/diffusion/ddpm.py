@@ -2748,7 +2748,7 @@ class LatentDiffusion(DDPM):
 
             loss += self.fg_bg_xlayer_consist_loss_weight * (loss_fg_xlayer_consist + loss_bg_xlayer_consist)
 
-        self.subj_attn_delta_distill_uses_scores    = False
+        self.subj_attn_delta_distill_uses_scores    = True
         self.subj_comp_attn_comple_loss_uses_scores = True
         self.comp_bg_attn_suppress_uses_scores      = True
 
@@ -2797,7 +2797,7 @@ class LatentDiffusion(DDPM):
             if loss_comp_attn_delta_distill > 0:
                 loss_dict.update({f'{prefix}/comp_attn_delta_distill':  loss_comp_attn_delta_distill.mean().detach()})
 
-            subj_attn_delta_distill_loss_scale = 0.5
+            subj_attn_delta_distill_loss_scale = 0.25
             comp_attn_delta_distill_loss_scale = 1
 
             if self.subj_attn_delta_distill_uses_scores:
