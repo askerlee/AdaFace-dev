@@ -2806,7 +2806,8 @@ class LatentDiffusion(DDPM):
                 # loss_subj_attn_norm_distill uses attention probs, which tends to be in 
                 # smaller magnitudes than using scores. So we scale it up by 4x.
                 subj_attn_norm_distill_loss_scale = self.subj_attn_norm_distill_loss_scale * 4
-
+                subj_attn_delta_distill_loss_scale *= 4
+                
             feat_delta_distill_scale = 2
 
             loss_mix_prompt_distill =  (loss_subj_attn_delta_distill + loss_comp_attn_delta_distill * comp_attn_delta_distill_loss_scale) \
