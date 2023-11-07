@@ -2355,8 +2355,7 @@ class LatentDiffusion(DDPM):
                 # do_sqrt_norm=True: wds_comp_extra prompts are usually much longer, so we do sqrt norm to scale down 
                 # wds_comp_extra attn scores.
                 loss_fg_wds_complementary, loss_fg_mask_align_wds, loss_wds_mask_align, loss_fg_wds_mask_contrast = \
-                            self.calc_fg_bg_complementary_loss(extra_info[fg_wds_comple_attn_key], 
-                                                                extra_info['unet_attnscores'],
+                            self.calc_fg_bg_complementary_loss(extra_info['unet_attnscores'],
                                                                 subj_indices_ext,
                                                                 wds_comp_extra_indices,
                                                                 BS=x_start.shape[0],
