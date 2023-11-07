@@ -1059,8 +1059,10 @@ class EmbeddingManager(nn.Module):
         self.text_embedder  = text_embedder
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_token_indices_cache = {}
-        self.force_grad     = False
-
+        self.iter_type = None
+        self.fg_selective_grad_scale  = 0.1
+        self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
+        
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}".format(
                placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings))
             
@@ -1145,6 +1147,7 @@ class EmbeddingManager(nn.Module):
             if placeholder_indices[0].numel() == 0:
                 continue
             
+            token_is_bg = (placeholder_string in self.background_strings)
             # If multiple occurrences are found in a prompt, only keep the first as the subject.
             # Other occurrences are treated as part of the background prompt (this may happen if
             # composition image overlay is used).
@@ -1191,7 +1194,13 @@ class EmbeddingManager(nn.Module):
                 # After repeat, the RHS is
                 # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
-                embedded_text[placeholder_indices_k] = subj_static_embedding[:, k].repeat(REAL_OCCURS_IN_BATCH, 1)
+                subj_static_embedding_k = subj_static_embedding[:, k]
+                if self.iter_type is not None and not token_is_bg:
+                    subj_static_embedding_k_gs = self.fg_emb_selective_grad_scaling(subj_static_embedding_k, k, self.iter_type)
+                else:
+                    subj_static_embedding_k_gs = subj_static_embedding_k
+
+                embedded_text[placeholder_indices_k] = subj_static_embedding_k_gs.repeat(REAL_OCCURS_IN_BATCH, 1)
 
             # Cache the placeholder indices for mix prompt distillation.
             # Note placeholder_indices are recomputed in update_placeholder_indices(), 
@@ -1202,7 +1211,7 @@ class EmbeddingManager(nn.Module):
             # If background_strings is None, then always update the indices. Otherwise, 
             # skip updating placeholder indices of the background string.
             self.update_placeholder_indices(orig_tokenized_text, placeholder_token, self.token2num_vectors[placeholder_string],
-                                            token_is_bg=(placeholder_string in self.background_strings))
+                                            token_is_bg=token_is_bg)
 
         return embedded_text, tokenized_text, static_subj_embs_dict
 
@@ -1358,10 +1367,33 @@ class EmbeddingManager(nn.Module):
                 # the placeholder token. But that requires complex processing so not pursued now.
                 placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k)
                 # subj_ada_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
-                embedded_text[placeholder_indices_k] = subj_ada_embedding[placeholder_indices_1st[0], k]
+                subj_ada_embedding_k = subj_ada_embedding[placeholder_indices_1st[0], k]
+                if self.iter_type is not None and not token_is_bg:
+                    subj_ada_embedding_k_gs = self.fg_emb_selective_grad_scaling(subj_ada_embedding_k, k, self.iter_type)
+                else:
+                    subj_ada_embedding_k_gs = subj_ada_embedding_k
+
+                embedded_text[placeholder_indices_k] = subj_ada_embedding_k_gs
 
         return embedded_text
 
+    def fg_emb_selective_grad_scaling(self, fg_embedding_k, k, iter_type):
+        if iter_type == 'recon_iter':
+            # In a recon_iter, do gs if k is even, not if k is odd.
+            if k % 2 == 1:
+                return fg_embedding_k
+            else:
+                return self.fg_selective_grad_scaler(fg_embedding_k)
+            
+        elif iter_type == 'distill_iter':
+            # In a distill_iter, do gs if k is odd, not if k is even.
+            if k % 2 == 1:
+                return self.fg_selective_grad_scaler(fg_embedding_k)
+            else:
+                return fg_embedding_k
+        else:
+            breakpoint()
+            
     # Update prompt_emb_mask and prompt_token_attn_mask.
     # tokenized_text: [B, N] = [2/4, 77].
     # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()

@@ -35,7 +35,8 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
                        anneal_t, rand_annealed, anneal_value, calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
-                       gen_comp_extra_indices_by_block, calc_prompt_emb_delta_loss, power_loss
+                       gen_comp_extra_indices_by_block, calc_prompt_emb_delta_loss, power_loss, \
+                       calc_dyn_loss_scale
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -1498,6 +1499,8 @@ class LatentDiffusion(DDPM):
                                                 # anneal_value(self.training_percent, 1, (1.0, 0.5)) \
                                                 # * self.recon_loss_weight 
 
+        self.embedding_manager.iter_type = 'distill_iter' if self.iter_flags['is_compos_iter'] else 'recon_iter'
+
         loss = self(x_start, captions, **kwargs)
 
         return loss
@@ -2792,12 +2795,15 @@ class LatentDiffusion(DDPM):
             subj_attn_delta_distill_loss_scale_base = 0.5
             comp_attn_delta_distill_loss_scale_base = 1
             # subj_attn_delta_distill_loss_base: 0.5
-            subj_attn_delta_distill_loss_scale = loss_subj_attn_delta_distill.item() * subj_attn_delta_distill_loss_scale_base \
-                                                    / self.subj_attn_delta_distill_loss_base
-            # comp_attn_delta_distill_loss_base: 5
-            comp_attn_delta_distill_loss_scale = loss_comp_attn_delta_distill.item() * comp_attn_delta_distill_loss_scale_base \
-                                                    / self.comp_attn_delta_distill_loss_base
+            subj_attn_delta_distill_loss_scale = calc_dyn_loss_scale(loss_subj_attn_delta_distill, 
+                                                                     self.subj_attn_delta_distill_loss_base,
+                                                                     subj_attn_delta_distill_loss_scale_base)
 
+            # comp_attn_delta_distill_loss_base: 5
+            comp_attn_delta_distill_loss_scale = calc_dyn_loss_scale(loss_comp_attn_delta_distill,
+                                                                     self.comp_attn_delta_distill_loss_base,
+                                                                     comp_attn_delta_distill_loss_scale_base)
+            
             feat_delta_distill_scale = 1
 
             loss_mix_prompt_distill =  (loss_subj_attn_delta_distill * subj_attn_delta_distill_loss_scale \
