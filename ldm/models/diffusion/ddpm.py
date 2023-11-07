@@ -3186,10 +3186,8 @@ class LatentDiffusion(DDPM):
             else:
                 pooler = nn.Identity()
 
-            # Pool the H, W dimensions to remove spatial information.
-            # After pooling, subj_single_feat, subj_comp_feat, 
-            # mix_single_feat, mix_comp_feat: [1, 1280] or [1, 640], ...
-            # subj_single_feat_3d: [2, 9, 1280]
+            # Flatten the spatial dimensions H, W.
+            # After pooling, subj_single_feat, ...: [2, 1280, 3, 3].
             # subj_single_feat: [2, 1280, 8, 8] pool -> [2, 1280, 3, 3] -> [2, 1280, 9] -> [2, 9, 1280]
             subj_single_feat_3d = pooler(subj_single_feat).reshape(*subj_single_feat.shape[:2], -1).permute(0, 2, 1)
             subj_comp_feat_3d   = pooler(subj_comp_feat).reshape(*subj_comp_feat.shape[:2], -1).permute(0, 2, 1)
@@ -3201,25 +3199,14 @@ class LatentDiffusion(DDPM):
             mix_comp_feat_3d_gs    = mix_feat_grad_scaler(mix_comp_feat_3d)
 
             # ortho_subtract() is done on the last dimension. 
-            # So we flatten the spatial dimensions first as above.
             # NOTE: use normalized_ortho_subtract() will reduce performance.
-            mix_comp_feat_delta_3d       = ortho_subtract(mix_comp_feat_3d_gs, mix_single_feat_3d_gs)
+            mix_comp_feat_delta_3d_gs    = ortho_subtract(mix_comp_feat_3d_gs,    mix_single_feat_3d_gs)
             # subj_mix_single_align_coeffs: [2, 9]
             subj_mix_single_align_coeffs = calc_align_coeffs(subj_single_feat_3d, mix_single_feat_3d_gs)
-            proj_subj_comp_feat_3d = (subj_mix_single_align_coeffs.unsqueeze(2) * mix_comp_feat_delta_3d) + subj_single_feat_3d
-            # single_feat_delta, comp_feat_delta: [1, 1280], ...
-            # Pool the spatial dimensions H, W to remove spatial information.
-            # The gradient goes back to single_feat_delta -> subj_comp_feat,
-            # as well as comp_feat_delta -> mix_comp_feat.
-            # If stop_single_grad, the gradients to subj_single_feat and mix_single_feat are stopped, 
-            # as these two images should look good by themselves (since they only contain the subject).
-            # Note the learning strategy to the single image features should be different from 
-            # the single embeddings, as the former should be optimized to look good by itself,
-            # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
-            # and 2) the embeddings are amendable to composition.
+            # proj_subj_comp_feat_3d: [2, 9, 1280]
+            proj_subj_comp_feat_3d = (subj_mix_single_align_coeffs.unsqueeze(2) * mix_comp_feat_delta_3d_gs) + subj_single_feat_3d
             loss_layer_feat_delta_distill = ortho_l2loss(subj_comp_feat_3d, proj_subj_comp_feat_3d, mean=True)
             
-            # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
             loss_feat_delta_distill += loss_layer_feat_delta_distill * feat_distill_layer_weight
 
         return loss_subj_attn_delta_distill, loss_comp_attn_delta_distill, loss_subj_attn_norm_distill, loss_feat_delta_distill
