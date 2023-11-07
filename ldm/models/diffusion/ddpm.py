@@ -23,7 +23,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
-                       ortho_subtract, decomp_align_ortho, get_align_coeffs, \
+                       ortho_subtract, decomp_align_ortho, calc_align_coeffs, \
                        ortho_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, calc_delta_loss, \
                        save_grid, chunk_list, join_list_of_indices, split_indices_by_instance, \
@@ -101,7 +101,8 @@ class DDPM(pl.LightningModule):
                  static_embedding_reg_weight=0.,
                  ada_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
-                 padding_embs_align_loss_weight=0.,
+                 padding_embs_align_loss_base=0.,
+                 padding_embs_align_loss_weight_base=0.,
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_value_ortho_loss_weight=0.,
                  subj_comp_attn_complementary_loss_weight=0.,
@@ -141,7 +142,8 @@ class DDPM(pl.LightningModule):
 
         self.composition_regs_iter_gap          = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
-        self.padding_embs_align_loss_weight     = padding_embs_align_loss_weight
+        self.padding_embs_align_loss_base           = padding_embs_align_loss_base
+        self.padding_embs_align_loss_weight_base    = padding_embs_align_loss_weight_base
         self.subj_comp_key_ortho_loss_weight    = subj_comp_key_ortho_loss_weight
         self.subj_comp_value_ortho_loss_weight  = subj_comp_value_ortho_loss_weight
         self.subj_comp_attn_complementary_loss_weight = subj_comp_attn_complementary_loss_weight
@@ -2686,8 +2688,8 @@ class LatentDiffusion(DDPM):
             loss += (loss_static_prompt_delta + loss_ada_prompt_delta * ada_comp_loss_boost_ratio) \
                      * self.prompt_emb_delta_reg_weight
         
-            # Even if padding_embs_align_loss_weight is disabled, we still monitor loss_padding_subj_embs_align.
-            if self.padding_embs_align_loss_weight >= 0:
+            # Even if padding_embs_align_loss_weight_base is disabled, we still monitor loss_padding_subj_embs_align.
+            if self.padding_embs_align_loss_weight_base >= 0:
                 if self.iter_flags['do_normal_recon']:
                     subj_indices        = extra_info['subj_indices_1b']
                     # c_static_emb_1b is generated from batch['captions']. 
@@ -2721,7 +2723,9 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/padding_cls_embs_align': loss_padding_cls_embs_align.mean().detach()})
                     loss_padding_cls_embs_align = 0
 
-                loss += loss_padding_subj_embs_align * self.padding_embs_align_loss_weight
+                padding_embs_align_loss_weight = loss_padding_subj_embs_align.item() * self.padding_embs_align_loss_weight_base \
+                                                  / self.padding_embs_align_loss_base
+                loss += loss_padding_subj_embs_align * padding_embs_align_loss_weight
 
         if self.fg_bg_xlayer_consist_loss_weight > 0:
             # SSB_SIZE: subject sub-batch size.
@@ -3185,21 +3189,24 @@ class LatentDiffusion(DDPM):
             # Pool the H, W dimensions to remove spatial information.
             # After pooling, subj_single_feat, subj_comp_feat, 
             # mix_single_feat, mix_comp_feat: [1, 1280] or [1, 640], ...
-            subj_single_feat = pooler(subj_single_feat).reshape(subj_single_feat.shape[0], -1)
-            subj_comp_feat   = pooler(subj_comp_feat).reshape(subj_comp_feat.shape[0], -1)
-            mix_single_feat  = pooler(mix_single_feat).reshape(mix_single_feat.shape[0], -1)
-            mix_comp_feat    = pooler(mix_comp_feat).reshape(mix_comp_feat.shape[0], -1)
+            # subj_single_feat_3d: [2, 9, 1280]
+            # subj_single_feat: [2, 1280, 8, 8] pool -> [2, 1280, 3, 3] -> [2, 1280, 9] -> [2, 9, 1280]
+            subj_single_feat_3d = pooler(subj_single_feat).reshape(*subj_single_feat.shape[:2], -1).permute(0, 2, 1)
+            subj_comp_feat_3d   = pooler(subj_comp_feat).reshape(*subj_comp_feat.shape[:2], -1).permute(0, 2, 1)
+            mix_single_feat_3d  = pooler(mix_single_feat).reshape(*mix_single_feat.shape[:2], -1).permute(0, 2, 1)
+            mix_comp_feat_3d    = pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1).permute(0, 2, 1)
 
             # mix_feat_grad_scale = 0.1.
-            mix_single_feat  = mix_feat_grad_scaler(mix_single_feat)
-            mix_comp_feat    = mix_feat_grad_scaler(mix_comp_feat)
+            mix_single_feat_3d_gs  = mix_feat_grad_scaler(mix_single_feat_3d)
+            mix_comp_feat_3d_gs    = mix_feat_grad_scaler(mix_comp_feat_3d)
 
             # ortho_subtract() is done on the last dimension. 
             # So we flatten the spatial dimensions first as above.
             # NOTE: use normalized_ortho_subtract() will reduce performance.
-            comp_feat_delta   = ortho_subtract(subj_comp_feat,   mix_comp_feat)
-            single_feat_delta = ortho_subtract(subj_single_feat, mix_single_feat)
-                
+            mix_comp_feat_delta_3d       = ortho_subtract(mix_comp_feat_3d_gs, mix_single_feat_3d_gs)
+            # subj_mix_single_align_coeffs: [2, 9]
+            subj_mix_single_align_coeffs = calc_align_coeffs(subj_single_feat_3d, mix_single_feat_3d_gs)
+            proj_subj_comp_feat_3d = (subj_mix_single_align_coeffs.unsqueeze(2) * mix_comp_feat_delta_3d) + subj_single_feat_3d
             # single_feat_delta, comp_feat_delta: [1, 1280], ...
             # Pool the spatial dimensions H, W to remove spatial information.
             # The gradient goes back to single_feat_delta -> subj_comp_feat,
@@ -3210,7 +3217,7 @@ class LatentDiffusion(DDPM):
             # the single embeddings, as the former should be optimized to look good by itself,
             # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
             # and 2) the embeddings are amendable to composition.
-            loss_layer_feat_delta_distill = ortho_l2loss(comp_feat_delta, single_feat_delta, mean=True)
+            loss_layer_feat_delta_distill = ortho_l2loss(subj_comp_feat_3d, proj_subj_comp_feat_3d, mean=True)
             
             # print(f'layer {unet_layer_idx} loss: {loss_layer_prompt_mix_reg:.4f}')
             loss_feat_delta_distill += loss_layer_feat_delta_distill * feat_distill_layer_weight
@@ -3897,7 +3904,7 @@ class LatentDiffusion(DDPM):
             # subj_subj_embs_gs_i: [1,  16, 768].
             subj_subj_embs_gs_i = subj_subj_embs_gs[i]
             # padding_subj_embs_align_coeffs_i: [63, 16]
-            padding_subj_embs_align_coeffs_i  = get_align_coeffs(subj_padding_embs_i, subj_subj_embs_gs_i)
+            padding_subj_embs_align_coeffs_i  = calc_align_coeffs(subj_padding_embs_i, subj_subj_embs_gs_i)
             loss_padding_subj_embs_align += power_loss(padding_subj_embs_align_coeffs_i, exponent=2)
 
         if is_compos_iter:
@@ -3914,7 +3921,7 @@ class LatentDiffusion(DDPM):
                 # cls_subj_embs_i:    [1, 16, 768].
                 cls_subj_embs_i = cls_subj_embs[i]
                 # padding_cls_embs_align_coeffs_i: [63, 16]
-                padding_cls_embs_align_coeffs_i  = get_align_coeffs(cls_padding_embs_i, cls_subj_embs_i)
+                padding_cls_embs_align_coeffs_i  = calc_align_coeffs(cls_padding_embs_i, cls_subj_embs_i)
                 loss_padding_cls_embs_align += power_loss(padding_cls_embs_align_coeffs_i, exponent=2)
 
         else:

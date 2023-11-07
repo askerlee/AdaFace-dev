@@ -263,7 +263,7 @@ def directional_suppress(a, b, align_suppress_scale=1):
 def align_suppressed_add(a, b, align_suppress_scale=1):
     return a + directional_suppress(b, a, align_suppress_scale)
 
-def get_align_coeffs(a, b, on_last_n_dims=1):
+def calc_align_coeffs(a, b, on_last_n_dims=1):
     assert a.ndim == b.ndim, "Tensors a and b must have the same number of dimensions"
     if on_last_n_dims > 1:
         # Do not support broadcasting if on_last_n_dims > 1.
