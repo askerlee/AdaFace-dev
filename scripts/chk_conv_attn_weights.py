@@ -32,10 +32,11 @@ for idx, iteration in enumerate(iterations):
     print(iteration)
     emb_path = os.path.join(emb_folder, iter2path[iteration])
     emb_ckpt = torch.load(emb_path)
-    print('emb_global_scale_score:', emb_ckpt['emb_global_scale_score'])
+    print('emb_global_scale_score: {:.4f}'.format(emb_ckpt['emb_global_scale_score'].sigmoid().item() + 0.5))
     for weight_name in ('layerwise_point_conv_attn_mix_weights', 'layerwise_conv_attn_weights'):
         if weight_name in emb_ckpt:
-            print(emb_ckpt[weight_name])
+            print('layerwise_point_conv_attn_mix_weights:')
+            print(emb_ckpt[weight_name].data)
 
 tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
 
