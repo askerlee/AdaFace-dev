@@ -335,10 +335,10 @@ def demean(x):
 # delta, ref_delta: [2, 16, 77, 768].
 # emb_mask: [2, 77, 1]. Could be fractional, e.g., 0.5, to discount some tokens.
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
-def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
-                    exponent=3, do_demean_first=False, repair_ref_bound_zeros=False,
-                    first_n_dims_to_flatten=3,
-                    ref_grad_scale=0, aim_to_align=True, debug=False):
+def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
+                            exponent=3, do_demean_first=False, repair_ref_bound_zeros=False,
+                            first_n_dims_to_flatten=3,
+                            ref_grad_scale=0, aim_to_align=True, debug=False):
     B = delta.shape[0]
     loss = 0
     if batch_mask is not None:
@@ -452,6 +452,27 @@ def calc_delta_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
     loss /= batch_mask.sum()
     return loss
 
+# feat_base, feat_ex, ...: [2, 9, 1280].
+# Last dim is the channel dim.
+# feat_ex     is the extension (enriched features) of feat_base.
+# ref_feat_ex is the extension (enriched features) of ref_feat_base.
+def calc_projected_delta_l2_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, ref_grad_scale=0.1):
+        ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
+        # Reduce the gradient to the reference features.
+        ref_feat_base_gs  = ref_grad_scaler(ref_feat_base)
+        ref_feat_ex_gs    = ref_grad_scaler(ref_feat_ex)
+
+        # ortho_subtract() is done on the last dimension. 
+        # NOTE: use normalized_ortho_subtract() will reduce performance.
+        ref_delta_gs      = ortho_subtract(ref_feat_ex_gs, ref_feat_base_gs)
+        # feat_base_ref_align_coeffs: [2, 9]
+        feat_base_ref_align_coeffs = calc_align_coeffs(feat_base, ref_feat_base_gs)
+        # proj_feat_ex: [2, 9, 1280]
+        proj_feat_ex = (feat_base_ref_align_coeffs.unsqueeze(-1) * ref_delta_gs) + feat_base
+        loss_delta = ortho_l2loss(feat_ex, proj_feat_ex, mean=True)
+        return loss_delta
+
+    
 def calc_and_print_stats(ts, ts_name=None):
     if ts_name is not None:
         print(f"{ts_name}: ", end='')
@@ -1341,11 +1362,12 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
         # is allowed to vary only along the direction of the orthogonal projections of class embeddings.
 
         # Encourage subj_comp_emb_align and cls_comp_emb_align to be aligned (dot product -> 1).
-        loss_layer_subj_comp_key_ortho = calc_delta_loss(subj_comp_emb_ortho, cls_comp_emb_ortho, 
-                                                         batch_mask=None, exponent=2,
-                                                         do_demean_first=do_demean_first, 
-                                                         first_n_dims_to_flatten=3,
-                                                         ref_grad_scale=cls_grad_scale)
+        loss_layer_subj_comp_key_ortho = \
+            calc_delta_cosine_loss(subj_comp_emb_ortho, cls_comp_emb_ortho, 
+                                    batch_mask=None, exponent=2,
+                                    do_demean_first=do_demean_first, 
+                                    first_n_dims_to_flatten=3,
+                                    ref_grad_scale=cls_grad_scale)
         
         loss_layer_cls_comp_key_align = power_loss(cls_comp_emb_align_coeffs, exponent=2)
     else:
@@ -1485,9 +1507,10 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
         cls_delta    = static_cls_comp_emb  - static_cls_single_emb
         static_delta = static_subj_comp_emb - static_subj_single_emb
 
-    loss_static_prompt_delta   = calc_delta_loss(static_delta, cls_delta, 
-                                                 emb_mask=prompt_emb_mask_weighted,
-                                                 do_demean_first=True)
+    loss_static_prompt_delta   = \
+        calc_delta_cosine_loss(static_delta, cls_delta, 
+                                emb_mask=prompt_emb_mask_weighted,
+                                do_demean_first=True)
 
     if do_ada_prompt_delta_reg and ada_embeddings is not None:
         # ada_embeddings: [4, 16, 77, 768]
@@ -1502,8 +1525,9 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
         else:
             ada_delta = ada_subj_comp_emb - ada_subj_single_emb
 
-        loss_ada_prompt_delta = calc_delta_loss(ada_delta, cls_delta, emb_mask=prompt_emb_mask_weighted,
-                                                do_demean_first=True)
+        loss_ada_prompt_delta = \
+            calc_delta_cosine_loss(ada_delta, cls_delta, emb_mask=prompt_emb_mask_weighted,
+                                    do_demean_first=True)
 
     else:
         loss_ada_prompt_delta = 0

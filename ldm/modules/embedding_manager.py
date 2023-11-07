@@ -6,7 +6,7 @@ from ldm.modules.ema import LitEma
 import torch.nn.functional as F
 import numpy as np
 
-from ldm.util import ortho_subtract, calc_delta_loss, GradientScaler, masked_mean, \
+from ldm.util import ortho_subtract, calc_delta_cosine_loss, GradientScaler, masked_mean, \
                      gen_gradient_scaler, extract_first_index_in_each_instance
 from functools import partial
 from collections import OrderedDict

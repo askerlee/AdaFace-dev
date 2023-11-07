@@ -25,7 +25,8 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        count_params, instantiate_from_config, \
                        ortho_subtract, decomp_align_ortho, calc_align_coeffs, \
                        ortho_l2loss, gen_gradient_scaler, \
-                       convert_attn_to_spatial_weight, calc_delta_loss, \
+                       convert_attn_to_spatial_weight, \
+                       calc_delta_cosine_loss, calc_projected_delta_l2_loss, \
                        save_grid, chunk_list, join_list_of_indices, split_indices_by_instance, \
                        distribute_embedding_to_M_tokens, fix_emb_scales, \
                        halve_token_indices, double_token_indices, \
@@ -2666,10 +2667,10 @@ class LatentDiffusion(DDPM):
             # subject embeddings from each block, and compare two such blocks.
             loss_static_prompt_delta,  loss_ada_prompt_delta \
                 = calc_prompt_emb_delta_loss( 
-                                    extra_info['c_static_emb_4b'], ada_embeddings,
-                                    extra_info['prompt_emb_mask'],
-                                    self.iter_flags['do_ada_emb_delta_reg']
-                                    )
+                        extra_info['c_static_emb_4b'], ada_embeddings,
+                        extra_info['prompt_emb_mask'],
+                        self.iter_flags['do_ada_emb_delta_reg']
+                    )
 
             if self.iter_flags['do_ada_emb_delta_reg'] and ada_embeddings is not None:
                 # The cached ada prompt embeddings are useless now, release them.
@@ -3110,18 +3111,25 @@ class LatentDiffusion(DDPM):
                 mix_comp_comp_attn_gs   = mix_attn_grad_scaler(mix_comp_comp_attn)
 
                 if attn_delta_distill_layer_weight > 0:
+                    comp_attn_delta        = ortho_subtract(subj_comp_comp_attn,   mix_comp_comp_attn_gs)
+
+                    '''
                     # deltas obtained from ortho_subtract() are scale-invariant to input attns.
                     single_subj_attn_delta = ortho_subtract(subj_single_subj_attn, mix_single_subj_attn_gs)
                     comp_subj_attn_delta   = ortho_subtract(subj_comp_subj_attn,   mix_comp_subj_attn_gs)
-                    comp_attn_delta        = ortho_subtract(subj_comp_comp_attn,   mix_comp_comp_attn_gs)
 
                     # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
                     # towards class embeddings, hurting authenticity.
-                    loss_layer_subj_attn_delta = calc_delta_loss(single_subj_attn_delta, comp_subj_attn_delta, 
-                                                                 exponent=2,
-                                                                 do_demean_first=False,
-                                                                 first_n_dims_to_flatten=2, 
-                                                                 ref_grad_scale=1)
+                    loss_layer_subj_attn_delta = \
+                        calc_delta_cosine_loss(single_subj_attn_delta, comp_subj_attn_delta, 
+                                                exponent=2,
+                                                do_demean_first=False,
+                                                first_n_dims_to_flatten=2, 
+                                                ref_grad_scale=1)
+                    '''
+                    loss_layer_subj_attn_delta = calc_projected_delta_l2_loss(subj_single_subj_attn,   subj_comp_subj_attn,
+                                                                              mix_single_subj_attn_gs, mix_comp_subj_attn_gs,
+                                                                              ref_grad_scale=mix_attn_grad_scale)
                     
                     loss_subj_attn_delta_distill  += loss_layer_subj_attn_delta * attn_delta_distill_layer_weight
                     # pow(3): focus on large differences. pow(0.33): reduce the grad scale.
@@ -3195,17 +3203,9 @@ class LatentDiffusion(DDPM):
             mix_comp_feat_3d    = pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1).permute(0, 2, 1)
 
             # mix_feat_grad_scale = 0.1.
-            mix_single_feat_3d_gs  = mix_feat_grad_scaler(mix_single_feat_3d)
-            mix_comp_feat_3d_gs    = mix_feat_grad_scaler(mix_comp_feat_3d)
-
-            # ortho_subtract() is done on the last dimension. 
-            # NOTE: use normalized_ortho_subtract() will reduce performance.
-            mix_comp_feat_delta_3d_gs    = ortho_subtract(mix_comp_feat_3d_gs,    mix_single_feat_3d_gs)
-            # subj_mix_single_align_coeffs: [2, 9]
-            subj_mix_single_align_coeffs = calc_align_coeffs(subj_single_feat_3d, mix_single_feat_3d_gs)
-            # proj_subj_comp_feat_3d: [2, 9, 1280]
-            proj_subj_comp_feat_3d = (subj_mix_single_align_coeffs.unsqueeze(2) * mix_comp_feat_delta_3d_gs) + subj_single_feat_3d
-            loss_layer_feat_delta_distill = ortho_l2loss(subj_comp_feat_3d, proj_subj_comp_feat_3d, mean=True)
+            loss_layer_feat_delta_distill = calc_projected_delta_l2_loss(subj_single_feat_3d, subj_comp_feat_3d,
+                                                                         mix_single_feat_3d,  mix_comp_feat_3d,
+                                                                         ref_grad_scale=mix_feat_grad_scale)
             
             loss_feat_delta_distill += loss_layer_feat_delta_distill * feat_distill_layer_weight
 
@@ -3305,13 +3305,14 @@ class LatentDiffusion(DDPM):
 
             # Use subj_attn as a reference, and scale down grad to fg attn, 
             # to make fg embeddings more stable.
-            loss_layer_fg_bg_comple = calc_delta_loss(bg_attn, subj_attn, 
-                                                        exponent=2,    
-                                                        do_demean_first=False,
-                                                        first_n_dims_to_flatten=2, 
-                                                        ref_grad_scale=fg_grad_scale,
-                                                        aim_to_align=False,
-                                                        debug=False)
+            loss_layer_fg_bg_comple = \
+                calc_delta_cosine_loss(bg_attn, subj_attn, 
+                                        exponent=2,    
+                                        do_demean_first=False,
+                                        first_n_dims_to_flatten=2, 
+                                        ref_grad_scale=fg_grad_scale,
+                                        aim_to_align=False,
+                                        debug=False)
 
             # loss_fg_bg_complementary doesn't need fg_mask.
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_align_layer_weight
@@ -3665,11 +3666,12 @@ class LatentDiffusion(DDPM):
                 # to make the two attention maps more complementary (expect the loss pushes the 
                 # subject embedding to a more accurate point).
                 # subj_comp_attn_ortho, cls_comp_attn_ortho: [1, 9, 8, 64]
-                loss_layer_comp_attn_ortho = calc_delta_loss(subj_comp_attn_ortho, cls_comp_attn_ortho, 
-                                                             exponent=2,    
-                                                             do_demean_first=False,
-                                                             first_n_dims_to_flatten=3, 
-                                                             ref_grad_scale=cls_grad_scale)
+                loss_layer_comp_attn_ortho = \
+                    calc_delta_cosine_loss(subj_comp_attn_ortho, cls_comp_attn_ortho, 
+                                            exponent=2,    
+                                            do_demean_first=False,
+                                            first_n_dims_to_flatten=3, 
+                                            ref_grad_scale=cls_grad_scale)
                 loss_layer_cls_comp_attn_align = power_loss(cls_comp_attn_align_coeffs, exponent=2)
             else:
                 loss_layer_comp_attn_ortho = 0
