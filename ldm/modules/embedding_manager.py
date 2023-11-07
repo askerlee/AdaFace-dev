@@ -867,7 +867,7 @@ class EmbeddingManager(nn.Module):
             default_point_conv_attn_mix_weight=0.5,
             static_only_tokens=None,
             normalize_subj_attn=False,
-            dedicated_recon_distill_subsets=False,
+            use_specialized_recon_distill_subsets=False,
             **kwargs
     ):
         super().__init__()
@@ -1061,12 +1061,12 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_token_indices_cache = {}
         self.iter_type = None
-        self.dedicated_recon_distill_subsets = dedicated_recon_distill_subsets
+        self.use_specialized_recon_distill_subsets = use_specialized_recon_distill_subsets
         self.fg_selective_grad_scale  = 0.1
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
         
-        print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, dedicated_recon_distill_subsets={}".format(
-               placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings, self.dedicated_recon_distill_subsets))
+        print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, use_specialized_recon_distill_subsets={}".format(
+               placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings, self.use_specialized_recon_distill_subsets))
             
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
@@ -1197,7 +1197,7 @@ class EmbeddingManager(nn.Module):
                 # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
                 subj_static_embedding_k = subj_static_embedding[:, k]
-                if self.iter_type is not None and not token_is_bg and self.dedicated_recon_distill_subsets:
+                if self.iter_type is not None and not token_is_bg and self.use_specialized_recon_distill_subsets:
                     subj_static_embedding_k_gs = self.scale_grad_on_fg_emb_subset(subj_static_embedding_k, k, self.iter_type)
                 else:
                     subj_static_embedding_k_gs = subj_static_embedding_k
@@ -1370,7 +1370,7 @@ class EmbeddingManager(nn.Module):
                 placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k)
                 # subj_ada_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
                 subj_ada_embedding_k = subj_ada_embedding[placeholder_indices_1st[0], k]
-                if self.iter_type is not None and not token_is_bg and self.dedicated_recon_distill_subsets:
+                if self.iter_type is not None and not token_is_bg and self.use_specialized_recon_distill_subsets:
                     subj_ada_embedding_k_gs = self.scale_grad_on_fg_emb_subset(subj_ada_embedding_k, k, self.iter_type)
                 else:
                     subj_ada_embedding_k_gs = subj_ada_embedding_k
