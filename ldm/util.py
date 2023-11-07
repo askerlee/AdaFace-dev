@@ -298,13 +298,15 @@ def normalized_ortho_subtract(a, b):
 # ortho_subtract(a, b): the residual is orthogonal to b (on the last dimension).
 # ortho_subtract(a, b) is not symmetric w.r.t. a and b, nor is ortho_l2loss(a, b).
 # NOTE: always choose a to be something we care about, and b to be something as a reference.
-def ortho_l2loss(a, b, mean=True):
+def ortho_l2loss(a, b, mean=True, do_sqrt=False):
     residual = ortho_subtract(a, b)
     # F.mse_loss() is taking the square of all elements in the residual, then mean.
     # ortho_l2loss() keeps consistent with F.mse_loss().
     loss = residual * residual
     if mean:
         loss = loss.mean()
+    if do_sqrt:
+        loss = loss.sqrt()
     return loss
 
 def normalized_l2loss(a, b, mean=True):
@@ -469,7 +471,8 @@ def calc_projected_delta_l2_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
         feat_base_ref_align_coeffs = calc_align_coeffs(feat_base, ref_feat_base_gs)
         # proj_feat_ex: [2, 9, 1280]
         proj_feat_ex = (feat_base_ref_align_coeffs.unsqueeze(-1) * ref_delta_gs) + feat_base
-        loss_delta = ortho_l2loss(feat_ex, proj_feat_ex, mean=True)
+        # do_sqrt: reduce the scale of the loss. Otherwise the loss is around 10, too big.
+        loss_delta = ortho_l2loss(feat_ex, proj_feat_ex, mean=True, do_sqrt=True)
         return loss_delta
 
     
