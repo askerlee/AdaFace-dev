@@ -458,7 +458,8 @@ def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 # Last dim is the channel dim.
 # feat_ex     is the extension (enriched features) of feat_base.
 # ref_feat_ex is the extension (enriched features) of ref_feat_base.
-def calc_projected_delta_l2_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, ref_grad_scale=0.1):
+def calc_projected_delta_l2_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
+                                 ref_grad_scale=0.1, do_sqrt=False):
         ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
         # Reduce the gradient to the reference features.
         ref_feat_base_gs  = ref_grad_scaler(ref_feat_base)
@@ -472,7 +473,7 @@ def calc_projected_delta_l2_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
         # proj_feat_ex: [2, 9, 1280]
         proj_feat_ex = (feat_base_ref_align_coeffs.unsqueeze(-1) * ref_delta_gs) + feat_base
         # do_sqrt: reduce the scale of the loss. Otherwise the loss is around 10, too big.
-        loss_delta = ortho_l2loss(feat_ex, proj_feat_ex, mean=True, do_sqrt=True)
+        loss_delta = ortho_l2loss(feat_ex, proj_feat_ex, mean=True, do_sqrt=do_sqrt)
         return loss_delta
 
     
