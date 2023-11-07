@@ -34,7 +34,7 @@ model:
     # typical loss_ada_em_reg is ~5e-2, * weight -> 5e-5.
     ada_embedding_reg_weight:           2e-4
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
-    prompt_emb_delta_reg_weight:        4e-4
+    prompt_emb_delta_reg_weight:        2e-4
     # Dynamically adjust padding_embs_align_loss weight based on the loss value, 
     # dynamic_weight = loss * padding_embs_align_loss_weight_base / padding_embs_align_loss_base.
     padding_embs_align_loss_base:        0.15
