@@ -3754,14 +3754,15 @@ class LatentDiffusion(DDPM):
             subj_single_fg_feat, subj_comp_fg_feat, mix_single_fg_feat, mix_comp_fg_feat \
                 = fg_feat.chunk(4)
 
-            # feat_pool_stride      = 2
+            do_feat_pooling = True
+            feat_pool_kernel_size = 4
+            feat_pool_stride      = 2
             # feature pooling: allow small perturbations of the locations of pixels.
-            feat_pool_out_size = (4, 4)
-            # feat_pool_stride      = 2
-            # feature pooling: allow small perturbations of the locations of pixels.
-            # If subj_single_feat is 8x8, then after pooling, it becomes 3x3, too rough.
-            # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
-            pooler = nn.AdaptiveAvgPool2d(feat_pool_out_size)
+            # calc_comp_fg_bg_preserve_loss() can have higher spatial precision than calc_prompt_mix_loss().
+            if do_feat_pooling and unet_feat.shape[-1] > 8:
+                pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
+            else:
+                pooler = nn.Identity()
 
             subj_single_fg_feat = pooler(subj_single_fg_feat)
             subj_comp_fg_feat   = pooler(subj_comp_fg_feat)
