@@ -459,11 +459,15 @@ def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 # feat_ex     is the extension (enriched features) of feat_base.
 # ref_feat_ex is the extension (enriched features) of ref_feat_base.
 def calc_base_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
-                                   ref_grad_scale=0.1):
+                                   ref_grad_scale=0.1, feat_base_grad_scale=0.5):
         ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
         # Reduce the gradient to the reference features.
         ref_feat_base_gs  = ref_grad_scaler(ref_feat_base)
         ref_feat_ex_gs    = ref_grad_scaler(ref_feat_ex)
+
+        feat_base_scaler  = gen_gradient_scaler(feat_base_grad_scale)
+        # Reduce the gradient to feat_base features.
+        feat_base_gs      = feat_base_scaler(feat_base)
 
         # ortho_subtract() is done on the last dimension. 
         # NOTE: use normalized_ortho_subtract() will reduce performance.
@@ -474,7 +478,7 @@ def calc_base_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_e
         # ref_align_delta_coeffs should be all 1, as it's a component (with scale 1) of ref_feat_ex_gs.
         ref_align_delta_coeffs  = calc_align_coeffs(ref_feat_ex_gs, ref_delta_gs)
 
-        feat_align_base_coeffs  = calc_align_coeffs(feat_ex, feat_base)
+        feat_align_base_coeffs  = calc_align_coeffs(feat_ex, feat_base_gs)
         # We encourage feat_ex to express at least ref_align_base_coeffs of feat_base, i.e.,
         # ref_feat_align_base_coeff_diffs should be <= 0. So a loss is incurred if it's > 0.
         ref_feat_align_base_coeff_diffs  = ref_align_base_coeffs - feat_align_base_coeffs
