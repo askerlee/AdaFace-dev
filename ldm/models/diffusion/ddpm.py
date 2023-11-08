@@ -111,7 +111,7 @@ class DDPM(pl.LightningModule):
                  mix_prompt_distill_weight=0.,
                  subj_attn_delta_distill_loss_base=0.,
                  comp_attn_delta_distill_loss_base=0.,
-                 subj_attn_norm_distill_loss_scale=0.,
+                 subj_attn_norm_distill_loss_base=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_wds_complementary_loss_weight=0.,
@@ -154,7 +154,7 @@ class DDPM(pl.LightningModule):
         self.mix_prompt_distill_weight          = mix_prompt_distill_weight
         self.subj_attn_delta_distill_loss_base  = subj_attn_delta_distill_loss_base
         self.comp_attn_delta_distill_loss_base  = comp_attn_delta_distill_loss_base
-        self.subj_attn_norm_distill_loss_scale  = subj_attn_norm_distill_loss_scale
+        self.subj_attn_norm_distill_loss_base  = subj_attn_norm_distill_loss_base
         self.comp_fg_bg_preserve_loss_weight    = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight    = fg_bg_complementary_loss_weight
         self.fg_wds_complementary_loss_weight   = fg_wds_complementary_loss_weight
@@ -2794,6 +2794,8 @@ class LatentDiffusion(DDPM):
 
             subj_attn_delta_distill_loss_scale_base = 0.5
             comp_attn_delta_distill_loss_scale_base = 1
+            subj_attn_norm_distill_loss_scale_base  = 1
+
             # subj_attn_delta_distill_loss_base: 0.5
             subj_attn_delta_distill_loss_scale = calc_dyn_loss_scale(loss_subj_attn_delta_distill, 
                                                                      self.subj_attn_delta_distill_loss_base,
@@ -2803,13 +2805,18 @@ class LatentDiffusion(DDPM):
             comp_attn_delta_distill_loss_scale = calc_dyn_loss_scale(loss_comp_attn_delta_distill,
                                                                      self.comp_attn_delta_distill_loss_base,
                                                                      comp_attn_delta_distill_loss_scale_base)
-            
+
+            # subj_attn_norm_distill_loss_base: 2.5
+            subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
+                                                                     self.subj_attn_norm_distill_loss_base,
+                                                                     subj_attn_norm_distill_loss_scale_base)
+
             feat_delta_distill_scale = 1
 
             loss_mix_prompt_distill =  (loss_subj_attn_delta_distill * subj_attn_delta_distill_loss_scale \
                                           + loss_comp_attn_delta_distill * comp_attn_delta_distill_loss_scale) \
-                                        + loss_subj_attn_norm_distill * self.subj_attn_norm_distill_loss_scale \
-                                        + loss_feat_delta_distill * feat_delta_distill_scale
+                                        + loss_subj_attn_norm_distill    * subj_attn_norm_distill_loss_scale \
+                                        + loss_feat_delta_distill        * feat_delta_distill_scale
                                         
             if loss_mix_prompt_distill > 0:
                 loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
