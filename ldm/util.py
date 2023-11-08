@@ -458,8 +458,8 @@ def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 # Last dim is the channel dim.
 # feat_ex     is the extension (enriched features) of feat_base.
 # ref_feat_ex is the extension (enriched features) of ref_feat_base.
-def calc_base_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
-                                   ref_grad_scale=0.1, feat_base_grad_scale=-1):
+def calc_base_and_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
+                                       ref_grad_scale=0.1, feat_base_grad_scale=-1):
         ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
         # Reduce the gradient to the reference features, 
         # as the reference features are supposed to be unchanged, as opposed to feat_*. 

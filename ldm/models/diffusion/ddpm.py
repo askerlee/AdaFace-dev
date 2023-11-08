@@ -26,7 +26,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, decomp_align_ortho, calc_align_coeffs, \
                        ortho_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, \
-                       calc_delta_cosine_loss, calc_base_delta_alignment_loss, \
+                       calc_delta_cosine_loss, calc_base_and_delta_alignment_loss, \
                        save_grid, chunk_list, join_list_of_indices, split_indices_by_instance, \
                        distribute_embedding_to_M_tokens, fix_emb_scales, \
                        halve_token_indices, double_token_indices, \
@@ -844,8 +844,7 @@ class LatentDiffusion(DDPM):
                                 'use_layerwise_context': self.use_layerwise_embedding, 
                                 'use_ada_context':       self.use_ada_embedding,
                                 'use_conv_attn':         self.use_conv_attn,
-                                # Default is False. Will be changed to True in forward() if necessary.
-                                'ada_bp_to_unet':        False, 
+                                'ada_bp_to_unet':        True, 
                                 # Setting up 'subj_indices' here is necessary for inference.
                                 # During training, 'subj_indices' will be overwritten in p_losses().
                                 # Although 'bg_indices' is usually not used during inference,
@@ -1576,9 +1575,6 @@ class LatentDiffusion(DDPM):
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
 
-                    # By default, ada_bp_to_unet is False. Will be changed to True if do_mix_prompt_distillation.
-                    extra_info['ada_bp_to_unet'] = False
-
                     # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
                     # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
                     extra_info['subj_indices_2b'] = extra_info['subj_indices']
@@ -1647,8 +1643,6 @@ class LatentDiffusion(DDPM):
                         # are manually mixed into their embeddings.
                         c_in2 = delta_prompts
                         extra_info['iter_type']      = self.prompt_mix_scheme   # 'mix_hijk'
-                        # Set ada_bp_to_unet to False will reduce performance.
-                        extra_info['ada_bp_to_unet'] = True
 
                         # The prompts are either (subj single, subj comp, cls single, cls comp) or
                         # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
@@ -1703,7 +1697,6 @@ class LatentDiffusion(DDPM):
 
                         extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_LAYERS, 
                                                                              *c_static_emb.shape[1:])
-                        extra_info['ada_bp_to_unet'] = True
                         ##### End of normal_recon with static delta loss iters. #####
 
                     extra_info['cls_single_prompts'] = cls_single_prompts
@@ -1735,7 +1728,6 @@ class LatentDiffusion(DDPM):
                     extra_info['c_static_emb_1b']   = c_static_emb.reshape(ORIG_BS, self.N_LAYERS, 
                                                                            *c_static_emb.shape[1:])
                                         
-                    extra_info['ada_bp_to_unet']    = True
                     extra_info['iter_type']         = 'normal_recon'
 
                     cond = (c_static_emb, c_in, extra_info)
@@ -2250,9 +2242,6 @@ class LatentDiffusion(DDPM):
 
         # There are always some subj prompts in this batch. So if self.use_conv_attn,
         # then extra_info['use_conv_attn'] = True, it will inform U-Net to do conv attn.
-        # Disabling unet_has_grad for recon iters will greatly reduce performance,
-        # although ada_bp_to_unet = False for recon iters.
-        # (probably because gradients of static embeddings still need to go through UNet)
 
         # The image mask here is used when computing Ada embeddings in embedding_manager.
         # Do not consider mask on compositional reg iterations (except use_wds_comp iters), 
@@ -3133,9 +3122,9 @@ class LatentDiffusion(DDPM):
                                                 ref_grad_scale=1)
                     '''
                     loss_layer_subj_attn_base_align, loss_layer_subj_attn_delta_align \
-                        = calc_base_delta_alignment_loss(subj_single_subj_attn,   subj_comp_subj_attn,
-                                                         mix_single_subj_attn_gs, mix_comp_subj_attn_gs,
-                                                         ref_grad_scale=mix_attn_grad_scale)
+                        = calc_base_and_delta_alignment_loss(subj_single_subj_attn,   subj_comp_subj_attn,
+                                                            mix_single_subj_attn_gs, mix_comp_subj_attn_gs,
+                                                            ref_grad_scale=mix_attn_grad_scale)
 
                     loss_subj_attn_base_align   += loss_layer_subj_attn_base_align * attn_norm_distill_layer_weight
                     loss_subj_attn_delta_align  += loss_layer_subj_attn_delta_align * attn_delta_distill_layer_weight
@@ -3196,14 +3185,15 @@ class LatentDiffusion(DDPM):
             feat_pool_kernel_size = 4
             feat_pool_stride      = 2
             # feature pooling: allow small perturbations of the locations of pixels.
-            if do_feat_pooling:
+            # If subj_single_feat is 8x8, then after pooling, it becomes 3x3, too rough.
+            # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
+            if do_feat_pooling and unet_feat.shape[-1] > 8:
                 pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
             else:
                 pooler = nn.Identity()
 
             # Flatten the spatial dimensions H, W.
-            # After pooling, subj_single_feat, ...: [2, 1280, 3, 3].
-            # subj_single_feat: [2, 1280, 8, 8] pool -> [2, 1280, 3, 3] -> [2, 1280, 9] -> [2, 9, 1280]
+            # subj_single_feat: [2, 1280, 16, 16] pool -> [2, 1280, 7, 7] -> [2, 1280, 49] -> [2, 49, 1280]
             subj_single_feat_3d = pooler(subj_single_feat).reshape(*subj_single_feat.shape[:2], -1).permute(0, 2, 1)
             subj_comp_feat_3d   = pooler(subj_comp_feat).reshape(*subj_comp_feat.shape[:2], -1).permute(0, 2, 1)
             mix_single_feat_3d  = pooler(mix_single_feat).reshape(*mix_single_feat.shape[:2], -1).permute(0, 2, 1)
@@ -3211,9 +3201,9 @@ class LatentDiffusion(DDPM):
 
             # mix_feat_grad_scale = 0.1.
             loss_layer_feat_base_align, loss_layer_feat_delta_align \
-                = calc_base_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
-                                                 mix_single_feat_3d,  mix_comp_feat_3d,
-                                                 ref_grad_scale=mix_feat_grad_scale)
+                = calc_base_and_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
+                                                    mix_single_feat_3d,  mix_comp_feat_3d,
+                                                    ref_grad_scale=mix_feat_grad_scale)
 
             loss_feat_base_align  += loss_layer_feat_base_align  * feat_distill_layer_weight
             loss_feat_delta_align += loss_layer_feat_delta_align * feat_distill_layer_weight
@@ -3772,7 +3762,7 @@ class LatentDiffusion(DDPM):
             feat_pool_kernel_size = 4
             feat_pool_stride      = 2
             # feature pooling: allow small perturbations of the locations of pixels.
-            if do_feat_pooling:
+            if do_feat_pooling and unet_feat.shape[-1] > 8:
                 pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
             else:
                 pooler = nn.Identity()

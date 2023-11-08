@@ -1062,7 +1062,7 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_token_indices_cache = {}
         self.iter_type = None
         self.use_specialized_recon_distill_subsets = use_specialized_recon_distill_subsets
-        self.fg_selective_grad_scale  = 0.3
+        self.fg_selective_grad_scale  = 0.5
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
         
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, use_specialized_recon_distill_subsets={}".format(
