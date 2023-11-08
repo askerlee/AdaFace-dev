@@ -1062,7 +1062,7 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_token_indices_cache = {}
         self.iter_type = None
         self.use_specialized_recon_distill_subsets = use_specialized_recon_distill_subsets
-        self.fg_selective_grad_scale  = 0.5
+        self.fg_selective_grad_scale  = 0.3
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
         
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, use_specialized_recon_distill_subsets={}".format(
@@ -1198,7 +1198,7 @@ class EmbeddingManager(nn.Module):
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
                 subj_static_embedding_k = subj_static_embedding[:, k]
                 if self.iter_type is not None and not token_is_bg and self.use_specialized_recon_distill_subsets:
-                    subj_static_embedding_k_gs = self.scale_grad_on_fg_emb_subset(subj_static_embedding_k, k, self.iter_type)
+                    subj_static_embedding_k_gs = self.scale_grad_of_fg_emb_subset(subj_static_embedding_k, k, self.iter_type)
                 else:
                     subj_static_embedding_k_gs = subj_static_embedding_k
 
@@ -1371,7 +1371,7 @@ class EmbeddingManager(nn.Module):
                 # subj_ada_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
                 subj_ada_embedding_k = subj_ada_embedding[placeholder_indices_1st[0], k]
                 if self.iter_type is not None and not token_is_bg and self.use_specialized_recon_distill_subsets:
-                    subj_ada_embedding_k_gs = self.scale_grad_on_fg_emb_subset(subj_ada_embedding_k, k, self.iter_type)
+                    subj_ada_embedding_k_gs = self.scale_grad_of_fg_emb_subset(subj_ada_embedding_k, k, self.iter_type)
                 else:
                     subj_ada_embedding_k_gs = subj_ada_embedding_k
 
@@ -1379,8 +1379,12 @@ class EmbeddingManager(nn.Module):
 
         return embedded_text
 
-    def scale_grad_on_fg_emb_subset(self, fg_embedding_k, k, iter_type):
+    def scale_grad_of_fg_emb_subset(self, fg_embedding_k, k, iter_type):
         if iter_type == 'recon_iter':
+            # All embeddings will be updated in a recon_iter.
+            return fg_embedding_k
+        
+            """             
             # In a recon_iter, do gs if k is odd, not if k is even.
             # So vectors 0, 2, ..., 8 (5 vecs) are not gs'ed and are dedicated to recon.
             #    Vectors 1, 3, ..., 7 (4 vecs) are gs'ed and are dedicated to distill.
@@ -1388,11 +1392,12 @@ class EmbeddingManager(nn.Module):
                 return fg_embedding_k
             else:
                 return self.fg_selective_grad_scaler(fg_embedding_k)
-            
+            """            
+
         elif iter_type == 'distill_iter':
             # In a distill_iter, do gs if k is even, not if k is odd.
-            # So vectors 0, 2, ..., 8 (5 vecs) are gs'ed and are dedicated to recon.
-            #    Vectors 1, 3, ..., 7 (4 vecs) are not gs'ed and are dedicated to distill.
+            # So vectors 0, 2, ..., 8 (5 vecs) are 0.3  grad and are dedicated to recon.
+            #    Vectors 1, 3, ..., 7 (4 vecs) are full grad and are dedicated to distill.
             if k % 2 == 0:
                 return self.fg_selective_grad_scaler(fg_embedding_k)
             else:
