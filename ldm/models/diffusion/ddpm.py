@@ -2776,22 +2776,22 @@ class LatentDiffusion(DDPM):
             # to index subj single and subj comp embeddings.
             # The indices will be shifted along the batch dimension (size doubled) 
             # within calc_prompt_mix_loss() to index all the 4 blocks.
-            loss_subj_attn_align_base,    loss_subj_attn_align_delta, \
+            loss_subj_attn_base_align,    loss_subj_attn_delta_align, \
             loss_comp_attn_delta_distill, loss_subj_attn_norm_distill,  \
-            loss_feat_align_base,         loss_feat_align_delta = \
+            loss_feat_base_align,         loss_feat_delta_align = \
                                 self.calc_prompt_mix_loss(unet_feats, extra_info['unet_attnscores'], 
                                                           extra_info['subj_indices_2b'], 
                                                           comp_extra_indices_13b,
                                                           BLOCK_SIZE, self.iter_flags['img_mask'])
 
-            if loss_feat_align_base > 0:
-                loss_dict.update({f'{prefix}/feat_base_align':         loss_feat_align_base.mean().detach()})
-            if loss_feat_align_delta > 0:
-                loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_align_delta.mean().detach()})
-            if loss_subj_attn_align_base > 0:
-                loss_dict.update({f'{prefix}/subj_attn_base_align':    loss_subj_attn_align_base.mean().detach()})
-            if loss_subj_attn_align_delta > 0:
-                loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_align_delta.mean().detach()})
+            if loss_feat_base_align > 0:
+                loss_dict.update({f'{prefix}/feat_base_align':         loss_feat_base_align.mean().detach()})
+            if loss_feat_delta_align > 0:
+                loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach()})
+            if loss_subj_attn_base_align > 0:
+                loss_dict.update({f'{prefix}/subj_attn_base_align':    loss_subj_attn_base_align.mean().detach()})
+            if loss_subj_attn_delta_align > 0:
+                loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach()})
             if loss_subj_attn_norm_distill > 0:
                 loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach()})
             if loss_comp_attn_delta_distill > 0:
@@ -2802,7 +2802,7 @@ class LatentDiffusion(DDPM):
             subj_attn_norm_distill_loss_scale_base  = 1
 
             # subj_attn_delta_distill_loss_base: 0.5
-            subj_attn_delta_distill_loss_scale = calc_dyn_loss_scale(loss_subj_attn_align_delta, 
+            subj_attn_delta_distill_loss_scale = calc_dyn_loss_scale(loss_subj_attn_delta_align, 
                                                                      self.subj_attn_delta_distill_loss_base,
                                                                      subj_attn_delta_distill_loss_scale_base)
 
@@ -2818,10 +2818,10 @@ class LatentDiffusion(DDPM):
 
             feat_delta_distill_scale = 1
 
-            loss_mix_prompt_distill =  ((loss_subj_attn_align_base + loss_subj_attn_align_delta) * subj_attn_delta_distill_loss_scale \
+            loss_mix_prompt_distill =  ((loss_subj_attn_base_align + loss_subj_attn_delta_align) * subj_attn_delta_distill_loss_scale \
                                           + loss_comp_attn_delta_distill * comp_attn_delta_distill_loss_scale) \
                                         + loss_subj_attn_norm_distill    * subj_attn_norm_distill_loss_scale \
-                                        + (loss_feat_align_base    + loss_feat_align_delta)      * feat_delta_distill_scale
+                                        + (loss_feat_base_align    + loss_feat_delta_align)      * feat_delta_distill_scale
                                         
             if loss_mix_prompt_distill > 0:
                 loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
@@ -3067,18 +3067,17 @@ class LatentDiffusion(DDPM):
         fg_indices_4b = double_token_indices(fg_indices_2b, BLOCK_SIZE * 2)
 
         mix_feat_grad_scale  = 0.1
-        mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
         # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to teacher attn. 
         # Setting to 0 may prevent the graph from being released and OOM.
         mix_attn_grad_scale  = 0.05  
         mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
 
-        loss_subj_attn_align_base  = 0
-        loss_subj_attn_align_delta = 0
+        loss_subj_attn_base_align  = 0
+        loss_subj_attn_delta_align = 0
         loss_comp_attn_delta_distill    = 0
         loss_subj_attn_norm_distill     = 0
-        loss_feat_align_base  = 0
-        loss_feat_align_delta = 0
+        loss_feat_base_align  = 0
+        loss_feat_delta_align = 0
 
         for unet_layer_idx, unet_feat in unet_feats.items():
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_norm_distill_layer_weights):
@@ -3133,13 +3132,14 @@ class LatentDiffusion(DDPM):
                                                 first_n_dims_to_flatten=2, 
                                                 ref_grad_scale=1)
                     '''
-                    loss_layer_subj_attn_align_base, loss_layer_subj_attn_align_delta \
+                    loss_layer_subj_attn_base_align, loss_layer_subj_attn_delta_align \
                         = calc_base_delta_alignment_loss(subj_single_subj_attn,   subj_comp_subj_attn,
                                                          mix_single_subj_attn_gs, mix_comp_subj_attn_gs,
-                                                         ref_grad_scale=mix_attn_grad_scale)
+                                                         ref_grad_scale=mix_attn_grad_scale,
+                                                         feat_base_grad_scale=0.25)
 
-                    loss_subj_attn_align_base   += loss_layer_subj_attn_align_base * attn_norm_distill_layer_weight
-                    loss_subj_attn_align_delta  += loss_layer_subj_attn_align_delta * attn_delta_distill_layer_weight
+                    loss_subj_attn_base_align   += loss_layer_subj_attn_base_align * attn_norm_distill_layer_weight
+                    loss_subj_attn_delta_align  += loss_layer_subj_attn_delta_align * attn_delta_distill_layer_weight
                     # pow(3): focus on large differences. pow(0.33): reduce the grad scale.
                     loss_layer_comp_attn_delta      = power_loss(comp_attn_delta, exponent=2)
                     loss_comp_attn_delta_distill   += loss_layer_comp_attn_delta
@@ -3211,17 +3211,18 @@ class LatentDiffusion(DDPM):
             mix_comp_feat_3d    = pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1).permute(0, 2, 1)
 
             # mix_feat_grad_scale = 0.1.
-            loss_layer_feat_align_base, loss_layer_feat_align_delta \
+            loss_layer_feat_base_align, loss_layer_feat_delta_align \
                 = calc_base_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
                                                  mix_single_feat_3d,  mix_comp_feat_3d,
-                                                 ref_grad_scale=mix_feat_grad_scale)
+                                                 ref_grad_scale=mix_feat_grad_scale,
+                                                 feat_base_grad_scale=0.25)
 
-            loss_feat_align_base  += loss_layer_feat_align_base  * feat_distill_layer_weight
-            loss_feat_align_delta += loss_layer_feat_align_delta * feat_distill_layer_weight
+            loss_feat_base_align  += loss_layer_feat_base_align  * feat_distill_layer_weight
+            loss_feat_delta_align += loss_layer_feat_delta_align * feat_distill_layer_weight
 
-        return loss_subj_attn_align_base,    loss_subj_attn_align_delta, \
+        return loss_subj_attn_base_align,    loss_subj_attn_delta_align, \
                loss_comp_attn_delta_distill, loss_subj_attn_norm_distill, \
-               loss_feat_align_base,         loss_feat_align_delta
+               loss_feat_base_align,         loss_feat_delta_align
 
     # Only compute the loss on the first block. If it's a normal_recon iter, 
     # the first block is the whole batch.

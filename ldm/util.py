@@ -459,13 +459,18 @@ def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 # feat_ex     is the extension (enriched features) of feat_base.
 # ref_feat_ex is the extension (enriched features) of ref_feat_base.
 def calc_base_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
-                                   ref_grad_scale=0.1, feat_base_grad_scale=0.25):
+                                   ref_grad_scale=0.1, feat_base_grad_scale=-1):
         ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
         # Reduce the gradient to the reference features, 
         # as the reference features are supposed to be unchanged, as opposed to feat_*. 
         # (although it still has a learnable component from mixed subject prompt embeddings.)
         ref_feat_base_gs  = ref_grad_scaler(ref_feat_base)
         ref_feat_ex_gs    = ref_grad_scaler(ref_feat_ex)
+
+        if feat_base_grad_scale == -1:
+            # subj_attn_base/subj_attn_delta:   ref_grad_scale = 0.05 => feat_base_grad_scale = 0.25.
+            # feat_base/feat_delta:             ref_grad_scale = 0.1  => feat_base_grad_scale = 0.5.
+            feat_base_grad_scale = min(ref_grad_scale * 5, 1)
 
         feat_base_scaler  = gen_gradient_scaler(feat_base_grad_scale)
         # Reduce the gradient to feat_base features, to better reserve subject features.
@@ -484,16 +489,16 @@ def calc_base_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_e
         # We encourage feat_ex to express at least ref_align_base_coeffs of feat_base, i.e.,
         # ref_feat_align_base_coeff_diffs should be <= 0. So a loss is incurred if it's > 0.
         ref_feat_align_base_coeff_diffs  = ref_align_base_coeffs - feat_align_base_coeffs
-        loss_align_base  = masked_mean(ref_feat_align_base_coeff_diffs, ref_feat_align_base_coeff_diffs > 0)
+        loss_base_align  = masked_mean(ref_feat_align_base_coeff_diffs, ref_feat_align_base_coeff_diffs > 0)
 
         # feat_align_base_coeffs, feat_align_delta_coeffs: [1, 8]
         feat_align_delta_coeffs = calc_align_coeffs(feat_ex, ref_delta_gs)
         ref_feat_align_delta_coeff_diffs = ref_align_delta_coeffs - feat_align_delta_coeffs
         # We encourage feat_ex to express at least ref_align_delta_coeffs of ref_delta, i.e., 
         # ref_feat_align_delta_coeff_diffs should be <= 0. So a loss is incurred if it's > 0.
-        loss_align_delta = masked_mean(ref_feat_align_delta_coeff_diffs, ref_feat_align_delta_coeff_diffs > 0)
+        loss_delta_align = masked_mean(ref_feat_align_delta_coeff_diffs, ref_feat_align_delta_coeff_diffs > 0)
 
-        return loss_align_base, loss_align_delta
+        return loss_base_align, loss_delta_align
 
     
 def calc_and_print_stats(ts, ts_name=None):
