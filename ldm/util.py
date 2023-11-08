@@ -461,12 +461,14 @@ def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 def calc_base_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
                                    ref_grad_scale=0.1, feat_base_grad_scale=0.5):
         ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
-        # Reduce the gradient to the reference features.
+        # Reduce the gradient to the reference features, 
+        # as the reference features are supposed to be unchanged, as opposed to feat_*. 
+        # (although it still has a learnable component from mixed subject prompt embeddings.)
         ref_feat_base_gs  = ref_grad_scaler(ref_feat_base)
         ref_feat_ex_gs    = ref_grad_scaler(ref_feat_ex)
 
         feat_base_scaler  = gen_gradient_scaler(feat_base_grad_scale)
-        # Reduce the gradient to feat_base features.
+        # Reduce the gradient to feat_base features, to better reserve subject features.
         feat_base_gs      = feat_base_scaler(feat_base)
 
         # ortho_subtract() is done on the last dimension. 
