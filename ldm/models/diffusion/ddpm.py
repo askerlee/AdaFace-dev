@@ -3181,16 +3181,12 @@ class LatentDiffusion(DDPM):
                 mix_single_feat  = mix_single_feat  * spatial_weight
                 mix_comp_feat    = mix_comp_feat    * spatial_weight
 
-            do_feat_pooling = True
-            feat_pool_kernel_size = 4
-            feat_pool_stride      = 2
+            feat_pool_out_size = (4, 4)
+            # feat_pool_stride      = 2
             # feature pooling: allow small perturbations of the locations of pixels.
             # If subj_single_feat is 8x8, then after pooling, it becomes 3x3, too rough.
             # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
-            if do_feat_pooling and unet_feat.shape[-1] > 8:
-                pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
-            else:
-                pooler = nn.Identity()
+            pooler = nn.AdaptiveAvgPool2d(feat_pool_out_size)
 
             # Flatten the spatial dimensions H, W.
             # subj_single_feat: [2, 1280, 16, 16] pool -> [2, 1280, 7, 7] -> [2, 1280, 49] -> [2, 49, 1280]
@@ -3758,14 +3754,14 @@ class LatentDiffusion(DDPM):
             subj_single_fg_feat, subj_comp_fg_feat, mix_single_fg_feat, mix_comp_fg_feat \
                 = fg_feat.chunk(4)
 
-            do_feat_pooling = True
-            feat_pool_kernel_size = 4
-            feat_pool_stride      = 2
+            # feat_pool_stride      = 2
             # feature pooling: allow small perturbations of the locations of pixels.
-            if do_feat_pooling and unet_feat.shape[-1] > 8:
-                pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
-            else:
-                pooler = nn.Identity()
+            feat_pool_out_size = (4, 4)
+            # feat_pool_stride      = 2
+            # feature pooling: allow small perturbations of the locations of pixels.
+            # If subj_single_feat is 8x8, then after pooling, it becomes 3x3, too rough.
+            # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
+            pooler = nn.AdaptiveAvgPool2d(feat_pool_out_size)
 
             subj_single_fg_feat = pooler(subj_single_fg_feat)
             subj_comp_fg_feat   = pooler(subj_comp_fg_feat)
