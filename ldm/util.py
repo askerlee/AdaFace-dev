@@ -858,6 +858,7 @@ def gen_gradient_scaler(alpha):
     if alpha > 0:
         return GradientScaler(alpha)
     else:
+        assert alpha == 0
         return lambda x: x.detach()
     
 # samples:   a list of (B, C, H, W) tensors.
