@@ -26,7 +26,7 @@ from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat,
                        ortho_subtract, decomp_align_ortho, calc_align_coeffs, \
                        ortho_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, \
-                       calc_delta_cosine_loss, calc_projected_delta_coeff_loss, \
+                       calc_delta_cosine_loss, calc_delta_coeff_margin_loss, \
                        save_grid, chunk_list, join_list_of_indices, split_indices_by_instance, \
                        distribute_embedding_to_M_tokens, fix_emb_scales, \
                        halve_token_indices, double_token_indices, \
@@ -3119,7 +3119,7 @@ class LatentDiffusion(DDPM):
                                                 first_n_dims_to_flatten=2, 
                                                 ref_grad_scale=1)
                     '''
-                    loss_layer_subj_attn_delta = calc_projected_delta_coeff_loss(subj_single_subj_attn,   subj_comp_subj_attn,
+                    loss_layer_subj_attn_delta = calc_delta_coeff_margin_loss(subj_single_subj_attn,   subj_comp_subj_attn,
                                                                               mix_single_subj_attn_gs, mix_comp_subj_attn_gs,
                                                                               ref_grad_scale=mix_attn_grad_scale,
                                                                               do_sqrt=False)
@@ -3196,7 +3196,7 @@ class LatentDiffusion(DDPM):
             mix_comp_feat_3d    = pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1).permute(0, 2, 1)
 
             # mix_feat_grad_scale = 0.1.
-            loss_layer_feat_delta_distill = calc_projected_delta_coeff_loss(subj_single_feat_3d, subj_comp_feat_3d,
+            loss_layer_feat_delta_distill = calc_delta_coeff_margin_loss(subj_single_feat_3d, subj_comp_feat_3d,
                                                                          mix_single_feat_3d,  mix_comp_feat_3d,
                                                                          ref_grad_scale=mix_feat_grad_scale,
                                                                          do_sqrt=False)
