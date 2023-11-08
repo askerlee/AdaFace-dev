@@ -1307,7 +1307,7 @@ class LatentDiffusion(DDPM):
                 # This block of code has to be before "captions = ..." below, 
                 # to avoid using wrong captions (some branches use batch['caption_bg']).
                 if self.iter_flags['is_compos_iter']:
-                    batch['image']      = batch['wds_image'] #batch['wds_image_bgonly']
+                    batch['image']      = batch['wds_image_bgonly'] # batch['wds_image']
                     # In compositional distillation iterations, captions are not used, 
                     # so it doesn't really matter which captions are used.
                     batch['caption']    = batch['wds_caption']
