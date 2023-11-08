@@ -458,7 +458,7 @@ def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 # Last dim is the channel dim.
 # feat_ex     is the extension (enriched features) of feat_base.
 # ref_feat_ex is the extension (enriched features) of ref_feat_base.
-def calc_projected_delta_l2_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
+def calc_projected_delta_coeff_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
                                  ref_grad_scale=0.1, do_sqrt=False):
         ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
         # Reduce the gradient to the reference features.
@@ -468,12 +468,12 @@ def calc_projected_delta_l2_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
         # ortho_subtract() is done on the last dimension. 
         # NOTE: use normalized_ortho_subtract() will reduce performance.
         ref_delta_gs      = ortho_subtract(ref_feat_ex_gs, ref_feat_base_gs)
+        ref_ref_delta_coeffs  = calc_align_coeffs(ref_feat_ex_gs, ref_delta_gs)
         # feat_base_ref_align_coeffs: [2, 9]
-        feat_base_ref_align_coeffs = calc_align_coeffs(feat_base, ref_feat_base_gs)
-        # proj_feat_ex: [2, 9, 1280]
-        proj_feat_ex = (feat_base_ref_align_coeffs.unsqueeze(-1) * ref_delta_gs) + feat_base
-        # do_sqrt: reduce the scale of the loss. Otherwise the loss is around 10, too big.
-        loss_delta = ortho_l2loss(feat_ex, proj_feat_ex, mean=True, do_sqrt=do_sqrt)
+        feat_ref_delta_coeffs = calc_align_coeffs(feat_base, ref_delta_gs)
+        ref_feat_delta_coeff_diffs = ref_ref_delta_coeffs - feat_ref_delta_coeffs
+        # ref_feat_delta_coeff_diffs should be <= 0. So a loss is incurred if it's > 0.
+        loss_delta = masked_mean(ref_feat_delta_coeff_diffs, ref_feat_delta_coeff_diffs > 0)
         return loss_delta
 
     
