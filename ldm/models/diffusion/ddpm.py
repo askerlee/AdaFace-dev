@@ -3135,8 +3135,7 @@ class LatentDiffusion(DDPM):
                     loss_layer_subj_attn_base_align, loss_layer_subj_attn_delta_align \
                         = calc_base_delta_alignment_loss(subj_single_subj_attn,   subj_comp_subj_attn,
                                                          mix_single_subj_attn_gs, mix_comp_subj_attn_gs,
-                                                         ref_grad_scale=mix_attn_grad_scale,
-                                                         feat_base_grad_scale=0.25)
+                                                         ref_grad_scale=mix_attn_grad_scale)
 
                     loss_subj_attn_base_align   += loss_layer_subj_attn_base_align * attn_norm_distill_layer_weight
                     loss_subj_attn_delta_align  += loss_layer_subj_attn_delta_align * attn_delta_distill_layer_weight
@@ -3214,8 +3213,7 @@ class LatentDiffusion(DDPM):
             loss_layer_feat_base_align, loss_layer_feat_delta_align \
                 = calc_base_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
                                                  mix_single_feat_3d,  mix_comp_feat_3d,
-                                                 ref_grad_scale=mix_feat_grad_scale,
-                                                 feat_base_grad_scale=0.25)
+                                                 ref_grad_scale=mix_feat_grad_scale)
 
             loss_feat_base_align  += loss_layer_feat_base_align  * feat_distill_layer_weight
             loss_feat_delta_align += loss_layer_feat_delta_align * feat_distill_layer_weight

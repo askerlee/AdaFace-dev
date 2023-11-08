@@ -468,9 +468,9 @@ def calc_base_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_e
         ref_feat_ex_gs    = ref_grad_scaler(ref_feat_ex)
 
         if feat_base_grad_scale == -1:
-            # subj_attn_base/subj_attn_delta:   ref_grad_scale = 0.05 => feat_base_grad_scale = 0.25.
-            # feat_base/feat_delta:             ref_grad_scale = 0.1  => feat_base_grad_scale = 0.5.
-            feat_base_grad_scale = min(ref_grad_scale * 5, 1)
+            # subj_attn_base/subj_attn_delta:   ref_grad_scale = 0.05 => feat_base_grad_scale = 0.125.
+            # feat_base/feat_delta:             ref_grad_scale = 0.1  => feat_base_grad_scale = 0.25.
+            feat_base_grad_scale = min(ref_grad_scale * 2.5, 1)
 
         feat_base_scaler  = gen_gradient_scaler(feat_base_grad_scale)
         # Reduce the gradient to feat_base features, to better reserve subject features.
