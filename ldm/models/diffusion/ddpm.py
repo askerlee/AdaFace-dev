@@ -114,6 +114,7 @@ class DDPM(pl.LightningModule):
                  subj_attn_norm_distill_loss_base=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
+                 comp_fg_bg_preserve_loss_base=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
                  wds_bg_recon_discount=1.,
@@ -156,6 +157,7 @@ class DDPM(pl.LightningModule):
         self.comp_attn_delta_distill_loss_base  = comp_attn_delta_distill_loss_base
         self.subj_attn_norm_distill_loss_base  = subj_attn_norm_distill_loss_base
         self.comp_fg_bg_preserve_loss_weight    = comp_fg_bg_preserve_loss_weight
+        self.comp_fg_bg_preserve_loss_base      = comp_fg_bg_preserve_loss_base
         self.fg_bg_complementary_loss_weight    = fg_bg_complementary_loss_weight
         self.fg_wds_complementary_loss_weight   = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight   = fg_bg_xlayer_consist_loss_weight
@@ -2852,8 +2854,15 @@ class LatentDiffusion(DDPM):
             else:
                 loss_comp_fg_bg_preserve = 0
 
+            # comp_fg_bg_preserve_loss_base: 0.25
+            comp_fg_bg_preserve_loss_scale_base = 0.5
+            comp_fg_bg_preserve_loss_scale = calc_dyn_loss_scale(loss_comp_fg_bg_preserve,
+                                                                 self.comp_fg_bg_preserve_loss_base,
+                                                                 comp_fg_bg_preserve_loss_scale_base)
+            
             # Scale down loss_comp_fg_bg_preserve if reuse_init_conds.
-            comp_fg_bg_preserve_loss_scale = 0.25 if self.iter_flags['reuse_init_conds'] else 0.5
+            if self.iter_flags['reuse_init_conds']:
+                comp_fg_bg_preserve_loss_scale *= 0.5
 
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     * comp_fg_bg_preserve_loss_scale
@@ -3061,6 +3070,8 @@ class LatentDiffusion(DDPM):
         # Setting to 0 may prevent the graph from being released and OOM.
         mix_attn_grad_scale  = 0.05  
         mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
+        # Align both spatial and channel dims.
+        feat_align_spatial_or_channel = 'spatial_and_channel'  # channel_only, spatial_only, spatial_and_channel
 
         loss_subj_attn_base_align  = 0
         loss_subj_attn_delta_align = 0
@@ -3068,8 +3079,6 @@ class LatentDiffusion(DDPM):
         loss_subj_attn_norm_distill     = 0
         loss_feat_base_align  = 0
         loss_feat_delta_align = 0
-        # Align both spatial and channel dims.
-        feat_align_spatial_or_channel = 'spatial_and_channel'  # channel_only, spatial_only, spatial_and_channel
 
         for unet_layer_idx, unet_feat in unet_feats.items():
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_norm_distill_layer_weights):
@@ -3768,6 +3777,8 @@ class LatentDiffusion(DDPM):
         feat_distill_layer_weights  = normalize_dict_values(feat_distill_layer_weights)
         single_feat_or_attn_grad_scale  = 0.02
         single_feat_or_attn_grad_scaler = gen_gradient_scaler(single_feat_or_attn_grad_scale)
+        # Align both spatial and channel dims.
+        feat_align_spatial_or_channel = 'spatial_and_channel'  # channel_only, spatial_only, spatial_and_channel
 
         loss_comp_subj_fg_feat_preserve = 0
         loss_comp_subj_fg_attn_preserve = 0
