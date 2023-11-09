@@ -1049,9 +1049,9 @@ class EmbeddingManager(nn.Module):
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
         self.attn_postproc_weight = attn_postproc_weight
         if self.attn_postproc_weight > 0:
-            self.postproc_att_layer = nn.MultiheadAttention(self.token_dim, num_heads=8, dropout=0.1, batch_first=True)
+            self.postproc_attn_layer = nn.MultiheadAttention(self.token_dim, num_heads=8, dropout=0.1, batch_first=True)
         else:
-            self.postproc_att_layer = None
+            self.postproc_attn_layer = None
 
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, attn_postproc_weight={}".format(
                placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings, self.attn_postproc_weight))
@@ -1369,7 +1369,7 @@ class EmbeddingManager(nn.Module):
         assert self.attn_postproc_weight > 0
         padding_mask = self.prompt_emb_mask.squeeze(2)
         # .nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
-        attn_embedded_text = self.postproc_att_layer(embedded_text, embedded_text, embedded_text, key_padding_mask=padding_mask)[0]
+        attn_embedded_text = self.postproc_attn_layer(embedded_text, embedded_text, embedded_text, key_padding_mask=padding_mask)[0]
         # Linearly combine the original embedding and the attention embedding.
         postproc_embedded_text = (1 - self.attn_postproc_weight) * embedded_text \
                                  + self.attn_postproc_weight * attn_embedded_text
@@ -1755,6 +1755,8 @@ class EmbeddingManager(nn.Module):
                      # learnable token in the deep negative prompt.
                      "static_only_tokens":              self.static_only_tokens,
                      "normalize_subj_attn":             self.normalize_subj_attn,
+                     "attn_postproc_weight":            self.attn_postproc_weight,
+                     "postproc_attn_layer":             self.postproc_attn_layer
                    }, 
                     ckpt_path)
 
@@ -1808,6 +1810,12 @@ class EmbeddingManager(nn.Module):
             if "normalize_subj_attn" in ckpt:
                 self.set_normalize_subj_attn(ckpt["normalize_subj_attn"])
 
+            if "attn_postproc_weight" in ckpt:
+                self.attn_postproc_weight = ckpt["attn_postproc_weight"]
+                if "postproc_attn_layer" in ckpt:
+                    self.postproc_attn_layer = ckpt["postproc_attn_layer"]
+                print(f"Set attn_postproc_weight = {self.attn_postproc_weight}")
+                
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
                     k2 = placeholder_mapper[k]
@@ -1855,6 +1863,9 @@ class EmbeddingManager(nn.Module):
                + list(self.string_to_ada_embedder_dict.parameters()) \
                + list(self.string_to_emb_ema_dict.parameters()) \
                + [ self.emb_global_scale_score, self.layerwise_point_conv_attn_mix_weights ]
+        
+        if self.attn_postproc_weight > 0:
+            params = params + list(self.postproc_attn_layer.parameters())
         
         return params
         
