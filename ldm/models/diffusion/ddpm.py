@@ -3123,8 +3123,8 @@ class LatentDiffusion(DDPM):
                     '''
                     loss_layer_subj_attn_base_align, loss_layer_subj_attn_delta_align \
                         = calc_base_and_delta_alignment_loss(subj_single_subj_attn,   subj_comp_subj_attn,
-                                                            mix_single_subj_attn_gs, mix_comp_subj_attn_gs,
-                                                            ref_grad_scale=mix_attn_grad_scale)
+                                                             mix_single_subj_attn_gs, mix_comp_subj_attn_gs,
+                                                             ref_grad_scale=mix_attn_grad_scale)
 
                     loss_subj_attn_base_align   += loss_layer_subj_attn_base_align * attn_norm_distill_layer_weight
                     loss_subj_attn_delta_align  += loss_layer_subj_attn_delta_align * attn_delta_distill_layer_weight
@@ -3188,12 +3188,22 @@ class LatentDiffusion(DDPM):
             # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
             pooler = nn.AdaptiveAvgPool2d(feat_pool_out_size)
 
+            last_dim_is_spatial = True
             # Flatten the spatial dimensions H, W.
-            # subj_single_feat: [2, 1280, 16, 16] pool -> [2, 1280, 7, 7] -> [2, 1280, 49] -> [2, 49, 1280]
-            subj_single_feat_3d = pooler(subj_single_feat).reshape(*subj_single_feat.shape[:2], -1).permute(0, 2, 1)
-            subj_comp_feat_3d   = pooler(subj_comp_feat).reshape(*subj_comp_feat.shape[:2], -1).permute(0, 2, 1)
-            mix_single_feat_3d  = pooler(mix_single_feat).reshape(*mix_single_feat.shape[:2], -1).permute(0, 2, 1)
-            mix_comp_feat_3d    = pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1).permute(0, 2, 1)
+            # subj_single_feat: [2, 1280, 16, 16] pool -> [2, 1280, 7, 7] -> [2, 1280, 49]
+            
+            # If last_dim_is_spatial, then no need to permute. Dim 1 is the channel dimension.
+            subj_single_feat_3d = pooler(subj_single_feat).reshape(*subj_single_feat.shape[:2], -1)
+            subj_comp_feat_3d   = pooler(subj_comp_feat).reshape(*subj_comp_feat.shape[:2], -1)
+            mix_single_feat_3d  = pooler(mix_single_feat).reshape(*mix_single_feat.shape[:2], -1)
+            mix_comp_feat_3d    = pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1)
+
+            # if not last_dim_is_spatial: [2, 1280, 49]  -> [2, 49, 1280]
+            if not last_dim_is_spatial:
+                subj_single_feat_3d = subj_single_feat_3d.permute(0, 2, 1)
+                subj_comp_feat_3d   = subj_comp_feat_3d.permute(0,   2, 1)
+                mix_single_feat_3d  = mix_single_feat_3d.permute(0,  2, 1)
+                mix_comp_feat_3d    = mix_comp_feat_3d.permute(0,    2, 1)
 
             # mix_feat_grad_scale = 0.1.
             loss_layer_feat_base_align, loss_layer_feat_delta_align \
@@ -3764,10 +3774,11 @@ class LatentDiffusion(DDPM):
             else:
                 pooler = nn.Identity()
 
-            subj_single_fg_feat = pooler(subj_single_fg_feat)
-            subj_comp_fg_feat   = pooler(subj_comp_fg_feat)
-            mix_single_fg_feat  = pooler(mix_single_fg_feat)
-            mix_comp_fg_feat    = pooler(mix_comp_fg_feat)
+            # subj_single_fg_feat: [1, 1280, 16, 16] => [1, 1280, 7, 7] => [1, 1280, 49]
+            subj_single_fg_feat = pooler(subj_single_fg_feat).reshape(*subj_single_fg_feat.shape[:2], -1)
+            subj_comp_fg_feat   = pooler(subj_comp_fg_feat).reshape(*subj_comp_fg_feat.shape[:2], -1)
+            mix_single_fg_feat  = pooler(mix_single_fg_feat).reshape(*mix_single_fg_feat.shape[:2], -1)
+            mix_comp_fg_feat    = pooler(mix_comp_fg_feat).reshape(*mix_comp_fg_feat.shape[:2], -1)
 
             # single_feat_or_attn_grad_scale = 0.02. 
             # feat_*_single are used as references, so their gradients are reduced to very small.
