@@ -850,6 +850,7 @@ class EmbeddingManager(nn.Module):
             static_only_tokens=None,
             normalize_subj_attn=False,
             use_specialized_recon_distill_subsets=False,
+            attn_postproc_weight=0.,
             **kwargs
     ):
         super().__init__()
@@ -1046,9 +1047,14 @@ class EmbeddingManager(nn.Module):
         self.use_specialized_recon_distill_subsets = use_specialized_recon_distill_subsets
         self.fg_selective_grad_scale  = 0.5
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
-        
-        print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, use_specialized_recon_distill_subsets={}".format(
-               placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings, self.use_specialized_recon_distill_subsets))
+        self.attn_postproc_weight = attn_postproc_weight
+        if self.attn_postproc_weight > 0:
+            self.postproc_att_layer = nn.MultiheadAttention(self.token_dim, num_heads=8, dropout=0.1, batch_first=True)
+        else:
+            self.postproc_att_layer = None
+
+        print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, attn_postproc_weight={}".format(
+               placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings, self.attn_postproc_weight))
             
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
@@ -1359,6 +1365,16 @@ class EmbeddingManager(nn.Module):
 
         return embedded_text
 
+    def attn_postprocess(self, embedded_text):
+        assert self.attn_postproc_weight > 0
+        padding_mask = self.prompt_emb_mask.squeeze(2)
+        # .nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
+        attn_embedded_text = self.postproc_att_layer(embedded_text, embedded_text, embedded_text, key_padding_mask=padding_mask)[0]
+        # Linearly combine the original embedding and the attention embedding.
+        postproc_embedded_text = (1 - self.attn_postproc_weight) * embedded_text \
+                                 + self.attn_postproc_weight * attn_embedded_text
+        return postproc_embedded_text
+    
     def scale_grad_of_fg_emb_subset(self, fg_embedding_k, k, iter_type):
         if iter_type == 'recon_iter':
             # All embeddings will be updated in a recon_iter.
