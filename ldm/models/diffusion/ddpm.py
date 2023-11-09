@@ -2806,12 +2806,12 @@ class LatentDiffusion(DDPM):
                                                                      self.subj_attn_norm_distill_loss_base,
                                                                      subj_attn_norm_distill_loss_scale_base)
 
-            feat_delta_distill_scale = 1
-
+            feat_base_align_scale = 0.5
             loss_mix_prompt_distill =  ((loss_subj_attn_base_align + loss_subj_attn_delta_align) * subj_attn_delta_distill_loss_scale \
                                           + loss_comp_attn_delta_distill * comp_attn_delta_distill_loss_scale) \
                                         + loss_subj_attn_norm_distill    * subj_attn_norm_distill_loss_scale \
-                                        + (loss_feat_base_align    + loss_feat_delta_align)      * feat_delta_distill_scale
+                                        + loss_feat_base_align * feat_base_align_scale \
+                                        + loss_feat_delta_align
                                         
             if loss_mix_prompt_distill > 0:
                 loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
