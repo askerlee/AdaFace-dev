@@ -3068,6 +3068,8 @@ class LatentDiffusion(DDPM):
         loss_subj_attn_norm_distill     = 0
         loss_feat_base_align  = 0
         loss_feat_delta_align = 0
+        # Align both spatial and channel dims.
+        feat_align_spatial_or_channel = 'spatial_channel'  # channel_only, spatial_only, spatial_channel
 
         for unet_layer_idx, unet_feat in unet_feats.items():
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_norm_distill_layer_weights):
@@ -3190,7 +3192,6 @@ class LatentDiffusion(DDPM):
             # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
             pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
 
-            last_dim_is_spatial = True
             # Flatten the spatial dimensions H, W.
             # subj_single_feat: [2, 1280, 16, 16] pool -> [2, 1280, 7, 7] -> [2, 1280, 49]
             
@@ -3203,20 +3204,38 @@ class LatentDiffusion(DDPM):
             # if not last_dim_is_spatial, then channel dim is permuted to the last dim.
             # This option will lead to worse spatial consistency.
             # [2, 1280, 49]  -> [2, 49, 1280]
-            if not last_dim_is_spatial:
+            # feat_align_spatial_or_channel: default 'spatial_channel', 
+            # align both spatial and channel dims.
+            if feat_align_spatial_or_channel in ['spatial_channel', 'spatial_only']:
+                # Do spatial-wise alignment at each channel.
+                # mix_feat_grad_scale = 0.1.
+                loss_layer_feat_base_align_spatial, loss_layer_feat_delta_align_spatial \
+                    = calc_base_and_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
+                                                        mix_single_feat_3d,  mix_comp_feat_3d,
+                                                        ref_grad_scale=mix_feat_grad_scale)
+
+                loss_feat_base_align  += loss_layer_feat_base_align_spatial  * feat_distill_layer_weight
+                loss_feat_delta_align += loss_layer_feat_delta_align_spatial * feat_distill_layer_weight
+                
+            if feat_align_spatial_or_channel in ['spatial_channel', 'channel_only']:
+                # Do channel-wise alignment at each spatial location.         
                 subj_single_feat_3d = subj_single_feat_3d.permute(0, 2, 1)
                 subj_comp_feat_3d   = subj_comp_feat_3d.permute(0,   2, 1)
                 mix_single_feat_3d  = mix_single_feat_3d.permute(0,  2, 1)
                 mix_comp_feat_3d    = mix_comp_feat_3d.permute(0,    2, 1)
+                # mix_feat_grad_scale = 0.1.
+                loss_layer_feat_base_align_channel, loss_layer_feat_delta_align_channel \
+                    = calc_base_and_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
+                                                        mix_single_feat_3d,  mix_comp_feat_3d,
+                                                        ref_grad_scale=mix_feat_grad_scale)
+                
+                loss_feat_base_align  += loss_layer_feat_base_align_channel  * feat_distill_layer_weight
+                loss_feat_delta_align += loss_layer_feat_delta_align_channel * feat_distill_layer_weight
 
-            # mix_feat_grad_scale = 0.1.
-            loss_layer_feat_base_align, loss_layer_feat_delta_align \
-                = calc_base_and_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
-                                                     mix_single_feat_3d,  mix_comp_feat_3d,
-                                                     ref_grad_scale=mix_feat_grad_scale)
-
-            loss_feat_base_align  += loss_layer_feat_base_align  * feat_distill_layer_weight
-            loss_feat_delta_align += loss_layer_feat_delta_align * feat_distill_layer_weight
+        # Normalize.
+        if feat_align_spatial_or_channel == 'spatial_channel':
+            loss_feat_base_align /= 2
+            loss_feat_delta_align /= 2
 
         return loss_subj_attn_base_align,    loss_subj_attn_delta_align, \
                loss_comp_attn_delta_distill, loss_subj_attn_norm_distill, \
