@@ -459,7 +459,7 @@ def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 # feat_ex     is the extension (enriched features) of feat_base.
 # ref_feat_ex is the extension (enriched features) of ref_feat_base.
 def calc_base_and_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
-                                       ref_grad_scale=0.1, feat_base_grad_scale=-1):
+                                       ref_grad_scale=0.1, feat_base_grad_scale=0.05):
         ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
         # Reduce the gradient to the reference features, 
         # as the reference features are supposed to be unchanged, as opposed to feat_*. 
@@ -468,9 +468,9 @@ def calc_base_and_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_fe
         ref_feat_ex_gs    = ref_grad_scaler(ref_feat_ex)
 
         if feat_base_grad_scale == -1:
-            # subj_attn_base/subj_attn_delta:   ref_grad_scale = 0.05 => feat_base_grad_scale = 0.125.
-            # feat_base/feat_delta:             ref_grad_scale = 0.1  => feat_base_grad_scale = 0.25.
-            feat_base_grad_scale = min(ref_grad_scale * 2.5, 1)
+            # subj_attn_base/subj_attn_delta:   ref_grad_scale = 0.05 => feat_base_grad_scale = 0.025.
+            # feat_base/feat_delta:             ref_grad_scale = 0.1  => feat_base_grad_scale = 0.05.
+            feat_base_grad_scale = min(ref_grad_scale * 0.5, 1)
 
         feat_base_scaler  = gen_gradient_scaler(feat_base_grad_scale)
         # Reduce the gradient to feat_base features, to better reserve subject features.

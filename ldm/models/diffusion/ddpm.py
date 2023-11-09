@@ -2838,7 +2838,7 @@ class LatentDiffusion(DDPM):
                     self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info['unet_attnscores'], 
                                                         filtered_fg_mask, batch_have_fg_mask,
                                                         extra_info['subj_indices_1b'], BLOCK_SIZE,
-                                                        mix_fg_preserve_loss_scale=0.1)
+                                                        mix_fg_preserve_loss_scale=0.2)
                 if loss_comp_subj_fg_feat_preserve > 0:
                     loss_dict.update({f'{prefix}/comp_subj_fg_feat_preserve': loss_comp_subj_fg_feat_preserve.mean().detach()})
                 if loss_comp_subj_fg_attn_preserve > 0:
@@ -3744,7 +3744,7 @@ class LatentDiffusion(DDPM):
     # subject features, as the former is only used to facilitate composition.
     def calc_comp_fg_bg_preserve_loss(self, unet_feats, unet_attnscores, 
                                       fg_mask, batch_have_fg_mask, subj_indices, BS,
-                                      mix_fg_preserve_loss_scale=0.1):
+                                      mix_fg_preserve_loss_scale=0.2):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0, 0
