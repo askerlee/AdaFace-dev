@@ -884,7 +884,6 @@ class UNetModel(nn.Module):
 
             if use_ada_context:
                 ada_embedder   = extra_info['ada_embedder']
-                ada_bp_to_unet = extra_info.get('ada_bp_to_unet', False)
                 layer_attn_components['layer_static_prompt_embs'] = layer_static_context_v
                 # emb: time embedding. h: features from the previous layer.
                 # context_in: ['an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
@@ -893,7 +892,7 @@ class UNetModel(nn.Module):
                 #              'an illustration of a dirty cat, , ,  swimming in the ocean, with backlight']
                 # The 1st and 2nd, and 3rd and 4th prompts are the same, if it's a do_teacher_filter iteration.
                 layer_ada_context, ada_emb_weight \
-                    = ada_embedder(context_in, layer_idx, layer_attn_components, emb, ada_bp_to_unet)
+                    = ada_embedder(context_in, layer_idx, layer_attn_components, emb)
                 static_emb_weight = 1 - ada_emb_weight
 
                 # If static context is expanded by doing prompt mixing,

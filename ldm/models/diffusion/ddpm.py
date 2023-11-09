@@ -844,7 +844,6 @@ class LatentDiffusion(DDPM):
                                 'use_layerwise_context': self.use_layerwise_embedding, 
                                 'use_ada_context':       self.use_ada_embedding,
                                 'use_conv_attn':         self.use_conv_attn,
-                                'ada_bp_to_unet':        True, 
                                 # Setting up 'subj_indices' here is necessary for inference.
                                 # During training, 'subj_indices' will be overwritten in p_losses().
                                 # Although 'bg_indices' is usually not used during inference,
@@ -878,11 +877,11 @@ class LatentDiffusion(DDPM):
     # get_layer_ada_conditioning() is a callback function called iteratively by each layer in UNet.
     # It returns the conditioning embedding (ada embedding & other token embeddings -> clip encoder) 
     # for the current layer to UNet.
-    def get_layer_ada_conditioning(self, c_in, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
+    def get_layer_ada_conditioning(self, c_in, layer_idx, layer_attn_components, time_emb):
         # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
         # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
         # when embedding_manager is called within cond_stage_model.encode().
-        self.embedding_manager.cache_layer_features_for_ada(layer_idx, layer_attn_components, time_emb, ada_bp_to_unet)
+        self.embedding_manager.cache_layer_features_for_ada(layer_idx, layer_attn_components, time_emb)
         # DO NOT call sample_last_layers_skip_weights() here, to make the ada embeddings are generated with 
         # CLIP skip weights consistent with the static embeddings.
         ada_embedded_text = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
@@ -3046,6 +3045,8 @@ class LatentDiffusion(DDPM):
                                             23: 1., 24: 1.,                                   
                                            }
 
+        feat_size2pooler_spec = { 8: [4, 2], 16: [4, 2], 32: [8, 4], 64: [8, 4] }
+
         # Normalize the weights above so that each set sum to 1.
         feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
         attn_norm_distill_layer_weights     = normalize_dict_values(attn_norm_distill_layer_weights)
@@ -3181,12 +3182,13 @@ class LatentDiffusion(DDPM):
                 mix_single_feat  = mix_single_feat  * spatial_weight
                 mix_comp_feat    = mix_comp_feat    * spatial_weight
 
-            feat_pool_out_size = (4, 4)
-            # feat_pool_stride      = 2
+            # 8  -> 4, 2 (output 3),  16 -> 4, 2 (output 7), 
+            # 32 -> 8, 4 (output 7),  64 -> 8, 4 (output 15).
+            feat_pool_kernel_size, feat_pool_stride = feat_size2pooler_spec[subj_single_feat.shape[-1]]
             # feature pooling: allow small perturbations of the locations of pixels.
             # If subj_single_feat is 8x8, then after pooling, it becomes 3x3, too rough.
             # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
-            pooler = nn.AdaptiveAvgPool2d(feat_pool_out_size)
+            pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
 
             last_dim_is_spatial = True
             # Flatten the spatial dimensions H, W.
@@ -3198,7 +3200,9 @@ class LatentDiffusion(DDPM):
             mix_single_feat_3d  = pooler(mix_single_feat).reshape(*mix_single_feat.shape[:2], -1)
             mix_comp_feat_3d    = pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1)
 
-            # if not last_dim_is_spatial: [2, 1280, 49]  -> [2, 49, 1280]
+            # if not last_dim_is_spatial, then channel dim is permuted to the last dim.
+            # This option will lead to worse spatial consistency.
+            # [2, 1280, 49]  -> [2, 49, 1280]
             if not last_dim_is_spatial:
                 subj_single_feat_3d = subj_single_feat_3d.permute(0, 2, 1)
                 subj_comp_feat_3d   = subj_comp_feat_3d.permute(0,   2, 1)
@@ -3208,8 +3212,8 @@ class LatentDiffusion(DDPM):
             # mix_feat_grad_scale = 0.1.
             loss_layer_feat_base_align, loss_layer_feat_delta_align \
                 = calc_base_and_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
-                                                    mix_single_feat_3d,  mix_comp_feat_3d,
-                                                    ref_grad_scale=mix_feat_grad_scale)
+                                                     mix_single_feat_3d,  mix_comp_feat_3d,
+                                                     ref_grad_scale=mix_feat_grad_scale)
 
             loss_feat_base_align  += loss_layer_feat_base_align  * feat_distill_layer_weight
             loss_feat_delta_align += loss_layer_feat_delta_align * feat_distill_layer_weight
@@ -3633,7 +3637,7 @@ class LatentDiffusion(DDPM):
             # attn_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
             attn_mat = unet_attnscores[unet_layer_idx]
             attn_mat = attn_mat.permute(0, 3, 1, 2)
-            # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64].
+            # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]. 8: head, 64: 8x8 spatial.
             # do_sum=False, to allow broadcasting to subj_comp_attn_sum.
             subj_subj_attn      = sel_emb_attns_by_indices(attn_mat, subj_subj_indices, 
                                                            do_sum=False, do_mean=True, do_sqrt_norm=False)
@@ -3663,7 +3667,7 @@ class LatentDiffusion(DDPM):
                 # The orthogonal projection of cls_subj_attn against cls_comp_attn.
                 # cls_comp_attn will broadcast to the K_fg dimension.
                 cls_comp_attn_align,  cls_comp_attn_ortho, cls_comp_attn_align_coeffs \
-                    = decomp_align_ortho(cls_subj_attn,  cls_comp_attn_sum, return_align_coeffs=True)
+                    = decomp_align_ortho(cls_subj_attn, cls_comp_attn_sum, return_align_coeffs=True)
                 # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
                 # vary only along the direction of the orthogonal projections of class attention.
 
@@ -3675,10 +3679,10 @@ class LatentDiffusion(DDPM):
                 # subj_comp_attn_ortho, cls_comp_attn_ortho: [1, 9, 8, 64]
                 loss_layer_comp_attn_ortho = \
                     calc_delta_cosine_loss(subj_comp_attn_ortho, cls_comp_attn_ortho, 
-                                            exponent=2,    
-                                            do_demean_first=False,
-                                            first_n_dims_to_flatten=3, 
-                                            ref_grad_scale=cls_grad_scale)
+                                           exponent=2,    
+                                           do_demean_first=False,
+                                           first_n_dims_to_flatten=3, 
+                                           ref_grad_scale=cls_grad_scale)
                 loss_layer_cls_comp_attn_align = power_loss(cls_comp_attn_align_coeffs, exponent=2)
             else:
                 loss_layer_comp_attn_ortho = 0

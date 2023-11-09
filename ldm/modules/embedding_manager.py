@@ -134,7 +134,7 @@ class MaskedAvgPool1d(nn.Module):
         x = x.sum(dim=self.dim, keepdim=self.keepdim) / mask.sum(dim=self.dim, keepdim=self.keepdim)
         return x
 
-# There's almost no learnable parameters in AttentionalPooler, except elementwise affines in 3 LayerNorms.
+# Set infeat_grad_scale < 1 to reduce the gradient flow into the UNet.
 class AttentionalPooler(nn.Module):
     def __init__(self, layer_idx, feat_dim, token_emb_dim, lora_dim=64,
                  infeat_grad_scale=0.5):
@@ -162,40 +162,26 @@ class AttentionalPooler(nn.Module):
 
         self.layer_idx = layer_idx
 
-        # Set to < 1 to reduce the gradient flow into the UNet.
-        self.infeat_grad_scale = infeat_grad_scale
-        if self.infeat_grad_scale < 1:
-            self.infeat_grad_scaler = GradientScaler(self.infeat_grad_scale)
-        else:
-            self.infeat_grad_scaler = None
+        self.infeat_grad_scale = infeat_grad_scale      # Default 0.5
+        self.infeat_grad_scaler = gen_gradient_scaler(self.infeat_grad_scale)
 
+        # v_pooler is used only if fg_q_emb is None.
         self.v_pooler = MaskedAvgPool1d(dim=1, keepdim=True)
 
     # k: query in the UNet attention layer. Used as key here.
     # fg_q_emb: [768,] static subject embedding of this layer. Used as query here.
     # Use UNet feature query as k, and subject token as q, to compute the attention, 
     # which aggregates the original UNet layer input features x.
-    def forward(self, layer_attn_components, fg_q_emb, bg_q_emb=None, img_mask=None, bp_to_unet=False):
+    def forward(self, layer_attn_components, fg_q_emb, bg_q_emb=None, img_mask=None):
         # x and q have the same shape.
         ca_x, ca_q, ca_to_k, ca_x_size \
                 = layer_attn_components['x'], layer_attn_components['q'], \
                   layer_attn_components['to_k'], layer_attn_components['infeat_size']
                            
-        if bp_to_unet:
-            if self.infeat_grad_scale < 1:
-                #grad_scaler = grad_scaler.cuda()
-                ca_x_gs  = self.infeat_grad_scaler(ca_x)
-                ca_q_gs = self.infeat_grad_scaler(ca_q)
-            else:
-                ca_x_gs  = ca_x
-                ca_q_gs = ca_q
-        else:
-            # Ordinary image reconstruction iterations. No BP into the UNet.
-            # But if attentional pooler is used, it will also not be BPed into and not updated.
-            # When not bp_to_unet, completely cut off the gradient flow into the UNet.
-            # bp_to_unet is enabled when doing composition regularization iterations. 
-            ca_x_gs = ca_x.detach()
-            ca_q_gs = ca_q.detach()
+        # By default, infeat_grad_scaler does 0.5 gs.
+        ca_x_gs  = self.infeat_grad_scaler(ca_x)
+        ca_q_gs = self.infeat_grad_scaler(ca_q)
+
 
         x = ca_x_gs
         k = ca_q_gs
@@ -712,7 +698,7 @@ class AdaEmbedding(nn.Module):
     # time_emb: [B, 1280].
     def forward(self, layer_idx, layer_attn_components, time_emb, 
                 layer_subj_emb_probe, layer_static_extra_emb_mean, 
-                img_mask=None, bp_to_unet=False, cached_infeat_bg=None):
+                img_mask=None, cached_infeat_bg=None):
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         pooler  = self.poolers[ca_layer_idx]
         ## Some Linears mainly use either fg or bg features. So we reduce cross weights.
@@ -728,10 +714,6 @@ class AdaEmbedding(nn.Module):
             breakpoint()
 
         with torch.autocast(device_type=self.device_type, enabled=True):
-            # If not bp_to_unet, then do not BP into the UNet. 
-            # So cut off the gradient flow here to reduce RAM and compute.
-            # The gradient is cut off within pooler.
-
             # Even if ca_infeat is grad-scaled, the pooler still receives the full gradient.
             # But the grad is scaled when it's further passed to the UNet.
 
@@ -748,7 +730,7 @@ class AdaEmbedding(nn.Module):
                 infeat_pooled    = pooler(layer_attn_components, 
                                           fg_q_emb=layer_subj_emb_probe, 
                                           bg_q_emb=layer_static_extra_emb_mean,
-                                          img_mask=img_mask, bp_to_unet=bp_to_unet)
+                                          img_mask=img_mask)
 
                 if self.use_attn_pooler:
                     # infeat_fg, infeat_bg: [2, 320]
@@ -1092,7 +1074,7 @@ class EmbeddingManager(nn.Module):
             # a previous call of  cache_layer_features_for_ada() from UNet.
             ada_embedded_text = \
                 self.get_ada_embedding(self.layer_idx, self.layer_attn_components, self.time_emb,
-                                       tokenized_text, embedded_text, self.ada_bp_to_unet)
+                                       tokenized_text, embedded_text)
 
             # Release ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
@@ -1227,7 +1209,6 @@ class EmbeddingManager(nn.Module):
             time_emb,               # time embedding of the current iteration.
             tokenized_text,         # [B, N]. Identical B copies along the batch dimension.
             embedded_text,          # [B, N, 768]. Identical B copies along the batch dimension.
-            ada_bp_to_unet=False
     ):
         BS, device = tokenized_text.shape[0], tokenized_text.device
         cached_infeat_bg = None
@@ -1344,8 +1325,7 @@ class EmbeddingManager(nn.Module):
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
                                      layer_subj_emb_probe,
                                      layer_static_extra_emb_mean, 
-                                     self.img_mask, ada_bp_to_unet, 
-                                     cached_infeat_bg)
+                                     self.img_mask, cached_infeat_bg)
 
             if self.img_mask is not None and self.img_mask.max() > 1:
                 breakpoint()
@@ -1612,11 +1592,10 @@ class EmbeddingManager(nn.Module):
         print(f"Setting normalize_subj_attn = {normalize_subj_attn}")
         
     # Cache features used to compute ada embeddings.
-    def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb, ada_bp_to_unet):
+    def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb):
         self.gen_ada_embedding      = True
         self.layer_idx              = layer_idx
         self.time_emb               = time_emb
-        self.ada_bp_to_unet         = ada_bp_to_unet
         self.layer_attn_components  = layer_attn_components
 
     # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
@@ -1625,7 +1604,6 @@ class EmbeddingManager(nn.Module):
         self.gen_ada_embedding      = False
         self.layer_idx              = -1
         self.time_emb               = None
-        self.ada_bp_to_unet         = False
         self.layer_attn_components  = None
 
     # Set volatile data structures for computing ada embeddings.
