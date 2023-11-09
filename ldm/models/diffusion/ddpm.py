@@ -3089,21 +3089,21 @@ class LatentDiffusion(DDPM):
             subj_single_feat, subj_comp_feat, mix_single_feat, mix_comp_feat \
                 = unet_feat.chunk(4)
             
-            # attn_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
+            # attn_score_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
             # We don't need BP through attention into UNet.
-            attn_mat = unet_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
+            attn_score_mat = unet_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
             # subj_attn_4b: [4, 8, 256] (1 embedding  for 1 token)  => [4, 1, 8, 256] => [4, 8, 256]
             # or         [16, 8, 256] (4 embeddings for 1 token) => [4, 4, 8, 256] => [4, 8, 256]
             # BLOCK_SIZE*4: this batch contains 4 blocks. Each block should have one instance.
-            subj_attn_4b = attn_mat[fg_indices_4b].reshape(BLOCK_SIZE*4, K_fg, *attn_mat.shape[2:]).sum(dim=1)
+            subj_attn_4b = attn_score_mat[fg_indices_4b].reshape(BLOCK_SIZE*4, K_fg, *attn_score_mat.shape[2:]).sum(dim=1)
             # subj_single_subj_attn, ...: [1, 8, 256] (1 embedding  for 1 token) 
             # or                          [1, 8, 256] (4 embeddings for 1 token)
             subj_single_subj_attn, subj_comp_subj_attn, mix_single_subj_attn, mix_comp_subj_attn \
                 = subj_attn_4b.chunk(4)
 
-            comp_attn_mat_2b = sel_emb_attns_by_indices(attn_mat, comp_extra_indices_13b, 
+            comp_attn_score_mat_2b = sel_emb_attns_by_indices(attn_score_mat, comp_extra_indices_13b, 
                                                         do_sum=False, do_sqrt_norm=False)
-            subj_comp_comp_attn, mix_comp_comp_attn = comp_attn_mat_2b.chunk(2)
+            subj_comp_comp_attn, mix_comp_comp_attn = comp_attn_score_mat_2b.chunk(2)
 
             if unet_layer_idx in attn_norm_distill_layer_weights:
                 attn_norm_distill_layer_weight     = attn_norm_distill_layer_weights[unet_layer_idx]
@@ -3308,20 +3308,20 @@ class LatentDiffusion(DDPM):
         #fg_attn_grad_scale  = 0.5
         #fg_attn_grad_scaler = gen_gradient_scaler(fg_attn_grad_scale)
 
-        for unet_layer_idx, unet_attn in unet_attnscores.items():
+        for unet_layer_idx, unet_attn_score in unet_attnscores.items():
             if (unet_layer_idx not in attn_align_layer_weights):
                 continue
 
             # [2, 8, 256, 77] / [2, 8, 64, 77] =>
             # [2, 77, 8, 256] / [2, 77, 8, 64]
-            attn_mat = unet_attn.permute(0, 3, 1, 2)
+            attn_score_mat = unet_attn_score.permute(0, 3, 1, 2)
             # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
-            subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices, 
+            subj_attn = sel_emb_attns_by_indices(attn_score_mat, subj_indices, 
                                                  do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
             
             # sel_emb_attns_by_indices will split bg_indices to multiple instances,
             # and select the corresponding attention rows for each instance.
-            bg_attn   = sel_emb_attns_by_indices(attn_mat, bg_indices, 
+            bg_attn   = sel_emb_attns_by_indices(attn_score_mat, bg_indices, 
                                                  do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
@@ -3506,23 +3506,23 @@ class LatentDiffusion(DDPM):
         loss_fg_xlayer_consist = 0
         loss_bg_xlayer_consist = 0
 
-        for unet_layer_idx, unet_attn in unet_attnscores.items():
+        for unet_layer_idx, unet_attn_score in unet_attnscores.items():
             if (unet_layer_idx not in attn_align_layer_weights):
                 continue
 
             # [2, 8, 256, 77] => [2, 77, 8, 256]
-            attn_mat        = unet_attn.permute(0, 3, 1, 2)
+            attn_score_mat        = unet_attn_score.permute(0, 3, 1, 2)
             # [2, 8, 64, 77]  => [2, 77, 8, 64]
-            attn_mat_xlayer = unet_attnscores[attn_align_xlayer_maps[unet_layer_idx]].permute(0, 3, 1, 2)
+            attn_score_mat_xlayer = unet_attnscores[attn_align_xlayer_maps[unet_layer_idx]].permute(0, 3, 1, 2)
             
-            # Make sure attn_mat_xlayer is always smaller than attn_mat.
-            # So we always scale down attn_mat to match attn_mat_xlayer.
-            if attn_mat_xlayer.shape[-1] > attn_mat.shape[-1]:
-                attn_mat, attn_mat_xlayer = attn_mat_xlayer, attn_mat
+            # Make sure attn_score_mat_xlayer is always smaller than attn_score_mat.
+            # So we always scale down attn_score_mat to match attn_score_mat_xlayer.
+            if attn_score_mat_xlayer.shape[-1] > attn_score_mat.shape[-1]:
+                attn_score_mat, attn_score_mat_xlayer = attn_score_mat_xlayer, attn_score_mat
 
             # H: 16, Hx: 8
-            H  = int(np.sqrt(attn_mat.shape[-1]))
-            Hx = int(np.sqrt(attn_mat_xlayer.shape[-1]))
+            H  = int(np.sqrt(attn_score_mat.shape[-1]))
+            Hx = int(np.sqrt(attn_score_mat_xlayer.shape[-1]))
 
             # Why taking mean over 8 heads: In a CA layer, FFN features added to the CA features. 
             # If there were no FFN pathways, the CA features of the previous CA layer would be better aligned
@@ -3531,9 +3531,9 @@ class LatentDiffusion(DDPM):
             # with the CA features in the L_xlayer-th CA layer. So it's of little benefit
             # to align the corresponding heads across CA layers.
             # subj_attn:        [8, 8, 256] -> [2, 4, 8, 256] -> mean among 8 heads -> [2, 4, 256] 
-            subj_attn        = attn_mat[subj_indices].reshape(       SSB_SIZE, K_fg, *attn_mat.shape[2:]).mean(dim=2)
+            subj_attn        = attn_score_mat[subj_indices].reshape(       SSB_SIZE, K_fg, *attn_score_mat.shape[2:]).mean(dim=2)
             # subj_attn_xlayer: [8, 8, 64]  -> [2, 4, 8, 64]  -> mean among 8 heads -> [2, 4, 64]
-            subj_attn_xlayer = attn_mat_xlayer[subj_indices].reshape(SSB_SIZE, K_fg, *attn_mat_xlayer.shape[2:]).mean(dim=2)
+            subj_attn_xlayer = attn_score_mat_xlayer[subj_indices].reshape(SSB_SIZE, K_fg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2)
 
             # subj_attn: [2, 4, 256] -> [2, 4, 16, 16] -> [2, 4, 8, 8] -> [2, 4, 64]
             subj_attn = subj_attn.reshape(SSB_SIZE, -1, H, H)
@@ -3543,8 +3543,8 @@ class LatentDiffusion(DDPM):
             if bg_indices is not None:
                 # bg_attn:   [4, 8, 256] -> [2, 2, 8, 256] -> sum over 8 attention heads -> [2, 2, 256]
                 # 8: 8 attention heads. Last dim 256: number of image tokens.
-                bg_attn   = attn_mat[bg_indices].reshape(SSB_SIZE, K_bg, *attn_mat.shape[2:]).mean(dim=2)
-                bg_attn_xlayer   = attn_mat_xlayer[bg_indices].reshape(SSB_SIZE, K_bg, *attn_mat_xlayer.shape[2:]).mean(dim=2)
+                bg_attn         = attn_score_mat[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat.shape[2:]).mean(dim=2)
+                bg_attn_xlayer  = attn_score_mat_xlayer[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2)
                 # bg_attn: [2, 2, 256] -> [2, 2, 16, 16] -> [2, 2, 8, 8] -> [2, 2, 64]
                 bg_attn   = bg_attn.reshape(SSB_SIZE, -1, H, H)
                 bg_attn   = F.interpolate(bg_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
@@ -3664,12 +3664,12 @@ class LatentDiffusion(DDPM):
             loss_cls_comp_value_align  += loss_layer_cls_comp_value_align  * v_ortho_layer_weight
             
             ###########   loss_subj_comp_attn_align   ###########
-            # attn_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
-            attn_mat = unet_attnscores[unet_layer_idx]
-            attn_mat = attn_mat.permute(0, 3, 1, 2)
+            # attn_score_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
+            attn_score_mat = unet_attnscores[unet_layer_idx]
+            attn_score_mat = attn_score_mat.permute(0, 3, 1, 2)
             # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]. 8: head, 64: 8x8 spatial.
             # do_sum=False, to allow broadcasting to subj_comp_attn_sum.
-            subj_subj_attn      = sel_emb_attns_by_indices(attn_mat, subj_subj_indices, 
+            subj_subj_attn      = sel_emb_attns_by_indices(attn_score_mat, subj_subj_indices, 
                                                            do_sum=False, do_mean=True, do_sqrt_norm=False)
 
             # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 1, 8, 64]
@@ -3678,7 +3678,7 @@ class LatentDiffusion(DDPM):
             # K_comp of different instances may be different.
             # In such cases, do_sum has to be True to avoid errors due to different shape.
             # decomp_align_ortho is scale-invariant to the output. So we don't need to sqrt_norm.
-            subj_comp_attn_sum  = sel_emb_attns_by_indices(attn_mat, subj_comp_indices,
+            subj_comp_attn_sum  = sel_emb_attns_by_indices(attn_score_mat, subj_comp_indices,
                                                            do_sum=False, do_mean=True, do_sqrt_norm=False)
             # do_sum reduces dim 1, so we add it back to be prepared for broadcasting.
             #subj_comp_attn_sum = subj_comp_attn_sum.unsqueeze(1)
@@ -3688,9 +3688,9 @@ class LatentDiffusion(DDPM):
                   = decomp_align_ortho(subj_subj_attn, subj_comp_attn_sum, return_align_coeffs=True)
 
             if is_4type_batch:
-                cls_subj_attn       = sel_emb_attns_by_indices(attn_mat, cls_subj_indices,
+                cls_subj_attn       = sel_emb_attns_by_indices(attn_score_mat, cls_subj_indices,
                                                                do_sum=False, do_mean=True, do_sqrt_norm=False)
-                cls_comp_attn_sum   = sel_emb_attns_by_indices(attn_mat, cls_comp_indices,
+                cls_comp_attn_sum   = sel_emb_attns_by_indices(attn_score_mat, cls_comp_indices,
                                                                do_sum=False, do_mean=True, do_sqrt_norm=False)
                 # do_sum reduces dim 1, so we add it back to be prepared for broadcasting.
                 #cls_comp_attn_sum   = cls_comp_attn_sum.unsqueeze(1)
@@ -3827,15 +3827,15 @@ class LatentDiffusion(DDPM):
                                                 + loss_layer_mix_fg_feat_preserve * mix_fg_preserve_loss_scale) \
                                                 * feat_distill_layer_weight
 
-            ##### unet_attn fg preservation loss & bg suppression loss #####
-            unet_attn = unet_attnscores[unet_layer_idx]
-            # attn_mat: [4, 8, 64, 77] => [4, 77, 8, 64] => sum over 8 attention heads => [4, 77, 64]
-            attn_mat = unet_attn.permute(0, 3, 1, 2).sum(dim=2)
+            ##### unet_attn_score fg preservation loss & bg suppression loss #####
+            unet_attn_score = unet_attnscores[unet_layer_idx]
+            # attn_score_mat: [4, 8, 64, 77] => [4, 77, 8, 64] => sum over 8 attention heads => [4, 77, 64]
+            attn_score_mat = unet_attn_score.permute(0, 3, 1, 2).sum(dim=2)
             # subj_subj_attn: [4, 77, 64] -> [4 * K_fg, 64] -> [4, K_fg, 64]
-            subj_attn = attn_mat[ind_subj_B, ind_subj_N].reshape(BS * 4, K_fg, -1)
+            subj_attn = attn_score_mat[ind_subj_B, ind_subj_N].reshape(BS * 4, K_fg, -1)
 
             # fg_attn_mask_4b: [1, 1, 64, 64] => [1, 1, 8, 8]
-            fg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_mat, fg_mask_4b, "fg_mask_4b", 
+            fg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_score_mat, fg_mask_4b, "fg_mask_4b", 
                                                            mode="nearest|bilinear", warn_on_all_zero=False)
             # fg_attn_mask_flat_4b: [1, 1, 8, 8] => [4, 1, 64]
             fg_attn_mask_flat_4b  = fg_attn_mask_4b.reshape(BS * 4, 1, -1)
@@ -3856,7 +3856,7 @@ class LatentDiffusion(DDPM):
                                                 * feat_distill_layer_weight
             
             ##### loss_comp_subj_bg_attn_suppress #####
-            bg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_mat, bg_mask_4b, "bg_mask_4b",
+            bg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_score_mat, bg_mask_4b, "bg_mask_4b",
                                                              mode="nearest|bilinear", warn_on_all_zero=True)
             # bg_attn_mask_flat_4b: [4, 1, 8, 8] => [4, 1, 64]
             bg_attn_mask_flat_4b  = bg_attn_mask_4b.reshape(BS * 4, 1, -1)
