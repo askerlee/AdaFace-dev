@@ -114,7 +114,7 @@ class DDPM(pl.LightningModule):
                  subj_attn_norm_distill_loss_base=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
-                 comp_fg_bg_preserve_loss_base=0.,
+                 comp_subj_fg_feat_preserve_loss_base=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
                  wds_bg_recon_discount=1.,
@@ -149,21 +149,21 @@ class DDPM(pl.LightningModule):
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
         self.padding_embs_align_loss_base           = padding_embs_align_loss_base
         self.padding_embs_align_loss_weight_base    = padding_embs_align_loss_weight_base
-        self.subj_comp_key_ortho_loss_weight    = subj_comp_key_ortho_loss_weight
-        self.subj_comp_value_ortho_loss_weight  = subj_comp_value_ortho_loss_weight
+        self.subj_comp_key_ortho_loss_weight        = subj_comp_key_ortho_loss_weight
+        self.subj_comp_value_ortho_loss_weight      = subj_comp_value_ortho_loss_weight
         self.subj_comp_attn_complementary_loss_weight = subj_comp_attn_complementary_loss_weight
-        self.mix_prompt_distill_weight          = mix_prompt_distill_weight
-        self.subj_attn_delta_distill_loss_base  = subj_attn_delta_distill_loss_base
-        self.comp_attn_delta_distill_loss_base  = comp_attn_delta_distill_loss_base
-        self.subj_attn_norm_distill_loss_base  = subj_attn_norm_distill_loss_base
-        self.comp_fg_bg_preserve_loss_weight    = comp_fg_bg_preserve_loss_weight
-        self.comp_fg_bg_preserve_loss_base      = comp_fg_bg_preserve_loss_base
-        self.fg_bg_complementary_loss_weight    = fg_bg_complementary_loss_weight
-        self.fg_wds_complementary_loss_weight   = fg_wds_complementary_loss_weight
-        self.fg_bg_xlayer_consist_loss_weight   = fg_bg_xlayer_consist_loss_weight
-        self.do_clip_teacher_filtering          = do_clip_teacher_filtering
-        self.prompt_mix_scheme                  = 'mix_hijk'
-        self.wds_bg_recon_discount              = wds_bg_recon_discount
+        self.mix_prompt_distill_weight              = mix_prompt_distill_weight
+        self.subj_attn_delta_distill_loss_base      = subj_attn_delta_distill_loss_base
+        self.comp_attn_delta_distill_loss_base      = comp_attn_delta_distill_loss_base
+        self.subj_attn_norm_distill_loss_base       = subj_attn_norm_distill_loss_base
+        self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
+        self.comp_subj_fg_feat_preserve_loss_base   = comp_subj_fg_feat_preserve_loss_base
+        self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
+        self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
+        self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
+        self.do_clip_teacher_filtering              = do_clip_teacher_filtering
+        self.prompt_mix_scheme                      = 'mix_hijk'
+        self.wds_bg_recon_discount                  = wds_bg_recon_discount
         
         self.use_conv_attn                   = use_conv_attn
         self.default_point_conv_attn_mix_weight = default_point_conv_attn_mix_weight
@@ -2839,6 +2839,7 @@ class LatentDiffusion(DDPM):
                                                         filtered_fg_mask, batch_have_fg_mask,
                                                         extra_info['subj_indices_1b'], BLOCK_SIZE,
                                                         mix_fg_preserve_loss_scale=0.2)
+                
                 if loss_comp_subj_fg_feat_preserve > 0:
                     loss_dict.update({f'{prefix}/comp_subj_fg_feat_preserve': loss_comp_subj_fg_feat_preserve.mean().detach()})
                 if loss_comp_subj_fg_attn_preserve > 0:
@@ -2846,20 +2847,20 @@ class LatentDiffusion(DDPM):
                 if loss_comp_subj_bg_attn_suppress > 0:
                     loss_dict.update({f'{prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach()})
 
-                comp_subj_fg_feat_preserve_loss_scale = 0.1 if self.iter_flags['use_wds_comp'] else 1
+                comp_subj_fg_feat_preserve_loss_scale_base = 1
+                # comp_subj_fg_feat_preserve_loss_base: 0.25
+                comp_subj_fg_feat_preserve_loss_scale = calc_dyn_loss_scale(loss_comp_subj_fg_feat_preserve,
+                                                                            self.comp_subj_fg_feat_preserve_loss_base,
+                                                                            comp_subj_fg_feat_preserve_loss_scale_base)
+                
                 bg_attn_suppress_loss_scale = 0.5
-                loss_comp_fg_bg_preserve = (loss_comp_subj_fg_feat_preserve + loss_comp_subj_fg_attn_preserve) \
-                                            * comp_subj_fg_feat_preserve_loss_scale \
+                loss_comp_fg_bg_preserve = (loss_comp_subj_fg_feat_preserve * comp_subj_fg_feat_preserve_loss_scale \
+                                              + loss_comp_subj_fg_attn_preserve) \
                                             + loss_comp_subj_bg_attn_suppress * bg_attn_suppress_loss_scale
             else:
                 loss_comp_fg_bg_preserve = 0
 
-            # comp_fg_bg_preserve_loss_base: 0.25
-            comp_fg_bg_preserve_loss_scale_base = 0.5
-            comp_fg_bg_preserve_loss_scale = calc_dyn_loss_scale(loss_comp_fg_bg_preserve,
-                                                                 self.comp_fg_bg_preserve_loss_base,
-                                                                 comp_fg_bg_preserve_loss_scale_base)
-            
+            comp_fg_bg_preserve_loss_scale = 0.5
             # Scale down loss_comp_fg_bg_preserve if reuse_init_conds.
             if self.iter_flags['reuse_init_conds']:
                 comp_fg_bg_preserve_loss_scale *= 0.5
