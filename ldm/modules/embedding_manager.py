@@ -1367,7 +1367,13 @@ class EmbeddingManager(nn.Module):
 
     def attn_postprocess(self, embedded_text):
         assert self.attn_postproc_weight > 0
-        padding_mask = self.prompt_emb_mask.squeeze(2)
+        # prompt_emb_mask: 0    for padding tokens, 1     for non-padding tokens.
+        # padding_mask:    True for padding tokens, False for non-padding tokens.
+        padding_mask = (1 - self.prompt_emb_mask.squeeze(2)).bool()
+        if self.placeholder_indices_bg is not None:
+            # Treat background tokens as padding tokens, and exclude them from self-attention.
+            padding_mask[self.placeholder_indices_bg] = True
+
         # .nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
         attn_embedded_text = self.postproc_attn_layer(embedded_text, embedded_text, embedded_text, key_padding_mask=padding_mask)[0]
         # Linearly combine the original embedding and the attention embedding.
