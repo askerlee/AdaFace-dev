@@ -1379,7 +1379,7 @@ class EmbeddingManager(nn.Module):
         # .nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
         attn_valid_embs = self.postproc_attn_layer(valid_embs, valid_embs, valid_embs)[0]
         attn_embedded_text = embedded_text.clone()
-        attn_embedded_text[valid_embs_indices] = attn_valid_embs.astype(embedded_text.dtype)
+        attn_embedded_text[valid_embs_indices] = attn_valid_embs.type(embedded_text.dtype)
         # Linearly combine the original embedding and the attention embedding.
         postproc_embedded_text = (1 - self.attn_postproc_weight) * embedded_text \
                                  + self.attn_postproc_weight * attn_embedded_text
