@@ -1367,7 +1367,8 @@ class EmbeddingManager(nn.Module):
             return embedded_text
         
         extra_embs_mask = self.prompt_emb_mask.squeeze(2).clone()
-        # Mask out fg and bg embeddings in the extra embeddings.
+        # extra_embs_mask is used to generate the indices to the extra embeddings.
+        # Exclude fg and bg embeddings from the extra embeddings.
         extra_embs_mask[self.placeholder_indices_fg] = 0
         if self.placeholder_indices_bg is not None:
             # Treat background tokens as padding tokens, and exclude them from cross-attention.
@@ -1376,10 +1377,11 @@ class EmbeddingManager(nn.Module):
         attn_embedded_text = embedded_text.clone()
         fg_indices_by_instance = split_indices_by_instance(self.placeholder_indices_fg)
 
-        # For each instance, the number of valid embeddings is different.
+        # Different instance in the batch have different numbers of extra embeddings.
         # So we cannot batch them together, and have to process them one by one.
         for instance_fg_indices in fg_indices_by_instance:
             batch_idx = instance_fg_indices[0][0]
+            # Number of subject embeddings.
             M = len(instance_fg_indices[0])
             if M > 1 and self.use_specialized_comp_embs:
                 # Only the odd embeddings participate in cross-attention.
@@ -1397,21 +1399,23 @@ class EmbeddingManager(nn.Module):
                 # print("even_fg_embs: ", even_fg_embs.norm(dim=1).mean())
                 '''
             else:
+                # All subject embeddings participate in cross-attention.
                 sel_fg_indices = instance_fg_indices
 
             inst_sel_fg_embs = embedded_text[sel_fg_indices]
             inst_extra_embs_indices = extra_embs_mask[batch_idx].nonzero(as_tuple=True)[0]
             inst_extra_embs = embedded_text[batch_idx][inst_extra_embs_indices]
             # nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
-            # inst_extra_embs: [6, 768]. attn_inst_sel_fg_embs: [4, 768].
-            # attn_output_weights: [4, 6].
+            # inst_extra_embs: [6, 768]. attn_inst_sel_fg_embs: [4, 768] or [9, 768]
+            # attn_output_weights: [4, 6] or [9, 6].
             # attn_inst_sel_fg_embs.norm: 300~500. Don't know why they are so large. 
             # Anyway need LN first.
-            attn_inst_sel_fg_embs = self.postmix_attn_layer(inst_sel_fg_embs, inst_extra_embs, inst_extra_embs)[0]
-            attn_inst_sel_fg_embs = self.postmix_attn_LN(attn_inst_sel_fg_embs)
+            attn_inst_sel_fg_embs = self.postproc_attn_layer(inst_sel_fg_embs, inst_extra_embs, inst_extra_embs)[0]
+            attn_inst_sel_fg_embs = self.postproc_attn_LN(attn_inst_sel_fg_embs)
             # print("attn_inst_sel_fg_embs: ", torch.norm(attn_inst_sel_fg_embs, dim=1).mean())
 
-            # Still normalize according to M, so that the attn_inst_sel_fg_embs are of the same scale 
+            # Still normalize according to M even if the subset < M, 
+            # so that the attn_inst_sel_fg_embs are of the same scale 
             # as other fg embs. If M = 9, then NORM = 1/3.
             NORM = 1 / np.sqrt(M)
             attn_inst_sel_fg_embs = attn_inst_sel_fg_embs * NORM * self.get_emb_global_scale()
@@ -1663,9 +1667,9 @@ class EmbeddingManager(nn.Module):
                 self.postmix_attn_LN    = nn.LayerNorm(self.token_dim, elementwise_affine=True)
                 print("Creating new postmix_attn_layer (LN).")
             else:
-                # If postmix_attn_layer (LN) exist, and no postmix_attn_layer (LN) are passed in,
+                # If postproc_attn_layer (LN) exist, and no postproc_attn_layer (LN) are passed in,
                 # do nothing.
-                print("postmix_attn_layer (LN) already created. Do nothing.")
+                print("postproc_attn_layer (LN) already created. Do nothing.")
         else:
             # If postmix_attn_layer (LN) exist, clear them.
             self.postmix_attn_layer = None
@@ -1819,8 +1823,8 @@ class EmbeddingManager(nn.Module):
                      # Learnable weights for mixing point attn and conv attn features.
                      "layerwise_point_conv_attn_mix_weights":   self.layerwise_point_conv_attn_mix_weights,
                      "attn_postmix_weight":             self.attn_postmix_weight,
-                     "postmix_attn_layer":              self.postmix_attn_layer,
-                     "postmix_attn_LN":                 self.postmix_attn_LN,
+                     "postproc_attn_layer":             self.postproc_attn_layer,
+                     "postproc_attn_LN":                self.postproc_attn_LN,
                      "use_specialized_comp_embs":       self.use_specialized_comp_embs,
                    }, 
                     ckpt_path)

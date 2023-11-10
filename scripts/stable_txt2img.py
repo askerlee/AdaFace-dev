@@ -286,7 +286,7 @@ def parse_args():
                         type=str2bool, const=True, nargs="?", default=argparse.SUPPRESS,
                         help="Use specialized subject embeddings for composition")
     parser.add_argument("--attn_postmix_weight", type=float, default=argparse.SUPPRESS,
-                        help="Weight of post-mixing attention. 0 to disable.")
+                        help="Weight of post-mixing attention.")
     
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
