@@ -1410,8 +1410,8 @@ class EmbeddingManager(nn.Module):
             # attn_output_weights: [4, 6] or [9, 6].
             # attn_inst_sel_fg_embs.norm: 300~500. Don't know why they are so large. 
             # Anyway need LN first.
-            attn_inst_sel_fg_embs = self.postproc_attn_layer(inst_sel_fg_embs, inst_extra_embs, inst_extra_embs)[0]
-            attn_inst_sel_fg_embs = self.postproc_attn_LN(attn_inst_sel_fg_embs)
+            attn_inst_sel_fg_embs = self.postmix_attn_layer(inst_sel_fg_embs, inst_extra_embs, inst_extra_embs)[0]
+            attn_inst_sel_fg_embs = self.postmix_attn_LN(attn_inst_sel_fg_embs)
             # print("attn_inst_sel_fg_embs: ", torch.norm(attn_inst_sel_fg_embs, dim=1).mean())
 
             # Still normalize according to M even if the subset < M, 
@@ -1667,9 +1667,9 @@ class EmbeddingManager(nn.Module):
                 self.postmix_attn_LN    = nn.LayerNorm(self.token_dim, elementwise_affine=True)
                 print("Creating new postmix_attn_layer (LN).")
             else:
-                # If postproc_attn_layer (LN) exist, and no postproc_attn_layer (LN) are passed in,
-                # do nothing.
-                print("postproc_attn_layer (LN) already created. Do nothing.")
+                # If postmix_attn_layer (LN) exist, and no postmix_attn_layer (LN) are passed in,
+                # leave them unchanged.
+                print("postmix_attn_layer (LN) already created. Do nothing.")
         else:
             # If postmix_attn_layer (LN) exist, clear them.
             self.postmix_attn_layer = None
