@@ -1369,10 +1369,10 @@ class EmbeddingManager(nn.Module):
         extra_embs_mask = self.prompt_emb_mask.squeeze(2).clone()
         # extra_embs_mask is used to generate the indices to the extra embeddings.
         # Exclude fg and bg embeddings from the extra embeddings.
-        extra_embs_mask[self.placeholder_indices_fg] = 0
-        if self.placeholder_indices_bg is not None:
-            # Treat background tokens as padding tokens, and exclude them from cross-attention.
-            extra_embs_mask[self.placeholder_indices_bg] = 0
+        #extra_embs_mask[self.placeholder_indices_fg] = 0
+        #if self.placeholder_indices_bg is not None:
+        #    # Treat background tokens as padding tokens, and exclude them from cross-attention.
+        #    extra_embs_mask[self.placeholder_indices_bg] = 0
 
         attn_embedded_text = embedded_text.clone()
         fg_indices_by_instance = split_indices_by_instance(self.placeholder_indices_fg)
