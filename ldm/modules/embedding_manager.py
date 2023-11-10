@@ -1394,7 +1394,7 @@ class EmbeddingManager(nn.Module):
             inst_extra_embs = embedded_text[batch_idx][inst_extra_embs_indices]
             # nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
             attn_inst_fg_embs = self.postproc_attn_layer(inst_fg_embs, inst_extra_embs, inst_extra_embs)[0]
-            attn_embedded_text[instance_fg_indices] = attn_inst_fg_embs.type(embedded_text.dtype)
+            attn_embedded_text[odd_fg_indices] = attn_inst_fg_embs.type(embedded_text.dtype)
 
         attn_embedded_text = fix_emb_scales(attn_embedded_text, self.placeholder_indices_fg, 
                                             extra_scale=self.get_emb_global_scale())
