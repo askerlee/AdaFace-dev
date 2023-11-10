@@ -48,7 +48,7 @@ def parse_args():
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
     parser.add_argument("--use_specialized_comp_embs",
-                        type=str2bool, const=True, default=argparse.SUPPRESS,
+                        type=str2bool, const=True, nargs="?", default=argparse.SUPPRESS,
                         help="Use specialized subject embeddings for composition")
     
     parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],
