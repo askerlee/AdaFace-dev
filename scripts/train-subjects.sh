@@ -26,7 +26,7 @@ end
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'use_conv_attn' 'eval' 'normalize_subj_attn' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'use_conv_attn' 'eval' -- $argv
 or begin
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] [--use_conv_attn] (ada|ti|db) [low-high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
@@ -91,11 +91,6 @@ else
 end
 
 set EXTRA_EVAL_ARGS0  --bb_type $_flag_bb_type
-
-if set -q _flag_normalize_subj_attn
-    set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --normalize_subj_attn
-    set EXTRA_EVAL_ARGS0 $EXTRA_EVAL_ARGS0   --normalize_subj_attn
-end
 
 if set -q _flag_num_vectors_per_token
     set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --num_vectors_per_token $_flag_num_vectors_per_token

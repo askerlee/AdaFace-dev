@@ -282,10 +282,6 @@ def parse_args():
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
-    # If normalize_subj_attn is not specified, then use the 'normalize_subj_attn' in the checkpoint.
-    # If 'normalize_subj_attn' doesn't exist in the checkpoint, then normalize_subj_attn is False.
-    parser.add_argument("--normalize_subj_attn", type=str2bool, nargs="?", const=True, default=argparse.SUPPRESS,
-                        help="Whether to normalize the subject embedding attention scores")
 
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
@@ -409,11 +405,6 @@ def main(opt):
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
         if opt.background_string is not None:
             model.embedding_manager.background_strings = [opt.background_string]
-
-        # command line --normalize_subj_attn overrides the checkpoint.
-        if hasattr(opt, 'normalize_subj_attn') and opt.normalize_subj_attn != model.embedding_manager.normalize_subj_attn:
-            print(f"Override normalize_subj_attn in checkpoint ({model.embedding_manager.normalize_subj_attn} or absent) with {opt.normalize_subj_attn}")
-            model.embedding_manager.normalize_subj_attn = opt.normalize_subj_attn
 
         device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
         model  = model.to(device)
@@ -679,7 +670,6 @@ def main(opt):
                                 # c / ref_c are tuples of (cond, prompts, extra_info).
                                 c = (c0_mix, c[1], c[2])
 
-                            c[2]['normalize_subj_attn'] = model.embedding_manager.normalize_subj_attn
                             if opt.debug and ref_c is None:
                                 c[2]['debug_attn'] = True
 

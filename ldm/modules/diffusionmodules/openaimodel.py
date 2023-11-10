@@ -509,7 +509,6 @@ class UNetModel(nn.Module):
 
         self.backup_vars = { 
                             'use_conv_attn':                            False,
-                            'normalize_subj_attn':                      False,
                             'point_conv_attn_mix_weight:layerwise':     None,
                             'save_attn_vars':                           False,
                            }
@@ -840,7 +839,6 @@ class UNetModel(nn.Module):
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
         layerwise_point_conv_attn_mix_weights   = extra_info.get('layerwise_point_conv_attn_mix_weights', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
-        normalize_subj_attn   = extra_info.get('normalize_subj_attn', False)   if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
         emb_k_mixer           = extra_info.get('emb_k_mixer', None)            if extra_info is not None else None
@@ -991,7 +989,6 @@ class UNetModel(nn.Module):
         ca_flags_stack = []
         old_ca_flags, _ = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn': use_conv_attn,
-                                                          'normalize_subj_attn': normalize_subj_attn,
                                                           'point_conv_attn_mix_weight:layerwise': \
                                                            layerwise_point_conv_attn_mix_weights },
                                        ca_layer_indices = ca_flag_layer_indices )
