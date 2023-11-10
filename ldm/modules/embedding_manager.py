@@ -1041,7 +1041,7 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_token_indices_cache = {}
         self.iter_type = None
-        self.use_specialized_comp_embs = use_specialized_comp_embs
+        self.set_use_specialized_comp_embs(use_specialized_comp_embs)
         self.fg_selective_grad_scale  = 0.5
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
         self.attn_postmix_weight = attn_postmix_weight
@@ -1644,6 +1644,10 @@ class EmbeddingManager(nn.Module):
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
 
+    def set_use_specialized_comp_embs(self, use_specialized_comp_embs):
+        self.use_specialized_comp_embs = use_specialized_comp_embs
+        print(f"Setting use_specialized_comp_embs = {use_specialized_comp_embs}")
+
     def set_emb_ema_as_pooling_probe_weight(self, emb_ema_as_pooling_probe_weight):
         self.emb_ema_as_pooling_probe_weight = emb_ema_as_pooling_probe_weight
         print(f"Setting emb_ema_as_pooling_probe_weight = {emb_ema_as_pooling_probe_weight}")
@@ -1849,8 +1853,7 @@ class EmbeddingManager(nn.Module):
                 print(f"Set attn_postmix_weight = {self.attn_postmix_weight}")
             
             if "use_specialized_comp_embs" in ckpt:
-                self.use_specialized_comp_embs = ckpt["use_specialized_comp_embs"]
-                print(f"Set use_specialized_comp_embs = {self.use_specialized_comp_embs}")
+                self.set_use_specialized_comp_embs(ckpt["use_specialized_comp_embs"])
                 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
