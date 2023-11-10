@@ -1047,8 +1047,10 @@ class EmbeddingManager(nn.Module):
         self.attn_postproc_weight = attn_postproc_weight
         if self.attn_postproc_weight > 0:
             self.postproc_attn_layer = nn.MultiheadAttention(self.token_dim, num_heads=8, dropout=0.1, batch_first=True)
+            self.postproc_attn_LN    = nn.LayerNorm(self.token_dim, elementwise_affine=True)
         else:
             self.postproc_attn_layer = None
+            self.postproc_attn_LN    = None
 
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, attn_postproc_weight={}".format(
                placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings, self.attn_postproc_weight))
@@ -1387,19 +1389,32 @@ class EmbeddingManager(nn.Module):
                 odd_fg_indices_B = instance_fg_indices[0][1::2]
                 odd_fg_indices_N = instance_fg_indices[1][1::2]
                 sel_fg_indices = (odd_fg_indices_B, odd_fg_indices_N)
+                even_fg_indices_B = instance_fg_indices[0][::2]
+                even_fg_indices_N = instance_fg_indices[1][::2]
+                even_fg_indices = (even_fg_indices_B, even_fg_indices_N)
+                even_fg_embs = embedded_text[even_fg_indices]
+                # even_fg_embs.norm: [11.4719,  8.8858,  9.1466,  9.2511,  8.9282]
+                # print("even_fg_embs: ", even_fg_embs.norm(dim=1).mean())
             else:
                 sel_fg_indices = instance_fg_indices
             # Only the odd embeddings participate in cross-attention.
-            inst_fg_embs = embedded_text[sel_fg_indices]
+            inst_sel_fg_embs = embedded_text[sel_fg_indices]
             inst_extra_embs_indices = extra_embs_mask[batch_idx].nonzero(as_tuple=True)[0]
             inst_extra_embs = embedded_text[batch_idx][inst_extra_embs_indices]
             # nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
-            attn_inst_fg_embs = self.postproc_attn_layer(inst_fg_embs, inst_extra_embs, inst_extra_embs)[0]
-            # Still normalize according to M, so that the attn_inst_fg_embs are of the same scale 
+            # inst_extra_embs: [6, 768]. attn_inst_sel_fg_embs: [4, 768].
+            # attn_output_weights: [4, 6].
+            # attn_inst_sel_fg_embs.norm: 300~500. Don't know why they are so large. 
+            # Anyway need LN first.
+            attn_inst_sel_fg_embs = self.postproc_attn_layer(inst_sel_fg_embs, inst_extra_embs, inst_extra_embs)[0]
+            attn_inst_sel_fg_embs = self.postproc_attn_LN(attn_inst_sel_fg_embs)
+            # print("attn_inst_sel_fg_embs: ", torch.norm(attn_inst_sel_fg_embs, dim=1).mean())
+
+            # Still normalize according to M, so that the attn_inst_sel_fg_embs are of the same scale 
             # as other fg embs. If M = 9, then NORM = 1/3.
             NORM = 1 / np.sqrt(M)
-            attn_inst_fg_embs = attn_inst_fg_embs * NORM * self.get_emb_global_scale()
-            attn_embedded_text[sel_fg_indices] = attn_inst_fg_embs.type(embedded_text.dtype)
+            attn_inst_sel_fg_embs = attn_inst_sel_fg_embs * NORM * self.get_emb_global_scale()
+            attn_embedded_text[sel_fg_indices] = attn_inst_sel_fg_embs.type(embedded_text.dtype)
 
         # Linearly combine the original embedding and the attention embedding.
         postproc_embedded_text = (1 - self.attn_postproc_weight) * embedded_text \
@@ -1772,7 +1787,8 @@ class EmbeddingManager(nn.Module):
                      # Learnable weights for mixing point attn and conv attn features.
                      "layerwise_point_conv_attn_mix_weights":   self.layerwise_point_conv_attn_mix_weights,
                      "attn_postproc_weight":            self.attn_postproc_weight,
-                     "postproc_attn_layer":             self.postproc_attn_layer
+                     "postproc_attn_layer":             self.postproc_attn_layer,
+                     "postproc_attn_LN":                self.postproc_attn_LN,
                    }, 
                     ckpt_path)
 
@@ -1824,6 +1840,7 @@ class EmbeddingManager(nn.Module):
                 self.attn_postproc_weight = ckpt["attn_postproc_weight"]
                 if "postproc_attn_layer" in ckpt:
                     self.postproc_attn_layer = ckpt["postproc_attn_layer"]
+                    self.postproc_attn_LN    = ckpt["postproc_attn_LN"]
                 print(f"Set attn_postproc_weight = {self.attn_postproc_weight}")
                 
             for k in ckpt["string_to_token"]:
@@ -1875,7 +1892,8 @@ class EmbeddingManager(nn.Module):
                + [ self.emb_global_scale_score, self.layerwise_point_conv_attn_mix_weights ]
         
         if self.attn_postproc_weight > 0:
-            params = params + list(self.postproc_attn_layer.parameters())
+            params = params + list(self.postproc_attn_layer.parameters()) \
+                            + list(self.postproc_attn_LN.parameters())
         
         return params
         
