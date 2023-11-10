@@ -848,7 +848,7 @@ class EmbeddingManager(nn.Module):
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
             default_point_conv_attn_mix_weight=0.5,
-            embs_use_specialized_distill_subsets=False,
+            use_specialized_comp_embs=False,
             attn_postmix_weight=0.,
             **kwargs
     ):
@@ -1041,7 +1041,7 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_token_indices_cache = {}
         self.iter_type = None
-        self.embs_use_specialized_distill_subsets = embs_use_specialized_distill_subsets
+        self.use_specialized_comp_embs = use_specialized_comp_embs
         self.fg_selective_grad_scale  = 0.5
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
         self.attn_postmix_weight = attn_postmix_weight
@@ -1184,7 +1184,7 @@ class EmbeddingManager(nn.Module):
                 # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
                 subj_static_embedding_k = subj_static_embedding[:, k]
-                if self.iter_type is not None and not token_is_bg and self.embs_use_specialized_distill_subsets:
+                if self.iter_type is not None and not token_is_bg and self.use_specialized_comp_embs:
                     subj_static_embedding_k_gs = self.scale_grad_of_fg_emb_subset(subj_static_embedding_k, k, self.iter_type)
                 else:
                     subj_static_embedding_k_gs = subj_static_embedding_k
@@ -1355,7 +1355,7 @@ class EmbeddingManager(nn.Module):
                 placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k)
                 # subj_ada_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
                 subj_ada_embedding_k = subj_ada_embedding[placeholder_indices_1st[0], k]
-                if self.iter_type is not None and not token_is_bg and self.embs_use_specialized_distill_subsets:
+                if self.iter_type is not None and not token_is_bg and self.use_specialized_comp_embs:
                     subj_ada_embedding_k_gs = self.scale_grad_of_fg_emb_subset(subj_ada_embedding_k, k, self.iter_type)
                 else:
                     subj_ada_embedding_k_gs = subj_ada_embedding_k
@@ -1384,7 +1384,7 @@ class EmbeddingManager(nn.Module):
         for instance_fg_indices in fg_indices_by_instance:
             batch_idx = instance_fg_indices[0][0]
             M = len(instance_fg_indices[0])
-            if M > 1 and self.embs_use_specialized_distill_subsets:
+            if M > 1 and self.use_specialized_comp_embs:
                 # Only the odd embeddings participate in cross-attention.
                 # If M=9, (0..8), then sel_fg_indices = odd_fg_indices = 1, 3, 5, 7 (4 vecs).
                 odd_fg_indices_B = instance_fg_indices[0][1::2]
@@ -1790,9 +1790,10 @@ class EmbeddingManager(nn.Module):
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
                      # Learnable weights for mixing point attn and conv attn features.
                      "layerwise_point_conv_attn_mix_weights":   self.layerwise_point_conv_attn_mix_weights,
-                     "attn_postmix_weight":            self.attn_postmix_weight,
+                     "attn_postmix_weight":             self.attn_postmix_weight,
                      "postproc_attn_layer":             self.postproc_attn_layer,
                      "postproc_attn_LN":                self.postproc_attn_LN,
+                     "use_specialized_comp_embs":       self.use_specialized_comp_embs,
                    }, 
                     ckpt_path)
 
@@ -1846,6 +1847,10 @@ class EmbeddingManager(nn.Module):
                     self.postproc_attn_layer = ckpt["postproc_attn_layer"]
                     self.postproc_attn_LN    = ckpt["postproc_attn_LN"]
                 print(f"Set attn_postmix_weight = {self.attn_postmix_weight}")
+            
+            if "use_specialized_comp_embs" in ckpt:
+                self.use_specialized_comp_embs = ckpt["use_specialized_comp_embs"]
+                print(f"Set use_specialized_comp_embs = {self.use_specialized_comp_embs}")
                 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):

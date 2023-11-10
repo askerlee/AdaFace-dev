@@ -47,6 +47,9 @@ def parse_args():
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
+    parser.add_argument("--use_specialized_comp_embs",
+                        type=str, default=argparse.SUPPRESS,
+                        help="Use specialized subject embeddings for composition")
     
     parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
@@ -446,6 +449,8 @@ if __name__ == "__main__":
             command_line += f" --use_conv_attn --default_point_conv_attn_mix_weight {args.default_point_conv_attn_mix_weight}"
         if hasattr(args, 'emb_ema_as_pooling_probe'):
             command_line += f" --emb_ema_as_pooling_probe"
+        if hasattr(args, 'use_specialized_comp_embs'):
+            command_line += f" --use_specialized_comp_embs"
 
         if args.background_string and args.include_bg_string:
             command_line += f" --background_string {args.background_string}"
