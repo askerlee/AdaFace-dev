@@ -1044,13 +1044,8 @@ class EmbeddingManager(nn.Module):
         self.set_use_specialized_comp_embs(use_specialized_comp_embs)
         self.fg_selective_grad_scale  = 0.5
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
-        self.attn_postmix_weight = attn_postmix_weight
-        if self.attn_postmix_weight > 0:
-            self.postproc_attn_layer = nn.MultiheadAttention(self.token_dim, num_heads=8, dropout=0.1, batch_first=True)
-            self.postproc_attn_LN    = nn.LayerNorm(self.token_dim, elementwise_affine=True)
-        else:
-            self.postproc_attn_layer = None
-            self.postproc_attn_LN    = None
+
+        self.initialize_attn_postmix_components(attn_postmix_weight)
 
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, attn_postmix_weight={}".format(
                placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings, self.attn_postmix_weight))
@@ -1648,6 +1643,33 @@ class EmbeddingManager(nn.Module):
         self.use_specialized_comp_embs = use_specialized_comp_embs
         print(f"Setting use_specialized_comp_embs = {use_specialized_comp_embs}")
 
+    def initialize_attn_postmix_components(self, attn_postmix_weight, 
+                                            postproc_attn_layer=None, 
+                                            postproc_attn_LN=None):
+        self.attn_postmix_weight = attn_postmix_weight
+        print(f"Setting attn_postmix_weight = {attn_postmix_weight}")
+        if self.attn_postmix_weight > 0:
+            if postproc_attn_layer is not None:
+                # Assign existing postproc_attn_layer (LN).
+                # If they already exist, replace them.
+                self.postproc_attn_layer = postproc_attn_layer
+                self.postproc_attn_LN    = postproc_attn_LN
+                print("Assigning existing postproc_attn_layer (LN).")
+            elif self.postproc_attn_layer is None:
+                # If postproc_attn_layer (LN) don't exist, create new ones.
+                self.postproc_attn_layer = nn.MultiheadAttention(self.token_dim, num_heads=8, dropout=0.1, batch_first=True)
+                self.postproc_attn_LN    = nn.LayerNorm(self.token_dim, elementwise_affine=True)
+                print("Creating new postproc_attn_layer (LN).")
+            else:
+                # If postproc_attn_layer (LN) exist, and no postproc_attn_layer (LN) are passed in,
+                # do nothing.
+                print("postproc_attn_layer (LN) already created. Do nothing.")
+        else:
+            # If postproc_attn_layer (LN) exist, clear them.
+            self.postproc_attn_layer = None
+            self.postproc_attn_LN    = None
+            print("Clearing postproc_attn_layer (LN).")
+
     def set_emb_ema_as_pooling_probe_weight(self, emb_ema_as_pooling_probe_weight):
         self.emb_ema_as_pooling_probe_weight = emb_ema_as_pooling_probe_weight
         print(f"Setting emb_ema_as_pooling_probe_weight = {emb_ema_as_pooling_probe_weight}")
@@ -1846,11 +1868,9 @@ class EmbeddingManager(nn.Module):
                                                                       ckpt["layerwise_point_conv_attn_mix_weights"])
 
             if "attn_postmix_weight" in ckpt:
-                self.attn_postmix_weight = ckpt["attn_postmix_weight"]
-                if "postproc_attn_layer" in ckpt:
-                    self.postproc_attn_layer = ckpt["postproc_attn_layer"]
-                    self.postproc_attn_LN    = ckpt["postproc_attn_LN"]
-                print(f"Set attn_postmix_weight = {self.attn_postmix_weight}")
+                self.initialize_attn_postmix_components(ckpt["attn_postmix_weight"], 
+                                                        ckpt["postproc_attn_layer"], 
+                                                        ckpt["postproc_attn_LN"])
             
             if "use_specialized_comp_embs" in ckpt:
                 self.set_use_specialized_comp_embs(ckpt["use_specialized_comp_embs"])

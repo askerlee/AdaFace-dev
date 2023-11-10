@@ -50,6 +50,8 @@ def parse_args():
     parser.add_argument("--use_specialized_comp_embs",
                         type=str2bool, const=True, nargs="?", default=argparse.SUPPRESS,
                         help="Use specialized subject embeddings for composition")
+    parser.add_argument("--attn_postmix_weight", type=float, default=argparse.SUPPRESS,
+                        help="Weight of post-mixing attention. 0 to disable.")
     
     parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
@@ -451,7 +453,9 @@ if __name__ == "__main__":
             command_line += f" --emb_ema_as_pooling_probe"
         if hasattr(args, 'use_specialized_comp_embs'):
             command_line += f" --use_specialized_comp_embs {args.use_specialized_comp_embs}"
-
+        if hasattr(args, 'attn_postmix_weight'):
+            command_line += f" --attn_postmix_weight {args.attn_postmix_weight}"
+            
         if args.background_string and args.include_bg_string:
             command_line += f" --background_string {args.background_string}"
 
