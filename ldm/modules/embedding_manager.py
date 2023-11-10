@@ -8,7 +8,7 @@ import numpy as np
 
 from ldm.util import ortho_subtract, calc_delta_cosine_loss, GradientScaler, masked_mean, \
                      gen_gradient_scaler, extract_first_index_in_each_instance, \
-                     split_indices_by_instance, fix_emb_scales, split_indices_by_odd_even
+                     split_indices_by_instance
 
 from functools import partial
 from collections import OrderedDict
@@ -1389,8 +1389,9 @@ class EmbeddingManager(nn.Module):
             M = len(instance_fg_indices[0])
             if M > 1:
                 # If M=9, (0..8), then sel_fg_indices = odd_fg_indices = 1, 3, 5, 7 (4 vecs).
-                odd_fg_indices, even_fg_indices = split_indices_by_odd_even(instance_fg_indices)
-                sel_fg_indices = odd_fg_indices
+                odd_fg_indices_B = instance_fg_indices[0][1::2]
+                odd_fg_indices_N = instance_fg_indices[1][1::2]
+                sel_fg_indices = (odd_fg_indices_B, odd_fg_indices_N)
             else:
                 sel_fg_indices = instance_fg_indices
             # Only the odd embeddings participate in cross-attention.

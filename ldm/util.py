@@ -925,23 +925,6 @@ def halve_token_indices(token_indices):
     token_indices_half_N  = token_indices[1].chunk(2)[0]
     return (token_indices_half_B, token_indices_half_N)
 
-def split_indices_by_odd_even(token_indices):
-    odd_token_indices_B,   odd_token_indices_N = [], []
-    even_token_indices_B, even_token_indices_N = [], []
-    for i in range(len(token_indices[0])):
-        if token_indices[1][i] % 2 == 0:
-            even_token_indices_B.append(token_indices[0][i])
-            even_token_indices_N.append(token_indices[1][i])
-        else:
-            odd_token_indices_B.append(token_indices[0][i])
-            odd_token_indices_N.append(token_indices[1][i])
-
-    odd_token_indices_B, odd_token_indices_N, even_token_indices_B, even_token_indices_N \
-        = [ torch.tensor(subset_indices, dtype=int, device=token_indices[0].device) \
-            for subset_indices in [odd_token_indices_B, odd_token_indices_N, even_token_indices_B, even_token_indices_N] ]
-
-    return (odd_token_indices_B, odd_token_indices_N), (even_token_indices_B, even_token_indices_N)
-
 def split_indices_by_instance(indices):
     indices_B, indices_N = indices
     unique_indices_B = torch.unique(indices_B)
