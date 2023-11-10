@@ -6,8 +6,7 @@ from ldm.modules.ema import LitEma
 import torch.nn.functional as F
 import numpy as np
 
-from ldm.util import ortho_subtract, calc_delta_cosine_loss, GradientScaler, masked_mean, \
-                     gen_gradient_scaler, extract_first_index_in_each_instance, \
+from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
                      split_indices_by_instance
 
 from functools import partial
@@ -849,8 +848,6 @@ class EmbeddingManager(nn.Module):
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
             default_point_conv_attn_mix_weight=0.5,
-            static_only_tokens=None,
-            normalize_subj_attn=False,
             use_specialized_recon_distill_subsets=False,
             attn_postproc_weight=0.,
             **kwargs
@@ -869,8 +866,6 @@ class EmbeddingManager(nn.Module):
         self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight
         self.emb_ema_grad_scale = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
-        self.set_static_only_tokens(static_only_tokens)
-        self.set_normalize_subj_attn(normalize_subj_attn)
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.layerwise_lora_rank_token_ratio = layerwise_lora_rank_token_ratio
@@ -1634,15 +1629,6 @@ class EmbeddingManager(nn.Module):
         self.emb_ema_as_pooling_probe_weight = emb_ema_as_pooling_probe_weight
         print(f"Setting emb_ema_as_pooling_probe_weight = {emb_ema_as_pooling_probe_weight}")
 
-    def set_static_only_tokens(self, static_only_tokens):
-        self.static_only_tokens = [] if static_only_tokens is None else static_only_tokens
-        if len(self.static_only_tokens) > 0:
-            print(f"Setting static_only_tokens = {static_only_tokens}")
-
-    def set_normalize_subj_attn(self, normalize_subj_attn):
-        self.normalize_subj_attn = normalize_subj_attn
-        print(f"Setting normalize_subj_attn = {normalize_subj_attn}")
-        
     # Cache features used to compute ada embeddings.
     def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb):
         self.gen_ada_embedding      = True
@@ -1711,10 +1697,6 @@ class EmbeddingManager(nn.Module):
         
         if self.training and self.emb_ema_as_pooling_probe_weight > 0:
             for k, token_emb_cache_obj in self.token2emb_cache.items():
-                # If a token doesn't have Ada component, then no need to update its EMA embedding.
-                if k in self.static_only_tokens:
-                    continue
-
                 # If all layers of ada embeddings have been cached in token_emb_cache_obj,
                 # then it's time to update EMA embeddings.
                 # This should happen after the previous training iteration finishes and 
@@ -1787,10 +1769,8 @@ class EmbeddingManager(nn.Module):
                      "emb_global_scale_score":          self.emb_global_scale_score,
                      "ada_emb_weight":                  self.ada_emb_weight,  
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
+                     # Learnable weights for mixing point attn and conv attn features.
                      "layerwise_point_conv_attn_mix_weights":   self.layerwise_point_conv_attn_mix_weights,
-                     # learnable token in the deep negative prompt.
-                     "static_only_tokens":              self.static_only_tokens,
-                     "normalize_subj_attn":             self.normalize_subj_attn,
                      "attn_postproc_weight":            self.attn_postproc_weight,
                      "postproc_attn_layer":             self.postproc_attn_layer
                    }, 
@@ -1839,12 +1819,6 @@ class EmbeddingManager(nn.Module):
                 # default_point_conv_attn_mix_weight is provided but not used here.
                 self.initialize_layerwise_point_conv_attn_mix_weights(self.default_point_conv_attn_mix_weight, 
                                                                       ckpt["layerwise_point_conv_attn_mix_weights"])
-
-            if "static_only_tokens" in ckpt:
-                self.set_static_only_tokens(ckpt["static_only_tokens"])
-
-            if "normalize_subj_attn" in ckpt:
-                self.set_normalize_subj_attn(ckpt["normalize_subj_attn"])
 
             if "attn_postproc_weight" in ckpt:
                 self.attn_postproc_weight = ckpt["attn_postproc_weight"]
@@ -2077,12 +2051,7 @@ class EmbeddingManager(nn.Module):
                     print(print_str)
 
                 if isinstance(embobj, StaticLayerwiseEmbedding):
-                    if key in self.static_only_tokens:
-                        static_only_loss_discount = 0.2
-                    else:
-                        static_only_loss_discount = 1.
-
-                    loss_static = loss_static + curr_loss * static_l2_loss_boost * static_only_loss_discount
+                    loss_static = loss_static + curr_loss * static_l2_loss_boost
                 else:
                     loss_ada = loss_ada + curr_loss * ada_l2_loss_boost
 

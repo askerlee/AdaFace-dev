@@ -21,22 +21,21 @@ from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 
-from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
+from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
                        ortho_subtract, decomp_align_ortho, calc_align_coeffs, \
                        ortho_l2loss, gen_gradient_scaler, \
-                       convert_attn_to_spatial_weight, \
+                       convert_attn_to_spatial_weight, masked_mean, \
                        calc_delta_cosine_loss, calc_base_and_delta_alignment_loss, \
-                       save_grid, chunk_list, join_list_of_indices, split_indices_by_instance, \
+                       calc_prompt_emb_delta_loss, power_loss, calc_dyn_loss_scale, \
+                       save_grid, chunk_list, normalize_dict_values, \
                        distribute_embedding_to_M_tokens, fix_emb_scales, \
-                       halve_token_indices, double_token_indices, \
-                       extend_indices_N_by_n, extend_indices_B_by_n_times, \
-                       normalize_dict_values, masked_mean, \
+                       halve_token_indices, double_token_indices, extend_indices_N_by_n, \
+                       extend_indices_B_by_n_times, join_list_of_indices, split_indices_by_instance, \
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
                        anneal_t, rand_annealed, anneal_value, calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
-                       gen_comp_extra_indices_by_block, calc_prompt_emb_delta_loss, power_loss, \
-                       calc_dyn_loss_scale
+                       gen_comp_extra_indices_by_block
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution

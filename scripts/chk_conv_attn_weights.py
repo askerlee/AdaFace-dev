@@ -41,9 +41,6 @@ for idx, iteration in enumerate(iterations):
 tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
 
 for k in tokens:
-    if k in emb_ckpt['static_only_tokens']:
-        continue
-
     print(f"Token: {k}")
 
     for idx, iteration in enumerate(iterations):
