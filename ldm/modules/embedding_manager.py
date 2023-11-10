@@ -8,7 +8,7 @@ import numpy as np
 
 from ldm.util import ortho_subtract, calc_delta_cosine_loss, GradientScaler, masked_mean, \
                      gen_gradient_scaler, extract_first_index_in_each_instance, \
-                     split_indices_by_instance, fix_emb_scales
+                     split_indices_by_instance, fix_emb_scales, split_indices_by_odd_even
 
 from functools import partial
 from collections import OrderedDict
@@ -1376,7 +1376,7 @@ class EmbeddingManager(nn.Module):
         # Mask out fg and bg embeddings in the extra embeddings.
         extra_embs_mask[self.placeholder_indices_fg] = 0
         if self.placeholder_indices_bg is not None:
-            # Treat background tokens as padding tokens, and exclude them from self-attention.
+            # Treat background tokens as padding tokens, and exclude them from cross-attention.
             extra_embs_mask[self.placeholder_indices_bg] = 0
 
         attn_embedded_text = embedded_text.clone()
@@ -1386,10 +1386,13 @@ class EmbeddingManager(nn.Module):
         # So we cannot batch them together, and have to process them one by one.
         for instance_fg_indices in fg_indices_by_instance:
             batch_idx = instance_fg_indices[0][0]
-            inst_fg_embs = embedded_text[instance_fg_indices]
+            # If M=9, (0..8), then odd_fg_indices are 1, 3, 5, 7 (4 vecs).
+            odd_fg_indices, even_fg_indices = split_indices_by_odd_even(instance_fg_indices)
+            # Only the odd embeddings participate in cross-attention.
+            inst_fg_embs = embedded_text[odd_fg_indices]
             inst_extra_embs_indices = extra_embs_mask[batch_idx].nonzero(as_tuple=True)[0]
             inst_extra_embs = embedded_text[batch_idx][inst_extra_embs_indices]
-            # .nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
+            # nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
             attn_inst_fg_embs = self.postproc_attn_layer(inst_fg_embs, inst_extra_embs, inst_extra_embs)[0]
             attn_embedded_text[instance_fg_indices] = attn_inst_fg_embs.type(embedded_text.dtype)
 
@@ -1408,8 +1411,8 @@ class EmbeddingManager(nn.Module):
         
             """             
             # In a recon_iter, do gs if k is odd, not if k is even.
-            # So vectors 0, 2, ..., 8 (5 vecs) are not gs'ed and are dedicated to recon.
-            #    Vectors 1, 3, ..., 7 (4 vecs) are gs'ed and are dedicated to distill.
+            # So vectors 0, 2, ..., 8 (5 vecs) are not gs'ed and are specialized to recon.
+            #    Vectors 1, 3, ..., 7 (4 vecs) are gs'ed and are specialized to distill.
             if k % 2 == 0:
                 return fg_embedding_k
             else:
@@ -1418,8 +1421,8 @@ class EmbeddingManager(nn.Module):
 
         elif iter_type == 'distill_iter':
             # In a distill_iter, do gs if k is even, not if k is odd.
-            # So vectors 0, 2, ..., 8 (5 vecs) are 0.3  grad and are dedicated to recon.
-            #    Vectors 1, 3, ..., 7 (4 vecs) are full grad and are dedicated to distill.
+            # So vectors 0, 2, ..., 8 (5 vecs) are 0.5  grad and are specialized to recon.
+            #    Vectors 1, 3, ..., 7 (4 vecs) are full grad and are specialized to distill.
             if k % 2 == 0:
                 return self.fg_selective_grad_scaler(fg_embedding_k)
             else:
