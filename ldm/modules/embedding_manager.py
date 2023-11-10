@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
-                     split_indices_by_instance
+                     split_indices_by_instance, add_noise_to_embedding
 
 from functools import partial
 from collections import OrderedDict
@@ -850,6 +850,7 @@ class EmbeddingManager(nn.Module):
             default_point_conv_attn_mix_weight=0.5,
             use_specialized_comp_embs=False,
             attn_postmix_weight=0.,
+            training_add_noise_range=None,
             **kwargs
     ):
         super().__init__()
@@ -881,6 +882,9 @@ class EmbeddingManager(nn.Module):
         self.default_point_conv_attn_mix_weight = default_point_conv_attn_mix_weight
         self.initialize_layerwise_point_conv_attn_mix_weights(self.default_point_conv_attn_mix_weight, 
                                                               learnable=True)
+        
+        self.set_training_add_noise_range(training_add_noise_range)
+
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
 
         # num_vectors_per_token: an int or a dict. How many vectors in each layer 
@@ -1186,6 +1190,10 @@ class EmbeddingManager(nn.Module):
                 else:
                     subj_static_embedding_k_gs = subj_static_embedding_k
 
+                if self.training and self.training_add_noise_range is not None:
+                    subj_static_embedding_k_gs = add_noise_to_embedding(subj_static_embedding_k_gs, 
+                                                                        self.training_add_noise_range)
+                    
                 embedded_text[placeholder_indices_k] = subj_static_embedding_k_gs.repeat(REAL_OCCURS_IN_BATCH, 1)
 
             # Cache the placeholder indices for mix prompt distillation.
@@ -1357,6 +1365,10 @@ class EmbeddingManager(nn.Module):
                 else:
                     subj_ada_embedding_k_gs = subj_ada_embedding_k
 
+                if self.training and self.training_add_noise_range is not None:
+                    subj_ada_embedding_k_gs = add_noise_to_embedding(subj_ada_embedding_k_gs, 
+                                                                     self.training_add_noise_range)
+                    
                 embedded_text[placeholder_indices_k] = subj_ada_embedding_k_gs
 
         return embedded_text
@@ -1368,7 +1380,7 @@ class EmbeddingManager(nn.Module):
         
         extra_embs_mask = self.prompt_emb_mask.squeeze(2).clone()
         # extra_embs_mask is used to generate the indices to the extra embeddings.
-        # Exclude fg and bg embeddings from the extra embeddings.
+        # Exclude fg embeddings from the extra embeddings.
         #extra_embs_mask[self.placeholder_indices_fg] = 0
         #if self.placeholder_indices_bg is not None:
         #    # Treat background tokens as padding tokens, and exclude them from cross-attention.
@@ -1404,12 +1416,7 @@ class EmbeddingManager(nn.Module):
 
             inst_sel_fg_embs = embedded_text[sel_fg_indices]
             inst_extra_embs_indices = extra_embs_mask[batch_idx].nonzero(as_tuple=True)[0]
-            # inst_extra_embs = embedded_text[batch_idx][inst_extra_embs_indices]
-            # Assume inst_extra_embs are contiguous. So we can slice embedded_text to get them,
-            # instead of directly indexing with inst_extra_embs_indices.
-            # A continuous inst_extra_embs may speed up the MHA computation a little bit.
-            head_idx, tail_idx = inst_extra_embs_indices[0], inst_extra_embs_indices[-1]
-            inst_extra_embs = embedded_text[batch_idx][head_idx:tail_idx+1]
+            inst_extra_embs = embedded_text[batch_idx][inst_extra_embs_indices]
             # nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
             # inst_extra_embs: [6, 768]. attn_inst_sel_fg_embs: [4, 768] or [9, 768]
             # attn_output_weights: [4, 6] or [9, 6].
@@ -1597,6 +1604,13 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight = self.ada_emb_weight        
         return ada_emb_weight
  
+    def set_training_add_noise_range(self, training_add_noise_range):
+        self.training_add_noise_range = training_add_noise_range
+        if training_add_noise_range is None:
+            print(f"Disable training_add_noise")
+        else:
+            print(f"Setting training_add_noise_range = {training_add_noise_range}")
+
     def initialize_layerwise_point_conv_attn_mix_weights(self, default_point_conv_attn_mix_weight=0.5, 
                                                          layerwise_point_conv_attn_mix_weights=None,
                                                          learnable=True):
@@ -1675,11 +1689,14 @@ class EmbeddingManager(nn.Module):
                 # If postmix_attn_layer (LN) exist, and no postmix_attn_layer (LN) are passed in,
                 # leave them unchanged.
                 print("postmix_attn_layer (LN) already created. Do nothing.")
-        else:
-            # If postmix_attn_layer (LN) exist, clear them.
-            self.postmix_attn_layer = None
-            self.postmix_attn_LN    = None
-            print("Clearing postmix_attn_layer (LN).")
+        # Setting attn_postmix_weight = 0 is sufficient to disable attn_postmix.
+        # For debugging purposes, do not clear postmix_attn_layer (LN) 
+        # even if attn_postmix_weight = 0.
+        #else:
+        #    # If postmix_attn_layer (LN) exist, clear them.
+        #    self.postmix_attn_layer = None
+        #    self.postmix_attn_LN    = None
+        #    print("Clearing postmix_attn_layer (LN).")
 
     def set_emb_ema_as_pooling_probe_weight(self, emb_ema_as_pooling_probe_weight):
         self.emb_ema_as_pooling_probe_weight = emb_ema_as_pooling_probe_weight

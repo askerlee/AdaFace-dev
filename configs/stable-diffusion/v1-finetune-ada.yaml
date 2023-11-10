@@ -90,7 +90,8 @@ model:
         ada_use_attn_pooler: True
         emb_ema_as_pooling_probe_weight: 0.5
         use_specialized_comp_embs: False
-        attn_postmix_weight: 1
+        attn_postmix_weight: 0
+        training_add_noise_range:  [ 0.2, 0.4 ]
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

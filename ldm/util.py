@@ -1546,3 +1546,11 @@ def calc_dyn_loss_scale(loss, loss_base, loss_scale_base, min_is_base=False):
     if min_is_base and loss <= loss_base:
         return loss_scale_base
     return loss.item() * loss_scale_base / loss_base
+
+def add_noise_to_embedding(embeddings, noise_std_range):
+    noise_std_lb, noise_std_ub = noise_std_range
+    emb_std_mean = embeddings.std(dim=-1).mean()
+    noise_std = np.random.uniform(noise_std_lb, noise_std_ub) * emb_std_mean
+    noise = torch.randn_like(embeddings) * noise_std
+    embeddings = embeddings + noise
+    return embeddings
