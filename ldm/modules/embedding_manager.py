@@ -1404,7 +1404,12 @@ class EmbeddingManager(nn.Module):
 
             inst_sel_fg_embs = embedded_text[sel_fg_indices]
             inst_extra_embs_indices = extra_embs_mask[batch_idx].nonzero(as_tuple=True)[0]
-            inst_extra_embs = embedded_text[batch_idx][inst_extra_embs_indices]
+            # inst_extra_embs = embedded_text[batch_idx][inst_extra_embs_indices]
+            # Assume inst_extra_embs are contiguous. So we can slice embedded_text to get them,
+            # instead of directly indexing with inst_extra_embs_indices.
+            # A continuous inst_extra_embs may speed up the MHA computation a little bit.
+            head_idx, tail_idx = inst_extra_embs_indices[0], inst_extra_embs_indices[-1]
+            inst_extra_embs = embedded_text[batch_idx][head_idx:tail_idx+1]
             # nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
             # inst_extra_embs: [6, 768]. attn_inst_sel_fg_embs: [4, 768] or [9, 768]
             # attn_output_weights: [4, 6] or [9, 6].
