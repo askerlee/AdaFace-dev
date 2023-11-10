@@ -722,27 +722,6 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)
 
-def normalize_attn_at_indices(attn_mat, subj_indices, H, shift_n_sigma=1):
-    # attn_mat: [32, 4096, 77]. 32: b * h. b = 4, h = 8.
-    attn_mat_shape = attn_mat.shape
-    # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77].
-    attn_mat = attn_mat.reshape(-1, H, *attn_mat.shape[1:])
-    subj_indices_B, subj_indices_N = subj_indices
-    # subj_attn: [B*M, 8, 4096].
-    subj_attn = attn_mat[subj_indices_B, :, :, subj_indices_N]
-    subj_attn_mean  = subj_attn.mean(dim=2, keepdim=True).clamp(min=0)
-    subj_attn_sigma = subj_attn.std(dim=2,  keepdim=True)
-    # offset: [B*M, 8, 1]
-    offset = shift_n_sigma * subj_attn_sigma - subj_attn_mean
-    offset = offset.clamp(max=0)
-    # Demean the attention scores at each location.
-    subj_attn2 = subj_attn + offset
-    attn_mat2 = attn_mat.clone()
-    attn_mat2[subj_indices_B, :, :, subj_indices_N] = subj_attn2
-
-    return attn_mat2.reshape(attn_mat_shape)
-
-
 # Distribute an embedding to M positions, each with sqrt(M) fraction of the original embedding.
 # text_embedding: [B, N, D]
 def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):

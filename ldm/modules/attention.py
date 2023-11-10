@@ -6,7 +6,7 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices
+from ldm.util import replace_rows_by_conv_attn
 
 def exists(val):
     return val is not None
