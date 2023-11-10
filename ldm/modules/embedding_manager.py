@@ -1386,19 +1386,25 @@ class EmbeddingManager(nn.Module):
         # So we cannot batch them together, and have to process them one by one.
         for instance_fg_indices in fg_indices_by_instance:
             batch_idx = instance_fg_indices[0][0]
-            # If M=9, (0..8), then odd_fg_indices are 1, 3, 5, 7 (4 vecs).
-            odd_fg_indices, even_fg_indices = split_indices_by_odd_even(instance_fg_indices)
+            M = len(instance_fg_indices[0])
+            if M > 1:
+                # If M=9, (0..8), then sel_fg_indices = odd_fg_indices = 1, 3, 5, 7 (4 vecs).
+                odd_fg_indices, even_fg_indices = split_indices_by_odd_even(instance_fg_indices)
+                sel_fg_indices = odd_fg_indices
+            else:
+                sel_fg_indices = instance_fg_indices
             # Only the odd embeddings participate in cross-attention.
-            inst_fg_embs = embedded_text[odd_fg_indices]
+            inst_fg_embs = embedded_text[sel_fg_indices]
             inst_extra_embs_indices = extra_embs_mask[batch_idx].nonzero(as_tuple=True)[0]
             inst_extra_embs = embedded_text[batch_idx][inst_extra_embs_indices]
             # nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
             attn_inst_fg_embs = self.postproc_attn_layer(inst_fg_embs, inst_extra_embs, inst_extra_embs)[0]
-            attn_embedded_text[odd_fg_indices] = attn_inst_fg_embs.type(embedded_text.dtype)
+            # Still normalize according to M, so that the attn_inst_fg_embs are of the same scale 
+            # as other fg embs. If M = 9, then NORM = 1/3.
+            NORM = 1 / np.sqrt(M)
+            attn_inst_fg_embs = attn_inst_fg_embs * NORM * self.get_emb_global_scale()
+            attn_embedded_text[sel_fg_indices] = attn_inst_fg_embs.type(embedded_text.dtype)
 
-        attn_embedded_text = fix_emb_scales(attn_embedded_text, self.placeholder_indices_fg, 
-                                            extra_scale=self.get_emb_global_scale())
-        
         # Linearly combine the original embedding and the attention embedding.
         postproc_embedded_text = (1 - self.attn_postproc_weight) * embedded_text \
                                  + self.attn_postproc_weight * attn_embedded_text
