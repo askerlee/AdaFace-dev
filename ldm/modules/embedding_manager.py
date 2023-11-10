@@ -1823,8 +1823,8 @@ class EmbeddingManager(nn.Module):
                      # Learnable weights for mixing point attn and conv attn features.
                      "layerwise_point_conv_attn_mix_weights":   self.layerwise_point_conv_attn_mix_weights,
                      "attn_postmix_weight":             self.attn_postmix_weight,
-                     "postproc_attn_layer":             self.postproc_attn_layer,
-                     "postproc_attn_LN":                self.postproc_attn_LN,
+                     "postmix_attn_layer":              self.postmix_attn_layer,
+                     "postmix_attn_LN":                 self.postmix_attn_LN,
                      "use_specialized_comp_embs":       self.use_specialized_comp_embs,
                    }, 
                     ckpt_path)
