@@ -1549,7 +1549,10 @@ def calc_dyn_loss_scale(loss, loss_base, loss_scale_base, min_is_base=False):
 
 # embeddings: [N, 768]. 
 # noise_rel_std_range: the noise std / embeddings std falls within this range.
-def add_noise_to_embedding(embeddings, noise_rel_std_range):
+def add_noise_to_embedding(embeddings, noise_rel_std_range, add_noise_prob):
+    if random.random() > add_noise_prob:
+        return embeddings
+    
     noise_rel_std_lb, noise_rel_std_ub = noise_rel_std_range
     emb_std_mean = embeddings.std(dim=-1).mean()
     noise_std = np.random.uniform(noise_rel_std_lb, noise_rel_std_ub) * emb_std_mean

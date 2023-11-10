@@ -91,8 +91,9 @@ model:
         emb_ema_as_pooling_probe_weight: 0.5
         use_specialized_comp_embs: False
         attn_postmix_weight: 0
-        training_add_noise_range:  [ 0.2, 0.4 ]
-
+        training_add_noise_range:  [ 0.1, 0.5 ]
+        training_add_noise_prob:   0.5
+        
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:
