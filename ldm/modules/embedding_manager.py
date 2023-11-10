@@ -1045,6 +1045,8 @@ class EmbeddingManager(nn.Module):
         self.fg_selective_grad_scale  = 0.5
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
 
+        self.postproc_attn_layer = None
+        self.postproc_attn_LN    = None
         self.initialize_attn_postmix_components(attn_postmix_weight)
 
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, attn_postmix_weight={}".format(
