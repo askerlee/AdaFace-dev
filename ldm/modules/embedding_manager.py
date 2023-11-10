@@ -7,7 +7,9 @@ import torch.nn.functional as F
 import numpy as np
 
 from ldm.util import ortho_subtract, calc_delta_cosine_loss, GradientScaler, masked_mean, \
-                     gen_gradient_scaler, extract_first_index_in_each_instance, split_indices_by_instance
+                     gen_gradient_scaler, extract_first_index_in_each_instance, \
+                     split_indices_by_instance, fix_emb_scales
+
 from functools import partial
 from collections import OrderedDict
 import random
@@ -1367,23 +1369,33 @@ class EmbeddingManager(nn.Module):
 
     def attn_postprocess(self, embedded_text):
         assert self.attn_postproc_weight > 0
-        valid_embs_mask = self.prompt_emb_mask.squeeze(2).clone()
+        if self.placeholder_indices_fg is None:
+            return embedded_text
+        
+        extra_embs_mask = self.prompt_emb_mask.squeeze(2).clone()
+        # Mask out fg and bg embeddings in the extra embeddings.
+        extra_embs_mask[self.placeholder_indices_fg] = 0
         if self.placeholder_indices_bg is not None:
             # Treat background tokens as padding tokens, and exclude them from self-attention.
-            valid_embs_mask[self.placeholder_indices_bg] = 0
+            extra_embs_mask[self.placeholder_indices_bg] = 0
 
-        valid_embs_indices = valid_embs_mask.nonzero(as_tuple=True)
-        valid_embs_indices_by_instance = split_indices_by_instance(valid_embs_indices)
         attn_embedded_text = embedded_text.clone()
+        fg_indices_by_instance = split_indices_by_instance(self.placeholder_indices_fg)
 
         # For each instance, the number of valid embeddings is different.
         # So we cannot batch them together, and have to process them one by one.
-        for instance_indices in valid_embs_indices_by_instance:
-            valid_embs = embedded_text[instance_indices]
+        for instance_fg_indices in fg_indices_by_instance:
+            batch_idx = instance_fg_indices[0][0]
+            inst_fg_embs = embedded_text[instance_fg_indices]
+            inst_extra_embs_indices = extra_embs_mask[batch_idx].nonzero(as_tuple=True)[0]
+            inst_extra_embs = embedded_text[batch_idx][inst_extra_embs_indices]
             # .nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
-            attn_valid_embs = self.postproc_attn_layer(valid_embs, valid_embs, valid_embs)[0]
-            attn_embedded_text[instance_indices] = attn_valid_embs.type(embedded_text.dtype)
+            attn_inst_fg_embs = self.postproc_attn_layer(inst_fg_embs, inst_extra_embs, inst_extra_embs)[0]
+            attn_embedded_text[instance_fg_indices] = attn_inst_fg_embs.type(embedded_text.dtype)
 
+        attn_embedded_text = fix_emb_scales(attn_embedded_text, self.placeholder_indices_fg, 
+                                            extra_scale=self.get_emb_global_scale())
+        
         # Linearly combine the original embedding and the attention embedding.
         postproc_embedded_text = (1 - self.attn_postproc_weight) * embedded_text \
                                  + self.attn_postproc_weight * attn_embedded_text

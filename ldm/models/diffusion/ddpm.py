@@ -896,9 +896,6 @@ class LatentDiffusion(DDPM):
         # Only do attn postprocessing to ada embeddings, not to static/class embeddings, to simplify the logic.
         if self.embedding_manager.attn_postproc_weight > 0:
             ada_embedded_text = self.embedding_manager.attn_postprocess(ada_embedded_text)
-            # Need to fix embedding scales again after attn postprocessing.
-            ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_fg, 
-                                               extra_scale=emb_global_scale)
             
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, clear_ada_prompt_embeddings_cache() should have been called somewhere.
