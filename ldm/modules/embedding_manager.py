@@ -1045,8 +1045,8 @@ class EmbeddingManager(nn.Module):
         self.fg_selective_grad_scale  = 0.5
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
 
-        self.postproc_attn_layer = None
-        self.postproc_attn_LN    = None
+        self.postmix_attn_layer = None
+        self.postmix_attn_LN    = None
         self.initialize_attn_postmix_components(attn_postmix_weight)
 
         print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, attn_postmix_weight={}".format(
@@ -1407,8 +1407,8 @@ class EmbeddingManager(nn.Module):
             # attn_output_weights: [4, 6].
             # attn_inst_sel_fg_embs.norm: 300~500. Don't know why they are so large. 
             # Anyway need LN first.
-            attn_inst_sel_fg_embs = self.postproc_attn_layer(inst_sel_fg_embs, inst_extra_embs, inst_extra_embs)[0]
-            attn_inst_sel_fg_embs = self.postproc_attn_LN(attn_inst_sel_fg_embs)
+            attn_inst_sel_fg_embs = self.postmix_attn_layer(inst_sel_fg_embs, inst_extra_embs, inst_extra_embs)[0]
+            attn_inst_sel_fg_embs = self.postmix_attn_LN(attn_inst_sel_fg_embs)
             # print("attn_inst_sel_fg_embs: ", torch.norm(attn_inst_sel_fg_embs, dim=1).mean())
 
             # Still normalize according to M, so that the attn_inst_sel_fg_embs are of the same scale 
@@ -1418,9 +1418,9 @@ class EmbeddingManager(nn.Module):
             attn_embedded_text[sel_fg_indices] = attn_inst_sel_fg_embs.type(embedded_text.dtype)
 
         # Linearly combine the original embedding and the attention embedding.
-        postproc_embedded_text = (1 - self.attn_postmix_weight) * embedded_text \
+        postmix_embedded_text = (1 - self.attn_postmix_weight) * embedded_text \
                                  + self.attn_postmix_weight * attn_embedded_text
-        return postproc_embedded_text
+        return postmix_embedded_text
     
     def scale_grad_of_fg_emb_subset(self, fg_embedding_k, k, iter_type):
         if iter_type == 'recon_iter':
@@ -1646,31 +1646,31 @@ class EmbeddingManager(nn.Module):
         print(f"Setting use_specialized_comp_embs = {use_specialized_comp_embs}")
 
     def initialize_attn_postmix_components(self, attn_postmix_weight, 
-                                            postproc_attn_layer=None, 
-                                            postproc_attn_LN=None):
+                                            postmix_attn_layer=None, 
+                                            postmix_attn_LN=None):
         self.attn_postmix_weight = attn_postmix_weight
         print(f"Setting attn_postmix_weight = {attn_postmix_weight}")
         if self.attn_postmix_weight > 0:
-            if postproc_attn_layer is not None:
-                # Assign existing postproc_attn_layer (LN).
+            if postmix_attn_layer is not None:
+                # Assign existing postmix_attn_layer (LN).
                 # If they already exist, replace them.
-                self.postproc_attn_layer = postproc_attn_layer
-                self.postproc_attn_LN    = postproc_attn_LN
-                print("Assigning existing postproc_attn_layer (LN).")
-            elif self.postproc_attn_layer is None:
-                # If postproc_attn_layer (LN) don't exist, create new ones.
-                self.postproc_attn_layer = nn.MultiheadAttention(self.token_dim, num_heads=8, dropout=0.1, batch_first=True)
-                self.postproc_attn_LN    = nn.LayerNorm(self.token_dim, elementwise_affine=True)
-                print("Creating new postproc_attn_layer (LN).")
+                self.postmix_attn_layer = postmix_attn_layer
+                self.postmix_attn_LN    = postmix_attn_LN
+                print("Assigning existing postmix_attn_layer (LN).")
+            elif self.postmix_attn_layer is None:
+                # If postmix_attn_layer (LN) don't exist, create new ones.
+                self.postmix_attn_layer = nn.MultiheadAttention(self.token_dim, num_heads=8, dropout=0.1, batch_first=True)
+                self.postmix_attn_LN    = nn.LayerNorm(self.token_dim, elementwise_affine=True)
+                print("Creating new postmix_attn_layer (LN).")
             else:
-                # If postproc_attn_layer (LN) exist, and no postproc_attn_layer (LN) are passed in,
+                # If postmix_attn_layer (LN) exist, and no postmix_attn_layer (LN) are passed in,
                 # do nothing.
-                print("postproc_attn_layer (LN) already created. Do nothing.")
+                print("postmix_attn_layer (LN) already created. Do nothing.")
         else:
-            # If postproc_attn_layer (LN) exist, clear them.
-            self.postproc_attn_layer = None
-            self.postproc_attn_LN    = None
-            print("Clearing postproc_attn_layer (LN).")
+            # If postmix_attn_layer (LN) exist, clear them.
+            self.postmix_attn_layer = None
+            self.postmix_attn_LN    = None
+            print("Clearing postmix_attn_layer (LN).")
 
     def set_emb_ema_as_pooling_probe_weight(self, emb_ema_as_pooling_probe_weight):
         self.emb_ema_as_pooling_probe_weight = emb_ema_as_pooling_probe_weight
@@ -1819,8 +1819,8 @@ class EmbeddingManager(nn.Module):
                      # Learnable weights for mixing point attn and conv attn features.
                      "layerwise_point_conv_attn_mix_weights":   self.layerwise_point_conv_attn_mix_weights,
                      "attn_postmix_weight":             self.attn_postmix_weight,
-                     "postproc_attn_layer":             self.postproc_attn_layer,
-                     "postproc_attn_LN":                self.postproc_attn_LN,
+                     "postmix_attn_layer":              self.postmix_attn_layer,
+                     "postmix_attn_LN":                 self.postmix_attn_LN,
                      "use_specialized_comp_embs":       self.use_specialized_comp_embs,
                    }, 
                     ckpt_path)
@@ -1871,8 +1871,8 @@ class EmbeddingManager(nn.Module):
 
             if "attn_postmix_weight" in ckpt:
                 self.initialize_attn_postmix_components(ckpt["attn_postmix_weight"], 
-                                                        ckpt["postproc_attn_layer"], 
-                                                        ckpt["postproc_attn_LN"])
+                                                        ckpt["postmix_attn_layer"], 
+                                                        ckpt["postmix_attn_LN"])
             
             if "use_specialized_comp_embs" in ckpt:
                 self.set_use_specialized_comp_embs(ckpt["use_specialized_comp_embs"])
@@ -1926,8 +1926,8 @@ class EmbeddingManager(nn.Module):
                + [ self.emb_global_scale_score, self.layerwise_point_conv_attn_mix_weights ]
         
         if self.attn_postmix_weight > 0:
-            params = params + list(self.postproc_attn_layer.parameters()) \
-                            + list(self.postproc_attn_LN.parameters())
+            params = params + list(self.postmix_attn_layer.parameters()) \
+                            + list(self.postmix_attn_LN.parameters())
         
         return params
         

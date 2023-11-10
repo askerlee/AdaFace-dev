@@ -891,7 +891,7 @@ class LatentDiffusion(DDPM):
         ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_fg, 
                                            extra_scale=emb_global_scale)
         
-        # Only do attn postprocessing to ada embeddings, not to static/class embeddings, to simplify the logic.
+        # Only do attn postmixing to ada embeddings, not to static/class embeddings, to simplify the logic.
         if self.embedding_manager.attn_postmix_weight > 0:
             ada_embedded_text = self.embedding_manager.attn_postmix(ada_embedded_text)
             
