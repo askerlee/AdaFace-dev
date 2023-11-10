@@ -1664,8 +1664,8 @@ class EmbeddingManager(nn.Module):
                 print("Creating new postproc_attn_layer (LN).")
             else:
                 # If postproc_attn_layer (LN) exist, and no postproc_attn_layer (LN) are passed in,
-                # do nothing.
-                print("postproc_attn_layer (LN) already created. Do nothing.")
+                # Leave them unchanged.
+                print("postproc_attn_layer (LN) already created. Leave them unchanged.")
         else:
             # If postproc_attn_layer (LN) exist, clear them.
             self.postproc_attn_layer = None
