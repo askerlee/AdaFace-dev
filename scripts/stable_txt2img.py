@@ -283,7 +283,7 @@ def parse_args():
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
     parser.add_argument("--use_specialized_comp_embs",
-                        type=str, default=argparse.SUPPRESS,
+                        action="store_true", default=argparse.SUPPRESS,
                         help="Use specialized subject embeddings for composition")
         
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
