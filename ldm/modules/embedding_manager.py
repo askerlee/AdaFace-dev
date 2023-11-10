@@ -849,7 +849,7 @@ class EmbeddingManager(nn.Module):
             emb_ema_as_pooling_probe_weight=0,
             default_point_conv_attn_mix_weight=0.5,
             use_specialized_recon_distill_subsets=False,
-            attn_postproc_weight=0.,
+            attn_postmix_weight=0.,
             **kwargs
     ):
         super().__init__()
@@ -1044,16 +1044,16 @@ class EmbeddingManager(nn.Module):
         self.use_specialized_recon_distill_subsets = use_specialized_recon_distill_subsets
         self.fg_selective_grad_scale  = 0.5
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
-        self.attn_postproc_weight = attn_postproc_weight
-        if self.attn_postproc_weight > 0:
+        self.attn_postmix_weight = attn_postmix_weight
+        if self.attn_postmix_weight > 0:
             self.postproc_attn_layer = nn.MultiheadAttention(self.token_dim, num_heads=8, dropout=0.1, batch_first=True)
             self.postproc_attn_LN    = nn.LayerNorm(self.token_dim, elementwise_affine=True)
         else:
             self.postproc_attn_layer = None
             self.postproc_attn_LN    = None
 
-        print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, attn_postproc_weight={}".format(
-               placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings, self.attn_postproc_weight))
+        print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, attn_postmix_weight={}".format(
+               placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings, self.attn_postmix_weight))
             
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
@@ -1364,8 +1364,8 @@ class EmbeddingManager(nn.Module):
 
         return embedded_text
 
-    def attn_postprocess(self, embedded_text):
-        assert self.attn_postproc_weight > 0
+    def attn_postmix(self, embedded_text):
+        assert self.attn_postmix_weight > 0
         if self.placeholder_indices_fg is None:
             return embedded_text
         
@@ -1417,8 +1417,8 @@ class EmbeddingManager(nn.Module):
             attn_embedded_text[sel_fg_indices] = attn_inst_sel_fg_embs.type(embedded_text.dtype)
 
         # Linearly combine the original embedding and the attention embedding.
-        postproc_embedded_text = (1 - self.attn_postproc_weight) * embedded_text \
-                                 + self.attn_postproc_weight * attn_embedded_text
+        postproc_embedded_text = (1 - self.attn_postmix_weight) * embedded_text \
+                                 + self.attn_postmix_weight * attn_embedded_text
         return postproc_embedded_text
     
     def scale_grad_of_fg_emb_subset(self, fg_embedding_k, k, iter_type):
@@ -1786,7 +1786,7 @@ class EmbeddingManager(nn.Module):
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
                      # Learnable weights for mixing point attn and conv attn features.
                      "layerwise_point_conv_attn_mix_weights":   self.layerwise_point_conv_attn_mix_weights,
-                     "attn_postproc_weight":            self.attn_postproc_weight,
+                     "attn_postmix_weight":            self.attn_postmix_weight,
                      "postproc_attn_layer":             self.postproc_attn_layer,
                      "postproc_attn_LN":                self.postproc_attn_LN,
                    }, 
@@ -1836,12 +1836,12 @@ class EmbeddingManager(nn.Module):
                 self.initialize_layerwise_point_conv_attn_mix_weights(self.default_point_conv_attn_mix_weight, 
                                                                       ckpt["layerwise_point_conv_attn_mix_weights"])
 
-            if "attn_postproc_weight" in ckpt:
-                self.attn_postproc_weight = ckpt["attn_postproc_weight"]
+            if "attn_postmix_weight" in ckpt:
+                self.attn_postmix_weight = ckpt["attn_postmix_weight"]
                 if "postproc_attn_layer" in ckpt:
                     self.postproc_attn_layer = ckpt["postproc_attn_layer"]
                     self.postproc_attn_LN    = ckpt["postproc_attn_LN"]
-                print(f"Set attn_postproc_weight = {self.attn_postproc_weight}")
+                print(f"Set attn_postmix_weight = {self.attn_postmix_weight}")
                 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
@@ -1891,7 +1891,7 @@ class EmbeddingManager(nn.Module):
                + list(self.string_to_emb_ema_dict.parameters()) \
                + [ self.emb_global_scale_score, self.layerwise_point_conv_attn_mix_weights ]
         
-        if self.attn_postproc_weight > 0:
+        if self.attn_postmix_weight > 0:
             params = params + list(self.postproc_attn_layer.parameters()) \
                             + list(self.postproc_attn_LN.parameters())
         
