@@ -283,7 +283,7 @@ def parse_args():
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
     parser.add_argument("--use_specialized_comp_embs",
-                        action="store_true", default=argparse.SUPPRESS,
+                        type=str2bool, const=True, default=argparse.SUPPRESS,
                         help="Use specialized subject embeddings for composition")
         
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
@@ -403,8 +403,10 @@ def main(opt):
 
         if hasattr(opt, 'emb_ema_as_pooling_probe'):
             model.embedding_manager.set_emb_ema_as_pooling_probe(opt.emb_ema_as_pooling_probe)
+        # use_specialized_comp_embs is set after loading the ckpt. 
+        # So it can be used to override the ckpt setting.
         if hasattr(opt, 'use_specialized_comp_embs'):
-            model.embedding_manager.use_specialized_comp_embs = True
+            model.embedding_manager.set_use_specialized_comp_embs(opt.use_specialized_comp_embs)
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight

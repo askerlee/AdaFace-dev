@@ -48,7 +48,7 @@ def parse_args():
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
     parser.add_argument("--use_specialized_comp_embs",
-                        action="store_true", default=argparse.SUPPRESS,
+                        type=str2bool, const=True, default=argparse.SUPPRESS,
                         help="Use specialized subject embeddings for composition")
     
     parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],
@@ -450,7 +450,7 @@ if __name__ == "__main__":
         if hasattr(args, 'emb_ema_as_pooling_probe'):
             command_line += f" --emb_ema_as_pooling_probe"
         if hasattr(args, 'use_specialized_comp_embs'):
-            command_line += f" --use_specialized_comp_embs"
+            command_line += f" --use_specialized_comp_embs {args.use_specialized_comp_embs}"
 
         if args.background_string and args.include_bg_string:
             command_line += f" --background_string {args.background_string}"
