@@ -2058,9 +2058,9 @@ class LatentDiffusion(DDPM):
                         # print(fg_mask_percent)
                         base_scale_range_lb, base_scale_range_ub = 0.7, 1.0
                         if fg_mask_percent > 0.1:
-                            scale_range_lb = base_scale_range_lb * 0.1 / fg_mask_percent
+                            scale_range_lb = base_scale_range_lb * 0.1 / fg_mask_percent.item()
                             # scale_range_ub is at least 0.5.
-                            scale_range_ub = max(0.5, base_scale_range_ub * 0.1 / fg_mask_percent)
+                            scale_range_ub = max(0.5, base_scale_range_ub * 0.1 / fg_mask_percent.item())
                             # If fg areas are larger (>= 1/10 of the whole image), then scale 
                             # more aggressively, to avoid it dominating the whole image.
                             fg_rand_scale = np.random.uniform(scale_range_lb, scale_range_ub)
