@@ -2795,7 +2795,11 @@ class LatentDiffusion(DDPM):
             subj_attn_delta_distill_loss_scale_base = 0.5
             comp_attn_delta_distill_loss_scale_base = 1
             # If normalize_subj_attn, then more relaxed on subj attn magnitudes.
-            subj_attn_norm_distill_loss_scale_base  = 0.5 if extra_info['normalize_subj_attn'] else 1
+            subj_attn_norm_distill_loss_scale_base  = 1 
+            
+            if extra_info['normalize_subj_attn']:
+                subj_attn_delta_distill_loss_scale_base *= 0.5
+                subj_attn_norm_distill_loss_scale_base  *= 0.5
 
             # subj_attn_delta_distill_loss_base: 0.5
             subj_attn_delta_distill_loss_scale = calc_dyn_loss_scale(loss_subj_attn_delta_align, 
