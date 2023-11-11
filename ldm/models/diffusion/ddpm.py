@@ -1355,12 +1355,12 @@ class LatentDiffusion(DDPM):
                 # Recon iters.
                 if self.iter_flags['use_wds_comp']:
                     # At 95% of the time, use background tokens in recon iters if use_wds_comp.
-                    p_use_background_token  = 0.95
+                    p_use_background_token  = 0.9
                 else:
                     # To avoid the backgound token taking too much of the foreground, 
                     # we only use the background token on 90% of the training images, to 
                     # force the foreground token to focus on the whole image.
-                    p_use_background_token  = 0.9
+                    p_use_background_token  = 0.85
 
             # Only use_background_token on recon iters.
             # No need to check do_mix_prompt_distillation, because if do_mix_prompt_distillation,
