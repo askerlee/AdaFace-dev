@@ -1355,12 +1355,12 @@ class LatentDiffusion(DDPM):
                 # Recon iters.
                 if self.iter_flags['use_wds_comp']:
                     # At 95% of the time, use background tokens in recon iters if use_wds_comp.
-                    p_use_background_token  = 0.9
+                    p_use_background_token  = 0.95
                 else:
                     # To avoid the backgound token taking too much of the foreground, 
                     # we only use the background token on 90% of the training images, to 
                     # force the foreground token to focus on the whole image.
-                    p_use_background_token  = 0.85
+                    p_use_background_token  = 0.9
 
             # Only use_background_token on recon iters.
             # No need to check do_mix_prompt_distillation, because if do_mix_prompt_distillation,
@@ -2056,13 +2056,17 @@ class LatentDiffusion(DDPM):
                         x_start_origsize = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
                         fg_mask_percent = filtered_fg_mask.float().sum() / filtered_fg_mask.numel()
                         # print(fg_mask_percent)
+                        base_scale_range_lb, base_scale_range_ub = 0.7, 1.0
                         if fg_mask_percent > 0.1:
-                            # fg areas are quite large (>= 1/10 of the whole image). 
-                            # Scale down the fg area to 40%-70% of the original size, to avoid it dominating the whole image.
-                            fg_rand_scale = np.random.uniform(0.4, 0.7)
+                            scale_range_lb = base_scale_range_lb * 0.1 / fg_mask_percent
+                            # scale_range_ub is at least 0.5.
+                            scale_range_ub = max(0.5, base_scale_range_ub * 0.1 / fg_mask_percent)
+                            # If fg areas are larger (>= 1/10 of the whole image), then scale 
+                            # more aggressively, to avoid it dominating the whole image.
+                            fg_rand_scale = np.random.uniform(scale_range_lb, scale_range_ub)
                         else:
-                            # fg areas are small. Scale the fg area to 60%-100% of the original size.
-                            fg_rand_scale = np.random.uniform(0.7, 1.0)
+                            # fg areas are small. Scale the fg area to 70%-100% of the original size.
+                            fg_rand_scale = np.random.uniform(base_scale_range_lb, base_scale_range_ub)
 
                         # Resize x_start_origsize and filtered_fg_mask by rand_scale. They have different numbers of channels,
                         # so we need to concatenate them at dim 1, and then resize.
@@ -2710,7 +2714,7 @@ class LatentDiffusion(DDPM):
                     # BLOCK_SIZE = 1, SSB_SIZE = 2.
                     SSB_SIZE = 2 * BLOCK_SIZE
 
-                loss_padding_subj_embs_align, loss_padding_cls_embs_align = \
+                loss_padding_subj_embs_align, loss_padding_cls_embs_align, loss_bg_subj_embs_align = \
                     self.calc_padding_embs_align_loss(static_embeddings, ada_embeddings,
                                                       extra_info['prompt_emb_mask'],
                                                       subj_indices, bg_indices, SSB_SIZE, 
@@ -2723,10 +2727,15 @@ class LatentDiffusion(DDPM):
                 if loss_padding_cls_embs_align != 0:
                     loss_dict.update({f'{prefix}/padding_cls_embs_align': loss_padding_cls_embs_align.mean().detach()})
                     loss_padding_cls_embs_align = 0
-
+                if loss_bg_subj_embs_align != 0:
+                    loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach()})
+                
+                bg_subj_embs_align_loss_scale = 4
                 padding_embs_align_loss_weight = loss_padding_subj_embs_align.item() * self.padding_embs_align_loss_weight_base \
                                                   / self.padding_embs_align_loss_base
-                loss += loss_padding_subj_embs_align * padding_embs_align_loss_weight
+                loss += (loss_padding_subj_embs_align 
+                           + loss_bg_subj_embs_align * bg_subj_embs_align_loss_scale) \
+                        * padding_embs_align_loss_weight
 
         if self.fg_bg_xlayer_consist_loss_weight > 0:
             # SSB_SIZE: subject sub-batch size.
@@ -3920,17 +3929,12 @@ class LatentDiffusion(DDPM):
         else:
             cond_prompt_embeddings = static_prompt_embeddings
         
-        padding_mask = 1 - prompt_emb_mask
+        # padding_mask: [2/4, 77, 1] => [2/4, 77]
+        padding_mask = 1 - prompt_emb_mask.squeeze(-1)
         # "start" token always receives the highest attention, which is the normal behavior.
         # So we exclude the "start" token from the align padding loss.
         padding_mask[:, 0] = 0
-        # Treat background tokens as padding tokens, to reduce them from 
-        # stealing semantics from the subject tokens.
-        if bg_indices is not None:
-            padding_mask[bg_indices] = 1
-        # padding_mask: [2/4, 77, 1] => [2/4, 77]
-        padding_mask = padding_mask.squeeze(-1)
-        subj_padding_indices = padding_mask[:SSB_SIZE].nonzero(as_tuple=True)
+        #subj_padding_indices = padding_mask[:SSB_SIZE].nonzero(as_tuple=True)
         subj_embs_grad_scale  = 0.05
         subj_embs_grad_scaler = gen_gradient_scaler(subj_embs_grad_scale)
 
@@ -3946,13 +3950,16 @@ class LatentDiffusion(DDPM):
 
         loss_padding_subj_embs_align = 0
         loss_padding_cls_embs_align  = 0
+        loss_bg_subj_embs_align      = 0
+        
+        #subj_padding_indices_by_instance = split_indices_by_instance(subj_padding_indices)
 
-        subj_padding_indices_by_instance = split_indices_by_instance(subj_padding_indices)
-
-        for i in range(len(subj_padding_indices_by_instance)):
-            subj_padding_indices_i = subj_padding_indices_by_instance[i]
+        # Subject tokens are always in instances 0 .. SSB_SIZE-1.
+        for i in range(SSB_SIZE):
+            #subj_padding_indices_i = subj_padding_indices_by_instance[i]
+            subj_padding_indices_i_N = padding_mask[i].nonzero().squeeze(-1)
             # subj_padding_embs_i: [63, 16, 768].
-            subj_padding_embs_i = cond_prompt_embeddings[subj_padding_indices_i[0], :, subj_padding_indices_i[1]]
+            subj_padding_embs_i = cond_prompt_embeddings[i, :, subj_padding_indices_i_N]
             # subj_subj_embs_gs_i: [1,  16, 768].
             subj_subj_embs_gs_i = subj_subj_embs_gs[i]
             # padding_subj_embs_align_coeffs_i: [63, 16]
@@ -3976,10 +3983,24 @@ class LatentDiffusion(DDPM):
                 padding_cls_embs_align_coeffs_i  = calc_align_coeffs(cls_padding_embs_i, cls_subj_embs_i)
                 loss_padding_cls_embs_align += power_loss(padding_cls_embs_align_coeffs_i, exponent=2)
 
-        else:
-            loss_padding_cls_embs_align = 0
+        if bg_indices is not None:
+            bg_padding_mask = torch.zeros_like(padding_mask)
+            bg_padding_mask[bg_indices] = 1
 
-        return loss_padding_subj_embs_align, loss_padding_cls_embs_align
+            for i in range(SSB_SIZE):
+                #subj_padding_indices_i = subj_padding_indices_by_instance[i]
+                bg_indices_i_N = bg_padding_mask[i].nonzero().squeeze(-1)
+                if len(bg_indices_i_N) > 0:
+                    # bg_embs_i: [4, 16, 768].
+                    bg_embs_i = cond_prompt_embeddings[i, :, bg_indices_i_N]
+                    # subj_subj_embs_gs_i: [1,  16, 768].
+                    # subj_embs_grad_scale  = 0.05.
+                    subj_subj_embs_gs_i = subj_subj_embs_gs[i]
+                    # bg_subj_embs_align_coeffs_i: [4, 16]
+                    bg_subj_embs_align_coeffs_i  = calc_align_coeffs(bg_embs_i, subj_subj_embs_gs_i)
+                    loss_bg_subj_embs_align += power_loss(bg_subj_embs_align_coeffs_i, exponent=2)
+
+        return loss_padding_subj_embs_align, loss_padding_cls_embs_align, loss_bg_subj_embs_align
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):
