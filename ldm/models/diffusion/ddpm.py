@@ -3959,7 +3959,7 @@ class LatentDiffusion(DDPM):
             #subj_padding_indices_i = subj_padding_indices_by_instance[i]
             subj_padding_indices_i_N = padding_mask[i].nonzero().squeeze(-1)
             # subj_padding_embs_i: [63, 16, 768].
-            subj_padding_embs_i = cond_prompt_embeddings[i, :, subj_padding_indices_i_N]
+            subj_padding_embs_i = cond_prompt_embeddings[i, :, subj_padding_indices_i_N].permute(1, 0, 2)
             # subj_subj_embs_gs_i: [1,  16, 768].
             subj_subj_embs_gs_i = subj_subj_embs_gs[i]
             # padding_subj_embs_align_coeffs_i: [63, 16]
@@ -3992,7 +3992,7 @@ class LatentDiffusion(DDPM):
                 bg_indices_i_N = bg_padding_mask[i].nonzero().squeeze(-1)
                 if len(bg_indices_i_N) > 0:
                     # bg_embs_i: [4, 16, 768].
-                    bg_embs_i = cond_prompt_embeddings[i, :, bg_indices_i_N]
+                    bg_embs_i = cond_prompt_embeddings[i, :, bg_indices_i_N].permute(1, 0, 2)
                     # subj_subj_embs_gs_i: [1,  16, 768].
                     # subj_embs_grad_scale  = 0.05.
                     subj_subj_embs_gs_i = subj_subj_embs_gs[i]
