@@ -1191,7 +1191,8 @@ class EmbeddingManager(nn.Module):
                 else:
                     subj_static_embedding_k_gs = subj_static_embedding_k
 
-                if self.training and self.training_add_noise_range is not None:
+                if self.training and self.training_add_noise_range is not None \
+                  and self.iter_type == 'recon_iter':
                     subj_static_embedding_k_gs = add_noise_to_embedding(subj_static_embedding_k_gs, 
                                                                         self.training_add_noise_range,
                                                                         self.training_add_noise_prob)
@@ -1367,7 +1368,8 @@ class EmbeddingManager(nn.Module):
                 else:
                     subj_ada_embedding_k_gs = subj_ada_embedding_k
 
-                if self.training and self.training_add_noise_range is not None:
+                if self.training and self.training_add_noise_range is not None \
+                  and self.iter_type == 'recon_iter':
                     subj_ada_embedding_k_gs = add_noise_to_embedding(subj_ada_embedding_k_gs, 
                                                                      self.training_add_noise_range,
                                                                      self.training_add_noise_prob)
@@ -1613,7 +1615,7 @@ class EmbeddingManager(nn.Module):
         if training_add_noise_range is None:
             print(f"Disable training_add_noise")
         else:
-            print(f"Setting training_add_noise_range = {training_add_noise_range} at prob = {training_add_noise_prob}")
+            print(f"training_add_noise_range = {training_add_noise_range} with prob = {training_add_noise_prob}")
 
     def initialize_layerwise_point_conv_attn_mix_weights(self, default_point_conv_attn_mix_weight=0.5, 
                                                          layerwise_point_conv_attn_mix_weights=None,

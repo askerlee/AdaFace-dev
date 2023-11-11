@@ -11,10 +11,6 @@ set -g broad_classes  1                 1                     1                1
 # whether to compute face similarity.
 # $are_faces are used only for evaluation, not for training.
 set -g are_faces     1                  1                     1                1            1              1            1            1                 0          1            0            1                    1            1              0                     1            1              1             1               1            1             1              1                   1                     1
-# $use_fp_trick is by default enabled (value 1), but disabled for difficult subjects (dominating compositions).
-# set -g use_fp_trick  1                1                     0                1            1              1            1            0                 1          0            1            1                    1            1              1                     1            1              1             1               1            1             0              0                   1                     1
-# -1: use default range [0.1, 0.3]. 0.6: hard subjects, use [0.2, 0.6].
-# set -g prompt_mix_max  -1               -1                    0.9              -1           -1             -1           -1           0.9               -1         0.9          -1           -1                   -1           -1             -1                    0.6          -1             0.6           -1              -1           -1            1.2            0.9                 -1                    -1
 #                     objects    humans/animals    cartoon characters
 set -g lrs            6e-4       8e-4              6e-4
 set -g inf_z_prefixes     ""         "portrait of"     ""
@@ -28,4 +24,4 @@ set -g sel_set              4 8 9 11 12 14 18 19 22 25
 # "instagram" for the main dataset, to focus on faces.
 set -g db_suffix           ", instagram"
 set -g data_folder         data
-set -g misc_train_opts     --static_embedding_reg_weight 2e-5 --ada_embedding_reg_weight 2e-3
+# set -g misc_train_opts     --static_embedding_reg_weight 1e-5 --ada_embedding_reg_weight 5e-4
