@@ -636,6 +636,8 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
         # inst_q_4d_padded: [1, 320, 65, 65] (ks=2) or [1, 320, 66, 66] (ks=3).
         inst_q_4d_padded = padder(inst_q_4d)
 
+        # Slice out indices_b, indices_n from indices_B, indices_N.
+        # If b=0, M=4, then indices_b = indices_B[0:4], indices_n = indices_N[0:4].
         # indices_b: [0, 0, 0, 0]. indices_n: [6, 7, 8, 9].
         indices_b = indices_B[b * M : b * M + M]
         indices_n = indices_N[b * M : b * M + M]
@@ -666,19 +668,21 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
         subj_attn = subj_attn * sim_scale * conv_attn_layer_scale / NORM
 
         # All subject embeddings receive the same attention matrix.
-        # subj_attn_allembs: [1, 8, 64, 64] => [4, 8, 64, 64] => [4, 8, 4096].
+        # subj_attn_allembs: [1, 8, 64, 64] => [4, 8, 64, 64] => [4, 8, 4096], [M, H, N].
         subj_attn_allembs = subj_attn.repeat(M, 1, 1, 1).reshape(M, H, -1)
 
-        # attn_mat2: [4, 8, 4096, 77], [B, H, N, T]. 
-        # B: the whole batch (>=BS). H: number of heads. 
-        # N: number of visual tokens. T: number of text tokens.
-        # attn_mat2[[0,0,0,0], :, :, [6,7,8,9]]: [4, 8, 4096]
-        # Linearly combine the old (pointwise) and new (convolutional) attn scores.
         debug = False
         if debug:
             calc_and_print_stats(attn_mat[indices_b, :, :, indices_n], "pointwise attn")
             calc_and_print_stats(subj_attn_allembs, "conv attn")
 
+        # attn_mat2: [4, 8, 4096, 77], [B, H, N, T].
+        # B: the whole batch (>=BS). H: number of heads. 
+        # N: number of visual tokens. T: number of text tokens.
+        # attn_mat2[indices_b, :, :, indices_n]: [M, H, N]
+        # attn_mat2[[0,0,0,0], :, :, [6,7,8,9]]: [4, 8, 4096]
+        # Linearly combine the old (pointwise) and conv attn scores. Since conv_attn_mix_weight=1,
+        # the pointwise attn scores are disabled.
         attn_mat2[indices_b, :, :, indices_n] = attn_mat[indices_b, :, :, indices_n] * (1 - conv_attn_mix_weight) \
                                                 + subj_attn_allembs * conv_attn_mix_weight
 

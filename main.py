@@ -252,10 +252,12 @@ def get_parser(**parser_kwargs):
         type=float, default=-1,
         help="Prompt delta regularization weight")
 
-    # --padding_embs_align_loss_weight_base
     parser.add_argument("--padding_embs_align_loss_weight_base",
         type=float, default=-1,
         help="Weight base of the padding embeddings alignment loss")
+    parser.add_argument("--comp_fg_bg_preserve_loss_weight",
+        type=float, default=-1,
+        help="Weight of the composition foreground-background preservation loss")
     
     parser.add_argument("--rand_scale_range",
                         type=float, nargs=2, 
@@ -828,7 +830,9 @@ if __name__ == "__main__":
 
         if opt.padding_embs_align_loss_weight_base >= 0:
             config.model.params.padding_embs_align_loss_weight_base = opt.padding_embs_align_loss_weight_base
-            
+        if opt.comp_fg_bg_preserve_loss_weight >= 0:
+            config.model.params.comp_fg_bg_preserve_loss_weight     = opt.comp_fg_bg_preserve_loss_weight
+
         if opt.lr > 0:
             config.model.base_learning_rate = opt.lr
 
