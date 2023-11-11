@@ -12,6 +12,7 @@ import torch.nn.functional as F
 
 import os
 import numpy as np
+import math
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR
 from einops import rearrange, repeat
@@ -2058,11 +2059,14 @@ class LatentDiffusion(DDPM):
                         # print(fg_mask_percent)
                         base_scale_range_lb, base_scale_range_ub = 0.7, 1.0
                         if fg_mask_percent > 0.1:
-                            scale_range_lb = base_scale_range_lb * 0.1 / fg_mask_percent.item()
-                            # scale_range_ub is at least 0.5.
-                            scale_range_ub = max(0.5, base_scale_range_ub * 0.1 / fg_mask_percent.item())
                             # If fg areas are larger (>= 1/10 of the whole image), then scale 
                             # more aggressively, to avoid it dominating the whole image.
+                            # Don't take extra_scale linearly to this ratio, which will make human
+                            # faces (usually taking around 20%-40%) too small.
+                            extra_scale = math.pow(0.1 / fg_mask_percent.item(), 0.3)
+                            scale_range_lb = base_scale_range_lb * extra_scale
+                            # scale_range_ub is at least 0.5.
+                            scale_range_ub = max(0.5, base_scale_range_ub * extra_scale)
                             fg_rand_scale = np.random.uniform(scale_range_lb, scale_range_ub)
                         else:
                             # fg areas are small. Scale the fg area to 70%-100% of the original size.
