@@ -851,7 +851,7 @@ class EmbeddingManager(nn.Module):
             use_specialized_comp_embs=False,
             attn_postmix_weight=0.,
             training_add_noise_range=None,
-            training_add_noise_prob=0.5,
+            training_add_noise_prob=None,
             **kwargs
     ):
         super().__init__()
@@ -1191,11 +1191,10 @@ class EmbeddingManager(nn.Module):
                 else:
                     subj_static_embedding_k_gs = subj_static_embedding_k
 
-                if self.training and self.training_add_noise_range is not None \
-                  and self.iter_type == 'recon_iter':
+                if self.training and self.training_add_noise_range is not None:
                     subj_static_embedding_k_gs = add_noise_to_embedding(subj_static_embedding_k_gs, 
                                                                         self.training_add_noise_range,
-                                                                        self.training_add_noise_prob)
+                                                                        self.training_add_noise_prob[self.iter_type])
                     
                 embedded_text[placeholder_indices_k] = subj_static_embedding_k_gs.repeat(REAL_OCCURS_IN_BATCH, 1)
 
@@ -1368,11 +1367,10 @@ class EmbeddingManager(nn.Module):
                 else:
                     subj_ada_embedding_k_gs = subj_ada_embedding_k
 
-                if self.training and self.training_add_noise_range is not None \
-                  and self.iter_type == 'recon_iter':
+                if self.training and self.training_add_noise_range is not None:
                     subj_ada_embedding_k_gs = add_noise_to_embedding(subj_ada_embedding_k_gs, 
                                                                      self.training_add_noise_range,
-                                                                     self.training_add_noise_prob)
+                                                                     self.training_add_noise_prob[self.iter_type])
                     
                 embedded_text[placeholder_indices_k] = subj_ada_embedding_k_gs
 
