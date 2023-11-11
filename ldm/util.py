@@ -762,7 +762,7 @@ def normalize_attn_at_indices(attn_mat, subj_indices, H, shift_n_sigma=1):
 
     means = subj_attn.mean(dim=2, keepdim=True)
     stds = subj_attn.std(dim=2, keepdim=True)
-    calc_and_print_stats(subj_attn, "subj_attn")
+    # calc_and_print_stats(subj_attn, "subj_attn")
 
     for std_quantile in std_quantiles:
         # quantile() is computed on the last dim (4096).
