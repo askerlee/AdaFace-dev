@@ -749,7 +749,8 @@ def normalize_attn_at_indices(attn_mat, subj_indices, H, shift_n_sigma=1):
     # subj_attn: [B*M, 8, 4096].
     subj_attn = attn_mat[subj_indices_B, :, :, subj_indices_N]
     dtype = subj_attn.dtype
-    subj_attn2 = subj_attn.clone().float()
+    subj_attn  = subj_attn.float()
+    subj_attn2 = subj_attn.clone()
 
     quantiles = [0.8, 0.6, 0.4]
     step_scale = 0.7
