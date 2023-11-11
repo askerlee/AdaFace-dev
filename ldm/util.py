@@ -597,6 +597,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
     # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77].
     attn_mat = attn_mat.reshape(-1, H, *attn_mat.shape[1:])
     # q: [32, 4096, 40] => [4, 8, 4096, 40].
+    # q is a projection of x, the image features.
     q = q.reshape(-1, H, *q.shape[1:])
     # k: [32, 77, 40] => [4, 8, 77, 40].
     k = k.reshape(-1, H, *k.shape[1:])
@@ -636,37 +637,41 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
     for b in range(BS):
         subj_attn_dxys = []
         index_b = indices_B_uniq[b]
-        # subj_q: [8, 4096, 40].
-        subj_q = q[index_b]
-        # subj_q_2d: [8, 4096, 40] => [8, 40, 4096] => [1, 320, 64, 64]
-        subj_q_2d = subj_q.permute(0, 2, 1).reshape(1, H * C, *infeat_size)
-        # subj_q_padded: [1, 320, 65, 65] (ks=2) or [1, 320, 66, 66] (ks=3).
-        subj_q_padded = padder(subj_q_2d)
+        # inst_q: [8, 4096, 40].
+        inst_q = q[index_b]
+        # inst_q_4d: [8, 4096, 40] => [8, 40, 4096] => [1, 320, 64, 64]
+        inst_q_4d = inst_q.permute(0, 2, 1).reshape(1, H * C, *infeat_size)
+        # inst_q_4d_padded: [1, 320, 65, 65] (ks=2) or [1, 320, 66, 66] (ks=3).
+        inst_q_4d_padded = padder(inst_q_4d)
 
         # indices_b: [0, 0, 0, 0]. indices_n: [6, 7, 8, 9].
         indices_b = indices_B[b * M : b * M + M]
         indices_n = indices_N[b * M : b * M + M]
         if (indices_b != index_b).any():
             breakpoint()
-        # subj_k: k[[0], :, [6,7,8,9]], shape [4, 8, 40] => [8, 40, 4], [H, C, M].
         # select the 4 subject embeddings (s1, s2, s3, s4) from k into subj_k.
+        # subj_k: k[[0], :, [6,7,8,9]], shape [4, 8, 40] => [8, 40, 4], [H, C, M].
+        # The last dim is the M embeddings.
         subj_k = k[indices_b, :, indices_n].permute(1, 2, 0)
-
-        # subj_k -> conv weight: [8, 40, 2, 2]. First 2 is height (y), second 2 is width (x).
-        # The input channel number is 40 * 8 = 320.
-        # But due to grouping, the weight shape is [8, 40, 2, 2] instead of [8, 320, 2, 2].
-        # Each output channel belongs to an individual group. 
-        # The shape of the weight 40*8 should be viewed as 8 groups of 40*1.
-        # subj_k: [8, 4, 40] => [8, 40, 4] => [8, 40, 2, 2].
+        # subj_k: [8, 40, 4] => conv weight [8, 40, 2, 2].
+        # The first 2 is height (y), and the second 2 is width (x).
         # So the 4 embeddings (s1, s2, s3, s4) in subj_k are arranged as 
         #                |  (s1 s2
         #              H |   s3 s4)
         #                    _____ W
-        # subj_attn: [1, 8, 64, 64]
-        # Note to scale attention scores by sim_scale, and further divide by NORM = M ** 0.75.
+        subj_conv2d_weight = subj_k.reshape(H, C, ks, ks)
+
+        # H=8: number of heads. C=40: number of channels.
+        # The total input channel number is 40 * 8 = 320. But due to grouping, 
+        # the weight shape is [8, 40, 2, 2] instead of [8, 320, 2, 2].
+        # Each output channel belongs to an individual group (head). 
+        # The shape of the weight 40*8 should be viewed as 8 groups of 40*1.
+        # subj_attn: [1, 8, 64, 64].
+        subj_attn = F.conv2d(inst_q_4d_padded, subj_conv2d_weight, 
+                             bias=None, groups=H)
         # sim_scale is to keep consistent to the original cross attention scores.
-        subj_attn = F.conv2d(subj_q_padded, subj_k.reshape(H, C, ks, ks), 
-                             bias=None, groups=H) * sim_scale / NORM
+        # Note to scale attention scores by sim_scale, and further divide by NORM = M ** 0.75.
+        subj_attn = subj_attn * sim_scale / NORM
         # Shift subj_attn (with 0 padding) to yield ks*ks slightly different attention maps 
         # for the M embeddings.
         # dx, dy: the relative position of a subject token to the center subject token.
@@ -684,14 +689,14 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
                 if dx == 0 and dy == 0:
                     subj_attn_dxy = subj_attn
                 elif dx <= 0 and dy <= 0:
-                    subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, -dx:], (0, -dx, 0, -dy))
+                    subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, -dx:], (0, -dx, 0, -dy), value=0)
                 elif dx <= 0 and dy > 0:
-                    subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, -dx:], (0, -dx, dy, 0))
+                    subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, -dx:], (0, -dx, dy, 0), value=0)
                 elif dx > 0 and dy <= 0:
-                    subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, :-dx], (dx, 0,  0, -dy))
+                    subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, :-dx], (dx, 0,  0, -dy), value=0)
                 else:
                     # dx > 0 and dy > 0
-                    subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, :-dx], (dx, 0,  dy, 0))
+                    subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, :-dx], (dx, 0,  dy, 0), value=0)
 
                 # subj_attn_dxy: [1, 8, 64, 64].
                 # Since first loop is over dy (each loop forms a column in the feature maps), 

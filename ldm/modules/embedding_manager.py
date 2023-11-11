@@ -1686,6 +1686,7 @@ class EmbeddingManager(nn.Module):
                 print("Assigning existing postmix_attn_layer (LN).")
             elif self.postmix_attn_layer is None:
                 # If postmix_attn_layer (LN) don't exist, create new ones.
+                # num_heads=8, consistent with the number of heads in the UNet cross-attention layer.
                 self.postmix_attn_layer = nn.MultiheadAttention(self.token_dim, num_heads=8, dropout=0.1, batch_first=True)
                 self.postmix_attn_LN    = nn.LayerNorm(self.token_dim, elementwise_affine=True)
                 print("Creating new postmix_attn_layer (LN).")
