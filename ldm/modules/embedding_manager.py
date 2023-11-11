@@ -847,7 +847,6 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight=0.5, 
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
-            default_point_conv_attn_mix_weight=0.5,
             use_specialized_comp_embs=False,
             attn_postmix_weight=0.,
             training_add_noise_range=None,
@@ -880,9 +879,7 @@ class EmbeddingManager(nn.Module):
             self.num_layers_per_embedder = 1
 
         self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
-        self.default_point_conv_attn_mix_weight = default_point_conv_attn_mix_weight
-        self.initialize_layerwise_point_conv_attn_mix_weights(self.default_point_conv_attn_mix_weight, 
-                                                              learnable=True)
+        self.initialize_conv_attn_layerwise_scales(1, learnable=True)
         
         self.set_training_add_noise_range(training_add_noise_range, training_add_noise_prob)
 
@@ -1615,38 +1612,24 @@ class EmbeddingManager(nn.Module):
         else:
             print(f"training_add_noise_range = {training_add_noise_range} with prob = {training_add_noise_prob}")
 
-    def initialize_layerwise_point_conv_attn_mix_weights(self, default_point_conv_attn_mix_weight=0.5, 
-                                                         layerwise_point_conv_attn_mix_weights=None,
-                                                         learnable=True):
-        if layerwise_point_conv_attn_mix_weights is not None:
-            self.layerwise_point_conv_attn_mix_weights = nn.Parameter(layerwise_point_conv_attn_mix_weights,
-                                                                      requires_grad=learnable)            
-            print(f"Change layerwise_point_conv_attn_mix_weights = {self.layerwise_point_conv_attn_mix_weights}")
+    def initialize_conv_attn_layerwise_scales(self, default_conv_attn_scale=1, 
+                                              conv_attn_layerwise_scales=None,
+                                              learnable=True):
+        if conv_attn_layerwise_scales is not None:
+            self.conv_attn_layerwise_scales = nn.Parameter(conv_attn_layerwise_scales,
+                                                           requires_grad=learnable)            
+            print(f"Change conv_attn_layerwise_scales = {self.conv_attn_layerwise_scales}")
 
         else:
-            self.layerwise_point_conv_attn_mix_weights = \
-                nn.Parameter(torch.ones(self.num_layers_per_embedder) * default_point_conv_attn_mix_weight, 
+            self.conv_attn_layerwise_scales = \
+                nn.Parameter(torch.ones(self.num_layers_per_embedder) * default_conv_attn_scale, 
                                         requires_grad=learnable)
-            if self.use_layerwise_embedding:
-                # 1, 2, 4, 5, 7, 8           feature maps: 64, 64, 32, 32, 16, 16.
-                # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
-                # 12, 16, 17, 18, 19, 20, 21 feature maps: 8, 16, 16, 16, 32, 32, 32.
-                # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0.8.
-                # 22, 23, 24                 feature maps: 64, 64, 64.
-                # 13~15 (22, 23, 24):                           weight 0.8.                
-                # This setting is based on the empirical observations of 
-                # the learned layerwise_point_conv_attn_mix_weights.
-                pass
-                # self.layerwise_point_conv_attn_mix_weights.data[6:13]  *= 1.6
-                # self.layerwise_point_conv_attn_mix_weights.data[13:]   *= 1.6
+            print(f"Initialize conv_attn_layerwise_scales = {self.conv_attn_layerwise_scales}")
 
-            print(f"Initialize layerwise_point_conv_attn_mix_weights = {self.layerwise_point_conv_attn_mix_weights}")
-
-    def get_layerwise_point_conv_attn_mix_weights(self):
-        # Sometimes some of the weights are pushed to be negative. But it will lead to
-        # reduced performance. So we clip the weights to be non-negative.
-        self.layerwise_point_conv_attn_mix_weights.data.clamp_(min=0, max=1)
-        return self.layerwise_point_conv_attn_mix_weights
+    def get_conv_attn_layerwise_scales(self):
+        # Clip the scales to [0.1, 3].
+        self.conv_attn_layerwise_scales.data.clamp_(min=0.1, max=3)
+        return self.conv_attn_layerwise_scales
     
     def get_emb_global_scale(self, do_perturb=True):
         # emb_global_scale_score = 0  -> emb_global_scale = 1, 
@@ -1847,8 +1830,8 @@ class EmbeddingManager(nn.Module):
                      "emb_global_scale_score":          self.emb_global_scale_score,
                      "ada_emb_weight":                  self.ada_emb_weight,  
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
-                     # Learnable weights for mixing point attn and conv attn features.
-                     "layerwise_point_conv_attn_mix_weights":   self.layerwise_point_conv_attn_mix_weights,
+                     # Learnable weights for scaling conv attns.
+                     "conv_attn_layerwise_scales":      self.conv_attn_layerwise_scales,
                      "attn_postmix_weight":             self.attn_postmix_weight,
                      "postmix_attn_layer":              self.postmix_attn_layer,
                      "postmix_attn_LN":                 self.postmix_attn_LN,
@@ -1895,10 +1878,8 @@ class EmbeddingManager(nn.Module):
             else:
                 self.emb_ema_as_pooling_probe_weight = 0
 
-            if "layerwise_point_conv_attn_mix_weights" in ckpt:
-                # default_point_conv_attn_mix_weight is provided but not used here.
-                self.initialize_layerwise_point_conv_attn_mix_weights(self.default_point_conv_attn_mix_weight, 
-                                                                      ckpt["layerwise_point_conv_attn_mix_weights"])
+            if "conv_attn_layerwise_scales" in ckpt:
+                self.initialize_conv_attn_layerwise_scales(1, ckpt["conv_attn_layerwise_scales"])
 
             if "attn_postmix_weight" in ckpt:
                 self.initialize_attn_postmix_components(ckpt["attn_postmix_weight"], 
@@ -1954,7 +1935,7 @@ class EmbeddingManager(nn.Module):
         params = list(self.string_to_static_embedder_dict.parameters()) \
                + list(self.string_to_ada_embedder_dict.parameters()) \
                + list(self.string_to_emb_ema_dict.parameters()) \
-               + [ self.emb_global_scale_score, self.layerwise_point_conv_attn_mix_weights ]
+               + [ self.emb_global_scale_score, self.conv_attn_layerwise_scales ]
         
         if self.attn_postmix_weight > 0:
             params = params + list(self.postmix_attn_layer.parameters()) \

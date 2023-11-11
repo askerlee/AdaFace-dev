@@ -120,7 +120,6 @@ class DDPM(pl.LightningModule):
                  do_clip_teacher_filtering=False,
                  use_background_token=False,
                  use_conv_attn=False,
-                 default_point_conv_attn_mix_weight=0.5,
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
                  use_fp_trick=True,      
                  ):
@@ -165,7 +164,6 @@ class DDPM(pl.LightningModule):
         self.wds_bg_recon_discount                  = wds_bg_recon_discount
         
         self.use_conv_attn                   = use_conv_attn
-        self.default_point_conv_attn_mix_weight = default_point_conv_attn_mix_weight
         self.use_background_token            = use_background_token
         # If use_conv_attn, the subject is well expressed, and use_fp_trick is unnecessary 
         # (actually harmful).
@@ -837,9 +835,9 @@ class LatentDiffusion(DDPM):
                 
                 c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_fg, num_layers=self.N_LAYERS)
                 # c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_bg, num_layers=self.N_LAYERS)
-                # layerwise_point_conv_attn_mix_weights: a list of 16 tensor scalars, used to linearly combine 
-                # pointwise attention and conv attention.
-                layerwise_point_conv_attn_mix_weights = self.embedding_manager.get_layerwise_point_conv_attn_mix_weights()
+                # conv_attn_layerwise_scales: a list of 16 tensor scalars, 
+                # used to scale conv attention at each CA layer.
+                conv_attn_layerwise_scales = self.embedding_manager.get_conv_attn_layerwise_scales()
 
                 extra_info = { 
                                 'use_layerwise_context': self.use_layerwise_embedding, 
@@ -852,8 +850,7 @@ class LatentDiffusion(DDPM):
                                 'subj_indices':          copy.copy(self.embedding_manager.placeholder_indices_fg),
                                 'bg_indices':            copy.copy(self.embedding_manager.placeholder_indices_bg),
                                 'prompt_emb_mask':       copy.copy(self.embedding_manager.prompt_emb_mask),
-                                'default_point_conv_attn_mix_weight':     self.default_point_conv_attn_mix_weight,
-                                'layerwise_point_conv_attn_mix_weights':  layerwise_point_conv_attn_mix_weights,
+                                'conv_attn_layerwise_scales':  conv_attn_layerwise_scales,
                              }
                 
                 if self.use_ada_embedding:

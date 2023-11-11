@@ -170,7 +170,7 @@ class CrossAttention(nn.Module):
         self.save_attn_vars = False
         self.use_conv_attn = False
         self.infeat_size   = None
-        self.point_conv_attn_mix_weight = 0.5
+        self.conv_attn_layer_scale = 1.0
         
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -209,14 +209,16 @@ class CrossAttention(nn.Module):
         # by attention scores computed with a convolutional attention mechanism.
         # If uncond (null condition) is active, then returned subj_indices = None.
         # Don't do conv attn if uncond is active.
-        # abs(self.point_conv_attn_mix_weight) >= 1e-6: 
-        # Sometimes point_conv_attn_mix_weight is a tiny negative number, and checking for equality with 0.0
+        # abs(self.conv_attn_layer_scale) >= 1e-6: 
+        # Sometimes conv_attn_layer_scale is a tiny negative number, and checking for equality with 0.0
         # will fail.
-        if context_provided and self.use_conv_attn and abs(self.point_conv_attn_mix_weight) >= 1e-6 \
+        if context_provided and self.use_conv_attn and abs(self.conv_attn_layer_scale) >= 1e-6 \
           and subj_indices is not None:
             # infeat_size is set in SpatialTransformer.forward().
+            # conv_attn_mix_weight=1: weight to mix conv attn with point-wise attn. 
+            # Set to 1 to disable point-wise attn.
             sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, h, self.scale,
-                                            self.point_conv_attn_mix_weight)
+                                            self.conv_attn_layer_scale, conv_attn_mix_weight=1)
 
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].

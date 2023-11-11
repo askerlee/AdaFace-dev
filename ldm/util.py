@@ -572,7 +572,7 @@ def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=Tr
 # Return a new attn_mat with the same shape as attn_mat, but with the attention scores at subj_indices
 # replaced by the convolutional attention scores.
 def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, 
-                              sim_scale, point_conv_attn_mix_weight=0.5):
+                              sim_scale, conv_attn_layer_scale=1, conv_attn_mix_weight=1):
     # input features x: [4, 4096, 320].
     # attn_mat: [32, 4096, 77]. 32: b * h. b = 4, h = 8.
     # q: [32, 4096, 40]. k: [32, 77, 40]. 32: b * h.
@@ -671,7 +671,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
                              bias=None, groups=H)
         # sim_scale is to keep consistent to the original cross attention scores.
         # Note to scale attention scores by sim_scale, and further divide by NORM = M ** 0.75.
-        subj_attn = subj_attn * sim_scale / NORM
+        subj_attn = subj_attn * sim_scale * conv_attn_layer_scale / NORM
         # Shift subj_attn (with 0 padding) to yield ks*ks slightly different attention maps 
         # for the M embeddings.
         # dx, dy: the relative position of a subject token to the center subject token.
@@ -721,8 +721,8 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
             calc_and_print_stats(attn_mat[indices_b, :, :, indices_n], "pointwise attn")
             calc_and_print_stats(subj_attn_dxys, "conv attn")
 
-        attn_mat2[indices_b, :, :, indices_n] = attn_mat[indices_b, :, :, indices_n] * (1 - point_conv_attn_mix_weight) \
-                                                + subj_attn_dxys * point_conv_attn_mix_weight
+        attn_mat2[indices_b, :, :, indices_n] = attn_mat[indices_b, :, :, indices_n] * (1 - conv_attn_mix_weight) \
+                                                + subj_attn_dxys * conv_attn_mix_weight
 
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)

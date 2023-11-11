@@ -509,7 +509,7 @@ class UNetModel(nn.Module):
 
         self.backup_vars = { 
                             'use_conv_attn':                            False,
-                            'point_conv_attn_mix_weight:layerwise':     None,
+                            'conv_attn_layer_scale:layerwise':          None,
                             'save_attn_vars':                           False,
                            }
 
@@ -837,7 +837,7 @@ class UNetModel(nn.Module):
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
-        layerwise_point_conv_attn_mix_weights   = extra_info.get('layerwise_point_conv_attn_mix_weights', None) if extra_info is not None else None
+        conv_attn_layerwise_scales   = extra_info.get('conv_attn_layerwise_scales', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
@@ -971,9 +971,9 @@ class UNetModel(nn.Module):
         # Although layer 12 has small 8x8 feature maps, since we linearly combine 
         # pointwise attn with conv attn, we still apply conv attn (3x3) on it.
         ca_flag_layer_indices      = None #[1, 2, 4, 5, 7, 8, 16, 17, 18, 19, 20, 21, 22, 23, 24]
-        # layerwise_point_conv_attn_mix_weights are not specified. So use the default value 0.5.
-        # Here layerwise_point_conv_attn_mix_weights is a list of scalars, not a learnable tensor.
-        if layerwise_point_conv_attn_mix_weights is None:
+        # conv_attn_layerwise_scales are not specified. So use the default value 0.5.
+        # Here conv_attn_layerwise_scales is a list of scalars, not a learnable tensor.
+        if conv_attn_layerwise_scales is None:
             # 1, 2, 4, 5, 7, 8           feature maps: 64, 64, 32, 32, 16, 16.
             # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
             # 12, 16, 17, 18, 19, 20, 21 feature maps: 8, 16, 16, 16, 32, 32, 32.
@@ -981,16 +981,14 @@ class UNetModel(nn.Module):
             # 22, 23, 24                 feature maps: 64, 64, 64.
             # 13~15 (22, 23, 24):                           weight 0.5. #0.8.
             # This setting is based on the empirical observations of 
-            # the learned layerwise_point_conv_attn_mix_weights.      
-            layerwise_point_conv_attn_mix_weights =   [0.5]   * 6 \
-                                                    + [0.5]   * 7 \
-                                                    + [0.5]   * 3
+            # the learned conv_attn_layerwise_scales.      
+            conv_attn_layerwise_scales = [1] * 16
 
         ca_flags_stack = []
         old_ca_flags, _ = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn': use_conv_attn,
-                                                          'point_conv_attn_mix_weight:layerwise': \
-                                                           layerwise_point_conv_attn_mix_weights },
+                                                          'conv_attn_layer_scale:layerwise': \
+                                                           conv_attn_layerwise_scales },
                                        ca_layer_indices = ca_flag_layer_indices )
             
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).
