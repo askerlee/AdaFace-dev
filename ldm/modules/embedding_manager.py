@@ -1045,7 +1045,7 @@ class EmbeddingManager(nn.Module):
         self.text_embedder  = text_embedder
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_token_indices_cache = {}
-        self.iter_type = None
+        self.iter_type = None       # 'recon_iter' or 'distill_iter'
         self.set_use_specialized_comp_embs(use_specialized_comp_embs)
         self.fg_selective_grad_scale  = 0.5
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
