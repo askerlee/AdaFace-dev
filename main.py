@@ -252,6 +252,11 @@ def get_parser(**parser_kwargs):
         type=float, default=-1,
         help="Prompt delta regularization weight")
 
+    # --padding_embs_align_loss_weight_base
+    parser.add_argument("--padding_embs_align_loss_weight_base",
+        type=float, default=-1,
+        help="Weight base of the padding embeddings alignment loss")
+    
     parser.add_argument("--rand_scale_range",
                         type=float, nargs=2, 
                         default=[0.7, 1.0],
@@ -273,7 +278,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
 
-    # --wds_comp_db_path
     parser.add_argument("--wds_comp_db_path", type=str, default=None,
                         help="Path to the composition webdatabase .tar file")
     parser.add_argument("--wds_background_string", 
@@ -822,6 +826,9 @@ if __name__ == "__main__":
         if opt.prompt_emb_delta_reg_weight >= 0:
             config.model.params.prompt_emb_delta_reg_weight = opt.prompt_emb_delta_reg_weight
 
+        if opt.padding_embs_align_loss_weight_base >= 0:
+            config.model.params.padding_embs_align_loss_weight_base = opt.padding_embs_align_loss_weight_base
+            
         if opt.lr > 0:
             config.model.base_learning_rate = opt.lr
 

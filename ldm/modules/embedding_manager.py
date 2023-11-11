@@ -849,7 +849,7 @@ class EmbeddingManager(nn.Module):
             emb_ema_as_pooling_probe_weight=0,
             use_specialized_comp_embs=False,
             attn_postmix_weight=0.,
-            training_add_noise_range=None,
+            training_add_noise_std_range=None,
             training_add_noise_prob=None,
             **kwargs
     ):
@@ -881,7 +881,7 @@ class EmbeddingManager(nn.Module):
         self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
         self.initialize_conv_attn_layerwise_scales(1, learnable=True)
         
-        self.set_training_add_noise_range(training_add_noise_range, training_add_noise_prob)
+        self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
 
@@ -1188,9 +1188,9 @@ class EmbeddingManager(nn.Module):
                 else:
                     subj_static_embedding_k_gs = subj_static_embedding_k
 
-                if self.training and self.training_add_noise_range is not None:
+                if self.training and self.training_add_noise_std_range is not None:
                     subj_static_embedding_k_gs = add_noise_to_embedding(subj_static_embedding_k_gs, 
-                                                                        self.training_add_noise_range,
+                                                                        self.training_add_noise_std_range,
                                                                         self.training_add_noise_prob[self.iter_type])
                     
                 embedded_text[placeholder_indices_k] = subj_static_embedding_k_gs.repeat(REAL_OCCURS_IN_BATCH, 1)
@@ -1364,9 +1364,9 @@ class EmbeddingManager(nn.Module):
                 else:
                     subj_ada_embedding_k_gs = subj_ada_embedding_k
 
-                if self.training and self.training_add_noise_range is not None:
+                if self.training and self.training_add_noise_std_range is not None:
                     subj_ada_embedding_k_gs = add_noise_to_embedding(subj_ada_embedding_k_gs, 
-                                                                     self.training_add_noise_range,
+                                                                     self.training_add_noise_std_range,
                                                                      self.training_add_noise_prob[self.iter_type])
                     
                 embedded_text[placeholder_indices_k] = subj_ada_embedding_k_gs
@@ -1604,13 +1604,13 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight = self.ada_emb_weight        
         return ada_emb_weight
  
-    def set_training_add_noise_range(self, training_add_noise_range, training_add_noise_prob):
-        self.training_add_noise_range = training_add_noise_range
-        self.training_add_noise_prob  = training_add_noise_prob
-        if training_add_noise_range is None:
+    def set_training_add_noise_specs(self, training_add_noise_std_range, training_add_noise_prob):
+        self.training_add_noise_std_range = training_add_noise_std_range
+        self.training_add_noise_prob      = training_add_noise_prob
+        if training_add_noise_std_range is None:
             print(f"Disable training_add_noise")
         else:
-            print(f"training_add_noise_range = {training_add_noise_range} with prob = {training_add_noise_prob}")
+            print(f"training_add_noise_std_range = {training_add_noise_std_range} with prob = {training_add_noise_prob}")
 
     def initialize_conv_attn_layerwise_scales(self, default_conv_attn_scale=1, 
                                               conv_attn_layerwise_scales=None,
