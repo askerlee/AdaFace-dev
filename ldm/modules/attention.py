@@ -171,7 +171,7 @@ class CrossAttention(nn.Module):
         self.use_conv_attn = False
         self.infeat_size   = None
         self.conv_attn_layer_scale = 1.0
-        self.normalize_subj_attn = True
+        self.normalize_subj_attn = False
         
     def forward(self, x, context=None, mask=None):
         h = self.heads
