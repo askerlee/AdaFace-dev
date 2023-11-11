@@ -191,9 +191,9 @@ class CrossAttention(nn.Module):
             # Don't do conv attn if uncond is active.
             layer_attn_components = { 'x': x, 'q': q, 'to_k': self.to_k, 
                                       'infeat_size': self.infeat_size, 'scale': self.scale }
-            context, subj_indices, bg_indices = context(layer_attn_components)
+            context, subj_indices = context(layer_attn_components)
         else:
-            subj_indices = bg_indices = None
+            subj_indices = None
 
         if type(context) == tuple:
             v_context, k_context  = context
@@ -221,11 +221,8 @@ class CrossAttention(nn.Module):
             sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, h, self.scale,
                                             self.conv_attn_layer_scale, conv_attn_mix_weight=1)
 
-        if context_provided and self.normalize_subj_attn:
-            if subj_indices is not None:
-                sim = normalize_attn_at_indices(sim, subj_indices, h)
-            if bg_indices is not None:
-                sim = normalize_attn_at_indices(sim, bg_indices, h)
+        if context_provided and self.normalize_subj_attn and subj_indices is not None:
+            sim = normalize_attn_at_indices(sim, subj_indices, h)
             
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].

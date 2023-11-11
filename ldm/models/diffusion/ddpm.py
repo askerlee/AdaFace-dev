@@ -2552,8 +2552,9 @@ class LatentDiffusion(DDPM):
                         emb_man_img_mask = None
                     else:
                         emb_man_img_mask = img_mask
+
                     emb_man_volatile_ds = { 'subj_indices':   extra_info['subj_indices_2b'],
-                                            'bg_indices':     extra_info['bg_indices_2b'],
+                                            'bg_indices':     extra_info['bg_indices'],
                                             'img_mask':       emb_man_img_mask }              
                     # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
                     # on mix reg and ada embeddings is generated for the delta loss. 
@@ -2689,6 +2690,7 @@ class LatentDiffusion(DDPM):
             if self.padding_embs_align_loss_weight_base >= 0:
                 if self.iter_flags['do_normal_recon']:
                     subj_indices        = extra_info['subj_indices_1b']
+                    bg_indices          = extra_info['bg_indices_1b']
                     # c_static_emb_1b is generated from batch['captions']. 
                     # Do not use c_static_emb_4b, which corresponds to the 4-type prompts.
                     static_embeddings   = extra_info['c_static_emb_1b']
@@ -2702,6 +2704,8 @@ class LatentDiffusion(DDPM):
                 else:
                     # Both static_embeddings and ada_embeddings are 4-type embeddings.
                     subj_indices        = extra_info['subj_indices_2b']
+                    # Occasionally, bg tokens also appear in the mix prompts.
+                    bg_indices          = extra_info['bg_indices']
                     static_embeddings   = extra_info['c_static_emb_4b']
                     # BLOCK_SIZE = 1, SSB_SIZE = 2.
                     SSB_SIZE = 2 * BLOCK_SIZE
@@ -2709,7 +2713,7 @@ class LatentDiffusion(DDPM):
                 loss_padding_subj_embs_align, loss_padding_cls_embs_align = \
                     self.calc_padding_embs_align_loss(static_embeddings, ada_embeddings,
                                                       extra_info['prompt_emb_mask'],
-                                                      subj_indices, SSB_SIZE, 
+                                                      subj_indices, bg_indices, SSB_SIZE, 
                                                       self.iter_flags['is_compos_iter'])
 
                 if loss_padding_subj_embs_align != 0:
@@ -3897,7 +3901,7 @@ class LatentDiffusion(DDPM):
     # If is_compos_iter, then subject sub-batch size SSB_SIZE = 2 * BLOCK_SIZE. 
     # (subj-single and subj-comp instances).
     def calc_padding_embs_align_loss(self, static_prompt_embeddings, ada_embeddings, 
-                                     prompt_emb_mask, subj_indices, 
+                                     prompt_emb_mask, subj_indices, bg_indices,
                                      SSB_SIZE, is_compos_iter):
         # If do_normal_recon:
         # static_prompt_embeddings: [8, 16, 77, 768].
@@ -3920,6 +3924,10 @@ class LatentDiffusion(DDPM):
         # "start" token always receives the highest attention, which is the normal behavior.
         # So we exclude the "start" token from the align padding loss.
         padding_mask[:, 0] = 0
+        # Treat background tokens as padding tokens, to reduce them from 
+        # stealing semantics from the subject tokens.
+        if bg_indices is not None:
+            padding_mask[bg_indices] = 1
         # padding_mask: [2/4, 77, 1] => [2/4, 77]
         padding_mask = padding_mask.squeeze(-1)
         subj_padding_indices = padding_mask[:SSB_SIZE].nonzero(as_tuple=True)
