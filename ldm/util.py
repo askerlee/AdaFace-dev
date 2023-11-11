@@ -748,7 +748,8 @@ def normalize_attn_at_indices(attn_mat, subj_indices, H, shift_n_sigma=1):
     subj_indices_B, subj_indices_N = subj_indices
     # subj_attn: [B*M, 8, 4096].
     subj_attn = attn_mat[subj_indices_B, :, :, subj_indices_N]
-    subj_attn2 = subj_attn.clone()
+    dtype = subj_attn.dtype
+    subj_attn2 = subj_attn.clone().float()
 
     quantiles = [0.8, 0.6, 0.4]
     step_scale = 0.7
@@ -764,7 +765,7 @@ def normalize_attn_at_indices(attn_mat, subj_indices, H, shift_n_sigma=1):
         subj_attn2[(subj_attn < quant_value) & (subj_attn >= 0)] *= step_scale
 
     attn_mat2 = attn_mat.clone()
-    attn_mat2[subj_indices_B, :, :, subj_indices_N] = subj_attn2    
+    attn_mat2[subj_indices_B, :, :, subj_indices_N] = subj_attn2.to(dtype)   
     return attn_mat2.reshape(attn_mat_shape)
 
 # Distribute an embedding to M positions, each with sqrt(M) fraction of the original embedding.
