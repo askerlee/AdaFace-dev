@@ -2056,12 +2056,12 @@ class LatentDiffusion(DDPM):
                         fg_mask_percent = filtered_fg_mask.float().sum() / filtered_fg_mask.numel()
                         # print(fg_mask_percent)
                         if fg_mask_percent > 0.1:
-                            # fg areas are quite large. Scale down the fg area to 40%-70% of 
-                            # the original size, to avoid it dominating the whole image.
+                            # fg areas are quite large (>= 1/10 of the whole image). 
+                            # Scale down the fg area to 40%-70% of the original size, to avoid it dominating the whole image.
                             fg_rand_scale = np.random.uniform(0.4, 0.7)
                         else:
-                            # fg areas are small. Scale up the fg area to 50%-100% of the original size.
-                            fg_rand_scale = np.random.uniform(0.6, 1.0)
+                            # fg areas are small. Scale the fg area to 60%-100% of the original size.
+                            fg_rand_scale = np.random.uniform(0.7, 1.0)
 
                         # Resize x_start_origsize and filtered_fg_mask by rand_scale. They have different numbers of channels,
                         # so we need to concatenate them at dim 1, and then resize.
@@ -2080,10 +2080,13 @@ class LatentDiffusion(DDPM):
                         # Unpack x_start and filtered_fg_mask from x_mask_scaled_padded.
                         x_start_scaled_padded, filtered_fg_mask = x_mask_scaled_padded[:, :4], x_mask_scaled_padded[:, 4:]
 
+                        # In filtered_fg_mask, the padded areas are filled with 0. 
+                        # So these pixels always take values from the random tensor.
                         x_start = torch.where(filtered_fg_mask.bool(), x_start_scaled_padded, torch.randn_like(x_start))
-                        # Gradually increase the noise amount from 0.25 to 0.5.
-                        fg_noise_amount = rand_annealed(self.training_percent, final_percent=1, mean_range=(0.25, 0.5))
-                        # At foreground, keep 50% of the original x_start values and add 50% noise. 
+                        # Gradually increase the fg area's noise amount from 0.2 to 0.6.
+                        fg_noise_amount = rand_annealed(self.training_percent, final_percent=1, mean_range=(0.2, 0.6))
+                        # At the fg area, keep 80% (beginning of training) ~ 40% (end of training) 
+                        # of the original x_start values and add 20% ~ 60% of noise. 
                         x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
                     # Otherwise it's use_wds_comp, then x_start is kept intact (the noisy wds overlay images).
 
