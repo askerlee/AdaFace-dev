@@ -827,14 +827,15 @@ class LatentDiffusion(DDPM):
                 if randomize_clip_weights:
                     self.cond_stage_model.sample_last_layers_skip_weights()
 
-                # c: [128, 77, 768]
-                c = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
-                # c is tensor. So the following statement is False.
-                if isinstance(c, DiagonalGaussianDistribution):
-                    c = c.mode()
+                # static_embeddings: [128, 77, 768]
+                static_embeddings = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
+                # static_embeddings is tensor. So the following statement is False.
+                if isinstance(static_embeddings, DiagonalGaussianDistribution):
+                    static_embeddings = static_embeddings.mode()
                 
-                c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_fg, num_layers=self.N_LAYERS)
-                # c = fix_emb_scales(c, self.embedding_manager.placeholder_indices_bg, num_layers=self.N_LAYERS)
+                # Fix the scales of the static subject embeddings.
+                static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_fg, num_layers=self.N_LAYERS)
+                # static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_bg, num_layers=self.N_LAYERS)
                 # conv_attn_layerwise_scales: a list of 16 tensor scalars, 
                 # used to scale conv attention at each CA layer.
                 conv_attn_layerwise_scales = self.embedding_manager.get_conv_attn_layerwise_scales()
@@ -862,7 +863,7 @@ class LatentDiffusion(DDPM):
                     self.embedding_manager.clear_ada_prompt_embeddings_cache()
                     extra_info['ada_embedder'] = ada_embedder
 
-                c = (c, cond_in, extra_info)
+                c = (static_embeddings, cond_in, extra_info)
             else:
                 c = self.cond_stage_model(cond_in)
         else:
@@ -883,8 +884,8 @@ class LatentDiffusion(DDPM):
         # CLIP skip weights consistent with the static embeddings.
         ada_embedded_text = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         emb_global_scale  = self.embedding_manager.get_emb_global_scale()
-        # ada embeddings and static embeddings are scale-fixed separately.
-        # static embeddings are scale-fixed in get_learned_conditioning().
+        # The scales of ada embeddings are fixed here.
+        # The scales of static subject embeddings are fixed in get_learned_conditioning().
         ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_fg, 
                                            extra_scale=emb_global_scale)
         
