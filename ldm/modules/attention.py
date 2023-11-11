@@ -6,7 +6,7 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn
+from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices
 
 def exists(val):
     return val is not None
@@ -171,6 +171,7 @@ class CrossAttention(nn.Module):
         self.use_conv_attn = False
         self.infeat_size   = None
         self.conv_attn_layer_scale = 1.0
+        self.normalize_subj_attn = True
         
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -220,6 +221,9 @@ class CrossAttention(nn.Module):
             sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, h, self.scale,
                                             self.conv_attn_layer_scale, conv_attn_mix_weight=1)
 
+        if context_provided and self.normalize_subj_attn and subj_indices is not None:
+            sim = normalize_attn_at_indices(sim, subj_indices, h)
+            
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].
         # img_mask should only be provided and applied if not context_provided. 

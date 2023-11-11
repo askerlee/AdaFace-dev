@@ -275,7 +275,12 @@ def parse_args():
     parser.add_argument("--use_conv_attn",
                         action="store_true", 
                         help="Use convolutional attention at subject tokens")
-
+    # If normalize_subj_attn is not specified, then use the 'normalize_subj_attn' in the checkpoint.
+    # If 'normalize_subj_attn' doesn't exist in the checkpoint, then normalize_subj_attn is False.
+    parser.add_argument("--normalize_subj_attn", type=str2bool, nargs="?", 
+                        const=True, default=argparse.SUPPRESS,
+                        help="Whether to normalize the subject embedding attention scores")
+    
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
@@ -411,6 +416,11 @@ def main(opt):
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
         if opt.background_string is not None:
             model.embedding_manager.background_strings = [opt.background_string]
+
+        # command line --normalize_subj_attn overrides the checkpoint.
+        if hasattr(opt, 'normalize_subj_attn') and opt.normalize_subj_attn != model.embedding_manager.normalize_subj_attn:
+            print(f"Override normalize_subj_attn in checkpoint ({model.embedding_manager.normalize_subj_attn} or absent) with {opt.normalize_subj_attn}")
+            model.embedding_manager.normalize_subj_attn = opt.normalize_subj_attn
 
         device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
         model  = model.to(device)

@@ -619,8 +619,15 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
         
     padder = nn.ZeroPad2d(pads)
 
+    # Traversed delta x: {0, 1} (ks=2) or {-1, 0, 1} (ks=3)
+    # Add 1 to the upper bound to make the range inclusive.
+    delta_x_bound = (-pads[0], pads[1] + 1)
+    # Traversed delta y: {0, 1} (ks=2) or {-1, 0, 1} (ks=3).
+    # Add 1 to the upper bound to make the range inclusive.
+    delta_y_bound = (-pads[2], pads[3] + 1)
+
     # Clone to make attn_mat2 a non-leaf node. Otherwise, 
-    # we can't do in-place assignment like attn_mat[indices_b, :, :, indices_n] = subj_attn_allembs.
+    # we can't do in-place assignment like attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.    
     attn_mat2 = attn_mat.clone()
     # Scale down conv attn scores by NORM. It's not M since the attention scores of different embeddings 
     # tend to cancel each other a little bit, so the sum of the attn scores is smaller than M * pointwise attn score.
@@ -628,6 +635,8 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
     NORM = M ** 0.75
 
     for b in range(BS):
+        subj_attn_dxys = []
+
         index_b = indices_B_uniq[b]
         # inst_q: [8, 4096, 40].
         inst_q = q[index_b]
@@ -667,14 +676,56 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
         # Note to scale attention scores by sim_scale, and further divide by NORM = M ** 0.75.
         subj_attn = subj_attn * sim_scale * conv_attn_layer_scale / NORM
 
+        # Shift subj_attn (with 0 padding) to yield ks*ks slightly different attention maps 
+        # for the M embeddings.
+        # dx, dy: the relative position of a subject token to the center subject token.
+        # dx: shift along rows    (width,  the last dim). 
+        # dy: shift along columns (height, the second-last dim).
+        # s1, s2, s3, s4 => s1 s2
+        #                   s3 s4
+        # Since the first  loop is over dy (vertical move,   or move within a column), 
+        # and   the second loop is over dx (horizontal move, or move within a row), 
+        # the traversed order is s1, s2, s3, s4.
+        # NOTE: This order should be consistent with how subj_k is reshaped to the conv weight. 
+        # Otherwise wrong attn maps will be assigend to some of the subject embeddings.
+        for dy in range(*delta_y_bound):
+            for dx in range(*delta_x_bound):
+                if dx == 0 and dy == 0:
+                    subj_attn_dxy = subj_attn
+                elif dx <= 0 and dy <= 0:
+                    subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, -dx:], (0, -dx, 0, -dy), value=0)
+                elif dx <= 0 and dy > 0:
+                    subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, -dx:], (0, -dx, dy, 0), value=0)
+                elif dx > 0 and dy <= 0:
+                    subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, :-dx], (dx, 0,  0, -dy), value=0)
+                else:
+                    # dx > 0 and dy > 0
+                    subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, :-dx], (dx, 0,  dy, 0), value=0)
+
+                # subj_attn_dxy: [1, 8, 64, 64].
+                # Since first loop is over dy (each loop forms a column in the feature maps), 
+                # and   second loop   over dx (each loop forms a row    in the feature maps), 
+                # the order in subj_attn_dxys is s1, s2, s3, s4.
+                subj_attn_dxys.append(subj_attn_dxy)
+
+        # dx, dy: the relative position of a subject token to the center subject token.
+        # s1, s2, s3, s4 => s1 s2
+        #                   s3 s4
+        # The traversed order is s1, s2, s3, s4. So we can flatten the list to get 
+        # consecutive 4 columns of attention. 
+        # subj_attn_dxys: [4, 8, 64, 64] => [4, 8, 4096].
+        subj_attn_dxys = torch.cat(subj_attn_dxys, dim=0).reshape(M, H, -1)
+
+        '''
         # All subject embeddings receive the same attention matrix.
         # subj_attn_allembs: [1, 8, 64, 64] => [4, 8, 64, 64] => [4, 8, 4096], [M, H, N].
         subj_attn_allembs = subj_attn.repeat(M, 1, 1, 1).reshape(M, H, -1)
+        '''
 
         debug = False
         if debug:
             calc_and_print_stats(attn_mat[indices_b, :, :, indices_n], "pointwise attn")
-            calc_and_print_stats(subj_attn_allembs, "conv attn")
+            calc_and_print_stats(subj_attn_dxys, "conv attn")
 
         # attn_mat2: [4, 8, 4096, 77], [B, H, N, T].
         # B: the whole batch (>=BS). H: number of heads. 
@@ -684,11 +735,38 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
         # Linearly combine the old (pointwise) and conv attn scores. Since conv_attn_mix_weight=1,
         # the pointwise attn scores are disabled.
         attn_mat2[indices_b, :, :, indices_n] = attn_mat[indices_b, :, :, indices_n] * (1 - conv_attn_mix_weight) \
-                                                + subj_attn_allembs * conv_attn_mix_weight
+                                                + subj_attn_dxys * conv_attn_mix_weight
 
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)
 
+def normalize_attn_at_indices(attn_mat, subj_indices, H, shift_n_sigma=1):
+    # attn_mat: [32, 4096, 77]. 32: B * H. B = 4, H = 8.
+    attn_mat_shape = attn_mat.shape
+    # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77]. 32: B * H.
+    attn_mat = attn_mat.reshape(-1, H, *attn_mat.shape[1:])
+    subj_indices_B, subj_indices_N = subj_indices
+    # subj_attn: [B*M, 8, 4096].
+    subj_attn = attn_mat[subj_indices_B, :, :, subj_indices_N]
+    subj_attn2 = subj_attn.clone()
+
+    quantiles = [0.8, 0.6, 0.4]
+    step_scale = 0.7
+
+    for quantile in quantiles:
+        # quantile() is computed on the last dim (4096).
+        quant_value = torch.quantile(subj_attn, quantile, dim=2, keepdim=True)
+        # If 0    < v < 0.4q,   then v *= 0.7 ^ 3 = 0.343.
+        # If 0.4q < v < 0.6q,   then v *= 0.7 ^ 2 = 0.49.
+        # If 0.6q < v < 0.8q,   then v *= 0.7.
+        # If v > 0.8q or v < 0, then v *= 1.
+        # Don't change negative values, as scaling them will make them larger.
+        subj_attn2[(subj_attn < quant_value) & (subj_attn >= 0)] *= step_scale
+
+    attn_mat2 = attn_mat.clone()
+    attn_mat2[subj_indices_B, :, :, subj_indices_N] = subj_attn2
+
+    return attn_mat2.reshape(attn_mat_shape)
 # Distribute an embedding to M positions, each with sqrt(M) fraction of the original embedding.
 # text_embedding: [B, N, D]
 def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):

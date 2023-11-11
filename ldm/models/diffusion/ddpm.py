@@ -852,6 +852,7 @@ class LatentDiffusion(DDPM):
                                 'bg_indices':            copy.copy(self.embedding_manager.placeholder_indices_bg),
                                 'prompt_emb_mask':       copy.copy(self.embedding_manager.prompt_emb_mask),
                                 'conv_attn_layerwise_scales':  conv_attn_layerwise_scales,
+                                'normalize_subj_attn':   self.embedding_manager.normalize_subj_attn,
                              }
                 
                 if self.use_ada_embedding:
@@ -3106,7 +3107,7 @@ class LatentDiffusion(DDPM):
                 = subj_attn_4b.chunk(4)
 
             comp_attn_score_mat_2b = sel_emb_attns_by_indices(attn_score_mat, comp_extra_indices_13b, 
-                                                        do_sum=False, do_sqrt_norm=False)
+                                                              do_sum=False, do_sqrt_norm=False)
             subj_comp_comp_attn, mix_comp_comp_attn = comp_attn_score_mat_2b.chunk(2)
 
             if unet_layer_idx in attn_norm_distill_layer_weights:
@@ -3798,7 +3799,7 @@ class LatentDiffusion(DDPM):
             fg_feat_mask_4b = resize_mask_for_feat_or_attn(unet_feat, fg_mask_4b, "fg_mask_4b", 
                                                            mode="nearest|bilinear", warn_on_all_zero=False)
 
-            # Mask out the background features, and only keep the foreground features.
+            # Only keep the foreground features, and mask out the background features (setting to 0).
             fg_feat = unet_feat * fg_feat_mask_4b
             # each is [1, 1280, 16, 16]
             subj_single_fg_feat, subj_comp_fg_feat, mix_single_fg_feat, mix_comp_fg_feat \

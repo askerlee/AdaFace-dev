@@ -511,6 +511,7 @@ class UNetModel(nn.Module):
                             'use_conv_attn':                            False,
                             'conv_attn_layer_scale:layerwise':          None,
                             'save_attn_vars':                           False,
+                            'normalize_subj_attn':                      False,
                            }
 
         time_embed_dim = model_channels * 4
@@ -839,6 +840,7 @@ class UNetModel(nn.Module):
         use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
         conv_attn_layerwise_scales   = extra_info.get('conv_attn_layerwise_scales', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
+        normalize_subj_attn   = extra_info.get('normalize_subj_attn', False)   if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
         emb_k_mixer           = extra_info.get('emb_k_mixer', None)            if extra_info is not None else None
@@ -988,7 +990,8 @@ class UNetModel(nn.Module):
         old_ca_flags, _ = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn': use_conv_attn,
                                                           'conv_attn_layer_scale:layerwise': \
-                                                           conv_attn_layerwise_scales },
+                                                           conv_attn_layerwise_scales,
+                                                          'normalize_subj_attn': normalize_subj_attn, },
                                        ca_layer_indices = ca_flag_layer_indices )
             
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).

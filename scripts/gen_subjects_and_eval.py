@@ -44,6 +44,10 @@ def parse_args():
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
+    parser.add_argument("--normalize_subj_attn", type=str2bool, nargs="?", 
+                        const=True, default=argparse.SUPPRESS,
+                        help="Whether to normalize the subject embedding attention scores")
+        
     parser.add_argument("--use_specialized_comp_embs",
                         type=str2bool, const=True, nargs="?", default=argparse.SUPPRESS,
                         help="Use specialized subject embeddings for composition")
@@ -449,6 +453,12 @@ if __name__ == "__main__":
 
         if hasattr(args, 'emb_ema_as_pooling_probe'):
             command_line += f" --emb_ema_as_pooling_probe"
+        if hasattr(args, 'normalize_subj_attn'):
+            if args.normalize_subj_attn:
+                command_line += f" --normalize_subj_attn"
+            else:
+                command_line += f" --normalize_subj_attn 0"
+                            
         if hasattr(args, 'use_specialized_comp_embs'):
             command_line += f" --use_specialized_comp_embs {args.use_specialized_comp_embs}"
         if hasattr(args, 'attn_postmix_weight'):

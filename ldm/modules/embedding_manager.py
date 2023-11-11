@@ -851,6 +851,7 @@ class EmbeddingManager(nn.Module):
             attn_postmix_weight=0.,
             training_add_noise_std_range=None,
             training_add_noise_prob=None,
+            normalize_subj_attn=False,
             **kwargs
     ):
         super().__init__()
@@ -882,6 +883,7 @@ class EmbeddingManager(nn.Module):
         self.initialize_conv_attn_layerwise_scales(1, learnable=True)
         
         self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
+        self.set_normalize_subj_attn(normalize_subj_attn)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
 
@@ -1655,6 +1657,10 @@ class EmbeddingManager(nn.Module):
         self.use_specialized_comp_embs = use_specialized_comp_embs
         print(f"Setting use_specialized_comp_embs = {use_specialized_comp_embs}")
 
+    def set_normalize_subj_attn(self, normalize_subj_attn):
+        self.normalize_subj_attn = normalize_subj_attn
+        print(f"Setting normalize_subj_attn = {normalize_subj_attn}")
+
     def initialize_attn_postmix_components(self, attn_postmix_weight, 
                                             postmix_attn_layer=None, 
                                             postmix_attn_LN=None):
@@ -1836,6 +1842,7 @@ class EmbeddingManager(nn.Module):
                      "postmix_attn_layer":              self.postmix_attn_layer,
                      "postmix_attn_LN":                 self.postmix_attn_LN,
                      "use_specialized_comp_embs":       self.use_specialized_comp_embs,
+                     "normalize_subj_attn":             self.normalize_subj_attn,
                    }, 
                     ckpt_path)
 
@@ -1888,7 +1895,9 @@ class EmbeddingManager(nn.Module):
             
             if "use_specialized_comp_embs" in ckpt:
                 self.set_use_specialized_comp_embs(ckpt["use_specialized_comp_embs"])
-                
+            if "normalize_subj_attn" in ckpt:
+                self.set_normalize_subj_attn(ckpt["normalize_subj_attn"])
+                                
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
                     k2 = placeholder_mapper[k]
