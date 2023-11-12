@@ -273,12 +273,17 @@ def parse_args():
                         type=int, default=argparse.SUPPRESS,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
     parser.add_argument("--use_conv_attn_kernel_size",
-                        type=int, default=-1,
-                        help="Use convolutional attention of subject tokens with this kernel size")
+                        type=int, default=None,
+                        help="Use convolutional attention of subject tokens with this kernel size."
+                             "Default: None, not specified.")
+    
     parser.add_argument("--attn_copycat_emb_range",
-                        type=int, nargs=2, default=[-1, -1],
+                        type=int, nargs=2, default=None,
                         help="Range of embedding indices to be used as copycat attention. "
                             "Default [-1, -1]: not specified.")
+    parser.add_argument("--copy_fg_attn_to_bg",
+                        action="store_true", 
+                        help="Whether to copy the foreground attention to the background tokens.")
         
     # If normalize_subj_attn is not specified, then use the 'normalize_subj_attn' in the checkpoint.
     # If 'normalize_subj_attn' doesn't exist in the checkpoint, then normalize_subj_attn is False.
@@ -408,13 +413,14 @@ def main(opt):
         if hasattr(opt, 'attn_postmix_weight'):
             model.embedding_manager.initialize_attn_postmix_components(opt.attn_postmix_weight)
 
-        if opt.use_conv_attn_kernel_size > 0:
+        if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
             K = opt.use_conv_attn_kernel_size
             assert opt.num_vectors_per_token >= K * K, \
                     f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
             
-            model.embedding_manager.set_embs_attn_specs(opt.use_conv_attn_kernel_size, 
-                                                        opt.attn_copycat_emb_range)
+        model.embedding_manager.set_embs_attn_specs(opt.use_conv_attn_kernel_size, 
+                                                    opt.attn_copycat_emb_range,
+                                                    opt.copy_fg_attn_to_bg)
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight

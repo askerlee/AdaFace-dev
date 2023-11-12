@@ -6,7 +6,8 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices, replace_rows_of_copycat_embs
+from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices, \
+                     replace_rows_of_copycat_emb, copy_fg_attn_to_bg_in_attn_mat
 
 def exists(val):
     return val is not None
@@ -173,6 +174,7 @@ class CrossAttention(nn.Module):
         self.conv_attn_layer_scale  = 1.0
         self.normalize_subj_attn    = False
         self.attn_copycat_emb_range = None
+        self.copy_fg_attn_to_bg     = False
 
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -192,9 +194,9 @@ class CrossAttention(nn.Module):
             # Don't do conv attn if uncond is active.
             layer_attn_components = { 'x': x, 'q': q, 'to_k': self.to_k, 
                                       'infeat_size': self.infeat_size, 'scale': self.scale }
-            context, subj_indices = context(layer_attn_components)
+            context, subj_indices, bg_indices = context(layer_attn_components)
         else:
-            subj_indices = None
+            subj_indices = bg_indices = None
 
         if type(context) == tuple:
             v_context, k_context  = context
@@ -225,8 +227,11 @@ class CrossAttention(nn.Module):
                                                 conv_attn_mix_weight=1)
 
             if self.attn_copycat_emb_range is not None:
-                sim = replace_rows_of_copycat_embs(sim, subj_indices, self.attn_copycat_emb_range, h)
-                
+                sim = replace_rows_of_copycat_emb(sim, subj_indices, self.attn_copycat_emb_range, h)
+            
+            if self.copy_fg_attn_to_bg and bg_indices is not None:
+                sim = copy_fg_attn_to_bg_in_attn_mat(sim, subj_indices, bg_indices, h)
+
             if self.normalize_subj_attn:
                 sim = normalize_attn_at_indices(sim, subj_indices, h)
             

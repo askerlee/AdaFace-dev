@@ -587,10 +587,10 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_at
     attn_mat_shape = attn_mat.shape
 
     indices_B, indices_N = subj_indices
-    indices_B_uniq = torch.unique(indices_B)
+    subj_indices_B_uniq = torch.unique(indices_B)
     # BS: sub-batch size that contains the subject token. 
     # Probably BS < the full batch size.
-    BS = len(indices_B_uniq)
+    BS = len(subj_indices_B_uniq)
     # M: number of embeddings for each subject token.
     M  = len(indices_N) // BS
     # ks: conv kernel size. ks**2 <= M.
@@ -641,7 +641,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_at
     for b in range(BS):
         subj_attn_dxys = []
 
-        index_b = indices_B_uniq[b]
+        index_b = subj_indices_B_uniq[b]
         # inst_q: [8, 4096, 40].
         inst_q = q[index_b]
         # inst_q_4d: [8, 4096, 40] => [8, 40, 4096] => [1, 320, 64, 64]
@@ -752,10 +752,10 @@ def replace_rows_of_copycat_embs(attn_mat, subj_indices, attn_copycat_emb_range,
     # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77]. 32: B * H.
     attn_mat = attn_mat.reshape(-1, H, *attn_mat.shape[1:])
     subj_indices_B, subj_indices_N = subj_indices
-    indices_B_uniq = torch.unique(subj_indices_B)
+    subj_indices_B_uniq = torch.unique(subj_indices_B)
     # BS: sub-batch size that contains the subject token. 
     # Probably BS < the full batch size.
-    BS = len(indices_B_uniq)
+    BS = len(subj_indices_B_uniq)
     # M: number of embeddings for each subject token.
     M  = len(subj_indices_B) // BS
     # subj_attn: [BS*M, 8, 4096] -> [BS, M, 8, 4096]
@@ -775,6 +775,41 @@ def replace_rows_of_copycat_embs(attn_mat, subj_indices, attn_copycat_emb_range,
     attn_mat2 = attn_mat.clone()
     attn_mat2[subj_indices_B, :, :, subj_indices_N] = subj_attn2.reshape(BS * M, H, -1)
     
+    return attn_mat2.reshape(attn_mat_shape)
+
+def copy_fg_attn_to_bg_in_attn_mat(attn_mat, subj_indices, bg_indices, H):
+    # attn_mat: [32, 4096, 77]. 32: B * H. B = 4, H = 8.
+    attn_mat_shape = attn_mat.shape
+    # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77]. 32: B * H.
+    attn_mat = attn_mat.reshape(-1, H, *attn_mat.shape[1:])
+    # subj_indices_by_instance: { 0: [4, ..., 11], 1: [5, ..., 12] }
+    subj_indices_by_instance = split_indices_by_instance(subj_indices, as_dict=True)
+    # BS: sub-batch size that contains the subject token. 
+    # Probably BS < the full batch size.
+    BS = len(subj_indices_by_instance)
+    # M_fg: number of embeddings for each subject token.
+    M_fg  = len(list(subj_indices_by_instance.values())[0])
+
+    # bg_indices_by_instance: { 0: [14, 15, 16, 17], 1: [15, 16, 17, 18] }
+    bg_indices_by_instance = split_indices_by_instance(bg_indices, as_dict=True)
+    # M_bg: number of embeddings for each background token.
+    M_bg = len(list(bg_indices_by_instance.values())[0])
+    assert M_bg <= M_fg, f"M_bg={M_bg} should be <= M_fg={M_fg}, since we copy from fg to bg."
+    attn_mat2 = attn_mat.clone()
+    num_copied_insts = 0
+    
+    for b in subj_indices_by_instance.keys():
+        if b not in bg_indices_by_instance:
+            continue
+        # Copy the FIRST M_bg fg attention rows to the M_bg bg attention rows.
+        subj_indices_b = subj_indices_by_instance[b][:M_bg]
+        # attn_mat: [4, 8, 4096, 77].
+        bg_attn = attn_mat[b, :, :, bg_indices_by_instance[b]]
+        fg_attn = attn_mat[b, :, :, subj_indices_b]
+        attn_mat2[b, :, :, bg_indices_by_instance[b]] = attn_mat[b, :, :, subj_indices_b]
+        num_copied_insts += M_bg
+    # print(f"num_copied_insts: {num_copied_insts}")
+
     return attn_mat2.reshape(attn_mat_shape)
 
 def normalize_attn_at_indices(attn_mat, subj_indices, H):
@@ -1000,10 +1035,13 @@ def halve_token_indices(token_indices):
     token_indices_half_N  = token_indices[1].chunk(2)[0]
     return (token_indices_half_B, token_indices_half_N)
 
-def split_indices_by_instance(indices):
+def split_indices_by_instance(indices, as_dict=False):
     indices_B, indices_N = indices
     unique_indices_B = torch.unique(indices_B)
-    indices_by_instance = [ (indices_B[indices_B == uib], indices_N[indices_B == uib]) for uib in unique_indices_B ]
+    if not as_dict:
+        indices_by_instance = [ (indices_B[indices_B == uib], indices_N[indices_B == uib]) for uib in unique_indices_B ]
+    else:
+        indices_by_instance = { uib.item(): indices_N[indices_B == uib] for uib in unique_indices_B }
     return indices_by_instance
 
 def split_indices_by_block(indices, block_size):

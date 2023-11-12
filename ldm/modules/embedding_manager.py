@@ -853,7 +853,8 @@ class EmbeddingManager(nn.Module):
             training_add_noise_prob=None,
             normalize_subj_attn=False,
             use_conv_attn_kernel_size=-1,
-            attn_copycat_emb_range=None,
+            attn_copycat_emb_range=[-1, -1],
+            copy_fg_attn_to_bg=False,
             **kwargs
     ):
         super().__init__()
@@ -886,7 +887,7 @@ class EmbeddingManager(nn.Module):
         
         self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
         self.set_normalize_subj_attn(normalize_subj_attn)
-        self.set_embs_attn_specs(use_conv_attn_kernel_size, attn_copycat_emb_range)
+        self.set_embs_attn_specs(use_conv_attn_kernel_size, attn_copycat_emb_range, copy_fg_attn_to_bg)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
 
@@ -1666,17 +1667,30 @@ class EmbeddingManager(nn.Module):
 
     # attn_copycat_emb_range = None:     Disabled.
     # attn_copycat_emb_range = [-1, -1]: Not specified (when called from an external caller). 
-    def set_embs_attn_specs(self, use_conv_attn_kernel_size, attn_copycat_emb_range):
-        self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
-        extra_msg = ", DISABLED" if use_conv_attn_kernel_size is -1 else ""
-        print(f"Setting use_conv_attn_kernel_size = {use_conv_attn_kernel_size}{extra_msg}")
+    # copy_fg_attn_to_bg = None:         Not specified.
+    def set_embs_attn_specs(self, use_conv_attn_kernel_size=None, 
+                            attn_copycat_emb_range=None, 
+                            copy_fg_attn_to_bg=None):
+        if use_conv_attn_kernel_size is not None:
+            self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
+            extra_msg = ", DISABLED" if use_conv_attn_kernel_size is -1 else ""
+            print(f"Setting use_conv_attn_kernel_size = {use_conv_attn_kernel_size}{extra_msg}")
+
         # Since attn_copycat_emb_range is not specified, we don't override the existing value.
-        if attn_copycat_emb_range == [-1, -1]:
-            return
-        
-        self.attn_copycat_emb_range    = attn_copycat_emb_range
-        extra_msg = ", DISABLED" if attn_copycat_emb_range is None else ""
-        print(f"Setting attn_copycat_emb_range = {attn_copycat_emb_range}{extra_msg}")
+        if attn_copycat_emb_range is not None:
+            if attn_copycat_emb_range[0] < 0:
+                self.attn_copycat_emb_range    = None
+                extra_msg = ", DISABLED"
+            else:
+                self.attn_copycat_emb_range    = attn_copycat_emb_range
+                extra_msg = ""
+
+            print(f"Setting attn_copycat_emb_range = {attn_copycat_emb_range}{extra_msg}")
+
+        if copy_fg_attn_to_bg is not None:
+            self.copy_fg_attn_to_bg = copy_fg_attn_to_bg
+            extra_msg = ", DISABLED" if copy_fg_attn_to_bg is False else ""
+            print(f"Setting copy_fg_attn_to_bg = {copy_fg_attn_to_bg}{extra_msg}")
 
     def initialize_attn_postmix_components(self, attn_postmix_weight, 
                                             postmix_attn_layer=None, 

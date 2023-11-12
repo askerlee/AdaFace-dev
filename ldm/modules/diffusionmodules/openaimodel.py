@@ -510,6 +510,7 @@ class UNetModel(nn.Module):
         self.backup_vars = { 
                             'use_conv_attn_kernel_size':                -1,
                             'attn_copycat_emb_range':                   None,
+                            'copy_fg_attn_to_bg':                       False,
                             'conv_attn_layer_scale:layerwise':          None,
                             'save_attn_vars':                           False,
                             'normalize_subj_attn':                      False,
@@ -840,8 +841,10 @@ class UNetModel(nn.Module):
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn_kernel_size    = extra_info.get('use_conv_attn_kernel_size',  -1)   if extra_info is not None else -1
         attn_copycat_emb_range       = extra_info.get('attn_copycat_emb_range',     None) if extra_info is not None else None
+        copy_fg_attn_to_bg           = extra_info.get('copy_fg_attn_to_bg',         False) if extra_info is not None else False
         conv_attn_layerwise_scales   = extra_info.get('conv_attn_layerwise_scales', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
+        bg_indices            = extra_info.get('bg_indices', None)             if extra_info is not None else None
         normalize_subj_attn   = extra_info.get('normalize_subj_attn', False)   if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
@@ -969,7 +972,7 @@ class UNetModel(nn.Module):
 
             # subj_indices is passed from extra_info, which was obtained when generating static embeddings.
             # Return subj_indices to cross attention layers for conv attn computation.
-            return layer_context, subj_indices
+            return layer_context, subj_indices, bg_indices
 
         # conv_attn_layerwise_scales are not specified. So use the default value 0.5.
         # Here conv_attn_layerwise_scales is a list of scalars, not a learnable tensor.
@@ -991,6 +994,7 @@ class UNetModel(nn.Module):
         old_ca_flags, _ = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn_kernel_size': use_conv_attn_kernel_size,
                                                           'attn_copycat_emb_range':    attn_copycat_emb_range,
+                                                          'copy_fg_attn_to_bg':        copy_fg_attn_to_bg,
                                                           'conv_attn_layer_scale:layerwise': \
                                                            conv_attn_layerwise_scales,
                                                           'normalize_subj_attn': normalize_subj_attn, },
