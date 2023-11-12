@@ -800,28 +800,34 @@ def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, copy
     for b in subj_indices_by_instance.keys():
         if b not in bg_indices_by_instance:
             continue
-        # Copy the FIRST M_bg fg attention rows to the M_bg bg attention rows.
-        subj_indices_part_b = subj_indices_by_instance[b][:M_bg]
+        bg_indices_b   = bg_indices_by_instance[b]
+        subj_indices_b = subj_indices_by_instance[b]
         # attn_mat: [4, 8, 4096, 77].
         # bg_attn: [8, 4096, 4]. fg_attn: [8, 4096, 9].
-        bg_attn = attn_mat[b, :, :, bg_indices_by_instance[b]]
-        fg_attn_part = attn_mat[b, :, :, subj_indices_part_b]
+        bg_attn = attn_mat[b, :, :, bg_indices_b]
+        fg_attn = attn_mat[b, :, :, subj_indices_b]
+        # bg_attn_demeaned: [8, 4096, 4].
         bg_attn_demeaned = bg_attn - bg_attn.mean(dim=(1,2), keepdim=True)
-        fg_attn_part_demeaned = fg_attn_part - fg_attn_part.mean(dim=(1,2), keepdim=True)
-
-        subj_indices_full_b = subj_indices_by_instance[b]
-        fg_attn_full = attn_mat[b, :, :, subj_indices_full_b]
-        bg_attn_avg_demeaned = bg_attn.mean(dim=2, keepdim=True) - bg_attn.mean(dim=(1,2), keepdim=True)
+        # bg_attn_avg: [8, 4096, 1].
+        bg_attn_avg = bg_attn.mean(dim=1, keepdim=True)
+        # bg_attn_avg_demeaned: averaged across the 4 bg embeddings, then demeaned.
+        # bg_attn_avg_demeaned: [8, 4096, 1].
+        bg_attn_avg_demeaned = bg_attn_avg - bg_attn.mean(dim=(1,2), keepdim=True)
+        # fg_attn_avg: [8, 4096, 1].
+        fg_attn_avg = fg_attn.mean(dim=1, keepdim=True)
+        # fg_attn_avg_demeaned: averaged across the 9 fg embeddings, then demeaned.
+        # fg_attn_avg_demeaned: [8, 4096, 1].
+        fg_attn_avg_demeaned = fg_attn_avg - fg_attn_avg.mean(dim=(1,2), keepdim=True)
 
         if copy_fg_attn_to_bg:
             # Let bg tokens focus on the fg areas, to contribute high-frequency details.
-            attn_mat2[b, :, :, bg_indices_by_instance[b]] = fg_attn_part - bg_attn_demeaned
+            attn_mat2[b, :, :, bg_indices_by_instance[b]] = fg_attn_avg - bg_attn_demeaned
         else:
             # Subtract (normalized) fg attns from bg attns
-            attn_mat2[b, :, :, bg_indices_by_instance[b]] = bg_attn - fg_attn_part_demeaned
+            attn_mat2[b, :, :, bg_indices_by_instance[b]] = bg_attn     - fg_attn_avg_demeaned
 
         # Subtract bg attns from fg attns, to reduce fg attns on bg areas.
-        attn_mat2[b, :, :, subj_indices_part_b] = fg_attn_full - bg_attn_avg_demeaned
+        attn_mat2[b, :, :, subj_indices_b] = fg_attn - bg_attn_avg_demeaned
 
     return attn_mat2.reshape(attn_mat_shape)
 
