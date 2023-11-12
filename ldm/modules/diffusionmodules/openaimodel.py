@@ -510,10 +510,11 @@ class UNetModel(nn.Module):
         self.backup_vars = { 
                             'use_conv_attn_kernel_size':                -1,
                             'attn_copycat_emb_range':                   None,
-                            'contrast_fg_bg_attns':                       False,
+                            'contrast_fg_bg_attns':                     False,
                             'conv_attn_layer_scale:layerwise':          None,
                             'save_attn_vars':                           False,
                             'normalize_subj_attn':                      False,
+                            'is_training':                              True,
                            }
 
         time_embed_dim = model_channels * 4
@@ -838,10 +839,11 @@ class UNetModel(nn.Module):
         use_layerwise_context = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
         use_ada_context       = extra_info.get('use_ada_context', False)       if extra_info is not None else False
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
+        is_training           = extra_info.get('is_training', True)            if extra_info is not None else True
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn_kernel_size    = extra_info.get('use_conv_attn_kernel_size',  -1)   if extra_info is not None else -1
-        attn_copycat_emb_range       = extra_info.get('attn_copycat_emb_range',     None) if extra_info is not None else None
-        contrast_fg_bg_attns           = extra_info.get('contrast_fg_bg_attns',         False) if extra_info is not None else False
+        attn_copycat_emb_range       = extra_info.get('attn_copycat_emb_range',  None)  if extra_info is not None else None
+        contrast_fg_bg_attns         = extra_info.get('contrast_fg_bg_attns',    False) if extra_info is not None else False
         conv_attn_layerwise_scales   = extra_info.get('conv_attn_layerwise_scales', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
         bg_indices            = extra_info.get('bg_indices', None)             if extra_info is not None else None
@@ -997,7 +999,8 @@ class UNetModel(nn.Module):
                                                           'contrast_fg_bg_attns':        contrast_fg_bg_attns,
                                                           'conv_attn_layer_scale:layerwise': \
                                                            conv_attn_layerwise_scales,
-                                                          'normalize_subj_attn': normalize_subj_attn, },
+                                                          'normalize_subj_attn': normalize_subj_attn,
+                                                          'is_training': is_training },
                                        ca_layer_indices = None )
             
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).

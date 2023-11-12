@@ -671,6 +671,9 @@ def main(opt):
 
                         if not opt.eval_blip:
                             c = model.get_learned_conditioning(prompts)
+                            # is_training=False ensures that contrast_fg_bg_attns will set bg attn to 0.
+                            c[2]['is_training'] = False
+
                             # ref_c is not None, implies (prompt_mix_weight != 0 and ref_prompt is not None).
                             if ref_c is not None:
                                 # c / ref_c are tuples of (cond, prompts, extra_info).

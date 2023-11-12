@@ -174,7 +174,8 @@ class CrossAttention(nn.Module):
         self.conv_attn_layer_scale  = 1.0
         self.normalize_subj_attn    = False
         self.attn_copycat_emb_range = None
-        self.contrast_fg_bg_attns     = False
+        self.contrast_fg_bg_attns   = False
+        self.is_training            = True
 
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -233,7 +234,7 @@ class CrossAttention(nn.Module):
                 # During inference, if bg tokens are included in the prompt, 
                 # we set bg attn to 0 to prevent it from affecting the generation.
                 sim = contrast_fg_bg_attns_in_attn_mat(sim, subj_indices, bg_indices, h,
-                                                       setting_bg_attn_to_0=not self.training)
+                                                       setting_bg_attn_to_0=not self.is_training)
 
             if self.normalize_subj_attn:
                 sim = normalize_attn_at_indices(sim, subj_indices, h)
