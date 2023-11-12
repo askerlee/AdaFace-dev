@@ -489,14 +489,18 @@ def calc_base_and_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_fe
         # We encourage feat_ex to express at least ref_align_base_coeffs of feat_base, i.e.,
         # ref_feat_align_base_coeff_diffs should be <= 0. So a loss is incurred if it's > 0.
         ref_feat_align_base_coeff_diffs  = ref_align_base_coeffs - feat_align_base_coeffs
-        loss_base_align  = masked_mean(ref_feat_align_base_coeff_diffs, ref_feat_align_base_coeff_diffs > 0)
+        loss_base_align  = masked_mean(ref_feat_align_base_coeff_diffs, 
+                                       ref_feat_align_base_coeff_diffs > 0,
+                                       do_sqr=True)
 
         # feat_align_base_coeffs, feat_align_delta_coeffs: [1, 8]
         feat_align_delta_coeffs = calc_align_coeffs(feat_ex, ref_delta_gs)
         ref_feat_align_delta_coeff_diffs = ref_align_delta_coeffs - feat_align_delta_coeffs
         # We encourage feat_ex to express at least ref_align_delta_coeffs of ref_delta, i.e., 
         # ref_feat_align_delta_coeff_diffs should be <= 0. So a loss is incurred if it's > 0.
-        loss_delta_align = masked_mean(ref_feat_align_delta_coeff_diffs, ref_feat_align_delta_coeff_diffs > 0)
+        loss_delta_align = masked_mean(ref_feat_align_delta_coeff_diffs, 
+                                       ref_feat_align_delta_coeff_diffs > 0,
+                                       do_sqr=True)
 
         return loss_base_align, loss_delta_align
 
@@ -1131,12 +1135,16 @@ def normalize_dict_values(d):
     d2 = { k: v / value_sum for k, v in d.items() }
     return d2
 
-def masked_mean(ts, mask, dim=None, instance_weights=None):
+def masked_mean(ts, mask, dim=None, instance_weights=None, do_sqr=False):
     if instance_weights is None:
         instance_weights = 1
     if isinstance(instance_weights, torch.Tensor):
         instance_weights = instance_weights.view(list(instance_weights.shape) + [1] * (ts.ndim - instance_weights.ndim))
-        
+    
+    # If do_sqr, then this function computes the masked L2 loss.
+    if do_sqr:
+        ts = ts ** 2
+
     if mask is None:
         return (ts * instance_weights).mean()
     else:
