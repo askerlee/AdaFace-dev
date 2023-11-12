@@ -2823,7 +2823,7 @@ class LatentDiffusion(DDPM):
                                                                      self.comp_attn_delta_distill_loss_base,
                                                                      comp_attn_delta_distill_loss_scale_base)
 
-            # subj_attn_norm_distill_loss_base: 4 for non-faces or 0 (disabled) for faces.
+            # subj_attn_norm_distill_loss_base: 8 for non-faces or 0 (disabled) for faces.
             subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
                                                                      self.subj_attn_norm_distill_loss_base,
                                                                      subj_attn_norm_distill_loss_scale_base)

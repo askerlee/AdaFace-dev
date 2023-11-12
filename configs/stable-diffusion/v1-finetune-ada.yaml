@@ -50,7 +50,7 @@ model:
     subj_attn_delta_distill_loss_base:  0.5
     comp_attn_delta_distill_loss_base:  5
     # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
-    subj_attn_norm_distill_loss_base:   4
+    subj_attn_norm_distill_loss_base:   8
     comp_fg_bg_preserve_loss_weight:    2e-4
     comp_subj_fg_feat_preserve_loss_base: 0.025
     # fg_bg_comple: used in non-wds recon iters.
