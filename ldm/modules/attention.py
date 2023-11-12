@@ -7,7 +7,7 @@ from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
 from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices, \
-                     replace_rows_of_copycat_embs, copy_fg_attn_to_bg_in_attn_mat
+                     replace_rows_of_copycat_embs, contrast_fg_bg_attns_in_attn_mat
 
 def exists(val):
     return val is not None
@@ -174,7 +174,7 @@ class CrossAttention(nn.Module):
         self.conv_attn_layer_scale  = 1.0
         self.normalize_subj_attn    = False
         self.attn_copycat_emb_range = None
-        self.copy_fg_attn_to_bg     = False
+        self.contrast_fg_bg_attns     = False
 
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -229,8 +229,8 @@ class CrossAttention(nn.Module):
             if self.attn_copycat_emb_range is not None:
                 sim = replace_rows_of_copycat_embs(sim, subj_indices, self.attn_copycat_emb_range, h)
             
-            if self.copy_fg_attn_to_bg and bg_indices is not None:
-                sim = copy_fg_attn_to_bg_in_attn_mat(sim, subj_indices, bg_indices, h)
+            if self.contrast_fg_bg_attns and bg_indices is not None:
+                sim = contrast_fg_bg_attns_in_attn_mat(sim, subj_indices, bg_indices, h)
 
             if self.normalize_subj_attn:
                 sim = normalize_attn_at_indices(sim, subj_indices, h)

@@ -854,7 +854,7 @@ class EmbeddingManager(nn.Module):
             normalize_subj_attn=False,
             use_conv_attn_kernel_size=-1,
             attn_copycat_emb_range=[-1, -1],
-            copy_fg_attn_to_bg=False,
+            contrast_fg_bg_attns=False,
             **kwargs
     ):
         super().__init__()
@@ -887,7 +887,7 @@ class EmbeddingManager(nn.Module):
         
         self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
         self.set_normalize_subj_attn(normalize_subj_attn)
-        self.set_embs_attn_specs(use_conv_attn_kernel_size, attn_copycat_emb_range, copy_fg_attn_to_bg)
+        self.set_embs_attn_specs(use_conv_attn_kernel_size, attn_copycat_emb_range, contrast_fg_bg_attns)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
 
@@ -1667,10 +1667,10 @@ class EmbeddingManager(nn.Module):
 
     # attn_copycat_emb_range = None:     Disabled.
     # attn_copycat_emb_range = [-1, -1]: Not specified (when called from an external caller). 
-    # copy_fg_attn_to_bg = None:         Not specified.
+    # contrast_fg_bg_attns = None:         Not specified.
     def set_embs_attn_specs(self, use_conv_attn_kernel_size=None, 
                             attn_copycat_emb_range=None, 
-                            copy_fg_attn_to_bg=None):
+                            contrast_fg_bg_attns=None):
         if use_conv_attn_kernel_size is not None:
             self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
             extra_msg = ", DISABLED" if use_conv_attn_kernel_size is -1 else ""
@@ -1687,10 +1687,10 @@ class EmbeddingManager(nn.Module):
 
             print(f"Setting attn_copycat_emb_range = {attn_copycat_emb_range}{extra_msg}")
 
-        if copy_fg_attn_to_bg is not None:
-            self.copy_fg_attn_to_bg = copy_fg_attn_to_bg
-            extra_msg = ", DISABLED" if copy_fg_attn_to_bg is False else ""
-            print(f"Setting copy_fg_attn_to_bg = {copy_fg_attn_to_bg}{extra_msg}")
+        if contrast_fg_bg_attns is not None:
+            self.contrast_fg_bg_attns = contrast_fg_bg_attns
+            extra_msg = ", DISABLED" if contrast_fg_bg_attns is False else ""
+            print(f"Setting contrast_fg_bg_attns = {contrast_fg_bg_attns}{extra_msg}")
 
     def initialize_attn_postmix_components(self, attn_postmix_weight, 
                                             postmix_attn_layer=None, 
@@ -1876,6 +1876,7 @@ class EmbeddingManager(nn.Module):
                      "normalize_subj_attn":             self.normalize_subj_attn,
                      "use_conv_attn_kernel_size":       self.use_conv_attn_kernel_size,
                      "attn_copycat_emb_range":          self.attn_copycat_emb_range,
+                     "contrast_fg_bg_attns":            self.contrast_fg_bg_attns
                    }, 
                     ckpt_path)
 
@@ -1930,9 +1931,12 @@ class EmbeddingManager(nn.Module):
                 self.set_use_specialized_comp_embs(ckpt["use_specialized_comp_embs"])
             if "normalize_subj_attn" in ckpt:
                 self.set_normalize_subj_attn(ckpt["normalize_subj_attn"])
-            # The two options should either both exist in the ckpt or both not exist (older ckpt).
+            # The three options should coexist in the ckpt.
             if "use_conv_attn_kernel_size" in ckpt:
-                self.set_embs_attn_specs(ckpt["use_conv_attn_kernel_size"], ckpt["attn_copycat_emb_range"])
+                contrast_fg_bg_attns = ckpt.get("contrast_fg_bg_attns", None)
+                self.set_embs_attn_specs(ckpt["use_conv_attn_kernel_size"], 
+                                         ckpt["attn_copycat_emb_range"],
+                                         contrast_fg_bg_attns)
 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):

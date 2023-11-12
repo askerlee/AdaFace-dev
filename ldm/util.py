@@ -777,7 +777,7 @@ def replace_rows_of_copycat_embs(attn_mat, subj_indices, attn_copycat_emb_range,
     
     return attn_mat2.reshape(attn_mat_shape)
 
-def copy_fg_attn_to_bg_in_attn_mat(attn_mat, subj_indices, bg_indices, H):
+def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H):
     # attn_mat: [32, 4096, 77]. 32: B * H. B = 4, H = 8.
     attn_mat_shape = attn_mat.shape
     # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77]. 32: B * H.

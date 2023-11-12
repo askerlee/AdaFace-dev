@@ -26,7 +26,7 @@ end
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'use_conv_attn_kernel_size=' 'eval' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'use_conv_attn_kernel_size=' 'contrast_fg_bg_attns' 'eval' -- $argv
 or begin
     echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] [--use_conv_attn_kernel_size K] (ada|ti|db) [low-high] [EXTRA_ARGS]"
     echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
@@ -100,6 +100,11 @@ end
 if set -q _flag_use_conv_attn_kernel_size
     set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --use_conv_attn_kernel_size $_flag_use_conv_attn_kernel_size
     set EXTRA_EVAL_ARGS0 $EXTRA_EVAL_ARGS0   --use_conv_attn_kernel_size $_flag_use_conv_attn_kernel_size
+end
+
+if set -q _flag_contrast_fg_bg_attns
+    set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --contrast_fg_bg_attns
+    set EXTRA_EVAL_ARGS0 $EXTRA_EVAL_ARGS0   --contrast_fg_bg_attns
 end
 
 set -q _flag_clip_last_layers_skip_weights; and set -l clip_last_layers_skip_weights (string split "," $_flag_clip_last_layers_skip_weights);

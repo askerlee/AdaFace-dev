@@ -281,7 +281,7 @@ def parse_args():
                         type=int, nargs=2, default=None,
                         help="Range of embedding indices to be used as copycat attention. "
                             "Default [-1, -1]: not specified.")
-    parser.add_argument("--copy_fg_attn_to_bg",
+    parser.add_argument("--contrast_fg_bg_attns",
                         action="store_true", 
                         help="Whether to copy the foreground attention to the background tokens.")
         
@@ -420,7 +420,7 @@ def main(opt):
             
         model.embedding_manager.set_embs_attn_specs(opt.use_conv_attn_kernel_size, 
                                                     opt.attn_copycat_emb_range,
-                                                    opt.copy_fg_attn_to_bg)
+                                                    opt.contrast_fg_bg_attns)
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
