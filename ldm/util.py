@@ -571,7 +571,7 @@ def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=Tr
 # H: number of heads.
 # Return a new attn_mat with the same shape as attn_mat, but with the attention scores at subj_indices
 # replaced by the convolutional attention scores.
-def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H, 
+def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_attn_kernel_size, H, 
                               sim_scale, conv_attn_layer_scale=1, conv_attn_mix_weight=1):
     # input features x: [4, 4096, 320].
     # attn_mat: [32, 4096, 77]. 32: b * h. b = 4, h = 8.
@@ -593,6 +593,11 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
     BS = len(indices_B_uniq)
     # M: number of embeddings for each subject token.
     M  = len(indices_N) // BS
+    # ks: conv kernel size. ks**2 <= M.
+    # If ks**2 < M, then only the first ks**2 embeddings are used to form the conv weight,
+    # and only these ks**2 rows of attention scores are replaced by the conv attn scores.
+    ks  = conv_attn_kernel_size
+    assert ks * ks <= M, "{M} embeddings are not enough to cover a {ks}x{ks} kernel."
 
     # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77].
     attn_mat = attn_mat.reshape(-1, H, *attn_mat.shape[1:])
@@ -603,8 +608,6 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
     k = k.reshape(-1, H, *k.shape[1:])
     # C: number of channels in the embeddings.
     C = q.shape[-1]
-    # ks: conv kernel size.
-    ks = int(np.sqrt(M))
     # if ks == 2, pad 1 pixel on the right and bottom.
     # pads: left, right, top, bottom.
     if ks == 2:
@@ -629,10 +632,11 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
     # Clone to make attn_mat2 a non-leaf node. Otherwise, 
     # we can't do in-place assignment like attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.    
     attn_mat2 = attn_mat.clone()
-    # Scale down conv attn scores by NORM. It's not M since the attention scores of different embeddings 
-    # tend to cancel each other a little bit, so the sum of the attn scores is smaller than M * pointwise attn score.
-    # If M = 9, NORM = 5.2. M / NORM = 1.73.
-    NORM = M ** 0.75
+    # Scale down conv attn scores by NORM. It's not ks**2 since the attention scores of different embeddings 
+    # tend to cancel each other a little bit, so the sum of the attn scores is smaller 
+    # than ks**2 * pointwise attn score.
+    # If ks = 3, NORM = 5.2. ks**2 / NORM = 1.73.
+    NORM = ks ** 1.5
 
     for b in range(BS):
         subj_attn_dxys = []
@@ -646,10 +650,12 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
         inst_q_4d_padded = padder(inst_q_4d)
 
         # Slice out indices_b, indices_n from indices_B, indices_N.
-        # If b=0, M=4, then indices_b = indices_B[0:4], indices_n = indices_N[0:4].
+        # If b=0, M=9, ks=2, then indices_b = indices_B[0:4], indices_n = indices_N[0:4].
         # indices_b: [0, 0, 0, 0]. indices_n: [6, 7, 8, 9].
-        indices_b = indices_B[b * M : b * M + M]
-        indices_n = indices_N[b * M : b * M + M]
+        # If ks**2 < M, then only the first ks**2 embeddings are used to form the conv weight,
+        # and only these ks**2 rows of attention scores are replaced by the conv attn scores.
+        indices_b = indices_B[b * M : b * M + ks**2]
+        indices_n = indices_N[b * M : b * M + ks**2]
         if (indices_b != index_b).any():
             breakpoint()
         # select the 4 subject embeddings (s1, s2, s3, s4) from k into subj_k.
@@ -714,7 +720,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
         # The traversed order is s1, s2, s3, s4. So we can flatten the list to get 
         # consecutive 4 columns of attention. 
         # subj_attn_dxys: [4, 8, 64, 64] => [4, 8, 4096].
-        subj_attn_dxys = torch.cat(subj_attn_dxys, dim=0).reshape(M, H, -1)
+        subj_attn_dxys = torch.cat(subj_attn_dxys, dim=0).reshape(ks**2, H, -1)
 
         '''
         # All subject embeddings receive the same attention matrix.
@@ -740,7 +746,36 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, H,
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)
 
-def normalize_attn_at_indices(attn_mat, subj_indices, H, shift_n_sigma=1):
+def replace_rows_of_copycat_emb(attn_mat, subj_indices, attn_copycat_emb_range, H):
+    # attn_mat: [32, 4096, 77]. 32: B * H. B = 4, H = 8.
+    attn_mat_shape = attn_mat.shape
+    # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77]. 32: B * H.
+    attn_mat = attn_mat.reshape(-1, H, *attn_mat.shape[1:])
+    subj_indices_B, subj_indices_N = subj_indices
+    indices_B_uniq = torch.unique(subj_indices_B)
+    # BS: sub-batch size that contains the subject token. 
+    # Probably BS < the full batch size.
+    BS = len(indices_B_uniq)
+    # M: number of embeddings for each subject token.
+    M  = len(subj_indices_B) // BS
+    # subj_attn: [BS*M, 8, 4096] -> [BS, M, 8, 4096]
+    subj_attn = attn_mat[subj_indices_B, :, :, subj_indices_N].reshape(BS, M, H, -1)
+    copycat_lb, copycat_ub = attn_copycat_emb_range
+    # attn_copycat_emb_range: [4, 5, 6, 7]
+    num_attn_copycat_emb = copycat_ub - copycat_lb
+    src_lb = copycat_lb - num_attn_copycat_emb
+    src_ub = copycat_lb
+    assert src_lb >= 0, \
+        f"num_attn_copycat_emb {num_attn_copycat_emb} is too large for M {M}."
+    # Copy the previous num_attn_copycat_emb attention rows to the copycat attention rows.
+    subj_attn2 = subj_attn.clone()
+    subj_attn2[:, copycat_lb:copycat_ub] = subj_attn[:, src_lb:src_ub]
+    attn_mat2 = attn_mat.clone()
+    attn_mat2[subj_indices_B, :, :, subj_indices_N] = subj_attn2.reshape(BS * M, H, -1)
+    
+    return attn_mat2.reshape(attn_mat_shape)
+
+def normalize_attn_at_indices(attn_mat, subj_indices, H):
     # attn_mat: [32, 4096, 77]. 32: B * H. B = 4, H = 8.
     attn_mat_shape = attn_mat.shape
     # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77]. 32: B * H.

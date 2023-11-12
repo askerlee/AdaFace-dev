@@ -508,7 +508,8 @@ class UNetModel(nn.Module):
         self.debug_attn = False
 
         self.backup_vars = { 
-                            'use_conv_attn':                            False,
+                            'use_conv_attn_kernel_size':                -1,
+                            'attn_copycat_emb_range':                   None,
                             'conv_attn_layer_scale:layerwise':          None,
                             'save_attn_vars':                           False,
                             'normalize_subj_attn':                      False,
@@ -837,7 +838,8 @@ class UNetModel(nn.Module):
         use_ada_context       = extra_info.get('use_ada_context', False)       if extra_info is not None else False
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
-        use_conv_attn         = extra_info.get('use_conv_attn', False)         if extra_info is not None else False
+        use_conv_attn_kernel_size    = extra_info.get('use_conv_attn_kernel_size',  -1)   if extra_info is not None else -1
+        attn_copycat_emb_range       = extra_info.get('attn_copycat_emb_range',     None) if extra_info is not None else None
         conv_attn_layerwise_scales   = extra_info.get('conv_attn_layerwise_scales', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
         normalize_subj_attn   = extra_info.get('normalize_subj_attn', False)   if extra_info is not None else False
@@ -988,7 +990,8 @@ class UNetModel(nn.Module):
 
         ca_flags_stack = []
         old_ca_flags, _ = \
-            self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn': use_conv_attn,
+            self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn_kernel_size': use_conv_attn_kernel_size,
+                                                          'attn_copycat_emb_range':    attn_copycat_emb_range,
                                                           'conv_attn_layer_scale:layerwise': \
                                                            conv_attn_layerwise_scales,
                                                           'normalize_subj_attn': normalize_subj_attn, },

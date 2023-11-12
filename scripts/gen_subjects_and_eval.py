@@ -37,10 +37,13 @@ def parse_args():
                         type=int, default=1,
                         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
                                 
-    parser.add_argument("--use_conv_attn",
-                        action="store_true", 
+    parser.add_argument("--use_conv_attn_kernel_size",
+                        type=int, default=argparse.SUPPRESS, 
                         help="Use convolutional attention at subject tokens")
-
+    parser.add_argument("--attn_copycat_emb_range",
+                        type=int, nargs=2, default=argparse.SUPPRESS,
+                        help="Range of embedding indices to be used as copycat attention.")
+    
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
@@ -173,11 +176,6 @@ if __name__ == "__main__":
     # Need to leave a space between multiple ",,", otherwise they are treated as one token.
     if hasattr(args, 'num_vectors_per_token') and args.num_vectors_per_token > 1:
         args.placeholder += ", " * (args.num_vectors_per_token - 1)
-
-    if args.use_conv_attn:
-            assert args.num_vectors_per_token in [4, 9, 16], \
-                    f"Only support 4/9/16 embeddings per token but got {args.num_vectors_per_token}. " \
-                    "4 = 2*2 kernel, 9 = 3*3, 16 = 4*4."
 
     z_prefixes_by_class     = [""] * 3
     z_prefixes_by_subject   = None
@@ -448,9 +446,11 @@ if __name__ == "__main__":
 
         if hasattr(args, 'num_vectors_per_token'):
             command_line += f" --placeholder_string {args.orig_placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
-        if args.use_conv_attn:
-            command_line += f" --use_conv_attn"
-
+        if hasattr(args, 'use_conv_attn_kernel_size'):
+            command_line += f" --use_conv_attn_kernel_size {args.use_conv_attn_kernel_size}"
+        if hasattr(args, 'attn_copycat_emb_range'):
+            command_line += f" --attn_copycat_emb_range {args.attn_copycat_emb_range[0]} {args.attn_copycat_emb_range[1]}"
+            
         if hasattr(args, 'emb_ema_as_pooling_probe'):
             command_line += f" --emb_ema_as_pooling_probe"
         if hasattr(args, 'normalize_subj_attn'):

@@ -272,9 +272,14 @@ def parse_args():
     parser.add_argument("--num_vectors_per_token",
                         type=int, default=argparse.SUPPRESS,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
-    parser.add_argument("--use_conv_attn",
-                        action="store_true", 
-                        help="Use convolutional attention at subject tokens")
+    parser.add_argument("--use_conv_attn_kernel_size",
+                        type=int, default=-1,
+                        help="Use convolutional attention of subject tokens with this kernel size")
+    parser.add_argument("--attn_copycat_emb_range",
+                        type=int, nargs=2, default=[-1, -1],
+                        help="Range of embedding indices to be used as copycat attention. "
+                            "Default [-1, -1]: not specified.")
+        
     # If normalize_subj_attn is not specified, then use the 'normalize_subj_attn' in the checkpoint.
     # If 'normalize_subj_attn' doesn't exist in the checkpoint, then normalize_subj_attn is False.
     parser.add_argument("--normalize_subj_attn", type=str2bool, nargs="?", 
@@ -378,15 +383,6 @@ def main(opt):
     if not opt.eval_blip:
         config = OmegaConf.load(f"{opt.config}")
 
-        if opt.use_conv_attn:
-            assert opt.num_vectors_per_token in [4, 9, 16], \
-                    f"Only support 4/9/16 embeddings per token but got {opt.num_vectors_per_token}. " \
-                    "4 = 2*2 kernel, 9 = 3*3, 16 = 4*4."
-            config.model.params.use_conv_attn = True
-            kernel_desc_map = {4: "2x2", 9: "3x3", 16: "4x4"}
-            kernel_desc = kernel_desc_map[opt.num_vectors_per_token]
-            print(f"Use {kernel_desc} Conv Attention by subject embeddings")
-
         model  = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
             model.embedding_manager.load(opt.embedding_paths)
@@ -411,6 +407,14 @@ def main(opt):
             model.embedding_manager.set_use_specialized_comp_embs(opt.use_specialized_comp_embs)
         if hasattr(opt, 'attn_postmix_weight'):
             model.embedding_manager.initialize_attn_postmix_components(opt.attn_postmix_weight)
+
+        if opt.use_conv_attn_kernel_size > 0:
+            K = opt.use_conv_attn_kernel_size
+            assert opt.num_vectors_per_token >= K * K, \
+                    f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
+            
+            model.embedding_manager.set_embs_attn_specs(opt.use_conv_attn_kernel_size, 
+                                                        opt.attn_copycat_emb_range)
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight

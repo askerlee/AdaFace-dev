@@ -120,7 +120,6 @@ class DDPM(pl.LightningModule):
                  wds_bg_recon_discount=1.,
                  do_clip_teacher_filtering=False,
                  use_background_token=False,
-                 use_conv_attn=False,
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
                  use_fp_trick=True,      
                  ):
@@ -164,11 +163,8 @@ class DDPM(pl.LightningModule):
         self.prompt_mix_scheme                      = 'mix_hijk'
         self.wds_bg_recon_discount                  = wds_bg_recon_discount
         
-        self.use_conv_attn                   = use_conv_attn
-        self.use_background_token            = use_background_token
-        # If use_conv_attn, the subject is well expressed, and use_fp_trick is unnecessary 
-        # (actually harmful).
-        self.use_fp_trick                    = use_fp_trick
+        self.use_background_token                   = use_background_token
+        self.use_fp_trick                           = use_fp_trick
 
         self.cached_inits_available          = False
         self.cached_inits                    = None
@@ -842,18 +838,19 @@ class LatentDiffusion(DDPM):
                 conv_attn_layerwise_scales = self.embedding_manager.get_conv_attn_layerwise_scales()
 
                 extra_info = { 
-                                'use_layerwise_context': self.use_layerwise_embedding, 
-                                'use_ada_context':       self.use_ada_embedding,
-                                'use_conv_attn':         self.use_conv_attn,
+                                'use_layerwise_context':        self.use_layerwise_embedding, 
+                                'use_ada_context':              self.use_ada_embedding,
+                                'use_conv_attn_kernel_size':    self.embedding_manager.use_conv_attn_kernel_size,
+                                'attn_copycat_emb_range':       self.embedding_manager.attn_copycat_emb_range,
                                 # Setting up 'subj_indices' here is necessary for inference.
                                 # During training, 'subj_indices' will be overwritten in p_losses().
                                 # Although 'bg_indices' is usually not used during inference,
                                 # we also set it up here just in case.
-                                'subj_indices':          copy.copy(self.embedding_manager.placeholder_indices_fg),
-                                'bg_indices':            copy.copy(self.embedding_manager.placeholder_indices_bg),
-                                'prompt_emb_mask':       copy.copy(self.embedding_manager.prompt_emb_mask),
-                                'conv_attn_layerwise_scales':  conv_attn_layerwise_scales,
-                                'normalize_subj_attn':   self.embedding_manager.normalize_subj_attn,
+                                'subj_indices':                 copy.copy(self.embedding_manager.placeholder_indices_fg),
+                                'bg_indices':                   copy.copy(self.embedding_manager.placeholder_indices_bg),
+                                'prompt_emb_mask':              copy.copy(self.embedding_manager.prompt_emb_mask),
+                                'conv_attn_layerwise_scales':   conv_attn_layerwise_scales,
+                                'normalize_subj_attn':          self.embedding_manager.normalize_subj_attn,
                              }
                 
                 if self.use_ada_embedding:
@@ -2253,9 +2250,6 @@ class LatentDiffusion(DDPM):
         subj_indices, bg_indices = extra_info['subj_indices'], extra_info['bg_indices']
         if not self.iter_flags['do_teacher_filter']:
             extra_info['capture_distill_attn'] = True
-
-        # There are always some subj prompts in this batch. So if self.use_conv_attn,
-        # then extra_info['use_conv_attn'] = True, it will inform U-Net to do conv attn.
 
         # The image mask here is used when computing Ada embeddings in embedding_manager.
         # Do not consider mask on compositional reg iterations (except use_wds_comp iters), 

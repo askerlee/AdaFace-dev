@@ -6,7 +6,7 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices
+from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices, replace_rows_of_copycat_emb
 
 def exists(val):
     return val is not None
@@ -168,11 +168,12 @@ class CrossAttention(nn.Module):
             nn.Dropout(dropout)
         )
         self.save_attn_vars = False
-        self.use_conv_attn = False
-        self.infeat_size   = None
-        self.conv_attn_layer_scale = 1.0
-        self.normalize_subj_attn = False
-        
+        self.use_conv_attn_kernel_size = -1
+        self.infeat_size            = None
+        self.conv_attn_layer_scale  = 1.0
+        self.normalize_subj_attn    = False
+        self.attn_copycat_emb_range = None
+
     def forward(self, x, context=None, mask=None):
         h = self.heads
 
@@ -213,16 +214,21 @@ class CrossAttention(nn.Module):
         # abs(self.conv_attn_layer_scale) >= 1e-6: 
         # Sometimes conv_attn_layer_scale is a tiny negative number, and checking for equality with 0.0
         # will fail.
-        if context_provided and self.use_conv_attn and abs(self.conv_attn_layer_scale) >= 1e-6 \
-          and subj_indices is not None:
-            # infeat_size is set in SpatialTransformer.forward().
-            # conv_attn_mix_weight=1: weight to mix conv attn with point-wise attn. 
-            # Set to 1 to disable point-wise attn.
-            sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, h, self.scale,
-                                            self.conv_attn_layer_scale, conv_attn_mix_weight=1)
+        if context_provided and subj_indices is not None:
+            if self.use_conv_attn_kernel_size > 0 and abs(self.conv_attn_layer_scale) >= 1e-6:
+                # infeat_size is set in SpatialTransformer.forward().
+                # conv_attn_mix_weight=1: weight to mix conv attn with point-wise attn. 
+                # Setting to 1 disables point-wise attn.
+                sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, 
+                                                self.use_conv_attn_kernel_size,
+                                                h, self.scale, self.conv_attn_layer_scale, 
+                                                conv_attn_mix_weight=1)
 
-        if context_provided and self.normalize_subj_attn and subj_indices is not None:
-            sim = normalize_attn_at_indices(sim, subj_indices, h)
+            if self.attn_copycat_emb_range is not None:
+                sim = replace_rows_of_copycat_emb(sim, subj_indices, self.attn_copycat_emb_range, h)
+                
+            if self.normalize_subj_attn:
+                sim = normalize_attn_at_indices(sim, subj_indices, h)
             
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].

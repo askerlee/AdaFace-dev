@@ -219,7 +219,7 @@ class DDIMSampler(object):
                 c_u, c_in_u, _ = unconditional_conditioning
 
                 # Concatenated conditining embedding in the order of (conditional, unconditional).
-                # NOTE: the original order is (unconditional, conditional). But if we use_conv_attn,
+                # NOTE: the original order is (unconditional, conditional). But if we use conv attn,
                 # extra_info['subj_indices'] index the conditional prompts. If we prepend unconditonal prompts,
                 # subj_indices need to be manually adjusted. 
                 # (conditional, unconditional) don't need to adjust subj_indices.

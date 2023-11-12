@@ -223,9 +223,15 @@ def get_parser(**parser_kwargs):
         type=int, default=1,
         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
     
-    parser.add_argument("--use_conv_attn",
-        action="store_true", 
-        help="Use convolutional attention at subject tokens")
+    parser.add_argument("--use_conv_attn_kernel_size",
+        type=int, default=-1,
+        help="Use convolutional attention of subject tokens with this kernel size")
+    parser.add_argument("--attn_copycat_emb_range",
+        type=int, nargs=2, 
+        default=[-1, -1],
+        help="Range of embedding indices to be used as copycat attention. "
+             "Default [-1, -1]: not specified.")
+    
     parser.add_argument("--normalize_subj_attn", 
         type=str2bool, nargs="?", const=True, default=argparse.SUPPRESS,
         help="Whether to normalize the subject embedding attention scores")
@@ -798,14 +804,14 @@ if __name__ == "__main__":
                 config.data.params.train.params.cls_bg_delta_tokens      = re.split(r"\s+", opt.bg_init_words)
                 config.data.params.validation.params.cls_bg_delta_tokens = re.split(r"\s+", opt.bg_init_words)
 
-        if opt.use_conv_attn:
-            assert opt.num_vectors_per_token in [4, 9, 16], \
-                    f"Only support 4/9/16 embeddings per token but got {opt.num_vectors_per_token}. " \
-                    "4 = 2*2 kernel, 9 = 3*3, 16 = 4*4."
-            config.model.params.use_conv_attn = True
-            kernel_desc_map = {4: "2x2", 9: "3x3", 16: "4x4"}
-            kernel_desc = kernel_desc_map[opt.num_vectors_per_token]
-            print(f"Use {kernel_desc} Conv Attention by subject embeddings")
+        if opt.use_conv_attn_kernel_size > 0:
+            K = opt.use_conv_attn_kernel_size
+            assert opt.num_vectors_per_token >= K * K, \
+                    f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
+            config.model.params.personalization_config.params.use_conv_attn_kernel_size \
+                = opt.use_conv_attn_kernel_size
+            config.model.params.personalization_config.params.attn_copycat_emb_range \
+                = opt.attn_copycat_emb_range
 
         if hasattr(opt, 'composition_regs_iter_gap'):
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
