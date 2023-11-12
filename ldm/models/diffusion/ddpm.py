@@ -3800,8 +3800,6 @@ class LatentDiffusion(DDPM):
         feat_distill_layer_weights  = normalize_dict_values(feat_distill_layer_weights)
         single_feat_or_attn_grad_scale  = 0.02
         single_feat_or_attn_grad_scaler = gen_gradient_scaler(single_feat_or_attn_grad_scale)
-        # Align both spatial and channel dims.
-        feat_align_spatial_or_channel = 'spatial_and_channel'  # channel_only, spatial_only, spatial_and_channel
 
         loss_comp_subj_fg_feat_preserve = 0
         loss_comp_subj_fg_attn_preserve = 0
