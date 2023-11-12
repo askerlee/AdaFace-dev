@@ -687,11 +687,13 @@ class LatentDiffusion(DDPM):
 
 
         if not self.unfreeze_model:
+            # cond_stage_model = FrozenCLIPEmbedder training = False.
             self.cond_stage_model.eval()
             self.cond_stage_model.train = disabled_train
             for param in self.cond_stage_model.parameters():
                 param.requires_grad = False
 
+            # self.model = DiffusionWrapper() training = False.
             self.model.eval()
             self.model.train = disabled_train
             for param in self.model.parameters():
@@ -700,6 +702,8 @@ class LatentDiffusion(DDPM):
         self.is_dreambooth = is_dreambooth
         self.db_reg_weight  = 1.
         if not is_dreambooth:
+            # self.embedding_manager.training = True after creation. 
+            # *** Where this status is set? ***
             self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
             # embedding_manager.optimized_parameters(): string_to_static_embedder_dict, 
             # which maps custom tokens to embeddings
@@ -3931,9 +3935,11 @@ class LatentDiffusion(DDPM):
         # "start" token always receives the highest attention, which is the normal behavior.
         # So we exclude the "start" token from the align padding loss.
         padding_mask[:, 0] = 0
-        #subj_padding_indices = padding_mask[:SSB_SIZE].nonzero(as_tuple=True)
+        # padding embeddings cannot push the subject embeddings away.
         subj_embs_contrast_paddings_grad_scale  = 0.01
         subj_embs_contrast_paddings_grad_scaler = gen_gradient_scaler(subj_embs_contrast_paddings_grad_scale)
+        # bg embeddings can push the subject embeddings away, but less effectively than 
+        # the subject embeddings pushing the bg embeddings away.
         subj_embs_contrast_bg_grad_scale  = 0.3
         subj_embs_contrast_bg_grad_scaler = gen_gradient_scaler(subj_embs_contrast_bg_grad_scale)
 
