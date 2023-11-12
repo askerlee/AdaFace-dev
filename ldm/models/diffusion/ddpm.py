@@ -3995,9 +3995,11 @@ class LatentDiffusion(DDPM):
                     bg_embs_i = cond_prompt_embeddings[i, :, bg_indices_i_N].permute(1, 0, 2)
                     # subj_subj_embs_gs_i: [1,  16, 768].
                     # subj_embs_grad_scale  = 0.05.
-                    subj_subj_embs_gs_i = subj_subj_embs_gs[i]
+                    subj_subj_embs_i = subj_subj_embs[i]
                     # bg_subj_embs_align_coeffs_i: [4, 16]
-                    bg_subj_embs_align_coeffs_i  = calc_align_coeffs(bg_embs_i, subj_subj_embs_gs_i)
+                    # We don't use gs to subj_subj_embs_i, since we also want to avoid the bg semantics 
+                    # contaminating the subj semantics. So the loss should be bi-directional.
+                    bg_subj_embs_align_coeffs_i  = calc_align_coeffs(bg_embs_i, subj_subj_embs_i)
                     loss_bg_subj_embs_align += power_loss(bg_subj_embs_align_coeffs_i, exponent=2)
 
         return loss_padding_subj_embs_align, loss_padding_cls_embs_align, loss_bg_subj_embs_align
