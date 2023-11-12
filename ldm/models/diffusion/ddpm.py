@@ -2812,7 +2812,8 @@ class LatentDiffusion(DDPM):
             # so no need to use dynamic loss scale.
             subj_attn_delta_distill_loss_scale = 1 #0.5
             # loss_comp_attn_delta_distill is L2 loss, so no need to use dynamic loss scale.
-            comp_attn_delta_distill_loss_scale = 1
+            # The range of loss_comp_attn_delta_distill is 20~50, so need to scale it down.
+            comp_attn_delta_distill_loss_scale = 0.2
             # If normalize_subj_attn, then more relaxed on subj attn magnitudes.
             subj_attn_norm_distill_loss_scale_base  = 1 
             
