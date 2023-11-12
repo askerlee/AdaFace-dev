@@ -6,7 +6,7 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices, replace_rows_of_copycat_emb
+from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices, replace_rows_of_copycat_embs
 
 def exists(val):
     return val is not None
@@ -225,7 +225,7 @@ class CrossAttention(nn.Module):
                                                 conv_attn_mix_weight=1)
 
             if self.attn_copycat_emb_range is not None:
-                sim = replace_rows_of_copycat_emb(sim, subj_indices, self.attn_copycat_emb_range, h)
+                sim = replace_rows_of_copycat_embs(sim, subj_indices, self.attn_copycat_emb_range, h)
                 
             if self.normalize_subj_attn:
                 sim = normalize_attn_at_indices(sim, subj_indices, h)

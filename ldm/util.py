@@ -652,8 +652,8 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_at
         # Slice out indices_b, indices_n from indices_B, indices_N.
         # If b=0, M=9, ks=2, then indices_b = indices_B[0:4], indices_n = indices_N[0:4].
         # indices_b: [0, 0, 0, 0]. indices_n: [6, 7, 8, 9].
-        # If ks**2 < M, then only the first ks**2 embeddings are used to form the conv weight,
-        # and only these ks**2 rows of attention scores are replaced by the conv attn scores.
+        # If ks**2 < M, then only the FIRST ks**2 embeddings are used to form the conv weight,
+        # and only the FIRST ks**2 rows of attention scores are replaced by the conv attn scores.
         indices_b = indices_B[b * M : b * M + ks**2]
         indices_n = indices_N[b * M : b * M + ks**2]
         if (indices_b != index_b).any():
@@ -746,7 +746,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_at
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)
 
-def replace_rows_of_copycat_emb(attn_mat, subj_indices, attn_copycat_emb_range, H):
+def replace_rows_of_copycat_embs(attn_mat, subj_indices, attn_copycat_emb_range, H):
     # attn_mat: [32, 4096, 77]. 32: B * H. B = 4, H = 8.
     attn_mat_shape = attn_mat.shape
     # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77]. 32: B * H.
@@ -761,14 +761,16 @@ def replace_rows_of_copycat_emb(attn_mat, subj_indices, attn_copycat_emb_range, 
     # subj_attn: [BS*M, 8, 4096] -> [BS, M, 8, 4096]
     subj_attn = attn_mat[subj_indices_B, :, :, subj_indices_N].reshape(BS, M, H, -1)
     copycat_lb, copycat_ub = attn_copycat_emb_range
-    # attn_copycat_emb_range: [4, 5, 6, 7]
+    # attn_copycat_emb_range: 4, 8. num_attn_copycat_emb: 4.
     num_attn_copycat_emb = copycat_ub - copycat_lb
+    # src_lb: 0. src_ub: 4.
     src_lb = copycat_lb - num_attn_copycat_emb
     src_ub = copycat_lb
     assert src_lb >= 0, \
         f"num_attn_copycat_emb {num_attn_copycat_emb} is too large for M {M}."
-    # Copy the previous num_attn_copycat_emb attention rows to the copycat attention rows.
     subj_attn2 = subj_attn.clone()
+    # Copy the previous num_attn_copycat_emb attention rows to the copycat attention rows.
+    # subj_attn2[:, 4:8] = subj_attn[:, 0:4].
     subj_attn2[:, copycat_lb:copycat_ub] = subj_attn[:, src_lb:src_ub]
     attn_mat2 = attn_mat.clone()
     attn_mat2[subj_indices_B, :, :, subj_indices_N] = subj_attn2.reshape(BS * M, H, -1)
