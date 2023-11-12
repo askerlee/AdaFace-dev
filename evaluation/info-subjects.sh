@@ -24,5 +24,5 @@ set -g sel_set              4 8 9 11 12 14 18 19 22 25
 # "instagram" for the main dataset, to focus on faces.
 set -g db_suffix           ", instagram"
 set -g data_folder         data
-set -g misc_train_opts     --padding_embs_align_loss_weight_base 2e-4 --comp_fg_bg_preserve_loss_weight 5e-4 --subj_attn_norm_distill_loss_base 6
+set -g misc_train_opts     --padding_embs_align_loss_weight_base 2e-4 --comp_fg_bg_preserve_loss_weight 5e-4 --subj_attn_norm_distill_loss_base 0
 set -g misc_infer_opts     --use_pre_neg_prompt
