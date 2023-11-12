@@ -777,7 +777,7 @@ def replace_rows_of_copycat_embs(attn_mat, subj_indices, attn_copycat_emb_range,
     
     return attn_mat2.reshape(attn_mat_shape)
 
-def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H):
+def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, setting_bg_attn_to_0=False):
     # attn_mat: [32, 4096, 77]. 32: B * H. B = 4, H = 8.
     attn_mat_shape = attn_mat.shape
     # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77]. 32: B * H.
@@ -807,7 +807,11 @@ def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H):
         # bg_attn: [8, 4096, 4]. fg_attn: [8, 4096, 9].
         bg_attn = attn_mat[b, :, :, bg_indices_by_instance[b]]
         fg_attn = attn_mat[b, :, :, subj_indices_b]
-        attn_mat2[b, :, :, bg_indices_by_instance[b]] = fg_attn - bg_attn
+        if setting_bg_attn_to_0:
+            attn_mat2[b, :, :, bg_indices_by_instance[b]] = 0
+        else:
+            # Set bg attns to the difference between fg attns and the mean of bg attns.
+            attn_mat2[b, :, :, bg_indices_by_instance[b]] = fg_attn - bg_attn
         attn_mat2[b, :, :, subj_indices_b] = fg_attn + bg_attn.mean(dim=(1,2), keepdim=True) - bg_attn
         num_copied_insts += 1
     # print(f"num_copied_insts: {num_copied_insts}")

@@ -282,7 +282,7 @@ def parse_args():
                         help="Range of embedding indices to be used as copycat attention. "
                             "Default [-1, -1]: not specified.")
     parser.add_argument("--contrast_fg_bg_attns",
-                        action="store_true", 
+                        type=str2bool, const=True, nargs="?", default=argparse.SUPPRESS,
                         help="Whether to copy the foreground attention to the background tokens.")
         
     # If normalize_subj_attn is not specified, then use the 'normalize_subj_attn' in the checkpoint.
@@ -417,10 +417,13 @@ def main(opt):
             K = opt.use_conv_attn_kernel_size
             assert opt.num_vectors_per_token >= K * K, \
                     f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
-            
+        
+        # If contrast_fg_bg_attns is specified, then use it (override the checkpoint). 
+        # Otherwise, leave the ckpt setting unchanged.
+        contrast_fg_bg_attns = opt.contrast_fg_bg_attns if hasattr(opt, 'contrast_fg_bg_attns') else None
         model.embedding_manager.set_embs_attn_specs(opt.use_conv_attn_kernel_size, 
                                                     opt.attn_copycat_emb_range,
-                                                    opt.contrast_fg_bg_attns)
+                                                    contrast_fg_bg_attns)
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
