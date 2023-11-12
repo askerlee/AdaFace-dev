@@ -825,7 +825,7 @@ if __name__ == "__main__":
 
         config.model.params.personalization_config.params.attn_copycat_emb_range \
             = opt.attn_copycat_emb_range
-        config.model.parmas.personalization_config.params.copy_fg_attn_to_bg \
+        config.model.params.personalization_config.params.copy_fg_attn_to_bg \
             = opt.copy_fg_attn_to_bg
         
         if hasattr(opt, 'composition_regs_iter_gap'):
