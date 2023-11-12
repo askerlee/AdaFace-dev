@@ -807,12 +807,18 @@ def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, sett
         # bg_attn: [8, 4096, 4]. fg_attn: [8, 4096, 9].
         bg_attn = attn_mat[b, :, :, bg_indices_by_instance[b]]
         fg_attn = attn_mat[b, :, :, subj_indices_b]
+        bg_attn_demeaned = bg_attn - bg_attn.mean(dim=(1,2), keepdim=True)
+        fg_attn_demeaned = fg_attn - fg_attn.mean(dim=(1,2), keepdim=True)
+
         if setting_bg_attn_to_0:
+            # Enabled during inference to remove the effects of bg tokens.
             attn_mat2[b, :, :, bg_indices_by_instance[b]] = 0
         else:
-            # Set bg attns to the difference between fg attns and the mean of bg attns.
-            attn_mat2[b, :, :, bg_indices_by_instance[b]] = fg_attn - bg_attn
-        attn_mat2[b, :, :, subj_indices_b] = fg_attn + bg_attn.mean(dim=(1,2), keepdim=True) - bg_attn
+            # Subtract (normalized) fg attns from bg attns
+            attn_mat2[b, :, :, bg_indices_by_instance[b]] = bg_attn - fg_attn_demeaned
+
+        # Subtract (normalized) bg attns from fg attns
+        attn_mat2[b, :, :, subj_indices_b] = fg_attn - bg_attn_demeaned
         num_copied_insts += 1
     # print(f"num_copied_insts: {num_copied_insts}")
 
