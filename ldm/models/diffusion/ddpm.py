@@ -3932,8 +3932,10 @@ class LatentDiffusion(DDPM):
         # So we exclude the "start" token from the align padding loss.
         padding_mask[:, 0] = 0
         #subj_padding_indices = padding_mask[:SSB_SIZE].nonzero(as_tuple=True)
-        subj_embs_grad_scale  = 0.01
-        subj_embs_grad_scaler = gen_gradient_scaler(subj_embs_grad_scale)
+        subj_embs_contrast_paddings_grad_scale  = 0.01
+        subj_embs_contrast_paddings_grad_scaler = gen_gradient_scaler(subj_embs_contrast_paddings_grad_scale)
+        subj_embs_contrast_bg_grad_scale  = 0.3
+        subj_embs_contrast_bg_grad_scaler = gen_gradient_scaler(subj_embs_contrast_bg_grad_scale)
 
         subj_subj_indices_B, subj_subj_indices_N = subj_indices
 
@@ -3942,7 +3944,7 @@ class LatentDiffusion(DDPM):
         subj_subj_embs = cond_prompt_embeddings[subj_subj_indices_B, :, subj_subj_indices_N]
         # subj_subj_embs: [18, 16, 768] => [2, 9, 16, 768] => [2, 1, 16, 768]. "1" is for broadcasting.
         subj_subj_embs = subj_subj_embs.reshape(SSB_SIZE, K_fg, self.N_LAYERS, -1).sum(dim=1, keepdim=True)
-        subj_subj_embs_gs = subj_embs_grad_scaler(subj_subj_embs)
+        subj_subj_embs_gs = subj_embs_contrast_paddings_grad_scaler(subj_subj_embs)
         EMB_DIM = subj_subj_embs.shape[-1]
 
         loss_padding_subj_embs_align = 0
@@ -3985,6 +3987,7 @@ class LatentDiffusion(DDPM):
             bg_padding_mask = torch.zeros_like(padding_mask)
             bg_padding_mask[bg_indices] = 1
 
+            subj_subj_embs_gs2 = subj_embs_contrast_bg_grad_scaler(subj_subj_embs)
             # bg tokens may appear in class prompts (beyond SSB_SIZE), 
             # but subj tokens are limited to SSB_SIZE. So we only look at the first SSB_SIZE instances.
             for i in range(SSB_SIZE):
@@ -3994,12 +3997,12 @@ class LatentDiffusion(DDPM):
                     # bg_embs_i: [16, 4, 768] => [4, 16, 768].
                     bg_embs_i = cond_prompt_embeddings[i, :, bg_indices_i_N].permute(1, 0, 2)
                     # subj_subj_embs_gs_i: [1,  16, 768].
-                    # subj_embs_grad_scale  = 0.05.
-                    subj_subj_embs_i = subj_subj_embs[i]
+                    # subj_embs_contrast_bg_grad_scale  = 0.3.
+                    subj_subj_embs_gs2_i = subj_subj_embs_gs2[i]
                     # bg_subj_embs_align_coeffs_i: [4, 16]
                     # We don't use gs to subj_subj_embs_i, since we also want to avoid the bg semantics 
                     # contaminating the subj semantics. So the loss should be bi-directional.
-                    bg_subj_embs_align_coeffs_i  = calc_align_coeffs(bg_embs_i, subj_subj_embs_i)
+                    bg_subj_embs_align_coeffs_i  = calc_align_coeffs(bg_embs_i, subj_subj_embs_gs2_i)
                     loss_bg_subj_embs_align += power_loss(bg_subj_embs_align_coeffs_i, exponent=2)
 
         return loss_padding_subj_embs_align, loss_padding_cls_embs_align, loss_bg_subj_embs_align
