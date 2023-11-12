@@ -2808,25 +2808,19 @@ class LatentDiffusion(DDPM):
             if loss_comp_attn_delta_distill > 0:
                 loss_dict.update({f'{prefix}/comp_attn_delta_distill': loss_comp_attn_delta_distill.mean().detach()})
 
-            subj_attn_delta_distill_loss_scale_base = 0.5
-            comp_attn_delta_distill_loss_scale_base = 1
+            # loss_subj_attn_base_align, loss_subj_attn_delta_align are L2 losses, 
+            # so no need to use dynamic loss scale.
+            subj_attn_delta_distill_loss_scale = 1 #0.5
+            # loss_comp_attn_delta_distill is L2 loss, so no need to use dynamic loss scale.
+            comp_attn_delta_distill_loss_scale = 1
             # If normalize_subj_attn, then more relaxed on subj attn magnitudes.
             subj_attn_norm_distill_loss_scale_base  = 1 
             
             if extra_info['normalize_subj_attn']:
-                subj_attn_delta_distill_loss_scale_base *= 0.5
+                subj_attn_delta_distill_loss_scale *= 0.5
                 subj_attn_norm_distill_loss_scale_base  *= 0.5
 
-            # subj_attn_delta_distill_loss_base: 0.5
-            subj_attn_delta_distill_loss_scale = calc_dyn_loss_scale(loss_subj_attn_delta_align, 
-                                                                     self.subj_attn_delta_distill_loss_base,
-                                                                     subj_attn_delta_distill_loss_scale_base)
-
-            # comp_attn_delta_distill_loss_base: 5
-            comp_attn_delta_distill_loss_scale = calc_dyn_loss_scale(loss_comp_attn_delta_distill,
-                                                                     self.comp_attn_delta_distill_loss_base,
-                                                                     comp_attn_delta_distill_loss_scale_base)
-
+            # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
             # subj_attn_norm_distill_loss_base: 8 for non-faces or 0 (disabled) for faces.
             subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
                                                                      self.subj_attn_norm_distill_loss_base,
@@ -2873,12 +2867,10 @@ class LatentDiffusion(DDPM):
                 if loss_comp_subj_bg_attn_suppress > 0:
                     loss_dict.update({f'{prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach()})
 
-                comp_subj_fg_feat_preserve_loss_scale_base = 1
+                # loss_comp_subj_fg_feat_preserve is L2 loss, so no need to use dynamic loss scale.
                 # comp_subj_fg_feat_preserve_loss_base: 0.25
-                comp_subj_fg_feat_preserve_loss_scale = calc_dyn_loss_scale(loss_comp_subj_fg_feat_preserve,
-                                                                            self.comp_subj_fg_feat_preserve_loss_base,
-                                                                            comp_subj_fg_feat_preserve_loss_scale_base)
-                
+                comp_subj_fg_feat_preserve_loss_scale = 1
+
                 bg_attn_suppress_loss_scale = 0.5
                 loss_comp_fg_bg_preserve = (loss_comp_subj_fg_feat_preserve * comp_subj_fg_feat_preserve_loss_scale \
                                               + loss_comp_subj_fg_attn_preserve) \
