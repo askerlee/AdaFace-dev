@@ -777,7 +777,7 @@ def replace_rows_of_copycat_embs(attn_mat, subj_indices, attn_copycat_emb_range,
     
     return attn_mat2.reshape(attn_mat_shape)
 
-def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, setting_bg_attn_to_0=False):
+def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, copy_fg_attn_to_bg=False):
     # attn_mat: [32, 4096, 77]. 32: B * H. B = 4, H = 8.
     attn_mat_shape = attn_mat.shape
     # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77]. 32: B * H.
@@ -796,31 +796,32 @@ def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, sett
     M_bg = len(list(bg_indices_by_instance.values())[0])
     assert M_bg <= M_fg, f"M_bg={M_bg} should be <= M_fg={M_fg}, since we copy from fg to bg."
     attn_mat2 = attn_mat.clone()
-    num_copied_insts = 0
     
     for b in subj_indices_by_instance.keys():
         if b not in bg_indices_by_instance:
             continue
         # Copy the FIRST M_bg fg attention rows to the M_bg bg attention rows.
-        subj_indices_b = subj_indices_by_instance[b][:M_bg]
+        subj_indices_part_b = subj_indices_by_instance[b][:M_bg]
         # attn_mat: [4, 8, 4096, 77].
         # bg_attn: [8, 4096, 4]. fg_attn: [8, 4096, 9].
         bg_attn = attn_mat[b, :, :, bg_indices_by_instance[b]]
-        fg_attn = attn_mat[b, :, :, subj_indices_b]
+        fg_attn_part = attn_mat[b, :, :, subj_indices_part_b]
         bg_attn_demeaned = bg_attn - bg_attn.mean(dim=(1,2), keepdim=True)
-        fg_attn_demeaned = fg_attn - fg_attn.mean(dim=(1,2), keepdim=True)
+        fg_attn_part_demeaned = fg_attn_part - fg_attn_part.mean(dim=(1,2), keepdim=True)
 
-        if setting_bg_attn_to_0:
-            # Enabled during inference to remove the effects of bg tokens.
-            attn_mat2[b, :, :, bg_indices_by_instance[b]] = 0
+        subj_indices_full_b = subj_indices_by_instance[b]
+        fg_attn_full = attn_mat[b, :, :, subj_indices_full_b]
+        bg_attn_avg_demeaned = bg_attn.mean(dim=2, keepdim=True) - bg_attn.mean(dim=(1,2), keepdim=True)
+
+        if copy_fg_attn_to_bg:
+            # Let bg tokens focus on the fg areas, to contribute high-frequency details.
+            attn_mat2[b, :, :, bg_indices_by_instance[b]] = fg_attn_part - bg_attn_demeaned
         else:
             # Subtract (normalized) fg attns from bg attns
-            attn_mat2[b, :, :, bg_indices_by_instance[b]] = bg_attn - fg_attn_demeaned
+            attn_mat2[b, :, :, bg_indices_by_instance[b]] = bg_attn - fg_attn_part_demeaned
 
-        # Subtract (normalized) bg attns from fg attns
-        attn_mat2[b, :, :, subj_indices_b] = fg_attn - bg_attn_demeaned
-        num_copied_insts += 1
-    # print(f"num_copied_insts: {num_copied_insts}")
+        # Subtract bg attns from fg attns, to reduce fg attns on bg areas.
+        attn_mat2[b, :, :, subj_indices_part_b] = fg_attn_full - bg_attn_avg_demeaned
 
     return attn_mat2.reshape(attn_mat_shape)
 

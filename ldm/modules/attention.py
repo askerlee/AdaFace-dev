@@ -231,16 +231,16 @@ class CrossAttention(nn.Module):
                 sim = replace_rows_of_copycat_embs(sim, subj_indices, self.attn_copycat_emb_range, h)
             
             if self.contrast_fg_bg_attns and bg_indices is not None:
-                self.setting_bg_attn_to_0_in_inference = True
+                self.copy_fg_attn_to_bg_in_inference = True
                 # During inference, if bg tokens are included in the prompt, 
                 # we set bg attn to 0 to prevent it from affecting the generation.
-                if self.setting_bg_attn_to_0_in_inference and not self.is_training:
-                    setting_bg_attn_to_0 = True
+                if self.copy_fg_attn_to_bg_in_inference and not self.is_training:
+                    copy_fg_attn_to_bg = True
                 else:
-                    setting_bg_attn_to_0 = False
+                    copy_fg_attn_to_bg = False
 
                 sim = contrast_fg_bg_attns_in_attn_mat(sim, subj_indices, bg_indices, h,
-                                                       setting_bg_attn_to_0=setting_bg_attn_to_0)
+                                                       copy_fg_attn_to_bg=copy_fg_attn_to_bg)
 
             if self.normalize_subj_attn:
                 sim = normalize_attn_at_indices(sim, subj_indices, h)
