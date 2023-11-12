@@ -971,10 +971,6 @@ class UNetModel(nn.Module):
             # Return subj_indices to cross attention layers for conv attn computation.
             return layer_context, subj_indices
 
-        # Apply conv attn on all layers. 
-        # Although layer 12 has small 8x8 feature maps, since we linearly combine 
-        # pointwise attn with conv attn, we still apply conv attn (3x3) on it.
-        ca_flag_layer_indices      = None #[1, 2, 4, 5, 7, 8, 16, 17, 18, 19, 20, 21, 22, 23, 24]
         # conv_attn_layerwise_scales are not specified. So use the default value 0.5.
         # Here conv_attn_layerwise_scales is a list of scalars, not a learnable tensor.
         if conv_attn_layerwise_scales is None:
@@ -988,6 +984,9 @@ class UNetModel(nn.Module):
             # the learned conv_attn_layerwise_scales.      
             conv_attn_layerwise_scales = [1] * 16
 
+        # ca_layer_indices = None: Apply conv attn on all layers. 
+        # Although layer 12 has small 8x8 feature maps, since we linearly combine 
+        # pointwise attn with conv attn, we still apply conv attn (3x3) on it.
         ca_flags_stack = []
         old_ca_flags, _ = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn_kernel_size': use_conv_attn_kernel_size,
@@ -995,7 +994,7 @@ class UNetModel(nn.Module):
                                                           'conv_attn_layer_scale:layerwise': \
                                                            conv_attn_layerwise_scales,
                                                           'normalize_subj_attn': normalize_subj_attn, },
-                                       ca_layer_indices = ca_flag_layer_indices )
+                                       ca_layer_indices = None )
             
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).
         # None here means ca_flags have been applied to all layers.
