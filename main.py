@@ -224,8 +224,10 @@ def get_parser(**parser_kwargs):
         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
     
     parser.add_argument("--use_conv_attn_kernel_size",
-        type=int, default=-1,
-        help="Use convolutional attention of subject tokens with this kernel size")
+                        type=int, default=None,
+                        help="Use convolutional attention of subject tokens with this kernel size."
+                             "Default: None, not specified.")
+    
     parser.add_argument("--attn_copycat_emb_range",
         type=int, nargs=2, 
         default=[-1, -1],
@@ -804,7 +806,7 @@ if __name__ == "__main__":
                 config.data.params.train.params.cls_bg_delta_tokens      = re.split(r"\s+", opt.bg_init_words)
                 config.data.params.validation.params.cls_bg_delta_tokens = re.split(r"\s+", opt.bg_init_words)
 
-        if opt.use_conv_attn_kernel_size > 0:
+        if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
             K = opt.use_conv_attn_kernel_size
             assert opt.num_vectors_per_token >= K * K, \
                     f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
