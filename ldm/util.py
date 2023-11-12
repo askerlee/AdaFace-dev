@@ -824,7 +824,6 @@ def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, copy
             attn_mat2[b, :, :, bg_indices_b] = fg_attn_avg - bg_attn_demeaned
         else:
             # Subtract (normalized) fg attns from bg attns
-            breakpoint()
             attn_mat2[b, :, :, bg_indices_b] = bg_attn     - fg_attn_avg_demeaned
 
         # Subtract bg attns from fg attns, to reduce fg attns on bg areas.
