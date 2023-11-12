@@ -282,7 +282,7 @@ def parse_args():
                         help="Range of embedding indices to be used as copycat attention. "
                             "Default [-1, -1]: not specified.")
     parser.add_argument("--contrast_fg_bg_attns",
-                        type=str2bool, const=True, nargs="?", default=False, #argparse.SUPPRESS,
+                        type=str2bool, const=True, nargs="?", default=argparse.SUPPRESS,
                         help="Whether to copy the foreground attention to the background tokens.")
         
     # If normalize_subj_attn is not specified, then use the 'normalize_subj_attn' in the checkpoint.
@@ -421,6 +421,7 @@ def main(opt):
         # If contrast_fg_bg_attns is specified, then use it (override the checkpoint). 
         # Otherwise, leave the ckpt setting unchanged.
         contrast_fg_bg_attns = opt.contrast_fg_bg_attns if hasattr(opt, 'contrast_fg_bg_attns') else None
+        contrast_fg_bg_attns = False # A dirty hack to disable contrast_fg_bg_attns during inference.
         model.embedding_manager.set_embs_attn_specs(opt.use_conv_attn_kernel_size, 
                                                     opt.attn_copycat_emb_range,
                                                     contrast_fg_bg_attns)
