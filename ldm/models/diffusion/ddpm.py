@@ -3932,7 +3932,7 @@ class LatentDiffusion(DDPM):
         # So we exclude the "start" token from the align padding loss.
         padding_mask[:, 0] = 0
         #subj_padding_indices = padding_mask[:SSB_SIZE].nonzero(as_tuple=True)
-        subj_embs_grad_scale  = 0.05
+        subj_embs_grad_scale  = 0.01
         subj_embs_grad_scaler = gen_gradient_scaler(subj_embs_grad_scale)
 
         subj_subj_indices_B, subj_subj_indices_N = subj_indices
@@ -3977,6 +3977,7 @@ class LatentDiffusion(DDPM):
                 # cls_subj_embs_i:    [1, 16, 768].
                 cls_subj_embs_i = cls_subj_embs[i]
                 # padding_cls_embs_align_coeffs_i: [63, 16]
+                # loss_padding_cls_embs_align is not optimized, so no need to do gs to cls_subj_embs_i.
                 padding_cls_embs_align_coeffs_i  = calc_align_coeffs(cls_padding_embs_i, cls_subj_embs_i)
                 loss_padding_cls_embs_align += power_loss(padding_cls_embs_align_coeffs_i, exponent=2)
 
@@ -3984,6 +3985,8 @@ class LatentDiffusion(DDPM):
             bg_padding_mask = torch.zeros_like(padding_mask)
             bg_padding_mask[bg_indices] = 1
 
+            # bg tokens may appear in class prompts (beyond SSB_SIZE), 
+            # but subj tokens are limited to SSB_SIZE. So we only look at the first SSB_SIZE instances.
             for i in range(SSB_SIZE):
                 #subj_padding_indices_i = subj_padding_indices_by_instance[i]
                 bg_indices_i_N = bg_padding_mask[i].nonzero().squeeze(-1)

@@ -804,10 +804,12 @@ def copy_fg_attn_to_bg_in_attn_mat(attn_mat, subj_indices, bg_indices, H):
         # Copy the FIRST M_bg fg attention rows to the M_bg bg attention rows.
         subj_indices_b = subj_indices_by_instance[b][:M_bg]
         # attn_mat: [4, 8, 4096, 77].
+        # bg_attn: [8, 4096, 4]. fg_attn: [8, 4096, 9].
         bg_attn = attn_mat[b, :, :, bg_indices_by_instance[b]]
         fg_attn = attn_mat[b, :, :, subj_indices_b]
-        attn_mat2[b, :, :, bg_indices_by_instance[b]] = attn_mat[b, :, :, subj_indices_b]
-        num_copied_insts += M_bg
+        attn_mat2[b, :, :, bg_indices_by_instance[b]] = fg_attn - bg_attn
+        attn_mat2[b, :, :, subj_indices_b] = fg_attn + bg_attn.mean(dim=(1,2), keepdim=True) - bg_attn
+        num_copied_insts += 1
     # print(f"num_copied_insts: {num_copied_insts}")
 
     return attn_mat2.reshape(attn_mat_shape)

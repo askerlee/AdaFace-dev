@@ -233,7 +233,10 @@ def get_parser(**parser_kwargs):
         default=[-1, -1],
         help="Range of embedding indices to be used as copycat attention. "
              "Default [-1, -1]: not specified.")
-    
+    parser.add_argument("--copy_fg_attn_to_bg",
+                        action="store_true", 
+                        help="Whether to copy the foreground attention to the background tokens.")
+            
     parser.add_argument("--normalize_subj_attn", 
         type=str2bool, nargs="?", const=True, default=argparse.SUPPRESS,
         help="Whether to normalize the subject embedding attention scores")
@@ -819,9 +822,12 @@ if __name__ == "__main__":
                     f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
             config.model.params.personalization_config.params.use_conv_attn_kernel_size \
                 = opt.use_conv_attn_kernel_size
-            config.model.params.personalization_config.params.attn_copycat_emb_range \
-                = opt.attn_copycat_emb_range
 
+        config.model.params.personalization_config.params.attn_copycat_emb_range \
+            = opt.attn_copycat_emb_range
+        config.model.parmas.personalization_config.params.copy_fg_attn_to_bg \
+            = opt.copy_fg_attn_to_bg
+        
         if hasattr(opt, 'composition_regs_iter_gap'):
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
 
