@@ -37,7 +37,7 @@ def parse_args():
                         type=int, default=4,
                         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
     parser.add_argument("--contrast_fg_bg_attns",
-                        action="store_true", 
+                        type=str2bool, const=True, nargs="?", default=argparse.SUPPRESS, 
                         help="Whether to copy the foreground attention to the background tokens.")
                                 
     parser.add_argument("--use_conv_attn_kernel_size",
@@ -348,8 +348,8 @@ if __name__ == "__main__":
         outdir = args.out_dir_tmpl + "-" + args.method
         os.makedirs(outdir, exist_ok=True)
 
-        if args.contrast_fg_bg_attns:
-            if not args.include_bg_string:
+        if hasattr(args, 'contrast_fg_bg_attns'):
+            if args.contrast_fg_bg_attns and not args.include_bg_string:
                 print("WARNING: --contrast_fg_bg_attns is specified, but --include_bg_string is not. Set it to True.")
                 args.include_bg_string = True
 
@@ -458,8 +458,8 @@ if __name__ == "__main__":
             command_line += f" --use_conv_attn_kernel_size {args.use_conv_attn_kernel_size}"
         if hasattr(args, 'attn_copycat_emb_range'):
             command_line += f" --attn_copycat_emb_range {args.attn_copycat_emb_range[0]} {args.attn_copycat_emb_range[1]}"
-        if args.contrast_fg_bg_attns:
-            command_line += f" --contrast_fg_bg_attns"
+        if hasattr(args, 'contrast_fg_bg_attns'):
+            command_line += f" --contrast_fg_bg_attns {args.contrast_fg_bg_attns}"
 
         if hasattr(args, 'emb_ema_as_pooling_probe'):
             command_line += f" --emb_ema_as_pooling_probe"
