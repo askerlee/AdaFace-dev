@@ -25,7 +25,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
                        ortho_subtract, decomp_align_ortho, \
-                       ortho_l2loss, gen_gradient_scaler, \
+                       ortho_l2loss, gen_gradient_scaler, calc_align_coeffs, \
                        convert_attn_to_spatial_weight, masked_mean, \
                        calc_delta_cosine_loss, calc_delta_alignment_loss, calc_align_coeff_loss, \
                        calc_prompt_emb_delta_loss, power_loss, calc_dyn_loss_scale, \
@@ -3163,15 +3163,20 @@ class LatentDiffusion(DDPM):
                     loss_layer_subj_attn_delta_align \
                         = calc_delta_alignment_loss(subj_single_subj_attn, subj_comp_subj_attn,
                                                     mix_single_subj_attn,  mix_comp_subj_attn,
-                                                    ref_grad_scale=mix_attn_grad_scale)
+                                                    ref_grad_scale=mix_attn_grad_scale,
+                                                    use_cosine_loss=True)
 
                     loss_subj_attn_delta_align  += loss_layer_subj_attn_delta_align * attn_delta_distill_layer_weight
+                    # We encourage subj_comp_comp_attn to express at least 1s of mix_comp_comp_attn, i.e.,
+                    # comp_attn_align_coeffs should be >= 1. So a loss is incurred if it's < 1.
+                    # do_sqr: square the loss, so that the loss is more sensitive to smaller (<< 1) delta_align_coeffs.
                     # subj_comp_comp_attn: [1, 13, 8, 64]. 13: number of extra compositional tokens.
-                    loss_layer_comp_attn_delta = calc_delta_cosine_loss(subj_comp_comp_attn, mix_comp_comp_attn_gs,
-                                                                        exponent=2,
-                                                                        do_demean_first=True,
-                                                                        first_n_dims_to_flatten=3, 
-                                                                        ref_grad_scale=1)
+                    # Don't use calc_delta_cosine_loss() as it is scale invariant to mix_comp_comp_attn_gs.
+                    # However,we wish subj_comp_comp_attn >= mix_comp_comp_attn_gs.
+                    # calc_align_coeff_loss() is ok, since we don't care about high-frequency details
+                    # of the compositional part.
+                    loss_layer_comp_attn_delta = calc_align_coeff_loss(subj_comp_comp_attn, mix_comp_comp_attn_gs,
+                                                                       margin=1., ref_grad_scale=1, do_sqr=True)
                     loss_comp_attn_delta_distill += loss_layer_comp_attn_delta
 
                 # mean(dim=-1): average over the 64 feature channels.
@@ -3262,7 +3267,8 @@ class LatentDiffusion(DDPM):
                 loss_layer_feat_delta_align_spatial \
                     = calc_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
                                                 mix_single_feat_3d,  mix_comp_feat_3d,
-                                                ref_grad_scale=mix_feat_grad_scale)
+                                                ref_grad_scale=mix_feat_grad_scale,
+                                                use_cosine_loss=True)
 
                 # The alignment of comp feat and single feat is done with L2 loss on alignment coefficients.
                 # This is not as effective as the cosine loss, but cosine loss is sensitive to noisy features
@@ -3992,6 +3998,13 @@ class LatentDiffusion(DDPM):
         # "start" token always receives the highest attention, which is the normal behavior.
         # So we exclude the "start" token from the align padding loss.
         padding_mask[:, 0] = 0
+        # padding embeddings cannot push the subject embeddings away.
+        subj_embs_contrast_paddings_grad_scale  = 0.01
+        subj_embs_contrast_paddings_grad_scaler = gen_gradient_scaler(subj_embs_contrast_paddings_grad_scale)
+        # bg embeddings can push the subject embeddings away, but less effectively than 
+        # the subject embeddings pushing the bg embeddings away.
+        subj_embs_contrast_bg_grad_scale  = 0.3
+        subj_embs_contrast_bg_grad_scaler = gen_gradient_scaler(subj_embs_contrast_bg_grad_scale)
 
         subj_subj_indices_B, subj_subj_indices_N = subj_indices
 
@@ -4000,6 +4013,7 @@ class LatentDiffusion(DDPM):
         subj_subj_embs = cond_prompt_embeddings[subj_subj_indices_B, :, subj_subj_indices_N]
         # subj_subj_embs: [18, 16, 768] => [2, 9, 16, 768] => [2, 1, 16, 768]. "1" is for broadcasting.
         subj_subj_embs = subj_subj_embs.reshape(SSB_SIZE, K_fg, self.N_LAYERS, -1).sum(dim=1, keepdim=True)
+        subj_subj_embs_gs = subj_embs_contrast_paddings_grad_scaler(subj_subj_embs)
 
         loss_padding_subj_embs_align = 0
         loss_padding_cls_embs_align  = 0
@@ -4011,18 +4025,11 @@ class LatentDiffusion(DDPM):
             subj_padding_indices_i_N = padding_mask[i].nonzero().squeeze(-1)
             # subj_padding_embs_i: [63, 16, 768].
             subj_padding_embs_i = cond_prompt_embeddings[i, :, subj_padding_indices_i_N].permute(1, 0, 2)
-            # subj_subj_embs_i: [1,  16, 768].
-            subj_subj_embs_i = subj_subj_embs[i]
-            # aim_to_align=False: loss is larger if the two embeddings are better aligned.
-            # ref_grad_scale=0.01: disable the grad into subj_subj_embs.
-            # padding embeddings cannot push the subject embeddings away.
-            loss_padding_subj_embs_align += \
-                calc_delta_cosine_loss(subj_padding_embs_i, subj_subj_embs_i.expand_as(subj_padding_embs_i),
-                                       exponent=2,
-                                       do_demean_first=True,
-                                       first_n_dims_to_flatten=2, 
-                                       ref_grad_scale=0.01,
-                                       aim_to_align=False)
+            # subj_subj_embs_gs_i: [1,  16, 768].
+            subj_subj_embs_gs_i = subj_subj_embs_gs[i]
+            # padding_subj_embs_align_coeffs_i: [63, 16]
+            padding_subj_embs_align_coeffs_i  = calc_align_coeffs(subj_padding_embs_i, subj_subj_embs_gs_i)
+            loss_padding_subj_embs_align += power_loss(padding_subj_embs_align_coeffs_i, exponent=2)
         
         loss_padding_subj_embs_align /= SSB_SIZE
 
@@ -4039,14 +4046,9 @@ class LatentDiffusion(DDPM):
                 cls_padding_embs_i = cond_prompt_embeddings[cls_padding_indices_i[0], :, cls_padding_indices_i[1]]
                 # cls_subj_embs_i:    [1, 16, 768].
                 cls_subj_embs_i = cls_subj_embs[i]
-                # ref_grad_scale=1: we don't do gs on cls_subj_embs, since loss_padding_cls_embs_align is not optimized.
-                loss_padding_cls_embs_align += \
-                    calc_delta_cosine_loss(cls_padding_embs_i, cls_subj_embs_i.expand_as(cls_padding_embs_i),
-                                           exponent=2,
-                                           do_demean_first=True,
-                                           first_n_dims_to_flatten=2, 
-                                           ref_grad_scale=1,
-                                           aim_to_align=False)
+                # we don't do gs on cls_subj_embs, since loss_padding_cls_embs_align is not optimized.
+                padding_cls_embs_align_coeffs_i  = calc_align_coeffs(cls_padding_embs_i, cls_subj_embs_i)
+                loss_padding_cls_embs_align += power_loss(padding_cls_embs_align_coeffs_i, exponent=2)
 
             if len(cls_padding_indices_by_instance) > 0:
                 loss_padding_cls_embs_align /= len(cls_padding_indices_by_instance)
@@ -4054,6 +4056,13 @@ class LatentDiffusion(DDPM):
         if bg_indices is not None:
             bg_padding_mask = torch.zeros_like(padding_mask)
             bg_padding_mask[bg_indices] = 1
+            # subj_embs_contrast_bg_grad_scale  = 0.3.
+            # We use a 0.3 gs (relatively large) on subj_subj_embs, 
+            # since we also want to avoid the bg semantics 
+            # contaminating the subj semantics. So the loss should be *bi-directional*.
+            # bg embeddings can push the subject embeddings away, but less effectively than 
+            # the subject embeddings pushing the bg embeddings away.
+            subj_subj_embs_gs2 = subj_embs_contrast_bg_grad_scaler(subj_subj_embs)
 
             # bg tokens may appear in class prompts (beyond SSB_SIZE), 
             # but subj tokens are limited to SSB_SIZE. So we only look at the first SSB_SIZE instances.
@@ -4063,21 +4072,12 @@ class LatentDiffusion(DDPM):
                 if len(bg_indices_i_N) > 0:
                     # bg_embs_i: [16, 4, 768] => [4, 16, 768].
                     bg_embs_i = cond_prompt_embeddings[i, :, bg_indices_i_N].permute(1, 0, 2)
-                    # subj_subj_embs_i: [1,  16, 768].
-                    subj_subj_embs_i = subj_subj_embs[i]
-                    # We use a 0.3 gs (relatively large) on subj_subj_embs_i, 
-                    # since we also want to avoid the bg semantics 
-                    # contaminating the subj semantics. So the loss should be bi-directional.
-                    # bg embeddings can push the subject embeddings away, but less effectively than 
-                    # the subject embeddings pushing the bg embeddings away.
-                    loss_bg_subj_embs_align += \
-                        calc_delta_cosine_loss(bg_embs_i, subj_subj_embs_i.expand_as(bg_embs_i),
-                                               exponent=2,
-                                               do_demean_first=True,
-                                               first_n_dims_to_flatten=2, 
-                                               ref_grad_scale=0.3,
-                                               aim_to_align=False)
-                    
+                    # subj_subj_embs_gs2_i: [1,  16, 768].
+                    subj_subj_embs_gs2_i = subj_subj_embs_gs2[i]
+                    # bg_subj_embs_align_coeffs_i: [4, 16]
+                    bg_subj_embs_align_coeffs_i  = calc_align_coeffs(bg_embs_i, subj_subj_embs_gs2_i)
+                    loss_bg_subj_embs_align += power_loss(bg_subj_embs_align_coeffs_i, exponent=2)
+
             loss_bg_subj_embs_align /= SSB_SIZE
 
         return loss_padding_subj_embs_align, loss_padding_cls_embs_align, loss_bg_subj_embs_align
