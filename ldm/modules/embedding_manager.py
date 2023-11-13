@@ -887,7 +887,8 @@ class EmbeddingManager(nn.Module):
         
         self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
         self.set_normalize_subj_attn(normalize_subj_attn)
-        self.set_embs_attn_specs(use_conv_attn_kernel_size, attn_copycat_emb_range, contrast_fg_bg_attns)
+        self.set_embs_attn_specs(use_conv_attn_kernel_size, attn_copycat_emb_range, 
+                                 contrast_fg_bg_attns, do_init=True)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
 
@@ -1671,14 +1672,15 @@ class EmbeddingManager(nn.Module):
     def set_embs_attn_specs(self, use_conv_attn_kernel_size=None, 
                             attn_copycat_emb_range=None, 
                             contrast_fg_bg_attns=None,
-                            bg_attn_behavior_in_inference='zero'):
-        if use_conv_attn_kernel_size is not None:
+                            bg_attn_behavior_in_inference='zero',
+                            do_init=False):
+        if use_conv_attn_kernel_size is not None or do_init:
             self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
             extra_msg = ", DISABLED" if use_conv_attn_kernel_size is -1 else ""
             print(f"Setting use_conv_attn_kernel_size = {use_conv_attn_kernel_size}{extra_msg}")
 
         # Since attn_copycat_emb_range is not specified, we don't override the existing value.
-        if attn_copycat_emb_range is not None:
+        if (attn_copycat_emb_range is not None) or do_init:
             if attn_copycat_emb_range[0] < 0:
                 self.attn_copycat_emb_range    = None
                 extra_msg = ", DISABLED"
@@ -1688,15 +1690,14 @@ class EmbeddingManager(nn.Module):
 
             print(f"Setting attn_copycat_emb_range = {attn_copycat_emb_range}{extra_msg}")
 
-        if contrast_fg_bg_attns is not None:
+        if (contrast_fg_bg_attns is not None) or do_init:
             self.contrast_fg_bg_attns = contrast_fg_bg_attns
             extra_msg = ", DISABLED" if contrast_fg_bg_attns is False else ""
             print(f"Setting contrast_fg_bg_attns = {contrast_fg_bg_attns}{extra_msg}")
 
-            if contrast_fg_bg_attns:
-                # Only set if contrast_fg_bg_attns is enabled.
-                self.bg_attn_behavior_in_inference = bg_attn_behavior_in_inference
-                print(f"Setting bg_attn_behavior_in_inference = {bg_attn_behavior_in_inference}")
+        # bg_attn_behavior_in_inference is only in effect if contrast_fg_bg_attns is enabled.
+        self.bg_attn_behavior_in_inference = bg_attn_behavior_in_inference
+        print(f"Setting bg_attn_behavior_in_inference = {bg_attn_behavior_in_inference}")
 
     def initialize_attn_postmix_components(self, attn_postmix_weight, 
                                             postmix_attn_layer=None, 
