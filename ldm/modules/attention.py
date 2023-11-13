@@ -176,6 +176,7 @@ class CrossAttention(nn.Module):
         self.attn_copycat_emb_range = None
         self.contrast_fg_bg_attns   = False
         self.is_training            = True
+        self.bg_attn_behavior_in_inference = 'zero'  # 'zero', 'copy_fg', 'contrast_fg'
 
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -231,16 +232,15 @@ class CrossAttention(nn.Module):
                 sim = replace_rows_of_copycat_embs(sim, subj_indices, self.attn_copycat_emb_range, h)
             
             if self.contrast_fg_bg_attns and bg_indices is not None:
-                self.copy_fg_attn_to_bg_in_inference = True
                 # During inference, if bg tokens are included in the prompt, 
                 # we set bg attn to 0 to prevent it from affecting the generation.
-                if self.copy_fg_attn_to_bg_in_inference and not self.is_training:
-                    copy_fg_attn_to_bg = True
+                if self.bg_attn_behavior_in_inference is not None and (not self.is_training):
+                    bg_attn_behavior = self.bg_attn_behavior_in_inference
                 else:
-                    copy_fg_attn_to_bg = False
+                    bg_attn_behavior = 'contrast_fg'
 
                 sim = contrast_fg_bg_attns_in_attn_mat(sim, subj_indices, bg_indices, h,
-                                                       copy_fg_attn_to_bg=copy_fg_attn_to_bg)
+                                                       bg_attn_behavior=bg_attn_behavior)
 
             if self.normalize_subj_attn:
                 sim = normalize_attn_at_indices(sim, subj_indices, h)

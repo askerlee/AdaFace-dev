@@ -39,6 +39,10 @@ def parse_args():
     parser.add_argument("--contrast_fg_bg_attns",
                         type=str2bool, const=True, nargs="?", default=argparse.SUPPRESS, 
                         help="Whether to copy the foreground attention to the background tokens.")
+    parser.add_argument("--bg_attn_behavior_in_inference",
+                        type=str, default=argparse.SUPPRESS, 
+                        choices=["zero", "contrast_fg", "copy_fg"],
+                        help="How to handle bg attention in inference, if contrast_fg_bg_attns is enabled. ")
                                 
     parser.add_argument("--use_conv_attn_kernel_size",
                         type=int, default=argparse.SUPPRESS, 
@@ -462,7 +466,9 @@ if __name__ == "__main__":
             command_line += f" --attn_copycat_emb_range {args.attn_copycat_emb_range[0]} {args.attn_copycat_emb_range[1]}"
         if hasattr(args, 'contrast_fg_bg_attns'):
             command_line += f" --contrast_fg_bg_attns {args.contrast_fg_bg_attns}"
-
+        if hasattr(args, 'bg_attn_behavior_in_inference'):
+            command_line += f" --bg_attn_behavior_in_inference {args.bg_attn_behavior_in_inference}"
+            
         if hasattr(args, 'emb_ema_as_pooling_probe'):
             command_line += f" --emb_ema_as_pooling_probe"
         if hasattr(args, 'normalize_subj_attn'):

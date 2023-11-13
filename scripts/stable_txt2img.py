@@ -284,7 +284,10 @@ def parse_args():
     parser.add_argument("--contrast_fg_bg_attns",
                         type=str2bool, const=True, nargs="?", default=False, #argparse.SUPPRESS,
                         help="Whether to copy the foreground attention to the background tokens.")
-        
+    parser.add_argument("--bg_attn_behavior_in_inference",
+                        type=str, default="zero", choices=["zero", "contrast_fg", "copy_fg"],
+                        help="How to handle bg attention in inference, if contrast_fg_bg_attns is enabled. ")
+
     # If normalize_subj_attn is not specified, then use the 'normalize_subj_attn' in the checkpoint.
     # If 'normalize_subj_attn' doesn't exist in the checkpoint, then normalize_subj_attn is False.
     parser.add_argument("--normalize_subj_attn", type=str2bool, nargs="?", 
@@ -673,6 +676,7 @@ def main(opt):
                             c = model.get_learned_conditioning(prompts)
                             # is_training=False ensures that contrast_fg_bg_attns will set bg attn to 0.
                             c[2]['is_training'] = False
+                            c[2]['bg_attn_behavior_in_inference'] = opt.bg_attn_behavior_in_inference
 
                             # ref_c is not None, implies (prompt_mix_weight != 0 and ref_prompt is not None).
                             if ref_c is not None:
