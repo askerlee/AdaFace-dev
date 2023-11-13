@@ -2828,7 +2828,10 @@ class LatentDiffusion(DDPM):
                                                                      self.subj_attn_norm_distill_loss_base,
                                                                      subj_attn_norm_distill_loss_scale_base)
 
-            feat_base_align_scale  = 0 # Disabled. # 0.5
+            # loss_feat_base_align is disabled. If enabled, the performance will drop significantly.
+            # Probably the base features (of the subject single instances) are too noisy, and 
+            # couldn't help teach the subject comp instances.
+            feat_base_align_scale  = 0 # 0.5
             feat_delta_align_scale = 2
 
             loss_mix_prompt_distill =  (loss_subj_attn_delta_align * subj_attn_delta_distill_loss_scale \
