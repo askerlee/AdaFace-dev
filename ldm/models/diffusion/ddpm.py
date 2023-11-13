@@ -27,7 +27,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        ortho_subtract, decomp_align_ortho, calc_align_coeffs, \
                        ortho_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, masked_mean, \
-                       calc_delta_cosine_loss, calc_base_and_delta_alignment_loss, \
+                       calc_delta_cosine_loss, calc_delta_alignment_loss, \
                        calc_prompt_emb_delta_loss, power_loss, calc_dyn_loss_scale, \
                        save_grid, chunk_list, normalize_dict_values, \
                        distribute_embedding_to_M_tokens, fix_emb_scales, \
@@ -2818,7 +2818,7 @@ class LatentDiffusion(DDPM):
             subj_attn_norm_distill_loss_scale_base  = 1 
             
             if extra_info['normalize_subj_attn']:
-                subj_attn_delta_distill_loss_scale *= 0.5
+                subj_attn_delta_distill_loss_scale      *= 0.5
                 subj_attn_norm_distill_loss_scale_base  *= 0.5
 
             # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
@@ -3151,12 +3151,14 @@ class LatentDiffusion(DDPM):
                     '''
 
                     # Do not use mix_single_subj_attn_gs and mix_comp_subj_attn_gs,
-                    # as gs will be done within calc_base_and_delta_alignment_loss().
+                    # as gs will be done within calc_delta_alignment_loss().
                     # Doing it twice will reduce the grad on mix embeddings to 0.0025, almost 0.
-                    loss_layer_subj_attn_base_align, loss_layer_subj_attn_delta_align \
-                        = calc_base_and_delta_alignment_loss(subj_single_subj_attn, subj_comp_subj_attn,
+                    loss_layer_subj_attn_delta_align \
+                        = calc_delta_alignment_loss(subj_single_subj_attn, subj_comp_subj_attn,
                                                              mix_single_subj_attn,  mix_comp_subj_attn,
                                                              ref_grad_scale=mix_attn_grad_scale)
+
+                    loss_layer_subj_attn_base_align = 0
 
                     loss_subj_attn_base_align   += loss_layer_subj_attn_base_align  * attn_norm_distill_layer_weight
                     loss_subj_attn_delta_align  += loss_layer_subj_attn_delta_align * attn_delta_distill_layer_weight
@@ -3239,10 +3241,12 @@ class LatentDiffusion(DDPM):
             if feat_align_spatial_or_channel in ['spatial_and_channel', 'spatial_only']:
                 # Do spatial-wise alignment at each channel.
                 # mix_feat_grad_scale = 0.1.
-                loss_layer_feat_base_align_spatial, loss_layer_feat_delta_align_spatial \
-                    = calc_base_and_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
+                loss_layer_feat_delta_align_spatial \
+                    = calc_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
                                                          mix_single_feat_3d,  mix_comp_feat_3d,
                                                          ref_grad_scale=mix_feat_grad_scale)
+
+                loss_layer_feat_base_align_spatial = 0
 
                 loss_feat_base_align  += loss_layer_feat_base_align_spatial  * feat_distill_layer_weight
                 loss_feat_delta_align += loss_layer_feat_delta_align_spatial * feat_distill_layer_weight
@@ -3254,10 +3258,12 @@ class LatentDiffusion(DDPM):
                 mix_single_feat_3d  = mix_single_feat_3d.permute(0,  2, 1)
                 mix_comp_feat_3d    = mix_comp_feat_3d.permute(0,    2, 1)
                 # mix_feat_grad_scale = 0.1.
-                loss_layer_feat_base_align_channel, loss_layer_feat_delta_align_channel \
-                    = calc_base_and_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
+                loss_layer_feat_delta_align_channel \
+                    = calc_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
                                                          mix_single_feat_3d,  mix_comp_feat_3d,
                                                          ref_grad_scale=mix_feat_grad_scale)
+                
+                loss_layer_feat_base_align_channel = 0
                 
                 loss_feat_base_align  += loss_layer_feat_base_align_channel  * feat_distill_layer_weight
                 loss_feat_delta_align += loss_layer_feat_delta_align_channel * feat_distill_layer_weight
