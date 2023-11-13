@@ -1256,7 +1256,7 @@ class LatentDiffusion(DDPM):
 
         batch_have_fg_mask                      = batch['has_fg_mask']
         # Temporarily disable fg_mask for debugging.
-        disable_fg_mask = True
+        disable_fg_mask = False #True
         if disable_fg_mask:
             batch_have_fg_mask[:] = False
 
@@ -2882,7 +2882,7 @@ class LatentDiffusion(DDPM):
                 # loss_comp_subj_fg_feat_preserve is L2 loss, so no need to use dynamic loss scale.
                 comp_subj_fg_feat_preserve_loss_scale = 1
 
-                bg_attn_suppress_loss_scale = 0.5
+                bg_attn_suppress_loss_scale = 0 # loss_comp_subj_bg_attn_suppress DISABLED. # 0.5
                 loss_comp_fg_bg_preserve = (loss_comp_subj_fg_feat_preserve * comp_subj_fg_feat_preserve_loss_scale \
                                               + loss_comp_subj_fg_attn_preserve) \
                                             + loss_comp_subj_bg_attn_suppress * bg_attn_suppress_loss_scale
