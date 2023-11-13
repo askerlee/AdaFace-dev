@@ -4013,6 +4013,8 @@ class LatentDiffusion(DDPM):
                                        first_n_dims_to_flatten=2, 
                                        ref_grad_scale=0.01,
                                        aim_to_align=False)
+        
+        loss_padding_subj_embs_align /= SSB_SIZE
 
         if is_compos_iter:
             cls_subj_indices_B, cls_subj_indices_N = subj_subj_indices_B + SSB_SIZE, subj_subj_indices_N
@@ -4036,6 +4038,8 @@ class LatentDiffusion(DDPM):
                                            ref_grad_scale=1,
                                            aim_to_align=False)
 
+            if len(cls_padding_indices_by_instance) > 0:
+                loss_padding_cls_embs_align /= len(cls_padding_indices_by_instance)
 
         if bg_indices is not None:
             bg_padding_mask = torch.zeros_like(padding_mask)
@@ -4063,6 +4067,8 @@ class LatentDiffusion(DDPM):
                                                first_n_dims_to_flatten=2, 
                                                ref_grad_scale=0.3,
                                                aim_to_align=False)
+                    
+            loss_bg_subj_embs_align /= SSB_SIZE
 
         return loss_padding_subj_embs_align, loss_padding_cls_embs_align, loss_bg_subj_embs_align
 
