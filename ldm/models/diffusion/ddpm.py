@@ -2828,7 +2828,7 @@ class LatentDiffusion(DDPM):
                                                                      self.subj_attn_norm_distill_loss_base,
                                                                      subj_attn_norm_distill_loss_scale_base)
 
-            feat_base_align_scale  = 0.5
+            feat_base_align_scale  = 0 # Disabled. # 0.5
             feat_delta_align_scale = 2
 
             loss_mix_prompt_distill =  (loss_subj_attn_delta_align * subj_attn_delta_distill_loss_scale \
