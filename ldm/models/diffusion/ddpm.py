@@ -3273,6 +3273,9 @@ class LatentDiffusion(DDPM):
                 # The alignment of comp feat and single feat is done with L2 loss on alignment coefficients.
                 # This is not as effective as the cosine loss, but cosine loss is sensitive to noisy features
                 # in the reference features. So L2 reg on alignment coefficients is used here.
+                # As the alignment coeffs are on the whole slice of feature map, it encourages to
+                # subj_comp_feat to include at least 0.8 * subj_single_feat (as a whole), which 
+                # is not unreasonable.
                 loss_layer_feat_base_align_spatial = \
                     calc_align_coeff_loss(subj_comp_feat_small_3d, subj_single_feat_small_3d,
                                           margin=0.8,
@@ -3312,6 +3315,9 @@ class LatentDiffusion(DDPM):
                 # The alignment of comp feat and single feat is done with L2 loss on alignment coefficients.
                 # This is not as effective as the cosine loss, but cosine loss is sensitive to noisy features
                 # in the reference features. So L2 reg on alignment coefficients is used here.
+                # As the alignment coeffs are on the whole slice of feature map, it encourages to
+                # subj_comp_feat to include at least 0.8 * subj_single_feat (as a whole), which 
+                # is not unreasonable.
                 loss_layer_feat_base_align_channel \
                     = calc_align_coeff_loss(subj_comp_feat_small_3d, subj_single_feat_small_3d,
                                             margin=0.8,
