@@ -3163,9 +3163,16 @@ class LatentDiffusion(DDPM):
                     loss_subj_attn_base_align   += loss_layer_subj_attn_base_align  * attn_norm_distill_layer_weight
                     loss_subj_attn_delta_align  += loss_layer_subj_attn_delta_align * attn_delta_distill_layer_weight
                     
-                    comp_attn_delta                 = ortho_subtract(subj_comp_comp_attn,   mix_comp_comp_attn_gs)
-                    loss_layer_comp_attn_delta      = power_loss(comp_attn_delta, exponent=2)
-                    loss_comp_attn_delta_distill   += loss_layer_comp_attn_delta
+                    #comp_attn_delta                 = ortho_subtract(subj_comp_comp_attn,   mix_comp_comp_attn_gs)
+                    #loss_layer_comp_attn_delta      = power_loss(comp_attn_delta, exponent=2)
+                    comp_attn_align_coeffs = calc_align_coeffs(subj_comp_comp_attn, mix_comp_comp_attn_gs)
+                    # We encourage subj_comp_comp_attn to express at least 1s of mix_comp_comp_attn, i.e.,
+                    # comp_attn_align_coeffs should be >= 1. So a loss is incurred if it's < 1.
+                    # do_sqr: square the loss, so that the loss is more sensitive to smaller (<< 1) delta_align_coeffs.
+                    loss_layer_comp_attn_delta  = masked_mean(1 - comp_attn_align_coeffs, 
+                                                              1 - comp_attn_align_coeffs > 0,
+                                                              do_sqr=True)
+                    loss_comp_attn_delta_distill += loss_layer_comp_attn_delta
 
                 # Align the attention corresponding to each embedding individually.
                 # Note mix_*subj_attn use *_gs versions.
