@@ -2815,12 +2815,14 @@ class LatentDiffusion(DDPM):
                                                                      self.subj_attn_norm_distill_loss_base,
                                                                      subj_attn_norm_distill_loss_scale_base)
 
-            feat_base_align_scale = 0.5
+            feat_base_align_scale  = 0.5
+            feat_delta_align_scale = 2
+
             loss_mix_prompt_distill =  (loss_subj_attn_delta_align * subj_attn_delta_distill_loss_scale \
                                           + loss_comp_attn_delta_distill * comp_attn_delta_distill_loss_scale) \
                                         + loss_subj_attn_norm_distill    * subj_attn_norm_distill_loss_scale \
                                         + loss_feat_base_align * feat_base_align_scale \
-                                        + loss_feat_delta_align
+                                        + loss_feat_delta_align * feat_delta_align_scale
                                         
             if loss_mix_prompt_distill > 0:
                 loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
@@ -3077,6 +3079,7 @@ class LatentDiffusion(DDPM):
         # Setting to 0 may prevent the graph from being released and OOM.
         mix_attn_grad_scale  = 0.05  
         mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
+        feat_align_coeff_grad_scale = 0.2
         # Align both spatial and channel dims.
         feat_align_spatial_or_channel = 'spatial_and_channel'  # channel_only, spatial_only, spatial_and_channel
 
@@ -3232,7 +3235,14 @@ class LatentDiffusion(DDPM):
                                                 mix_single_feat_3d,  mix_comp_feat_3d,
                                                 ref_grad_scale=mix_feat_grad_scale)
 
-                loss_layer_feat_base_align_spatial = 0
+                # Scale down the align_coeff_loss on mix instances by * 0.2.
+                loss_layer_feat_base_align_spatial = calc_align_coeff_loss(subj_comp_feat_3d, subj_single_feat_3d,
+                                                                           ref_grad_scale=feat_align_coeff_grad_scale,
+                                                                           do_sqr=True) \
+                                                    + \
+                                                     calc_align_coeff_loss(mix_comp_feat_3d, mix_single_feat_3d,
+                                                                           ref_grad_scale=feat_align_coeff_grad_scale, 
+                                                                           do_sqr=True) * 0.2
 
                 loss_feat_base_align  += loss_layer_feat_base_align_spatial  * feat_distill_layer_weight
                 loss_feat_delta_align += loss_layer_feat_delta_align_spatial * feat_distill_layer_weight
@@ -3249,7 +3259,14 @@ class LatentDiffusion(DDPM):
                                                 mix_single_feat_3d,  mix_comp_feat_3d,
                                                 ref_grad_scale=mix_feat_grad_scale)
                 
-                loss_layer_feat_base_align_channel = 0
+                # Scale down the align_coeff_loss on mix instances by * 0.2.
+                loss_layer_feat_base_align_channel = calc_align_coeff_loss(subj_comp_feat_3d, subj_single_feat_3d,
+                                                                           ref_grad_scale=feat_align_coeff_grad_scale, 
+                                                                           do_sqr=True) \
+                                                     + \
+                                                     calc_align_coeff_loss(mix_comp_feat_3d, mix_single_feat_3d,
+                                                                           ref_grad_scale=feat_align_coeff_grad_scale, 
+                                                                           do_sqr=True) * 0.2
                 
                 loss_feat_base_align  += loss_layer_feat_base_align_channel  * feat_distill_layer_weight
                 loss_feat_delta_align += loss_layer_feat_delta_align_channel * feat_distill_layer_weight
