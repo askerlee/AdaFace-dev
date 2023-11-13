@@ -2828,16 +2828,16 @@ class LatentDiffusion(DDPM):
                                                                      self.subj_attn_norm_distill_loss_base,
                                                                      subj_attn_norm_distill_loss_scale_base)
 
-            # loss_feat_base_align is disabled. If enabled, the performance will drop significantly.
-            # Probably the base features (of the subject single instances) are too noisy, and 
-            # couldn't help teach the subject comp instances.
-            feat_base_align_scale  = 0 # 0.5
+            ## loss_feat_base_align is disabled. If enabled, the performance will drop significantly.
+            ## Probably the base features (of the subject single instances) are too noisy, and 
+            ## couldn't help teach the subject comp instances.
+            feat_base_align_scale  = 0.5
             feat_delta_align_scale = 2
 
             loss_mix_prompt_distill =  (loss_subj_attn_delta_align * subj_attn_delta_distill_loss_scale \
                                           + loss_comp_attn_delta_distill * comp_attn_delta_distill_loss_scale) \
                                         + loss_subj_attn_norm_distill    * subj_attn_norm_distill_loss_scale \
-                                        + loss_feat_base_align * feat_base_align_scale \
+                                        + loss_feat_base_align  * feat_base_align_scale \
                                         + loss_feat_delta_align * feat_delta_align_scale
                                         
             if loss_mix_prompt_distill > 0:
@@ -3181,7 +3181,7 @@ class LatentDiffusion(DDPM):
                     # of the compositional part.
                     loss_layer_comp_attn_delta = calc_align_coeff_loss(subj_comp_comp_attn, mix_comp_comp_attn_gs,
                                                                        margin=1., ref_grad_scale=1, do_sqr=True)
-                    loss_comp_attn_delta_distill += loss_layer_comp_attn_delta
+                    loss_comp_attn_delta_distill += loss_layer_comp_attn_delta * attn_delta_distill_layer_weight
 
                 # mean(dim=-1): average over the 64 feature channels.
                 # Align the attention corresponding to each embedding individually.
