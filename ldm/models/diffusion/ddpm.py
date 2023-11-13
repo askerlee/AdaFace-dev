@@ -3437,6 +3437,7 @@ class LatentDiffusion(DDPM):
 
             # Use subj_attn as a reference, and scale down grad to fg attn, 
             # to make fg embeddings more stable.
+            '''
             loss_layer_fg_bg_comple = \
                 calc_delta_cosine_loss(bg_attn, subj_attn, 
                                        exponent=2,    
@@ -3445,7 +3446,15 @@ class LatentDiffusion(DDPM):
                                        ref_grad_scale=fg_grad_scale,
                                        aim_to_align=False,
                                        debug=False)
+            '''
 
+            # encourage_align = False: push bg_attn to be orthogonal with subj_attn.
+            # margin = 0: penalize any components in bg_attn that are positively correlated with subj_attn.
+            loss_layer_fg_bg_comple = calc_align_coeff_loss(bg_attn, subj_attn, margin=0,
+                                                            encourage_align=False,
+                                                            ref_grad_scale=fg_grad_scale,
+                                                            do_sqr=True)
+            
             # loss_fg_bg_complementary doesn't need fg_mask.
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_align_layer_weight
 
@@ -4034,9 +4043,16 @@ class LatentDiffusion(DDPM):
             subj_padding_embs_i = cond_prompt_embeddings[i, :, subj_padding_indices_i_N].permute(1, 0, 2)
             # subj_subj_embs_gs_i: [1,  16, 768].
             subj_subj_embs_gs_i = subj_subj_embs_gs[i]
-            # padding_subj_embs_align_coeffs_i: [63, 16]
-            padding_subj_embs_align_coeffs_i  = calc_align_coeffs(subj_padding_embs_i, subj_subj_embs_gs_i)
-            loss_padding_subj_embs_align += power_loss(padding_subj_embs_align_coeffs_i, exponent=2)
+            # Penalize any positive coeffs within padding_subj_embs_align_coeffs_i: [63, 16].
+            # padding_subj_embs_align_coeffs_i = calc_align_coeffs(subj_padding_embs_i, subj_subj_embs_gs_i).
+            # encourage_align = False: push subj_padding_embs_i to be orthogonal with subj_subj_embs_gs_i.
+            # margin = 0: penalize any components in subj_padding_embs_i that are 
+            # positively correlated with subj_subj_embs_gs_i.
+            loss_inst_padding_subj_embs_align \
+                = calc_align_coeff_loss(subj_padding_embs_i, subj_subj_embs_gs_i,
+                                        margin=0, encourage_align=False,
+                                        ref_grad_scale=1, do_sqr=True)
+            loss_padding_subj_embs_align += loss_inst_padding_subj_embs_align
         
         loss_padding_subj_embs_align /= SSB_SIZE
 
@@ -4054,8 +4070,11 @@ class LatentDiffusion(DDPM):
                 # cls_subj_embs_i:    [1, 16, 768].
                 cls_subj_embs_i = cls_subj_embs[i]
                 # we don't do gs on cls_subj_embs, since loss_padding_cls_embs_align is not optimized.
-                padding_cls_embs_align_coeffs_i  = calc_align_coeffs(cls_padding_embs_i, cls_subj_embs_i)
-                loss_padding_cls_embs_align += power_loss(padding_cls_embs_align_coeffs_i, exponent=2)
+                loss_inst_padding_cls_embs_align \
+                    = calc_align_coeff_loss(cls_padding_embs_i, cls_subj_embs_i,
+                                            margin=0, encourage_align=False,
+                                            ref_grad_scale=1, do_sqr=True)
+                loss_padding_cls_embs_align += loss_inst_padding_cls_embs_align
 
             if len(cls_padding_indices_by_instance) > 0:
                 loss_padding_cls_embs_align /= len(cls_padding_indices_by_instance)
@@ -4081,9 +4100,16 @@ class LatentDiffusion(DDPM):
                     bg_embs_i = cond_prompt_embeddings[i, :, bg_indices_i_N].permute(1, 0, 2)
                     # subj_subj_embs_gs2_i: [1,  16, 768].
                     subj_subj_embs_gs2_i = subj_subj_embs_gs2[i]
-                    # bg_subj_embs_align_coeffs_i: [4, 16]
-                    bg_subj_embs_align_coeffs_i  = calc_align_coeffs(bg_embs_i, subj_subj_embs_gs2_i)
-                    loss_bg_subj_embs_align += power_loss(bg_subj_embs_align_coeffs_i, exponent=2)
+                    # Penalize any positive coeffs within bg_subj_embs_align_coeffs_i: [4, 16].
+                    # bg_subj_embs_align_coeffs_i = calc_align_coeffs(bg_embs_i, subj_subj_embs_gs2_i)
+                    # encourage_align = False: push bg_embs_i to be orthogonal with subj_subj_embs_gs2_i.
+                    # margin = 0: penalize any components in bg_embs_i that are
+                    # positively correlated with subj_subj_embs_gs2_i.
+                    loss_inst_bg_subj_embs_align \
+                        = calc_align_coeff_loss(bg_embs_i, subj_subj_embs_gs2_i,
+                                                margin=0, encourage_align=False,
+                                                ref_grad_scale=1, do_sqr=True)
+                    loss_bg_subj_embs_align += loss_inst_bg_subj_embs_align
 
             loss_bg_subj_embs_align /= SSB_SIZE
 

@@ -520,19 +520,26 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
             
         return loss_delta_align
 
-def calc_align_coeff_loss(f1, f2, margin=1., ref_grad_scale=1, do_sqr=True):
+def calc_align_coeff_loss(f1, f2, margin=1., encourage_align=True, ref_grad_scale=1, do_sqr=True):
     ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
     # Reduce the gradient to the reference features, 
     # as the reference features are supposed to be unchanged, as opposed to feat_*. 
     # (although it still has a learnable component from mixed subject prompt embeddings.)
     f2_gs  = ref_grad_scaler(f2)    
     align_coeffs  = calc_align_coeffs(f1, f2_gs)
-    # We encourage f1 to express at least 1s of f2, i.e.,
-    # align_coeffs should be >= margin. So a loss is incurred if it's < margin.
-    # do_sqr=True: square the loss, so that the loss is more sensitive to smaller (<< margin) align_coeffs.
-    loss_align  = masked_mean(margin - align_coeffs,
-                              margin - align_coeffs > 0,
-                              do_sqr=do_sqr)
+    if encourage_align:
+        # We encourage f1 to express at least margin * f2, i.e.,
+        # align_coeffs should be >= margin. So a loss is incurred if it's < margin.
+        # do_sqr=True: square the loss, so that the loss is more sensitive to smaller (<< margin) align_coeffs.
+        loss_align  = masked_mean(margin - align_coeffs,
+                                  margin - align_coeffs > 0,
+                                  do_sqr=do_sqr)
+    else:
+        # We discourage f1 to express more than margin * f2, i.e.,
+        # align_coeffs should be <= margin. So a loss is incurred if it's > margin.
+        loss_align  = masked_mean(align_coeffs - margin,
+                                  align_coeffs - margin > 0,
+                                  do_sqr=do_sqr)
     return loss_align
 
 def calc_and_print_stats(ts, ts_name=None):
