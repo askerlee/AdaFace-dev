@@ -2750,13 +2750,15 @@ class LatentDiffusion(DDPM):
             if loss_bg_xlayer_consist > 0:
                 loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach()})
 
-            bg_xlayer_consist_loss_scale_base = 1
-            # self.bg_xlayer_consist_loss_base: 0.3. If loss_bg_xlayer_consist >> 0.3, 
-            # then bg_xlayer_consist_loss_scale will increase to give more penalty.
-            bg_xlayer_consist_loss_scale = calc_dyn_loss_scale(loss_bg_xlayer_consist,
-                                                               self.bg_xlayer_consist_loss_base,
-                                                               bg_xlayer_consist_loss_scale_base)
-            
+                bg_xlayer_consist_loss_scale_base = 1
+                # self.bg_xlayer_consist_loss_base: 0.3. If loss_bg_xlayer_consist >> 0.3, 
+                # then bg_xlayer_consist_loss_scale will increase to give more penalty.
+                bg_xlayer_consist_loss_scale = calc_dyn_loss_scale(loss_bg_xlayer_consist,
+                                                                self.bg_xlayer_consist_loss_base,
+                                                                bg_xlayer_consist_loss_scale_base)
+            else:
+                bg_xlayer_consist_loss_scale = 1
+                
             loss += (loss_fg_xlayer_consist + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale) \
                     * self.fg_bg_xlayer_consist_loss_weight
 
