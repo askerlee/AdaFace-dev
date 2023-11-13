@@ -500,16 +500,28 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
         # delta_align_coeffs is like: [[1.0598, 0.9105, 1.2208, 1.0868, 1.0764, 1.0875, 1.0017, 1.1690]]
         base_delta = ortho_subtract(feat_base_gs, ref_feat_base_gs)
         ex_delta   = ortho_subtract(feat_ex,      ref_feat_ex_gs)
-        delta_align_coeffs  = calc_align_coeffs(ex_delta, base_delta)
 
-        # We encourage ex_delta to express at least 1s of base_delta, i.e.,
-        # delta_align_coeffs should be >= 1. So a loss is incurred if it's < 1.
-        # do_sqr: square the loss, so that the loss is more sensitive to smaller (<< 1) delta_align_coeffs.
-        loss_delta_align  = masked_mean(1 - delta_align_coeffs, 
-                                        1 - delta_align_coeffs > 0,
-                                        do_sqr=True)
+        # ref_grad_scale=1: ref grad scaling is disabled within calc_delta_cosine_loss,
+        # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
+        # do_sqr=True: square the loss, so that the loss is more sensitive to smaller (<< 1) align_coeffs.
+        loss_delta_align = calc_align_coeff_loss(ex_delta, base_delta, ref_grad_scale=1, do_sqr=True)
 
         return loss_delta_align
+
+def calc_align_coeff_loss(f1, f2, ref_grad_scale=1, do_sqr=True):
+    ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
+    # Reduce the gradient to the reference features, 
+    # as the reference features are supposed to be unchanged, as opposed to feat_*. 
+    # (although it still has a learnable component from mixed subject prompt embeddings.)
+    f2_gs  = ref_grad_scaler(f2)    
+    align_coeffs  = calc_align_coeffs(f1, f2_gs)
+    # We encourage f1 to express at least 1s of f2, i.e.,
+    # align_coeffs should be >= 1. So a loss is incurred if it's < 1.
+    # do_sqr=True: square the loss, so that the loss is more sensitive to smaller (<< 1) align_coeffs.
+    loss_align  = masked_mean(1 - align_coeffs,
+                              1 - align_coeffs > 0,
+                              do_sqr=do_sqr)
+    return loss_align
 
 def calc_and_print_stats(ts, ts_name=None):
     if ts_name is not None:

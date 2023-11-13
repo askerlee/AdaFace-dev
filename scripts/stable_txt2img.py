@@ -282,7 +282,7 @@ def parse_args():
                         help="Range of embedding indices to be used as copycat attention. "
                             "Default [-1, -1]: not specified.")
     parser.add_argument("--contrast_fg_bg_attns",
-                        type=str2bool, const=True, nargs="?", default=False, #argparse.SUPPRESS,
+                        type=str2bool, const=True, nargs="?", default=argparse.SUPPRESS,
                         help="Whether to copy the foreground attention to the background tokens.")
         
     # If normalize_subj_attn is not specified, then use the 'normalize_subj_attn' in the checkpoint.

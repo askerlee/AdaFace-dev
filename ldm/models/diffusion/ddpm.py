@@ -27,7 +27,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        ortho_subtract, decomp_align_ortho, calc_align_coeffs, \
                        ortho_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, masked_mean, \
-                       calc_delta_cosine_loss, calc_delta_alignment_loss, \
+                       calc_delta_cosine_loss, calc_delta_alignment_loss, calc_align_coeff_loss, \
                        calc_prompt_emb_delta_loss, power_loss, calc_dyn_loss_scale, \
                        save_grid, chunk_list, normalize_dict_values, \
                        distribute_embedding_to_M_tokens, fix_emb_scales, \
@@ -2787,7 +2787,7 @@ class LatentDiffusion(DDPM):
             # to index subj single and subj comp embeddings.
             # The indices will be shifted along the batch dimension (size doubled) 
             # within calc_prompt_mix_loss() to index all the 4 blocks.
-            loss_subj_attn_base_align,    loss_subj_attn_delta_align, \
+            loss_subj_attn_delta_align, \
             loss_comp_attn_delta_distill, loss_subj_attn_norm_distill,  \
             loss_feat_base_align,         loss_feat_delta_align = \
                                 self.calc_prompt_mix_loss(unet_feats, extra_info['unet_attnscores'], 
@@ -2799,8 +2799,6 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/feat_base_align':         loss_feat_base_align.mean().detach()})
             if loss_feat_delta_align > 0:
                 loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach()})
-            if loss_subj_attn_base_align > 0:
-                loss_dict.update({f'{prefix}/subj_attn_base_align':    loss_subj_attn_base_align.mean().detach()})
             if loss_subj_attn_delta_align > 0:
                 loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach()})
             if loss_subj_attn_norm_distill > 0:
@@ -2808,7 +2806,7 @@ class LatentDiffusion(DDPM):
             if loss_comp_attn_delta_distill > 0:
                 loss_dict.update({f'{prefix}/comp_attn_delta_distill': loss_comp_attn_delta_distill.mean().detach()})
 
-            # loss_subj_attn_base_align, loss_subj_attn_delta_align are L2 losses, 
+            # loss_subj_attn_delta_align us an L2 loss, 
             # so no need to use dynamic loss scale.
             subj_attn_delta_distill_loss_scale = 1 #0.5
             # loss_comp_attn_delta_distill is L2 loss, so no need to use dynamic loss scale.
@@ -2828,7 +2826,7 @@ class LatentDiffusion(DDPM):
                                                                      subj_attn_norm_distill_loss_scale_base)
 
             feat_base_align_scale = 0.5
-            loss_mix_prompt_distill =  ((loss_subj_attn_base_align + loss_subj_attn_delta_align) * subj_attn_delta_distill_loss_scale \
+            loss_mix_prompt_distill =  (loss_subj_attn_delta_align * subj_attn_delta_distill_loss_scale \
                                           + loss_comp_attn_delta_distill * comp_attn_delta_distill_loss_scale) \
                                         + loss_subj_attn_norm_distill    * subj_attn_norm_distill_loss_scale \
                                         + loss_feat_base_align * feat_base_align_scale \
@@ -3093,7 +3091,6 @@ class LatentDiffusion(DDPM):
         # Align both spatial and channel dims.
         feat_align_spatial_or_channel = 'spatial_and_channel'  # channel_only, spatial_only, spatial_and_channel
 
-        loss_subj_attn_base_align  = 0
         loss_subj_attn_delta_align = 0
         loss_comp_attn_delta_distill    = 0
         loss_subj_attn_norm_distill     = 0
@@ -3158,20 +3155,13 @@ class LatentDiffusion(DDPM):
                                                     mix_single_subj_attn,  mix_comp_subj_attn,
                                                     ref_grad_scale=mix_attn_grad_scale)
 
-                    loss_layer_subj_attn_base_align = 0
-
-                    loss_subj_attn_base_align   += loss_layer_subj_attn_base_align  * attn_norm_distill_layer_weight
                     loss_subj_attn_delta_align  += loss_layer_subj_attn_delta_align * attn_delta_distill_layer_weight
                     
-                    #comp_attn_delta                 = ortho_subtract(subj_comp_comp_attn,   mix_comp_comp_attn_gs)
-                    #loss_layer_comp_attn_delta      = power_loss(comp_attn_delta, exponent=2)
-                    comp_attn_align_coeffs = calc_align_coeffs(subj_comp_comp_attn, mix_comp_comp_attn_gs)
                     # We encourage subj_comp_comp_attn to express at least 1s of mix_comp_comp_attn, i.e.,
                     # comp_attn_align_coeffs should be >= 1. So a loss is incurred if it's < 1.
                     # do_sqr: square the loss, so that the loss is more sensitive to smaller (<< 1) delta_align_coeffs.
-                    loss_layer_comp_attn_delta  = masked_mean(1 - comp_attn_align_coeffs, 
-                                                              1 - comp_attn_align_coeffs > 0,
-                                                              do_sqr=True)
+                    loss_layer_comp_attn_delta = calc_align_coeff_loss(subj_comp_comp_attn, mix_comp_comp_attn_gs,
+                                                                       ref_grad_scale=1, do_sqr=True)
                     loss_comp_attn_delta_distill += loss_layer_comp_attn_delta
 
                 # Align the attention corresponding to each embedding individually.
@@ -3280,7 +3270,7 @@ class LatentDiffusion(DDPM):
             loss_feat_base_align  /= 2
             loss_feat_delta_align /= 2
 
-        return loss_subj_attn_base_align,    loss_subj_attn_delta_align, \
+        return loss_subj_attn_delta_align, \
                loss_comp_attn_delta_distill, loss_subj_attn_norm_distill, \
                loss_feat_base_align,         loss_feat_delta_align
 
