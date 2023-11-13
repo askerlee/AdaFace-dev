@@ -478,14 +478,15 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
 
         # ortho_subtract() is done on the last dimension. 
         # NOTE: use normalized_ortho_subtract() will reduce performance.
-        # ref_delta_gs: [1, 8, 64]. ref_align_base_coeffs: [1, 8].
-        # ref_align_base_coeffs is like: [[1.0598, 0.9105, 1.2208, 1.0868, 1.0764, 1.0875, 1.0017, 1.1690]]
+        # ex_delta: [1, 8, 64]. delta_align_coeffs: [1, 8].
+        # delta_align_coeffs is like: [[1.0598, 0.9105, 1.2208, 1.0868, 1.0764, 1.0875, 1.0017, 1.1690]]
         base_delta = ortho_subtract(feat_base_gs, ref_feat_base_gs)
         ex_delta   = ortho_subtract(feat_ex,      ref_feat_ex_gs)
         delta_align_coeffs  = calc_align_coeffs(ex_delta, base_delta)
 
         # We encourage ex_delta to express at least 1s of base_delta, i.e.,
         # delta_align_coeffs should be >= 1. So a loss is incurred if it's < 1.
+        # do_sqr: square the loss, so that the loss is more sensitive to smaller (<< 1) delta_align_coeffs.
         loss_delta_align  = masked_mean(1 - delta_align_coeffs, 
                                         1 - delta_align_coeffs > 0,
                                         do_sqr=True)
