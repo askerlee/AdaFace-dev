@@ -103,18 +103,14 @@ class DDPM(pl.LightningModule):
                  static_embedding_reg_weight=0.,
                  ada_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
-                 padding_embs_align_loss_base=0.,
-                 padding_embs_align_loss_weight_base=0.,
+                 padding_embs_align_loss_weight=0.,
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_value_ortho_loss_weight=0.,
                  subj_comp_attn_complementary_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
-                 subj_attn_delta_distill_loss_base=0.,
-                 comp_attn_delta_distill_loss_base=0.,
                  subj_attn_norm_distill_loss_base=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
-                 comp_subj_fg_feat_preserve_loss_base=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
                  wds_bg_recon_discount=1.,
@@ -145,17 +141,13 @@ class DDPM(pl.LightningModule):
 
         self.composition_regs_iter_gap          = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
-        self.padding_embs_align_loss_base           = padding_embs_align_loss_base
-        self.padding_embs_align_loss_weight_base    = padding_embs_align_loss_weight_base
+        self.padding_embs_align_loss_weight     = padding_embs_align_loss_weight
         self.subj_comp_key_ortho_loss_weight        = subj_comp_key_ortho_loss_weight
         self.subj_comp_value_ortho_loss_weight      = subj_comp_value_ortho_loss_weight
         self.subj_comp_attn_complementary_loss_weight = subj_comp_attn_complementary_loss_weight
         self.mix_prompt_distill_weight              = mix_prompt_distill_weight
-        self.subj_attn_delta_distill_loss_base      = subj_attn_delta_distill_loss_base
-        self.comp_attn_delta_distill_loss_base      = comp_attn_delta_distill_loss_base
         self.subj_attn_norm_distill_loss_base       = subj_attn_norm_distill_loss_base
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
-        self.comp_subj_fg_feat_preserve_loss_base   = comp_subj_fg_feat_preserve_loss_base
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
@@ -2693,8 +2685,8 @@ class LatentDiffusion(DDPM):
             loss += (loss_static_prompt_delta + loss_ada_prompt_delta * ada_comp_loss_boost_ratio) \
                      * self.prompt_emb_delta_reg_weight
         
-            # Even if padding_embs_align_loss_weight_base is disabled, we still monitor loss_padding_subj_embs_align.
-            if self.padding_embs_align_loss_weight_base >= 0:
+            # Even if padding_embs_align_loss_weight is disabled (=0), we still monitor loss_padding_subj_embs_align.
+            if self.padding_embs_align_loss_weight >= 0:
                 if self.iter_flags['do_normal_recon']:
                     subj_indices        = extra_info['subj_indices_1b']
                     bg_indices          = extra_info['bg_indices_1b']
@@ -2734,11 +2726,9 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach()})
                 
                 bg_subj_embs_align_loss_scale  = 2
-                padding_embs_align_loss_weight = loss_padding_subj_embs_align.item() * self.padding_embs_align_loss_weight_base \
-                                                  / self.padding_embs_align_loss_base
                 loss += (loss_padding_subj_embs_align 
                            + loss_bg_subj_embs_align * bg_subj_embs_align_loss_scale) \
-                        * padding_embs_align_loss_weight
+                        * self.padding_embs_align_loss_weight
 
         if self.fg_bg_xlayer_consist_loss_weight > 0:
             # SSB_SIZE: subject sub-batch size.
@@ -2867,7 +2857,6 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach()})
 
                 # loss_comp_subj_fg_feat_preserve is L2 loss, so no need to use dynamic loss scale.
-                # comp_subj_fg_feat_preserve_loss_base: 0.25
                 comp_subj_fg_feat_preserve_loss_scale = 1
 
                 bg_attn_suppress_loss_scale = 0.5
@@ -2878,7 +2867,7 @@ class LatentDiffusion(DDPM):
                 loss_comp_fg_bg_preserve = 0
 
             comp_fg_bg_preserve_loss_scale = 0.5
-            # Scale down loss_comp_fg_bg_preserve if reuse_init_conds.
+            # Scale down loss_comp_fg_bg_preserve if reuse_init_conds, as it's more noisy.
             if self.iter_flags['reuse_init_conds']:
                 comp_fg_bg_preserve_loss_scale *= 0.5
 
