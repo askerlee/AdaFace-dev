@@ -1255,6 +1255,11 @@ class LatentDiffusion(DDPM):
         x_start, _ = self.get_input(batch, self.first_stage_key)
 
         batch_have_fg_mask                      = batch['has_fg_mask']
+        # Temporarily disable fg_mask for debugging.
+        disable_fg_mask = True
+        if disable_fg_mask:
+            batch_have_fg_mask[:] = False
+
         self.iter_flags['fg_mask_avail_ratio']  = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
 
         self.iter_flags['wds_comp_avail_ratio'] = batch['has_wds_comp'].sum() / batch['has_wds_comp'].shape[0]
@@ -3314,7 +3319,8 @@ class LatentDiffusion(DDPM):
                 loss_layer_feat_delta_align_channel \
                     = calc_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
                                                 mix_single_feat_3d,  mix_comp_feat_3d,
-                                                ref_grad_scale=mix_feat_grad_scale)
+                                                ref_grad_scale=mix_feat_grad_scale,
+                                                use_cosine_loss=True)
                 
                 # The alignment of comp feat and single feat is done with L2 loss on alignment coefficients.
                 # This is not as effective as the cosine loss, but cosine loss is sensitive to noisy features
