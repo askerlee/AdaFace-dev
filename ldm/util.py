@@ -214,8 +214,17 @@ def parallel_data_prefetch(
 def ortho_subtract(a, b, on_last_n_dims=1, return_align_coeffs=False):
     assert a.ndim == b.ndim, "Tensors a and b must have the same number of dimensions"
     if on_last_n_dims > 1:
-        # Do not support broadcasting if on_last_n_dims > 1.
-        assert a.shape == b.shape, "Tensors a and b must have the same shape"
+        for i in range(-on_last_n_dims, 0):
+            assert a.shape[i] == b.shape[i] or a.shape[i] == 1 or b.shape[i] == 1, \
+              "Tensors a and b must have the same shape on non-singleton dims"
+
+        # There could still be exceptions, if a and b have singleton dims at non-matching dims.
+        # Leave the check to torch.
+        if a.numel() < b.numel():
+            a = a.expand(b.shape)
+        elif b.numel() < a.numel():
+            b = b.expand(a.shape)
+        
         orig_shape = a.shape
         a2 = a.reshape(*a.shape[:-on_last_n_dims], -1)
         b2 = b.reshape(*b.shape[:-on_last_n_dims], -1)
