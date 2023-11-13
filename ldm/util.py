@@ -486,9 +486,9 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
 
         # We encourage ex_delta to express at least 1s of base_delta, i.e.,
         # delta_align_coeffs should be >= 1. So a loss is incurred if it's < 1.
-        loss_delta_align  = masked_mean(delta_align_coeffs, 
-                                       delta_align_coeffs < 0,
-                                       do_sqr=True)
+        loss_delta_align  = masked_mean(1 - delta_align_coeffs, 
+                                        1 - delta_align_coeffs > 0,
+                                        do_sqr=True)
 
         return loss_delta_align
 
