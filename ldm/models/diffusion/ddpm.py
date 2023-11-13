@@ -3099,7 +3099,7 @@ class LatentDiffusion(DDPM):
         # Almost disabled the gradient to subject single instances.
         feat_base_align_coeff_grad_scale = 0.02
         # Align both spatial and channel dims.
-        feat_align_spatial_or_channel = 'spatial_and_channel'  # channel_only, spatial_only, spatial_and_channel
+        feat_align_spatial_or_channel = 'spatial_only'  # channel_only, spatial_only, spatial_and_channel
 
         loss_subj_attn_delta_align = 0
         loss_comp_attn_delta_distill    = 0
@@ -3914,11 +3914,14 @@ class LatentDiffusion(DDPM):
             else:
                 pooler = nn.Identity()
 
-            # subj_single_fg_feat: [1, 1280, 16, 16] => [1, 1280, 7, 7] => [1, 1280, 49] => [1, 49, 1280]
-            subj_single_fg_feat = pooler(subj_single_fg_feat).reshape(*subj_single_fg_feat.shape[:2], -1).permute(0, 2, 1)
-            subj_comp_fg_feat   = pooler(subj_comp_fg_feat).reshape(*subj_comp_fg_feat.shape[:2], -1).permute(0, 2, 1)
-            mix_single_fg_feat  = pooler(mix_single_fg_feat).reshape(*mix_single_fg_feat.shape[:2], -1).permute(0, 2, 1)
-            mix_comp_fg_feat    = pooler(mix_comp_fg_feat).reshape(*mix_comp_fg_feat.shape[:2], -1).permute(0, 2, 1)
+            # subj_single_fg_feat: [1, 1280, 16, 16] => [1, 1280, 7, 7] => [1, 1280, 49].
+            # We don't permute the channel dim to the last dim like [1, 49, 1280].
+            # Doing that is equivalent to 'channel_only' in computing loss_feat_delta_align.
+            # 'channel_only' will lead to worse spatial consistency.
+            subj_single_fg_feat = pooler(subj_single_fg_feat).reshape(*subj_single_fg_feat.shape[:2], -1)
+            subj_comp_fg_feat   = pooler(subj_comp_fg_feat).reshape(*subj_comp_fg_feat.shape[:2], -1)
+            mix_single_fg_feat  = pooler(mix_single_fg_feat).reshape(*mix_single_fg_feat.shape[:2], -1)
+            mix_comp_fg_feat    = pooler(mix_comp_fg_feat).reshape(*mix_comp_fg_feat.shape[:2], -1)
 
             # single_feat_or_attn_grad_scale = 0.02. 
             # feat_*_single are used as references, so their gradients are almost totally disabled.
