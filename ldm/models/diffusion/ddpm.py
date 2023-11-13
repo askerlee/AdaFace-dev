@@ -3073,7 +3073,8 @@ class LatentDiffusion(DDPM):
                                             23: 1., 24: 1.,                                   
                                            }
 
-        feat_size2pooler_spec = { 8: [4, 2], 16: [4, 2], 32: [8, 4], 64: [8, 4] }
+        feat_size2large_pooler_spec = { 8: [4, 2], 16: [4, 2], 32: [8, 4], 64: [8, 4] }
+        feat_size2small_pooler_spec = { 8: [4, 2], 16: [8, 4], 32: [8, 4], 64: [16, 8] }
 
         # Normalize the weights above so that each set sum to 1.
         feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
@@ -3217,20 +3218,29 @@ class LatentDiffusion(DDPM):
 
             # 8  -> 4, 2 (output 3),  16 -> 4, 2 (output 7), 
             # 32 -> 8, 4 (output 7),  64 -> 8, 4 (output 15).
-            feat_pool_kernel_size, feat_pool_stride = feat_size2pooler_spec[subj_single_feat.shape[-1]]
+            large_pooler_kernel_size, large_pooler_stride = feat_size2large_pooler_spec[subj_single_feat.shape[-1]]
             # feature pooling: allow small perturbations of the locations of pixels.
             # If subj_single_feat is 8x8, then after pooling, it becomes 3x3, too rough.
             # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
-            pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
+            large_pooler = nn.AvgPool2d(large_pooler_kernel_size, stride=large_pooler_stride)
+            small_pooler_kernel_size, small_pooler_stride = feat_size2small_pooler_spec[subj_single_feat.shape[-1]]
+            small_pooler = nn.AvgPool2d(small_pooler_kernel_size, stride=small_pooler_stride)
 
             # Flatten the spatial dimensions H, W.
             # subj_single_feat: [2, 1280, 16, 16] pool -> [2, 1280, 7, 7] -> [2, 1280, 49]
             
             # If last_dim_is_spatial, then no need to permute. Dim 1 is the channel dimension.
-            subj_single_feat_3d = pooler(subj_single_feat).reshape(*subj_single_feat.shape[:2], -1)
-            subj_comp_feat_3d   = pooler(subj_comp_feat).reshape(*subj_comp_feat.shape[:2], -1)
-            mix_single_feat_3d  = pooler(mix_single_feat).reshape(*mix_single_feat.shape[:2], -1)
-            mix_comp_feat_3d    = pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1)
+            subj_single_feat_3d = large_pooler(subj_single_feat).reshape(*subj_single_feat.shape[:2], -1)
+            subj_comp_feat_3d   = large_pooler(subj_comp_feat).reshape(*subj_comp_feat.shape[:2], -1)
+            mix_single_feat_3d  = large_pooler(mix_single_feat).reshape(*mix_single_feat.shape[:2], -1)
+            mix_comp_feat_3d    = large_pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1)
+
+            # Smaller feature maps are for loss_feat_base_align, 
+            # i.e., aligning between comp and single instances.
+            subj_single_feat_small_3d = small_pooler(subj_single_feat).reshape(*subj_single_feat.shape[:2], -1)
+            subj_comp_feat_small_3d   = small_pooler(subj_comp_feat).reshape(*subj_comp_feat.shape[:2], -1)
+            mix_single_feat_small_3d  = small_pooler(mix_single_feat).reshape(*mix_single_feat.shape[:2], -1)
+            mix_comp_feat_small_3d    = small_pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1)
 
             # if channel_only, then channel dim is permuted to the last dim.
             # [2, 1280, 49]  -> [2, 49, 1280]
@@ -3246,15 +3256,16 @@ class LatentDiffusion(DDPM):
                                                 ref_grad_scale=mix_feat_grad_scale)
 
                 # Scale down the align_coeff_loss on mix instances by * 0.2.
-                loss_layer_feat_base_align_spatial = calc_align_coeff_loss(subj_comp_feat_3d, subj_single_feat_3d,
-                                                                           margin=0.8,
-                                                                           ref_grad_scale=feat_base_align_coeff_grad_scale,
-                                                                           do_sqr=True) \
-                                                    + \
-                                                     calc_align_coeff_loss(mix_comp_feat_3d, mix_single_feat_3d,
-                                                                           margin=0.8,
-                                                                           ref_grad_scale=feat_base_align_coeff_grad_scale, 
-                                                                           do_sqr=True) * 0.2
+                loss_layer_feat_base_align_spatial = \
+                    calc_align_coeff_loss(subj_comp_feat_small_3d, subj_single_feat_small_3d,
+                                          margin=0.8,
+                                          ref_grad_scale=feat_base_align_coeff_grad_scale,
+                                          do_sqr=True) \
+                    + \
+                      calc_align_coeff_loss(mix_comp_feat_small_3d, mix_single_feat_small_3d,
+                                            margin=0.8,
+                                            ref_grad_scale=feat_base_align_coeff_grad_scale, 
+                                            do_sqr=True) * 0.2
 
                 loss_feat_delta_align += loss_layer_feat_delta_align_spatial * feat_distill_layer_weight
                 loss_feat_base_align  += loss_layer_feat_base_align_spatial  * feat_distill_layer_weight
@@ -3265,6 +3276,12 @@ class LatentDiffusion(DDPM):
                 subj_comp_feat_3d   = subj_comp_feat_3d.permute(0,   2, 1)
                 mix_single_feat_3d  = mix_single_feat_3d.permute(0,  2, 1)
                 mix_comp_feat_3d    = mix_comp_feat_3d.permute(0,    2, 1)
+
+                subj_single_feat_small_3d = subj_single_feat_small_3d.permute(0, 2, 1)
+                subj_comp_feat_small_3d   = subj_comp_feat_small_3d.permute(0,   2, 1)
+                mix_single_feat_small_3d  = mix_single_feat_small_3d.permute(0,  2, 1)
+                mix_comp_feat_small_3d    = mix_comp_feat_small_3d.permute(0,    2, 1)
+
                 # mix_feat_grad_scale = 0.1.
                 loss_layer_feat_delta_align_channel \
                     = calc_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
@@ -3272,15 +3289,16 @@ class LatentDiffusion(DDPM):
                                                 ref_grad_scale=mix_feat_grad_scale)
                 
                 # Scale down the align_coeff_loss on mix instances by * 0.2.
-                loss_layer_feat_base_align_channel = calc_align_coeff_loss(subj_comp_feat_3d, subj_single_feat_3d,
-                                                                           margin=0.8,
-                                                                           ref_grad_scale=feat_base_align_coeff_grad_scale, 
-                                                                           do_sqr=True) \
-                                                     + \
-                                                     calc_align_coeff_loss(mix_comp_feat_3d, mix_single_feat_3d,
-                                                                           ref_grad_scale=feat_base_align_coeff_grad_scale, 
-                                                                           margin=0.8,
-                                                                           do_sqr=True) * 0.2
+                loss_layer_feat_base_align_channel \
+                    = calc_align_coeff_loss(subj_comp_feat_small_3d, subj_single_feat_small_3d,
+                                            margin=0.8,
+                                            ref_grad_scale=feat_base_align_coeff_grad_scale, 
+                                            do_sqr=True) \
+                      + \
+                      calc_align_coeff_loss(mix_comp_feat_small_3d, mix_single_feat_small_3d,
+                                            ref_grad_scale=feat_base_align_coeff_grad_scale, 
+                                            margin=0.8,
+                                            do_sqr=True) * 0.2
                 
                 loss_feat_delta_align += loss_layer_feat_delta_align_channel * feat_distill_layer_weight
                 loss_feat_base_align  += loss_layer_feat_base_align_channel  * feat_distill_layer_weight
