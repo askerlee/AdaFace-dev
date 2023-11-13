@@ -3090,7 +3090,8 @@ class LatentDiffusion(DDPM):
         # Setting to 0 may prevent the graph from being released and OOM.
         mix_attn_grad_scale  = 0.05  
         mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
-        feat_base_align_coeff_grad_scale = 0.2
+        # Almost disabled the gradient to subject single instances.
+        feat_base_align_coeff_grad_scale = 0.02
         # Align both spatial and channel dims.
         feat_align_spatial_or_channel = 'spatial_and_channel'  # channel_only, spatial_only, spatial_and_channel
 
