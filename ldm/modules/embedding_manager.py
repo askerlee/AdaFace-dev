@@ -1693,9 +1693,10 @@ class EmbeddingManager(nn.Module):
             extra_msg = ", DISABLED" if contrast_fg_bg_attns is False else ""
             print(f"Setting contrast_fg_bg_attns = {contrast_fg_bg_attns}{extra_msg}")
 
-            # Only set if contrast_fg_bg_attns is not None.
-            self.bg_attn_behavior_in_inference = bg_attn_behavior_in_inference
-            print(f"Setting bg_attn_behavior_in_inference = {bg_attn_behavior_in_inference}")
+            if contrast_fg_bg_attns:
+                # Only set if contrast_fg_bg_attns is enabled.
+                self.bg_attn_behavior_in_inference = bg_attn_behavior_in_inference
+                print(f"Setting bg_attn_behavior_in_inference = {bg_attn_behavior_in_inference}")
 
     def initialize_attn_postmix_components(self, attn_postmix_weight, 
                                             postmix_attn_layer=None, 
