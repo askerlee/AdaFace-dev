@@ -24,7 +24,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
-                       ortho_subtract, decomp_align_ortho, calc_align_coeffs, \
+                       ortho_subtract, decomp_align_ortho, \
                        ortho_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, masked_mean, \
                        calc_delta_cosine_loss, calc_delta_alignment_loss, calc_align_coeff_loss, \
@@ -2758,7 +2758,7 @@ class LatentDiffusion(DDPM):
                                                                 bg_xlayer_consist_loss_scale_base)
             else:
                 bg_xlayer_consist_loss_scale = 1
-                
+
             loss += (loss_fg_xlayer_consist + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale) \
                     * self.fg_bg_xlayer_consist_loss_weight
 
@@ -3162,12 +3162,11 @@ class LatentDiffusion(DDPM):
                                                     ref_grad_scale=mix_attn_grad_scale)
 
                     loss_subj_attn_delta_align  += loss_layer_subj_attn_delta_align * attn_delta_distill_layer_weight
-                    
-                    # We encourage subj_comp_comp_attn to express at least 1s of mix_comp_comp_attn, i.e.,
-                    # comp_attn_align_coeffs should be >= 1. So a loss is incurred if it's < 1.
-                    # do_sqr: square the loss, so that the loss is more sensitive to smaller (<< 1) delta_align_coeffs.
-                    loss_layer_comp_attn_delta = calc_align_coeff_loss(subj_comp_comp_attn, mix_comp_comp_attn_gs,
-                                                                       ref_grad_scale=1, do_sqr=True)
+                    loss_layer_comp_attn_delta = calc_delta_cosine_loss(subj_comp_comp_attn, mix_comp_comp_attn_gs,
+                                                                        exponent=2,
+                                                                        do_demean_first=False,
+                                                                        first_n_dims_to_flatten=2, 
+                                                                        ref_grad_scale=1)
                     loss_comp_attn_delta_distill += loss_layer_comp_attn_delta
 
                 # Align the attention corresponding to each embedding individually.
@@ -3258,7 +3257,9 @@ class LatentDiffusion(DDPM):
                                                 mix_single_feat_3d,  mix_comp_feat_3d,
                                                 ref_grad_scale=mix_feat_grad_scale)
 
-                # Scale down the align_coeff_loss on mix instances by * 0.2.
+                # The alignment of comp feat and single feat is done with L2 loss on alignment coefficients.
+                # This is not as effective as the cosine loss, but cosine loss is sensitive to noisy features
+                # in the reference features. So L2 reg on alignment coefficients is used here.
                 loss_layer_feat_base_align_spatial = \
                     calc_align_coeff_loss(subj_comp_feat_small_3d, subj_single_feat_small_3d,
                                           margin=0.8,
@@ -3269,6 +3270,7 @@ class LatentDiffusion(DDPM):
                                             margin=0.8,
                                             ref_grad_scale=feat_base_align_coeff_grad_scale, 
                                             do_sqr=True) * 0.2
+                # Scale down the align_coeff_loss on mix    ^  instances by * 0.2.
 
                 loss_feat_delta_align += loss_layer_feat_delta_align_spatial * feat_distill_layer_weight
                 loss_feat_base_align  += loss_layer_feat_base_align_spatial  * feat_distill_layer_weight
@@ -3291,7 +3293,9 @@ class LatentDiffusion(DDPM):
                                                 mix_single_feat_3d,  mix_comp_feat_3d,
                                                 ref_grad_scale=mix_feat_grad_scale)
                 
-                # Scale down the align_coeff_loss on mix instances by * 0.2.
+                # The alignment of comp feat and single feat is done with L2 loss on alignment coefficients.
+                # This is not as effective as the cosine loss, but cosine loss is sensitive to noisy features
+                # in the reference features. So L2 reg on alignment coefficients is used here.
                 loss_layer_feat_base_align_channel \
                     = calc_align_coeff_loss(subj_comp_feat_small_3d, subj_single_feat_small_3d,
                                             margin=0.8,
@@ -3302,7 +3306,8 @@ class LatentDiffusion(DDPM):
                                             ref_grad_scale=feat_base_align_coeff_grad_scale, 
                                             margin=0.8,
                                             do_sqr=True) * 0.2
-                
+                # Scale down the align_coeff_loss on mix    ^  instances by * 0.2.
+                                
                 loss_feat_delta_align += loss_layer_feat_delta_align_channel * feat_distill_layer_weight
                 loss_feat_base_align  += loss_layer_feat_base_align_channel  * feat_distill_layer_weight
 
@@ -3638,6 +3643,7 @@ class LatentDiffusion(DDPM):
 
         return loss_fg_xlayer_consist, loss_bg_xlayer_consist
 
+    # DISABLED. No obvious improvement.
     def calc_subj_comp_ortho_loss(self, unet_ks, unet_vs, unet_attnscores,
                                   subj_indices_by_block, comp_extra_indices_by_block, 
                                   cls_grad_scale=0.05, is_4type_batch=True):
@@ -3770,6 +3776,8 @@ class LatentDiffusion(DDPM):
                 # to make the two attention maps more complementary (expect the loss pushes the 
                 # subject embedding to a more accurate point).
                 # subj_comp_attn_ortho, cls_comp_attn_ortho: [1, 9, 8, 64]
+                # TODO: replace decomp_align_ortho() and L2 loss on cls_comp_attn_align_coeffs.
+                # But since calc_subj_comp_ortho_loss() is disabled, this is not urgent.
                 loss_layer_comp_attn_ortho = \
                     calc_delta_cosine_loss(subj_comp_attn_ortho, cls_comp_attn_ortho, 
                                            exponent=2,    
@@ -3871,17 +3879,19 @@ class LatentDiffusion(DDPM):
             else:
                 pooler = nn.Identity()
 
-            # subj_single_fg_feat: [1, 1280, 16, 16] => [1, 1280, 7, 7] => [1, 1280, 49]
-            subj_single_fg_feat = pooler(subj_single_fg_feat).reshape(*subj_single_fg_feat.shape[:2], -1)
-            subj_comp_fg_feat   = pooler(subj_comp_fg_feat).reshape(*subj_comp_fg_feat.shape[:2], -1)
-            mix_single_fg_feat  = pooler(mix_single_fg_feat).reshape(*mix_single_fg_feat.shape[:2], -1)
-            mix_comp_fg_feat    = pooler(mix_comp_fg_feat).reshape(*mix_comp_fg_feat.shape[:2], -1)
+            # subj_single_fg_feat: [1, 1280, 16, 16] => [1, 1280, 7, 7] => [1, 1280, 49] => [1, 49, 1280]
+            subj_single_fg_feat = pooler(subj_single_fg_feat).reshape(*subj_single_fg_feat.shape[:2], -1).permute(0, 2, 1)
+            subj_comp_fg_feat   = pooler(subj_comp_fg_feat).reshape(*subj_comp_fg_feat.shape[:2], -1).permute(0, 2, 1)
+            mix_single_fg_feat  = pooler(mix_single_fg_feat).reshape(*mix_single_fg_feat.shape[:2], -1).permute(0, 2, 1)
+            mix_comp_fg_feat    = pooler(mix_comp_fg_feat).reshape(*mix_comp_fg_feat.shape[:2], -1).permute(0, 2, 1)
 
             # single_feat_or_attn_grad_scale = 0.02. 
-            # feat_*_single are used as references, so their gradients are reduced to very small.
+            # feat_*_single are used as references, so their gradients are almost totally disabled.
             subj_single_fg_feat_gs = single_feat_or_attn_grad_scaler(subj_single_fg_feat)
             mix_single_fg_feat_gs  = single_feat_or_attn_grad_scaler(mix_single_fg_feat)
+            # ortho_l2loss: minimize the non-correlated components of the two inputs.
             # normalized_l2loss() or L2 loss (get_loss()) perform worse than ortho_l2loss().
+            # ortho_subtract() is done on the 1280-dim features, so the loss is scale-invariant to the second input.
             loss_layer_subj_fg_feat_preserve = ortho_l2loss(subj_comp_fg_feat, subj_single_fg_feat_gs, mean=True)
             loss_layer_mix_fg_feat_preserve  = ortho_l2loss(mix_comp_fg_feat,  mix_single_fg_feat_gs,  mean=True)
             loss_comp_subj_fg_feat_preserve += (loss_layer_subj_fg_feat_preserve 
@@ -3972,13 +3982,6 @@ class LatentDiffusion(DDPM):
         # "start" token always receives the highest attention, which is the normal behavior.
         # So we exclude the "start" token from the align padding loss.
         padding_mask[:, 0] = 0
-        # padding embeddings cannot push the subject embeddings away.
-        subj_embs_contrast_paddings_grad_scale  = 0.01
-        subj_embs_contrast_paddings_grad_scaler = gen_gradient_scaler(subj_embs_contrast_paddings_grad_scale)
-        # bg embeddings can push the subject embeddings away, but less effectively than 
-        # the subject embeddings pushing the bg embeddings away.
-        subj_embs_contrast_bg_grad_scale  = 0.3
-        subj_embs_contrast_bg_grad_scaler = gen_gradient_scaler(subj_embs_contrast_bg_grad_scale)
 
         subj_subj_indices_B, subj_subj_indices_N = subj_indices
 
@@ -3987,8 +3990,6 @@ class LatentDiffusion(DDPM):
         subj_subj_embs = cond_prompt_embeddings[subj_subj_indices_B, :, subj_subj_indices_N]
         # subj_subj_embs: [18, 16, 768] => [2, 9, 16, 768] => [2, 1, 16, 768]. "1" is for broadcasting.
         subj_subj_embs = subj_subj_embs.reshape(SSB_SIZE, K_fg, self.N_LAYERS, -1).sum(dim=1, keepdim=True)
-        subj_subj_embs_gs = subj_embs_contrast_paddings_grad_scaler(subj_subj_embs)
-        EMB_DIM = subj_subj_embs.shape[-1]
 
         loss_padding_subj_embs_align = 0
         loss_padding_cls_embs_align  = 0
@@ -4002,11 +4003,18 @@ class LatentDiffusion(DDPM):
             subj_padding_indices_i_N = padding_mask[i].nonzero().squeeze(-1)
             # subj_padding_embs_i: [63, 16, 768].
             subj_padding_embs_i = cond_prompt_embeddings[i, :, subj_padding_indices_i_N].permute(1, 0, 2)
-            # subj_subj_embs_gs_i: [1,  16, 768].
-            subj_subj_embs_gs_i = subj_subj_embs_gs[i]
-            # padding_subj_embs_align_coeffs_i: [63, 16]
-            padding_subj_embs_align_coeffs_i  = calc_align_coeffs(subj_padding_embs_i, subj_subj_embs_gs_i)
-            loss_padding_subj_embs_align += power_loss(padding_subj_embs_align_coeffs_i, exponent=2)
+            # subj_subj_embs_i: [1,  16, 768].
+            subj_subj_embs_i = subj_subj_embs[i]
+            # aim_to_align=False: loss is larger if the two embeddings are better aligned.
+            # ref_grad_scale=0.01: disable the grad into subj_subj_embs.
+            # padding embeddings cannot push the subject embeddings away.
+            loss_padding_subj_embs_align += \
+                calc_delta_cosine_loss(subj_padding_embs_i, subj_subj_embs_i,
+                                       exponent=2,
+                                       do_demean_first=False,
+                                       first_n_dims_to_flatten=2, 
+                                       ref_grad_scale=0.01,
+                                       aim_to_align=False)
 
         if is_compos_iter:
             cls_subj_indices_B, cls_subj_indices_N = subj_subj_indices_B + SSB_SIZE, subj_subj_indices_N
@@ -4022,15 +4030,20 @@ class LatentDiffusion(DDPM):
                 # cls_subj_embs_i:    [1, 16, 768].
                 cls_subj_embs_i = cls_subj_embs[i]
                 # padding_cls_embs_align_coeffs_i: [63, 16]
-                # loss_padding_cls_embs_align is not optimized, so no need to do gs to cls_subj_embs_i.
-                padding_cls_embs_align_coeffs_i  = calc_align_coeffs(cls_padding_embs_i, cls_subj_embs_i)
-                loss_padding_cls_embs_align += power_loss(padding_cls_embs_align_coeffs_i, exponent=2)
+                # ref_grad_scale=1: we don't do gs on cls_subj_embs, since loss_padding_cls_embs_align is not optimized.
+                loss_padding_cls_embs_align += \
+                    calc_delta_cosine_loss(cls_padding_embs_i, cls_subj_embs_i,
+                                           exponent=2,
+                                           do_demean_first=False,
+                                           first_n_dims_to_flatten=2, 
+                                           ref_grad_scale=1,
+                                           aim_to_align=False)
+
 
         if bg_indices is not None:
             bg_padding_mask = torch.zeros_like(padding_mask)
             bg_padding_mask[bg_indices] = 1
 
-            subj_subj_embs_gs2 = subj_embs_contrast_bg_grad_scaler(subj_subj_embs)
             # bg tokens may appear in class prompts (beyond SSB_SIZE), 
             # but subj tokens are limited to SSB_SIZE. So we only look at the first SSB_SIZE instances.
             for i in range(SSB_SIZE):
@@ -4040,13 +4053,19 @@ class LatentDiffusion(DDPM):
                     # bg_embs_i: [16, 4, 768] => [4, 16, 768].
                     bg_embs_i = cond_prompt_embeddings[i, :, bg_indices_i_N].permute(1, 0, 2)
                     # subj_subj_embs_gs_i: [1,  16, 768].
-                    # subj_embs_contrast_bg_grad_scale  = 0.3.
-                    subj_subj_embs_gs2_i = subj_subj_embs_gs2[i]
-                    # bg_subj_embs_align_coeffs_i: [4, 16]
-                    # We don't use gs to subj_subj_embs_i, since we also want to avoid the bg semantics 
+                    subj_subj_embs_i = subj_subj_embs[i]
+                    # We use a 0.3 gs (relatively large) on subj_subj_embs_i, 
+                    # since we also want to avoid the bg semantics 
                     # contaminating the subj semantics. So the loss should be bi-directional.
-                    bg_subj_embs_align_coeffs_i  = calc_align_coeffs(bg_embs_i, subj_subj_embs_gs2_i)
-                    loss_bg_subj_embs_align += power_loss(bg_subj_embs_align_coeffs_i, exponent=2)
+                    # bg embeddings can push the subject embeddings away, but less effectively than 
+                    # the subject embeddings pushing the bg embeddings away.
+                    loss_bg_subj_embs_align += \
+                        calc_delta_cosine_loss(bg_embs_i, subj_subj_embs_i,
+                                               exponent=2,
+                                               do_demean_first=False,
+                                               first_n_dims_to_flatten=2, 
+                                               ref_grad_scale=0.3,
+                                               aim_to_align=False)
 
         return loss_padding_subj_embs_align, loss_padding_cls_embs_align, loss_bg_subj_embs_align
 

@@ -503,9 +503,12 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
 
         # ref_grad_scale=1: ref grad scaling is disabled within calc_delta_cosine_loss,
         # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
-        # do_sqr=True: square the loss, so that the loss is more sensitive to smaller (<< 1) align_coeffs.
-        loss_delta_align = calc_align_coeff_loss(ex_delta, base_delta, margin=1., ref_grad_scale=1, do_sqr=True)
-
+        loss_delta_align = calc_delta_cosine_loss(ex_delta, base_delta, 
+                                                  exponent=2,
+                                                  do_demean_first=False,
+                                                  first_n_dims_to_flatten=(feat_base.ndim - 1), 
+                                                  ref_grad_scale=1)
+        
         return loss_delta_align
 
 def calc_align_coeff_loss(f1, f2, margin=1., ref_grad_scale=1, do_sqr=True):
