@@ -1673,7 +1673,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
         prompt_emb_mask_agg = subj_single_mask + subj_comp_mask
         # If a token appears both in single and comp prompts (all tokens in the single prompts), 
         # the aggregated mask value is 2. Convert to 1.
-        # If a token appears in only comp prompts (the extra compositional part), 
+        # If a token appears only in the compositional part, 
         # the aggregated mask value is 1. Convert to 0.25.
         # If a token is padding, the aggregated mask value is 0.5. Convert to 0.0625.
         prompt_emb_mask_weighted = prompt_emb_mask_agg.pow(2) / 4            

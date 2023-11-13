@@ -113,6 +113,7 @@ class DDPM(pl.LightningModule):
                  fg_bg_complementary_loss_weight=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
+                 bg_xlayer_consist_loss_base=0.,
                  wds_bg_recon_discount=1.,
                  do_clip_teacher_filtering=False,
                  use_background_token=False,
@@ -151,6 +152,7 @@ class DDPM(pl.LightningModule):
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
+        self.bg_xlayer_consist_loss_base            = bg_xlayer_consist_loss_base
         self.do_clip_teacher_filtering              = do_clip_teacher_filtering
         self.prompt_mix_scheme                      = 'mix_hijk'
         self.wds_bg_recon_discount                  = wds_bg_recon_discount
@@ -2748,7 +2750,15 @@ class LatentDiffusion(DDPM):
             if loss_bg_xlayer_consist > 0:
                 loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach()})
 
-            loss += self.fg_bg_xlayer_consist_loss_weight * (loss_fg_xlayer_consist + loss_bg_xlayer_consist)
+            bg_xlayer_consist_loss_scale_base = 1
+            # self.bg_xlayer_consist_loss_base: 0.3. If loss_bg_xlayer_consist >> 0.3, 
+            # then bg_xlayer_consist_loss_scale will increase to give more penalty.
+            bg_xlayer_consist_loss_scale = calc_dyn_loss_scale(loss_bg_xlayer_consist,
+                                                               self.bg_xlayer_consist_loss_base,
+                                                               bg_xlayer_consist_loss_scale_base)
+            
+            loss += (loss_fg_xlayer_consist + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale) \
+                    * self.fg_bg_xlayer_consist_loss_weight
 
         if self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']:
             # unet_feats is a dict as: layer_idx -> unet_feat. 
@@ -2810,7 +2820,7 @@ class LatentDiffusion(DDPM):
                 subj_attn_norm_distill_loss_scale_base  *= 0.5
 
             # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
-            # subj_attn_norm_distill_loss_base: 8 for non-faces or 0 (disabled) for faces.
+            # subj_attn_norm_distill_loss_base: 4 for non-faces or 8 for faces.
             subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
                                                                      self.subj_attn_norm_distill_loss_base,
                                                                      subj_attn_norm_distill_loss_scale_base)
