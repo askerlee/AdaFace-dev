@@ -3123,6 +3123,7 @@ class LatentDiffusion(DDPM):
             subj_single_subj_attn, subj_comp_subj_attn, mix_single_subj_attn, mix_comp_subj_attn \
                 = subj_attn_4b.chunk(4)
 
+            # comp_attn_score_mat_2b: [2, 13, 8, 64]. 13: number of extra compositional tokens.
             comp_attn_score_mat_2b = sel_emb_attns_by_indices(attn_score_mat, comp_extra_indices_13b, 
                                                               do_sum=False, do_sqrt_norm=False)
             subj_comp_comp_attn, mix_comp_comp_attn = comp_attn_score_mat_2b.chunk(2)
@@ -3153,22 +3154,27 @@ class LatentDiffusion(DDPM):
                                                 ref_grad_scale=1)
                     '''
 
+                    # subj_single_subj_attn, subj_comp_subj_attn, mix_single_subj_attn,
+                    # mix_comp_subj_attn: [1, 8, 64].
                     # Do not use mix_single_subj_attn_gs and mix_comp_subj_attn_gs,
-                    # as gs will be done within calc_delta_alignment_loss().
-                    # Doing it twice will reduce the grad on mix embeddings to 0.0025, almost 0.
+                    # as gs will be done within calc_delta_alignment_loss(),
+                    # and if doing it twice, the grad on mix embeddings will be 
+                    # reduced to 0.0025, almost 0.
                     loss_layer_subj_attn_delta_align \
                         = calc_delta_alignment_loss(subj_single_subj_attn, subj_comp_subj_attn,
                                                     mix_single_subj_attn,  mix_comp_subj_attn,
                                                     ref_grad_scale=mix_attn_grad_scale)
 
                     loss_subj_attn_delta_align  += loss_layer_subj_attn_delta_align * attn_delta_distill_layer_weight
+                    # subj_comp_comp_attn: [1, 13, 8, 64]. 13: number of extra compositional tokens.
                     loss_layer_comp_attn_delta = calc_delta_cosine_loss(subj_comp_comp_attn, mix_comp_comp_attn_gs,
                                                                         exponent=2,
-                                                                        do_demean_first=False,
-                                                                        first_n_dims_to_flatten=2, 
+                                                                        do_demean_first=True,
+                                                                        first_n_dims_to_flatten=3, 
                                                                         ref_grad_scale=1)
                     loss_comp_attn_delta_distill += loss_layer_comp_attn_delta
 
+                # mean(dim=-1): average over the 64 feature channels.
                 # Align the attention corresponding to each embedding individually.
                 # Note mix_*subj_attn use *_gs versions.
                 loss_layer_subj_comp_attn_norm   = (subj_comp_subj_attn.mean(dim=-1)   - mix_comp_subj_attn_gs.mean(dim=-1)).abs().mean()
@@ -3229,7 +3235,7 @@ class LatentDiffusion(DDPM):
             small_pooler = nn.AvgPool2d(small_pooler_kernel_size, stride=small_pooler_stride)
 
             # Flatten the spatial dimensions H, W.
-            # subj_single_feat: [2, 1280, 16, 16] pool -> [2, 1280, 7, 7] -> [2, 1280, 49]
+            # subj_single_feat: [2, 1280, 8, 8] pool -> [2, 1280, 3, 3] -> [2, 1280, 9]
             
             # If last_dim_is_spatial, then no need to permute. Dim 1 is the channel dimension.
             subj_single_feat_3d = large_pooler(subj_single_feat).reshape(*subj_single_feat.shape[:2], -1)
@@ -3244,13 +3250,14 @@ class LatentDiffusion(DDPM):
             mix_single_feat_small_3d  = small_pooler(mix_single_feat).reshape(*mix_single_feat.shape[:2], -1)
             mix_comp_feat_small_3d    = small_pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1)
 
-            # if channel_only, then channel dim is permuted to the last dim.
-            # [2, 1280, 49]  -> [2, 49, 1280]
-            # This option will lead to worse spatial consistency.
             # feat_align_spatial_or_channel: default 'spatial_and_channel', 
             # align both spatial and channel dims.
+            # if 'channel_only', then channel dim is permuted to the last dim.
+            # [2, 1280, 9]  -> [2, 9, 1280]
+            # 'channel_only' will lead to worse spatial consistency.
             if feat_align_spatial_or_channel in ['spatial_and_channel', 'spatial_only']:
-                # Do spatial-wise alignment at each channel.
+                # Do spatial-wise alignment at each channel. 
+                # The last dim is spatial dim.
                 # mix_feat_grad_scale = 0.1.
                 loss_layer_feat_delta_align_spatial \
                     = calc_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
@@ -3276,12 +3283,15 @@ class LatentDiffusion(DDPM):
                 loss_feat_base_align  += loss_layer_feat_base_align_spatial  * feat_distill_layer_weight
 
             if feat_align_spatial_or_channel in ['spatial_and_channel', 'channel_only']:
-                # Do channel-wise alignment at each spatial location.         
+                # Do channel-wise alignment at each spatial location. 
+                # The last dim is channel dim.    
+                # subj_single_feat_3d: [2, 1280, 9] -> [2, 9, 1280]
                 subj_single_feat_3d = subj_single_feat_3d.permute(0, 2, 1)
                 subj_comp_feat_3d   = subj_comp_feat_3d.permute(0,   2, 1)
                 mix_single_feat_3d  = mix_single_feat_3d.permute(0,  2, 1)
                 mix_comp_feat_3d    = mix_comp_feat_3d.permute(0,    2, 1)
 
+                # subj_single_feat_small_3d: [2, 1280, 9] -> [2, 9, 1280]
                 subj_single_feat_small_3d = subj_single_feat_small_3d.permute(0, 2, 1)
                 subj_comp_feat_small_3d   = subj_comp_feat_small_3d.permute(0,   2, 1)
                 mix_single_feat_small_3d  = mix_single_feat_small_3d.permute(0,  2, 1)
@@ -3416,12 +3426,12 @@ class LatentDiffusion(DDPM):
             # to make fg embeddings more stable.
             loss_layer_fg_bg_comple = \
                 calc_delta_cosine_loss(bg_attn, subj_attn, 
-                                        exponent=2,    
-                                        do_demean_first=False,
-                                        first_n_dims_to_flatten=2, 
-                                        ref_grad_scale=fg_grad_scale,
-                                        aim_to_align=False,
-                                        debug=False)
+                                       exponent=2,    
+                                       do_demean_first=True,
+                                       first_n_dims_to_flatten=2, 
+                                       ref_grad_scale=fg_grad_scale,
+                                       aim_to_align=False,
+                                       debug=False)
 
             # loss_fg_bg_complementary doesn't need fg_mask.
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_align_layer_weight
@@ -3781,7 +3791,7 @@ class LatentDiffusion(DDPM):
                 loss_layer_comp_attn_ortho = \
                     calc_delta_cosine_loss(subj_comp_attn_ortho, cls_comp_attn_ortho, 
                                            exponent=2,    
-                                           do_demean_first=False,
+                                           do_demean_first=True,
                                            first_n_dims_to_flatten=3, 
                                            ref_grad_scale=cls_grad_scale)
                 loss_layer_cls_comp_attn_align = power_loss(cls_comp_attn_align_coeffs, exponent=2)
@@ -4009,7 +4019,7 @@ class LatentDiffusion(DDPM):
             loss_padding_subj_embs_align += \
                 calc_delta_cosine_loss(subj_padding_embs_i, subj_subj_embs_i.expand_as(subj_padding_embs_i),
                                        exponent=2,
-                                       do_demean_first=False,
+                                       do_demean_first=True,
                                        first_n_dims_to_flatten=2, 
                                        ref_grad_scale=0.01,
                                        aim_to_align=False)
@@ -4033,7 +4043,7 @@ class LatentDiffusion(DDPM):
                 loss_padding_cls_embs_align += \
                     calc_delta_cosine_loss(cls_padding_embs_i, cls_subj_embs_i.expand_as(cls_padding_embs_i),
                                            exponent=2,
-                                           do_demean_first=False,
+                                           do_demean_first=True,
                                            first_n_dims_to_flatten=2, 
                                            ref_grad_scale=1,
                                            aim_to_align=False)
@@ -4063,7 +4073,7 @@ class LatentDiffusion(DDPM):
                     loss_bg_subj_embs_align += \
                         calc_delta_cosine_loss(bg_embs_i, subj_subj_embs_i.expand_as(bg_embs_i),
                                                exponent=2,
-                                               do_demean_first=False,
+                                               do_demean_first=True,
                                                first_n_dims_to_flatten=2, 
                                                ref_grad_scale=0.3,
                                                aim_to_align=False)
