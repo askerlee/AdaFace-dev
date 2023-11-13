@@ -45,7 +45,7 @@ model:
     # typical loss_mix_prompt_distill: 4, * weight -> 1.2e-3.
     mix_prompt_distill_weight:          2e-4
     # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
-    subj_attn_norm_distill_loss_base:   4
+    subj_attn_norm_distill_loss_base:   8
     comp_fg_bg_preserve_loss_weight:    2e-4
     # fg_bg_comple: used in non-wds recon iters.
     # loss_fg_bg_complementary: 1.5,      * weight -> 7.5e-4
