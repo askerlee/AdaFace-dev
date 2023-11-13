@@ -3079,7 +3079,7 @@ class LatentDiffusion(DDPM):
         # Setting to 0 may prevent the graph from being released and OOM.
         mix_attn_grad_scale  = 0.05  
         mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
-        feat_align_coeff_grad_scale = 0.2
+        feat_base_align_coeff_grad_scale = 0.2
         # Align both spatial and channel dims.
         feat_align_spatial_or_channel = 'spatial_and_channel'  # channel_only, spatial_only, spatial_and_channel
 
@@ -3237,15 +3237,17 @@ class LatentDiffusion(DDPM):
 
                 # Scale down the align_coeff_loss on mix instances by * 0.2.
                 loss_layer_feat_base_align_spatial = calc_align_coeff_loss(subj_comp_feat_3d, subj_single_feat_3d,
-                                                                           ref_grad_scale=feat_align_coeff_grad_scale,
+                                                                           margin=0.8,
+                                                                           ref_grad_scale=feat_base_align_coeff_grad_scale,
                                                                            do_sqr=True) \
                                                     + \
                                                      calc_align_coeff_loss(mix_comp_feat_3d, mix_single_feat_3d,
-                                                                           ref_grad_scale=feat_align_coeff_grad_scale, 
+                                                                           margin=0.8,
+                                                                           ref_grad_scale=feat_base_align_coeff_grad_scale, 
                                                                            do_sqr=True) * 0.2
 
-                loss_feat_base_align  += loss_layer_feat_base_align_spatial  * feat_distill_layer_weight
                 loss_feat_delta_align += loss_layer_feat_delta_align_spatial * feat_distill_layer_weight
+                loss_feat_base_align  += loss_layer_feat_base_align_spatial  * feat_distill_layer_weight
 
             if feat_align_spatial_or_channel in ['spatial_and_channel', 'channel_only']:
                 # Do channel-wise alignment at each spatial location.         
@@ -3261,15 +3263,17 @@ class LatentDiffusion(DDPM):
                 
                 # Scale down the align_coeff_loss on mix instances by * 0.2.
                 loss_layer_feat_base_align_channel = calc_align_coeff_loss(subj_comp_feat_3d, subj_single_feat_3d,
-                                                                           ref_grad_scale=feat_align_coeff_grad_scale, 
+                                                                           margin=0.8,
+                                                                           ref_grad_scale=feat_base_align_coeff_grad_scale, 
                                                                            do_sqr=True) \
                                                      + \
                                                      calc_align_coeff_loss(mix_comp_feat_3d, mix_single_feat_3d,
-                                                                           ref_grad_scale=feat_align_coeff_grad_scale, 
+                                                                           ref_grad_scale=feat_base_align_coeff_grad_scale, 
+                                                                           margin=0.8,
                                                                            do_sqr=True) * 0.2
                 
-                loss_feat_base_align  += loss_layer_feat_base_align_channel  * feat_distill_layer_weight
                 loss_feat_delta_align += loss_layer_feat_delta_align_channel * feat_distill_layer_weight
+                loss_feat_base_align  += loss_layer_feat_base_align_channel  * feat_distill_layer_weight
 
         # Normalize.
         if feat_align_spatial_or_channel == 'spatial_and_channel':

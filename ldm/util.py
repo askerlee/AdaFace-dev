@@ -477,7 +477,7 @@ def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 # feat_ex     is the extension (enriched features) of feat_base.
 # ref_feat_ex is the extension (enriched features) of ref_feat_base.
 def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
-                              ref_grad_scale=0.1, feat_base_grad_scale=0.2):
+                              ref_grad_scale=0.1, feat_base_grad_scale=0.05):
         ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
         # Reduce the gradient to the reference features, 
         # as the reference features are supposed to be unchanged, as opposed to feat_*. 
@@ -488,7 +488,7 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
         if feat_base_grad_scale == -1:
             # subj_attn_base/subj_attn_delta:   ref_grad_scale = 0.05 => feat_base_grad_scale = 0.025.
             # feat_base/feat_delta:             ref_grad_scale = 0.1  => feat_base_grad_scale = 0.05.
-            feat_base_grad_scale = min(ref_grad_scale * 2, 1)
+            feat_base_grad_scale = min(ref_grad_scale / 2, 1)
 
         feat_base_scaler  = gen_gradient_scaler(feat_base_grad_scale)
         # Reduce the gradient to feat_base features, to better reserve subject features.
@@ -504,11 +504,11 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
         # ref_grad_scale=1: ref grad scaling is disabled within calc_delta_cosine_loss,
         # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
         # do_sqr=True: square the loss, so that the loss is more sensitive to smaller (<< 1) align_coeffs.
-        loss_delta_align = calc_align_coeff_loss(ex_delta, base_delta, ref_grad_scale=1, do_sqr=True)
+        loss_delta_align = calc_align_coeff_loss(ex_delta, base_delta, margin=1., ref_grad_scale=1, do_sqr=True)
 
         return loss_delta_align
 
-def calc_align_coeff_loss(f1, f2, ref_grad_scale=1, do_sqr=True):
+def calc_align_coeff_loss(f1, f2, margin=1., ref_grad_scale=1, do_sqr=True):
     ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
     # Reduce the gradient to the reference features, 
     # as the reference features are supposed to be unchanged, as opposed to feat_*. 
@@ -516,10 +516,10 @@ def calc_align_coeff_loss(f1, f2, ref_grad_scale=1, do_sqr=True):
     f2_gs  = ref_grad_scaler(f2)    
     align_coeffs  = calc_align_coeffs(f1, f2_gs)
     # We encourage f1 to express at least 1s of f2, i.e.,
-    # align_coeffs should be >= 1. So a loss is incurred if it's < 1.
-    # do_sqr=True: square the loss, so that the loss is more sensitive to smaller (<< 1) align_coeffs.
-    loss_align  = masked_mean(1 - align_coeffs,
-                              1 - align_coeffs > 0,
+    # align_coeffs should be >= margin. So a loss is incurred if it's < margin.
+    # do_sqr=True: square the loss, so that the loss is more sensitive to smaller (<< margin) align_coeffs.
+    loss_align  = masked_mean(margin - align_coeffs,
+                              margin - align_coeffs > 0,
                               do_sqr=do_sqr)
     return loss_align
 
