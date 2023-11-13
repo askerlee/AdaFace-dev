@@ -841,6 +841,7 @@ class LatentDiffusion(DDPM):
                                 'use_conv_attn_kernel_size':    self.embedding_manager.use_conv_attn_kernel_size,
                                 'attn_copycat_emb_range':       self.embedding_manager.attn_copycat_emb_range,
                                 'contrast_fg_bg_attns':         self.embedding_manager.contrast_fg_bg_attns,
+                                'bg_attn_behavior_in_inference': self.embedding_manager.bg_attn_behavior_in_inference,
                                 # Setting up 'subj_indices' here is necessary for inference.
                                 # During training, 'subj_indices' will be overwritten in p_losses().
                                 # Although 'bg_indices' is usually not used during inference,

@@ -426,7 +426,8 @@ def main(opt):
         contrast_fg_bg_attns = opt.contrast_fg_bg_attns if hasattr(opt, 'contrast_fg_bg_attns') else None
         model.embedding_manager.set_embs_attn_specs(opt.use_conv_attn_kernel_size, 
                                                     opt.attn_copycat_emb_range,
-                                                    contrast_fg_bg_attns)
+                                                    contrast_fg_bg_attns,
+                                                    opt.bg_attn_behavior_in_inference)
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
@@ -676,7 +677,6 @@ def main(opt):
                             c = model.get_learned_conditioning(prompts)
                             # is_training=False ensures that contrast_fg_bg_attns will set bg attn to 0.
                             c[2]['is_training'] = False
-                            c[2]['bg_attn_behavior_in_inference'] = opt.bg_attn_behavior_in_inference
 
                             # ref_c is not None, implies (prompt_mix_weight != 0 and ref_prompt is not None).
                             if ref_c is not None:

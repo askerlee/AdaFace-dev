@@ -1670,7 +1670,8 @@ class EmbeddingManager(nn.Module):
     # contrast_fg_bg_attns = None:         Not specified.
     def set_embs_attn_specs(self, use_conv_attn_kernel_size=None, 
                             attn_copycat_emb_range=None, 
-                            contrast_fg_bg_attns=None):
+                            contrast_fg_bg_attns=None,
+                            bg_attn_behavior_in_inference='zero'):
         if use_conv_attn_kernel_size is not None:
             self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
             extra_msg = ", DISABLED" if use_conv_attn_kernel_size is -1 else ""
@@ -1691,6 +1692,10 @@ class EmbeddingManager(nn.Module):
             self.contrast_fg_bg_attns = contrast_fg_bg_attns
             extra_msg = ", DISABLED" if contrast_fg_bg_attns is False else ""
             print(f"Setting contrast_fg_bg_attns = {contrast_fg_bg_attns}{extra_msg}")
+
+            # Only set if contrast_fg_bg_attns is not None.
+            self.bg_attn_behavior_in_inference = bg_attn_behavior_in_inference
+            print(f"Setting bg_attn_behavior_in_inference = {bg_attn_behavior_in_inference}")
 
     def initialize_attn_postmix_components(self, attn_postmix_weight, 
                                             postmix_attn_layer=None, 
