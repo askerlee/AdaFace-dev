@@ -86,9 +86,9 @@ model:
         emb_ema_as_pooling_probe_weight: 0.5
         use_specialized_comp_embs: False
         attn_postmix_weight: 0
-        training_add_noise_std_range:  [ 0.1, 0.1 ]
+        training_add_noise_std_range:  [ 0.1, 0.4 ]
         # probs for recon_iter and distill_iter, respectively
-        training_add_noise_prob:   { 'recon_iter': 0.3, 'distill_iter': 0.1 }
+        training_add_noise_prob:   { 'recon_iter': 0.6, 'distill_iter': 0.4 }
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
