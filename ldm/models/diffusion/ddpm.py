@@ -2711,11 +2711,11 @@ class LatentDiffusion(DDPM):
                     # BLOCK_SIZE = 1, SSB_SIZE = 2.
                     SSB_SIZE = 2 * BLOCK_SIZE
 
-                loss_padding_subj_embs_align, loss_padding_cls_embs_align, loss_bg_subj_embs_align = \
-                    self.calc_padding_embs_align_loss(static_embeddings, ada_embeddings,
-                                                      extra_info['prompt_emb_mask'],
-                                                      subj_indices, bg_indices, SSB_SIZE, 
-                                                      self.iter_flags['is_compos_iter'])
+                loss_padding_subj_embs_align, loss_padding_cls_embs_align, loss_bg_subj_embs_align \
+                    = self.calc_padding_embs_align_loss(static_embeddings, ada_embeddings,
+                                                        extra_info['prompt_emb_mask'],
+                                                        subj_indices, bg_indices, SSB_SIZE, 
+                                                        self.iter_flags['is_compos_iter'])
 
                 if loss_padding_subj_embs_align != 0:
                     loss_dict.update({f'{prefix}/padding_subj_embs_align': loss_padding_subj_embs_align.mean().detach()})
@@ -3994,8 +3994,6 @@ class LatentDiffusion(DDPM):
         loss_padding_subj_embs_align = 0
         loss_padding_cls_embs_align  = 0
         loss_bg_subj_embs_align      = 0
-        
-        #subj_padding_indices_by_instance = split_indices_by_instance(subj_padding_indices)
 
         # Subject tokens are always in instances 0 .. SSB_SIZE-1.
         for i in range(SSB_SIZE):
@@ -4009,7 +4007,7 @@ class LatentDiffusion(DDPM):
             # ref_grad_scale=0.01: disable the grad into subj_subj_embs.
             # padding embeddings cannot push the subject embeddings away.
             loss_padding_subj_embs_align += \
-                calc_delta_cosine_loss(subj_padding_embs_i, subj_subj_embs_i,
+                calc_delta_cosine_loss(subj_padding_embs_i, subj_subj_embs_i.expand_as(subj_padding_embs_i),
                                        exponent=2,
                                        do_demean_first=False,
                                        first_n_dims_to_flatten=2, 
@@ -4029,10 +4027,9 @@ class LatentDiffusion(DDPM):
                 cls_padding_embs_i = cond_prompt_embeddings[cls_padding_indices_i[0], :, cls_padding_indices_i[1]]
                 # cls_subj_embs_i:    [1, 16, 768].
                 cls_subj_embs_i = cls_subj_embs[i]
-                # padding_cls_embs_align_coeffs_i: [63, 16]
                 # ref_grad_scale=1: we don't do gs on cls_subj_embs, since loss_padding_cls_embs_align is not optimized.
                 loss_padding_cls_embs_align += \
-                    calc_delta_cosine_loss(cls_padding_embs_i, cls_subj_embs_i,
+                    calc_delta_cosine_loss(cls_padding_embs_i, cls_subj_embs_i.expand_as(cls_padding_embs_i),
                                            exponent=2,
                                            do_demean_first=False,
                                            first_n_dims_to_flatten=2, 
@@ -4052,7 +4049,7 @@ class LatentDiffusion(DDPM):
                 if len(bg_indices_i_N) > 0:
                     # bg_embs_i: [16, 4, 768] => [4, 16, 768].
                     bg_embs_i = cond_prompt_embeddings[i, :, bg_indices_i_N].permute(1, 0, 2)
-                    # subj_subj_embs_gs_i: [1,  16, 768].
+                    # subj_subj_embs_i: [1,  16, 768].
                     subj_subj_embs_i = subj_subj_embs[i]
                     # We use a 0.3 gs (relatively large) on subj_subj_embs_i, 
                     # since we also want to avoid the bg semantics 
@@ -4060,7 +4057,7 @@ class LatentDiffusion(DDPM):
                     # bg embeddings can push the subject embeddings away, but less effectively than 
                     # the subject embeddings pushing the bg embeddings away.
                     loss_bg_subj_embs_align += \
-                        calc_delta_cosine_loss(bg_embs_i, subj_subj_embs_i,
+                        calc_delta_cosine_loss(bg_embs_i, subj_subj_embs_i.expand_as(bg_embs_i),
                                                exponent=2,
                                                do_demean_first=False,
                                                first_n_dims_to_flatten=2, 
