@@ -355,9 +355,11 @@ if __name__ == "__main__":
 
         if args.background_string and args.include_bg_string:
             background_string = "with background " + args.background_string + ", " * (args.num_vectors_per_bg_token - 1)
+            bg_suffix = "-bg"
         else:
             background_string = ""
-
+            bg_suffix = ""
+            
         if args.prompt is None:
             if args.n_samples == -1:
                 args.n_samples = 4
@@ -368,7 +370,7 @@ if __name__ == "__main__":
                 get_prompt_list(args.placeholder, z_prefix, z_suffix, background_string, 
                                 class_token, class_long_token, 
                                 broad_class, args.prompt_set)
-            prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set}.txt"
+            prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set}{bg_suffix}.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
             if args.n_samples == -1:
