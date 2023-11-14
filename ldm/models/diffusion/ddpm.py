@@ -4028,7 +4028,8 @@ class LatentDiffusion(DDPM):
             # on background areas.
             subj_subj_bg_attn, mix_subj_bg_attn = subj_bg_attn.chunk(2)
 
-            subj_attn_mean = subj_attn.mean().item() + 1e-6
+            # abs(): just in case. the subj emb activations are almost always positive.
+            subj_attn_mean = subj_attn.mean().abs().item() + 1e-6
             # Simply suppress the subj attention on background areas. 
             # No need to use attn_*_single as references.
             # do_sqr=True: focus on large activations and tolerate more of small activations.
