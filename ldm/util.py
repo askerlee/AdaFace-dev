@@ -476,9 +476,10 @@ def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 # Last dim is the channel dim.
 # feat_ex     is the extension (enriched features) of feat_base.
 # ref_feat_ex is the extension (enriched features) of ref_feat_base.
+# delta_choices: feat_to_ref or ex_to_base or both.
 def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
                               ref_grad_scale=0.1, feat_base_grad_scale=0.05,
-                              use_cosine_loss=True):
+                              use_cosine_loss=True, delta_choices=['feat_to_ref', 'ex_to_base']):
         ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
         # Reduce the gradient to the reference features, 
         # as the reference features are supposed to be unchanged, as opposed to feat_*. 
@@ -497,28 +498,35 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
 
         # ortho_subtract() is done on the last dimension. 
         # NOTE: use normalized_ortho_subtract() will reduce performance.
-        # ex_delta: [1, 8, 64]. delta_align_coeffs: [1, 8].
-        # delta_align_coeffs is like: [[1.0598, 0.9105, 1.2208, 1.0868, 1.0764, 1.0875, 1.0017, 1.1690]]
-        base_delta = ortho_subtract(feat_base_gs, ref_feat_base_gs)
-        ex_delta   = ortho_subtract(feat_ex,      ref_feat_ex_gs)
+        # Align tgt_delta to src_delta.
+        losses_delta_align = {}
+        for delta_choice in delta_choices:
+            if delta_choice == 'feat_to_ref':                
+                src_delta = ortho_subtract(feat_base_gs, ref_feat_base_gs)
+                tgt_delta = ortho_subtract(feat_ex,      ref_feat_ex_gs)
+            elif delta_choice == 'ex_to_base':
+                src_delta = ortho_subtract(ref_feat_ex_gs, ref_feat_base_gs)
+                tgt_delta = ortho_subtract(feat_ex,        feat_base_gs)
 
-        if use_cosine_loss:
-            # ref_grad_scale=1: ref grad scaling is disabled within calc_delta_cosine_loss,
-            # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
-            loss_delta_align = calc_delta_cosine_loss(ex_delta, base_delta, 
-                                                      exponent=2,
-                                                      do_demean_first=False,
-                                                      first_n_dims_to_flatten=(feat_base.ndim - 1), 
-                                                      ref_grad_scale=1)
-        else:
-            # ref_grad_scale=1: ref grad scaling is disabled within calc_delta_cosine_loss,
-            # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
-            # do_sqr=True: square the loss, so that the loss is more sensitive to 
-            # smaller (<< 1) align_coeffs.            
-            loss_delta_align = calc_align_coeff_loss(ex_delta, base_delta, 
-                                                     margin=1., ref_grad_scale=1, do_sqr=True)
+            if use_cosine_loss:
+                # ref_grad_scale=1: ref grad scaling is disabled within calc_delta_cosine_loss,
+                # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
+                loss_delta_align = calc_delta_cosine_loss(tgt_delta, src_delta, 
+                                                        exponent=2,
+                                                        do_demean_first=False,
+                                                        first_n_dims_to_flatten=(feat_base.ndim - 1), 
+                                                        ref_grad_scale=1)
+            else:
+                # ref_grad_scale=1: ref grad scaling is disabled within calc_delta_cosine_loss,
+                # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
+                # do_sqr=True: square the loss, so that the loss is more sensitive to 
+                # smaller (<< 1) align_coeffs.            
+                loss_delta_align = calc_align_coeff_loss(tgt_delta, src_delta, 
+                                                        margin=1., ref_grad_scale=1, do_sqr=True)
             
-        return loss_delta_align
+            losses_delta_align[delta_choice] = loss_delta_align
+
+        return losses_delta_align
 
 def calc_align_coeff_loss(f1, f2, margin=1., encourage_align=True, ref_grad_scale=1, do_sqr=True):
     ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
