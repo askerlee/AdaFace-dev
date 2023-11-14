@@ -2826,7 +2826,7 @@ class LatentDiffusion(DDPM):
             if loss_comp_attn_delta_distill > 0:
                 loss_dict.update({f'{prefix}/comp_attn_delta_distill': loss_comp_attn_delta_distill.mean().detach()})
 
-            # loss_subj_attn_delta_align us an L2 loss, 
+            # loss_subj_attn_delta_align_* use L2 losses, 
             # so no need to use dynamic loss scale.
             subj_attn_delta_distill_loss_scale = 1 #0.5
             # loss_comp_attn_delta_distill is L2 loss, so no need to use dynamic loss scale.
@@ -3124,7 +3124,7 @@ class LatentDiffusion(DDPM):
         loss_feat_base_align            = 0
         loss_feat_delta_align_id        = 0
         loss_feat_delta_align_ex        = 0
-        
+
         loss_comp_attn_delta_distill    = 0
         loss_subj_attn_norm_distill     = 0
 
@@ -3377,7 +3377,8 @@ class LatentDiffusion(DDPM):
             loss_feat_delta_align_id /= 2
             loss_feat_delta_align_ex /= 2
 
-        return loss_subj_attn_delta_align, loss_comp_attn_delta_distill, \
+        return loss_subj_attn_delta_align_id, loss_subj_attn_delta_align_ex, \
+               loss_comp_attn_delta_distill, \
                loss_subj_attn_norm_distill, loss_feat_base_align,        \
                loss_feat_delta_align_id, loss_feat_delta_align_ex
 
