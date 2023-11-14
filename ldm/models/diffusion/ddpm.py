@@ -3109,7 +3109,8 @@ class LatentDiffusion(DDPM):
         K_fg = len(fg_indices_2b[0]) // len(torch.unique(fg_indices_2b[0]))
         fg_indices_4b = double_token_indices(fg_indices_2b, BLOCK_SIZE * 2)
 
-        mix_feat_grad_scale  = 0.1
+        mix_feat_grad_scale = 0.1
+        mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)        
         # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to teacher attn. 
         # Setting to 0 may prevent the graph from being released and OOM.
         mix_attn_grad_scale  = 0.05  
@@ -3284,6 +3285,32 @@ class LatentDiffusion(DDPM):
             mix_single_feat_small_3d  = small_pooler(mix_single_feat).reshape(*mix_single_feat.shape[:2], -1)
             mix_comp_feat_small_3d    = small_pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1)
 
+            mix_comp_feat_2d = mix_comp_feat.reshape(mix_comp_feat.shape[0], -1)
+            mix_single_feat_2d = mix_single_feat.reshape(mix_single_feat.shape[0], -1)
+            subj_comp_feat_2d = subj_comp_feat.reshape(subj_comp_feat.shape[0], -1)
+            subj_single_feat_2d = subj_single_feat.reshape(subj_single_feat.shape[0], -1)
+
+            # mix_feat_grad_scale = 0.1.
+            mix_single_feat_2d_gs  = mix_feat_grad_scaler(mix_single_feat_2d)
+            mix_comp_feat_2d_gs    = mix_feat_grad_scaler(mix_comp_feat_2d)
+
+            comp_feat_delta   = ortho_subtract(mix_comp_feat_2d_gs,   subj_comp_feat_2d)
+            single_feat_delta = ortho_subtract(mix_single_feat_2d_gs, subj_single_feat_2d)
+                
+            # single_feat_delta, comp_feat_delta: [1, 1280], ...
+            # Pool the spatial dimensions H, W to remove spatial information.
+            # The gradient goes back to single_feat_delta -> subj_comp_feat,
+            # as well as comp_feat_delta -> mix_comp_feat.
+            # If stop_single_grad, the gradients to subj_single_feat and mix_single_feat are stopped, 
+            # as these two images should look good by themselves (since they only contain the subject).
+            # Note the learning strategy to the single image features should be different from 
+            # the single embeddings, as the former should be optimized to look good by itself,
+            # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
+            # and 2) the embeddings are amendable to composition.
+            loss_layer_feat_delta_align_id = self.get_loss(comp_feat_delta, single_feat_delta, mean=True)
+            loss_feat_delta_align_id += loss_layer_feat_delta_align_id * feat_distill_layer_weight
+
+            '''
             # feat_align_spatial_or_channel: default 'spatial_and_channel', 
             # align both spatial and channel dims.
             # if 'channel_only', then channel dim is permuted to the last dim.
@@ -3371,11 +3398,16 @@ class LatentDiffusion(DDPM):
                                              * feat_distill_layer_weight
                 loss_feat_base_align  += loss_layer_feat_base_align_channel  * feat_distill_layer_weight
 
+            '''
+            
         # Normalize.
+
+        '''
         if feat_align_spatial_or_channel == 'spatial_and_channel':
             loss_feat_base_align  /= 2
             loss_feat_delta_align_id /= 2
             loss_feat_delta_align_ex /= 2
+        '''
 
         return loss_subj_attn_delta_align_id, loss_subj_attn_delta_align_ex, \
                loss_comp_attn_delta_distill, \
