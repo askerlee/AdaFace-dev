@@ -2102,10 +2102,10 @@ class LatentDiffusion(DDPM):
                         # of the original x_start values and add 20% ~ 60% of noise. 
                         x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
 
-                        if fg_mask_percent > 0.1:
-                            new_fg_mask_percent = filtered_fg_mask.float().sum() / filtered_fg_mask.numel()
-                            print(f'fg_mask_percent: {fg_mask_percent:.3f} -> scale {fg_rand_scale} -> {new_fg_mask_percent:.3f}')
-                            
+                        #if fg_mask_percent > 0.1:
+                        #    new_fg_mask_percent = filtered_fg_mask.float().sum() / filtered_fg_mask.numel()
+                        #    print(f'fg_mask_percent: {fg_mask_percent:.3f} -> scale {fg_rand_scale} -> {new_fg_mask_percent:.3f}')
+
                     # Otherwise it's use_wds_comp, then x_start is kept intact (the noisy wds overlay images).
 
                 elif not self.iter_flags['use_wds_comp']:
@@ -2888,11 +2888,11 @@ class LatentDiffusion(DDPM):
 
                 # loss_comp_subj_fg_feat_preserve is L2 loss, so no need to use dynamic loss scale.
                 comp_subj_fg_feat_preserve_loss_scale = 1
-
-                bg_attn_suppress_loss_scale = 0 # loss_comp_subj_bg_attn_suppress DISABLED. # 0.5
+                # A big comp_subj_bg_attn_suppress_loss_scale may hurt the authenticity.
+                comp_subj_bg_attn_suppress_loss_scale = 0.2 # 0.5
                 loss_comp_fg_bg_preserve = (loss_comp_subj_fg_feat_preserve * comp_subj_fg_feat_preserve_loss_scale \
                                               + loss_comp_subj_fg_attn_preserve) \
-                                            + loss_comp_subj_bg_attn_suppress * bg_attn_suppress_loss_scale
+                                            + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
             else:
                 loss_comp_fg_bg_preserve = 0
 
@@ -3404,11 +3404,12 @@ class LatentDiffusion(DDPM):
         loss_bg_mask_align = 0
         loss_fg_bg_mask_contrast = 0
 
-        emb_mfmb_contrast_scale         = 0.1
+        subj_mb_contrast_scale          = 0.2
+        bg_mf_contrast_scale            = 0.2
         fgbg_emb_contrast_scale         = 0.2
-        mfmb_contrast_score_margin            = 0.4
-        subj_bg_contrast_at_mf_score_margin   = 0.4
-        bg_subj_contrast_at_mb_score_margin   = 0.4
+        mfmb_contrast_score_margin            = 0.6
+        subj_bg_contrast_at_mf_score_margin   = 0.6
+        bg_subj_contrast_at_mb_score_margin   = 0.6
 
         # In each instance, subj_indices has K_fg times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
@@ -3522,6 +3523,16 @@ class LatentDiffusion(DDPM):
                 subj_score_at_mb = subj_score * bg_mask3
                 bg_score_at_mb   = bg_score   * bg_mask3
 
+                # Mainly protect subject emb activations on fg areas.
+                # Also   protect subject emb activations on bg areas, to a lesser degree.
+                subj_score_at_mf_grad_scale = 0.1
+                subj_score_at_mb_grad_scale = 0.3
+                subj_score_at_mf_grad_scaler = gen_gradient_scaler(subj_score_at_mf_grad_scale)
+                subj_score_at_mb_grad_scaler = gen_gradient_scaler(subj_score_at_mb_grad_scale)
+
+                subj_score_at_mf = subj_score_at_mf_grad_scaler(subj_score_at_mf)
+                subj_score_at_mb = subj_score_at_mb_grad_scaler(subj_score_at_mb)
+
                 # fg_mask3: [BS, 8, 64]
                 # avg_subj_score_at_mf: [BS, 1, 1]
                 # keepdim=True, since scores at all locations will use them as references (subtract them).
@@ -3559,6 +3570,7 @@ class LatentDiffusion(DDPM):
                 # bg_score_at_mf at any foreground locations.
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, as avg_bg_score_at_mf 
                 # usually takes a much smaller value than avg_subj_score_at_mf.
+                # avg_subj_score_at_mf.item(): protect subj fg activations.
                 layer_subj_bg_contrast_at_mf        = bg_score_at_mf + subj_bg_contrast_at_mf_score_margin - avg_subj_score_at_mf
                 loss_layer_subj_bg_contrast_at_mf   = masked_mean(layer_subj_bg_contrast_at_mf, 
                                                                   layer_subj_bg_contrast_at_mf > 0, 
@@ -3572,10 +3584,14 @@ class LatentDiffusion(DDPM):
                                                                   instance_weights=instance_mask)
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, 
                 # so loss_fg_mask_align is much smaller than loss_bg_mask_align.
+                # subj_mb_contrast_scale: 0.1.
                 loss_fg_mask_align          += loss_layer_subj_mfmb_contrast \
-                                                * attn_align_layer_weight * emb_mfmb_contrast_scale
+                                                * attn_align_layer_weight * subj_mb_contrast_scale
+                # bg_mf_contrast_scale: 0.3. More penalty of bg emb activations on fg areas.
                 loss_bg_mask_align          += loss_layer_bg_mfmb_contrast \
-                                                * attn_align_layer_weight * emb_mfmb_contrast_scale
+                                                * attn_align_layer_weight * bg_mf_contrast_scale
+                # fgbg_emb_contrast_scale: 0.2. Balanced penalty of fg emb activation 
+                # contrast on fg and bg areas.
                 loss_fg_bg_mask_contrast    += (loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
                                                 * attn_align_layer_weight * fgbg_emb_contrast_scale
                 #print(f'layer {unet_layer_idx}')
@@ -3887,9 +3903,9 @@ class LatentDiffusion(DDPM):
                                         12: 1.,
                                         16: 1., 17: 1.,
                                         18: 1.,
-                                        19: 0.5, 20: 0.5, 
-                                        21: 0.5,  22: 0.25, 
-                                        23: 0.25, 24: 0.25, 
+                                        19: 1, 20: 1, 
+                                        21: 1,  22: 1, 
+                                        23: 1, 24: 1, 
                                      }
         # 16-18: feature maps 16x16.
         # 19-21: feature maps 32x32.
@@ -4014,8 +4030,11 @@ class LatentDiffusion(DDPM):
 
             # Simply suppress the subj attention on background areas. 
             # No need to use attn_*_single as references.
-            loss_layer_subj_bg_attn_suppress = masked_mean(subj_subj_bg_attn, subj_subj_bg_attn > 0)
-            loss_layer_mix_bg_attn_suppress  = masked_mean(mix_subj_bg_attn,  mix_subj_bg_attn  > 0)
+            # do_sqr=True: focus on large activations and tolerate more of small activations.
+            loss_layer_subj_bg_attn_suppress = masked_mean(subj_subj_bg_attn, subj_subj_bg_attn > 0,
+                                                           do_sqr=True)
+            loss_layer_mix_bg_attn_suppress  = masked_mean(mix_subj_bg_attn,  mix_subj_bg_attn  > 0,
+                                                           do_sqr=True)
             mix_bg_attn_suppress_loss_scale = 0.2
             loss_comp_subj_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
                                                 + loss_layer_mix_bg_attn_suppress * mix_bg_attn_suppress_loss_scale) \
