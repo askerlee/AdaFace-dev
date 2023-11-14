@@ -271,8 +271,9 @@ class AttentionalPooler(nn.Module):
             # Prepare to be used by v_pooler.
             img_mask = img_mask.permute(0, 2, 1)
 
-        # attn: [B, 2, 4096]. Normalize across the token (2) dimension.
-        attn = sim_scores.softmax(dim=1)
+        # attn: [B, 2, 4096]. Normalize across the image patches (4096) dimension.
+        # ** I don't know why, but normalizing across the token (2) dimension performs worse. **
+        attn = sim_scores.softmax(dim=-1)
         # attn_fg, attn_bg: [B, 1, 4096].
         attn_fg, attn_bg = attn.split(1, dim=1)
 
