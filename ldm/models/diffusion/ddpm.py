@@ -2076,7 +2076,7 @@ class LatentDiffusion(DDPM):
 
                         # Resize x_start_origsize and filtered_fg_mask by rand_scale. They have different numbers of channels,
                         # so we need to concatenate them at dim 1, and then resize.
-                        x_mask = torch.cat([x_start_origsize, filtered_fg_mask], dim=1)
+                        x_mask = torch.cat([x_start_origsize, fg_mask, filtered_fg_mask], dim=1)
                         x_mask_scaled = F.interpolate(x_mask, scale_factor=fg_rand_scale, mode='bilinear', align_corners=False)
 
                         # Pad filtered_fg_mask_scaled to the original size, with left/right padding roughly equal
@@ -2085,11 +2085,13 @@ class LatentDiffusion(DDPM):
                         pad_h1 = int((x_start.shape[2] - x_mask_scaled.shape[2]) / 2)
                         pad_h2 =      x_start.shape[2] - x_mask_scaled.shape[2] - pad_h1
                         x_mask_scaled_padded = F.pad(x_mask_scaled, 
-                                                    (pad_w1, pad_w2, pad_h1, pad_h2),
-                                                    mode='constant', value=0)
+                                                     (pad_w1, pad_w2, pad_h1, pad_h2),
+                                                     mode='constant', value=0)
 
-                        # Unpack x_start and filtered_fg_mask from x_mask_scaled_padded.
-                        x_start_scaled_padded, filtered_fg_mask = x_mask_scaled_padded[:, :4], x_mask_scaled_padded[:, 4:]
+                        # Unpack x_start, fg_mask and filtered_fg_mask from x_mask_scaled_padded.
+                        x_start_scaled_padded, fg_mask, filtered_fg_mask \
+                            = x_mask_scaled_padded[:, :4], x_mask_scaled_padded[:, [4]], \
+                              x_mask_scaled_padded[:, [5]]
 
                         # In filtered_fg_mask, the padded areas are filled with 0. 
                         # So these pixels always take values from the random tensor.
@@ -2099,6 +2101,11 @@ class LatentDiffusion(DDPM):
                         # At the fg area, keep 80% (beginning of training) ~ 40% (end of training) 
                         # of the original x_start values and add 20% ~ 60% of noise. 
                         x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
+
+                        if fg_mask_percent > 0.1:
+                            new_fg_mask_percent = filtered_fg_mask.float().sum() / filtered_fg_mask.numel()
+                            print(f'fg_mask_percent: {fg_mask_percent:.3f} -> scale {fg_rand_scale} -> {new_fg_mask_percent:.3f}')
+                            
                     # Otherwise it's use_wds_comp, then x_start is kept intact (the noisy wds overlay images).
 
                 elif not self.iter_flags['use_wds_comp']:
