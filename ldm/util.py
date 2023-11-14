@@ -476,10 +476,10 @@ def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 # Last dim is the channel dim.
 # feat_ex     is the extension (enriched features) of feat_base.
 # ref_feat_ex is the extension (enriched features) of ref_feat_base.
-# delta_choices: feat_to_ref or ex_to_base or both.
+# delta_types: feat_to_ref or ex_to_base or both.
 def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
                               ref_grad_scale=0.1, feat_base_grad_scale=0.05,
-                              use_cosine_loss=True, delta_choices=['feat_to_ref', 'ex_to_base']):
+                              use_cosine_loss=True, delta_types=['feat_to_ref', 'ex_to_base']):
         ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
         # Reduce the gradient to the reference features, 
         # as the reference features are supposed to be unchanged, as opposed to feat_*. 
@@ -500,7 +500,7 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
         # NOTE: use normalized_ortho_subtract() will reduce performance.
         # Align tgt_delta to src_delta.
         losses_delta_align = {}
-        for delta_choice in delta_choices:
+        for delta_choice in delta_types:
             if delta_choice == 'feat_to_ref':                
                 src_delta = ortho_subtract(feat_base_gs, ref_feat_base_gs)
                 tgt_delta = ortho_subtract(feat_ex,      ref_feat_ex_gs)

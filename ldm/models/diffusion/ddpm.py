@@ -2802,7 +2802,8 @@ class LatentDiffusion(DDPM):
             # to index subj single and subj comp embeddings.
             # The indices will be shifted along the batch dimension (size doubled) 
             # within calc_prompt_mix_loss() to index all the 4 blocks.
-            loss_subj_attn_delta_align, loss_comp_attn_delta_distill, \
+            loss_subj_attn_delta_align_id, loss_subj_attn_delta_align_ex, \
+            loss_comp_attn_delta_distill, \
             loss_subj_attn_norm_distill, loss_feat_base_align, \
             loss_feat_delta_align_id,    loss_feat_delta_align_ex = \
                                 self.calc_prompt_mix_loss(unet_feats, extra_info['unet_attnscores'], 
@@ -2816,8 +2817,10 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/feat_delta_align_id':     loss_feat_delta_align_id.mean().detach()})
             if loss_feat_delta_align_ex > 0:
                 loss_dict.update({f'{prefix}/feat_delta_align_ex':     loss_feat_delta_align_ex.mean().detach()})
-            if loss_subj_attn_delta_align > 0:
-                loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach()})
+            if loss_subj_attn_delta_align_id > 0:
+                loss_dict.update({f'{prefix}/subj_attn_delta_align_id':   loss_subj_attn_delta_align_id.mean().detach()})
+            if loss_subj_attn_delta_align_ex > 0:
+                loss_dict.update({f'{prefix}/subj_attn_delta_align_ex':   loss_subj_attn_delta_align_ex.mean().detach()})
             if loss_subj_attn_norm_distill > 0:
                 loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach()})
             if loss_comp_attn_delta_distill > 0:
@@ -2848,7 +2851,8 @@ class LatentDiffusion(DDPM):
             feat_base_align_scale  = 0.5
             feat_delta_align_scale = 1
 
-            loss_mix_prompt_distill =  (loss_subj_attn_delta_align * subj_attn_delta_distill_loss_scale \
+            loss_mix_prompt_distill =  ( (loss_subj_attn_delta_align_id + loss_subj_attn_delta_align_ex) 
+                                          * subj_attn_delta_distill_loss_scale \
                                           + loss_comp_attn_delta_distill * comp_attn_delta_distill_loss_scale) \
                                         + loss_subj_attn_norm_distill    * subj_attn_norm_distill_loss_scale \
                                         + loss_feat_base_align  * feat_base_align_scale \
@@ -3115,12 +3119,14 @@ class LatentDiffusion(DDPM):
         # Align both spatial and channel dims.
         feat_align_spatial_or_channel = 'spatial_only'  # channel_only, spatial_only, spatial_and_channel
 
-        loss_subj_attn_delta_align = 0
+        loss_subj_attn_delta_align_id   = 0
+        loss_subj_attn_delta_align_ex   = 0
+        loss_feat_base_align            = 0
+        loss_feat_delta_align_id        = 0
+        loss_feat_delta_align_ex        = 0
+        
         loss_comp_attn_delta_distill    = 0
         loss_subj_attn_norm_distill     = 0
-        loss_feat_base_align  = 0
-        loss_feat_delta_align_ex = 0
-        loss_feat_delta_align_id = 0
 
         for unet_layer_idx, unet_feat in unet_feats.items():
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_norm_distill_layer_weights):
@@ -3179,13 +3185,17 @@ class LatentDiffusion(DDPM):
                     # as gs will be done within calc_delta_alignment_loss(),
                     # and if doing it twice, the grad on mix embeddings will be 
                     # reduced to 0.0025, almost 0.
-                    loss_layer_subj_attn_delta_align \
+                    loss_dict_layer_subj_attn_delta_align \
                         = calc_delta_alignment_loss(subj_single_subj_attn, subj_comp_subj_attn,
                                                     mix_single_subj_attn,  mix_comp_subj_attn,
                                                     ref_grad_scale=mix_attn_grad_scale,
-                                                    use_cosine_loss=True)
+                                                    use_cosine_loss=True, 
+                                                    delta_types=['feat_to_ref', 'ex_to_base'])
 
-                    loss_subj_attn_delta_align  += loss_layer_subj_attn_delta_align * attn_delta_distill_layer_weight
+                    loss_subj_attn_delta_align_id  += loss_dict_layer_subj_attn_delta_align['feat_to_ref'] \
+                                                       * attn_delta_distill_layer_weight
+                    loss_subj_attn_delta_align_ex  += loss_dict_layer_subj_attn_delta_align['ex_to_base'] \
+                                                       * attn_delta_distill_layer_weight
                     # We encourage subj_comp_comp_attn to express at least 1s of mix_comp_comp_attn, i.e.,
                     # comp_attn_align_coeffs should be >= 1. So a loss is incurred if it's < 1.
                     # do_sqr: square the loss, so that the loss is more sensitive to smaller (<< 1) delta_align_coeffs.
@@ -3287,7 +3297,8 @@ class LatentDiffusion(DDPM):
                     = calc_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
                                                 mix_single_feat_3d,  mix_comp_feat_3d,
                                                 ref_grad_scale=mix_feat_grad_scale,
-                                                use_cosine_loss=True)
+                                                use_cosine_loss=True,
+                                                delta_types=['feat_to_ref', 'ex_to_base'])
 
                 # The alignment of comp feat and single feat is done with L2 loss on alignment coefficients.
                 # This is not as effective as the cosine loss, but cosine loss is sensitive to noisy features
@@ -3334,7 +3345,7 @@ class LatentDiffusion(DDPM):
                                                 mix_single_feat_3d,  mix_comp_feat_3d,
                                                 ref_grad_scale=mix_feat_grad_scale,
                                                 use_cosine_loss=True, 
-                                                delta_choices=['feat_to_ref', 'ex_to_base'])
+                                                delta_types=['feat_to_ref', 'ex_to_base'])
                 
                 # The alignment of comp feat and single feat is done with L2 loss on alignment coefficients.
                 # This is not as effective as the cosine loss, but cosine loss is sensitive to noisy features
