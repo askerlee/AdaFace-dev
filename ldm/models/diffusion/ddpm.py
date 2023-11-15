@@ -3590,7 +3590,7 @@ class LatentDiffusion(DDPM):
         emb_kq_do_demean_first = False
 
         if not is_4type_batch:
-            return 0, 0, 0
+            return 0, 0
         else:
             subj_subj_indices = subj_indices_by_block[1]
             subj_comp_indices = comp_extra_indices_by_block[1]
