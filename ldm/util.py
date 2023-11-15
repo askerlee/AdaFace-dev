@@ -515,7 +515,8 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
                                                           exponent=2,
                                                           do_demean_first=False,
                                                           first_n_dims_to_flatten=(feat_base.ndim - 1), 
-                                                          ref_grad_scale=1)
+                                                          ref_grad_scale=1,
+                                                          aim_to_align=True)
             else:
                 # ref_grad_scale=1: ref grad scaling is disabled within calc_delta_cosine_loss,
                 # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
@@ -1583,7 +1584,8 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
                                 batch_mask=None, exponent=2,
                                 do_demean_first=do_demean_first, 
                                 first_n_dims_to_flatten=2,
-                                ref_grad_scale=cls_grad_scale)
+                                ref_grad_scale=cls_grad_scale,
+                                aim_to_align=True)
 
     return loss_layer_subj_comp_key_ortho
 
@@ -1720,7 +1722,8 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
     loss_static_prompt_delta   = \
         calc_delta_cosine_loss(static_subj_delta, static_cls_delta, 
                                emb_mask=prompt_emb_mask_weighted,
-                               do_demean_first=True)
+                               do_demean_first=True,
+                               aim_to_align=True)
 
     if do_ada_prompt_delta_reg and ada_embeddings is not None:
         # ada_embeddings: [4, 16, 77, 768]
@@ -1740,7 +1743,8 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
         loss_ada_prompt_delta = \
             calc_delta_cosine_loss(ada_subj_delta, ada_cls_delta, 
                                    emb_mask=prompt_emb_mask_weighted,
-                                   do_demean_first=True)
+                                   do_demean_first=True,
+                                   aim_to_align=True)
 
     else:
         loss_ada_prompt_delta = 0

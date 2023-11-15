@@ -3684,7 +3684,8 @@ class LatentDiffusion(DDPM):
                                          exponent=2,    
                                          do_demean_first=False,
                                          first_n_dims_to_flatten=2, 
-                                         ref_grad_scale=cls_grad_scale)
+                                         ref_grad_scale=cls_grad_scale,
+                                         aim_to_align=True)
 
             loss_subj_comp_attn_delta_align += loss_layer_comp_attn_align * k_ortho_layer_weight
 
