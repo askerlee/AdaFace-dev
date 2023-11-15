@@ -2800,7 +2800,7 @@ class LatentDiffusion(DDPM):
             # The indices will be shifted along the batch dimension (size doubled) 
             # within calc_prompt_mix_loss() to index all the 4 blocks.
             loss_subj_attn_delta_align_id, loss_subj_attn_delta_align_ex, \
-            loss_comp_attn_delta_distill, loss_subj_attn_norm_distill, \
+            loss_subj_attn_norm_distill, \
             loss_feat_delta_align_id = \
                                 self.calc_prompt_mix_loss(unet_feats, extra_info['unet_attnscores'], 
                                                           extra_info['subj_indices_2b'], 
@@ -2815,16 +2815,10 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/subj_attn_delta_align_ex':   loss_subj_attn_delta_align_ex.mean().detach()})
             if loss_subj_attn_norm_distill > 0:
                 loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach()})
-            if loss_comp_attn_delta_distill > 0:
-                loss_dict.update({f'{prefix}/comp_attn_delta_distill': loss_comp_attn_delta_distill.mean().detach()})
 
             # loss_subj_attn_delta_align_* use L2 losses, 
             # so no need to use dynamic loss scale.
             subj_attn_delta_distill_loss_scale = 1 #0.5
-            # loss_comp_attn_delta_distill is L2 loss, so no need to use dynamic loss scale.
-            # The range of loss_comp_attn_delta_distill is 20~50, so need to scale it down.
-            # Disabled.
-            comp_attn_delta_distill_loss_scale = 0 #1
             # If normalize_subj_attn, then more relaxed on subj attn magnitudes.
             subj_attn_norm_distill_loss_scale_base  = 1 
             
@@ -2843,10 +2837,9 @@ class LatentDiffusion(DDPM):
             subj_attn_delta_align_ex_loss_scale = 0
             loss_mix_prompt_distill =  ( (loss_subj_attn_delta_align_id 
                                             + loss_subj_attn_delta_align_ex * subj_attn_delta_align_ex_loss_scale)
-                                          * subj_attn_delta_distill_loss_scale \
-                                          + loss_comp_attn_delta_distill * comp_attn_delta_distill_loss_scale) \
-                                        + loss_subj_attn_norm_distill    * subj_attn_norm_distill_loss_scale \
-                                        + loss_feat_delta_align_id * feat_delta_align_scale
+                                          * subj_attn_delta_distill_loss_scale) \
+                                        + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
+                                        + loss_feat_delta_align_id    * feat_delta_align_scale
                                         
             if loss_mix_prompt_distill > 0:
                 loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
@@ -3092,7 +3085,6 @@ class LatentDiffusion(DDPM):
         loss_subj_attn_delta_align_ex   = 0
         loss_feat_delta_align_id        = 0
 
-        loss_comp_attn_delta_distill    = 0
         loss_subj_attn_norm_distill     = 0
 
         for unet_layer_idx, unet_feat in unet_feats.items():
@@ -3150,7 +3142,9 @@ class LatentDiffusion(DDPM):
                                                        * attn_delta_distill_layer_weight
                     loss_subj_attn_delta_align_ex  += loss_dict_layer_subj_attn_delta_align['ex_to_base'] \
                                                        * attn_delta_distill_layer_weight
-                    # We encourage subj_comp_comp_attn to express at least 1s of mix_comp_comp_attn, i.e.,
+                    '''
+                    I don't know why, but loss_comp_attn_delta_distill greatly hurts the performance.
+                    # It encourages subj_comp_comp_attn to express at least 1s of mix_comp_comp_attn, i.e.,
                     # comp_attn_align_coeffs should be >= 1. So a loss is incurred if it's < 1.
                     # do_sqr: square the loss, so that the loss is more sensitive to smaller (<< 1) delta_align_coeffs.
                     # subj_comp_comp_attn: [1, 13, 8, 64]. 13: number of extra compositional tokens.
@@ -3161,7 +3155,7 @@ class LatentDiffusion(DDPM):
                     loss_layer_comp_attn_delta = calc_align_coeff_loss(subj_comp_comp_attn, mix_comp_comp_attn_gs,
                                                                        margin=1., ref_grad_scale=1, do_sqr=True)
                     loss_comp_attn_delta_distill += loss_layer_comp_attn_delta * attn_delta_distill_layer_weight
-
+                    '''
                 # mean(dim=-1): average over the 64 feature channels.
                 # Align the attention corresponding to each embedding individually.
                 # Note mix_*subj_attn use *_gs versions.
@@ -3247,7 +3241,6 @@ class LatentDiffusion(DDPM):
             loss_feat_delta_align_id += loss_layer_feat_delta_align_id * feat_distill_layer_weight
 
         return loss_subj_attn_delta_align_id, loss_subj_attn_delta_align_ex, \
-               loss_comp_attn_delta_distill, \
                loss_subj_attn_norm_distill, loss_feat_delta_align_id
 
     # Only compute the loss on the first block. If it's a normal_recon iter, 
