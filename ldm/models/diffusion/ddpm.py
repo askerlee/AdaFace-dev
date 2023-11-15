@@ -3644,11 +3644,12 @@ class LatentDiffusion(DDPM):
             attn_score_mat = unet_attnscores[unet_layer_idx]
             attn_score_mat = attn_score_mat.permute(0, 3, 1, 2)
             # subj_subj_attn: [4, 8, 64] -> [1, 4, 8, 64]. 8: head, 64: 8x8 spatial.
+            # => mean over 4 fg embeddings => [1, 8, 64].
             # do_sum=False, to allow broadcasting to subj_comp_attn_sum.
             subj_subj_attn      = sel_emb_attns_by_indices(attn_score_mat, subj_subj_indices, 
                                                            do_sum=False, do_mean=True, do_sqrt_norm=False)
 
-            # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 1, 8, 64]
+            # subj_comp_attn: [18, 8, 64] -> [1, 18, 8, 64] sum among K_comp embeddings -> [1, 8, 64]
             # 8: 8 attention heads. Last dim 64: number of image tokens.
             # If not is_4type_batch, then this block contains > 1 instances. 
             # K_comp of different instances may be different.
@@ -3680,10 +3681,10 @@ class LatentDiffusion(DDPM):
             # subject embedding to a more accurate point).
             loss_layer_comp_attn_align \
                 = calc_delta_cosine_loss(subj_comp_attn_diff, cls_comp_attn_diff, 
-                                            exponent=2,    
-                                            do_demean_first=False,
-                                            first_n_dims_to_flatten=2, 
-                                            ref_grad_scale=cls_grad_scale)
+                                         exponent=2,    
+                                         do_demean_first=False,
+                                         first_n_dims_to_flatten=2, 
+                                         ref_grad_scale=cls_grad_scale)
 
             loss_subj_comp_attn_delta_align += loss_layer_comp_attn_align * k_ortho_layer_weight
 
