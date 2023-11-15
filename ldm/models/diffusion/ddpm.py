@@ -3825,17 +3825,22 @@ class LatentDiffusion(DDPM):
             # mix_subj_bg_attn:  attention of mix embeddings (corresponding to the subj embeddings) in class instances 
             # on background areas.
             subj_subj_bg_attn, mix_subj_bg_attn = subj_bg_attn.chunk(2)
-            mix_subj_bg_attn_gs = mix_grad_scaler(mix_subj_bg_attn)
 
+            subj_attn_mean = subj_attn.mean().item()
+            subj_subj_bg_attn_demean = subj_subj_bg_attn - subj_attn_mean
+            mix_subj_bg_attn_demean  = mix_subj_bg_attn  - subj_attn_mean
+            mix_subj_bg_attn_demean_gs = mix_grad_scaler(mix_subj_bg_attn_demean)
             # Simply suppress the subj attention on background areas. 
             # No need to use attn_*_single as references.
             # do_sqr=True: focus on large activations and tolerate more of small activations.
             # But do_sqr will make the losses too big. Therefore we normalize them with subj_attn_mean.
             # normalize_with_mean: normalize the result with the mean of the input.abs().
-            loss_layer_subj_bg_attn_suppress = masked_mean(subj_subj_bg_attn, subj_subj_bg_attn > 0,
-                                                           do_sqr=True, normalize_with_mean=True)
-            loss_layer_mix_bg_attn_suppress  = masked_mean(mix_subj_bg_attn_gs,  mix_subj_bg_attn_gs > 0,
-                                                           do_sqr=True, normalize_with_mean=True)
+            loss_layer_subj_bg_attn_suppress = masked_mean(subj_subj_bg_attn_demean, 
+                                                           subj_subj_bg_attn_demean > 0,
+                                                           do_sqr=True)
+            loss_layer_mix_bg_attn_suppress  = masked_mean(mix_subj_bg_attn_demean_gs,  
+                                                           mix_subj_bg_attn_demean_gs > 0,
+                                                           do_sqr=True)
             loss_comp_subj_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
                                                 + loss_layer_mix_bg_attn_suppress) \
                                                * feat_distill_layer_weight

@@ -1193,7 +1193,7 @@ def normalize_dict_values(d):
     return d2
 
 # normalize_with_mean is only activated when do_sqr is True.
-def masked_mean(ts, mask, dim=None, instance_weights=None, do_sqr=False, normalize_with_mean=False):
+def masked_mean(ts, mask, dim=None, instance_weights=None, do_sqr=False):
     if instance_weights is None:
         instance_weights = 1
     if isinstance(instance_weights, torch.Tensor):
@@ -1206,16 +1206,7 @@ def masked_mean(ts, mask, dim=None, instance_weights=None, do_sqr=False, normali
 
     # If do_sqr, then this function computes the masked L2 loss.
     if do_sqr:
-        ts_sqr = ts ** 2
-        if normalize_with_mean:
-            if mask is None:
-                ts_mean = ts.abs().mean()
-            else:
-                ts_mean = (ts * mask).abs().sum() / (mask.sum() + 1e-6)
-            
-            ts_sqr = ts_sqr / ts_mean.item()
-
-        ts = ts_sqr
+        ts = ts ** 2
 
     if mask is None:
         return (ts * instance_weights).mean()
