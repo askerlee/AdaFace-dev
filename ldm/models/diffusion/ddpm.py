@@ -2951,8 +2951,6 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/subj_wds_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
 
             else:
-                loss_subj_comp_key_align   = 0
-                loss_subj_comp_value_align = 0
                 loss_subj_comp_attn_delta_align  = 0
                 loss_subj_comp_key_ortho   = 0
                 loss_subj_comp_value_ortho = 0
@@ -2962,8 +2960,8 @@ class LatentDiffusion(DDPM):
             # subj_comp_key_ortho_loss_weight:          5e-4, 
             # subj_comp_value_ortho_loss_weight:        0, disabled.
             # subj_comp_attn_complementary_loss_weight: 5e-4.
-            loss +=   (loss_subj_comp_key_align   + loss_subj_comp_key_ortho   * ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
-                    + (loss_subj_comp_value_align + loss_subj_comp_value_ortho * ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight \
+            loss +=   (loss_subj_comp_key_ortho   * ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
+                    + (loss_subj_comp_value_ortho * ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight \
                     + loss_subj_comp_attn_delta_align * self.subj_comp_attn_complementary_loss_weight
                 
         self.release_plosses_intermediates(locals())
