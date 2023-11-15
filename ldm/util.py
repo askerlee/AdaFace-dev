@@ -1192,26 +1192,37 @@ def normalize_dict_values(d):
     d2 = { k: v / value_sum for k, v in d.items() }
     return d2
 
-def masked_mean(ts, mask, dim=None, instance_weights=None, do_sqr=False):
+# normalize_with_mean is only activated when do_sqr is True.
+def masked_mean(ts, mask, dim=None, instance_weights=None, do_sqr=False, normalize_with_mean=False):
     if instance_weights is None:
         instance_weights = 1
     if isinstance(instance_weights, torch.Tensor):
         instance_weights = instance_weights.view(list(instance_weights.shape) + [1] * (ts.ndim - instance_weights.ndim))
     
-    # If do_sqr, then this function computes the masked L2 loss.
-    if do_sqr:
-        ts = ts ** 2
-
-    if mask is None:
-        return (ts * instance_weights).mean()
-    else:
+    if mask is not None:
         # Broadcast mask to the same shape as ts. 
         # Without this step, mask_sum will be wrong.
         mask = mask.expand(ts.shape)
 
-    mask_sum = mask.sum(dim=dim)
-    mask_sum = torch.maximum( mask_sum, torch.ones_like(mask_sum) * 1e-6 )
-    return (ts * instance_weights * mask).sum(dim=dim) / mask_sum
+    # If do_sqr, then this function computes the masked L2 loss.
+    if do_sqr:
+        ts_sqr = ts ** 2
+        if normalize_with_mean:
+            if mask is None:
+                ts_mean = ts.abs().mean()
+            else:
+                ts_mean = (ts * mask).abs().sum() / (mask.sum() + 1e-6)
+            
+            ts_sqr = ts_sqr / ts_mean.item()
+
+        ts = ts_sqr
+
+    if mask is None:
+        return (ts * instance_weights).mean()
+    else:
+        mask_sum = mask.sum(dim=dim)
+        mask_sum = torch.maximum( mask_sum, torch.ones_like(mask_sum) * 1e-6 )
+        return (ts * instance_weights * mask).sum(dim=dim) / mask_sum
 
 def anneal_value(training_percent, final_percent, value_range):
     assert 0 - 1e-6 <= training_percent <= 1 + 1e-6

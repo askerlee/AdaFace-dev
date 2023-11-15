@@ -3827,16 +3827,15 @@ class LatentDiffusion(DDPM):
             subj_subj_bg_attn, mix_subj_bg_attn = subj_bg_attn.chunk(2)
             mix_subj_bg_attn_gs = mix_grad_scaler(mix_subj_bg_attn)
 
-            # abs(): just in case. the subj emb activations are almost always positive.
-            subj_attn_mean = subj_attn.abs().mean().item() + 1e-6
             # Simply suppress the subj attention on background areas. 
             # No need to use attn_*_single as references.
             # do_sqr=True: focus on large activations and tolerate more of small activations.
             # But do_sqr will make the losses too big. Therefore we normalize them with subj_attn_mean.
+            # normalize_with_mean: normalize the result with the mean of the input.abs().
             loss_layer_subj_bg_attn_suppress = masked_mean(subj_subj_bg_attn, subj_subj_bg_attn > 0,
-                                                           do_sqr=True) / subj_attn_mean
+                                                           do_sqr=True, normalize_with_mean=True)
             loss_layer_mix_bg_attn_suppress  = masked_mean(mix_subj_bg_attn_gs,  mix_subj_bg_attn_gs > 0,
-                                                           do_sqr=True) / subj_attn_mean
+                                                           do_sqr=True, normalize_with_mean=True)
             loss_comp_subj_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
                                                 + loss_layer_mix_bg_attn_suppress) \
                                                * feat_distill_layer_weight
