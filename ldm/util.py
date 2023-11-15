@@ -1728,16 +1728,16 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
     # Delta embedding between subject single and comp embeddings.
     # static_delta / ada_delta should be aligned with cls_delta.
     if use_ortho_subtract:
-        static_comp_delta   = ortho_subtract(static_subj_comp_emb,   static_cls_comp_emb)
-        static_single_delta = ortho_subtract(static_subj_single_emb, static_cls_single_emb)
+        static_subj_delta   = ortho_subtract(static_subj_comp_emb, static_subj_single_emb)
+        static_cls_delta    = ortho_subtract(static_cls_comp_emb,  static_cls_single_emb)
     else:
-        static_comp_delta   = static_subj_comp_emb  - static_cls_comp_emb
-        static_single_delta = static_subj_single_emb - static_cls_single_emb
+        static_subj_delta   = static_subj_comp_emb  - static_cls_comp_emb
+        static_cls_delta    = static_subj_single_emb - static_cls_single_emb
 
     loss_static_prompt_delta   = \
-        calc_delta_cosine_loss(static_comp_delta, static_single_delta, 
-                                emb_mask=prompt_emb_mask_weighted,
-                                do_demean_first=True)
+        calc_delta_cosine_loss(static_subj_delta, static_cls_delta, 
+                               emb_mask=prompt_emb_mask_weighted,
+                               do_demean_first=True)
 
     if do_ada_prompt_delta_reg and ada_embeddings is not None:
         # ada_embeddings: [4, 16, 77, 768]
@@ -1748,14 +1748,15 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
             = ada_embeddings.chunk(4)
 
         if use_ortho_subtract:
-            ada_comp_delta   = ortho_subtract(ada_subj_comp_emb,   ada_cls_comp_emb)
-            ada_single_delta = ortho_subtract(ada_subj_single_emb, ada_cls_single_emb)
+            ada_subj_delta  = ortho_subtract(ada_subj_comp_emb, ada_subj_single_emb)
+            ada_cls_delta   = ortho_subtract(ada_cls_comp_emb,  ada_cls_single_emb)
         else:
-            ada_comp_delta   = ada_subj_comp_emb  - ada_cls_comp_emb
-            ada_single_delta = ada_subj_single_emb - ada_cls_single_emb
+            ada_subj_delta  = ada_subj_comp_emb  - ada_cls_comp_emb
+            ada_cls_delta   = ada_subj_single_emb - ada_cls_single_emb
 
         loss_ada_prompt_delta = \
-            calc_delta_cosine_loss(ada_comp_delta, ada_single_delta, emb_mask=prompt_emb_mask_weighted,
+            calc_delta_cosine_loss(ada_subj_delta, ada_cls_delta, 
+                                   emb_mask=prompt_emb_mask_weighted,
                                    do_demean_first=True)
 
     else:
