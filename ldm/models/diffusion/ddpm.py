@@ -2901,8 +2901,6 @@ class LatentDiffusion(DDPM):
                     gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
                                                     subj_indices_4b, bg_indices_4b, block_size=BLOCK_SIZE)
 
-                loss_subj_comp_key_align,  loss_subj_comp_value_align, \
-                loss_cls_comp_key_align,   loss_cls_comp_value_align,  \
                 loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho, \
                 loss_subj_comp_attn_delta_align = \
                     self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
@@ -2911,22 +2909,12 @@ class LatentDiffusion(DDPM):
                                                     cls_grad_scale=0.05,
                                                     is_4type_batch=True)
 
-                if loss_subj_comp_key_align != 0:
-                    loss_dict.update({f'{prefix}/subj_comp_key_align':   loss_subj_comp_key_align.mean().detach()})
-                if loss_subj_comp_value_align != 0:
-                    loss_dict.update({f'{prefix}/subj_comp_value_align': loss_subj_comp_value_align.mean().detach()})
                 if loss_subj_comp_attn_delta_align != 0:
                     loss_dict.update({f'{prefix}/subj_comp_attn_delta_align': loss_subj_comp_attn_delta_align.mean().detach()})
                 if loss_subj_comp_key_ortho != 0:
                     loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
                 if loss_subj_comp_value_ortho != 0:
                     loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
-                # loss_cls_comp_key_align, loss_cls_comp_value_align are not optimized.
-                # They are just monitored as a reference for loss_subj_comp_*.
-                if loss_cls_comp_key_align != 0:
-                    loss_dict.update({f'{prefix}/cls_comp_key_align':   loss_cls_comp_key_align.mean().detach()})
-                if loss_cls_comp_value_align != 0:
-                    loss_dict.update({f'{prefix}/cls_comp_value_align': loss_cls_comp_value_align.mean().detach()})
 
             elif self.iter_flags['do_normal_recon'] and self.iter_flags['use_wds_comp']:
                 subj_indices_ext = extra_info['subj_indices_1b']
@@ -2944,8 +2932,6 @@ class LatentDiffusion(DDPM):
                     gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
                                                     subj_indices_ext, bg_indices, block_size=BLOCK_SIZE)
                                 
-                loss_subj_comp_key_align,  loss_subj_comp_value_align, \
-                loss_cls_comp_key_align,   loss_cls_comp_value_align,  \
                 loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho, \
                 loss_subj_comp_attn_delta_align = \
                     self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
@@ -2956,10 +2942,7 @@ class LatentDiffusion(DDPM):
                                                     cls_grad_scale=0.05,
                                                     # is_4type_batch=False: reference cls prompts are unavailable.
                                                     is_4type_batch=False)
-                if loss_subj_comp_key_align != 0:
-                    loss_dict.update({f'{prefix}/subj_wds_key_align':   loss_subj_comp_key_align.mean().detach()})
-                if loss_subj_comp_value_align != 0:
-                    loss_dict.update({f'{prefix}/subj_wds_value_align': loss_subj_comp_value_align.mean().detach()})
+                
                 if loss_subj_comp_attn_delta_align != 0:
                     loss_dict.update({f'{prefix}/subj_wds_attn_align':  loss_subj_comp_attn_delta_align.mean().detach()})
                 if loss_subj_comp_key_ortho != 0:
@@ -3618,28 +3601,17 @@ class LatentDiffusion(DDPM):
 
         loss_subj_comp_key_ortho   = 0
         loss_subj_comp_value_ortho = 0
-        loss_subj_comp_key_align   = 0
-        loss_subj_comp_value_align = 0
-        loss_subj_comp_attn_delta_align  = 0
-        loss_cls_comp_key_align    = 0
-        loss_cls_comp_value_align  = 0        
-
+        loss_subj_comp_attn_delta_align  = 0   
         emb_kq_do_demean_first = False
 
-        if is_4type_batch:
+        if not is_4type_batch:
+            return 0, 0, 0
+        else:
             subj_subj_indices = subj_indices_by_block[1]
             subj_comp_indices = comp_extra_indices_by_block[1]
             # cls blocks are available, so the ortho loss has to align the delta with the cls delta.
             cls_subj_indices  = subj_indices_by_block[3]
             cls_comp_indices  = comp_extra_indices_by_block[3]
-        else:
-            # Only 1 block in the batch, as well as in 
-            # subj_indices_by_block / comp_extra_indices_by_block.
-            # cls blocks are unavailable, so the ortho loss has to push the delta towards 0.
-            subj_subj_indices = subj_indices_by_block[0]
-            subj_comp_indices = comp_extra_indices_by_block[0]
-            cls_subj_indices  = None
-            cls_comp_indices  = None
 
         for unet_layer_idx, unet_seq_k in unet_ks.items():
             if (unet_layer_idx not in k_ortho_layer_weights):
@@ -3647,8 +3619,7 @@ class LatentDiffusion(DDPM):
 
             # No need to pass is_4type_batch to calc_layer_subj_comp_k_or_v_ortho_loss().
             # It can decide by checking whether cls_subj_indices/cls_comp_indices are None.
-            loss_layer_subj_comp_key_align, loss_layer_subj_comp_key_ortho, \
-            loss_layer_cls_comp_key_align = \
+            loss_layer_subj_comp_key_ortho = \
                 calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k,
                                                         subj_subj_indices, 
                                                         subj_comp_indices, 
@@ -3656,8 +3627,7 @@ class LatentDiffusion(DDPM):
                                                         cls_comp_indices,
                                                         do_demean_first=emb_kq_do_demean_first, 
                                                         cls_grad_scale=cls_grad_scale)
-            loss_layer_subj_comp_value_align, loss_layer_subj_comp_value_ortho, \
-            loss_layer_cls_comp_value_align = \
+            loss_layer_subj_comp_value_ortho = \
                 calc_layer_subj_comp_k_or_v_ortho_loss(unet_vs[unet_layer_idx], 
                                                         subj_subj_indices, 
                                                         subj_comp_indices, 
@@ -3670,10 +3640,6 @@ class LatentDiffusion(DDPM):
             v_ortho_layer_weight = v_ortho_layer_weights[unet_layer_idx]
             loss_subj_comp_key_ortho   += loss_layer_subj_comp_key_ortho   * k_ortho_layer_weight
             loss_subj_comp_value_ortho += loss_layer_subj_comp_value_ortho * v_ortho_layer_weight
-            loss_subj_comp_key_align   += loss_layer_subj_comp_key_align   * k_ortho_layer_weight
-            loss_subj_comp_value_align += loss_layer_subj_comp_value_align * v_ortho_layer_weight
-            loss_cls_comp_key_align    += loss_layer_cls_comp_key_align    * k_ortho_layer_weight
-            loss_cls_comp_value_align  += loss_layer_cls_comp_value_align  * v_ortho_layer_weight
             
             ###########   loss_subj_comp_attn_delta_align   ###########
             # attn_score_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
@@ -3693,44 +3659,37 @@ class LatentDiffusion(DDPM):
             subj_comp_attn  = sel_emb_attns_by_indices(attn_score_mat, subj_comp_indices,
                                                        do_sum=False, do_mean=True, do_sqrt_norm=False)
 
-            if is_4type_batch:
-                cls_subj_attn   = sel_emb_attns_by_indices(attn_score_mat, cls_subj_indices,
-                                                            do_sum=False, do_mean=True, do_sqrt_norm=False)
-                cls_comp_attn   = sel_emb_attns_by_indices(attn_score_mat, cls_comp_indices,
-                                                            do_sum=False, do_mean=True, do_sqrt_norm=False)
-                
-                # The orthogonal projection of subj_subj_attn against subj_comp_attn.
-                # subj_comp_attn will broadcast to the K_fg dimension.
-                # ortho_subtract() is scale-invariant w.r.t. subj_comp_attn. So no need to normalize it.
-                subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn)
-                # The orthogonal projection of cls_subj_attn against cls_comp_attn.
-                # cls_comp_attn will broadcast to the K_fg dimension.
-                # ortho_subtract() is scale-invariant w.r.t. cls_comp_attn.  So no need to normalize it.
-                cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn)
-                # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
-                # vary only along the direction of the orthogonal projections of class attention.
-
-                # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
-                # But we don't want to only focus on large activations. So set it to 2.
-                # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
-                # to make the two attention maps more complementary (expect the loss pushes the 
-                # subject embedding to a more accurate point).
-                loss_layer_comp_attn_align \
-                    = calc_delta_cosine_loss(subj_comp_attn_diff, cls_comp_attn_diff, 
-                                             exponent=2,    
-                                             do_demean_first=False,
-                                             first_n_dims_to_flatten=3, 
-                                             ref_grad_scale=cls_grad_scale)
+            cls_subj_attn   = sel_emb_attns_by_indices(attn_score_mat, cls_subj_indices,
+                                                        do_sum=False, do_mean=True, do_sqrt_norm=False)
+            cls_comp_attn   = sel_emb_attns_by_indices(attn_score_mat, cls_comp_indices,
+                                                        do_sum=False, do_mean=True, do_sqrt_norm=False)
             
-            else:
-                loss_layer_comp_attn_align = 0
+            # The orthogonal projection of subj_subj_attn against subj_comp_attn.
+            # subj_comp_attn will broadcast to the K_fg dimension.
+            # ortho_subtract() is scale-invariant w.r.t. subj_comp_attn. So no need to normalize it.
+            subj_comp_attn_diff = ortho_subtract(subj_subj_attn, subj_comp_attn)
+            # The orthogonal projection of cls_subj_attn against cls_comp_attn.
+            # cls_comp_attn will broadcast to the K_fg dimension.
+            # ortho_subtract() is scale-invariant w.r.t. cls_comp_attn.  So no need to normalize it.
+            cls_comp_attn_diff  = ortho_subtract(cls_subj_attn,  cls_comp_attn)
+            # The two orthogonal projections should be aligned. That is, subj_subj_attn is allowed to
+            # vary only along the direction of the orthogonal projections of class attention.
+
+            # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
+            # But we don't want to only focus on large activations. So set it to 2.
+            # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
+            # to make the two attention maps more complementary (expect the loss pushes the 
+            # subject embedding to a more accurate point).
+            loss_layer_comp_attn_align \
+                = calc_delta_cosine_loss(subj_comp_attn_diff, cls_comp_attn_diff, 
+                                            exponent=2,    
+                                            do_demean_first=False,
+                                            first_n_dims_to_flatten=2, 
+                                            ref_grad_scale=cls_grad_scale)
 
             loss_subj_comp_attn_delta_align += loss_layer_comp_attn_align * k_ortho_layer_weight
 
-        return loss_subj_comp_key_align, loss_subj_comp_value_align, \
-               loss_cls_comp_key_align,  loss_cls_comp_value_align, \
-               loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, \
-               loss_subj_comp_attn_delta_align
+        return loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_delta_align
 
     # Intuition: In distillation iterations, if comp_init_with_fg_area, then at fg_mask areas, x_start is initialized with 
     #            the noisy input images. (Usually in distillation iterations, x_start is initialized as pure noise.)
@@ -3959,7 +3918,7 @@ class LatentDiffusion(DDPM):
             loss_inst_padding_subj_embs_align \
                 = calc_delta_cosine_loss(subj_padding_embs_i, subj_subj_embs_gs_i,
                                          exponent=2, do_demean_first=True, 
-                                         first_n_dims_to_flatten=3, 
+                                         first_n_dims_to_flatten=2, 
                                          ref_grad_scale=1, aim_to_align=False)
             
             loss_padding_subj_embs_align += loss_inst_padding_subj_embs_align
@@ -3983,7 +3942,7 @@ class LatentDiffusion(DDPM):
                 loss_inst_padding_cls_embs_align \
                     = calc_delta_cosine_loss(cls_padding_embs_i, cls_subj_embs_i,
                                              exponent=2, do_demean_first=True, 
-                                             first_n_dims_to_flatten=3,                                              
+                                             first_n_dims_to_flatten=2,                                              
                                              ref_grad_scale=1, aim_to_align=False)
                 
                 loss_padding_cls_embs_align += loss_inst_padding_cls_embs_align
@@ -4016,7 +3975,7 @@ class LatentDiffusion(DDPM):
                     loss_inst_bg_subj_embs_align \
                         = calc_delta_cosine_loss(bg_embs_i, subj_subj_embs_gs2_i,
                                                  exponent=2, do_demean_first=True, 
-                                                 first_n_dims_to_flatten=3, 
+                                                 first_n_dims_to_flatten=2, 
                                                  ref_grad_scale=1, aim_to_align=False)
                     
                     loss_bg_subj_embs_align += loss_inst_bg_subj_embs_align

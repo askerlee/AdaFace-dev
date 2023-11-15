@@ -1554,55 +1554,38 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
     # unet_seq_k: [B, H, N, D] -> [B, N, H, D] = [2, 77, 8, 160].
     unet_seq_k = unet_seq_k.permute(0, 2, 1, 3)
 
-    # subj_subj_ks, cls_subj_ks: [4,  8, 160] => [1, 4,  8, 160]
-    # subj_comp_ks, cls_comp_ks: [15, 8, 160] => [1, 15, 8, 160]
-    #subj_subj_ks = unet_seq_k[subj_subj_indices].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3)
-    #cls_subj_ks  = unet_seq_k[cls_subj_indices].reshape(BS, K_fg, H, D).permute(0, 2, 1, 3)
-    # subj_comp_ks, cls_comp_ks: [11, 16, 160] => [1, 11, 16, 160] => [1, 16, 11, 160].
-    #subj_comp_ks = unet_seq_k[subj_comp_indices].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
-    #cls_comp_ks  = unet_seq_k[cls_comp_indices].reshape(BS, K_comp, H, D).permute(0, 2, 1, 3)
-    subj_subj_ks        = sel_emb_attns_by_indices(unet_seq_k, subj_subj_indices, 
-                                                    do_sum=False, do_mean=True, do_sqrt_norm=False)
-    subj_comp_ks_sum    = sel_emb_attns_by_indices(unet_seq_k, subj_comp_indices,
-                                                    do_sum=False, do_mean=True, do_sqrt_norm=False)
-    # subj_comp_ks_sum, cls_comp_ks_sum: [1, 15, 8, 160] => [1, 1, 8, 160]. 
-    # Sum over all extra 15 compositional embeddings and be divided by sqrt(15).
-    #subj_comp_ks_sum = subj_comp_ks_sum.unsqueeze(1)
+    # subj_subj_ks, cls_subj_ks: [4,  8, 160] => [1, 4,  8, 160] => [1, 8, 160]
+    # subj_comp_ks, cls_comp_ks: [15, 8, 160] => [1, 15, 8, 160] => [1, 8, 160]
+    subj_subj_ks    = sel_emb_attns_by_indices(unet_seq_k, subj_subj_indices, 
+                                                do_sum=False, do_mean=True, do_sqrt_norm=False)
+    subj_comp_ks    = sel_emb_attns_by_indices(unet_seq_k, subj_comp_indices,
+                                                do_sum=False, do_mean=True, do_sqrt_norm=False)
+    cls_subj_ks     = sel_emb_attns_by_indices(unet_seq_k, cls_subj_indices,
+                                                do_sum=False, do_mean=True, do_sqrt_norm=False)
+    cls_comp_ks     = sel_emb_attns_by_indices(unet_seq_k, cls_comp_indices,
+                                                do_sum=False, do_mean=True, do_sqrt_norm=False)
+
     # The orthogonal projection of subj_subj_ks against subj_comp_ks_sum.
     # subj_comp_ks_sum will broadcast to the K_fg dimension of subj_subj_ks.
-    subj_comp_emb_align, subj_comp_emb_ortho, subj_comp_emb_align_coeffs \
-          = decomp_align_ortho(subj_subj_ks, subj_comp_ks_sum, return_align_coeffs=True)
-    
-    if cls_subj_indices is not None:
-        cls_subj_ks     = sel_emb_attns_by_indices(unet_seq_k, cls_subj_indices,
-                                                   do_sum=False, do_mean=True, do_sqrt_norm=False)
-        cls_comp_ks_sum = sel_emb_attns_by_indices(unet_seq_k, cls_comp_indices,
-                                                   do_sum=False, do_mean=True, do_sqrt_norm=False)
-        #cls_comp_ks_sum = cls_comp_ks_sum.unsqueeze(1)
-        # The orthogonal projection of cls_subj_ks against cls_comp_ks_sum.
-        # cls_comp_ks_sum will broadcast to the K_fg dimension of cls_subj_ks_mean.
-        cls_comp_emb_align, cls_comp_emb_ortho, cls_comp_emb_align_coeffs \
-            = decomp_align_ortho(cls_subj_ks,  cls_comp_ks_sum, return_align_coeffs=True)
-        # The two orthogonal projections should be aligned. That is, each embedding in subj_subj_ks 
-        # is allowed to vary only along the direction of the orthogonal projections of class embeddings.
+    subj_comp_emb_diff = normalized_ortho_subtract(subj_subj_ks, subj_comp_ks)
+    # The orthogonal projection of cls_subj_ks against cls_comp_ks_sum.
+    # cls_comp_ks_sum will broadcast to the K_fg dimension of cls_subj_ks_mean.
+    cls_comp_emb_diff  = normalized_ortho_subtract(cls_subj_ks,  cls_comp_ks)
+    # The two orthogonal projections should be aligned. That is, each embedding in subj_subj_ks 
+    # is allowed to vary only along the direction of the orthogonal projections of class embeddings.
+    # Don't compute the ortho loss on dress-type compositions, 
+    # such as "z wearing a santa hat / z that is red", because the attended areas 
+    # largely overlap with the subject, and making them orthogonal will 
+    # hurt their expression in the image (e.g., push the attributes to the background).
+    # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
+    loss_layer_subj_comp_key_ortho = \
+        calc_delta_cosine_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
+                                batch_mask=None, exponent=2,
+                                do_demean_first=do_demean_first, 
+                                first_n_dims_to_flatten=2,
+                                ref_grad_scale=cls_grad_scale)
 
-        # Encourage subj_comp_emb_align and cls_comp_emb_align to be aligned (dot product -> 1).
-        loss_layer_subj_comp_key_ortho = \
-            calc_delta_cosine_loss(subj_comp_emb_ortho, cls_comp_emb_ortho, 
-                                    batch_mask=None, exponent=2,
-                                    do_demean_first=do_demean_first, 
-                                    first_n_dims_to_flatten=3,
-                                    ref_grad_scale=cls_grad_scale)
-        
-        loss_layer_cls_comp_key_align = power_loss(cls_comp_emb_align_coeffs, exponent=2)
-    else:
-        loss_layer_subj_comp_key_ortho = 0
-        loss_layer_cls_comp_key_align  = 0
-    # Use L2 loss to push subj_comp_emb_align towards 0
-    # =>
-    # encourage subj_subj_ks be orthogonal with subj_comp_ks_sum.
-    loss_layer_subj_comp_key_align = power_loss(subj_comp_emb_align_coeffs, exponent=2)
-    return loss_layer_subj_comp_key_align, loss_layer_subj_comp_key_ortho, loss_layer_cls_comp_key_align
+    return loss_layer_subj_comp_key_ortho
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.
 def sel_emb_attns_by_indices(attn_mat, indices, do_sum=True, do_mean=False, do_sqrt_norm=False):
