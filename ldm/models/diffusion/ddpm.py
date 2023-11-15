@@ -105,7 +105,6 @@ class DDPM(pl.LightningModule):
                  padding_embs_align_loss_weight=0.,
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_value_ortho_loss_weight=0.,
-                 subj_comp_attn_delta_align_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
                  subj_attn_norm_distill_loss_base=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
@@ -144,7 +143,6 @@ class DDPM(pl.LightningModule):
         self.padding_embs_align_loss_weight     = padding_embs_align_loss_weight
         self.subj_comp_key_ortho_loss_weight        = subj_comp_key_ortho_loss_weight
         self.subj_comp_value_ortho_loss_weight      = subj_comp_value_ortho_loss_weight
-        self.subj_comp_attn_delta_align_loss_weight = subj_comp_attn_delta_align_loss_weight
         self.mix_prompt_distill_weight              = mix_prompt_distill_weight
         self.subj_attn_norm_distill_loss_base       = subj_attn_norm_distill_loss_base
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
@@ -2901,16 +2899,13 @@ class LatentDiffusion(DDPM):
                     gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
                                                     subj_indices_4b, bg_indices_4b, block_size=BLOCK_SIZE)
 
-                loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho, \
-                loss_subj_comp_attn_delta_align = \
-                    self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
+                loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho \
+                    = self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
                                                     extra_info['unet_attnscores'],
                                                     subj_indices_4b_by_block, comp_extra_indices_4b_by_block,
                                                     cls_grad_scale=0.05,
                                                     is_4type_batch=True)
 
-                if loss_subj_comp_attn_delta_align != 0:
-                    loss_dict.update({f'{prefix}/subj_comp_attn_delta_align': loss_subj_comp_attn_delta_align.mean().detach()})
                 if loss_subj_comp_key_ortho != 0:
                     loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
                 if loss_subj_comp_value_ortho != 0:
@@ -2932,9 +2927,8 @@ class LatentDiffusion(DDPM):
                     gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
                                                     subj_indices_ext, bg_indices, block_size=BLOCK_SIZE)
                                 
-                loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho, \
-                loss_subj_comp_attn_delta_align = \
-                    self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
+                loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho \
+                    = self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
                                                     extra_info['unet_attnscores'],
                                                     # Param subj_indices_by_block is a list of blocks.
                                                     # subj_indices_ext is only 1 block. So put it in a list.
@@ -2943,15 +2937,12 @@ class LatentDiffusion(DDPM):
                                                     # is_4type_batch=False: reference cls prompts are unavailable.
                                                     is_4type_batch=False)
                 
-                if loss_subj_comp_attn_delta_align != 0:
-                    loss_dict.update({f'{prefix}/subj_wds_attn_align':  loss_subj_comp_attn_delta_align.mean().detach()})
                 if loss_subj_comp_key_ortho != 0:
                     loss_dict.update({f'{prefix}/subj_wds_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
                 if loss_subj_comp_value_ortho != 0:
                     loss_dict.update({f'{prefix}/subj_wds_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
 
             else:
-                loss_subj_comp_attn_delta_align  = 0
                 loss_subj_comp_key_ortho   = 0
                 loss_subj_comp_value_ortho = 0
 
@@ -2959,10 +2950,8 @@ class LatentDiffusion(DDPM):
             ortho_loss_scale = 1
             # subj_comp_key_ortho_loss_weight:          5e-4, 
             # subj_comp_value_ortho_loss_weight:        0, disabled.
-            # subj_comp_attn_delta_align_loss_weight: 5e-4.
             loss +=   (loss_subj_comp_key_ortho   * ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
-                    + (loss_subj_comp_value_ortho * ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight \
-                    + loss_subj_comp_attn_delta_align * self.subj_comp_attn_delta_align_loss_weight
+                    + (loss_subj_comp_value_ortho * ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight
                 
         self.release_plosses_intermediates(locals())
         loss_dict.update({f'{prefix}/loss': loss.mean().detach()})
@@ -3599,7 +3588,6 @@ class LatentDiffusion(DDPM):
 
         loss_subj_comp_key_ortho   = 0
         loss_subj_comp_value_ortho = 0
-        loss_subj_comp_attn_delta_align  = 0   
         emb_kq_do_demean_first = False
 
         if not is_4type_batch:
@@ -3639,6 +3627,7 @@ class LatentDiffusion(DDPM):
             loss_subj_comp_key_ortho   += loss_layer_subj_comp_key_ortho   * k_ortho_layer_weight
             loss_subj_comp_value_ortho += loss_layer_subj_comp_value_ortho * v_ortho_layer_weight
             
+            '''
             ###########   loss_subj_comp_attn_delta_align   ###########
             # attn_score_mat: [4, 8, 64, 77] => [4, 77, 8, 64]
             attn_score_mat = unet_attnscores[unet_layer_idx]
@@ -3688,8 +3677,9 @@ class LatentDiffusion(DDPM):
                                          aim_to_align=True)
 
             loss_subj_comp_attn_delta_align += loss_layer_comp_attn_align * k_ortho_layer_weight
+            '''
 
-        return loss_subj_comp_key_ortho, loss_subj_comp_value_ortho, loss_subj_comp_attn_delta_align
+        return loss_subj_comp_key_ortho, loss_subj_comp_value_ortho
 
     # Intuition: In distillation iterations, if comp_init_with_fg_area, then at fg_mask areas, x_start is initialized with 
     #            the noisy input images. (Usually in distillation iterations, x_start is initialized as pure noise.)
