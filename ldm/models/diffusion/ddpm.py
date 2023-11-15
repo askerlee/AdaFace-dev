@@ -24,11 +24,10 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 
 from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
-                       ortho_subtract, decomp_align_ortho, \
-                       ortho_l2loss, gen_gradient_scaler, calc_align_coeffs, \
+                       ortho_subtract, ortho_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, masked_mean, \
-                       calc_delta_cosine_loss, calc_delta_alignment_loss, calc_align_coeff_loss, \
-                       calc_prompt_emb_delta_loss, power_loss, calc_dyn_loss_scale, \
+                       calc_delta_cosine_loss, calc_delta_alignment_loss, \
+                       calc_prompt_emb_delta_loss, calc_dyn_loss_scale, \
                        save_grid, chunk_list, normalize_dict_values, \
                        distribute_embedding_to_M_tokens, fix_emb_scales, \
                        halve_token_indices, double_token_indices, extend_indices_N_by_n, \
@@ -3962,17 +3961,15 @@ class LatentDiffusion(DDPM):
             subj_padding_indices_i_N = padding_mask[i].nonzero().squeeze(-1)
             # subj_padding_embs_i: [63, 16, 768].
             subj_padding_embs_i = cond_prompt_embeddings[i, :, subj_padding_indices_i_N].permute(1, 0, 2)
-            # subj_subj_embs_gs_i: [1,  16, 768].
-            subj_subj_embs_gs_i = subj_subj_embs_gs[i]
+            # subj_subj_embs_gs_i: [1,  16, 768] => [63, 16, 768].
+            subj_subj_embs_gs_i = subj_subj_embs_gs[i].expand_as(subj_padding_embs_i)
             # Penalize any positive coeffs within padding_subj_embs_align_coeffs_i: [63, 16].
-            # padding_subj_embs_align_coeffs_i = calc_align_coeffs(subj_padding_embs_i, subj_subj_embs_gs_i).
-            # encourage_align = False: push subj_padding_embs_i to be orthogonal with subj_subj_embs_gs_i.
-            # margin = 0: penalize any components in subj_padding_embs_i that are 
-            # positively correlated with subj_subj_embs_gs_i.
             loss_inst_padding_subj_embs_align \
-                = calc_align_coeff_loss(subj_padding_embs_i, subj_subj_embs_gs_i,
-                                        margin=0, encourage_align=False,
-                                        ref_grad_scale=1, do_sqr=True)
+                = calc_delta_cosine_loss(subj_padding_embs_i, subj_subj_embs_gs_i,
+                                         exponent=2, do_demean_first=True, 
+                                         first_n_dims_to_flatten=3, 
+                                         ref_grad_scale=1, aim_to_align=False)
+            
             loss_padding_subj_embs_align += loss_inst_padding_subj_embs_align
         
         loss_padding_subj_embs_align /= SSB_SIZE
@@ -3988,13 +3985,15 @@ class LatentDiffusion(DDPM):
                 cls_padding_indices_i = cls_padding_indices_by_instance[i]
                 # cls_padding_embs_i: [16, 63, 768] -> [63, 16, 768].
                 cls_padding_embs_i = cond_prompt_embeddings[cls_padding_indices_i[0], :, cls_padding_indices_i[1]]
-                # cls_subj_embs_i:    [1, 16, 768].
-                cls_subj_embs_i = cls_subj_embs[i]
+                # cls_subj_embs_i:    [1, 16, 768] -> [63, 16, 768].
+                cls_subj_embs_i = cls_subj_embs[i].expand_as(cls_padding_embs_i)
                 # we don't do gs on cls_subj_embs, since loss_padding_cls_embs_align is not optimized.
                 loss_inst_padding_cls_embs_align \
-                    = calc_align_coeff_loss(cls_padding_embs_i, cls_subj_embs_i,
-                                            margin=0, encourage_align=False,
-                                            ref_grad_scale=1, do_sqr=True)
+                    = calc_delta_cosine_loss(cls_padding_embs_i, cls_subj_embs_i,
+                                             exponent=2, do_demean_first=True, 
+                                             first_n_dims_to_flatten=3,                                              
+                                             ref_grad_scale=1, aim_to_align=False)
+                
                 loss_padding_cls_embs_align += loss_inst_padding_cls_embs_align
 
             if len(cls_padding_indices_by_instance) > 0:
@@ -4020,16 +4019,14 @@ class LatentDiffusion(DDPM):
                     # bg_embs_i: [16, 4, 768] => [4, 16, 768].
                     bg_embs_i = cond_prompt_embeddings[i, :, bg_indices_i_N].permute(1, 0, 2)
                     # subj_subj_embs_gs2_i: [1,  16, 768].
-                    subj_subj_embs_gs2_i = subj_subj_embs_gs2[i]
+                    subj_subj_embs_gs2_i = subj_subj_embs_gs2[i].expand_as(bg_embs_i)
                     # Penalize any positive coeffs within bg_subj_embs_align_coeffs_i: [4, 16].
-                    # bg_subj_embs_align_coeffs_i = calc_align_coeffs(bg_embs_i, subj_subj_embs_gs2_i)
-                    # encourage_align = False: push bg_embs_i to be orthogonal with subj_subj_embs_gs2_i.
-                    # margin = 0: penalize any components in bg_embs_i that are
-                    # positively correlated with subj_subj_embs_gs2_i.
                     loss_inst_bg_subj_embs_align \
-                        = calc_align_coeff_loss(bg_embs_i, subj_subj_embs_gs2_i,
-                                                margin=0, encourage_align=False,
-                                                ref_grad_scale=1, do_sqr=True)
+                        = calc_delta_cosine_loss(bg_embs_i, subj_subj_embs_gs2_i,
+                                                 exponent=2, do_demean_first=True, 
+                                                 first_n_dims_to_flatten=3, 
+                                                 ref_grad_scale=1, aim_to_align=False)
+                    
                     loss_bg_subj_embs_align += loss_inst_bg_subj_embs_align
 
             loss_bg_subj_embs_align /= SSB_SIZE
