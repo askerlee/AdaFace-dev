@@ -3827,6 +3827,8 @@ class LatentDiffusion(DDPM):
             subj_subj_bg_attn, mix_subj_bg_attn = subj_bg_attn.chunk(2)
 
             subj_attn_mean = subj_attn.mean().item()
+            subj_attn_abs_mean = subj_attn.abs().mean().item() + 1e-6
+
             subj_subj_bg_attn_demean = subj_subj_bg_attn - subj_attn_mean
             mix_subj_bg_attn_demean  = mix_subj_bg_attn  - subj_attn_mean
             mix_subj_bg_attn_demean_gs = mix_grad_scaler(mix_subj_bg_attn_demean)
@@ -3837,10 +3839,10 @@ class LatentDiffusion(DDPM):
             # normalize_with_mean: normalize the result with the mean of the input.abs().
             loss_layer_subj_bg_attn_suppress = masked_mean(subj_subj_bg_attn_demean, 
                                                            subj_subj_bg_attn_demean > 0,
-                                                           do_sqr=True)
+                                                           do_sqr=True) / subj_attn_abs_mean
             loss_layer_mix_bg_attn_suppress  = masked_mean(mix_subj_bg_attn_demean_gs,  
                                                            mix_subj_bg_attn_demean_gs > 0,
-                                                           do_sqr=True)
+                                                           do_sqr=True) / subj_attn_abs_mean
             loss_comp_subj_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
                                                 + loss_layer_mix_bg_attn_suppress) \
                                                * feat_distill_layer_weight
