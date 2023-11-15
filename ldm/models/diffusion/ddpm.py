@@ -2857,8 +2857,7 @@ class LatentDiffusion(DDPM):
                 loss_comp_subj_fg_feat_preserve, loss_comp_subj_fg_attn_preserve, loss_comp_subj_bg_attn_suppress = \
                     self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info['unet_attnscores'], 
                                                         filtered_fg_mask, batch_have_fg_mask,
-                                                        extra_info['subj_indices_1b'], BLOCK_SIZE,
-                                                        mix_fg_preserve_loss_scale=0.2)
+                                                        extra_info['subj_indices_1b'], BLOCK_SIZE)
                 
                 if loss_comp_subj_fg_feat_preserve > 0:
                     loss_dict.update({f'{prefix}/comp_subj_fg_feat_preserve': loss_comp_subj_fg_feat_preserve.mean().detach()})
@@ -3693,8 +3692,7 @@ class LatentDiffusion(DDPM):
     # The requirement of preserving foreground features is not as strict as that of preserving
     # subject features, as the former is only used to facilitate composition.
     def calc_comp_fg_bg_preserve_loss(self, unet_feats, unet_attnscores, 
-                                      fg_mask, batch_have_fg_mask, subj_indices, BS,
-                                      mix_fg_preserve_loss_scale=0.2):
+                                      fg_mask, batch_have_fg_mask, subj_indices, BS):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0, 0
@@ -3731,8 +3729,8 @@ class LatentDiffusion(DDPM):
 
         # Normalize the weights above so that each set sum to 1.
         feat_distill_layer_weights  = normalize_dict_values(feat_distill_layer_weights)
-        single_feat_or_attn_grad_scale  = 0.02
-        single_feat_or_attn_grad_scaler = gen_gradient_scaler(single_feat_or_attn_grad_scale)
+        mix_grad_scale  = 0.02
+        mix_grad_scaler = gen_gradient_scaler(mix_grad_scale)
 
         loss_comp_subj_fg_feat_preserve = 0
         loss_comp_subj_fg_attn_preserve = 0
@@ -3774,16 +3772,16 @@ class LatentDiffusion(DDPM):
 
             # single_feat_or_attn_grad_scale = 0.02. 
             # feat_*_single are used as references, so their gradients are almost totally disabled.
-            subj_single_fg_feat_gs = single_feat_or_attn_grad_scaler(subj_single_fg_feat)
-            mix_single_fg_feat_gs  = single_feat_or_attn_grad_scaler(mix_single_fg_feat)
+            mix_comp_fg_feat_gs    = mix_grad_scaler(mix_comp_fg_feat)
+            mix_single_fg_feat_gs  = mix_grad_scaler(mix_single_fg_feat)
             # ortho_l2loss: minimize the non-correlated components of the two inputs.
             # normalized_l2loss() or L2 loss (get_loss()) perform worse than ortho_l2loss().
             # ortho_subtract() is done on the 1280-dim features, so the loss is scale-invariant to the second input.
-            loss_layer_subj_fg_feat_preserve = ortho_l2loss(subj_comp_fg_feat, subj_single_fg_feat_gs, mean=True)
-            loss_layer_mix_fg_feat_preserve  = ortho_l2loss(mix_comp_fg_feat,  mix_single_fg_feat_gs,  mean=True)
+            loss_layer_subj_fg_feat_preserve = ortho_l2loss(subj_comp_fg_feat,   subj_single_fg_feat, mean=True)
+            loss_layer_mix_fg_feat_preserve  = ortho_l2loss(mix_comp_fg_feat_gs, mix_single_fg_feat_gs,  mean=True)
             loss_comp_subj_fg_feat_preserve += (loss_layer_subj_fg_feat_preserve 
-                                                + loss_layer_mix_fg_feat_preserve * mix_fg_preserve_loss_scale) \
-                                                * feat_distill_layer_weight
+                                                + loss_layer_mix_fg_feat_preserve) \
+                                               * feat_distill_layer_weight
 
             ##### unet_attn_score fg preservation loss & bg suppression loss #####
             unet_attn_score = unet_attnscores[unet_layer_idx]
@@ -3803,15 +3801,15 @@ class LatentDiffusion(DDPM):
             subj_single_subj_fg_attn, subj_comp_subj_fg_attn, mix_single_subj_fg_attn, mix_comp_subj_fg_attn \
                 = subj_fg_attn.chunk(4)
             
-            subj_single_subj_fg_attn_gs = single_feat_or_attn_grad_scaler(subj_single_subj_fg_attn)
-            mix_single_subj_fg_attn_gs  = single_feat_or_attn_grad_scaler(mix_single_subj_fg_attn)
+            mix_comp_subj_fg_attn_gs    = mix_grad_scaler(mix_comp_subj_fg_attn)
+            mix_single_subj_fg_attn_gs  = mix_grad_scaler(mix_single_subj_fg_attn)
 
             ##### loss_comp_subj_fg_attn_preserve #####
-            loss_layer_subj_subj_fg_attn_contrast = ortho_l2loss(subj_comp_subj_fg_attn, subj_single_subj_fg_attn_gs)
-            loss_layer_mix_subj_fg_attn_contrast  = ortho_l2loss(mix_comp_subj_fg_attn,  mix_single_subj_fg_attn_gs)
+            loss_layer_subj_subj_fg_attn_contrast = ortho_l2loss(subj_comp_subj_fg_attn,   subj_single_subj_fg_attn)
+            loss_layer_mix_subj_fg_attn_contrast  = ortho_l2loss(mix_comp_subj_fg_attn_gs, mix_single_subj_fg_attn_gs)
             loss_comp_subj_fg_attn_preserve += (loss_layer_subj_subj_fg_attn_contrast 
-                                                + loss_layer_mix_subj_fg_attn_contrast * mix_fg_preserve_loss_scale) \
-                                                * feat_distill_layer_weight
+                                                + loss_layer_mix_subj_fg_attn_contrast) \
+                                               * feat_distill_layer_weight
             
             ##### loss_comp_subj_bg_attn_suppress #####
             bg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_score_mat, bg_mask_4b, "bg_mask_4b",
@@ -3827,21 +3825,21 @@ class LatentDiffusion(DDPM):
             # mix_subj_bg_attn:  attention of mix embeddings (corresponding to the subj embeddings) in class instances 
             # on background areas.
             subj_subj_bg_attn, mix_subj_bg_attn = subj_bg_attn.chunk(2)
+            mix_subj_bg_attn_gs = mix_grad_scaler(mix_subj_bg_attn)
 
             # abs(): just in case. the subj emb activations are almost always positive.
-            subj_attn_mean = subj_attn.mean().abs().item() + 1e-6
+            subj_attn_mean = subj_attn.abs().mean().item() + 1e-6
             # Simply suppress the subj attention on background areas. 
             # No need to use attn_*_single as references.
             # do_sqr=True: focus on large activations and tolerate more of small activations.
             # But do_sqr will make the losses too big. Therefore we normalize them with subj_attn_mean.
             loss_layer_subj_bg_attn_suppress = masked_mean(subj_subj_bg_attn, subj_subj_bg_attn > 0,
                                                            do_sqr=True) / subj_attn_mean
-            loss_layer_mix_bg_attn_suppress  = masked_mean(mix_subj_bg_attn,  mix_subj_bg_attn  > 0,
+            loss_layer_mix_bg_attn_suppress  = masked_mean(mix_subj_bg_attn_gs,  mix_subj_bg_attn_gs > 0,
                                                            do_sqr=True) / subj_attn_mean
-            mix_bg_attn_suppress_loss_scale = 0.2
             loss_comp_subj_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
-                                                + loss_layer_mix_bg_attn_suppress * mix_bg_attn_suppress_loss_scale) \
-                                                * feat_distill_layer_weight
+                                                + loss_layer_mix_bg_attn_suppress) \
+                                               * feat_distill_layer_weight
                     
         return loss_comp_subj_fg_feat_preserve, loss_comp_subj_fg_attn_preserve, loss_comp_subj_bg_attn_suppress
 
@@ -3876,7 +3874,7 @@ class LatentDiffusion(DDPM):
         # So we exclude the "start" token from the align padding loss.
         padding_mask[:, 0] = 0
         # padding embeddings cannot push the subject embeddings away.
-        subj_embs_contrast_paddings_grad_scale  = 0.01
+        subj_embs_contrast_paddings_grad_scale  = 0.02
         subj_embs_contrast_paddings_grad_scaler = gen_gradient_scaler(subj_embs_contrast_paddings_grad_scale)
         # bg embeddings can push the subject embeddings away, but less effectively than 
         # the subject embeddings pushing the bg embeddings away.
