@@ -3097,8 +3097,7 @@ class LatentDiffusion(DDPM):
                                             23: 1., 24: 1.,                                   
                                            }
 
-        feat_size2large_pooler_spec = { 8: [4, 2], 16: [4, 2], 32: [8, 4], 64: [8, 4] }
-        feat_size2small_pooler_spec = { 8: [4, 2], 16: [8, 4], 32: [8, 4], 64: [16, 8] }
+        feat_size2pooler_spec = { 8: [4, 2], 16: [4, 2], 32: [8, 4], 64: [8, 4] }
 
         # Normalize the weights above so that each set sum to 1.
         feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
@@ -3115,10 +3114,6 @@ class LatentDiffusion(DDPM):
         # Setting to 0 may prevent the graph from being released and OOM.
         mix_attn_grad_scale  = 0.05  
         mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
-        # Almost disabled the gradient to subject single instances.
-        feat_base_align_coeff_grad_scale = 0.02
-        # Align both spatial and channel dims.
-        feat_align_spatial_or_channel = 'spatial_only'  # channel_only, spatial_only, spatial_and_channel
 
         loss_subj_attn_delta_align_id   = 0
         loss_subj_attn_delta_align_ex   = 0
@@ -3165,31 +3160,18 @@ class LatentDiffusion(DDPM):
                 mix_comp_comp_attn_gs   = mix_attn_grad_scaler(mix_comp_comp_attn)
 
                 if attn_delta_distill_layer_weight > 0:
-                    '''
-                    # deltas obtained from ortho_subtract() are scale-invariant to input attns.
-                    single_subj_attn_delta = ortho_subtract(subj_single_subj_attn, mix_single_subj_attn_gs)
-                    comp_subj_attn_delta   = ortho_subtract(subj_comp_subj_attn,   mix_comp_subj_attn_gs)
-
-                    # Setting exponent as 2 seems to push too hard restriction on subject embeddings 
-                    # towards class embeddings, hurting authenticity.
-                    loss_layer_subj_attn_delta = \
-                        calc_delta_cosine_loss(single_subj_attn_delta, comp_subj_attn_delta, 
-                                                exponent=2,
-                                                do_demean_first=False,
-                                                first_n_dims_to_flatten=2, 
-                                                ref_grad_scale=1)
-                    '''
-
                     # subj_single_subj_attn, subj_comp_subj_attn, mix_single_subj_attn,
                     # mix_comp_subj_attn: [1, 8, 64].
                     # Do not use mix_single_subj_attn_gs and mix_comp_subj_attn_gs,
                     # as gs will be done within calc_delta_alignment_loss(),
                     # and if doing it twice, the grad on mix embeddings will be 
                     # reduced to 0.0025, almost 0.
+                    # Don't do gs on subj_single_subj_attn, by setting feat_base_grad_scale = 1.
                     loss_dict_layer_subj_attn_delta_align \
                         = calc_delta_alignment_loss(subj_single_subj_attn, subj_comp_subj_attn,
                                                     mix_single_subj_attn,  mix_comp_subj_attn,
                                                     ref_grad_scale=mix_attn_grad_scale,
+                                                    feat_base_grad_scale=1,
                                                     use_cosine_loss=True, 
                                                     delta_types=['feat_to_ref', 'ex_to_base'])
 
@@ -3261,41 +3243,24 @@ class LatentDiffusion(DDPM):
 
             # 8  -> 4, 2 (output 3),  16 -> 4, 2 (output 7), 
             # 32 -> 8, 4 (output 7),  64 -> 8, 4 (output 15).
-            large_pooler_kernel_size, large_pooler_stride = feat_size2large_pooler_spec[subj_single_feat.shape[-1]]
+            pooler_kernel_size, pooler_stride = feat_size2pooler_spec[subj_single_feat.shape[-1]]
             # feature pooling: allow small perturbations of the locations of pixels.
             # If subj_single_feat is 8x8, then after pooling, it becomes 3x3, too rough.
             # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
-            large_pooler = nn.AvgPool2d(large_pooler_kernel_size, stride=large_pooler_stride)
-            small_pooler_kernel_size, small_pooler_stride = feat_size2small_pooler_spec[subj_single_feat.shape[-1]]
-            small_pooler = nn.AvgPool2d(small_pooler_kernel_size, stride=small_pooler_stride)
+            pooler = nn.AvgPool2d(pooler_kernel_size, stride=pooler_stride)
 
-            # Flatten the spatial dimensions H, W.
-            # subj_single_feat: [2, 1280, 8, 8] pool -> [2, 1280, 3, 3] -> [2, 1280, 9]
-            
-            # If last_dim_is_spatial, then no need to permute. Dim 1 is the channel dimension.
-            subj_single_feat_3d = large_pooler(subj_single_feat).reshape(*subj_single_feat.shape[:2], -1)
-            subj_comp_feat_3d   = large_pooler(subj_comp_feat).reshape(*subj_comp_feat.shape[:2], -1)
-            mix_single_feat_3d  = large_pooler(mix_single_feat).reshape(*mix_single_feat.shape[:2], -1)
-            mix_comp_feat_3d    = large_pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1)
-
-            # Smaller feature maps are for loss_feat_base_align, 
-            # i.e., aligning between comp and single instances.
-            subj_single_feat_small_3d = small_pooler(subj_single_feat).reshape(*subj_single_feat.shape[:2], -1)
-            subj_comp_feat_small_3d   = small_pooler(subj_comp_feat).reshape(*subj_comp_feat.shape[:2], -1)
-            mix_single_feat_small_3d  = small_pooler(mix_single_feat).reshape(*mix_single_feat.shape[:2], -1)
-            mix_comp_feat_small_3d    = small_pooler(mix_comp_feat).reshape(*mix_comp_feat.shape[:2], -1)
-
-            mix_comp_feat_2d = mix_comp_feat.reshape(mix_comp_feat.shape[0], -1)
-            mix_single_feat_2d = mix_single_feat.reshape(mix_single_feat.shape[0], -1)
-            subj_comp_feat_2d = subj_comp_feat.reshape(subj_comp_feat.shape[0], -1)
-            subj_single_feat_2d = subj_single_feat.reshape(subj_single_feat.shape[0], -1)
+            mix_comp_feat_2d    = pooler(mix_comp_feat).reshape(mix_comp_feat.shape[0], -1)
+            mix_single_feat_2d  = pooler(mix_single_feat).reshape(mix_single_feat.shape[0], -1)
+            subj_comp_feat_2d   = pooler(subj_comp_feat).reshape(subj_comp_feat.shape[0], -1)
+            subj_single_feat_2d = pooler(subj_single_feat).reshape(subj_single_feat.shape[0], -1)
 
             # mix_feat_grad_scale = 0.1.
             mix_single_feat_2d_gs  = mix_feat_grad_scaler(mix_single_feat_2d)
             mix_comp_feat_2d_gs    = mix_feat_grad_scaler(mix_comp_feat_2d)
 
-            comp_feat_delta   = ortho_subtract(mix_comp_feat_2d_gs,   subj_comp_feat_2d)
-            single_feat_delta = ortho_subtract(mix_single_feat_2d_gs, subj_single_feat_2d)
+            comp_feat_delta   = ortho_subtract(subj_comp_feat_2d,   mix_comp_feat_2d_gs)
+            # subj_single_feat is not gs'ed, and I don't know why without gs it still works.
+            single_feat_delta = ortho_subtract(subj_single_feat_2d, mix_single_feat_2d_gs)
                 
             # single_feat_delta, comp_feat_delta: [1, 1280], ...
             # Pool the spatial dimensions H, W to remove spatial information.
@@ -3309,105 +3274,6 @@ class LatentDiffusion(DDPM):
             # and 2) the embeddings are amendable to composition.
             loss_layer_feat_delta_align_id = self.get_loss(comp_feat_delta, single_feat_delta, mean=True)
             loss_feat_delta_align_id += loss_layer_feat_delta_align_id * feat_distill_layer_weight
-
-            '''
-            # feat_align_spatial_or_channel: default 'spatial_and_channel', 
-            # align both spatial and channel dims.
-            # if 'channel_only', then channel dim is permuted to the last dim.
-            # [2, 1280, 9]  -> [2, 9, 1280]
-            # 'channel_only' will lead to worse spatial consistency.
-            if feat_align_spatial_or_channel in ['spatial_and_channel', 'spatial_only']:
-                # Do spatial-wise alignment at each channel. 
-                # The last dim is spatial dim.
-                # mix_feat_grad_scale = 0.1.
-                loss_dict_layer_feat_delta_align_spatial \
-                    = calc_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
-                                                mix_single_feat_3d,  mix_comp_feat_3d,
-                                                ref_grad_scale=mix_feat_grad_scale,
-                                                use_cosine_loss=True,
-                                                delta_types=['feat_to_ref', 'ex_to_base'])
-
-                # The alignment of comp feat and single feat is done with L2 loss on alignment coefficients.
-                # This is not as effective as the cosine loss, but cosine loss is sensitive to noisy features
-                # in the reference features. So L2 reg on alignment coefficients is used here.
-                # As the alignment coeffs are on the whole slice of feature map, it encourages to
-                # subj_comp_feat to include at least 0.8 * subj_single_feat (as a whole), which 
-                # is not unreasonable.
-                loss_layer_feat_base_align_spatial = \
-                    calc_align_coeff_loss(subj_comp_feat_small_3d, subj_single_feat_small_3d,
-                                          margin=0.8,
-                                          ref_grad_scale=feat_base_align_coeff_grad_scale,
-                                          do_sqr=True) \
-                    + \
-                      calc_align_coeff_loss(mix_comp_feat_small_3d, mix_single_feat_small_3d,
-                                            margin=0.8,
-                                            ref_grad_scale=feat_base_align_coeff_grad_scale, 
-                                            do_sqr=True) * 0.2
-                # Scale down the align_coeff_loss on mix    ^  instances by * 0.2.
-
-                loss_feat_delta_align_id += loss_dict_layer_feat_delta_align_spatial['feat_to_ref'] \
-                                             * feat_distill_layer_weight
-                loss_feat_delta_align_ex += loss_dict_layer_feat_delta_align_spatial['ex_to_base'] \
-                                             * feat_distill_layer_weight
-                loss_feat_base_align  += loss_layer_feat_base_align_spatial  * feat_distill_layer_weight
-
-            if feat_align_spatial_or_channel in ['spatial_and_channel', 'channel_only']:
-                # Do channel-wise alignment at each spatial location. 
-                # The last dim is channel dim.    
-                # subj_single_feat_3d: [2, 1280, 9] -> [2, 9, 1280]
-                subj_single_feat_3d = subj_single_feat_3d.permute(0, 2, 1)
-                subj_comp_feat_3d   = subj_comp_feat_3d.permute(0,   2, 1)
-                mix_single_feat_3d  = mix_single_feat_3d.permute(0,  2, 1)
-                mix_comp_feat_3d    = mix_comp_feat_3d.permute(0,    2, 1)
-
-                # subj_single_feat_small_3d: [2, 1280, 9] -> [2, 9, 1280]
-                subj_single_feat_small_3d = subj_single_feat_small_3d.permute(0, 2, 1)
-                subj_comp_feat_small_3d   = subj_comp_feat_small_3d.permute(0,   2, 1)
-                mix_single_feat_small_3d  = mix_single_feat_small_3d.permute(0,  2, 1)
-                mix_comp_feat_small_3d    = mix_comp_feat_small_3d.permute(0,    2, 1)
-
-                # mix_feat_grad_scale = 0.1.
-                loss_dict_layer_feat_delta_align_channel \
-                    = calc_delta_alignment_loss(subj_single_feat_3d, subj_comp_feat_3d,
-                                                mix_single_feat_3d,  mix_comp_feat_3d,
-                                                ref_grad_scale=mix_feat_grad_scale,
-                                                use_cosine_loss=True, 
-                                                delta_types=['feat_to_ref', 'ex_to_base'])
-                
-                # The alignment of comp feat and single feat is done with L2 loss on alignment coefficients.
-                # This is not as effective as the cosine loss, but cosine loss is sensitive to noisy features
-                # in the reference features. So L2 reg on alignment coefficients is used here.
-                # As the alignment coeffs are on the whole slice of feature map, it encourages to
-                # subj_comp_feat to include at least 0.8 * subj_single_feat (as a whole), which 
-                # is not unreasonable.
-                loss_layer_feat_base_align_channel \
-                    = calc_align_coeff_loss(subj_comp_feat_small_3d, subj_single_feat_small_3d,
-                                            margin=0.8,
-                                            ref_grad_scale=feat_base_align_coeff_grad_scale, 
-                                            do_sqr=True) \
-                      + \
-                      calc_align_coeff_loss(mix_comp_feat_small_3d, mix_single_feat_small_3d,
-                                            ref_grad_scale=feat_base_align_coeff_grad_scale, 
-                                            margin=0.8,
-                                            do_sqr=True) * 0.2
-                # Scale down the align_coeff_loss on mix    ^  instances by * 0.2.
-                                
-                loss_feat_delta_align_id += loss_dict_layer_feat_delta_align_channel['feat_to_ref'] \
-                                             * feat_distill_layer_weight
-                loss_feat_delta_align_ex += loss_dict_layer_feat_delta_align_channel['ex_to_base'] \
-                                             * feat_distill_layer_weight
-                loss_feat_base_align  += loss_layer_feat_base_align_channel  * feat_distill_layer_weight
-
-            '''
-            
-        # Normalize.
-
-        '''
-        if feat_align_spatial_or_channel == 'spatial_and_channel':
-            loss_feat_base_align  /= 2
-            loss_feat_delta_align_id /= 2
-            loss_feat_delta_align_ex /= 2
-        '''
 
         return loss_subj_attn_delta_align_id, loss_subj_attn_delta_align_ex, \
                loss_comp_attn_delta_distill, \
