@@ -1765,11 +1765,11 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
     return loss_static_prompt_delta, loss_ada_prompt_delta
 
 def calc_dyn_loss_scale(loss, loss_base, loss_scale_base, min_is_base=False):
-    if min_is_base and loss <= loss_base:
-        return loss_scale_base
     # Setting loss_base to 0 will disable the loss.
     if loss_base == 0:
         return 0
+    if min_is_base and loss <= loss_base:
+        return loss_scale_base
     return loss.item() * loss_scale_base / loss_base
 
 # embeddings: [N, 768]. 
