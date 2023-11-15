@@ -2800,16 +2800,13 @@ class LatentDiffusion(DDPM):
             # The indices will be shifted along the batch dimension (size doubled) 
             # within calc_prompt_mix_loss() to index all the 4 blocks.
             loss_subj_attn_delta_align_id, loss_subj_attn_delta_align_ex, \
-            loss_comp_attn_delta_distill, \
-            loss_subj_attn_norm_distill, loss_feat_base_align, \
+            loss_comp_attn_delta_distill, loss_subj_attn_norm_distill, \
             loss_feat_delta_align_id = \
                                 self.calc_prompt_mix_loss(unet_feats, extra_info['unet_attnscores'], 
                                                           extra_info['subj_indices_2b'], 
                                                           comp_extra_indices_13b,
                                                           BLOCK_SIZE, self.iter_flags['img_mask'])
 
-            if loss_feat_base_align > 0:
-                loss_dict.update({f'{prefix}/feat_base_align':         loss_feat_base_align.mean().detach()})
             if loss_feat_delta_align_id > 0:
                 loss_dict.update({f'{prefix}/feat_delta_align_id':     loss_feat_delta_align_id.mean().detach()})
             if loss_subj_attn_delta_align_id > 0:
@@ -2826,7 +2823,8 @@ class LatentDiffusion(DDPM):
             subj_attn_delta_distill_loss_scale = 1 #0.5
             # loss_comp_attn_delta_distill is L2 loss, so no need to use dynamic loss scale.
             # The range of loss_comp_attn_delta_distill is 20~50, so need to scale it down.
-            comp_attn_delta_distill_loss_scale = 1
+            # Disabled.
+            comp_attn_delta_distill_loss_scale = 0 #1
             # If normalize_subj_attn, then more relaxed on subj attn magnitudes.
             subj_attn_norm_distill_loss_scale_base  = 1 
             
@@ -2840,17 +2838,14 @@ class LatentDiffusion(DDPM):
                                                                      self.subj_attn_norm_distill_loss_base,
                                                                      subj_attn_norm_distill_loss_scale_base)
 
-            ## loss_feat_base_align is disabled. If enabled, the performance will drop significantly.
-            ## Probably the base features (of the subject single instances) are too noisy, and 
-            ## couldn't help teach the subject comp instances.
-            feat_base_align_scale  = 0.5
             feat_delta_align_scale = 2
 
-            loss_mix_prompt_distill =  ( (loss_subj_attn_delta_align_id + loss_subj_attn_delta_align_ex) 
+            subj_attn_delta_align_ex_loss_scale = 0
+            loss_mix_prompt_distill =  ( (loss_subj_attn_delta_align_id 
+                                            + loss_subj_attn_delta_align_ex * subj_attn_delta_align_ex_loss_scale)
                                           * subj_attn_delta_distill_loss_scale \
                                           + loss_comp_attn_delta_distill * comp_attn_delta_distill_loss_scale) \
                                         + loss_subj_attn_norm_distill    * subj_attn_norm_distill_loss_scale \
-                                        + loss_feat_base_align  * feat_base_align_scale \
                                         + loss_feat_delta_align_id * feat_delta_align_scale
                                         
             if loss_mix_prompt_distill > 0:
@@ -3095,7 +3090,6 @@ class LatentDiffusion(DDPM):
 
         loss_subj_attn_delta_align_id   = 0
         loss_subj_attn_delta_align_ex   = 0
-        loss_feat_base_align            = 0
         loss_feat_delta_align_id        = 0
 
         loss_comp_attn_delta_distill    = 0
@@ -3254,8 +3248,7 @@ class LatentDiffusion(DDPM):
 
         return loss_subj_attn_delta_align_id, loss_subj_attn_delta_align_ex, \
                loss_comp_attn_delta_distill, \
-               loss_subj_attn_norm_distill, loss_feat_base_align,        \
-               loss_feat_delta_align_id
+               loss_subj_attn_norm_distill, loss_feat_delta_align_id
 
     # Only compute the loss on the first block. If it's a normal_recon iter, 
     # the first block is the whole batch.
