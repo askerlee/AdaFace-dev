@@ -3344,7 +3344,7 @@ class LatentDiffusion(DDPM):
 
             # Use subj_attn as a reference, and scale down grad to fg attn, 
             # to make fg embeddings more stable.
-            '''
+            # fg_grad_scale: 0.1.
             loss_layer_fg_bg_comple = \
                 calc_delta_cosine_loss(bg_attn, subj_attn, 
                                        exponent=2,    
@@ -3353,15 +3353,7 @@ class LatentDiffusion(DDPM):
                                        ref_grad_scale=fg_grad_scale,
                                        aim_to_align=False,
                                        debug=False)
-            '''
 
-            # encourage_align = False: push bg_attn to be orthogonal with subj_attn.
-            # margin = 0: penalize any components in bg_attn that are positively correlated with subj_attn.
-            loss_layer_fg_bg_comple = calc_align_coeff_loss(bg_attn, subj_attn, margin=0,
-                                                            encourage_align=False,
-                                                            ref_grad_scale=fg_grad_scale,
-                                                            do_sqr=True)
-            
             # loss_fg_bg_complementary doesn't need fg_mask.
             loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_align_layer_weight
 
