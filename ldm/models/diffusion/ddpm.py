@@ -2956,7 +2956,7 @@ class LatentDiffusion(DDPM):
                 loss_subj_comp_value_ortho = 0
 
             # ortho losses are less effecive, so scale them down.
-            ortho_loss_scale = 0.1
+            ortho_loss_scale = 1
             # subj_comp_key_ortho_loss_weight:          5e-4, 
             # subj_comp_value_ortho_loss_weight:        0, disabled.
             # subj_comp_attn_delta_align_loss_weight: 5e-4.
