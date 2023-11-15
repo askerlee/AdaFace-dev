@@ -105,7 +105,7 @@ class DDPM(pl.LightningModule):
                  padding_embs_align_loss_weight=0.,
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_value_ortho_loss_weight=0.,
-                 subj_comp_attn_complementary_loss_weight=0.,
+                 subj_comp_attn_delta_align_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
                  subj_attn_norm_distill_loss_base=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
@@ -144,7 +144,7 @@ class DDPM(pl.LightningModule):
         self.padding_embs_align_loss_weight     = padding_embs_align_loss_weight
         self.subj_comp_key_ortho_loss_weight        = subj_comp_key_ortho_loss_weight
         self.subj_comp_value_ortho_loss_weight      = subj_comp_value_ortho_loss_weight
-        self.subj_comp_attn_complementary_loss_weight = subj_comp_attn_complementary_loss_weight
+        self.subj_comp_attn_delta_align_loss_weight = subj_comp_attn_delta_align_loss_weight
         self.mix_prompt_distill_weight              = mix_prompt_distill_weight
         self.subj_attn_norm_distill_loss_base       = subj_attn_norm_distill_loss_base
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
@@ -2959,10 +2959,10 @@ class LatentDiffusion(DDPM):
             ortho_loss_scale = 0.1
             # subj_comp_key_ortho_loss_weight:          5e-4, 
             # subj_comp_value_ortho_loss_weight:        0, disabled.
-            # subj_comp_attn_complementary_loss_weight: 5e-4.
+            # subj_comp_attn_delta_align_loss_weight: 5e-4.
             loss +=   (loss_subj_comp_key_ortho   * ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
                     + (loss_subj_comp_value_ortho * ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight \
-                    + loss_subj_comp_attn_delta_align * self.subj_comp_attn_complementary_loss_weight
+                    + loss_subj_comp_attn_delta_align * self.subj_comp_attn_delta_align_loss_weight
                 
         self.release_plosses_intermediates(locals())
         loss_dict.update({f'{prefix}/loss': loss.mean().detach()})
