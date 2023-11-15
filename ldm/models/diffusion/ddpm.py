@@ -2869,7 +2869,7 @@ class LatentDiffusion(DDPM):
                 # loss_comp_subj_fg_feat_preserve is L2 loss, so no need to use dynamic loss scale.
                 comp_subj_fg_feat_preserve_loss_scale = 1
                 # A big comp_subj_bg_attn_suppress_loss_scale may hurt the authenticity.
-                comp_subj_bg_attn_suppress_loss_scale = 0.2 # 0.5
+                comp_subj_bg_attn_suppress_loss_scale = 0.1 # 0.5
                 loss_comp_fg_bg_preserve = (loss_comp_subj_fg_feat_preserve * comp_subj_fg_feat_preserve_loss_scale \
                                               + loss_comp_subj_fg_attn_preserve) \
                                             + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
