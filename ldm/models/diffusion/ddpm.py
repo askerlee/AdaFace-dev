@@ -3494,27 +3494,27 @@ class LatentDiffusion(DDPM):
             # Therefore, the CA features in the current CA layer may be barely aligned 
             # with the CA features in the L_xlayer-th CA layer. So it's of little benefit
             # to align the corresponding heads across CA layers.
-            # subj_attn:        [8, 8, 256] -> [2, 4, 8, 256] -> mean among 8 heads -> [2, 4, 256] 
-            # Take mean over head, because the heads may have no correspondence across layers.
-            subj_attn        = attn_score_mat[subj_indices].reshape(       SSB_SIZE, K_fg, *attn_score_mat.shape[2:]).mean(dim=2)
-            # subj_attn_xlayer: [8, 8, 64]  -> [2, 4, 8, 64]  -> mean among 8 heads -> [2, 4, 64]
-            subj_attn_xlayer = attn_score_mat_xlayer[subj_indices].reshape(SSB_SIZE, K_fg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2)
+            # subj_attn:        [8, 8, 256] -> [2, 9, 8, 256] -> mean over 8 heads, sum over 9 embs -> [2, 256] 
+            # Average out head, because the head i in layer a may not correspond to head i in layer b.
+            subj_attn        = attn_score_mat[subj_indices].reshape(       SSB_SIZE, K_fg, *attn_score_mat.shape[2:]).mean(dim=2).sum(dim=1)
+            # subj_attn_xlayer: [8, 8, 64]  -> [2, 9, 8, 64]  -> mean over 8 heads, sum over 9 embs -> [2, 64]
+            subj_attn_xlayer = attn_score_mat_xlayer[subj_indices].reshape(SSB_SIZE, K_fg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2).sum(dim=1)
 
             # subj_attn: [2, 9, 256] -> [2, 9, 16, 16] -> [2, 9, 8, 8] -> [2, 9, 64]
-            subj_attn = subj_attn.reshape(SSB_SIZE, -1, H, H)
+            subj_attn = subj_attn.reshape(SSB_SIZE, H, H)
             subj_attn = F.interpolate(subj_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
-            subj_attn = subj_attn.reshape(SSB_SIZE, -1, Hx*Hx)
+            subj_attn = subj_attn.reshape(SSB_SIZE, Hx*Hx)
 
             if bg_indices is not None:
-                # bg_attn:   [8, 8, 256] -> [2, 4, 8, 256] -> mean over 8 attention heads -> [2, 4, 256]
+                # bg_attn:   [8, 8, 256] -> [2, 4, 8, 256] -> mean over 8 heads, sum over 4 embs -> [2, 256]
                 # 8: 8 attention heads. Last dim 256: number of image tokens.
-                # Take mean over head, because the heads may have no correspondence across layers.
-                bg_attn         = attn_score_mat[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat.shape[2:]).mean(dim=2)
-                bg_attn_xlayer  = attn_score_mat_xlayer[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2)
+                # Average out head, because the head i in layer a may not correspond to head i in layer b.
+                bg_attn         = attn_score_mat[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat.shape[2:]).mean(dim=2).sum(dim=1)
+                bg_attn_xlayer  = attn_score_mat_xlayer[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2).sum(dim=1)
                 # bg_attn: [2, 4, 256] -> [2, 4, 16, 16] -> [2, 4, 8, 8] -> [2, 4, 64]
-                bg_attn   = bg_attn.reshape(SSB_SIZE, -1, H, H)
+                bg_attn   = bg_attn.reshape(SSB_SIZE, H, H)
                 bg_attn   = F.interpolate(bg_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
-                bg_attn   = bg_attn.reshape(SSB_SIZE, -1, Hx*Hx)
+                bg_attn   = bg_attn.reshape(SSB_SIZE, Hx*Hx)
             
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
 
