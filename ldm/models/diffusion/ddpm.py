@@ -828,9 +828,6 @@ class LatentDiffusion(DDPM):
                 # Fix the scales of the static subject embeddings.
                 static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_fg, num_layers=self.N_LAYERS)
                 # static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_bg, num_layers=self.N_LAYERS)
-                # conv_attn_layerwise_scales: a list of 16 tensor scalars, 
-                # used to scale conv attention at each CA layer.
-                conv_attn_layerwise_scales = self.embedding_manager.get_conv_attn_layerwise_scales()
 
                 extra_info = { 
                                 'use_layerwise_context':        self.use_layerwise_embedding, 
@@ -846,7 +843,9 @@ class LatentDiffusion(DDPM):
                                 'subj_indices':                 copy.copy(self.embedding_manager.placeholder_indices_fg),
                                 'bg_indices':                   copy.copy(self.embedding_manager.placeholder_indices_bg),
                                 'prompt_emb_mask':              copy.copy(self.embedding_manager.prompt_emb_mask),
-                                'conv_attn_layerwise_scales':   conv_attn_layerwise_scales,
+                                # conv_attn_layerwise_scales: a list of 16 tensor scalars, 
+                                # used to scale conv attention at each CA layer.
+                                'conv_attn_layerwise_scales':   self.embedding_manager.get_conv_attn_layerwise_scales(),
                                 'normalize_subj_attn':          self.embedding_manager.normalize_subj_attn,
                                 'is_training':                  self.embedding_manager.training,
                              }

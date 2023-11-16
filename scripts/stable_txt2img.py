@@ -421,23 +421,20 @@ def main(opt):
             assert opt.num_vectors_per_token >= K * K, \
                     f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
         
-        # If contrast_fg_bg_attns is specified, then use it (override the checkpoint). 
-        # Otherwise, leave the ckpt setting unchanged.
+        # command line --contrast_fg_bg_attns and --normalize_subj_attn override the checkpoint.
+        # If not specified, passed None's will be ignored in set_embs_attn_tricks().
         contrast_fg_bg_attns = opt.contrast_fg_bg_attns if hasattr(opt, 'contrast_fg_bg_attns') else None
-        model.embedding_manager.set_embs_attn_specs(opt.use_conv_attn_kernel_size, 
-                                                    opt.attn_copycat_emb_range,
-                                                    contrast_fg_bg_attns,
-                                                    opt.bg_attn_behavior_in_inference)
+        normalize_subj_attn  = opt.normalize_subj_attn  if hasattr(opt, 'normalize_subj_attn')  else None
+        model.embedding_manager.set_embs_attn_tricks(opt.use_conv_attn_kernel_size, 
+                                                     opt.attn_copycat_emb_range,
+                                                     contrast_fg_bg_attns,
+                                                     normalize_subj_attn,
+                                                     opt.bg_attn_behavior_in_inference)
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
         if opt.background_string is not None:
             model.embedding_manager.background_strings = [opt.background_string]
-
-        # command line --normalize_subj_attn overrides the checkpoint.
-        if hasattr(opt, 'normalize_subj_attn') and opt.normalize_subj_attn != model.embedding_manager.normalize_subj_attn:
-            print(f"Override normalize_subj_attn in checkpoint ({model.embedding_manager.normalize_subj_attn} or absent) with {opt.normalize_subj_attn}")
-            model.embedding_manager.normalize_subj_attn = opt.normalize_subj_attn
 
         device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
         model  = model.to(device)

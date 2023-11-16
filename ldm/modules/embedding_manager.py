@@ -887,9 +887,9 @@ class EmbeddingManager(nn.Module):
         self.initialize_conv_attn_layerwise_scales(1, learnable=True)
         
         self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
-        self.set_normalize_subj_attn(normalize_subj_attn)
-        self.set_embs_attn_specs(use_conv_attn_kernel_size, attn_copycat_emb_range, 
-                                 contrast_fg_bg_attns, do_init=True)
+        self.set_embs_attn_tricks(use_conv_attn_kernel_size, attn_copycat_emb_range, 
+                                  contrast_fg_bg_attns, normalize_subj_attn, 
+                                  do_init=True)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
 
@@ -1663,19 +1663,17 @@ class EmbeddingManager(nn.Module):
         self.use_specialized_comp_embs = use_specialized_comp_embs
         print(f"Setting use_specialized_comp_embs = {use_specialized_comp_embs}")
 
-    def set_normalize_subj_attn(self, normalize_subj_attn):
-        self.normalize_subj_attn = normalize_subj_attn
-        print(f"Setting normalize_subj_attn = {normalize_subj_attn}")
-
-    # attn_copycat_emb_range = None:     Disabled.
-    # attn_copycat_emb_range = [-1, -1]: Not specified (when called from an external caller). 
-    # contrast_fg_bg_attns = None:         Not specified.
-    def set_embs_attn_specs(self, use_conv_attn_kernel_size=None, 
-                            attn_copycat_emb_range=None, 
-                            contrast_fg_bg_attns=None,
-                            bg_attn_behavior_in_inference='zero',
-                            do_init=False):
-        if use_conv_attn_kernel_size is not None or do_init:
+    # attn_copycat_emb_range = None:        Not specified.
+    # attn_copycat_emb_range = [-1, -1]:    Disabled.
+    # contrast_fg_bg_attns = None:          Not specified.
+    # normalize_subj_attn  = None:          Not specified.
+    def set_embs_attn_tricks(self, use_conv_attn_kernel_size=None, 
+                             attn_copycat_emb_range=None, 
+                             contrast_fg_bg_attns=None,
+                             normalize_subj_attn=None,
+                             bg_attn_behavior_in_inference='zero',
+                             do_init=False):
+        if (use_conv_attn_kernel_size is not None) or do_init:
             self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
             extra_msg = ", DISABLED" if use_conv_attn_kernel_size is -1 else ""
             print(f"Setting use_conv_attn_kernel_size = {use_conv_attn_kernel_size}{extra_msg}")
@@ -1697,8 +1695,15 @@ class EmbeddingManager(nn.Module):
             print(f"Setting contrast_fg_bg_attns = {contrast_fg_bg_attns}{extra_msg}")
 
         # bg_attn_behavior_in_inference is only in effect if contrast_fg_bg_attns is enabled.
+        # So we can safely override the existing value 
+        # (even if it's inappropriately set during training or during inference 
+        # while not contrast_fg_bg_attns, it won't have effect.
         self.bg_attn_behavior_in_inference = bg_attn_behavior_in_inference
         print(f"Setting bg_attn_behavior_in_inference = {bg_attn_behavior_in_inference}")
+
+        if (normalize_subj_attn is not None) or do_init:
+            self.normalize_subj_attn = normalize_subj_attn
+            print(f"Setting normalize_subj_attn = {normalize_subj_attn}")
 
     def initialize_attn_postmix_components(self, attn_postmix_weight, 
                                             postmix_attn_layer=None, 
@@ -1939,12 +1944,16 @@ class EmbeddingManager(nn.Module):
                 self.set_use_specialized_comp_embs(ckpt["use_specialized_comp_embs"])
             if "normalize_subj_attn" in ckpt:
                 self.set_normalize_subj_attn(ckpt["normalize_subj_attn"])
-            # The three options should coexist in the ckpt.
-            if "use_conv_attn_kernel_size" in ckpt:
-                contrast_fg_bg_attns = ckpt.get("contrast_fg_bg_attns", None)
-                self.set_embs_attn_specs(ckpt["use_conv_attn_kernel_size"], 
-                                         ckpt["attn_copycat_emb_range"],
-                                         contrast_fg_bg_attns)
+            # The four options should coexist in the ckpt.
+            use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
+            contrast_fg_bg_attns        = ckpt.get("contrast_fg_bg_attns",      None)
+            attn_copycat_emb_range      = ckpt.get("attn_copycat_emb_range",    None)
+            normalize_subj_attn         = ckpt.get("normalize_subj_attn",       None)
+
+            self.set_embs_attn_tricks(use_conv_attn_kernel_size, 
+                                      attn_copycat_emb_range,
+                                      contrast_fg_bg_attns,
+                                      normalize_subj_attn)
 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
