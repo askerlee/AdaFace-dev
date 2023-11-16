@@ -848,6 +848,7 @@ class LatentDiffusion(DDPM):
                                 'prompt_emb_mask':              copy.copy(self.embedding_manager.prompt_emb_mask),
                                 'conv_attn_layerwise_scales':   conv_attn_layerwise_scales,
                                 'normalize_subj_attn':          self.embedding_manager.normalize_subj_attn,
+                                'is_training':                  self.embedding_manager.training,
                              }
                 
                 if self.use_ada_embedding:
