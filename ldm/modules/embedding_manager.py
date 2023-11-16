@@ -1942,8 +1942,6 @@ class EmbeddingManager(nn.Module):
             
             if "use_specialized_comp_embs" in ckpt:
                 self.set_use_specialized_comp_embs(ckpt["use_specialized_comp_embs"])
-            if "normalize_subj_attn" in ckpt:
-                self.set_normalize_subj_attn(ckpt["normalize_subj_attn"])
             # The four options should coexist in the ckpt.
             use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
             contrast_fg_bg_attns        = ckpt.get("contrast_fg_bg_attns",      None)
