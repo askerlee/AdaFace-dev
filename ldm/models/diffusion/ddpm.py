@@ -2906,7 +2906,6 @@ class LatentDiffusion(DDPM):
 
                 loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho \
                     = self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
-                                                    extra_info['unet_attnscores'],
                                                     subj_indices_4b_by_block, comp_extra_indices_4b_by_block,
                                                     cls_grad_scale=0.05,
                                                     is_4type_batch=True)
@@ -2934,7 +2933,6 @@ class LatentDiffusion(DDPM):
                                 
                 loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho \
                     = self.calc_subj_comp_ortho_loss(extra_info['unet_ks'], extra_info['unet_vs'], 
-                                                    extra_info['unet_attnscores'],
                                                     # Param subj_indices_by_block is a list of blocks.
                                                     # subj_indices_ext is only 1 block. So put it in a list.
                                                     [subj_indices_ext], comp_extra_indices_1b_by_block,
@@ -3577,7 +3575,7 @@ class LatentDiffusion(DDPM):
         return loss_fg_xlayer_consist, loss_bg_xlayer_consist
 
     # DISABLED. No obvious improvement.
-    def calc_subj_comp_ortho_loss(self, unet_ks, unet_vs, unet_attnscores,
+    def calc_subj_comp_ortho_loss(self, unet_ks, unet_vs, 
                                   subj_indices_by_block, comp_extra_indices_by_block, 
                                   cls_grad_scale=0.05, is_4type_batch=True):
 
