@@ -1193,7 +1193,7 @@ def normalize_dict_values(d):
     return d2
 
 # normalize_with_mean is only activated when do_sqr is True.
-def masked_mean(ts, mask, dim=None, instance_weights=None, do_sqr=False):
+def masked_mean(ts, mask, instance_weights=None, dim=None, keepdim=False):
     if instance_weights is None:
         instance_weights = 1
     if isinstance(instance_weights, torch.Tensor):
@@ -1204,16 +1204,12 @@ def masked_mean(ts, mask, dim=None, instance_weights=None, do_sqr=False):
         # Without this step, mask_sum will be wrong.
         mask = mask.expand(ts.shape)
 
-    # If do_sqr, then this function computes the masked L2 loss.
-    if do_sqr:
-        ts = ts ** 2
-
     if mask is None:
         return (ts * instance_weights).mean()
     else:
-        mask_sum = mask.sum(dim=dim)
+        mask_sum = mask.sum(dim=dim, keepdim=keepdim)
         mask_sum = torch.maximum( mask_sum, torch.ones_like(mask_sum) * 1e-6 )
-        return (ts * instance_weights * mask).sum(dim=dim) / mask_sum
+        return (ts * instance_weights * mask).sum(dim=dim, keepdim=keepdim) / mask_sum
 
 def anneal_value(training_percent, final_percent, value_range):
     assert 0 - 1e-6 <= training_percent <= 1 + 1e-6
@@ -1264,13 +1260,9 @@ def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0
 # its geometrical dimensions (H, W) have been flatten to 1D (last dim).
 # mask:      always 4D.
 # mode: either "nearest" or "nearest|bilinear". Other modes will be ignored.
-def resize_mask_for_feat_or_attn(feat_or_attn, mask, mask_name, mode="nearest|bilinear", warn_on_all_zero=True):
-    if feat_or_attn.ndim == 3:
-        spatial_scale = np.sqrt(feat_or_attn.shape[-1] / mask.shape[2:].numel())
-    elif feat_or_attn.ndim == 4:
-        spatial_scale = np.sqrt(feat_or_attn.shape[-2:].numel() / mask.shape[2:].numel())
-    else:
-        breakpoint()
+def resize_mask_for_feat_or_attn(feat_or_attn, mask, mask_name, num_spatial_dims=1,
+                                 mode="nearest|bilinear", warn_on_all_zero=True):
+    spatial_scale = np.sqrt(feat_or_attn.shape[-num_spatial_dims:].numel() / mask.shape[2:].numel())
 
     spatial_shape2 = (int(mask.shape[2] * spatial_scale), int(mask.shape[3] * spatial_scale))
 

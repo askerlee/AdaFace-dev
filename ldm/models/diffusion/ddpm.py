@@ -3159,7 +3159,9 @@ class LatentDiffusion(DDPM):
                 spatial_weight = (spatial_weight_mix_comp + spatial_weight_subj_comp) / 2
 
                 if img_mask is not None:
-                    img_mask = resize_mask_for_feat_or_attn(unet_feat, img_mask, "img_mask", mode="nearest|bilinear")
+                    img_mask = resize_mask_for_feat_or_attn(unet_feat, img_mask, "img_mask", 
+                                                            num_spatial_dims=2,
+                                                            mode="nearest|bilinear")
                     spatial_weight = spatial_weight * img_mask
 
                 # spatial_attn_mix_comp, spatial_attn_subj_comp are returned for debugging purposes. 
@@ -3294,7 +3296,9 @@ class LatentDiffusion(DDPM):
             
             if img_mask is not None:
                 # img_mask: [2, 1, 64, 64] -> [2, 1, 8, 8]. subj_attn: [2, 8, 64]
-                img_mask2 = resize_mask_for_feat_or_attn(subj_attn, img_mask, "img_mask", mode="nearest|bilinear")
+                img_mask2 = resize_mask_for_feat_or_attn(subj_attn, img_mask, "img_mask", 
+                                                         num_spatial_dims=1,
+                                                         mode="nearest|bilinear")
                 # img_mask2: [2, 1, 8, 8] -> [2, 1, 64] -> [2, 8, 64].
                 img_mask2 = img_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 bg_attn   = bg_attn   * img_mask2
@@ -3334,7 +3338,9 @@ class LatentDiffusion(DDPM):
                 bg_score   = sel_emb_attns_by_indices(attnscore_mat, bg_indices, 
                                                       do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
 
-                fg_mask2 = resize_mask_for_feat_or_attn(subj_attn, fg_mask, "fg_mask", mode="nearest|bilinear")
+                fg_mask2 = resize_mask_for_feat_or_attn(subj_attn, fg_mask, "fg_mask", 
+                                                        num_spatial_dims=1,
+                                                        mode="nearest|bilinear")
                 # Repeat 8 times to match the number of attention heads (for normalization).
                 fg_mask2 = fg_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 fg_mask3 = torch.zeros_like(fg_mask2)
@@ -3380,10 +3386,10 @@ class LatentDiffusion(DDPM):
                 # fg_mask3: [BLOCK_SIZE, 8, 64]
                 # avg_subj_score_at_mf: [BLOCK_SIZE, 1, 1]
                 # keepdim=True, since scores at all locations will use them as references (subtract them).
-                avg_subj_score_at_mf = subj_score_at_mf.sum(dim=(1,2), keepdim=True)  / fg_mask3.sum(dim=(1,2), keepdim=True)
-                avg_subj_score_at_mb = subj_score_at_mb.sum(dim=(1,2), keepdim=True)  / bg_mask3.sum(dim=(1,2), keepdim=True)
-                avg_bg_score_at_mf   = bg_score_at_mf.sum(dim=(1,2), keepdim=True)    / fg_mask3.sum(dim=(1,2), keepdim=True)
-                avg_bg_score_at_mb   = bg_score_at_mb.sum(dim=(1,2), keepdim=True)    / bg_mask3.sum(dim=(1,2), keepdim=True)
+                avg_subj_score_at_mf = masked_mean(subj_score_at_mf, fg_mask3, dim=(1,2), keepdim=True)
+                avg_subj_score_at_mb = masked_mean(subj_score_at_mb, bg_mask3, dim=(1,2), keepdim=True)
+                avg_bg_score_at_mf   = masked_mean(bg_score_at_mf,   fg_mask3, dim=(1,2), keepdim=True)
+                avg_bg_score_at_mb   = masked_mean(bg_score_at_mb,   bg_mask3, dim=(1,2), keepdim=True)
 
                 if 'DEBUG' in os.environ:
                     print(f'layer {unet_layer_idx}')
@@ -3521,21 +3527,23 @@ class LatentDiffusion(DDPM):
             # with the CA features in the L_xlayer-th CA layer. So it's of little benefit
             # to align the corresponding heads across CA layers.
             # subj_attn:        [8, 8, 256] -> [2, 4, 8, 256] -> mean among 8 heads -> [2, 4, 256] 
+            # Take mean over head, because the heads may have no correspondence across layers.
             subj_attn        = attn_score_mat[subj_indices].reshape(       SSB_SIZE, K_fg, *attn_score_mat.shape[2:]).mean(dim=2)
             # subj_attn_xlayer: [8, 8, 64]  -> [2, 4, 8, 64]  -> mean among 8 heads -> [2, 4, 64]
             subj_attn_xlayer = attn_score_mat_xlayer[subj_indices].reshape(SSB_SIZE, K_fg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2)
 
-            # subj_attn: [2, 4, 256] -> [2, 4, 16, 16] -> [2, 4, 8, 8] -> [2, 4, 64]
+            # subj_attn: [2, 9, 256] -> [2, 9, 16, 16] -> [2, 9, 8, 8] -> [2, 9, 64]
             subj_attn = subj_attn.reshape(SSB_SIZE, -1, H, H)
             subj_attn = F.interpolate(subj_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
             subj_attn = subj_attn.reshape(SSB_SIZE, -1, Hx*Hx)
 
             if bg_indices is not None:
-                # bg_attn:   [4, 8, 256] -> [2, 2, 8, 256] -> sum over 8 attention heads -> [2, 2, 256]
+                # bg_attn:   [8, 8, 256] -> [2, 4, 8, 256] -> mean over 8 attention heads -> [2, 4, 256]
                 # 8: 8 attention heads. Last dim 256: number of image tokens.
+                # Take mean over head, because the heads may have no correspondence across layers.
                 bg_attn         = attn_score_mat[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat.shape[2:]).mean(dim=2)
                 bg_attn_xlayer  = attn_score_mat_xlayer[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2)
-                # bg_attn: [2, 2, 256] -> [2, 2, 16, 16] -> [2, 2, 8, 8] -> [2, 2, 64]
+                # bg_attn: [2, 4, 256] -> [2, 4, 16, 16] -> [2, 4, 8, 8] -> [2, 4, 64]
                 bg_attn   = bg_attn.reshape(SSB_SIZE, -1, H, H)
                 bg_attn   = F.interpolate(bg_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
                 bg_attn   = bg_attn.reshape(SSB_SIZE, -1, Hx*Hx)
@@ -3546,8 +3554,10 @@ class LatentDiffusion(DDPM):
                 # img_mask: [4, 1, 64, 64] -> [2, 1, 64, 64]
                 img_mask = img_mask[:SSB_SIZE]
                 # img_mask2: [2, 1, 64, 64] -> [2, 1, 8, 8] -> [2, 1, 64]
-                # "1" will be broadcasted to 2: subj_attn_xlayer: [2, 2, 64]
-                img_mask2 = resize_mask_for_feat_or_attn(subj_attn_xlayer, img_mask, "img_mask", mode="nearest|bilinear")
+                # "1" will be broadcasted to 4: subj_attn_xlayer: [2, 9, 64]
+                img_mask2 = resize_mask_for_feat_or_attn(subj_attn_xlayer, img_mask, "img_mask", 
+                                                         num_spatial_dims=1,
+                                                         mode="nearest|bilinear")
                 img_mask2 = img_mask2.reshape(SSB_SIZE, 1, -1)
                 subj_attn           = subj_attn         * img_mask2
                 subj_attn_xlayer    = subj_attn_xlayer  * img_mask2
@@ -3755,6 +3765,7 @@ class LatentDiffusion(DDPM):
 
             # fg_feat_mask_4b: [1, 1, 64, 64] => [1, 1, 8, 8]
             fg_feat_mask_4b = resize_mask_for_feat_or_attn(unet_feat, fg_mask_4b, "fg_mask_4b", 
+                                                           num_spatial_dims=2,
                                                            mode="nearest|bilinear", warn_on_all_zero=False)
 
             # Only keep the foreground features, and mask out the background features (setting to 0).
@@ -3799,21 +3810,24 @@ class LatentDiffusion(DDPM):
 
             ##### unet_attn_score fg preservation loss & bg suppression loss #####
             unet_attn_score = unet_attnscores[unet_layer_idx]
-            # attn_score_mat: [4, 8, 64, 77] => [4, 77, 8, 64] => sum over 8 attention heads => [4, 77, 64]
-            attn_score_mat = unet_attn_score.permute(0, 3, 1, 2).sum(dim=2)
-            # subj_subj_attn: [4, 77, 64] -> [4 * K_fg, 64] -> [4, K_fg, 64]
-            subj_attn = attn_score_mat[ind_subj_B, ind_subj_N].reshape(BLOCK_SIZE * 4, K_fg, -1)
+            # attn_score_mat: [4, 8, 64, 77] => [4, 77, 8, 64] 
+            attn_score_mat = unet_attn_score.permute(0, 3, 1, 2)
+            # subj_subj_attn: [4, 77, 8, 64] -> [4 * K_fg, 8, 64] -> [4, K_fg, 8, 64]
+            subj_attn = attn_score_mat[ind_subj_B, ind_subj_N].reshape(BLOCK_SIZE * 4, K_fg, *attn_score_mat.shape[2:])
+            # Sum over 9 subject embeddings. [4, K_fg, 8, 64] -> [4, 8, 64]
+            subj_attn = subj_attn.sum(dim=1)
 
             # fg_attn_mask_4b: [1, 1, 64, 64] => [1, 1, 8, 8]
             fg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_score_mat, fg_mask_4b, "fg_mask_4b", 
+                                                           num_spatial_dims=1,
                                                            mode="nearest|bilinear", warn_on_all_zero=False)
             # fg_attn_mask_flat_4b: [1, 1, 8, 8] => [4, 1, 64]
             fg_attn_mask_flat_4b  = fg_attn_mask_4b.reshape(BLOCK_SIZE * 4, 1, -1)
 
-            # subj_fg_attn: [4, K_fg, 64].
+            # subj_fg_attn: [4, 8, 64].
             subj_fg_attn = subj_attn * fg_attn_mask_flat_4b
 
-            # subj_single_subj_fg_attn: [1, K_fg, 64].
+            # subj_single_subj_fg_attn: [1, 8, 64].
             subj_single_subj_fg_attn, subj_comp_subj_fg_attn, mix_single_subj_fg_attn, mix_comp_subj_fg_attn \
                 = subj_fg_attn.chunk(4)
             # subj_single_fg_mask: [1, 1, 64]
@@ -3831,6 +3845,7 @@ class LatentDiffusion(DDPM):
             loss_comp_mix_fg_attn_preserve  += loss_layer_mix_subj_fg_attn_contrast  * feat_distill_layer_weight
             ##### loss_comp_subj_bg_attn_suppress #####
             bg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_score_mat, bg_mask_4b, "bg_mask_4b",
+                                                           num_spatial_dims=1,
                                                            mode="nearest|bilinear", warn_on_all_zero=True)
             # bg_attn_mask_flat_4b: [4, 1, 8, 8] => [4, 1, 64]
             bg_attn_mask_flat_4b  = bg_attn_mask_4b.reshape(BLOCK_SIZE * 4, 1, -1)
@@ -3845,9 +3860,13 @@ class LatentDiffusion(DDPM):
             subj_single_subj_bg_attn, subj_comp_subj_bg_attn, mix_single_subj_bg_attn, mix_comp_subj_bg_attn \
                 = subj_bg_attn.chunk(4)
 
+
+            breakpoint()
+            # subj_comp_subj_fg_attn: [1, 8, 64], subj_comp_fg_mask: [1, 1, 64].
             subj_fg_attn_mean = masked_mean(subj_comp_subj_fg_attn, subj_comp_fg_mask).item()
             mix_fg_attn_mean  = masked_mean(mix_comp_subj_fg_attn,  mix_comp_fg_mask).item()
 
+            # subj_comp_subj_bg_attn: [1, 8, 64].
             subj_comp_subj_bg_attn_demean   = subj_comp_subj_bg_attn - subj_fg_attn_mean
             mix_comp_subj_bg_attn_demean    = mix_comp_subj_bg_attn  - mix_fg_attn_mean
             mix_comp_subj_bg_attn_demean_gs = mix_grad_scaler(mix_comp_subj_bg_attn_demean)
