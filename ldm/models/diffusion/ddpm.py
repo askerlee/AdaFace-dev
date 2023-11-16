@@ -2406,7 +2406,7 @@ class LatentDiffusion(DDPM):
                 else:
                     # use_background_token == True and not self.iter_flags['use_wds_comp'].
                     # bg loss is somewhat discounted.
-                    instance_bg_weights = 0.2
+                    instance_bg_weights = 1
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
@@ -2967,6 +2967,8 @@ class LatentDiffusion(DDPM):
 
     # pixel-wise recon loss. 
     # instance_fg_weights, instance_bg_weights: could be 1D tensors of batch size, or scalars.
+    # img_mask, fg_mask: [2, 1, 64, 64].
+    # model_output, target: [2, 4, 64, 64]
     def calc_recon_loss(self, model_output, target, img_mask, fg_mask, 
                         instance_fg_weights=1, instance_bg_weights=1):
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
@@ -2974,8 +2976,12 @@ class LatentDiffusion(DDPM):
         target       = target       * img_mask
         loss_recon_pixels = self.get_loss(model_output, target, mean=False)
 
+        # fg_mask,              weighted_fg_mask.sum(): 1747, 1747
+        # bg_mask=(1-fg_mask),  weighted_fg_mask.sum(): 6445, 887
         weighted_fg_mask = fg_mask       * img_mask * instance_fg_weights
         weighted_bg_mask = (1 - fg_mask) * img_mask * instance_bg_weights
+        weighted_fg_mask = weighted_fg_mask.expand_as(loss_recon_pixels)
+        weighted_bg_mask = weighted_bg_mask.expand_as(loss_recon_pixels)
 
         # recon loss only on the foreground pixels.
         loss_recon = (  (loss_recon_pixels * weighted_fg_mask).sum()     \
