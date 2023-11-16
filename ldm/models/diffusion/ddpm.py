@@ -3500,8 +3500,8 @@ class LatentDiffusion(DDPM):
             # subj_attn_xlayer: [8, 8, 64]  -> [2, 9, 8, 64]  -> mean over 8 heads, sum over 9 embs -> [2, 64]
             subj_attn_xlayer = attn_score_mat_xlayer[subj_indices].reshape(SSB_SIZE, K_fg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2).sum(dim=1)
 
-            # subj_attn: [2, 9, 256] -> [2, 9, 16, 16] -> [2, 9, 8, 8] -> [2, 9, 64]
-            subj_attn = subj_attn.reshape(SSB_SIZE, H, H)
+            # subj_attn: [2, 256] -> [2, 16, 16] -> [2, 8, 8] -> [2, 64]
+            subj_attn = subj_attn.reshape(SSB_SIZE, 1, H, H)
             subj_attn = F.interpolate(subj_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
             subj_attn = subj_attn.reshape(SSB_SIZE, Hx*Hx)
 
@@ -3512,7 +3512,7 @@ class LatentDiffusion(DDPM):
                 bg_attn         = attn_score_mat[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat.shape[2:]).mean(dim=2).sum(dim=1)
                 bg_attn_xlayer  = attn_score_mat_xlayer[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2).sum(dim=1)
                 # bg_attn: [2, 4, 256] -> [2, 4, 16, 16] -> [2, 4, 8, 8] -> [2, 4, 64]
-                bg_attn   = bg_attn.reshape(SSB_SIZE, H, H)
+                bg_attn   = bg_attn.reshape(SSB_SIZE, 1, H, H)
                 bg_attn   = F.interpolate(bg_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
                 bg_attn   = bg_attn.reshape(SSB_SIZE, Hx*Hx)
             
