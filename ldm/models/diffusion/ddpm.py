@@ -2113,7 +2113,7 @@ class LatentDiffusion(DDPM):
             if not self.iter_flags['do_mix_prompt_distillation']:
                 # Only do ada delta loss. This usually won't happen unless mix_prompt_distill_weight = 0.
                 # Generate a batch of 4 instances with the same initial x_start, noise and t.
-                # This doubles the batch size to 4, if bs=2.
+                # This doubles the batch size to 4, if batch size = 2.
                 x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
                 noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
                 t       = t[:BLOCK_SIZE].repeat(4)
@@ -2143,7 +2143,7 @@ class LatentDiffusion(DDPM):
                 # Note x_start[0] = x_start[2] != x_start[1] = x_start[3].
                 # That means, instances are arranged as: 
                 # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
-                # This doubles the batch size to 4, if bs=2.
+                # This doubles the batch size to 4, if batch size = 2.
                 if self.iter_flags['do_teacher_filter']:
                     x_start = x_start.repeat(2, 1, 1, 1)
                     # noise and t are repeated in the same way as x_start for two sets. 
@@ -2162,16 +2162,13 @@ class LatentDiffusion(DDPM):
                     
                     subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                         chunk_list(c_in, 4)
-                    # Only keep *comp_prompts, but repeat them to form twin comp sets.
+                    # We change the prompts to be twin structure: (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
+                    # Since subj comp and subj single have the same placeholder_indices_fg and placeholder_indices_bg,
+                    # We don't need to update subj_indices and bg_indices of emb_man_volatile_ds.
                     c_in2 = subj_comp_prompts + subj_comp_prompts + cls_comp_prompts + cls_comp_prompts
                     # Back up cond as cond_orig. Replace cond with the cond for the twin comp sets.
                     cond_orig = cond
                     cond = (c_static_emb2, c_in2, extra_info)
-                    # subj_indices and bg_indices are the same as the conventional 4-fold structure.
-                    # Since, subj_single_emb, subj_comp_emb, mix_single_emb, mix_comp_emb 
-                    # and    subj_comp_emb,   subj_comp_emb, mix_comp_emb,   mix_comp_emb, 
-                    # have the same subj_indices and bg_indices respectively.
-                    # So we don't need to change subj_indices and bg_indices.
 
                     # Update masks to be a two-fold * 2 structure.
                     # Before repeating, img_mask, fg_mask, batch_have_fg_mask should all 
@@ -2314,7 +2311,7 @@ class LatentDiffusion(DDPM):
                             self.calc_fg_bg_complementary_loss(extra_info['unet_attnscores'],
                                                                 extra_info['subj_indices'],
                                                                 extra_info['bg_indices'],
-                                                                BS=x_start.shape[0],
+                                                                BLOCK_SIZE=x_start.shape[0],
                                                                 img_mask=img_mask,
                                                                 fg_grad_scale=0.1,
                                                                 fg_mask=fg_mask,
@@ -2366,7 +2363,7 @@ class LatentDiffusion(DDPM):
                             self.calc_fg_bg_complementary_loss(extra_info['unet_attnscores'],
                                                                 subj_indices_ext,
                                                                 wds_comp_extra_indices,
-                                                                BS=x_start.shape[0],
+                                                                BLOCK_SIZE=x_start.shape[0],
                                                                 img_mask=img_mask,
                                                                 fg_grad_scale=0.1, 
                                                                 fg_mask=fg_mask,
@@ -2596,7 +2593,7 @@ class LatentDiffusion(DDPM):
                     x_recon_sel_rep = x_recon.detach().chunk(2)[0].repeat(2, 1, 1, 1)
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but under some settings, maybe mix comp = subj comp.
-                    # cached_inits['x_start'] has a BS of 4.
+                    # cached_inits['x_start'] has a batch size of 4.
                     # x_recon_sel_rep doesn't have the 1-repeat-4 structure, instead a 
                     # 1-repeat-2 structure that's repeated twice.
                     # But it approximates a 1-repeat-4 structure, so the distillation should still work.
@@ -2969,7 +2966,7 @@ class LatentDiffusion(DDPM):
         return loss, loss_dict
 
     # pixel-wise recon loss. 
-    # instance_fg_weights, instance_bg_weights: could be 1D tensors of size BS, or scalars.
+    # instance_fg_weights, instance_bg_weights: could be 1D tensors of batch size, or scalars.
     def calc_recon_loss(self, model_output, target, img_mask, fg_mask, 
                         instance_fg_weights=1, instance_bg_weights=1):
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
@@ -3215,12 +3212,12 @@ class LatentDiffusion(DDPM):
                loss_subj_attn_norm_distill, loss_feat_delta_align_id
 
     # Only compute the loss on the first block. If it's a normal_recon iter, 
-    # the first block is the whole batch.
+    # the first block is the whole batch, i.e., BLOCK_SIZE = batch size.
     # bg_indices: we assume the bg tokens appear in all instances in the batch.
     def calc_fg_bg_complementary_loss(self, unet_attnscores,
                                       subj_indices, 
                                       bg_indices,
-                                      BS, img_mask, 
+                                      BLOCK_SIZE, img_mask, 
                                       fg_grad_scale=0.1,
                                       fg_mask=None, instance_mask=None,
                                       do_sqrt_norm=False):
@@ -3270,9 +3267,9 @@ class LatentDiffusion(DDPM):
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
         # bg_indices: ([0, 1, 2, 3], [11, 12, 34, 29]).
-        # BS = 2, so we only keep instances indexed by [0, 1].
+        # BLOCK_SIZE = 2, so we only keep instances indexed by [0, 1].
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
-        subj_indices = (subj_indices[0][:BS*K_fg], subj_indices[1][:BS*K_fg])
+        subj_indices = (subj_indices[0][:BLOCK_SIZE*K_fg], subj_indices[1][:BLOCK_SIZE*K_fg])
 
         #fg_attn_grad_scale  = 0.5
         #fg_attn_grad_scaler = gen_gradient_scaler(fg_attn_grad_scale)
@@ -3299,7 +3296,7 @@ class LatentDiffusion(DDPM):
                 # img_mask: [2, 1, 64, 64] -> [2, 1, 8, 8]. subj_attn: [2, 8, 64]
                 img_mask2 = resize_mask_for_feat_or_attn(subj_attn, img_mask, "img_mask", mode="nearest|bilinear")
                 # img_mask2: [2, 1, 8, 8] -> [2, 1, 64] -> [2, 8, 64].
-                img_mask2 = img_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
+                img_mask2 = img_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 bg_attn   = bg_attn   * img_mask2
                 subj_attn = subj_attn * img_mask2
             else:
@@ -3339,7 +3336,7 @@ class LatentDiffusion(DDPM):
 
                 fg_mask2 = resize_mask_for_feat_or_attn(subj_attn, fg_mask, "fg_mask", mode="nearest|bilinear")
                 # Repeat 8 times to match the number of attention heads (for normalization).
-                fg_mask2 = fg_mask2.reshape(BS, 1, -1).repeat(1, subj_attn.shape[1], 1)
+                fg_mask2 = fg_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 fg_mask3 = torch.zeros_like(fg_mask2)
                 fg_mask3[fg_mask2 >  1e-6] = 1.
 
@@ -3360,7 +3357,7 @@ class LatentDiffusion(DDPM):
                     print("WARNING: bg_mask3 has all-zero masks.")
                     continue
 
-                # subj_score_at_mf: [BS, 8, 64].
+                # subj_score_at_mf: [BLOCK_SIZE, 8, 64].
                 # subj, bg: subject embedding,         background embedding.
                 # mf,   mb: mask foreground locations, mask background locations.
                 # sum(dim=(1,2)): avoid summing across the batch dimension. 
@@ -3380,8 +3377,8 @@ class LatentDiffusion(DDPM):
                 subj_score_at_mf = subj_score_at_mf_grad_scaler(subj_score_at_mf)
                 subj_score_at_mb = subj_score_at_mb_grad_scaler(subj_score_at_mb)
 
-                # fg_mask3: [BS, 8, 64]
-                # avg_subj_score_at_mf: [BS, 1, 1]
+                # fg_mask3: [BLOCK_SIZE, 8, 64]
+                # avg_subj_score_at_mf: [BLOCK_SIZE, 1, 1]
                 # keepdim=True, since scores at all locations will use them as references (subtract them).
                 avg_subj_score_at_mf = subj_score_at_mf.sum(dim=(1,2), keepdim=True)  / fg_mask3.sum(dim=(1,2), keepdim=True)
                 avg_subj_score_at_mb = subj_score_at_mb.sum(dim=(1,2), keepdim=True)  / bg_mask3.sum(dim=(1,2), keepdim=True)
@@ -3397,7 +3394,7 @@ class LatentDiffusion(DDPM):
                 # to be at least larger by mfmb_contrast_score_margin = 1 than 
                 # subj_score_at_mb at any background locations.
                 # If not, clip() > 0, incurring a loss.
-                # layer_subj_mfmb_contrast: [BS, 8, 64].
+                # layer_subj_mfmb_contrast: [BLOCK_SIZE, 8, 64].
                 layer_subj_mfmb_contrast        = subj_score_at_mb + mfmb_contrast_score_margin - avg_subj_score_at_mf
                 # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
                 # activations conform to the margin restrictions.
@@ -3698,12 +3695,11 @@ class LatentDiffusion(DDPM):
     #            features under comp prompts should align with the foreground of the original images as well.
     #            So features under comp prompts should be close to features under single prompts, at fg_mask areas.
     #            (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
-    # BS: block size, not batch size.
     # mix_fg_preserve_loss_scale: A small weight to the preservation loss on mix instances. 
     # The requirement of preserving foreground features is not as strict as that of preserving
     # subject features, as the former is only used to facilitate composition.
     def calc_comp_fg_bg_preserve_loss(self, unet_feats, unet_attnscores, 
-                                      fg_mask, batch_have_fg_mask, subj_indices, BS):
+                                      fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0, 0
@@ -3724,7 +3720,7 @@ class LatentDiffusion(DDPM):
         # fg/bg loss hurts more high-frequency details, therefore it has a smalll weight.
 
         # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
-        # *_4b means it corresponds to a 4-block batch (batch size = 4 * BS).
+        # *_4b means it corresponds to a 4-block batch (batch size = 4 * BLOCK_SIZE).
         fg_mask_4b = fg_mask            * batch_have_fg_mask.view(-1, 1, 1, 1)
         bg_mask_4b = (1 - fg_mask_4b)   * batch_have_fg_mask.view(-1, 1, 1, 1)
 
@@ -3733,9 +3729,9 @@ class LatentDiffusion(DDPM):
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
         # ind_subj_subj_B_1b, ind_subj_subj_N_1b: [0, 0, 0, 0], [5, 6, 7, 8].
-        ind_subj_subj_B_1b, ind_subj_subj_N_1b = subj_indices[0][:BS*K_fg], subj_indices[1][:BS*K_fg]
-        ind_subj_B = torch.cat([ind_subj_subj_B_1b,            ind_subj_subj_B_1b + BS,
-                                ind_subj_subj_B_1b + 2 * BS,   ind_subj_subj_B_1b + 3 * BS], dim=0)
+        ind_subj_subj_B_1b, ind_subj_subj_N_1b = subj_indices[0][:BLOCK_SIZE*K_fg], subj_indices[1][:BLOCK_SIZE*K_fg]
+        ind_subj_B = torch.cat([ind_subj_subj_B_1b,                     ind_subj_subj_B_1b + BLOCK_SIZE,
+                                ind_subj_subj_B_1b + 2 * BLOCK_SIZE,    ind_subj_subj_B_1b + 3 * BLOCK_SIZE], dim=0)
         ind_subj_N = ind_subj_subj_N_1b.repeat(4)
 
         # Normalize the weights above so that each set sum to 1.
@@ -3806,13 +3802,13 @@ class LatentDiffusion(DDPM):
             # attn_score_mat: [4, 8, 64, 77] => [4, 77, 8, 64] => sum over 8 attention heads => [4, 77, 64]
             attn_score_mat = unet_attn_score.permute(0, 3, 1, 2).sum(dim=2)
             # subj_subj_attn: [4, 77, 64] -> [4 * K_fg, 64] -> [4, K_fg, 64]
-            subj_attn = attn_score_mat[ind_subj_B, ind_subj_N].reshape(BS * 4, K_fg, -1)
+            subj_attn = attn_score_mat[ind_subj_B, ind_subj_N].reshape(BLOCK_SIZE * 4, K_fg, -1)
 
             # fg_attn_mask_4b: [1, 1, 64, 64] => [1, 1, 8, 8]
             fg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_score_mat, fg_mask_4b, "fg_mask_4b", 
                                                            mode="nearest|bilinear", warn_on_all_zero=False)
             # fg_attn_mask_flat_4b: [1, 1, 8, 8] => [4, 1, 64]
-            fg_attn_mask_flat_4b  = fg_attn_mask_4b.reshape(BS * 4, 1, -1)
+            fg_attn_mask_flat_4b  = fg_attn_mask_4b.reshape(BLOCK_SIZE * 4, 1, -1)
 
             # subj_fg_attn: [4, K_fg, 64].
             subj_fg_attn = subj_attn * fg_attn_mask_flat_4b
@@ -3837,7 +3833,7 @@ class LatentDiffusion(DDPM):
             bg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_score_mat, bg_mask_4b, "bg_mask_4b",
                                                            mode="nearest|bilinear", warn_on_all_zero=True)
             # bg_attn_mask_flat_4b: [4, 1, 8, 8] => [4, 1, 64]
-            bg_attn_mask_flat_4b  = bg_attn_mask_4b.reshape(BS * 4, 1, -1)
+            bg_attn_mask_flat_4b  = bg_attn_mask_4b.reshape(BLOCK_SIZE * 4, 1, -1)
             if bg_attn_mask_flat_4b.sum() == 0:
                 breakpoint()
             
