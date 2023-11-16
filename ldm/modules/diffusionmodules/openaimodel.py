@@ -509,6 +509,7 @@ class UNetModel(nn.Module):
 
         self.backup_vars = { 
                             'use_conv_attn_kernel_size:layerwise':      [-1] * 16,
+                            'shift_attn_maps_for_diff_embs:layerwise':  [True] * 16,
                             'attn_copycat_emb_range':                   None,
                             'contrast_fg_bg_attns':                     False,
                             'bg_attn_behavior_in_inference':            'zero',
@@ -1000,12 +1001,16 @@ class UNetModel(nn.Module):
         # takes up too much space.
         use_conv_attn_kernel_sizes[6:11] = -1
 
+        shift_attn_maps_for_diff_embs = np.ones(16, dtype=bool)
+        # shift_attn_maps_for_diff_embs[6:11] = False
+
         # ca_layer_indices = None: Apply conv attn on all layers. 
         # Although layer 12 has small 8x8 feature maps, since we linearly combine 
         # pointwise attn with conv attn, we still apply conv attn (3x3) on it.
         ca_flags_stack = []
         old_ca_flags, _ = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn_kernel_size:layerwise': use_conv_attn_kernel_sizes,
+                                                          'shift_attn_maps_for_diff_embs:layerwise': shift_attn_maps_for_diff_embs,
                                                           'attn_copycat_emb_range':    attn_copycat_emb_range,
                                                           'contrast_fg_bg_attns':      contrast_fg_bg_attns,
                                                           'bg_attn_behavior_in_inference': 

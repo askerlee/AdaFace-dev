@@ -620,7 +620,8 @@ def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=Tr
 # Return a new attn_mat with the same shape as attn_mat, but with the attention scores at subj_indices
 # replaced by the convolutional attention scores.
 def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_attn_kernel_size, H, 
-                              sim_scale, conv_attn_layer_scale=1, conv_attn_mix_weight=1):
+                              sim_scale, conv_attn_layer_scale=1, conv_attn_mix_weight=1,
+                              shift_attn_maps_for_diff_embs=True):
     # input features x: [4, 4096, 320].
     # attn_mat: [32, 4096, 77]. 32: b * h. b = 4, h = 8.
     # q: [32, 4096, 40]. k: [32, 77, 40]. 32: b * h.
@@ -730,51 +731,50 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_at
         # Note to scale attention scores by sim_scale, and further divide by NORM = M ** 0.75.
         subj_attn = subj_attn * sim_scale * conv_attn_layer_scale / NORM
 
-        # Shift subj_attn (with 0 padding) to yield ks*ks slightly different attention maps 
-        # for the M embeddings.
-        # dx, dy: the relative position of a subject token to the center subject token.
-        # dx: shift along rows    (width,  the last dim). 
-        # dy: shift along columns (height, the second-last dim).
-        # s1, s2, s3, s4 => s1 s2
-        #                   s3 s4
-        # Since the first  loop is over dy (vertical move,   or move within a column), 
-        # and   the second loop is over dx (horizontal move, or move within a row), 
-        # the traversed order is s1, s2, s3, s4.
-        # NOTE: This order should be consistent with how subj_k is reshaped to the conv weight. 
-        # Otherwise wrong attn maps will be assigend to some of the subject embeddings.
-        for dy in range(*delta_y_bound):
-            for dx in range(*delta_x_bound):
-                if dx == 0 and dy == 0:
-                    subj_attn_dxy = subj_attn
-                elif dx <= 0 and dy <= 0:
-                    subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, -dx:], (0, -dx, 0, -dy), value=0)
-                elif dx <= 0 and dy > 0:
-                    subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, -dx:], (0, -dx, dy, 0), value=0)
-                elif dx > 0 and dy <= 0:
-                    subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, :-dx], (dx, 0,  0, -dy), value=0)
-                else:
-                    # dx > 0 and dy > 0
-                    subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, :-dx], (dx, 0,  dy, 0), value=0)
+        if shift_attn_maps_for_diff_embs:
+            # Shift subj_attn (with 0 padding) to yield ks*ks slightly different attention maps 
+            # for the M embeddings.
+            # dx, dy: the relative position of a subject token to the center subject token.
+            # dx: shift along rows    (width,  the last dim). 
+            # dy: shift along columns (height, the second-last dim).
+            # s1, s2, s3, s4 => s1 s2
+            #                   s3 s4
+            # Since the first  loop is over dy (vertical move,   or move within a column), 
+            # and   the second loop is over dx (horizontal move, or move within a row), 
+            # the traversed order is s1, s2, s3, s4.
+            # NOTE: This order should be consistent with how subj_k is reshaped to the conv weight. 
+            # Otherwise wrong attn maps will be assigend to some of the subject embeddings.
+            for dy in range(*delta_y_bound):
+                for dx in range(*delta_x_bound):
+                    if dx == 0 and dy == 0:
+                        subj_attn_dxy = subj_attn
+                    elif dx <= 0 and dy <= 0:
+                        subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, -dx:], (0, -dx, 0, -dy), value=0)
+                    elif dx <= 0 and dy > 0:
+                        subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, -dx:], (0, -dx, dy, 0), value=0)
+                    elif dx > 0 and dy <= 0:
+                        subj_attn_dxy = F.pad(subj_attn[:, :, -dy:, :-dx], (dx, 0,  0, -dy), value=0)
+                    else:
+                        # dx > 0 and dy > 0
+                        subj_attn_dxy = F.pad(subj_attn[:, :, :-dy, :-dx], (dx, 0,  dy, 0), value=0)
 
-                # subj_attn_dxy: [1, 8, 64, 64].
-                # Since first loop is over dy (each loop forms a column in the feature maps), 
-                # and   second loop   over dx (each loop forms a row    in the feature maps), 
-                # the order in subj_attn_dxys is s1, s2, s3, s4.
-                subj_attn_dxys.append(subj_attn_dxy)
+                    # subj_attn_dxy: [1, 8, 64, 64].
+                    # Since first loop is over dy (each loop forms a column in the feature maps), 
+                    # and   second loop   over dx (each loop forms a row    in the feature maps), 
+                    # the order in subj_attn_dxys is s1, s2, s3, s4.
+                    subj_attn_dxys.append(subj_attn_dxy)
+            # dx, dy: the relative position of a subject token to the center subject token.
+            # s1, s2, s3, s4 => s1 s2
+            #                   s3 s4
+            # The traversed order is s1, s2, s3, s4. So we can flatten the list to get 
+            # consecutive 4 columns of attention. 
+            # subj_attn_dxys: [4, 8, 64, 64] => [4, 8, 4096].
+            subj_attn_dxys = torch.cat(subj_attn_dxys, dim=0).reshape(ks**2, H, -1)
 
-        # dx, dy: the relative position of a subject token to the center subject token.
-        # s1, s2, s3, s4 => s1 s2
-        #                   s3 s4
-        # The traversed order is s1, s2, s3, s4. So we can flatten the list to get 
-        # consecutive 4 columns of attention. 
-        # subj_attn_dxys: [4, 8, 64, 64] => [4, 8, 4096].
-        subj_attn_dxys = torch.cat(subj_attn_dxys, dim=0).reshape(ks**2, H, -1)
-
-        '''
-        # All subject embeddings receive the same attention matrix.
-        # subj_attn_allembs: [1, 8, 64, 64] => [4, 8, 64, 64] => [4, 8, 4096], [M, H, N].
-        subj_attn_allembs = subj_attn.repeat(M, 1, 1, 1).reshape(M, H, -1)
-        '''
+        else:
+            # All subject embeddings receive the same attention matrix.
+            # subj_attn_dxys: [1, 8, 64, 64] => [4, 8, 64, 64] => [4, 8, 4096], [M, H, N].
+            subj_attn_dxys = subj_attn.repeat(M, 1, 1, 1).reshape(M, H, -1)
 
         debug = False
         if debug:
