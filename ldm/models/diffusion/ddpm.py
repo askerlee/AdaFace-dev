@@ -810,7 +810,7 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
-    def get_learned_conditioning(self, cond_in, img_mask=None, randomize_clip_weights=True):
+    def get_learned_conditioning(self, cond_in, randomize_clip_weights=True):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
@@ -1573,8 +1573,7 @@ class LatentDiffusion(DDPM):
                     # delta_prompts: the concatenation of
                     # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
                     # extra_info: a dict that contains extra info.
-                    c_static_emb, _, extra_info = self.get_learned_conditioning(delta_prompts, 
-                                                                                img_mask=self.iter_flags['img_mask'])
+                    c_static_emb, _, extra_info = self.get_learned_conditioning(delta_prompts)
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
 
@@ -1691,8 +1690,7 @@ class LatentDiffusion(DDPM):
                             # generate embeddings from the captions from scratch.
                             # subj_indices and bg_indices in captions should be the same.
                             # Embeddings of subject prompts (including "captions") don't need patching.
-                            c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions,
-                                                                                         img_mask=self.iter_flags['img_mask'])
+                            c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions)
                             # print(captions)
                             extra_info['subj_indices'] = extra_info0['subj_indices']
                             extra_info['bg_indices']   = extra_info0['bg_indices']
@@ -1725,7 +1723,7 @@ class LatentDiffusion(DDPM):
                     # it's called by self.validation_step().
                     assert self.iter_flags['do_normal_recon']
                     c_static_emb, c_in, extra_info0 = \
-                        self.get_learned_conditioning(captions, img_mask=self.iter_flags['img_mask'])
+                        self.get_learned_conditioning(captions)
                     extra_info['subj_indices']      = extra_info0['subj_indices']
                     extra_info['bg_indices']        = extra_info0['bg_indices']
                     extra_info['c_static_emb_1b']   = c_static_emb.reshape(ORIG_BS, self.N_LAYERS, 
@@ -2312,7 +2310,6 @@ class LatentDiffusion(DDPM):
                                                                 extra_info['subj_indices'],
                                                                 extra_info['bg_indices'],
                                                                 BLOCK_SIZE=x_start.shape[0],
-                                                                img_mask=img_mask,
                                                                 fg_grad_scale=0.1,
                                                                 fg_mask=fg_mask,
                                                                 instance_mask=batch_have_fg_mask,
@@ -2364,7 +2361,6 @@ class LatentDiffusion(DDPM):
                                                                 subj_indices_ext,
                                                                 wds_comp_extra_indices,
                                                                 BLOCK_SIZE=x_start.shape[0],
-                                                                img_mask=img_mask,
                                                                 fg_grad_scale=0.1, 
                                                                 fg_mask=fg_mask,
                                                                 instance_mask=batch_have_fg_mask,
@@ -2751,8 +2747,7 @@ class LatentDiffusion(DDPM):
                 self.calc_fg_bg_xlayer_consist_loss(extra_info['unet_attnscores'],
                                                     extra_info['subj_indices'],
                                                     extra_info['bg_indices'],
-                                                    SSB_SIZE, 
-                                                    img_mask)
+                                                    SSB_SIZE)
             if loss_fg_xlayer_consist > 0:
                 loss_dict.update({f'{prefix}/fg_xlayer_consist': loss_fg_xlayer_consist.mean().detach()})
             if loss_bg_xlayer_consist > 0:
@@ -2801,7 +2796,7 @@ class LatentDiffusion(DDPM):
                 = self.calc_prompt_mix_loss(unet_feats, extra_info['unet_attnscores'], 
                                             extra_info['subj_indices_2b'], 
                                             comp_extra_indices_13b,
-                                            BLOCK_SIZE, self.iter_flags['img_mask'])
+                                            BLOCK_SIZE)
 
             if loss_feat_delta_align > 0:
                 loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach()})
@@ -2988,15 +2983,14 @@ class LatentDiffusion(DDPM):
     
     def calc_prompt_mix_loss(self, unet_feats, unet_attnscores, fg_indices_2b, 
                              comp_extra_indices_13b,
-                             BLOCK_SIZE, img_mask):
+                             BLOCK_SIZE):
         # do_mix_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
         # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
         # F(subj_single_prompts) - F(cls_single_prompts)
 
-        # Avoid doing distillation on top layers (too detailed) and 
-        # the first few bottom layers (little difference).
+        # Avoid doing distillation on the first few bottom layers (little difference).
         # distill_layer_weights: relative weight of each distillation layer. 
         # distill_layer_weights are normalized using distill_overall_weight.
         # Most important conditioning layers are 7, 8, 12, 16, 17. All the 5 layers have 1280 channels.
@@ -3159,12 +3153,6 @@ class LatentDiffusion(DDPM):
                                                                                                   reversed=True)
                 spatial_weight = (spatial_weight_mix_comp + spatial_weight_subj_comp) / 2
 
-                if img_mask is not None:
-                    img_mask = resize_mask_for_feat_or_attn(unet_feat, img_mask, "img_mask", 
-                                                            num_spatial_dims=2,
-                                                            mode="nearest|bilinear")
-                    spatial_weight = spatial_weight * img_mask
-
                 # spatial_attn_mix_comp, spatial_attn_subj_comp are returned for debugging purposes. 
                 # Delete them to release RAM.
                 del spatial_attn_mix_comp, spatial_attn_subj_comp
@@ -3219,7 +3207,7 @@ class LatentDiffusion(DDPM):
     def calc_fg_bg_complementary_loss(self, unet_attnscores,
                                       subj_indices, 
                                       bg_indices,
-                                      BLOCK_SIZE, img_mask, 
+                                      BLOCK_SIZE, 
                                       fg_grad_scale=0.1,
                                       fg_mask=None, instance_mask=None,
                                       do_sqrt_norm=False):
@@ -3292,18 +3280,6 @@ class LatentDiffusion(DDPM):
                                                  do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
-            
-            if img_mask is not None:
-                # img_mask: [2, 1, 64, 64] -> [2, 1, 8, 8]. subj_attn: [2, 8, 64]
-                img_mask2 = resize_mask_for_feat_or_attn(subj_attn, img_mask, "img_mask", 
-                                                         num_spatial_dims=1,
-                                                         mode="nearest|bilinear")
-                # img_mask2: [2, 1, 8, 8] -> [2, 1, 64] -> [2, 8, 64].
-                img_mask2 = img_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
-                #bg_attn   = bg_attn   * img_mask2
-                #subj_attn = subj_attn * img_mask2
-            else:
-                img_mask2 = torch.ones_like(subj_attn)
 
             # aim_to_align=False: push bg_attn to be orthogonal with subj_attn, 
             # so that the two attention maps are complementary.
@@ -3345,13 +3321,7 @@ class LatentDiffusion(DDPM):
                 fg_mask3 = torch.zeros_like(fg_mask2)
                 fg_mask3[fg_mask2 >  1e-6] = 1.
 
-                # The ones in fg_mask should always be a subset of ones in img_mask. 
-                # However, it's possible that after scale, some elements in img_mask2 become 0.5.
-                # So this equality doesn't always hold: fg_mask3 == fg_mask3 * img_mask2.
-                #if (fg_mask3 != fg_mask3 * img_mask2).any():
-                #    breakpoint()
-
-                bg_mask3 = (1 - fg_mask3) #* img_mask2
+                bg_mask3 = (1 - fg_mask3)
 
                 if (fg_mask3.sum(dim=(1, 2)) == 0).any():
                     # Very rare cases. Safe to skip.
@@ -3454,8 +3424,7 @@ class LatentDiffusion(DDPM):
     def calc_fg_bg_xlayer_consist_loss(self, unet_attnscores,
                                        subj_indices, 
                                        bg_indices, 
-                                       SSB_SIZE, 
-                                       img_mask):
+                                       SSB_SIZE):
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
         attn_align_layer_weights = { #7:  1., 8: 1.,
@@ -3548,22 +3517,6 @@ class LatentDiffusion(DDPM):
                 bg_attn   = bg_attn.reshape(SSB_SIZE, -1, Hx*Hx)
             
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
-
-            if img_mask is not None:
-                # img_mask: [4, 1, 64, 64] -> [2, 1, 64, 64]
-                img_mask = img_mask[:SSB_SIZE]
-                # img_mask2: [2, 1, 64, 64] -> [2, 1, 8, 8] -> [2, 1, 64]
-                # "1" will be broadcasted to 4: subj_attn_xlayer: [2, 9, 64]
-                img_mask2 = resize_mask_for_feat_or_attn(subj_attn_xlayer, img_mask, "img_mask", 
-                                                         num_spatial_dims=1,
-                                                         mode="nearest|bilinear")
-                img_mask2 = img_mask2.reshape(SSB_SIZE, 1, -1)
-                subj_attn           = subj_attn         #* img_mask2
-                subj_attn_xlayer    = subj_attn_xlayer  #* img_mask2
-
-                if bg_indices is not None:
-                    bg_attn             = bg_attn           #* img_mask2
-                    bg_attn_xlayer      = bg_attn_xlayer    #* img_mask2
 
             loss_layer_fg_xlayer_consist = ortho_l2loss(subj_attn, subj_attn_xlayer, mean=True)
             loss_fg_xlayer_consist += loss_layer_fg_xlayer_consist * attn_align_layer_weight

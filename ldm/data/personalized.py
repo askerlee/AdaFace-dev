@@ -250,12 +250,6 @@ class PersonalizedBase(Dataset):
                                      ])
                 print(f"{set} images will be randomly scaled in range {rand_scale_range}")
 
-                self.random_small_scaler = transforms.Compose([
-                                            transforms.RandomAffine(degrees=0, shear=0, scale=(0.4, 0.9),
-                                                                    interpolation=InterpolationMode.NEAREST),
-                                            transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
-                                           ])
-            
             if self.do_wds_comp:
                 # rand_scale_range is (0.7, 1.0) by default. Here we use a smaller range, 
                 # i.e., more aggressive scaling.
@@ -347,12 +341,7 @@ class PersonalizedBase(Dataset):
         else:
             gen_wds_comp = False
 
-        if self.is_training:    
-            random_scaler = self.random_small_scaler if mask_fg_percent > 0.1 else self.random_scaler
-        else:
-            random_scaler = None
-            
-        if random_scaler is not None:
+        if self.random_scaler is not None:
             scale_p = 1
         else:
             scale_p = 0
@@ -369,7 +358,7 @@ class PersonalizedBase(Dataset):
                 aug_mask    = torch.ones_like(image_tensor[0:1])
                 image_ext   = torch.cat([image_tensor, aug_mask], dim=0)
                 # image_ext: [4, 512, 512]
-                image_ext   = random_scaler(image_ext)
+                image_ext   = self.random_scaler(image_ext)
                 # After random scaling, the valid area is only a sub-region at the center of the image.
                 # NOTE: random shifting DISABLED, as it seems to hurt.
                 # ??% chance to randomly roll towards right and bottom (), 
