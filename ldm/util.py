@@ -1718,8 +1718,8 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
         static_subj_delta   = ortho_subtract(static_subj_comp_emb, static_subj_single_emb)
         static_cls_delta    = ortho_subtract(static_cls_comp_emb,  static_cls_single_emb)
     else:
-        static_subj_delta   = static_subj_comp_emb  - static_cls_comp_emb
-        static_cls_delta    = static_subj_single_emb - static_cls_single_emb
+        static_subj_delta   = static_subj_comp_emb  - static_subj_single_emb
+        static_cls_delta    = static_cls_comp_emb   - static_cls_single_emb
 
     loss_static_prompt_delta   = \
         calc_delta_cosine_loss(static_subj_delta, static_cls_delta, 
@@ -1739,8 +1739,8 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
             ada_subj_delta  = ortho_subtract(ada_subj_comp_emb, ada_subj_single_emb)
             ada_cls_delta   = ortho_subtract(ada_cls_comp_emb,  ada_cls_single_emb)
         else:
-            ada_subj_delta  = ada_subj_comp_emb  - ada_cls_comp_emb
-            ada_cls_delta   = ada_subj_single_emb - ada_cls_single_emb
+            ada_subj_delta  = ada_subj_comp_emb - ada_subj_single_emb
+            ada_cls_delta   = ada_cls_comp_emb  - ada_cls_single_emb
 
         loss_ada_prompt_delta = \
             calc_delta_cosine_loss(ada_subj_delta, ada_cls_delta, 

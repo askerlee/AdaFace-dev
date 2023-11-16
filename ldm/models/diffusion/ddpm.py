@@ -458,7 +458,7 @@ class DDPM(pl.LightningModule):
                             'do_normal_recon':              True,
                             'is_compos_iter':               False,
                             'do_mix_prompt_distillation':   False,
-                            'do_ada_emb_delta_reg':         False,
+                            'do_ada_prompt_delta_reg':         False,
                             # 'do_teacher_filter':        False,
                             # 'is_teachable':             False,
                             'use_background_token':         False,
@@ -484,17 +484,17 @@ class DDPM(pl.LightningModule):
         # How many regularizations are done intermittently during the training iterations?
         cand_reg_types = []
         cand_reg_probs = []
-        # do_mix_prompt_distillation implies do_ada_emb_delta_reg.
+        # do_mix_prompt_distillation implies do_ada_prompt_delta_reg.
         # So if do_mix_prompt_distillation is enabled (mix_prompt_distill_weight > 0),
-        # then no need to put do_ada_emb_delta_reg in cand_reg_types.
-        # Otherwise, we need to put do_ada_emb_delta_reg in cand_reg_types.
+        # then no need to put do_ada_prompt_delta_reg in cand_reg_types.
+        # Otherwise, we need to put do_ada_prompt_delta_reg in cand_reg_types.
         # There's only one reg type: 'do_mix_prompt_distillation' in cand_reg_types.
         # This structure is kept for possible future extensions.
         if self.mix_prompt_distill_weight > 0:
             cand_reg_types.append('do_mix_prompt_distillation')
             cand_reg_probs.append(1.)
         else:
-            cand_reg_types.append('do_ada_emb_delta_reg')
+            cand_reg_types.append('do_ada_prompt_delta_reg')
             cand_reg_probs.append(1.)
 
         # NOTE: No need to have standalone ada prompt delta reg, 
@@ -507,20 +507,20 @@ class DDPM(pl.LightningModule):
         if N_CAND_REGS > 0 and self.composition_regs_iter_gap > 0 \
             and self.global_step % self.composition_regs_iter_gap == 0:
             # Alternate among the regularizations in cand_reg_types. 
-            # If both do_ada_emb_delta_reg and do_mix_prompt_distillation,
-            # then alternate between do_ada_emb_delta_reg and do_mix_prompt_distillation.
+            # If both do_ada_prompt_delta_reg and do_mix_prompt_distillation,
+            # then alternate between do_ada_prompt_delta_reg and do_mix_prompt_distillation.
             # The two regularizations cannot be done in the same batch, as they require
             # different handling of prompts and are calculated by different loss functions.
             # reg_type_idx = (self.global_step // self.composition_regs_iter_gap) % N_CAND_REGS
             reg_type_idx = np.random.choice(N_CAND_REGS, p=cand_reg_probs)
             iter_reg_type     = cand_reg_types[reg_type_idx]
-            if iter_reg_type   == 'do_ada_emb_delta_reg':
+            if iter_reg_type   == 'do_ada_prompt_delta_reg':
                 self.iter_flags['do_mix_prompt_distillation']  = False
-                self.iter_flags['do_ada_emb_delta_reg'] = True
-            # do_mix_prompt_distillation => do_ada_emb_delta_reg = True.
+                self.iter_flags['do_ada_prompt_delta_reg'] = True
+            # do_mix_prompt_distillation => do_ada_prompt_delta_reg = True.
             elif iter_reg_type == 'do_mix_prompt_distillation':
                 self.iter_flags['do_mix_prompt_distillation']  = True
-                self.iter_flags['do_ada_emb_delta_reg'] = True
+                self.iter_flags['do_ada_prompt_delta_reg'] = True
 
             self.iter_flags['is_compos_iter'] = True
             # Always calculate clip loss during comp reg iterations, even if self.iter_flags['do_teacher_filter'] is False.
@@ -1273,7 +1273,7 @@ class LatentDiffusion(DDPM):
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
-        # do_ada_emb_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
+        # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
         if self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation']:
             # *_fp prompts are like "a face portrait of ...". They are advantageous over "a photo of ..."
             # when doing compositional mix regularization on humans/animals.
@@ -1414,7 +1414,7 @@ class LatentDiffusion(DDPM):
                 cls_comp_prompts.append(prompt_comp.split("|"))
             # REPEATS: how many prompts correspond to each image.
             REPEATS = len(subj_comp_prompts[0])
-            if REPEATS == 1 or self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_emb_delta_reg']:
+            if REPEATS == 1 or self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_prompt_delta_reg']:
                 # When this iter computes ada prompt delta loss / prompt mixing loss, 
                 # only use the first of the composition prompts (in effect num_compositions_per_image=1),
                 # otherwise it will use more than 40G RAM.
@@ -1522,7 +1522,7 @@ class LatentDiffusion(DDPM):
             if self.cond_stage_trainable:
                 # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
                 # or traditional TI.
-                # do_ada_emb_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
+                # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
                 # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
                 if self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation']:
                     # reuse_init_conds, discard the prompts offered in shared_step().
@@ -1543,8 +1543,8 @@ class LatentDiffusion(DDPM):
                     ORIG_BS  = len(x_start)
                     N_EMBEDS = ORIG_BS * self.N_LAYERS
                     
-                    # Recon iters don't do_ada_emb_delta_reg.
-                    if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_emb_delta_reg']:
+                    # Recon iters don't do_ada_prompt_delta_reg.
+                    if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_prompt_delta_reg']:
                         # In distillation iterations, the full batch size cannot fit in the RAM.
                         # So we have to halve the batch size. 
                         # BLOCK_SIZE is at least 1. So if ORIG_BS == 1, then BLOCK_SIZE = 1.
@@ -1556,11 +1556,11 @@ class LatentDiffusion(DDPM):
                     else:
                         BLOCK_SIZE = ORIG_BS
 
-                    # Otherwise, do_static_prompt_delta_reg but not do_ada_emb_delta_reg.
+                    # Otherwise, do_static_prompt_delta_reg but not do_ada_prompt_delta_reg.
                     # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 2.
                     # 8 prompts will be fed into get_learned_conditioning().
                                             
-                    # If not do_ada_emb_delta_reg, we still compute the static embeddings 
+                    # If not do_ada_prompt_delta_reg, we still compute the static embeddings 
                     # of the 4 types of prompts, to compute static delta loss. 
                     # But now there are 8 prompts (4 * ORIG_BS = 8), as the batch is not halved.
                     delta_prompts = subj_single_prompts + subj_comp_prompts \
@@ -1634,7 +1634,7 @@ class LatentDiffusion(DDPM):
                     # [64, 77, 768] => [16, 4, 77, 768].
                     extra_info['c_static_emb_4b'] = c_static_emb.reshape(4 * BLOCK_SIZE, self.N_LAYERS, 
                                                                          *c_static_emb.shape[1:])
-                    # if do_ada_emb_delta_reg, then do_mix_prompt_distillation 
+                    # if do_ada_prompt_delta_reg, then do_mix_prompt_distillation 
                     # may be True or False, depending whether mix reg is enabled.
                     if self.iter_flags['do_mix_prompt_distillation']:
                         # c_in2 = delta_prompts is used to generate ada embeddings.
@@ -1657,12 +1657,12 @@ class LatentDiffusion(DDPM):
                     # This branch is reached only if prompt mixing is not enabled.
                     # "and not self.iter_flags['do_mix_prompt_distillation']" is redundant, because it's at an "elif" branch.
                     # Kept for clarity. 
-                    elif self.iter_flags['do_ada_emb_delta_reg'] and not self.iter_flags['do_mix_prompt_distillation']:
+                    elif self.iter_flags['do_ada_prompt_delta_reg'] and not self.iter_flags['do_mix_prompt_distillation']:
                         # c_in2 consists of four types of prompts: 
                         # subj_single, subj_comp, cls_single, cls_comp.
                         c_in2         = delta_prompts
                         # Do ada prompt delta loss in this iteration. 
-                        extra_info['iter_type']     = 'do_ada_emb_delta_reg'
+                        extra_info['iter_type']     = 'do_ada_prompt_delta_reg'
                         # The prompts are either (subj single, subj comp, cls single, cls comp) or
                         # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
                         # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
@@ -1931,6 +1931,8 @@ class LatentDiffusion(DDPM):
                 # (only differ on prompts, but uncond means no prompts).
                 x_noisy_ = self.q_sample(x_start=x_start_, t=t_, noise=noise_)
                 # Clear the cached placeholder indices, as they are for conditional embeddings.
+                # Now we generate model_output_uncond under unconditional (negative) prompts,
+                # which don't contain placeholder tokens.
                 self.embedding_manager.clear_placeholder_indices()
                 # self.uncond_context: precomputed unconditional embedding and other info.
                 # This statement (executed above) disables deep neg prompts on unconditional embeddings. 
@@ -2667,17 +2669,19 @@ class LatentDiffusion(DDPM):
                     + loss_ada_emb_reg  * self.ada_embedding_reg_weight
 
         if self.do_static_prompt_delta_reg:
-            # do_ada_emb_delta_reg controls whether to do ada comp delta reg here.
+            # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
             # Use subj_indices_1b here, since this index is used to extract 
             # subject embeddings from each block, and compare two such blocks.
             loss_static_prompt_delta,  loss_ada_prompt_delta \
                 = calc_prompt_emb_delta_loss( 
+                        # 'c_static_emb_4b' is the staticc embedding before mixing.
+                        # ada_embeddings is the ada embedding after mixing.
                         extra_info['c_static_emb_4b'], ada_embeddings,
                         extra_info['prompt_emb_mask'],
-                        self.iter_flags['do_ada_emb_delta_reg']
+                        self.iter_flags['do_ada_prompt_delta_reg']
                     )
 
-            if self.iter_flags['do_ada_emb_delta_reg'] and ada_embeddings is not None:
+            if self.iter_flags['do_ada_prompt_delta_reg'] and ada_embeddings is not None:
                 # The cached ada prompt embeddings are useless now, release them.
                 self.embedding_manager.clear_ada_prompt_embeddings_cache()
 
