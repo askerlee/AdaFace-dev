@@ -446,11 +446,8 @@ def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
             ref_delta_i2 = ref_delta_i
 
         # x * x.abs.pow(exponent - 1) will keep the sign of x after pow(exponent).
-        if ref_grad_scale == 0:
-            ref_delta_i2 = ref_delta_i2.detach()
-        else:
-            grad_scaler = GradientScaler(ref_grad_scale)
-            ref_delta_i2 = grad_scaler(ref_delta_i2)
+        grad_scaler = gen_gradient_scaler(ref_grad_scale)
+        ref_delta_i2 = grad_scaler(ref_delta_i2)
 
         ref_delta_i_pow = ref_delta_i2 * ref_delta_i2.abs().pow(exponent - 1)
 
