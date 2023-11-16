@@ -991,7 +991,7 @@ class UNetModel(nn.Module):
             # the learned conv_attn_layerwise_scales.      
             conv_attn_layerwise_scales = [1] * 16
 
-        use_conv_attn_kernel_sizes = np.ones(16) * use_conv_attn_kernel_size
+        use_conv_attn_kernel_sizes = np.ones(16, dtype=int) * use_conv_attn_kernel_size
         # Most layers use use_conv_attn_kernel_size as the conv attn kernel size.
         # But disable conv attn on layers 6-10, i.e., 12, 16, 17, 18, 19. 
         # Based on the learned conv_attn_layerwise_scales, 

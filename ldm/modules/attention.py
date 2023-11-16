@@ -223,11 +223,14 @@ class CrossAttention(nn.Module):
                 # infeat_size is set in SpatialTransformer.forward().
                 # conv_attn_mix_weight=1: weight to mix conv attn with point-wise attn. 
                 # Setting to 1 disables point-wise attn.
-                sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, 
-                                                self.use_conv_attn_kernel_size,
-                                                h, self.scale, self.conv_attn_layer_scale, 
-                                                conv_attn_mix_weight=1)
-
+                try:
+                    sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, 
+                                                    self.use_conv_attn_kernel_size,
+                                                    h, self.scale, self.conv_attn_layer_scale, 
+                                                    conv_attn_mix_weight=1)
+                except:
+                    breakpoint()
+                    
             if self.attn_copycat_emb_range is not None:
                 sim = replace_rows_of_copycat_embs(sim, subj_indices, self.attn_copycat_emb_range, h)
             
