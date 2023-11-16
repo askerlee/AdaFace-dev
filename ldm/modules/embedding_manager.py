@@ -661,7 +661,7 @@ class AdaEmbedding(nn.Module):
         assert self.H == 2
 
         layer_range = range(self.num_layers) if masked_layer_idx is None else [masked_layer_idx]
-        cross_weight_max_ratio = 0.25
+        cross_weight_max_ratio = 0.01 #25
 
         for layer_idx in layer_range:
             SINGLE_D = self.attn_infeat_dims[layer_idx]
