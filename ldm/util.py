@@ -650,6 +650,16 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_at
 
     # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77].
     attn_mat = attn_mat.reshape(-1, H, *attn_mat.shape[1:])
+    # Clone to make attn_mat2 a non-leaf node. Otherwise, 
+    # we can't do in-place assignment like attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.    
+    attn_mat2 = attn_mat.clone()
+    
+    if conv_attn_kernel_size == 1:
+        # If conv_attn_kernel_size == 1, simply apply conv_attn_layer_scale to subj attn rows.
+        attn_mat2[indices_B, :, :, indices_N] = attn_mat[indices_B, :, :, indices_N] * conv_attn_layer_scale
+        attn_mat2 = attn_mat2.reshape(attn_mat_shape)
+        return attn_mat2
+
     # q: [32, 4096, 40] => [4, 8, 4096, 40].
     # q is a projection of x, the image features.
     q = q.reshape(-1, H, *q.shape[1:])
@@ -678,9 +688,6 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_at
     # Add 1 to the upper bound to make the range inclusive.
     delta_y_bound = (-pads[2], pads[3] + 1)
 
-    # Clone to make attn_mat2 a non-leaf node. Otherwise, 
-    # we can't do in-place assignment like attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.    
-    attn_mat2 = attn_mat.clone()
     # Scale down conv attn scores by NORM. It's not ks**2 since the attention scores of different embeddings 
     # tend to cancel each other a little bit, so the sum of the attn scores is smaller 
     # than ks**2 * pointwise attn score.

@@ -994,12 +994,14 @@ class UNetModel(nn.Module):
 
         use_conv_attn_kernel_sizes = np.ones(16, dtype=int) * use_conv_attn_kernel_size
         # Most layers use use_conv_attn_kernel_size as the conv attn kernel size.
-        # But disable conv attn on layers 6-10, i.e., 12, 16, 17, 18, 19. 
-        # Based on the learned conv_attn_layerwise_scales, 
+        # But disable conv attn on layers 6-10, i.e., 12, 16, 17, 18, 19, 
+        # by setting the kernel size as 1 (don't set to -1, as the conv_attn_layerwise_scales 
+        # are still helpful for these layers. Setting to -1 will not do learnable attention scaling).
+        # This is based on the learned conv_attn_layerwise_scales, 
         # these layers don't like 3x3 conv attn (conv_attn_layerwise_scales are driven to 0.5~0.7).
         # Probably because the feature maps are too small (8x8 - 32x32), and a 3x3 conv attn head
         # takes up too much space.
-        use_conv_attn_kernel_sizes[6:11] = -1
+        use_conv_attn_kernel_sizes[6:11] = 1
 
         shift_attn_maps_for_diff_embs = np.ones(16, dtype=bool)
         # shift_attn_maps_for_diff_embs[6:11] = False
