@@ -3321,7 +3321,7 @@ class LatentDiffusion(DDPM):
             loss_layer_fg_bg_comple = \
                 calc_delta_cosine_loss(bg_attn, subj_attn, 
                                        exponent=2,    
-                                       do_demean_first=True,
+                                       do_demean_first=False,
                                        first_n_dims_to_flatten=2, 
                                        ref_grad_scale=fg_grad_scale,
                                        aim_to_align=False,
@@ -3802,7 +3802,8 @@ class LatentDiffusion(DDPM):
 
             # ortho_l2loss: minimize the non-correlated components of the two inputs.
             # normalized_l2loss() or L2 loss (get_loss()) perform worse than ortho_l2loss().
-            # ortho_subtract() is done on the 1280-dim features, so the loss is scale-invariant to the second input.
+            # ortho_subtract() is done on the 1280-dim features, so the loss is invariant 
+            # to the feature magnitudes of the second input.
             loss_layer_subj_fg_feat_preserve = ortho_l2loss(subj_comp_fg_feat,   subj_single_fg_feat_gs, mean=True)
             loss_layer_mix_fg_feat_preserve  = ortho_l2loss(mix_comp_fg_feat_gs, mix_single_fg_feat_gs,  mean=True)
 
@@ -3840,10 +3841,10 @@ class LatentDiffusion(DDPM):
             subj_single_subj_fg_attn_gs = single_grad_scaler(subj_single_subj_fg_attn)
 
             ##### loss_comp_subj_fg_attn_preserve #####
-            loss_layer_subj_subj_fg_attn_contrast = ortho_l2loss(subj_comp_subj_fg_attn,   subj_single_subj_fg_attn_gs)
-            loss_layer_mix_subj_fg_attn_contrast  = ortho_l2loss(mix_comp_subj_fg_attn_gs, mix_single_subj_fg_attn_gs)
-            loss_comp_subj_fg_attn_preserve += loss_layer_subj_subj_fg_attn_contrast * feat_distill_layer_weight
-            loss_comp_mix_fg_attn_preserve  += loss_layer_mix_subj_fg_attn_contrast  * feat_distill_layer_weight
+            loss_layer_subj_subj_fg_attn_preserve = ortho_l2loss(subj_comp_subj_fg_attn,   subj_single_subj_fg_attn_gs)
+            loss_layer_mix_subj_fg_attn_preserve  = ortho_l2loss(mix_comp_subj_fg_attn_gs, mix_single_subj_fg_attn_gs)
+            loss_comp_subj_fg_attn_preserve += loss_layer_subj_subj_fg_attn_preserve * feat_distill_layer_weight
+            loss_comp_mix_fg_attn_preserve  += loss_layer_mix_subj_fg_attn_preserve  * feat_distill_layer_weight
             ##### loss_comp_subj_bg_attn_suppress #####
             bg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_score_mat, bg_mask_4b, "bg_mask_4b",
                                                            num_spatial_dims=1,
