@@ -3767,8 +3767,10 @@ class LatentDiffusion(DDPM):
             attn_score_mat = unet_attn_score.permute(0, 3, 1, 2)
             # subj_subj_attn: [4, 77, 8, 64] -> [4 * K_fg, 8, 64] -> [4, K_fg, 8, 64]
             subj_attn = attn_score_mat[ind_subj_B, ind_subj_N].reshape(BLOCK_SIZE * 4, K_fg, *attn_score_mat.shape[2:])
-            # Mean over 9 subject embeddings. [4, K_fg, 8, 64] -> [4, 8, 64]
-            subj_attn = subj_attn.mean(dim=1)
+            # Sum over 9 subject embeddings. [4, K_fg, 8, 64] -> [4, 8, 64].
+            # The scale of the summed attention won't be overly large, since we've done 
+            # distribute_embedding_to_M_tokens() to them.
+            subj_attn = subj_attn.sum(dim=1)
 
             # fg_attn_mask_4b: [1, 1, 64, 64] => [1, 1, 8, 8]
             fg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_score_mat, fg_mask_4b, "fg_mask_4b", 
