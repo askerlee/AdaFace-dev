@@ -476,7 +476,8 @@ def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 # delta_types: feat_to_ref or ex_to_base or both.
 def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
                               ref_grad_scale=0.1, feat_base_grad_scale=0.05,
-                              use_cosine_loss=True, delta_types=['feat_to_ref', 'ex_to_base']):
+                              use_cosine_loss=True, cosine_exponent=2,
+                              delta_types=['feat_to_ref', 'ex_to_base']):
         ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
         # Reduce the gradient to the reference features, 
         # as the reference features are supposed to be unchanged, as opposed to feat_*. 
@@ -509,7 +510,7 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
                 # ref_grad_scale=1: ref grad scaling is disabled within calc_delta_cosine_loss,
                 # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
                 loss_delta_align = calc_delta_cosine_loss(tgt_delta, src_delta, 
-                                                          exponent=2,
+                                                          exponent=cosine_exponent,
                                                           do_demean_first=False,
                                                           first_n_dims_to_flatten=(feat_base.ndim - 1), 
                                                           ref_grad_scale=1,
