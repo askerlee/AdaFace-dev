@@ -2854,7 +2854,9 @@ class LatentDiffusion(DDPM):
                 # the background in the training images, which is not desirable.
                 # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
                 # excluding the instance from the fg_bg_preserve_loss.
-                loss_comp_subj_fg_feat_preserve, loss_comp_subj_fg_attn_preserve, loss_comp_subj_bg_attn_suppress = \
+                loss_comp_subj_fg_feat_preserve, loss_mix_subj_fg_feat_preserve, \
+                loss_comp_subj_fg_attn_preserve, loss_mix_subj_fg_attn_preserve, \
+                loss_comp_subj_bg_attn_suppress, loss_mix_subj_bg_attn_suppress = \
                     self.calc_comp_fg_bg_preserve_loss(unet_feats, extra_info['unet_attnscores'], 
                                                         filtered_fg_mask, batch_have_fg_mask,
                                                         extra_info['subj_indices_1b'], BLOCK_SIZE)
@@ -2865,11 +2867,16 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/comp_subj_fg_attn_preserve': loss_comp_subj_fg_attn_preserve.mean().detach()})
                 if loss_comp_subj_bg_attn_suppress > 0:
                     loss_dict.update({f'{prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach()})
+                # loss_mix_subj_fg/bg* are not optimized, and only recorded for monitoring.
+                if loss_mix_subj_fg_feat_preserve > 0:
+                    loss_dict.update({f'{prefix}/mix_subj_fg_feat_preserve': loss_mix_subj_fg_feat_preserve.mean().detach()})
+                if loss_mix_subj_fg_attn_preserve > 0:
+                    loss_dict.update({f'{prefix}/mix_subj_fg_attn_preserve': loss_mix_subj_fg_attn_preserve.mean().detach()})
+                if loss_mix_subj_bg_attn_suppress > 0:
+                    loss_dict.update({f'{prefix}/mix_subj_bg_attn_suppress': loss_mix_subj_bg_attn_suppress.mean().detach()})
 
-                # loss_comp_subj_fg_feat_preserve is L2 loss, so no need to use dynamic loss scale.
                 comp_subj_fg_feat_preserve_loss_scale = 1
-                # A big comp_subj_bg_attn_suppress_loss_scale may hurt the authenticity.
-                comp_subj_bg_attn_suppress_loss_scale = 0.1 # 0.5
+                comp_subj_bg_attn_suppress_loss_scale = 0.5
                 loss_comp_fg_bg_preserve = (loss_comp_subj_fg_feat_preserve * comp_subj_fg_feat_preserve_loss_scale \
                                               + loss_comp_subj_fg_attn_preserve) \
                                             + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
@@ -3729,12 +3736,17 @@ class LatentDiffusion(DDPM):
 
         # Normalize the weights above so that each set sum to 1.
         feat_distill_layer_weights  = normalize_dict_values(feat_distill_layer_weights)
-        mix_grad_scale  = 0.02
-        mix_grad_scaler = gen_gradient_scaler(mix_grad_scale)
+        mix_grad_scale      = 0.02
+        mix_grad_scaler     = gen_gradient_scaler(mix_grad_scale)
+        single_grad_scale   = 0.05
+        single_grad_scaler  = gen_gradient_scaler(single_grad_scale)
 
         loss_comp_subj_fg_feat_preserve = 0
+        loss_comp_mix_fg_feat_preserve  = 0
         loss_comp_subj_fg_attn_preserve = 0
+        loss_comp_mix_fg_attn_preserve  = 0
         loss_comp_subj_bg_attn_suppress = 0
+        loss_comp_mix_bg_attn_suppress  = 0
 
         for unet_layer_idx, unet_feat in unet_feats.items():
             if unet_layer_idx not in feat_distill_layer_weights:
@@ -3774,14 +3786,16 @@ class LatentDiffusion(DDPM):
             # feat_*_single are used as references, so their gradients are almost totally disabled.
             mix_comp_fg_feat_gs    = mix_grad_scaler(mix_comp_fg_feat)
             mix_single_fg_feat_gs  = mix_grad_scaler(mix_single_fg_feat)
+            subj_single_fg_feat_gs = single_grad_scaler(subj_single_fg_feat)
+
             # ortho_l2loss: minimize the non-correlated components of the two inputs.
             # normalized_l2loss() or L2 loss (get_loss()) perform worse than ortho_l2loss().
             # ortho_subtract() is done on the 1280-dim features, so the loss is scale-invariant to the second input.
-            loss_layer_subj_fg_feat_preserve = ortho_l2loss(subj_comp_fg_feat,   subj_single_fg_feat, mean=True)
+            loss_layer_subj_fg_feat_preserve = ortho_l2loss(subj_comp_fg_feat,   subj_single_fg_feat_gs, mean=True)
             loss_layer_mix_fg_feat_preserve  = ortho_l2loss(mix_comp_fg_feat_gs, mix_single_fg_feat_gs,  mean=True)
-            loss_comp_subj_fg_feat_preserve += (loss_layer_subj_fg_feat_preserve 
-                                                + loss_layer_mix_fg_feat_preserve) \
-                                               * feat_distill_layer_weight
+
+            loss_comp_subj_fg_feat_preserve += loss_layer_subj_fg_feat_preserve * feat_distill_layer_weight
+            loss_comp_mix_fg_feat_preserve  += loss_layer_mix_fg_feat_preserve  * feat_distill_layer_weight
 
             ##### unet_attn_score fg preservation loss & bg suppression loss #####
             unet_attn_score = unet_attnscores[unet_layer_idx]
@@ -3800,17 +3814,18 @@ class LatentDiffusion(DDPM):
 
             subj_single_subj_fg_attn, subj_comp_subj_fg_attn, mix_single_subj_fg_attn, mix_comp_subj_fg_attn \
                 = subj_fg_attn.chunk(4)
+            subj_single_fg_mask, subj_comp_fg_mask, mix_single_fg_mask, mix_comp_fg_mask \
+                = fg_attn_mask_flat_4b.chunk(4)
             
             mix_comp_subj_fg_attn_gs    = mix_grad_scaler(mix_comp_subj_fg_attn)
             mix_single_subj_fg_attn_gs  = mix_grad_scaler(mix_single_subj_fg_attn)
+            subj_single_subj_fg_attn_gs = single_grad_scaler(subj_single_subj_fg_attn)
 
             ##### loss_comp_subj_fg_attn_preserve #####
-            loss_layer_subj_subj_fg_attn_contrast = ortho_l2loss(subj_comp_subj_fg_attn,   subj_single_subj_fg_attn)
+            loss_layer_subj_subj_fg_attn_contrast = ortho_l2loss(subj_comp_subj_fg_attn,   subj_single_subj_fg_attn_gs)
             loss_layer_mix_subj_fg_attn_contrast  = ortho_l2loss(mix_comp_subj_fg_attn_gs, mix_single_subj_fg_attn_gs)
-            loss_comp_subj_fg_attn_preserve += (loss_layer_subj_subj_fg_attn_contrast 
-                                                + loss_layer_mix_subj_fg_attn_contrast) \
-                                               * feat_distill_layer_weight
-            
+            loss_comp_subj_fg_attn_preserve += loss_layer_subj_subj_fg_attn_contrast * feat_distill_layer_weight
+            loss_comp_mix_fg_attn_preserve  += loss_layer_mix_subj_fg_attn_contrast  * feat_distill_layer_weight
             ##### loss_comp_subj_bg_attn_suppress #####
             bg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_score_mat, bg_mask_4b, "bg_mask_4b",
                                                              mode="nearest|bilinear", warn_on_all_zero=True)
@@ -3824,30 +3839,28 @@ class LatentDiffusion(DDPM):
             # It's not the attention of background embeddings.
             # mix_subj_bg_attn:  attention of mix embeddings (corresponding to the subj embeddings) in class instances 
             # on background areas.
-            subj_subj_bg_attn, mix_subj_bg_attn = subj_bg_attn.chunk(2)
+            subj_single_subj_bg_attn, subj_comp_subj_bg_attn, mix_single_subj_bg_attn, mix_comp_subj_bg_attn \
+                = subj_bg_attn.chunk(4)
 
-            subj_attn_mean = subj_attn.mean().item()
-            subj_attn_abs_mean = subj_attn.abs().mean().item() + 1e-6
+            subj_fg_attn_mean = masked_mean(subj_comp_subj_fg_attn, subj_comp_fg_mask).item()
+            mix_fg_attn_mean  = masked_mean(mix_comp_subj_fg_attn,  mix_comp_fg_mask).item()
 
-            subj_subj_bg_attn_demean = subj_subj_bg_attn - subj_attn_mean
-            mix_subj_bg_attn_demean  = mix_subj_bg_attn  - subj_attn_mean
-            mix_subj_bg_attn_demean_gs = mix_grad_scaler(mix_subj_bg_attn_demean)
-            # Simply suppress the subj attention on background areas. 
-            # No need to use attn_*_single as references.
-            # do_sqr=True: focus on large activations and tolerate more of small activations.
-            # But do_sqr will make the losses too big. Therefore we normalize them with subj_attn_mean.
-            # normalize_with_mean: normalize the result with the mean of the input.abs().
-            loss_layer_subj_bg_attn_suppress = masked_mean(subj_subj_bg_attn_demean, 
-                                                           subj_subj_bg_attn_demean > 0,
-                                                           do_sqr=True) / subj_attn_abs_mean
-            loss_layer_mix_bg_attn_suppress  = masked_mean(mix_subj_bg_attn_demean_gs,  
-                                                           mix_subj_bg_attn_demean_gs > 0,
-                                                           do_sqr=True) / subj_attn_abs_mean
-            loss_comp_subj_bg_attn_suppress += (loss_layer_subj_bg_attn_suppress 
-                                                + loss_layer_mix_bg_attn_suppress) \
-                                               * feat_distill_layer_weight
-                    
-        return loss_comp_subj_fg_feat_preserve, loss_comp_subj_fg_attn_preserve, loss_comp_subj_bg_attn_suppress
+            subj_comp_subj_bg_attn_demean   = subj_comp_subj_bg_attn - subj_fg_attn_mean
+            mix_comp_subj_bg_attn_demean    = mix_comp_subj_bg_attn  - mix_fg_attn_mean
+            mix_comp_subj_bg_attn_demean_gs = mix_grad_scaler(mix_comp_subj_bg_attn_demean)
+            # Suppress the subj attention scores on background areas in comp instances, 
+            # when they are larger than the average fg attention scores in comp instances.
+            loss_layer_subj_bg_attn_suppress = masked_mean(subj_comp_subj_bg_attn_demean, 
+                                                           subj_comp_subj_bg_attn_demean > 0)
+            loss_layer_mix_bg_attn_suppress  = masked_mean(mix_comp_subj_bg_attn_demean_gs,  
+                                                           mix_comp_subj_bg_attn_demean_gs > 0)
+
+            loss_comp_subj_bg_attn_suppress += loss_layer_subj_bg_attn_suppress * feat_distill_layer_weight
+            loss_comp_mix_bg_attn_suppress  += loss_layer_mix_bg_attn_suppress  * feat_distill_layer_weight
+
+        return loss_comp_subj_fg_feat_preserve, loss_comp_mix_fg_feat_preserve, \
+               loss_comp_subj_fg_attn_preserve, loss_comp_mix_fg_attn_preserve, \
+               loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress
 
     # SSB_SIZE: subject sub-batch size.
     # If do_normal_recon, then both instances are subject instances. 
