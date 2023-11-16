@@ -3861,7 +3861,6 @@ class LatentDiffusion(DDPM):
                 = subj_bg_attn.chunk(4)
 
 
-            breakpoint()
             # subj_comp_subj_fg_attn: [1, 8, 64], subj_comp_fg_mask: [1, 1, 64].
             subj_fg_attn_mean = masked_mean(subj_comp_subj_fg_attn, subj_comp_fg_mask).item()
             mix_fg_attn_mean  = masked_mean(mix_comp_subj_fg_attn,  mix_comp_fg_mask).item()
