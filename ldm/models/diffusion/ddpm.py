@@ -3810,10 +3810,13 @@ class LatentDiffusion(DDPM):
             # fg_attn_mask_flat_4b: [1, 1, 8, 8] => [4, 1, 64]
             fg_attn_mask_flat_4b  = fg_attn_mask_4b.reshape(BS * 4, 1, -1)
 
+            # subj_fg_attn: [4, K_fg, 64].
             subj_fg_attn = subj_attn * fg_attn_mask_flat_4b
 
+            # subj_single_subj_fg_attn: [1, K_fg, 64].
             subj_single_subj_fg_attn, subj_comp_subj_fg_attn, mix_single_subj_fg_attn, mix_comp_subj_fg_attn \
                 = subj_fg_attn.chunk(4)
+            # subj_single_fg_mask: [1, 1, 64]
             subj_single_fg_mask, subj_comp_fg_mask, mix_single_fg_mask, mix_comp_fg_mask \
                 = fg_attn_mask_flat_4b.chunk(4)
             
@@ -3828,7 +3831,7 @@ class LatentDiffusion(DDPM):
             loss_comp_mix_fg_attn_preserve  += loss_layer_mix_subj_fg_attn_contrast  * feat_distill_layer_weight
             ##### loss_comp_subj_bg_attn_suppress #####
             bg_attn_mask_4b = resize_mask_for_feat_or_attn(attn_score_mat, bg_mask_4b, "bg_mask_4b",
-                                                             mode="nearest|bilinear", warn_on_all_zero=True)
+                                                           mode="nearest|bilinear", warn_on_all_zero=True)
             # bg_attn_mask_flat_4b: [4, 1, 8, 8] => [4, 1, 64]
             bg_attn_mask_flat_4b  = bg_attn_mask_4b.reshape(BS * 4, 1, -1)
             if bg_attn_mask_flat_4b.sum() == 0:
