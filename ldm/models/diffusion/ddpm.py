@@ -3302,8 +3302,8 @@ class LatentDiffusion(DDPM):
                                                          mode="nearest|bilinear")
                 # img_mask2: [2, 1, 8, 8] -> [2, 1, 64] -> [2, 8, 64].
                 img_mask2 = img_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
-                bg_attn   = bg_attn   * img_mask2
-                subj_attn = subj_attn * img_mask2
+                #bg_attn   = bg_attn   * img_mask2
+                #subj_attn = subj_attn * img_mask2
             else:
                 img_mask2 = torch.ones_like(subj_attn)
 
@@ -3353,7 +3353,7 @@ class LatentDiffusion(DDPM):
                 #if (fg_mask3 != fg_mask3 * img_mask2).any():
                 #    breakpoint()
 
-                bg_mask3 = (1 - fg_mask3) * img_mask2
+                bg_mask3 = (1 - fg_mask3) #* img_mask2
 
                 if (fg_mask3.sum(dim=(1, 2)) == 0).any():
                     # Very rare cases. Safe to skip.
@@ -3560,12 +3560,12 @@ class LatentDiffusion(DDPM):
                                                          num_spatial_dims=1,
                                                          mode="nearest|bilinear")
                 img_mask2 = img_mask2.reshape(SSB_SIZE, 1, -1)
-                subj_attn           = subj_attn         * img_mask2
-                subj_attn_xlayer    = subj_attn_xlayer  * img_mask2
+                subj_attn           = subj_attn         #* img_mask2
+                subj_attn_xlayer    = subj_attn_xlayer  #* img_mask2
 
                 if bg_indices is not None:
-                    bg_attn             = bg_attn           * img_mask2
-                    bg_attn_xlayer      = bg_attn_xlayer    * img_mask2
+                    bg_attn             = bg_attn           #* img_mask2
+                    bg_attn_xlayer      = bg_attn_xlayer    #* img_mask2
 
             loss_layer_fg_xlayer_consist = ortho_l2loss(subj_attn, subj_attn_xlayer, mean=True)
             loss_fg_xlayer_consist += loss_layer_fg_xlayer_consist * attn_align_layer_weight
