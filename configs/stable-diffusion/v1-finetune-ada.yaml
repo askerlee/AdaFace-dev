@@ -52,7 +52,6 @@ model:
     fg_wds_complementary_loss_weight:   0 #1e-4
     # loss_fg_xlayer_consist ~ 0.2, loss_bg_xlayer_consist ~ 0.1. * weight -> 3e-4.
     fg_bg_xlayer_consist_loss_weight:   5e-5
-    bg_xlayer_consist_loss_base:        0.3
     # loss_fg_mask_align, loss_bg_mask_align: 0.004, * weight -> 2e-6
     wds_bg_recon_discount:              0.05
     do_clip_teacher_filtering:          True
