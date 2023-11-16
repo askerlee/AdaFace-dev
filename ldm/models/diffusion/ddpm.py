@@ -3253,23 +3253,22 @@ class LatentDiffusion(DDPM):
         # Normalize the weights above so that each set sum to 1.
         attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
 
-        # K_fg: 4, number of embeddings per subject token.
+        # K_fg: 9, number of embeddings per subject token.
         K_fg = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
-        # Don't compute K_bg, as the number of bg embeddings 
-        # (either user-defined bg embeddings, or comp extra embeddings in wds instances) 
-        # per instance may vary.
+        # K_bg: 4, number of embeddings per background token.
+        K_bg = len(bg_indices[0]) // len(torch.unique(bg_indices[0]))
 
         loss_fg_bg_complementary = 0
         loss_fg_mask_align = 0
         loss_bg_mask_align = 0
         loss_fg_bg_mask_contrast = 0
 
-        subj_mb_contrast_scale          = 0.2
-        bg_mf_contrast_scale            = 0.2
-        fgbg_emb_contrast_scale         = 0.2
-        mfmb_contrast_score_margin            = 0.6
-        subj_bg_contrast_at_mf_score_margin   = 0.6
-        bg_subj_contrast_at_mb_score_margin   = 0.6
+        subj_mb_contrast_scale                = 0.01
+        bg_mf_contrast_scale                  = 0.01
+        fgbg_emb_contrast_scale               = 0.05
+        mfmb_contrast_score_margin            = 0.4
+        subj_bg_contrast_at_mf_score_margin   = 0.4 * K_fg / K_bg     # 0.9
+        bg_subj_contrast_at_mb_score_margin   = 0.4
 
         # In each instance, subj_indices has K_fg times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
