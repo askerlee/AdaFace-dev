@@ -2866,7 +2866,7 @@ class LatentDiffusion(DDPM):
                 # Seems it's not so important whether fg attns in subj comp and subj single 
                 # instances are similar or not (observe the attns between mix comp 
                 # and mix single instances). So scale down loss_comp_subj_fg_attn_preserve.
-                comp_subj_fg_attn_preserve_loss_scale = 0.3
+                comp_subj_fg_attn_preserve_loss_scale = 0   # disabled. #s0.3
                 comp_subj_bg_attn_suppress_loss_scale = 0.5
                 loss_comp_fg_bg_preserve = (loss_comp_subj_fg_feat_preserve \
                                              + loss_comp_subj_fg_attn_preserve * comp_subj_fg_attn_preserve_loss_scale) \
