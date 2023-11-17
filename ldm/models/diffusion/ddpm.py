@@ -2062,7 +2062,7 @@ class LatentDiffusion(DDPM):
                             # more aggressively, to avoid it dominating the whole image.
                             # Don't take extra_scale linearly to this ratio, which will make human
                             # faces (usually taking around 20%-40%) too small.
-                            extra_scale = math.pow(0.1 / fg_mask_percent.item(), 0.3)
+                            extra_scale = math.pow(0.1 / fg_mask_percent.item(), 0.35)
                             scale_range_lb = base_scale_range_lb * extra_scale
                             # scale_range_ub is at least 0.5.
                             scale_range_ub = max(0.5, base_scale_range_ub * extra_scale)
