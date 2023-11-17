@@ -1322,6 +1322,8 @@ class EmbeddingManager(nn.Module):
                     # We only need one embedding of [768]. But
                     # the layer subj embedding is of [9, 768]. So we take the first embedding.
                     layer_subj_emb_ema = token_emb_ema_embedding[ca_layer_idx].mean(dim=0)
+                    # emb_ema_grad_scale = 0.05. Avoid updating the EMA embedding too quickly.
+                    layer_subj_emb_ema = self.emb_ema_grad_scaler(layer_subj_emb_ema)
 
                 # Although layer_subj_emb_ema cannot be updated through SGD, 
                 # layer_static_subj_emb is updateable. So the probe will still adapt to the learning objective.

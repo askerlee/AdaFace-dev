@@ -2861,14 +2861,14 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/mix_subj_bg_attn_suppress': loss_mix_subj_bg_attn_suppress.mean().detach()})
 
                 comp_subj_fg_feat_preserve_loss_scale = 1
-                comp_subj_bg_attn_suppress_loss_scale = 0.5
+                comp_subj_bg_attn_suppress_loss_scale = 2
                 loss_comp_fg_bg_preserve = (loss_comp_subj_fg_feat_preserve * comp_subj_fg_feat_preserve_loss_scale \
                                               + loss_comp_subj_fg_attn_preserve) \
                                             + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
             else:
                 loss_comp_fg_bg_preserve = 0
 
-            comp_fg_bg_preserve_loss_scale = 0.5
+            comp_fg_bg_preserve_loss_scale = 1
             # Scale down loss_comp_fg_bg_preserve if reuse_init_conds, as it's more noisy.
             if self.iter_flags['reuse_init_conds']:
                 comp_fg_bg_preserve_loss_scale *= 0.5

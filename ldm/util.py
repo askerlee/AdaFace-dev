@@ -833,7 +833,11 @@ def replace_rows_of_copycat_embs(attn_mat, subj_indices, attn_copycat_emb_range,
     return attn_mat2.reshape(attn_mat_shape)
 
 # bg_attn_behavior: 'contrast_fg', 'copy_fg', 'zero'.
-def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, bg_attn_behavior='contrast_fg'):
+# During training, always bg_attn_behavior = 'contrast_fg'.
+# contrast_coeff: controls the degree of contrast.
+def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, 
+                                     bg_attn_behavior='contrast_fg',
+                                     contrast_coeff=0.5):
     # attn_mat: [32, 4096, 77]. 32: B * H. B = 4, H = 8.
     attn_mat_shape = attn_mat.shape
     # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77]. 32: B * H.
@@ -878,13 +882,13 @@ def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, bg_a
         if bg_attn_behavior == 'contrast_fg':
             # 'contrast_fg': Subtract demeaned fg attns from bg attns.
             # 'contrast_fg' is the behavior during training.
-            attn_mat2[b, :, :, bg_indices_b] = bg_attn - fg_attn_avg_demeaned
+            attn_mat2[b, :, :, bg_indices_b] = bg_attn - fg_attn_avg_demeaned * contrast_coeff
         elif bg_attn_behavior == 'copy_fg':
             # NOTE: this is very hackish, and may only work on certain cases.
             # Replace bg attn with fg attn (normalized by original bg_attn), 
             # so that bg tokens focus more on the fg areas (instead of the bg areas), 
             # and contribute the high-frequency semantics they encode.
-            attn_mat2[b, :, :, bg_indices_b] = fg_attn_avg - bg_attn_demeaned
+            attn_mat2[b, :, :, bg_indices_b] = fg_attn_avg - bg_attn_demeaned * contrast_coeff
         elif bg_attn_behavior == 'zero':
             # 'zero': Zero out bg attns, so that bg embeddings don't contribute their semantics.
             # In this case, their only role is to help fg attn focus better on fg areas.
@@ -893,7 +897,7 @@ def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, bg_a
             breakpoint()
 
         # Subtract bg attns from fg attns, to reduce fg attns on bg areas.
-        attn_mat2[b, :, :, subj_indices_b] = fg_attn - bg_attn_avg_demeaned
+        attn_mat2[b, :, :, subj_indices_b] = fg_attn - bg_attn_avg_demeaned * contrast_coeff
 
     return attn_mat2.reshape(attn_mat_shape)
 
