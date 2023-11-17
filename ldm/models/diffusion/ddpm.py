@@ -183,7 +183,9 @@ class DDPM(pl.LightningModule):
         else:
             self.scheduler = None
             self.warm_up_steps = 500
-
+            
+        self.training_percent = 0.
+        
         self.v_posterior = v_posterior
         self.original_elbo_weight = original_elbo_weight
         self.recon_loss_weight = recon_loss_weight
@@ -708,7 +710,7 @@ class LatentDiffusion(DDPM):
         self.generation_cache_img_colors = []
         self.cache_start_iter = 0
         self.num_cached_generations = 0
-        
+
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
         ids = torch.round(torch.linspace(0, self.num_timesteps - 1, self.num_timesteps_cond)).long()
@@ -828,11 +830,11 @@ class LatentDiffusion(DDPM):
                 # static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_bg, num_layers=self.N_LAYERS)
 
                 extra_info = { 
-                                'use_layerwise_context':        self.use_layerwise_embedding, 
-                                'use_ada_context':              self.use_ada_embedding,
-                                'use_conv_attn_kernel_size':    self.embedding_manager.use_conv_attn_kernel_size,
-                                'attn_copycat_emb_range':       self.embedding_manager.attn_copycat_emb_range,
-                                'contrast_fg_bg_attns':         self.embedding_manager.contrast_fg_bg_attns,
+                                'use_layerwise_context':         self.use_layerwise_embedding, 
+                                'use_ada_context':               self.use_ada_embedding,
+                                'use_conv_attn_kernel_size':     self.embedding_manager.use_conv_attn_kernel_size,
+                                'attn_copycat_emb_range':        self.embedding_manager.attn_copycat_emb_range,
+                                'contrast_fgbg_coeff':           self.embedding_manager.get_contrast_fgbg_coeff(self.training_percent),
                                 'bg_attn_behavior_in_inference': self.embedding_manager.bg_attn_behavior_in_inference,
                                 # Setting up 'subj_indices' here is necessary for inference.
                                 # During training, 'subj_indices' will be overwritten in p_losses().

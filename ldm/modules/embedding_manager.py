@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
-                     split_indices_by_instance, add_noise_to_embedding
+                     split_indices_by_instance, add_noise_to_embedding, anneal_value
 
 from functools import partial
 from collections import OrderedDict
@@ -855,7 +855,7 @@ class EmbeddingManager(nn.Module):
             normalize_subj_attn=False,
             use_conv_attn_kernel_size=-1,
             attn_copycat_emb_range=[-1, -1],
-            contrast_fg_bg_attns=0,
+            contrast_fgbg_init_coeff=0,
             **kwargs
     ):
         super().__init__()
@@ -888,7 +888,7 @@ class EmbeddingManager(nn.Module):
         
         self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
         self.set_embs_attn_tricks(use_conv_attn_kernel_size, attn_copycat_emb_range, 
-                                  contrast_fg_bg_attns, normalize_subj_attn, 
+                                  contrast_fgbg_init_coeff, normalize_subj_attn, 
                                   do_init=True)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
@@ -1667,11 +1667,14 @@ class EmbeddingManager(nn.Module):
 
     # attn_copycat_emb_range = None:        Not specified.
     # attn_copycat_emb_range = [-1, -1]:    Disabled.
-    # contrast_fg_bg_attns = None:          Not specified.
+    # contrast_fgbg_init_coeff = None:      Not specified.
+    # contrast_fgbg_init_coeff = 0:         Disabled.
+    # During inference, contrast_fgbg_init_coeff is used as contrast_fgbg_coeff.
     # normalize_subj_attn  = None:          Not specified.
+    # normalize_subj_attn  = False:         Disabled.
     def set_embs_attn_tricks(self, use_conv_attn_kernel_size=None, 
                              attn_copycat_emb_range=None, 
-                             contrast_fg_bg_attns=None,
+                             contrast_fgbg_init_coeff=None,
                              normalize_subj_attn=None,
                              bg_attn_behavior_in_inference='zero',
                              do_init=False):
@@ -1691,18 +1694,20 @@ class EmbeddingManager(nn.Module):
 
             print(f"Setting attn_copycat_emb_range = {attn_copycat_emb_range}{extra_msg}")
 
-        if contrast_fg_bg_attns is not None or do_init:
-            if contrast_fg_bg_attns is None:
-                self.contrast_fg_bg_attns = 0
+        if contrast_fgbg_init_coeff is not None or do_init:
+            if contrast_fgbg_init_coeff is None:
+                self.contrast_fgbg_init_coeff = 0
             else:
-                self.contrast_fg_bg_attns = contrast_fg_bg_attns
-            extra_msg = ", DISABLED" if contrast_fg_bg_attns <= 0 else ""
-            print(f"Setting contrast_fg_bg_attns = {contrast_fg_bg_attns}{extra_msg}")
+                self.contrast_fgbg_init_coeff = contrast_fgbg_init_coeff
 
-        # bg_attn_behavior_in_inference is only in effect if contrast_fg_bg_attns > 0 (enabled).
+            extra_msg = ", DISABLED" if contrast_fgbg_init_coeff <= 0 else ""
+            print(f"Setting contrast_fgbg_init_coeff = {contrast_fgbg_init_coeff}{extra_msg}")
+
+        # bg_attn_behavior_in_inference is only in effect if 
+        # contrast_fgbg_init_coeff > 0 (contrast_fgbg enabled).
         # So we can safely override the existing value 
         # (even if it's inappropriately set during training or during inference 
-        # while contrast_fg_bg_attns <= 0, it won't have effect.
+        # while contrast_fgbg_init_coeff <= 0, it won't have effect.
         self.bg_attn_behavior_in_inference = bg_attn_behavior_in_inference
         print(f"Setting bg_attn_behavior_in_inference = {bg_attn_behavior_in_inference}")
 
@@ -1710,6 +1715,16 @@ class EmbeddingManager(nn.Module):
             self.normalize_subj_attn = normalize_subj_attn
             print(f"Setting normalize_subj_attn = {normalize_subj_attn}")
 
+    def get_contrast_fgbg_coeff(self, training_percent=0):
+        if self.training:
+            # contrast_fgbg_coeff will gradually decrease from contrast_fgbg_init_coeff to 0,
+            # at 50% training iterations.
+            contrast_fgbg_coeff = anneal_value(training_percent, 0.5, 
+                                               [self.contrast_fgbg_init_coeff, 0])
+            return contrast_fgbg_coeff
+        else:
+            return self.contrast_fgbg_init_coeff
+        
     def initialize_attn_postmix_components(self, attn_postmix_weight, 
                                             postmix_attn_layer=None, 
                                             postmix_attn_LN=None):
@@ -1894,7 +1909,7 @@ class EmbeddingManager(nn.Module):
                      "normalize_subj_attn":             self.normalize_subj_attn,
                      "use_conv_attn_kernel_size":       self.use_conv_attn_kernel_size,
                      "attn_copycat_emb_range":          self.attn_copycat_emb_range,
-                     "contrast_fg_bg_attns":            self.contrast_fg_bg_attns
+                     "contrast_fgbg_init_coeff":            self.contrast_fgbg_init_coeff
                    }, 
                     ckpt_path)
 
@@ -1949,13 +1964,13 @@ class EmbeddingManager(nn.Module):
                 self.set_use_specialized_comp_embs(ckpt["use_specialized_comp_embs"])
             # The four options should coexist in the ckpt.
             use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
-            contrast_fg_bg_attns        = ckpt.get("contrast_fg_bg_attns",      None)
+            contrast_fgbg_init_coeff        = ckpt.get("contrast_fgbg_init_coeff",      None)
             attn_copycat_emb_range      = ckpt.get("attn_copycat_emb_range",    None)
             normalize_subj_attn         = ckpt.get("normalize_subj_attn",       None)
 
             self.set_embs_attn_tricks(use_conv_attn_kernel_size, 
                                       attn_copycat_emb_range,
-                                      contrast_fg_bg_attns,
+                                      contrast_fgbg_init_coeff,
                                       normalize_subj_attn)
 
             for k in ckpt["string_to_token"]:

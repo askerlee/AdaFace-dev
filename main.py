@@ -234,7 +234,7 @@ def get_parser(**parser_kwargs):
         help="Range of embedding indices to be used as copycat attention. "
              "Default [-1, -1]: not specified.")
     
-    parser.add_argument("--contrast_fg_bg_attns",
+    parser.add_argument("--contrast_fgbg_init_coeff",
                         type=float, default=0,
                         help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")
             
@@ -826,9 +826,9 @@ if __name__ == "__main__":
 
         config.model.params.personalization_config.params.attn_copycat_emb_range \
             = opt.attn_copycat_emb_range
-        if hasattr(opt, 'contrast_fg_bg_attns'):
-            config.model.params.personalization_config.params.contrast_fg_bg_attns \
-                = opt.contrast_fg_bg_attns
+        if hasattr(opt, 'contrast_fgbg_init_coeff'):
+            config.model.params.personalization_config.params.contrast_fgbg_init_coeff \
+                = opt.contrast_fgbg_init_coeff
             
         if hasattr(opt, 'composition_regs_iter_gap'):
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap

@@ -36,13 +36,13 @@ def parse_args():
     parser.add_argument("--num_vectors_per_bg_token",
                         type=int, default=4,
                         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
-    parser.add_argument("--contrast_fg_bg_attns",
+    parser.add_argument("--contrast_fgbg_inf_coeff",
                         type=float, default=argparse.SUPPRESS,
                         help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")    
     parser.add_argument("--bg_attn_behavior_in_inference",
                         type=str, default=argparse.SUPPRESS, 
                         choices=["zero", "contrast_fg", "copy_fg"],
-                        help="How to handle bg attention in inference, if contrast_fg_bg_attns is enabled. ")
+                        help="How to handle bg attention in inference, if contrast_fgbg_inf_coeff is enabled. ")
                                 
     parser.add_argument("--use_conv_attn_kernel_size",
                         type=int, default=argparse.SUPPRESS, 
@@ -352,9 +352,9 @@ if __name__ == "__main__":
         outdir = args.out_dir_tmpl + "-" + args.method
         os.makedirs(outdir, exist_ok=True)
 
-        if hasattr(args, 'contrast_fg_bg_attns'):
-            if args.contrast_fg_bg_attns >= 0 and not args.include_bg_string:
-                print("WARNING: --contrast_fg_bg_attns is specified, but --include_bg_string is not. Set it to True.")
+        if hasattr(args, 'contrast_fgbg_inf_coeff'):
+            if args.contrast_fgbg_inf_coeff >= 0 and not args.include_bg_string:
+                print("WARNING: --contrast_fgbg_inf_coeff is specified, but --include_bg_string is not. Set it to True.")
                 args.include_bg_string = True
 
         if args.background_string and args.include_bg_string:
@@ -464,8 +464,8 @@ if __name__ == "__main__":
             command_line += f" --use_conv_attn_kernel_size {args.use_conv_attn_kernel_size}"
         if hasattr(args, 'attn_copycat_emb_range'):
             command_line += f" --attn_copycat_emb_range {args.attn_copycat_emb_range[0]} {args.attn_copycat_emb_range[1]}"
-        if hasattr(args, 'contrast_fg_bg_attns'):
-            command_line += f" --contrast_fg_bg_attns {args.contrast_fg_bg_attns}"
+        if hasattr(args, 'contrast_fgbg_inf_coeff'):
+            command_line += f" --contrast_fgbg_inf_coeff {args.contrast_fgbg_inf_coeff}"
         if hasattr(args, 'bg_attn_behavior_in_inference'):
             command_line += f" --bg_attn_behavior_in_inference {args.bg_attn_behavior_in_inference}"
             

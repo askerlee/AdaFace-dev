@@ -281,12 +281,12 @@ def parse_args():
                         type=int, nargs=2, default=None,
                         help="Range of embedding indices to be used as copycat attention. "
                             "Default [-1, -1]: not specified.")
-    parser.add_argument("--contrast_fg_bg_attns",
+    parser.add_argument("--contrast_fgbg_inf_coeff",
                         type=float, default=0,
                         help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")
     parser.add_argument("--bg_attn_behavior_in_inference",
                         type=str, default="zero", choices=["zero", "contrast_fg", "copy_fg"],
-                        help="How to handle bg attention in inference, if contrast_fg_bg_attns is enabled. ")
+                        help="How to handle bg attention in inference, if contrast_fgbg_inf_coeff is enabled. ")
 
     # If normalize_subj_attn is not specified, then use the 'normalize_subj_attn' in the checkpoint.
     # If 'normalize_subj_attn' doesn't exist in the checkpoint, then normalize_subj_attn is False.
@@ -421,13 +421,13 @@ def main(opt):
             assert opt.num_vectors_per_token >= K * K, \
                     f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
         
-        # command line --contrast_fg_bg_attns and --normalize_subj_attn override the checkpoint.
+        # command line --contrast_fgbg_inf_coeff and --normalize_subj_attn override the checkpoint.
         # If not specified, passed None's will be ignored in set_embs_attn_tricks().
-        contrast_fg_bg_attns = opt.contrast_fg_bg_attns if hasattr(opt, 'contrast_fg_bg_attns') else None
-        normalize_subj_attn  = opt.normalize_subj_attn  if hasattr(opt, 'normalize_subj_attn')  else None
+        contrast_fgbg_coeff = opt.contrast_fgbg_inf_coeff if hasattr(opt, 'contrast_fgbg_inf_coeff') else None
+        normalize_subj_attn = opt.normalize_subj_attn    if hasattr(opt, 'normalize_subj_attn')  else None
         model.embedding_manager.set_embs_attn_tricks(opt.use_conv_attn_kernel_size, 
                                                      opt.attn_copycat_emb_range,
-                                                     contrast_fg_bg_attns,
+                                                     contrast_fgbg_coeff,
                                                      normalize_subj_attn,
                                                      opt.bg_attn_behavior_in_inference)
 
