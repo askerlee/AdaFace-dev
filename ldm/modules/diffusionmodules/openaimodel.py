@@ -508,7 +508,7 @@ class UNetModel(nn.Module):
         self.debug_attn = False
 
         self.backup_vars = { 
-                            'use_conv_attn_kernel_size:layerwise':      [-1] * 16,
+                            'use_conv_attn_kernel_size:layerwise':      [-1]   * 16,
                             'shift_attn_maps_for_diff_embs:layerwise':  [True] * 16,
                             'attn_copycat_emb_range':                   None,
                             'contrast_fg_bg_attns':                     0,

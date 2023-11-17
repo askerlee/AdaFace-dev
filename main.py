@@ -235,7 +235,7 @@ def get_parser(**parser_kwargs):
              "Default [-1, -1]: not specified.")
     
     parser.add_argument("--contrast_fg_bg_attns",
-                        type=float, default=argparse.SUPPRESS,
+                        type=float, default=0,
                         help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")
             
     parser.add_argument("--normalize_subj_attn", 
