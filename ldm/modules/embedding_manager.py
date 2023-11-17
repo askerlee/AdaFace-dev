@@ -275,7 +275,8 @@ class AttentionalPooler(nn.Module):
         # attn: [B, 2, 4096]. 2: fg/bg, 4096: image patches.
         # ** I don't know why, but is_fgbg_competitive (normalizing across the token dimension) **
         # ** performs worse. **
-        if self.is_fgbg_competitive:
+        # Compatible with old checkpoints.
+        if 'is_fgbg_competitive' in self.__dict__ and self.is_fgbg_competitive:
             # Attention probs are normalized across the fg/bg (2) dimension.
             attn = sim_scores.softmax(dim=1)
         else:
