@@ -7,7 +7,7 @@ from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
 from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices, \
-                     replace_rows_of_copycat_embs, contrast_fgbg_coeff_in_attn_mat
+                     replace_rows_of_copycat_embs, contrast_fgbg_attns_in_attn_mat
 
 def exists(val):
     return val is not None
@@ -241,7 +241,7 @@ class CrossAttention(nn.Module):
                 else:
                     bg_attn_behavior = 'contrast_fg'
 
-                sim = contrast_fgbg_coeff_in_attn_mat(sim, subj_indices, bg_indices, h,
+                sim = contrast_fgbg_attns_in_attn_mat(sim, subj_indices, bg_indices, h,
                                                        bg_attn_behavior=bg_attn_behavior,
                                                        contrast_coeff=self.contrast_fgbg_coeff)
 

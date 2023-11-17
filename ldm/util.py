@@ -835,7 +835,7 @@ def replace_rows_of_copycat_embs(attn_mat, subj_indices, attn_copycat_emb_range,
 # bg_attn_behavior: 'contrast_fg', 'copy_fg', 'zero'.
 # During training, always bg_attn_behavior = 'contrast_fg'.
 # contrast_coeff: controls the degree of contrast.
-def contrast_fg_bg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, 
+def contrast_fgbg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H, 
                                      bg_attn_behavior='contrast_fg',
                                      contrast_coeff=0.5):
     # attn_mat: [32, 4096, 77]. 32: B * H. B = 4, H = 8.
