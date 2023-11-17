@@ -273,12 +273,18 @@ class AttentionalPooler(nn.Module):
             img_mask = img_mask.permute(0, 2, 1)
 
         # attn: [B, 2, 4096]. 2: fg/bg, 4096: image patches.
-        # ** I don't know why, but is_fgbg_competitive (normalizing across the token dimension) **
-        # ** performs worse. **
+        # ** If only normalizing across the token (2) dimension, the performance is poor. **
         # Compatible with old checkpoints.
         if 'is_fgbg_competitive' in self.__dict__ and self.is_fgbg_competitive:
-            # Attention probs are normalized across the fg/bg (2) dimension.
-            attn = sim_scores.softmax(dim=1)
+            # Attention probs are normalized across the joint space of fg/bg (2) and image patches (4096).
+            # This means the fg attention on patch p_0 is competitive with all other patches {p_i}
+            # in the image, as well as with bg on p_0. 
+            # Although after ln_fg_out, the overall scales of fg and bg, respectively, 
+            # are normalized (removed), it still gives more flexibility to each individual patch
+            # how much attention it will receive from an fg embedding (relative to bg embeddings).
+            sim_scores_shape = sim_scores.shape
+            attn = sim_scores.reshape(sim_scores.shape[0], -1).softmax(dim=1)
+            attn = attn.reshape(sim_scores_shape)
         else:
             # Attention probs are normalized across the image patches (4096) dimension.
             attn = sim_scores.softmax(dim=-1)
