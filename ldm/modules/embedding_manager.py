@@ -272,6 +272,7 @@ class AttentionalPooler(nn.Module):
             # Prepare to be used by v_pooler.
             img_mask = img_mask.permute(0, 2, 1)
 
+        # attn: [B, 2, 4096]. 2: fg/bg, 4096: image patches.
         # ** I don't know why, but is_fgbg_competitive (normalizing across the token dimension) **
         # ** performs worse. **
         if self.is_fgbg_competitive:
