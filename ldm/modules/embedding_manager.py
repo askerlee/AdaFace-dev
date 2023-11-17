@@ -168,6 +168,7 @@ class AttentionalPooler(nn.Module):
 
         # v_pooler is used only if fg_q_emb is None.
         self.v_pooler = MaskedAvgPool1d(dim=1, keepdim=True)
+        self.is_fgbg_competitive = True
 
     # k: query in the UNet attention layer. Used as key here.
     # fg_q_emb: [768,] static subject embedding of this layer. Used as query here.
@@ -271,9 +272,15 @@ class AttentionalPooler(nn.Module):
             # Prepare to be used by v_pooler.
             img_mask = img_mask.permute(0, 2, 1)
 
-        # attn: [B, 2, 4096]. Normalize across the image patches (4096) dimension.
-        # ** I don't know why, but normalizing across the token (2) dimension performs worse. **
-        attn = sim_scores.softmax(dim=-1)
+        # ** I don't know why, but is_fgbg_competitive (normalizing across the token dimension) **
+        # ** performs worse. **
+        if self.is_fgbg_competitive:
+            # Attention probs are normalized across the fg/bg (2) dimension.
+            attn = sim_scores.softmax(dim=1)
+        else:
+            # Attention probs are normalized across the image patches (4096) dimension.
+            attn = sim_scores.softmax(dim=-1)
+
         # attn_fg, attn_bg: [B, 1, 4096].
         attn_fg, attn_bg = attn.split(1, dim=1)
 
