@@ -1718,8 +1718,9 @@ class EmbeddingManager(nn.Module):
     def get_contrast_fgbg_coeff(self, training_percent=0):
         if self.training:
             # contrast_fgbg_coeff will gradually decrease from contrast_fgbg_init_coeff to 0,
-            # at 50% training iterations.
-            contrast_fgbg_coeff = anneal_value(training_percent, 0.5, 
+            # at the beginning 1/4 of all training iterations (if total iters = 4500, 
+            # then stop attn contrast at the 1125-th iter).
+            contrast_fgbg_coeff = anneal_value(training_percent, 0.25, 
                                                [self.contrast_fgbg_init_coeff, 0])
             return contrast_fgbg_coeff
         else:
