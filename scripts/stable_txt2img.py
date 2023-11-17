@@ -298,9 +298,9 @@ def parse_args():
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
-    parser.add_argument("--specialized_comp_embs_frac",
-                        type=int, default=0,
-                        help="1/F subject embeddings are specialized for composition (default: 0, disabled)")
+    parser.add_argument("--specialized_comp_embs_mod",
+                        type=int, default=-1,
+                        help="Modulus used to identify a subset of subject embeddings specialized for composition (default: -1, disabled)")
     parser.add_argument("--attn_postmix_weight", type=float, default=argparse.SUPPRESS,
                         help="Weight of post-mixing attention.")
     
@@ -410,10 +410,10 @@ def main(opt):
 
         if hasattr(opt, 'emb_ema_as_pooling_probe'):
             model.embedding_manager.set_emb_ema_as_pooling_probe(opt.emb_ema_as_pooling_probe)
-        # specialized_comp_embs_frac is set after loading the ckpt. 
+        # specialized_comp_embs_mod is set after loading the ckpt. 
         # So it can override the ckpt setting.
-        if opt.specialized_comp_embs_frac > 0:
-            model.embedding_manager.set_specialized_comp_embs_frac(opt.specialized_comp_embs_frac)
+        if opt.specialized_comp_embs_mod > 0:
+            model.embedding_manager.set_specialized_comp_embs_mod(opt.specialized_comp_embs_mod)
         if hasattr(opt, 'attn_postmix_weight'):
             model.embedding_manager.initialize_attn_postmix_components(opt.attn_postmix_weight)
 

@@ -59,9 +59,9 @@ def parse_args():
                         const=True, default=argparse.SUPPRESS,
                         help="Whether to normalize the subject embedding attention scores")
         
-    parser.add_argument("--specialized_comp_embs_frac",
-                        type=int, default=0,
-                        help="1/F subject embeddings are specialized for composition (default: 0, disabled)")
+    parser.add_argument("--specialized_comp_embs_mod",
+                        type=int, default=-1,
+                        help="Modulus used to identify a subset of subject embeddings specialized for composition (default: -1, disabled)")
     parser.add_argument("--attn_postmix_weight", type=float, default=argparse.SUPPRESS,
                         help="Weight of post-mixing attention. 0 to disable.")
     
@@ -478,8 +478,8 @@ if __name__ == "__main__":
             else:
                 command_line += f" --normalize_subj_attn 0"
                             
-        if args.specialized_comp_embs_frac > 0:
-            command_line += f" --specialized_comp_embs_frac {args.specialized_comp_embs_frac}"
+        if args.specialized_comp_embs_mod > 0:
+            command_line += f" --specialized_comp_embs_mod {args.specialized_comp_embs_mod}"
         if hasattr(args, 'attn_postmix_weight'):
             command_line += f" --attn_postmix_weight {args.attn_postmix_weight}"
             

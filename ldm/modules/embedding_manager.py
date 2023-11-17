@@ -856,9 +856,9 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight=0.5, 
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
-            # If specialized_comp_embs_frac > 0, say 3, then 1/3 of the embeddings 
+            # If specialized_comp_embs_mod > 0, say 3, then 1/3 of the embeddings 
             # are specialized for composition, and 2/3 are ordinary embeddings.
-            specialized_comp_embs_frac=0,
+            specialized_comp_embs_mod=-1,
             attn_postmix_weight=0.,
             training_add_noise_std_range=None,
             training_add_noise_prob=None,
@@ -1060,7 +1060,7 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_token_indices_cache = {}
         self.iter_type = None       # 'recon_iter' or 'distill_iter'
-        self.set_specialized_comp_embs_frac(specialized_comp_embs_frac)
+        self.set_specialized_comp_embs_mod(specialized_comp_embs_mod)
         self.fg_selective_grad_scale  = 0.5
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
 
@@ -1200,8 +1200,8 @@ class EmbeddingManager(nn.Module):
                 # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
                 subj_static_embedding_k = subj_static_embedding[:, k]
-                if self.iter_type is not None and not token_is_bg and self.specialized_comp_embs_frac > 0:
-                    subj_static_embedding_k_gs = self.scale_grad_of_fg_emb_subset(subj_static_embedding_k, k, self.iter_type)
+                if self.iter_type is not None and not token_is_bg and self.specialized_comp_embs_mod > 0:
+                    subj_static_embedding_k_gs = self.specialized_gs_on_embs(subj_static_embedding_k, k, self.iter_type)
                 else:
                     subj_static_embedding_k_gs = subj_static_embedding_k
 
@@ -1378,8 +1378,8 @@ class EmbeddingManager(nn.Module):
                 placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k)
                 # subj_ada_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
                 subj_ada_embedding_k = subj_ada_embedding[placeholder_indices_1st[0], k]
-                if self.iter_type is not None and not token_is_bg and self.specialized_comp_embs_frac > 0:
-                    subj_ada_embedding_k_gs = self.scale_grad_of_fg_emb_subset(subj_ada_embedding_k, k, self.iter_type)
+                if self.iter_type is not None and not token_is_bg and self.specialized_comp_embs_mod > 0:
+                    subj_ada_embedding_k_gs = self.specialized_gs_on_embs(subj_ada_embedding_k, k, self.iter_type)
                 else:
                     subj_ada_embedding_k_gs = subj_ada_embedding_k
 
@@ -1414,7 +1414,7 @@ class EmbeddingManager(nn.Module):
             batch_idx = instance_fg_indices[0][0]
             # Number of subject embeddings.
             M = len(instance_fg_indices[0])
-            if M > 1 and self.specialized_comp_embs_frac > 0:
+            if M > 1 and self.specialized_comp_embs_mod > 0:
                 # Only the odd embeddings participate in cross-attention.
                 # If M=9, (0..8), then sel_fg_indices = odd_fg_indices = 1, 3, 5, 7 (4 vecs).
                 odd_fg_indices_B = instance_fg_indices[0][1::2]
@@ -1457,7 +1457,7 @@ class EmbeddingManager(nn.Module):
                                  + self.attn_postmix_weight * attn_embedded_text
         return postmix_embedded_text
     
-    def scale_grad_of_fg_emb_subset(self, fg_embedding_k, k, iter_type):
+    def specialized_gs_on_embs(self, fg_embedding_k, k, iter_type):
         if iter_type == 'recon_iter':
             # All embeddings will be updated in a recon_iter.
             return fg_embedding_k
@@ -1473,13 +1473,19 @@ class EmbeddingManager(nn.Module):
             """            
 
         elif iter_type == 'distill_iter':
-            # If F = specialized_comp_embs_frac > 0, say 3, then 1/3 of the embeddings 
-            # are specialized for composition, and 2/3 are ordinary embeddings.
-            # In a distill_iter, do gs if k / F = 0, not if k / F != 0. 
+            # The rationale is some compositional iterations are quite noisy (side views, 
+            # long distance from camera, no faces, etc). These iterations will be mainly handled
+            # by the unprotected embeddings. 
+            # The protected embeddings will be updated more slowly in such cases.
+            # If F = specialized_comp_embs_mod > 0, say 3, then 1/3 of the embeddings 
+            # are specialized for composition distillation, and 2/3 are ordinary embeddings.
+            # In a distill_iter, do gs if k / F != 0 (6 embs), no gs if k / F = 0 (3 embs) 
             # If F = 3, M = 9, then
-            # vectors 0, 3, 6 (3 vecs) are 0.5 grad and are specialized to distill.
-            # Vectors 1, 2, ..., 8 (6 vecs) are full grad and are not specialized.
-            if k % self.specialized_comp_embs_frac == 0:
+            # vectors 0, 3, 6 (3 vecs) have full grad, unprotected, and are specialized to distillation.
+            # These embeddings will be updated fast in cases of noisy compositional iterations.
+            # Vectors 1, 2, ..., 8 (6 vecs) are 0.5 grad and are protected 
+            # from being updated fast during distillation iterations (therefore keeping authenticity).
+            if k % self.specialized_comp_embs_mod != 0:
                 return self.fg_selective_grad_scaler(fg_embedding_k)
             else:
                 return fg_embedding_k
@@ -1673,11 +1679,11 @@ class EmbeddingManager(nn.Module):
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
 
-    # If specialized_comp_embs_frac > 0, say 3, then 1/3 of the embeddings 
+    # If specialized_comp_embs_mod > 0, say 3, then 1/3 of the embeddings 
     # are specialized for composition, and 2/3 are ordinary embeddings.
-    def set_specialized_comp_embs_frac(self, specialized_comp_embs_frac):
-        self.specialized_comp_embs_frac = specialized_comp_embs_frac
-        print(f"Setting specialized_comp_embs_frac = {specialized_comp_embs_frac}")
+    def set_specialized_comp_embs_mod(self, specialized_comp_embs_mod):
+        self.specialized_comp_embs_mod = specialized_comp_embs_mod
+        print(f"Setting specialized_comp_embs_mod = {specialized_comp_embs_mod}")
 
     # attn_copycat_emb_mod = None:          Not specified.
     # attn_copycat_emb_mod = -1 or 0:       Disabled.
@@ -1916,7 +1922,7 @@ class EmbeddingManager(nn.Module):
                      "attn_postmix_weight":             self.attn_postmix_weight,
                      "postmix_attn_layer":              self.postmix_attn_layer,
                      "postmix_attn_LN":                 self.postmix_attn_LN,
-                     "specialized_comp_embs_frac":      self.specialized_comp_embs_frac,
+                     "specialized_comp_embs_mod":       self.specialized_comp_embs_mod,
                      "normalize_subj_attn":             self.normalize_subj_attn,
                      "use_conv_attn_kernel_size":       self.use_conv_attn_kernel_size,
                      "attn_copycat_emb_mod":            self.attn_copycat_emb_mod,
@@ -1971,8 +1977,8 @@ class EmbeddingManager(nn.Module):
                                                         ckpt["postmix_attn_layer"], 
                                                         ckpt["postmix_attn_LN"])
             
-            if "specialized_comp_embs_frac" in ckpt:
-                self.set_specialized_comp_embs_frac(ckpt["specialized_comp_embs_frac"])
+            if "specialized_comp_embs_mod" in ckpt:
+                self.set_specialized_comp_embs_mod(ckpt["specialized_comp_embs_mod"])
             # The four options should coexist in the ckpt.
             use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
             contrast_fgbg_init_coeff    = ckpt.get("contrast_fgbg_init_coeff",  None)
