@@ -842,7 +842,9 @@ def main(opt):
                     if opt.bb_type:
                         experiment_sig += "-" + opt.bb_type
                     if opt.neg_prompt != "":
-                        experiment_sig += "-" + "neg"
+                        experiment_sig += "-neg"
+                    if opt.contrast_fgbg_inf_coeff != 0:
+                        experiment_sig += f"-contrast{opt.contrast_fgbg_inf_coeff:.1f}"
 
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                     if opt.from_file:
