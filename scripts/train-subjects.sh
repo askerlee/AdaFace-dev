@@ -103,8 +103,8 @@ if set -q _flag_use_conv_attn_kernel_size
 end
 
 if set -q _flag_contrast_fg_bg_attns
-    set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --contrast_fg_bg_attns
-#    set EXTRA_EVAL_ARGS0 $EXTRA_EVAL_ARGS0   --contrast_fg_bg_attns
+    set EXTRA_TRAIN_ARGS0 $EXTRA_TRAIN_ARGS0 --contrast_fg_bg_attns $_flag_contrast_fg_bg_attns
+#    set EXTRA_EVAL_ARGS0 $EXTRA_EVAL_ARGS0   --contrast_fg_bg_attns $_flag_contrast_fg_bg_attns
 end
 
 set -q _flag_clip_last_layers_skip_weights; and set -l clip_last_layers_skip_weights (string split "," $_flag_clip_last_layers_skip_weights);
