@@ -1062,8 +1062,9 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_token_indices_cache = {}
         self.iter_type = None       # 'recon_iter' or 'distill_iter'
         self.set_specialized_comp_embs_mod(specialized_comp_embs_mod)
-        self.fg_selective_grad_scale  = 0.5
-        self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
+        # 2/3 of embs are protected and receive 1/3 of normal grads in distillation iterations.
+        self.fg_specialized_embs_grad_scale  = 0.33
+        self.fg_specialized_embs_grad_scaler = gen_gradient_scaler(self.fg_specialized_embs_grad_scale)
 
         self.postmix_attn_layer = None
         self.postmix_attn_LN    = None
@@ -1470,7 +1471,7 @@ class EmbeddingManager(nn.Module):
             if k % 2 == 0:
                 return fg_embedding_k
             else:
-                return self.fg_selective_grad_scaler(fg_embedding_k)
+                return self.fg_specialized_embs_grad_scaler(fg_embedding_k)
             """            
 
         elif iter_type == 'distill_iter':
@@ -1487,7 +1488,7 @@ class EmbeddingManager(nn.Module):
             # Vectors 1, 2, ..., 8 (6 vecs) are 0.5 grad and are protected 
             # from being updated fast during distillation iterations (therefore keeping authenticity).
             if k % self.specialized_comp_embs_mod != 0:
-                return self.fg_selective_grad_scaler(fg_embedding_k)
+                return self.fg_specialized_embs_grad_scaler(fg_embedding_k)
             else:
                 return fg_embedding_k
         else:
