@@ -37,8 +37,8 @@ def parse_args():
                         type=int, default=4,
                         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
     parser.add_argument("--contrast_fg_bg_attns",
-                        type=str2bool, const=True, nargs="?", default=argparse.SUPPRESS, 
-                        help="Whether to copy the foreground attention to the background tokens.")
+                        type=float, default=argparse.SUPPRESS,
+                        help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")    
     parser.add_argument("--bg_attn_behavior_in_inference",
                         type=str, default=argparse.SUPPRESS, 
                         choices=["zero", "contrast_fg", "copy_fg"],
@@ -353,7 +353,7 @@ if __name__ == "__main__":
         os.makedirs(outdir, exist_ok=True)
 
         if hasattr(args, 'contrast_fg_bg_attns'):
-            if args.contrast_fg_bg_attns and not args.include_bg_string:
+            if args.contrast_fg_bg_attns >= 0 and not args.include_bg_string:
                 print("WARNING: --contrast_fg_bg_attns is specified, but --include_bg_string is not. Set it to True.")
                 args.include_bg_string = True
 

@@ -511,7 +511,7 @@ class UNetModel(nn.Module):
                             'use_conv_attn_kernel_size:layerwise':      [-1] * 16,
                             'shift_attn_maps_for_diff_embs:layerwise':  [True] * 16,
                             'attn_copycat_emb_range':                   None,
-                            'contrast_fg_bg_attns':                     False,
+                            'contrast_fg_bg_attns':                     0,
                             'bg_attn_behavior_in_inference':            'zero',
                             'conv_attn_layer_scale:layerwise':          None,
                             'save_attn_vars':                           False,
@@ -845,7 +845,7 @@ class UNetModel(nn.Module):
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn_kernel_size    = extra_info.get('use_conv_attn_kernel_size',  None)   if extra_info is not None else None
         attn_copycat_emb_range       = extra_info.get('attn_copycat_emb_range',  None)  if extra_info is not None else None
-        contrast_fg_bg_attns         = extra_info.get('contrast_fg_bg_attns',    False) if extra_info is not None else False
+        contrast_fg_bg_attns         = extra_info.get('contrast_fg_bg_attns',    0)     if extra_info is not None else 0
         bg_attn_behavior_in_inference = extra_info.get('bg_attn_behavior_in_inference', 'zero') if extra_info is not None else 'zero'
         conv_attn_layerwise_scales   = extra_info.get('conv_attn_layerwise_scales', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None

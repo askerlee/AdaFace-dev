@@ -175,7 +175,7 @@ class CrossAttention(nn.Module):
         self.conv_attn_layer_scale  = 1.0
         self.normalize_subj_attn    = False
         self.attn_copycat_emb_range = None
-        self.contrast_fg_bg_attns   = False
+        self.contrast_fg_bg_attns   = 0
         self.is_training            = True
         self.bg_attn_behavior_in_inference = 'zero'  # 'zero', 'copy_fg', 'contrast_fg'
 
@@ -233,7 +233,7 @@ class CrossAttention(nn.Module):
             if self.attn_copycat_emb_range is not None:
                 sim = replace_rows_of_copycat_embs(sim, subj_indices, self.attn_copycat_emb_range, h)
             
-            if self.contrast_fg_bg_attns and bg_indices is not None:
+            if self.contrast_fg_bg_attns > 0 and bg_indices is not None:
                 # During inference, if bg tokens are included in the prompt, 
                 # we set bg attn to 0 to prevent it from affecting the generation.
                 if self.bg_attn_behavior_in_inference is not None and (not self.is_training):
@@ -242,7 +242,8 @@ class CrossAttention(nn.Module):
                     bg_attn_behavior = 'contrast_fg'
 
                 sim = contrast_fg_bg_attns_in_attn_mat(sim, subj_indices, bg_indices, h,
-                                                       bg_attn_behavior=bg_attn_behavior)
+                                                       bg_attn_behavior=bg_attn_behavior,
+                                                       contrast_coeff=self.contrast_fg_bg_attns)
 
             if self.normalize_subj_attn:
                 sim = normalize_attn_at_indices(sim, subj_indices, h)

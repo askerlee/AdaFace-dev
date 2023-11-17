@@ -855,7 +855,7 @@ class EmbeddingManager(nn.Module):
             normalize_subj_attn=False,
             use_conv_attn_kernel_size=-1,
             attn_copycat_emb_range=[-1, -1],
-            contrast_fg_bg_attns=False,
+            contrast_fg_bg_attns=0,
             **kwargs
     ):
         super().__init__()
@@ -1691,15 +1691,18 @@ class EmbeddingManager(nn.Module):
 
             print(f"Setting attn_copycat_emb_range = {attn_copycat_emb_range}{extra_msg}")
 
-        if (contrast_fg_bg_attns is not None) or do_init:
-            self.contrast_fg_bg_attns = contrast_fg_bg_attns
-            extra_msg = ", DISABLED" if contrast_fg_bg_attns is False else ""
+        if contrast_fg_bg_attns is not None or do_init:
+            if contrast_fg_bg_attns is None:
+                self.contrast_fg_bg_attns = 0
+            else:
+                self.contrast_fg_bg_attns = contrast_fg_bg_attns
+            extra_msg = ", DISABLED" if contrast_fg_bg_attns <= 0 else ""
             print(f"Setting contrast_fg_bg_attns = {contrast_fg_bg_attns}{extra_msg}")
 
-        # bg_attn_behavior_in_inference is only in effect if contrast_fg_bg_attns is enabled.
+        # bg_attn_behavior_in_inference is only in effect if contrast_fg_bg_attns > 0 (enabled).
         # So we can safely override the existing value 
         # (even if it's inappropriately set during training or during inference 
-        # while not contrast_fg_bg_attns, it won't have effect.
+        # while contrast_fg_bg_attns <= 0, it won't have effect.
         self.bg_attn_behavior_in_inference = bg_attn_behavior_in_inference
         print(f"Setting bg_attn_behavior_in_inference = {bg_attn_behavior_in_inference}")
 

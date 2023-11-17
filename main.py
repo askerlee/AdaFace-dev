@@ -233,9 +233,10 @@ def get_parser(**parser_kwargs):
         default=[-1, -1],
         help="Range of embedding indices to be used as copycat attention. "
              "Default [-1, -1]: not specified.")
+    
     parser.add_argument("--contrast_fg_bg_attns",
-                        action="store_true", 
-                        help="Whether to copy the foreground attention to the background tokens.")
+                        type=float, default=argparse.SUPPRESS,
+                        help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")
             
     parser.add_argument("--normalize_subj_attn", 
         type=str2bool, nargs="?", const=True, default=argparse.SUPPRESS,
@@ -825,9 +826,10 @@ if __name__ == "__main__":
 
         config.model.params.personalization_config.params.attn_copycat_emb_range \
             = opt.attn_copycat_emb_range
-        config.model.params.personalization_config.params.contrast_fg_bg_attns \
-            = opt.contrast_fg_bg_attns
-        
+        if hasattr(opt, 'contrast_fg_bg_attns'):
+            config.model.params.personalization_config.params.contrast_fg_bg_attns \
+                = opt.contrast_fg_bg_attns
+            
         if hasattr(opt, 'composition_regs_iter_gap'):
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
 

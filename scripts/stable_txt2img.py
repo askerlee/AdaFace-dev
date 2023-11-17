@@ -282,8 +282,8 @@ def parse_args():
                         help="Range of embedding indices to be used as copycat attention. "
                             "Default [-1, -1]: not specified.")
     parser.add_argument("--contrast_fg_bg_attns",
-                        type=str2bool, const=True, nargs="?", default=False, #argparse.SUPPRESS,
-                        help="Whether to copy the foreground attention to the background tokens.")
+                        type=float, default=argparse.SUPPRESS,
+                        help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")
     parser.add_argument("--bg_attn_behavior_in_inference",
                         type=str, default="zero", choices=["zero", "contrast_fg", "copy_fg"],
                         help="How to handle bg attention in inference, if contrast_fg_bg_attns is enabled. ")
