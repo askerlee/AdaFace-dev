@@ -228,11 +228,10 @@ def get_parser(**parser_kwargs):
                         help="Use convolutional attention of subject tokens with this kernel size."
                              "Default: None, not specified.")
     
-    parser.add_argument("--attn_copycat_emb_range",
-        type=int, nargs=2, 
-        default=[-1, -1],
-        help="Range of embedding indices to be used as copycat attention. "
-             "Default [-1, -1]: not specified.")
+    parser.add_argument("--attn_copycat_emb_mod",
+        type=int, default=-1,
+        help="Modulo of embedding indices to be used for copycat attention. "
+             "Default -1: disabled.")
     
     parser.add_argument("--contrast_fgbg_init_coeff",
                         type=float, default=0,
@@ -824,8 +823,8 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.use_conv_attn_kernel_size \
                 = opt.use_conv_attn_kernel_size
 
-        config.model.params.personalization_config.params.attn_copycat_emb_range \
-            = opt.attn_copycat_emb_range
+        config.model.params.personalization_config.params.attn_copycat_emb_mod \
+            = opt.attn_copycat_emb_mod
         if hasattr(opt, 'contrast_fgbg_init_coeff'):
             config.model.params.personalization_config.params.contrast_fgbg_init_coeff \
                 = opt.contrast_fgbg_init_coeff

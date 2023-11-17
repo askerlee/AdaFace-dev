@@ -183,7 +183,7 @@ class DDPM(pl.LightningModule):
         else:
             self.scheduler = None
             self.warm_up_steps = 500
-            
+
         self.training_percent = 0.
         
         self.v_posterior = v_posterior
@@ -833,7 +833,7 @@ class LatentDiffusion(DDPM):
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
                                 'use_ada_context':               self.use_ada_embedding,
                                 'use_conv_attn_kernel_size':     self.embedding_manager.use_conv_attn_kernel_size,
-                                'attn_copycat_emb_range':        self.embedding_manager.attn_copycat_emb_range,
+                                'attn_copycat_emb_mod':          self.embedding_manager.attn_copycat_emb_mod,
                                 'contrast_fgbg_coeff':           self.embedding_manager.get_contrast_fgbg_coeff(self.training_percent),
                                 'bg_attn_behavior_in_inference': self.embedding_manager.bg_attn_behavior_in_inference,
                                 # Setting up 'subj_indices' here is necessary for inference.

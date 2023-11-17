@@ -277,10 +277,11 @@ def parse_args():
                         help="Use convolutional attention of subject tokens with this kernel size."
                              "Default: None, not specified.")
     
-    parser.add_argument("--attn_copycat_emb_range",
-                        type=int, nargs=2, default=None,
-                        help="Range of embedding indices to be used as copycat attention. "
-                            "Default [-1, -1]: not specified.")
+    parser.add_argument("--attn_copycat_emb_mod",
+                        type=int, default=None,
+                        help="Modulo used to identify embedding indices used for copycat attention. "
+                            "Default -1: disabled.")
+    
     parser.add_argument("--contrast_fgbg_inf_coeff",
                         type=float, default=0,
                         help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")
@@ -297,9 +298,9 @@ def parse_args():
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
-    parser.add_argument("--use_specialized_comp_embs",
-                        type=str2bool, const=True, nargs="?", default=argparse.SUPPRESS,
-                        help="Use specialized subject embeddings for composition")
+    parser.add_argument("--specialized_comp_embs_frac",
+                        type=int, default=0,
+                        help="1/F subject embeddings are specialized for composition (default: 0, disabled)")
     parser.add_argument("--attn_postmix_weight", type=float, default=argparse.SUPPRESS,
                         help="Weight of post-mixing attention.")
     
@@ -409,10 +410,10 @@ def main(opt):
 
         if hasattr(opt, 'emb_ema_as_pooling_probe'):
             model.embedding_manager.set_emb_ema_as_pooling_probe(opt.emb_ema_as_pooling_probe)
-        # use_specialized_comp_embs is set after loading the ckpt. 
-        # So it can be used to override the ckpt setting.
-        if hasattr(opt, 'use_specialized_comp_embs'):
-            model.embedding_manager.set_use_specialized_comp_embs(opt.use_specialized_comp_embs)
+        # specialized_comp_embs_frac is set after loading the ckpt. 
+        # So it can override the ckpt setting.
+        if opt.specialized_comp_embs_frac > 0:
+            model.embedding_manager.set_specialized_comp_embs_frac(opt.specialized_comp_embs_frac)
         if hasattr(opt, 'attn_postmix_weight'):
             model.embedding_manager.initialize_attn_postmix_components(opt.attn_postmix_weight)
 
@@ -426,7 +427,7 @@ def main(opt):
         contrast_fgbg_coeff = opt.contrast_fgbg_inf_coeff if hasattr(opt, 'contrast_fgbg_inf_coeff') else None
         normalize_subj_attn = opt.normalize_subj_attn    if hasattr(opt, 'normalize_subj_attn')  else None
         model.embedding_manager.set_embs_attn_tricks(opt.use_conv_attn_kernel_size, 
-                                                     opt.attn_copycat_emb_range,
+                                                     opt.attn_copycat_emb_mod,
                                                      contrast_fgbg_coeff,
                                                      normalize_subj_attn,
                                                      opt.bg_attn_behavior_in_inference)

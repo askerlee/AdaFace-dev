@@ -47,9 +47,10 @@ def parse_args():
     parser.add_argument("--use_conv_attn_kernel_size",
                         type=int, default=argparse.SUPPRESS, 
                         help="Use convolutional attention at subject tokens")
-    parser.add_argument("--attn_copycat_emb_range",
-                        type=int, nargs=2, default=argparse.SUPPRESS,
-                        help="Range of embedding indices to be used as copycat attention.")
+    parser.add_argument("--attn_copycat_emb_mod",
+                        type=int, default=argparse.SUPPRESS,
+                        help="Modulo used to identify embedding indices used for copycat attention. "
+                             "Default -1: disabled.")
     
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
@@ -58,9 +59,9 @@ def parse_args():
                         const=True, default=argparse.SUPPRESS,
                         help="Whether to normalize the subject embedding attention scores")
         
-    parser.add_argument("--use_specialized_comp_embs",
-                        type=str2bool, const=True, nargs="?", default=argparse.SUPPRESS,
-                        help="Use specialized subject embeddings for composition")
+    parser.add_argument("--specialized_comp_embs_frac",
+                        type=int, default=0,
+                        help="1/F subject embeddings are specialized for composition (default: 0, disabled)")
     parser.add_argument("--attn_postmix_weight", type=float, default=argparse.SUPPRESS,
                         help="Weight of post-mixing attention. 0 to disable.")
     
@@ -462,8 +463,8 @@ if __name__ == "__main__":
             command_line += f" --placeholder_string {args.orig_placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
         if hasattr(args, 'use_conv_attn_kernel_size'):
             command_line += f" --use_conv_attn_kernel_size {args.use_conv_attn_kernel_size}"
-        if hasattr(args, 'attn_copycat_emb_range'):
-            command_line += f" --attn_copycat_emb_range {args.attn_copycat_emb_range[0]} {args.attn_copycat_emb_range[1]}"
+        if hasattr(args, 'attn_copycat_emb_mod'):
+            command_line += f" --attn_copycat_emb_mod {args.attn_copycat_emb_mod}"
         if hasattr(args, 'contrast_fgbg_inf_coeff'):
             command_line += f" --contrast_fgbg_inf_coeff {args.contrast_fgbg_inf_coeff}"
         if hasattr(args, 'bg_attn_behavior_in_inference'):
@@ -477,8 +478,8 @@ if __name__ == "__main__":
             else:
                 command_line += f" --normalize_subj_attn 0"
                             
-        if hasattr(args, 'use_specialized_comp_embs'):
-            command_line += f" --use_specialized_comp_embs {args.use_specialized_comp_embs}"
+        if args.specialized_comp_embs_frac > 0:
+            command_line += f" --specialized_comp_embs_frac {args.specialized_comp_embs_frac}"
         if hasattr(args, 'attn_postmix_weight'):
             command_line += f" --attn_postmix_weight {args.attn_postmix_weight}"
             

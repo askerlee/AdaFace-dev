@@ -33,7 +33,7 @@ model:
         ada_emb_weight: 0.5
         ada_use_attn_pooler: True
         emb_ema_as_pooling_probe_weight: 0.5
-        use_specialized_comp_embs: False
+        specialized_comp_embs_frac: 0
         attn_postmix_weight: 0
                 
     unet_config:

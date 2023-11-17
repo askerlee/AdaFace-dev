@@ -848,13 +848,15 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight=0.5, 
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
-            use_specialized_comp_embs=False,
+            # If specialized_comp_embs_frac > 0, say 3, then 1/3 of the embeddings 
+            # are specialized for composition, and 2/3 are ordinary embeddings.
+            specialized_comp_embs_frac=0,
             attn_postmix_weight=0.,
             training_add_noise_std_range=None,
             training_add_noise_prob=None,
             normalize_subj_attn=False,
             use_conv_attn_kernel_size=-1,
-            attn_copycat_emb_range=[-1, -1],
+            attn_copycat_emb_mod=-1,
             contrast_fgbg_init_coeff=0,
             **kwargs
     ):
@@ -887,9 +889,8 @@ class EmbeddingManager(nn.Module):
         self.initialize_conv_attn_layerwise_scales(1, learnable=True)
         
         self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
-        self.set_embs_attn_tricks(use_conv_attn_kernel_size, attn_copycat_emb_range, 
-                                  contrast_fgbg_init_coeff, normalize_subj_attn, 
-                                  do_init=True)
+        self.set_embs_attn_tricks(use_conv_attn_kernel_size, attn_copycat_emb_mod, 
+                                  contrast_fgbg_init_coeff, normalize_subj_attn)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
 
@@ -1051,7 +1052,7 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_token_indices_cache = {}
         self.iter_type = None       # 'recon_iter' or 'distill_iter'
-        self.set_use_specialized_comp_embs(use_specialized_comp_embs)
+        self.set_specialized_comp_embs_frac(specialized_comp_embs_frac)
         self.fg_selective_grad_scale  = 0.5
         self.fg_selective_grad_scaler = gen_gradient_scaler(self.fg_selective_grad_scale)
 
@@ -1191,7 +1192,7 @@ class EmbeddingManager(nn.Module):
                 # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
                 subj_static_embedding_k = subj_static_embedding[:, k]
-                if self.iter_type is not None and not token_is_bg and self.use_specialized_comp_embs:
+                if self.iter_type is not None and not token_is_bg and self.specialized_comp_embs_frac > 0:
                     subj_static_embedding_k_gs = self.scale_grad_of_fg_emb_subset(subj_static_embedding_k, k, self.iter_type)
                 else:
                     subj_static_embedding_k_gs = subj_static_embedding_k
@@ -1369,7 +1370,7 @@ class EmbeddingManager(nn.Module):
                 placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k)
                 # subj_ada_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
                 subj_ada_embedding_k = subj_ada_embedding[placeholder_indices_1st[0], k]
-                if self.iter_type is not None and not token_is_bg and self.use_specialized_comp_embs:
+                if self.iter_type is not None and not token_is_bg and self.specialized_comp_embs_frac > 0:
                     subj_ada_embedding_k_gs = self.scale_grad_of_fg_emb_subset(subj_ada_embedding_k, k, self.iter_type)
                 else:
                     subj_ada_embedding_k_gs = subj_ada_embedding_k
@@ -1405,7 +1406,7 @@ class EmbeddingManager(nn.Module):
             batch_idx = instance_fg_indices[0][0]
             # Number of subject embeddings.
             M = len(instance_fg_indices[0])
-            if M > 1 and self.use_specialized_comp_embs:
+            if M > 1 and self.specialized_comp_embs_frac > 0:
                 # Only the odd embeddings participate in cross-attention.
                 # If M=9, (0..8), then sel_fg_indices = odd_fg_indices = 1, 3, 5, 7 (4 vecs).
                 odd_fg_indices_B = instance_fg_indices[0][1::2]
@@ -1464,10 +1465,13 @@ class EmbeddingManager(nn.Module):
             """            
 
         elif iter_type == 'distill_iter':
-            # In a distill_iter, do gs if k is even, not if k is odd.
-            # So vectors 0, 2, ..., 8 (5 vecs) are 0.5  grad and are specialized to recon.
-            #    Vectors 1, 3, ..., 7 (4 vecs) are full grad and are specialized to distill.
-            if k % 2 == 0:
+            # If F = specialized_comp_embs_frac > 0, say 3, then 1/3 of the embeddings 
+            # are specialized for composition, and 2/3 are ordinary embeddings.
+            # In a distill_iter, do gs if k / F = 0, not if k / F != 0. 
+            # If F = 3, M = 9, then
+            # vectors 0, 3, 6 (3 vecs) are 0.5 grad and are specialized to distill.
+            # Vectors 1, 2, ..., 8 (6 vecs) are full grad and are not specialized.
+            if k % self.specialized_comp_embs_frac == 0:
                 return self.fg_selective_grad_scaler(fg_embedding_k)
             else:
                 return fg_embedding_k
@@ -1661,40 +1665,38 @@ class EmbeddingManager(nn.Module):
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
 
-    def set_use_specialized_comp_embs(self, use_specialized_comp_embs):
-        self.use_specialized_comp_embs = use_specialized_comp_embs
-        print(f"Setting use_specialized_comp_embs = {use_specialized_comp_embs}")
+    # If specialized_comp_embs_frac > 0, say 3, then 1/3 of the embeddings 
+    # are specialized for composition, and 2/3 are ordinary embeddings.
+    def set_specialized_comp_embs_frac(self, specialized_comp_embs_frac):
+        self.specialized_comp_embs_frac = specialized_comp_embs_frac
+        print(f"Setting specialized_comp_embs_frac = {specialized_comp_embs_frac}")
 
-    # attn_copycat_emb_range = None:        Not specified.
-    # attn_copycat_emb_range = [-1, -1]:    Disabled.
+    # attn_copycat_emb_mod = None:          Not specified.
+    # attn_copycat_emb_mod = -1:            Disabled.
     # contrast_fgbg_init_coeff = None:      Not specified.
     # contrast_fgbg_init_coeff = 0:         Disabled.
     # During inference, contrast_fgbg_init_coeff is used as contrast_fgbg_coeff.
     # normalize_subj_attn  = None:          Not specified.
     # normalize_subj_attn  = False:         Disabled.
     def set_embs_attn_tricks(self, use_conv_attn_kernel_size=None, 
-                             attn_copycat_emb_range=None, 
+                             attn_copycat_emb_mod=None, 
                              contrast_fgbg_init_coeff=None,
                              normalize_subj_attn=None,
-                             bg_attn_behavior_in_inference='zero',
-                             do_init=False):
-        if (use_conv_attn_kernel_size is not None) or do_init:
+                             bg_attn_behavior_in_inference='zero'):
+        if use_conv_attn_kernel_size is not None:
             self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
             extra_msg = ", DISABLED" if use_conv_attn_kernel_size is -1 else ""
             print(f"Setting use_conv_attn_kernel_size = {use_conv_attn_kernel_size}{extra_msg}")
 
-        # Since attn_copycat_emb_range is not specified, we don't override the existing value.
-        if (attn_copycat_emb_range is not None) or do_init:
-            if attn_copycat_emb_range[0] < 0:
-                self.attn_copycat_emb_range    = None
+        # If attn_copycat_emb_mod is None (not specified), we don't override the existing value.
+        if attn_copycat_emb_mod is not None:
+            self.attn_copycat_emb_mod = attn_copycat_emb_mod
+            if self.attn_copycat_emb_mod < 0:
                 extra_msg = ", DISABLED"
-            else:
-                self.attn_copycat_emb_range    = attn_copycat_emb_range
-                extra_msg = ""
 
-            print(f"Setting attn_copycat_emb_range = {attn_copycat_emb_range}{extra_msg}")
+            print(f"Setting attn_copycat_emb_mod = {attn_copycat_emb_mod}{extra_msg}")
 
-        if contrast_fgbg_init_coeff is not None or do_init:
+        if contrast_fgbg_init_coeff is not None:
             if contrast_fgbg_init_coeff is None:
                 self.contrast_fgbg_init_coeff = 0
             else:
@@ -1711,7 +1713,7 @@ class EmbeddingManager(nn.Module):
         self.bg_attn_behavior_in_inference = bg_attn_behavior_in_inference
         print(f"Setting bg_attn_behavior_in_inference = {bg_attn_behavior_in_inference}")
 
-        if (normalize_subj_attn is not None) or do_init:
+        if normalize_subj_attn is not None:
             self.normalize_subj_attn = normalize_subj_attn
             print(f"Setting normalize_subj_attn = {normalize_subj_attn}")
 
@@ -1906,10 +1908,10 @@ class EmbeddingManager(nn.Module):
                      "attn_postmix_weight":             self.attn_postmix_weight,
                      "postmix_attn_layer":              self.postmix_attn_layer,
                      "postmix_attn_LN":                 self.postmix_attn_LN,
-                     "use_specialized_comp_embs":       self.use_specialized_comp_embs,
+                     "specialized_comp_embs_frac":      self.specialized_comp_embs_frac,
                      "normalize_subj_attn":             self.normalize_subj_attn,
                      "use_conv_attn_kernel_size":       self.use_conv_attn_kernel_size,
-                     "attn_copycat_emb_range":          self.attn_copycat_emb_range,
+                     "attn_copycat_emb_mod":          self.attn_copycat_emb_mod,
                      "contrast_fgbg_init_coeff":            self.contrast_fgbg_init_coeff
                    }, 
                     ckpt_path)
@@ -1961,16 +1963,16 @@ class EmbeddingManager(nn.Module):
                                                         ckpt["postmix_attn_layer"], 
                                                         ckpt["postmix_attn_LN"])
             
-            if "use_specialized_comp_embs" in ckpt:
-                self.set_use_specialized_comp_embs(ckpt["use_specialized_comp_embs"])
+            if "specialized_comp_embs_frac" in ckpt:
+                self.set_specialized_comp_embs_frac(ckpt["specialized_comp_embs_frac"])
             # The four options should coexist in the ckpt.
             use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
-            contrast_fgbg_init_coeff        = ckpt.get("contrast_fgbg_init_coeff",      None)
-            attn_copycat_emb_range      = ckpt.get("attn_copycat_emb_range",    None)
+            contrast_fgbg_init_coeff    = ckpt.get("contrast_fgbg_init_coeff",  None)
+            attn_copycat_emb_mod        = ckpt.get("attn_copycat_emb_mod",      None)
             normalize_subj_attn         = ckpt.get("normalize_subj_attn",       None)
 
             self.set_embs_attn_tricks(use_conv_attn_kernel_size, 
-                                      attn_copycat_emb_range,
+                                      attn_copycat_emb_mod,
                                       contrast_fgbg_init_coeff,
                                       normalize_subj_attn)
 
