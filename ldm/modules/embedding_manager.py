@@ -1672,7 +1672,7 @@ class EmbeddingManager(nn.Module):
         print(f"Setting specialized_comp_embs_frac = {specialized_comp_embs_frac}")
 
     # attn_copycat_emb_mod = None:          Not specified.
-    # attn_copycat_emb_mod = -1:            Disabled.
+    # attn_copycat_emb_mod = -1 or 0:       Disabled.
     # contrast_fgbg_init_coeff = None:      Not specified.
     # contrast_fgbg_init_coeff = 0:         Disabled.
     # During inference, contrast_fgbg_init_coeff is used as contrast_fgbg_coeff.
@@ -1691,7 +1691,7 @@ class EmbeddingManager(nn.Module):
         # If attn_copycat_emb_mod is None (not specified), we don't override the existing value.
         if attn_copycat_emb_mod is not None:
             self.attn_copycat_emb_mod = attn_copycat_emb_mod
-            if self.attn_copycat_emb_mod < 0:
+            if self.attn_copycat_emb_mod <= 0:
                 extra_msg = ", DISABLED"
 
             print(f"Setting attn_copycat_emb_mod = {attn_copycat_emb_mod}{extra_msg}")
@@ -1911,8 +1911,8 @@ class EmbeddingManager(nn.Module):
                      "specialized_comp_embs_frac":      self.specialized_comp_embs_frac,
                      "normalize_subj_attn":             self.normalize_subj_attn,
                      "use_conv_attn_kernel_size":       self.use_conv_attn_kernel_size,
-                     "attn_copycat_emb_mod":          self.attn_copycat_emb_mod,
-                     "contrast_fgbg_init_coeff":            self.contrast_fgbg_init_coeff
+                     "attn_copycat_emb_mod":            self.attn_copycat_emb_mod,
+                     "contrast_fgbg_init_coeff":        self.contrast_fgbg_init_coeff
                    }, 
                     ckpt_path)
 
