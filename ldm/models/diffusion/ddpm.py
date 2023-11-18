@@ -2882,7 +2882,7 @@ class LatentDiffusion(DDPM):
                 # and mix single instances). So scale down loss_comp_subj_fg_attn_preserve.
                 comp_subj_fg_attn_preserve_loss_scale = 0   # disabled. #s0.3
                 comp_subj_bg_attn_suppress_loss_scale = 0.5
-                elastic_matching_loss_scale = 1
+                elastic_matching_loss_scale = 2
                 # loss_comp_single_map_align is L1 loss on attn maps, so its magnitude is small.
                 # We need to scale it up to make it comparable to other losses.
                 comp_single_map_align_loss_scale = 3
