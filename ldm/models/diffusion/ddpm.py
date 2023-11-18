@@ -2888,13 +2888,15 @@ class LatentDiffusion(DDPM):
                 comp_single_map_align_loss_scale = 3
                 # mix single - mix comp matching loss is less important, so scale it down.
                 ms_mc_match_loss_scale = 0.1
-                loss_comp_fg_bg_preserve = (loss_comp_subj_fg_feat_preserve \
-                                             + loss_comp_subj_fg_attn_preserve * comp_subj_fg_attn_preserve_loss_scale) \
-                                             * comp_subj_fg_feat_preserve_loss_scale \
-                                            + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale \
-                                            + (loss_comp_single_map_align * comp_single_map_align_loss_scale \
+                loss_comp_fg_bg_preserve = (loss_comp_single_map_align * comp_single_map_align_loss_scale \
                                                 + loss_ss_sc_match + loss_ms_mc_match * ms_mc_match_loss_scale) \
                                               * elastic_matching_loss_scale
+                '''
+                (loss_comp_subj_fg_feat_preserve \
+                    + loss_comp_subj_fg_attn_preserve * comp_subj_fg_attn_preserve_loss_scale) \
+                    * comp_subj_fg_feat_preserve_loss_scale \
+                + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
+                '''
             else:
                 loss_comp_fg_bg_preserve = 0
 
