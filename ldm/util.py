@@ -3,6 +3,7 @@ import importlib
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 import numpy as np
 from collections import abc
 from einops import rearrange
@@ -355,10 +356,10 @@ def demean(x):
 # delta, ref_delta: [2, 16, 77, 768].
 # emb_mask: [2, 77, 1]. Could be fractional, e.g., 0.5, to discount some tokens.
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
-def calc_delta_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
-                            exponent=3, do_demean_first=False, repair_ref_bound_zeros=False,
-                            first_n_dims_to_flatten=3,
-                            ref_grad_scale=0, aim_to_align=True, debug=False):
+def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
+                        exponent=2, do_demean_first=False, repair_ref_bound_zeros=False,
+                        first_n_dims_to_flatten=3,
+                        ref_grad_scale=0, aim_to_align=True, debug=False):
     B = delta.shape[0]
     loss = 0
     if batch_mask is not None:
@@ -507,16 +508,16 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
                 tgt_delta = ortho_subtract(feat_ex,        feat_base_gs)
 
             if use_cosine_loss:
-                # ref_grad_scale=1: ref grad scaling is disabled within calc_delta_cosine_loss,
+                # ref_grad_scale=1: ref grad scaling is disabled within calc_ref_cosine_loss,
                 # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
-                loss_delta_align = calc_delta_cosine_loss(tgt_delta, src_delta, 
+                loss_delta_align = calc_ref_cosine_loss(tgt_delta, src_delta, 
                                                           exponent=cosine_exponent,
                                                           do_demean_first=False,
                                                           first_n_dims_to_flatten=(feat_base.ndim - 1), 
                                                           ref_grad_scale=1,
                                                           aim_to_align=True)
             else:
-                # ref_grad_scale=1: ref grad scaling is disabled within calc_delta_cosine_loss,
+                # ref_grad_scale=1: ref grad scaling is disabled within calc_ref_cosine_loss,
                 # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
                 # do_sqr=True: square the loss, so that the loss is more sensitive to 
                 # smaller (<< 1) align_coeffs.            
@@ -1271,9 +1272,9 @@ def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0
 # mode: either "nearest" or "nearest|bilinear". Other modes will be ignored.
 def resize_mask_for_feat_or_attn(feat_or_attn, mask, mask_name, num_spatial_dims=1,
                                  mode="nearest|bilinear", warn_on_all_zero=True):
-    spatial_scale = np.sqrt(feat_or_attn.shape[-num_spatial_dims:].numel() / mask.shape[2:].numel())
-
-    spatial_shape2 = (int(mask.shape[2] * spatial_scale), int(mask.shape[3] * spatial_scale))
+    # Assume square feature maps, target_H = target_W.
+    target_H = int(np.sqrt(feat_or_attn.shape[-num_spatial_dims:].numel()))
+    spatial_shape2 = (target_H, target_H)
 
     # NOTE: avoid "bilinear" mode. If the object is too small in the mask, 
     # it may result in all-zero masks.
@@ -1583,7 +1584,7 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
     # hurt their expression in the image (e.g., push the attributes to the background).
     # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
     loss_layer_subj_comp_key_ortho = \
-        calc_delta_cosine_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
+        calc_ref_cosine_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
                                 batch_mask=None, exponent=2,
                                 do_demean_first=do_demean_first, 
                                 first_n_dims_to_flatten=2,
@@ -1723,7 +1724,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
         static_cls_delta    = static_cls_comp_emb   - static_cls_single_emb
 
     loss_static_prompt_delta   = \
-        calc_delta_cosine_loss(static_subj_delta, static_cls_delta, 
+        calc_ref_cosine_loss(static_subj_delta, static_cls_delta, 
                                emb_mask=prompt_emb_mask_weighted,
                                do_demean_first=True,
                                aim_to_align=True)
@@ -1744,7 +1745,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
             ada_cls_delta   = ada_cls_comp_emb  - ada_cls_single_emb
 
         loss_ada_prompt_delta = \
-            calc_delta_cosine_loss(ada_subj_delta, ada_cls_delta, 
+            calc_ref_cosine_loss(ada_subj_delta, ada_cls_delta, 
                                    emb_mask=prompt_emb_mask_weighted,
                                    do_demean_first=True,
                                    aim_to_align=True)
@@ -1775,5 +1776,51 @@ def add_noise_to_embedding(embeddings, noise_rel_std_range, add_noise_prob):
     embeddings = embeddings + noise
     return embeddings
 
-def calc_elastic_matching_loss(ca_q, ca_outfeat):
-    return 0, 0, 0, 0
+def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask):
+    # fg_mask: [1, 1, 64] => [1, 64]
+    fg_mask = fg_mask.bool().squeeze(1)
+    if fg_mask.sum() == 0:
+        return 0, 0, 0
+    
+    # ca_q, ca_outfeat: [4, 1280, 64]
+    # ss_q, sc_q, ms_q, mc_q: [1, 1280, 64]. 
+    # ss_*: subj single, sc_*: subj comp, ms_*: mix single, mc_*: mix comp.
+    ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
+    # sc_ss_sim_score:        [1, 64, 64]. Pairwise matching scores between the 9 image tokens of 
+    # the subj comp instance and the 9 image tokens of the subj single instance.
+    sc_ss_sim_score = torch.matmul(sc_q.transpose(1, 2), ss_q)
+    # sc_ss_sim_prob:   [1, 64, 64]. Pairwise matching probabilities between the 9 image tokens of
+    # the subj comp instance and the 9 image tokens of the subj single instance.
+    # Normalize among subj comp tokens.
+    sc_ss_sim_prob  = F.softmax(sc_ss_sim_score, dim=1)
+    mc_ms_sim_score = torch.matmul(mc_q.transpose(1, 2), ms_q)
+    # Normalize among mix comp tokens.
+    mc_ms_sim_prob  = F.softmax(mc_ms_sim_score, dim=1)
+    # ss_feat, sc_feat, ms_feat, mc_feat: [4, 1280, 64] => [1, 1280, 64].
+    ss_feat, sc_feat, ms_feat, mc_feat = ca_outfeat.chunk(4)
+    # recon_sc_feat: [1, 1280, 64] * [1, 64, 64] => [1, 1280, 64]
+    # We can only use the subj comp tokens to reconstruct the subj single tokens, not vice versa. 
+    # Because we need to apply fg_mask, which is only available for the subj single tokens. Then we
+    # can compare the values of the recon subj single tokens with the original values at the fg area.
+    sc_recon_ss_feat = torch.einsum('b d i, b i j -> b d j', sc_feat, sc_ss_sim_prob)
+    mc_recon_ms_feat = torch.einsum('b d i, b i j -> b d j', mc_feat, mc_ms_sim_prob)
+
+    # fg_mask: bool of [1, 64] with R_fg True values.
+    # Apply mask, permute features to the last dim. [1, 1280, 64] => [1, 64, 1280] => [R_fg, 1280]
+    ss_fg_feat, ms_fg_feat, sc_recon_ss_fg_feat, mc_recon_ms_fg_feat = \
+        [ feat.permute(0, 2, 1)[fg_mask] for feat in \
+            [ss_feat, ms_feat, sc_recon_ss_feat, mc_recon_ms_feat] ]
+    
+    orig_feat_grad_scaler = gen_gradient_scaler(0.05)
+    ss_fg_feat_gs = orig_feat_grad_scaler(ss_fg_feat)
+    ms_fg_feat_gs = orig_feat_grad_scaler(ms_fg_feat)
+
+    loss_comp_single_map_align = masked_mean(torch.abs(sc_ss_sim_prob - mc_ms_sim_prob), fg_mask)
+    loss_sc_ss_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat_gs, 
+                                            exponent=2, do_demean_first=False,
+                                            first_n_dims_to_flatten=2, ref_grad_scale=0.05)
+    loss_mc_ms_match = calc_ref_cosine_loss(mc_recon_ms_fg_feat, ms_fg_feat_gs, 
+                                            exponent=2, do_demean_first=False,
+                                            first_n_dims_to_flatten=2, ref_grad_scale=0.05)
+    
+    return loss_comp_single_map_align, loss_sc_ss_match, loss_mc_ms_match
