@@ -1774,3 +1774,6 @@ def add_noise_to_embedding(embeddings, noise_rel_std_range, add_noise_prob):
     noise = torch.randn_like(embeddings) * noise_std
     embeddings = embeddings + noise
     return embeddings
+
+def calc_elastic_matching_loss(ca_q, ca_outfeat):
+    return 0, 0, 0, 0

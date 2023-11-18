@@ -829,11 +829,8 @@ class UNetModel(nn.Module):
         
         hs = []
 
-        distill_feats = {}
-        distill_attns = {}
-        distill_attnscores = {}
-        distill_ks      = {}
-        distill_vs      = {}
+        # keys: outfeat (h), attn, attnscore, q, k, v.
+        ca_layers_activations = {}
 
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
@@ -1066,11 +1063,10 @@ class UNetModel(nn.Module):
             hs.append(h)
 
             if layer_idx in distill_layer_indices:
-                    distill_attns[layer_idx]        = module[1].transformer_blocks[0].attn2.cached_attn_mat 
-                    distill_attnscores[layer_idx]   = module[1].transformer_blocks[0].attn2.cached_attn_scores
-                    distill_ks[layer_idx]           = module[1].transformer_blocks[0].attn2.cached_k
-                    distill_vs[layer_idx]           = module[1].transformer_blocks[0].attn2.cached_v
-                    distill_feats[layer_idx]        = h
+                    ca_layers_activations[layer_idx]            = module[1].transformer_blocks[0].attn2.cached_activations
+                    ca_layers_activations[layer_idx]['outfeat'] = h
+                    # Release RAM.
+                    module[1].transformer_blocks[0].attn2.cached_activations = None
 
             layer_idx += 1
         
@@ -1079,11 +1075,10 @@ class UNetModel(nn.Module):
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, get_layer_idx_context, mask=img_mask)
         if layer_idx in distill_layer_indices:
-                distill_attns[layer_idx]        = self.middle_block[1].transformer_blocks[0].attn2.cached_attn_mat 
-                distill_attnscores[layer_idx]   = self.middle_block[1].transformer_blocks[0].attn2.cached_attn_scores
-                distill_ks[layer_idx]           = self.middle_block[1].transformer_blocks[0].attn2.cached_k
-                distill_vs[layer_idx]           = self.middle_block[1].transformer_blocks[0].attn2.cached_v
-                distill_feats[layer_idx]        = h
+                ca_layers_activations[layer_idx]            = self.middle_block[1].transformer_blocks[0].attn2.cached_activations
+                ca_layers_activations[layer_idx]['outfeat'] = h
+                # Release RAM.
+                self.middle_block[1].transformer_blocks[0].attn2.cached_activations = None
 
         layer_idx += 1
 
@@ -1107,19 +1102,18 @@ class UNetModel(nn.Module):
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, get_layer_idx_context, mask=img_mask)
             if layer_idx in distill_layer_indices:
-                    distill_attns[layer_idx]        = module[1].transformer_blocks[0].attn2.cached_attn_mat 
-                    distill_attnscores[layer_idx]   = module[1].transformer_blocks[0].attn2.cached_attn_scores
-                    distill_ks[layer_idx]           = module[1].transformer_blocks[0].attn2.cached_k
-                    distill_vs[layer_idx]           = module[1].transformer_blocks[0].attn2.cached_v
-                    distill_feats[layer_idx]        = h
+                    ca_layers_activations[layer_idx]            = module[1].transformer_blocks[0].attn2.cached_activations
+                    ca_layers_activations[layer_idx]['outfeat'] = h
+                    # Release RAM.
+                    module[1].transformer_blocks[0].attn2.cached_activations = None
 
             layer_idx += 1
 
-        extra_info['unet_feats']        = distill_feats
-        extra_info['unet_attns']        = distill_attns
-        extra_info['unet_attnscores']   = distill_attnscores
-        extra_info['unet_ks']           = distill_ks
-        extra_info['unet_vs']           = distill_vs
+        ca_layers_activations2 = {}
+        for key in ('outfeat', 'attn', 'attnscore', 'q', 'k', 'v'):
+            # Collect each type of activations for all layers into a dict.
+            ca_layers_activations2[key] = { layer_idx: ca_layers_activations[layer_idx][key] for layer_idx in ca_layers_activations }
+        extra_info['ca_layers_activations']    = ca_layers_activations2
 
         if debug_attn:
             breakpoint()

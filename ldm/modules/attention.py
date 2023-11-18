@@ -168,7 +168,8 @@ class CrossAttention(nn.Module):
             nn.Linear(inner_dim, query_dim),
             nn.Dropout(dropout)
         )
-        self.save_attn_vars = False
+        self.save_attn_vars     = False
+        self.cached_activations = None
         self.use_conv_attn_kernel_size = -1
         self.shift_attn_maps_for_diff_embs = True
         self.infeat_size            = None
@@ -178,7 +179,7 @@ class CrossAttention(nn.Module):
         self.contrast_fgbg_coeff    = 0
         self.is_training            = True
         self.bg_attn_behavior_in_inference = 'zero'  # 'zero', 'copy_fg', 'contrast_fg'
-
+        
     def forward(self, x, context=None, mask=None):
         h = self.heads
 
@@ -273,15 +274,16 @@ class CrossAttention(nn.Module):
         out = self.to_out(out)
 
         if self.save_attn_vars:
-            self.cached_attn_mat    = rearrange(attn, '(b h) i j -> b h i j', h=h)
-            self.cached_attn_scores = rearrange(sim,  '(b h) i j -> b h i j', h=h)
-            # cached_k will be used in ddpm.py:calc_fg_bg_key_ortho_loss(), in which two ks will multiply each other.
-            # So sqrt(self.scale) will scale the product of two ks by self.scale.
-            self.cached_k           = rearrange(k,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
-            self.cached_v           = rearrange(v,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
-            #self.cached_out      = out
-            #self.cached_infeat_size = self.infeat_size
-            #breakpoint()
+            self.cached_activations = {}
+            # cached q will be used in ddpm.py:calc_comp_fg_bg_preserve_loss(), in which two qs will multiply each other.
+            # So sqrt(self.scale) will scale the product of two qs by self.scale.
+            self.cached_activations['q'] = rearrange(q,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
+            # cached k, v will be used in ddpm.py:calc_subj_comp_ortho_loss(), in which two ks will multiply each other.
+            # So sqrt(self.scale) will scale the product of two ks/vs by self.scale.
+            self.cached_activations['k'] = rearrange(k,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
+            self.cached_activations['v'] = rearrange(v,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
+            self.cached_activations['attn'] = rearrange(attn, '(b h) i j -> b h i j', h=h)
+            self.cached_activations['attnscore'] = rearrange(sim,  '(b h) i j -> b h i j', h=h)
 
         return out
 
