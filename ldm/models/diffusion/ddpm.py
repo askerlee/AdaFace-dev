@@ -2741,7 +2741,9 @@ class LatentDiffusion(DDPM):
                            + loss_bg_subj_embs_align * bg_subj_embs_align_loss_scale) \
                         * self.padding_embs_align_loss_weight
 
-        if self.fg_bg_xlayer_consist_loss_weight > 0:
+        if self.fg_bg_xlayer_consist_loss_weight > 0 \
+          and (self.iter_flags['do_normal_recon'] \
+                or (self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable'])):
             # SSB_SIZE: subject sub-batch size.
             # If do_normal_recon, then both instances are subject instances. 
             # The subject sub-batch size SSB_SIZE = 2 (1 * BLOCK_SIZE).
@@ -2896,6 +2898,7 @@ class LatentDiffusion(DDPM):
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     * comp_fg_bg_preserve_loss_scale
 
+        '''
         # If subj_comp_key_ortho_loss_weight = 0, we still monitor loss_subj_comp_key_ortho 
         # and loss_subj_comp_value_ortho.
         if self.subj_comp_key_ortho_loss_weight > 0:
@@ -2965,6 +2968,7 @@ class LatentDiffusion(DDPM):
             # subj_comp_value_ortho_loss_weight:        0, disabled.
             loss +=   (loss_subj_comp_key_ortho   * ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
                     + (loss_subj_comp_value_ortho * ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight
+        '''
                 
         self.release_plosses_intermediates(locals())
         loss_dict.update({f'{prefix}/loss': loss.mean().detach()})
