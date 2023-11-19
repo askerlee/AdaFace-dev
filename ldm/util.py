@@ -1776,7 +1776,7 @@ def add_noise_to_embedding(embeddings, noise_rel_std_range, add_noise_prob):
     embeddings = embeddings + noise
     return embeddings
 
-def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask):
+def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.2):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
@@ -1815,12 +1815,18 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask):
     ss_fg_feat_gs = orig_feat_grad_scaler(ss_fg_feat)
     ms_fg_feat_gs = orig_feat_grad_scaler(ms_fg_feat)
 
-    loss_comp_single_map_align = masked_mean(torch.abs(sc_ss_sim_prob - mc_ms_sim_prob), fg_mask)
+    # Span the fg_mask to both H and W dimensions.
+    fg_mask_HW = fg_mask.unsqueeze(1) * fg_mask.unsqueeze(2)
+
+    loss_comp_single_map_align = masked_mean(torch.abs(sc_ss_sim_prob - mc_ms_sim_prob), fg_mask_HW)
+    # single_grad_scale = 0.2: 0.2 gs on subj single / mix single features.
+    # single features are still updated (although more slowly), to reduce the chance of 
+    # generating single images without facial details.
     loss_sc_ss_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat_gs, 
                                             exponent=2, do_demean_first=False,
-                                            first_n_dims_to_flatten=2, ref_grad_scale=0.05)
+                                            first_n_dims_to_flatten=2, ref_grad_scale=single_grad_scale)
     loss_mc_ms_match = calc_ref_cosine_loss(mc_recon_ms_fg_feat, ms_fg_feat_gs, 
                                             exponent=2, do_demean_first=False,
-                                            first_n_dims_to_flatten=2, ref_grad_scale=0.05)
+                                            first_n_dims_to_flatten=2, ref_grad_scale=single_grad_scale)
     
     return loss_comp_single_map_align, loss_sc_ss_match, loss_mc_ms_match

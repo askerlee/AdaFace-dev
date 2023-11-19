@@ -2908,7 +2908,9 @@ class LatentDiffusion(DDPM):
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     * comp_fg_bg_preserve_loss_scale
 
-        if self.subj_comp_key_ortho_loss_weight > 0:
+        # If subj_comp_key_ortho_loss_weight = 0, we still monitor loss_subj_comp_key_ortho 
+        # and loss_subj_comp_value_ortho.
+        if self.subj_comp_key_ortho_loss_weight >= 0:
             if self.iter_flags['is_teachable']:
                 subj_indices_1b = extra_info['subj_indices_1b']
                 bg_indices_1b   = extra_info['bg_indices_1b'] if self.iter_flags['use_background_token'] \
@@ -3767,7 +3769,8 @@ class LatentDiffusion(DDPM):
             # fg_attn_mask_pooled: [1, 1, 7, 7] -> [1, 1, 49]
             fg_attn_mask_pooled = fg_attn_mask_pooled.reshape(*fg_attn_mask_pooled.shape[:2], -1)
             loss_layer_comp_single_align_map, loss_layer_ss_sc_match, loss_layer_ms_mc_match \
-                = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, fg_attn_mask_pooled)
+                = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, 
+                                             fg_attn_mask_pooled, single_grad_scale=0.2)
 
             loss_ss_sc_match += loss_layer_ss_sc_match * feat_distill_layer_weight
             loss_ms_mc_match += loss_layer_ms_mc_match * feat_distill_layer_weight
