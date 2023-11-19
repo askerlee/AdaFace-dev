@@ -2897,7 +2897,7 @@ class LatentDiffusion(DDPM):
 
         # If subj_comp_key_ortho_loss_weight = 0, we still monitor loss_subj_comp_key_ortho 
         # and loss_subj_comp_value_ortho.
-        if self.subj_comp_key_ortho_loss_weight >= 0:
+        if self.subj_comp_key_ortho_loss_weight > 0:
             if self.iter_flags['is_teachable']:
                 subj_indices_1b = extra_info['subj_indices_1b']
                 bg_indices_1b   = extra_info['bg_indices_1b'] if self.iter_flags['use_background_token'] \
