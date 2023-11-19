@@ -2419,7 +2419,7 @@ class LatentDiffusion(DDPM):
         ###### begin of preparation for is_compos_iter ######
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
         if self.iter_flags['is_compos_iter'] and self.iter_flags['calc_clip_loss']:
-            del cond[2]['ca_layers_activations']
+            del extra_info['ca_layers_activations']
 
             # Images generated both under subj_comp_prompts and cls_comp_prompts 
             # are subject to the CLIP text-image matching evaluation.
