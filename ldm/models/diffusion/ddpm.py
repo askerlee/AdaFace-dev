@@ -2419,8 +2419,6 @@ class LatentDiffusion(DDPM):
         ###### begin of preparation for is_compos_iter ######
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
         if self.iter_flags['is_compos_iter'] and self.iter_flags['calc_clip_loss']:
-            del extra_info['ca_layers_activations']
-
             # Images generated both under subj_comp_prompts and cls_comp_prompts 
             # are subject to the CLIP text-image matching evaluation.
             # If self.iter_flags['do_teacher_filter'] (implying do_mix_prompt_distillation), 
@@ -2428,6 +2426,7 @@ class LatentDiffusion(DDPM):
             # So cls_comp_prompts is used to compute the CLIP text-image matching loss on
             # images guided by the subject or mixed embeddings.
             if self.iter_flags['do_teacher_filter']:
+                del extra_info['ca_layers_activations']
                 clip_images_code  = x_recon
                 # 4 sets of cls_comp_prompts for (subj comp 1, subj comp 2, mix comp 1, mix comp 2).                
                 clip_prompts_comp = extra_info['cls_comp_prompts'] * 4            
