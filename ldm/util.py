@@ -1202,7 +1202,7 @@ def normalize_dict_values(d):
     d2 = { k: v / value_sum for k, v in d.items() }
     return d2
 
-# normalize_with_mean is only activated when do_sqr is True.
+# mask could be binary or float.
 def masked_mean(ts, mask, instance_weights=None, dim=None, keepdim=False):
     if instance_weights is None:
         instance_weights = 1
@@ -1776,34 +1776,59 @@ def add_noise_to_embedding(embeddings, noise_rel_std_range, add_noise_prob):
     embeddings = embeddings + noise
     return embeddings
 
-def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.2):
+# prob_mat: [1, 64, 64].
+def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
+    # diagonal_delta: [64, 64].
+    diagonal_delta = torch.diag(torch.ones(prob_mat.shape[-1], device=prob_mat.device)) * p
+    if prob_mat.ndim > 2:
+        # diagonal_delta: [1, 64, 64].
+        ones_shape = [1] * (prob_mat.ndim - 2)
+        diagonal_delta = diagonal_delta.reshape(ones_shape + list(diagonal_delta.shape))
+
+    prob_mat = prob_mat + diagonal_delta
+    if renormalize_dim is not None:
+        # Re-normalize among the specified dimension after adding p to the diagonal.
+        prob_mat = prob_mat / prob_mat.sum(dim=renormalize_dim, keepdim=True)
+    return prob_mat
+
+def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.1):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
-        return 0, 0, 0
+        return 0, 0, 0, None, None
     
     # ca_q, ca_outfeat: [4, 1280, 64]
     # ss_q, sc_q, ms_q, mc_q: [1, 1280, 64]. 
     # ss_*: subj single, sc_*: subj comp, ms_*: mix single, mc_*: mix comp.
     ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
-    # sc_ss_sim_score:        [1, 64, 64]. Pairwise matching scores between the 9 image tokens of 
-    # the subj comp instance and the 9 image tokens of the subj single instance.
+    # sc_ss_sim_score:        [1, 64, 64]. 
+    # Pairwise matching scores (9 subj comp image tokens) -> (9 subj single image tokens).
     sc_ss_sim_score = torch.matmul(sc_q.transpose(1, 2), ss_q)
-    # sc_ss_sim_prob:   [1, 64, 64]. Pairwise matching probabilities between the 9 image tokens of
-    # the subj comp instance and the 9 image tokens of the subj single instance.
-    # Normalize among subj comp tokens.
+    # sc_ss_sim_prob:   [1, 64, 64]. 
+    # Pairwise matching probs (9 subj comp image tokens) -> (9 subj single image tokens).
+    # Normalize among subj comp tokens (sc dim)
     sc_ss_sim_prob  = F.softmax(sc_ss_sim_score, dim=1)
+    # Add a small value to the diagonal of sc_ss_sim_prob to encourage the contributions 
+    # from the tokens at the same locations.
+    sc_ss_sim_prob  = add_to_prob_mat_diagonal(sc_ss_sim_prob, 0.1, renormalize_dim=1)
+
     mc_ms_sim_score = torch.matmul(mc_q.transpose(1, 2), ms_q)
-    # Normalize among mix comp tokens.
+    # Normalize among mix comp tokens (mc dim).
     mc_ms_sim_prob  = F.softmax(mc_ms_sim_score, dim=1)
+    # Add a small value to the diagonal of mc_ms_sim_prob to encourage the contributions
+    # from the tokens at the same locations.
+    mc_ms_sim_prob  = add_to_prob_mat_diagonal(mc_ms_sim_prob, 0.1, renormalize_dim=1)
+
     # ss_feat, sc_feat, ms_feat, mc_feat: [4, 1280, 64] => [1, 1280, 64].
     ss_feat, sc_feat, ms_feat, mc_feat = ca_outfeat.chunk(4)
     # recon_sc_feat: [1, 1280, 64] * [1, 64, 64] => [1, 1280, 64]
     # We can only use the subj comp tokens to reconstruct the subj single tokens, not vice versa. 
     # Because we need to apply fg_mask, which is only available for the subj single tokens. Then we
     # can compare the values of the recon subj single tokens with the original values at the fg area.
-    sc_recon_ss_feat = torch.einsum('b d i, b i j -> b d j', sc_feat, sc_ss_sim_prob)
-    mc_recon_ms_feat = torch.einsum('b d i, b i j -> b d j', mc_feat, mc_ms_sim_prob)
+    # torch.einsum('b d i, b i j -> b d j', sc_feat, sc_ss_sim_prob) is equivalent to
+    # torch.matmul(sc_feat, sc_ss_sim_prob). But maybe matmul is faster?
+    sc_recon_ss_feat = torch.matmul(sc_feat, sc_ss_sim_prob)
+    mc_recon_ms_feat = torch.matmul(mc_feat, mc_ms_sim_prob)
 
     # fg_mask: bool of [1, 64] with R_fg True values.
     # Apply mask, permute features to the last dim. [1, 1280, 64] => [1, 64, 1280] => [R_fg, 1280]
@@ -1811,15 +1836,15 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.2)
         [ feat.permute(0, 2, 1)[fg_mask] for feat in \
             [ss_feat, ms_feat, sc_recon_ss_feat, mc_recon_ms_feat] ]
     
-    orig_feat_grad_scaler = gen_gradient_scaler(0.05)
-    ss_fg_feat_gs = orig_feat_grad_scaler(ss_fg_feat)
-    ms_fg_feat_gs = orig_feat_grad_scaler(ms_fg_feat)
+    single_feat_grad_scaler = gen_gradient_scaler(single_grad_scale)
+    ss_fg_feat_gs = single_feat_grad_scaler(ss_fg_feat)
+    ms_fg_feat_gs = single_feat_grad_scaler(ms_fg_feat)
 
     # Span the fg_mask to both H and W dimensions.
     fg_mask_HW = fg_mask.unsqueeze(1) * fg_mask.unsqueeze(2)
 
     loss_comp_single_map_align = masked_mean(torch.abs(sc_ss_sim_prob - mc_ms_sim_prob), fg_mask_HW)
-    # single_grad_scale = 0.2: 0.2 gs on subj single / mix single features.
+    # single_grad_scale = 0.1: 0.1 gs on subj single / mix single features.
     # single features are still updated (although more slowly), to reduce the chance of 
     # generating single images without facial details.
     loss_sc_ss_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat_gs, 
@@ -1829,4 +1854,25 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.2)
                                             exponent=2, do_demean_first=False,
                                             first_n_dims_to_flatten=2, ref_grad_scale=single_grad_scale)
     
-    return loss_comp_single_map_align, loss_sc_ss_match, loss_mc_ms_match
+    # bg_mask: [1, 64] => [1, 1, 64]
+    bg_mask = (~fg_mask).unsqueeze(1).float()
+    if bg_mask.sum() == 0:
+        ss_bg_mask_map_to_sc = None
+        ms_bg_mask_map_to_mc = None
+    else:
+        # sc_ss_sim_score -> transpose -> ss_sc_sim_score -> softmax -> ss_sc_sim_prob.
+        # Normalized along the ss dim.
+        ss_sc_sim_prob = sc_ss_sim_score.transpose(1, 2).softmax(dim=1)
+        ms_mc_sim_prob = mc_ms_sim_score.transpose(1, 2).softmax(dim=1)
+        # Add a small value to the diagonal of ss_sc_sim_prob/ms_mc_sim_prob to encourage the contributions
+        # from the tokens at the same locations.    
+        ss_sc_sim_prob  = add_to_prob_mat_diagonal(ss_sc_sim_prob, 0.1, renormalize_dim=1)
+        ms_mc_sim_prob  = add_to_prob_mat_diagonal(ms_mc_sim_prob, 0.1, renormalize_dim=1)
+
+        # bg_mask: [1, 1, 64]. ss_sc_sim_prob: [1, 64, 64]. matmul -> [1, 1, 64].
+        # After mapping, bg_mask is no longer binary.
+        ss_bg_mask_map_to_sc = torch.matmul(bg_mask, ss_sc_sim_prob)
+        ms_bg_mask_map_to_mc = torch.matmul(bg_mask, ms_mc_sim_prob)
+
+    return loss_comp_single_map_align, loss_sc_ss_match, loss_mc_ms_match, \
+            ss_bg_mask_map_to_sc, ms_bg_mask_map_to_mc
