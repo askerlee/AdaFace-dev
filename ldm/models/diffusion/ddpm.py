@@ -2760,7 +2760,7 @@ class LatentDiffusion(DDPM):
             if loss_bg_xlayer_consist > 0:
                 loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach()})
 
-            bg_xlayer_consist_loss_scale = 0.5
+            bg_xlayer_consist_loss_scale = 0.2
 
             loss += (loss_fg_xlayer_consist + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale) \
                     * self.fg_bg_xlayer_consist_loss_weight
@@ -2898,10 +2898,9 @@ class LatentDiffusion(DDPM):
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     * comp_fg_bg_preserve_loss_scale
 
-        '''
         # If subj_comp_key_ortho_loss_weight = 0, we still monitor loss_subj_comp_key_ortho 
         # and loss_subj_comp_value_ortho.
-        if self.subj_comp_key_ortho_loss_weight > 0:
+        if self.subj_comp_key_ortho_loss_weight >= 0:
             if self.iter_flags['is_teachable']:
                 subj_indices_1b = extra_info['subj_indices_1b']
                 bg_indices_1b   = extra_info['bg_indices_1b'] if self.iter_flags['use_background_token'] \
@@ -2968,7 +2967,6 @@ class LatentDiffusion(DDPM):
             # subj_comp_value_ortho_loss_weight:        0, disabled.
             loss +=   (loss_subj_comp_key_ortho   * ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
                     + (loss_subj_comp_value_ortho * ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight
-        '''
 
         self.release_plosses_intermediates(locals())
         loss_dict.update({f'{prefix}/loss': loss.mean().detach()})
@@ -3755,7 +3753,7 @@ class LatentDiffusion(DDPM):
             loss_layer_comp_single_align_map, loss_layer_ss_sc_match, loss_layer_ms_mc_match, \
             sc_map_ss_fg_prob, mc_map_ms_fg_prob \
                 = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, 
-                                             fg_attn_mask_pooled, single_grad_scale=0.1)
+                                             fg_attn_mask_pooled, single_grad_scale=0.05)
 
             loss_ss_sc_match += loss_layer_ss_sc_match * feat_distill_layer_weight
             loss_ms_mc_match += loss_layer_ms_mc_match * feat_distill_layer_weight

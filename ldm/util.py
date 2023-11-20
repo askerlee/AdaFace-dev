@@ -1791,7 +1791,7 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
         prob_mat = prob_mat / prob_mat.sum(dim=renormalize_dim, keepdim=True)
     return prob_mat
 
-def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.1):
+def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.05):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
@@ -1836,9 +1836,9 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.1)
         [ feat.permute(0, 2, 1)[fg_mask] for feat in \
             [ss_feat, ms_feat, sc_recon_ss_feat, mc_recon_ms_feat] ]
     
-    single_feat_grad_scaler = gen_gradient_scaler(single_grad_scale)
-    ss_fg_feat_gs = single_feat_grad_scaler(ss_fg_feat)
-    ms_fg_feat_gs = single_feat_grad_scaler(ms_fg_feat)
+    single_grad_scaler = gen_gradient_scaler(single_grad_scale)
+    ss_fg_feat_gs = single_grad_scaler(ss_fg_feat)
+    ms_fg_feat_gs = single_grad_scaler(ms_fg_feat)
 
     # Span the fg_mask to both H and W dimensions.
     fg_mask_HW = fg_mask.unsqueeze(1) * fg_mask.unsqueeze(2)
