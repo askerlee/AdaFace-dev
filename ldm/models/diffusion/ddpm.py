@@ -3751,7 +3751,7 @@ class LatentDiffusion(DDPM):
             # fg_attn_mask_pooled: [1, 1, 8, 8] -> [1, 1, 64]
             fg_attn_mask_pooled = fg_attn_mask_pooled.reshape(*fg_attn_mask_pooled.shape[:2], -1)
 
-            # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 64, 1]
+            # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64]
             loss_layer_comp_single_align_map, loss_layer_ss_sc_match, loss_layer_ms_mc_match, \
             sc_map_ss_fg_prob, mc_map_ms_fg_prob \
                 = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, 
@@ -3788,7 +3788,7 @@ class LatentDiffusion(DDPM):
 
             mix_comp_subj_attn_gs = mix_grad_scaler(mix_comp_subj_attn)
 
-            # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 64, 1].
+            # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64].
             # The total prob of each image token in the subj comp instance maps to fg areas 
             # in the subj single instance. 
             # If this prob is low, i.e., the image token doesn't match to any tokens in the fg areas 

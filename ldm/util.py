@@ -1857,8 +1857,8 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.1)
     # fg_mask: [1, 64] => [1, 64, 1].
     fg_mask = fg_mask.float().unsqueeze(2)
     # sc_map_ss_fg_prob: [1, 64, 64] * [1, 64, 1] => [1, 64, 1].
-    sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, fg_mask)
-    mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, fg_mask)
+    sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, fg_mask).permute(0, 2, 1)
+    mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, fg_mask).permute(0, 2, 1)
 
     return loss_comp_single_map_align, loss_sc_ss_match, loss_mc_ms_match, \
             sc_map_ss_fg_prob, mc_map_ms_fg_prob
