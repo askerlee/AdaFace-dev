@@ -3794,8 +3794,8 @@ class LatentDiffusion(DDPM):
             # If this prob is low, i.e., the image token doesn't match to any tokens in the fg areas 
             # in the subj single instance, then this token is probably background.
             # So sc_whole_ss_map_prob.mean(dim=2) is always 1.
-            sc_map_ss_fg_prob_below_mean = sc_map_ss_fg_prob.mean(dim=1, keepdim=True) - sc_map_ss_fg_prob
-            mc_map_ss_fg_prob_below_mean = mc_map_ms_fg_prob.mean(dim=1, keepdim=True) - mc_map_ms_fg_prob
+            sc_map_ss_fg_prob_below_mean = sc_map_ss_fg_prob.mean(dim=2, keepdim=True) - sc_map_ss_fg_prob
+            mc_map_ss_fg_prob_below_mean = mc_map_ms_fg_prob.mean(dim=2, keepdim=True) - mc_map_ms_fg_prob
 
             # Remove large negative values (corresponding to large positive probs in 
             # sc_ss_map_prob, mc_ms_map_prob at fg areas of the corresponding single instances),
