@@ -1791,19 +1791,24 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
         prob_mat = prob_mat / prob_mat.sum(dim=renormalize_dim, keepdim=True)
     return prob_mat
 
-def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.02):
+def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.05):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
         return 0, 0, 0, None, None
-    
+
+    single_grad_scaler = gen_gradient_scaler(single_grad_scale)
+
     # ca_q, ca_outfeat: [4, 1280, 64]
     # ss_q, sc_q, ms_q, mc_q: [1, 1280, 64]. 
     # ss_*: subj single, sc_*: subj comp, ms_*: mix single, mc_*: mix comp.
     ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
-    # sc_map_ss_score:        [1, 64, 64]. 
+    ss_q_gs = single_grad_scaler(ss_q)
+    ms_q_gs = single_grad_scaler(ms_q)
+
+        # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (9 subj comp image tokens) -> (9 subj single image tokens).
-    sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2), ss_q)
+    sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2), ss_q_gs)
     # sc_map_ss_prob:   [1, 64, 64]. 
     # Pairwise matching probs (9 subj comp image tokens) -> (9 subj single image tokens).
     # Normalize among subj comp tokens (sc dim)
@@ -1812,7 +1817,7 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.02
     # from the tokens at the same locations.
     sc_map_ss_prob  = add_to_prob_mat_diagonal(sc_map_ss_prob, 0.1, renormalize_dim=1)
 
-    mc_map_ms_score = torch.matmul(mc_q.transpose(1, 2), ms_q)
+    mc_map_ms_score = torch.matmul(mc_q.transpose(1, 2), ms_q_gs)
     # Normalize among mix comp tokens (mc dim).
     mc_map_ms_prob  = F.softmax(mc_map_ms_score, dim=1)
     # Add a small value to the diagonal of mc_map_ms_prob to encourage the contributions
@@ -1836,7 +1841,6 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.02
         [ feat.permute(0, 2, 1)[fg_mask] for feat in \
             [ss_feat, ms_feat, sc_recon_ss_feat, mc_recon_ms_feat] ]
     
-    single_grad_scaler = gen_gradient_scaler(single_grad_scale)
     ss_fg_feat_gs = single_grad_scaler(ss_fg_feat)
     ms_fg_feat_gs = single_grad_scaler(ms_fg_feat)
 
@@ -1847,17 +1851,17 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.02
     # single_grad_scale = 0.1: 0.1 gs on subj single / mix single features.
     # single features are still updated (although more slowly), to reduce the chance of 
     # generating single images without facial details.
-    '''
     loss_sc_ss_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat_gs, 
                                             exponent=2, do_demean_first=False,
-                                            first_n_dims_to_flatten=2, ref_grad_scale=single_grad_scale)
+                                            first_n_dims_to_flatten=2, ref_grad_scale=1)
     loss_mc_ms_match = calc_ref_cosine_loss(mc_recon_ms_fg_feat, ms_fg_feat_gs, 
                                             exponent=2, do_demean_first=False,
-                                            first_n_dims_to_flatten=2, ref_grad_scale=single_grad_scale)
+                                            first_n_dims_to_flatten=2, ref_grad_scale=1)
+    
     '''
-
     loss_sc_ss_match = power_loss(sc_recon_ss_fg_feat - ss_fg_feat_gs, exponent=2)
     loss_mc_ms_match = power_loss(mc_recon_ms_fg_feat - ms_fg_feat_gs, exponent=2)
+    '''
 
     # fg_mask: [1, 64] => [1, 64, 1].
     fg_mask = fg_mask.float().unsqueeze(2)
