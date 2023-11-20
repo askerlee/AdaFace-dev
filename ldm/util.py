@@ -1856,8 +1856,8 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.02
                                             first_n_dims_to_flatten=2, ref_grad_scale=single_grad_scale)
     '''
 
-    loss_sc_ss_match = power_loss(sc_recon_ss_fg_feat, ss_fg_feat_gs, exponent=2)
-    loss_mc_ms_match = power_loss(mc_recon_ms_fg_feat, ms_fg_feat_gs, exponent=2)
+    loss_sc_ss_match = power_loss(sc_recon_ss_fg_feat - ss_fg_feat_gs, exponent=2)
+    loss_mc_ms_match = power_loss(mc_recon_ms_fg_feat - ms_fg_feat_gs, exponent=2)
 
     # fg_mask: [1, 64] => [1, 64, 1].
     fg_mask = fg_mask.float().unsqueeze(2)
