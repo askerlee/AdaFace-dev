@@ -1791,20 +1791,22 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
         prob_mat = prob_mat / prob_mat.sum(dim=renormalize_dim, keepdim=True)
     return prob_mat
 
-def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.05):
+def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, 
+                               single_q_grad_scale=0.05, single_feat_grad_scale=0.1):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
         return 0, 0, 0, None, None
 
-    single_grad_scaler = gen_gradient_scaler(single_grad_scale)
+    single_q_grad_scaler    = gen_gradient_scaler(single_q_grad_scale)
+    single_feat_grad_scaler = gen_gradient_scaler(single_feat_grad_scale)
 
     # ca_q, ca_outfeat: [4, 1280, 64]
     # ss_q, sc_q, ms_q, mc_q: [1, 1280, 64]. 
     # ss_*: subj single, sc_*: subj comp, ms_*: mix single, mc_*: mix comp.
     ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
-    ss_q_gs = single_grad_scaler(ss_q)
-    ms_q_gs = single_grad_scaler(ms_q)
+    ss_q_gs = single_q_grad_scaler(ss_q)
+    ms_q_gs = single_q_grad_scaler(ms_q)
 
         # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (9 subj comp image tokens) -> (9 subj single image tokens).
@@ -1841,8 +1843,8 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.05
         [ feat.permute(0, 2, 1)[fg_mask] for feat in \
             [ss_feat, ms_feat, sc_recon_ss_feat, mc_recon_ms_feat] ]
     
-    ss_fg_feat_gs = single_grad_scaler(ss_fg_feat)
-    ms_fg_feat_gs = single_grad_scaler(ms_fg_feat)
+    ss_fg_feat_gs = single_feat_grad_scaler(ss_fg_feat)
+    ms_fg_feat_gs = single_feat_grad_scaler(ms_fg_feat)
 
     # Span the fg_mask to both H and W dimensions.
     fg_mask_HW = fg_mask.unsqueeze(1) * fg_mask.unsqueeze(2)
