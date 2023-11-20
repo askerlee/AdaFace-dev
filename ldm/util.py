@@ -1791,7 +1791,7 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
         prob_mat = prob_mat / prob_mat.sum(dim=renormalize_dim, keepdim=True)
     return prob_mat
 
-def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.05):
+def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.1):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
