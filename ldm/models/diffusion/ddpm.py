@@ -1340,7 +1340,7 @@ class LatentDiffusion(DDPM):
             # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
             # NOTE: If use_wds_comp, then to preserve the foreground, we always enable comp_init_with_fg_area.
             # But in this case, the background areas will not be replaced with random noises.
-            p_comp_init_with_fg_area = 0 if self.iter_flags['use_wds_comp'] else 0.5
+            p_comp_init_with_fg_area = 0 if self.iter_flags['use_wds_comp'] else 0.7
             # If reuse_init_conds, comp_init_with_fg_area may be set to True later
             # if the previous iteration has comp_init_with_fg_area = True.
             self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
@@ -2873,17 +2873,17 @@ class LatentDiffusion(DDPM):
                 # Seems it's not so important whether fg attns in subj comp and subj single 
                 # instances are similar or not (observe the attns between mix comp 
                 # and mix single instances). So scale down loss_comp_subj_fg_attn_preserve.
-                elastic_matching_loss_scale = 2
+                elastic_matching_loss_scale = 0.2
                 # loss_comp_single_map_align is L1 loss on attn maps, so its magnitude is small.
                 # We need to scale it up to make it comparable to other losses.
-                comp_single_map_align_loss_scale = 3
+                comp_single_map_align_loss_scale = 6
                 # mix single - mix comp matching loss is less important, so scale it down.
                 ms_mc_match_loss_scale = 0.1
                 comp_subj_bg_attn_suppress_loss_scale = 0.02
                 # No need to scale down loss_comp_mix_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
-                loss_comp_fg_bg_preserve = (loss_comp_single_map_align * comp_single_map_align_loss_scale \
-                                              + loss_ss_sc_match + loss_ms_mc_match * ms_mc_match_loss_scale) \
-                                            * elastic_matching_loss_scale \
+                loss_comp_fg_bg_preserve = loss_comp_single_map_align * comp_single_map_align_loss_scale \
+                                           + (loss_ss_sc_match + loss_ms_mc_match * ms_mc_match_loss_scale) \
+                                              * elastic_matching_loss_scale \
                                             + (loss_comp_subj_bg_attn_suppress + loss_comp_mix_bg_attn_suppress) \
                                                * comp_subj_bg_attn_suppress_loss_scale
 
@@ -3753,7 +3753,7 @@ class LatentDiffusion(DDPM):
             loss_layer_comp_single_align_map, loss_layer_ss_sc_match, loss_layer_ms_mc_match, \
             sc_map_ss_fg_prob, mc_map_ms_fg_prob \
                 = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, 
-                                             fg_attn_mask_pooled, single_grad_scale=0.1)
+                                             fg_attn_mask_pooled, single_grad_scale=0.02)
 
             loss_ss_sc_match += loss_layer_ss_sc_match * feat_distill_layer_weight
             loss_ms_mc_match += loss_layer_ms_mc_match * feat_distill_layer_weight

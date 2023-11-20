@@ -1791,7 +1791,7 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
         prob_mat = prob_mat / prob_mat.sum(dim=renormalize_dim, keepdim=True)
     return prob_mat
 
-def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.1):
+def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.02):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
@@ -1847,13 +1847,18 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, single_grad_scale=0.1)
     # single_grad_scale = 0.1: 0.1 gs on subj single / mix single features.
     # single features are still updated (although more slowly), to reduce the chance of 
     # generating single images without facial details.
+    '''
     loss_sc_ss_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat_gs, 
                                             exponent=2, do_demean_first=False,
                                             first_n_dims_to_flatten=2, ref_grad_scale=single_grad_scale)
     loss_mc_ms_match = calc_ref_cosine_loss(mc_recon_ms_fg_feat, ms_fg_feat_gs, 
                                             exponent=2, do_demean_first=False,
                                             first_n_dims_to_flatten=2, ref_grad_scale=single_grad_scale)
-    
+    '''
+
+    loss_sc_ss_match = power_loss(sc_recon_ss_fg_feat, ss_fg_feat_gs, exponent=2)
+    loss_mc_ms_match = power_loss(mc_recon_ms_fg_feat, ms_fg_feat_gs, exponent=2)
+
     # fg_mask: [1, 64] => [1, 64, 1].
     fg_mask = fg_mask.float().unsqueeze(2)
     # sc_map_ss_fg_prob: [1, 64, 64] * [1, 64, 1] => [1, 64, 1].
