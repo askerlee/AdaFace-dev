@@ -3753,7 +3753,7 @@ class LatentDiffusion(DDPM):
 
             # ss_bg_mask_map_to_sc, ms_bg_mask_map_to_mc: [1, 1, 64]
             loss_layer_comp_single_align_map, loss_layer_ss_sc_match, loss_layer_ms_mc_match, \
-            ss_bg_mask_map_to_sc, ms_bg_mask_map_to_mc \
+            sc_ss_map_prob, mc_ms_map_prob \
                 = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, 
                                              fg_attn_mask_pooled, single_grad_scale=0.1)
 
@@ -3787,12 +3787,31 @@ class LatentDiffusion(DDPM):
                 = subj_attn_pooled.chunk(4)
 
             mix_comp_subj_attn_gs = mix_grad_scaler(mix_comp_subj_attn)
+
+            # sc_whole_ss_map_prob: the sum of probs each image token in the subj comp instance 
+            # maps to any tokens in the subj single instance. If an image token don't match
+            # to any tokens in the subj single instance, then it's probably background area.
+            # sc_whole_ss_map_prob: [1, 64, 64] -> [1, 64] -> [1, 1, 64]
+            sc_whole_ss_map_prob = sc_ss_map_prob.sum(dim=2).unsqueeze(1)
+            mc_whole_ms_map_prob = mc_ms_map_prob.sum(dim=2).unsqueeze(1)
+            # sc_whole_ss_map_prob, mc_whole_ms_map_prob:   [1, 64, 1]. Normalized across dim 1, i.e., 
+            # among sc (subj comp) image tokens.
+            # So sc_whole_ss_map_prob.mean(dim=2) is always 1.
+            sc_whole_ss_map_prob_below_mean = sc_whole_ss_map_prob.mean(dim=2, keepdim=True) - sc_whole_ss_map_prob
+            mc_whole_ms_map_prob_below_mean = mc_whole_ms_map_prob.mean(dim=2, keepdim=True) - mc_whole_ms_map_prob
+
+            # Remove values corresponding to large probs in sc_ss_map_prob, mc_ms_map_prob,
+            # which are likely to be foreground areas. 
+            # What remains may still contain background areas, but it's ok to contain some noise.
+            sc_whole_ss_map_prob_below_mean = torch.clamp(sc_whole_ss_map_prob_below_mean, min=0)
+            mc_whole_ms_map_prob_below_mean = torch.clamp(mc_whole_ms_map_prob_below_mean, min=0)
+
             # Suppress the subj attention scores on background areas in comp instances.
             # subj_comp_subj_attn: [1, 8, 64]. ss_bg_mask_map_to_sc: [1, 1, 64].
             loss_layer_subj_bg_attn_suppress = masked_mean(subj_comp_subj_attn, 
-                                                           ss_bg_mask_map_to_sc)
+                                                           sc_whole_ss_map_prob_below_mean)
             loss_layer_mix_bg_attn_suppress  = masked_mean(mix_comp_subj_attn_gs,  
-                                                           ms_bg_mask_map_to_mc)
+                                                           mc_whole_ms_map_prob_below_mean)
 
             loss_comp_subj_bg_attn_suppress += loss_layer_subj_bg_attn_suppress * feat_distill_layer_weight
             loss_comp_mix_bg_attn_suppress  += loss_layer_mix_bg_attn_suppress  * feat_distill_layer_weight
