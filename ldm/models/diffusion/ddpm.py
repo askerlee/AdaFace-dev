@@ -2736,7 +2736,7 @@ class LatentDiffusion(DDPM):
                 if loss_bg_subj_embs_align != 0:
                     loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach()})
                 
-                bg_subj_embs_align_loss_scale  = 2
+                bg_subj_embs_align_loss_scale  = 0.2
                 loss += (loss_padding_subj_embs_align 
                            + loss_bg_subj_embs_align * bg_subj_embs_align_loss_scale) \
                         * self.padding_embs_align_loss_weight
