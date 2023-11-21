@@ -1864,7 +1864,7 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
         
     # fg_mask: [1, 64] => [1, 64, 1].
     fg_mask = fg_mask.float().unsqueeze(2)
-    # sc_map_ss_fg_prob: [1, 64, 64] * [1, 64, 1] => [1, 64, 1].
+    # sc_map_ss_fg_prob: [1, 64, 64] * [1, 64, 1] => [1, 64, 1] => [1, 1, 64].
     sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, fg_mask).permute(0, 2, 1)
     mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, fg_mask).permute(0, 2, 1)
 
@@ -1874,9 +1874,9 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
     # Since sc_map_ss_prob and mc_map_ms_prob are very close to each other (error is 1e-5),
     # we use sc_bg_prob as mc_bg_prob.
     # Note sc_bg_prob is a soft mask, not a hard mask.
-    # sc_bg_prob: [1, 64, 1] => [1, 1, 64]. Can be viewed as a token-wise weight, used
+    # sc_bg_prob: [1, 1, 64]. Can be viewed as a token-wise weight, used
     # to give CA layer output features different weights at different tokens.
-    sc_bg_prob = (1 - sc_map_ss_fg_prob).permute(0, 2, 1)
+    sc_bg_prob = 1 - sc_map_ss_fg_prob
     # sc_bg_feat: [1, 1280, 64] * [1, 1, 64] => [1, 1280, 64]
     sc_bg_feat = sc_feat * sc_bg_prob
     # mc_bg_feat: [1, 1280, 64] * [1, 1, 64] => [1, 1280, 64]
