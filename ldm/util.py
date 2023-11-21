@@ -1868,6 +1868,21 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
     sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, fg_mask).permute(0, 2, 1)
     mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, fg_mask).permute(0, 2, 1)
 
+    # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64].
+    # The total prob of each image token in the subj comp instance maps to fg areas 
+    # in the subj single instance. 
+    # If this prob is low, i.e., the image token doesn't match to any tokens in the fg areas 
+    # in the subj single instance, then this token is probably background.
+    # So sc_whole_ss_map_prob.mean(dim=2) is always 1.
+    sc_map_ss_fg_prob_below_mean = sc_map_ss_fg_prob.mean(dim=2, keepdim=True) - sc_map_ss_fg_prob
+    mc_map_ss_fg_prob_below_mean = mc_map_ms_fg_prob.mean(dim=2, keepdim=True) - mc_map_ms_fg_prob
+
+    # Remove large negative values (corresponding to large positive probs in 
+    # sc_ss_map_prob, mc_ms_map_prob at fg areas of the corresponding single instances),
+    # which are likely to be foreground areas. 
+    sc_map_ss_fg_prob_below_mean = torch.clamp(sc_map_ss_fg_prob_below_mean, min=0)
+    mc_map_ss_fg_prob_below_mean = torch.clamp(mc_map_ss_fg_prob_below_mean, min=0)
+
     # Image tokens that don't map to any fg image tokens in subj single instance
     # (i.e., corresponding entries in sc_map_ss_fg_prob are small)
     # are considered as bg image tokens.
@@ -1876,7 +1891,7 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
     # Note sc_bg_prob is a soft mask, not a hard mask.
     # sc_bg_prob: [1, 1, 64]. Can be viewed as a token-wise weight, used
     # to give CA layer output features different weights at different tokens.
-    sc_bg_prob = 1 - sc_map_ss_fg_prob
+    sc_bg_prob = (sc_map_ss_fg_prob_below_mean + mc_map_ss_fg_prob_below_mean) / 2
     # sc_bg_feat: [1, 1280, 64] * [1, 1, 64] => [1, 1280, 64]
     sc_bg_feat = sc_feat * sc_bg_prob
     # mc_bg_feat: [1, 1280, 64] * [1, 1, 64] => [1, 1280, 64]
@@ -1884,4 +1899,4 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
     loss_sc_mc_bg_match = power_loss(sc_bg_feat - mc_bg_feat, exponent=2)
     
     return loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
-            loss_sc_mc_bg_match, sc_map_ss_fg_prob, mc_map_ms_fg_prob
+            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean

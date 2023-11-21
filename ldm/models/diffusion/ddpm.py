@@ -3742,7 +3742,7 @@ class LatentDiffusion(DDPM):
 
             # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64]
             loss_layer_comp_single_align_map, loss_layer_ss_sc_fg_match, loss_layer_ms_mc_fg_match, \
-            loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob, mc_map_ms_fg_prob \
+            loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
                 = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, fg_attn_mask_pooled, 
                                              single_q_grad_scale=0.1, single_feat_grad_scale=0.01)
 
@@ -3751,7 +3751,7 @@ class LatentDiffusion(DDPM):
             loss_mc_ms_fg_match += loss_layer_ms_mc_fg_match * feat_distill_layer_weight
             loss_sc_mc_bg_match += loss_layer_sc_mc_bg_match * feat_distill_layer_weight
 
-            if sc_map_ss_fg_prob is None or mc_map_ms_fg_prob is None:
+            if sc_map_ss_fg_prob_below_mean is None or mc_map_ss_fg_prob_below_mean is None:
                 continue
             
             ##### unet_attn_score fg preservation loss & bg suppression loss #####
@@ -3780,21 +3780,6 @@ class LatentDiffusion(DDPM):
                 = subj_attn_pooled.chunk(4)
 
             mix_comp_subj_attn_gs = mix_grad_scaler(mix_comp_subj_attn)
-
-            # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64].
-            # The total prob of each image token in the subj comp instance maps to fg areas 
-            # in the subj single instance. 
-            # If this prob is low, i.e., the image token doesn't match to any tokens in the fg areas 
-            # in the subj single instance, then this token is probably background.
-            # So sc_whole_ss_map_prob.mean(dim=2) is always 1.
-            sc_map_ss_fg_prob_below_mean = sc_map_ss_fg_prob.mean(dim=2, keepdim=True) - sc_map_ss_fg_prob
-            mc_map_ss_fg_prob_below_mean = mc_map_ms_fg_prob.mean(dim=2, keepdim=True) - mc_map_ms_fg_prob
-
-            # Remove large negative values (corresponding to large positive probs in 
-            # sc_ss_map_prob, mc_ms_map_prob at fg areas of the corresponding single instances),
-            # which are likely to be foreground areas. 
-            sc_map_ss_fg_prob_below_mean = torch.clamp(sc_map_ss_fg_prob_below_mean, min=0)
-            mc_map_ss_fg_prob_below_mean = torch.clamp(mc_map_ss_fg_prob_below_mean, min=0)
 
             # Suppress the subj attention scores on background areas in comp instances.
             # subj_comp_subj_attn: [1, 8, 64]. ss_bg_mask_map_to_sc: [1, 1, 64].
