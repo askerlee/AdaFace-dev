@@ -871,6 +871,7 @@ class EmbeddingManager(nn.Module):
             training_add_noise_prob=None,
             normalize_subj_attn=False,
             use_conv_attn_kernel_size=-1,
+            conv_attn_layerwise_scale_learnable=False,
             attn_copycat_emb_mod=-1,
             contrast_fgbg_init_coeff=0,
             **kwargs
@@ -901,7 +902,7 @@ class EmbeddingManager(nn.Module):
             self.num_layers_per_embedder = 1
 
         self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
-        self.initialize_conv_attn_layerwise_scales(1, learnable=True)
+        self.initialize_conv_attn_layerwise_scales(1, learnable=conv_attn_layerwise_scale_learnable)
         
         self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
         self.set_embs_attn_tricks(use_conv_attn_kernel_size, attn_copycat_emb_mod, 
@@ -1650,7 +1651,9 @@ class EmbeddingManager(nn.Module):
 
     def initialize_conv_attn_layerwise_scales(self, default_conv_attn_scale=1, 
                                               conv_attn_layerwise_scales=None,
-                                              learnable=True):
+                                              learnable=False):
+        self.conv_attn_layerwise_scale_learnable = learnable
+        
         if conv_attn_layerwise_scales is not None:
             self.conv_attn_layerwise_scales = nn.Parameter(conv_attn_layerwise_scales,
                                                            requires_grad=learnable)            
@@ -2044,8 +2047,11 @@ class EmbeddingManager(nn.Module):
         params = list(self.string_to_static_embedder_dict.parameters()) \
                + list(self.string_to_ada_embedder_dict.parameters()) \
                + list(self.string_to_emb_ema_dict.parameters()) \
-               + [ self.emb_global_scale_score, self.conv_attn_layerwise_scales ]
+               + [ self.emb_global_scale_score ]
         
+        if self.conv_attn_layerwise_scale_learnable:
+            params = params + [self.conv_attn_layerwise_scales]
+            
         if self.attn_postmix_weight > 0:
             params = params + list(self.postmix_attn_layer.parameters()) \
                             + list(self.postmix_attn_LN.parameters())
