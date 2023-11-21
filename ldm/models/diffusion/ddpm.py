@@ -2766,6 +2766,11 @@ class LatentDiffusion(DDPM):
                     * self.fg_bg_xlayer_consist_loss_weight
 
         if self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']:
+            # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
+            # It contains the 12 specified cross-attention layers of UNet.
+            # i.e., layers 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24.
+            # Similar are ca_attns and ca_attnscores.
+            ca_outfeats  = extra_info['ca_layers_activations']['outfeat']
 
             # NOTE: loss_comp_fg_bg_preserve is applied only when this 
             # iteration is teachable, because at such iterations the unet gradient is enabled.
@@ -2830,12 +2835,6 @@ class LatentDiffusion(DDPM):
 
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     * comp_fg_bg_preserve_loss_scale
-
-            # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
-            # It contains the 12 specified cross-attention layers of UNet.
-            # i.e., layers 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24.
-            # Similar are ca_attns and ca_attnscores.
-            ca_outfeats  = extra_info['ca_layers_activations']['outfeat']
 
             # subj_indices_2b is used in calc_prompt_mix_loss(), as it's used 
             # to index subj single and subj comp embeddings.
