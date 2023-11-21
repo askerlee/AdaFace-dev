@@ -84,7 +84,7 @@ model:
         specialized_comp_embs_mod: -1
         contrast_fgbg_init_coeff:  0
         attn_postmix_weight: 0
-        conv_attn_layerwise_scale_learnable: False
+        conv_attn_layerwise_scale_learnable: True
         training_add_noise_std_range:  [ 0.1, 0.4 ]
         # probs for recon_iter and distill_iter, respectively
         training_add_noise_prob:   { 'recon_iter': 0.6, 'distill_iter': 0.4 }

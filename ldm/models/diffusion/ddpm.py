@@ -2766,73 +2766,6 @@ class LatentDiffusion(DDPM):
                     * self.fg_bg_xlayer_consist_loss_weight
 
         if self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']:
-            # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
-            # It contains the 12 specified cross-attention layers of UNet.
-            # i.e., layers 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24.
-            # Similar are ca_attns and ca_attnscores.
-            ca_outfeats  = extra_info['ca_layers_activations']['outfeat']
-
-            subj_indices_1b = extra_info['subj_indices_1b']
-            bg_indices_1b   = extra_info['bg_indices_1b'] if self.iter_flags['use_background_token'] \
-                                else None
-            # subj_indices_4b: Extend subj_indices_1b to subj_indices_4b, by adding offset to batch indices.
-            # bg_indices_4b:   Extend bg_indices_1b   to bg_indices_4b,   by adding offset to batch indices.
-            subj_indices_4b, subj_indices_4b_by_block = extend_indices_B_by_n_times(subj_indices_1b, n=4, offset=BLOCK_SIZE)
-            bg_indices_4b,   bg_indices_4b_by_block   = extend_indices_B_by_n_times(bg_indices_1b,   n=4, offset=BLOCK_SIZE)
-
-            comp_extra_indices_4b_by_block = \
-                gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
-                                                subj_indices_4b, bg_indices_4b, block_size=BLOCK_SIZE)
-            # block[0] and block[2] are the indices within the subj single and class single blocks.
-            # So they are empty and useless, and we only need block[1] and block[3].
-            comp_extra_indices_13b = join_list_of_indices(comp_extra_indices_4b_by_block[1], 
-                                                          comp_extra_indices_4b_by_block[3])
-
-            # subj_indices_2b is used in calc_prompt_mix_loss(), as it's used 
-            # to index subj single and subj comp embeddings.
-            # The indices will be shifted along the batch dimension (size doubled) 
-            # within calc_prompt_mix_loss() to index all the 4 blocks.
-            loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill \
-                = self.calc_prompt_mix_loss(ca_outfeats, 
-                                            extra_info['ca_layers_activations']['attnscore'], 
-                                            extra_info['subj_indices_2b'], 
-                                            comp_extra_indices_13b,
-                                            BLOCK_SIZE)
-
-            if loss_feat_delta_align > 0:
-                loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach()})
-            if loss_subj_attn_delta_align > 0:
-                loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach()})
-            if loss_subj_attn_norm_distill > 0:
-                loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach()})
-
-            # loss_subj_attn_delta_align_* use L2 losses, 
-            # so no need to use dynamic loss scale.
-            subj_attn_delta_distill_loss_scale = 1 #0.5
-            # If normalize_subj_attn, then more relaxed on subj attn magnitudes.
-            subj_attn_norm_distill_loss_scale_base  = 1 
-            
-            if extra_info['normalize_subj_attn']:
-                subj_attn_delta_distill_loss_scale      *= 0.5
-                subj_attn_norm_distill_loss_scale_base  *= 0.5
-
-            # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
-            # subj_attn_norm_distill_loss_base: 4 for non-faces or 8 for faces.
-            subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
-                                                                     self.subj_attn_norm_distill_loss_base,
-                                                                     subj_attn_norm_distill_loss_scale_base)
-
-            feat_delta_align_scale = 2
-
-            loss_mix_prompt_distill =   loss_subj_attn_delta_align * subj_attn_delta_distill_loss_scale \
-                                        + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
-                                        + loss_feat_delta_align    * feat_delta_align_scale
-                                        
-            if loss_mix_prompt_distill > 0:
-                loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
-
-            # mix_prompt_distill_weight: 2e-4.
-            loss += loss_mix_prompt_distill * self.mix_prompt_distill_weight
 
             # NOTE: loss_comp_fg_bg_preserve is applied only when this 
             # iteration is teachable, because at such iterations the unet gradient is enabled.
@@ -2897,6 +2830,66 @@ class LatentDiffusion(DDPM):
 
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     * comp_fg_bg_preserve_loss_scale
+
+            # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
+            # It contains the 12 specified cross-attention layers of UNet.
+            # i.e., layers 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24.
+            # Similar are ca_attns and ca_attnscores.
+            ca_outfeats  = extra_info['ca_layers_activations']['outfeat']
+
+            # subj_indices_2b is used in calc_prompt_mix_loss(), as it's used 
+            # to index subj single and subj comp embeddings.
+            # The indices will be shifted along the batch dimension (size doubled) 
+            # within calc_prompt_mix_loss() to index all the 4 blocks.
+            loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill \
+                = self.calc_prompt_mix_loss(ca_outfeats, 
+                                            extra_info['ca_layers_activations']['attnscore'], 
+                                            extra_info['subj_indices_2b'], 
+                                            BLOCK_SIZE)
+
+            if loss_feat_delta_align > 0:
+                loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach()})
+            if loss_subj_attn_delta_align > 0:
+                loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach()})
+            if loss_subj_attn_norm_distill > 0:
+                loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach()})
+
+            # loss_subj_attn_delta_align_* use L2 losses, 
+            # so no need to use dynamic loss scale.
+            subj_attn_delta_distill_loss_scale = 1 #0.5
+            # If normalize_subj_attn, then more relaxed on subj attn magnitudes.
+            subj_attn_norm_distill_loss_scale_base  = 1 
+            
+            if extra_info['normalize_subj_attn']:
+                subj_attn_delta_distill_loss_scale      *= 0.5
+                subj_attn_norm_distill_loss_scale_base  *= 0.5
+
+            # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
+            # subj_attn_norm_distill_loss_base: 4 for non-faces or 8 for faces.
+            subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
+                                                                     self.subj_attn_norm_distill_loss_base,
+                                                                     subj_attn_norm_distill_loss_scale_base)
+
+            feat_delta_align_scale = 2
+
+            loss_mix_prompt_distill =   loss_subj_attn_delta_align * subj_attn_delta_distill_loss_scale \
+                                        + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
+                                        + loss_feat_delta_align    * feat_delta_align_scale
+                                        
+            if loss_mix_prompt_distill > 0:
+                loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
+
+            if loss_comp_fg_bg_preserve > 0:
+                # Scale down loss_mix_prompt_distill if loss_comp_fg_bg_preserve is active.
+                # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill partly,
+                # as it's more accurate.
+                mix_prompt_distill_loss_scale = 0.5
+            else:
+                mix_prompt_distill_loss_scale = 1
+
+            # mix_prompt_distill_weight: 2e-4.
+            loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
+                    * self.mix_prompt_distill_weight
 
         # If subj_comp_key_ortho_loss_weight = 0, we still monitor loss_subj_comp_key_ortho 
         # and loss_subj_comp_value_ortho.
@@ -2998,9 +2991,7 @@ class LatentDiffusion(DDPM):
 
         return loss_recon, loss_recon_pixels
     
-    def calc_prompt_mix_loss(self, ca_outfeats, ca_attnscores, fg_indices_2b, 
-                             comp_extra_indices_13b,
-                             BLOCK_SIZE):
+    def calc_prompt_mix_loss(self, ca_outfeats, ca_attnscores, fg_indices_2b, BLOCK_SIZE):
         # do_mix_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
