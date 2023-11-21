@@ -1861,9 +1861,15 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
     loss_mc_ms_fg_match = calc_ref_cosine_loss(mc_recon_ms_fg_feat, ms_fg_feat_gs, 
                                                 exponent=2, do_demean_first=False,
                                                 first_n_dims_to_flatten=2, ref_grad_scale=1)
-    
-    
-    # Those image tokens that don't map to fg image tokens in subj single instance
+        
+    # fg_mask: [1, 64] => [1, 64, 1].
+    fg_mask = fg_mask.float().unsqueeze(2)
+    # sc_map_ss_fg_prob: [1, 64, 64] * [1, 64, 1] => [1, 64, 1].
+    sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, fg_mask).permute(0, 2, 1)
+    mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, fg_mask).permute(0, 2, 1)
+
+    # Image tokens that don't map to fg image tokens in subj single instance
+    # (i.e., corresponding entries in sc_map_ss_fg_prob are small)
     # are considered as bg image tokens.
     # Since sc_map_ss_prob and mc_map_ms_prob are very close to each other (error is 1e-5),
     # we use sc_bg_prob as mc_bg_prob.
@@ -1875,11 +1881,5 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
     mc_bg_feat = torch.matmul(mc_feat, sc_bg_prob)
     loss_sc_mc_bg_match = power_loss(sc_bg_feat - mc_bg_feat, exponent=2)
     
-    # fg_mask: [1, 64] => [1, 64, 1].
-    fg_mask = fg_mask.float().unsqueeze(2)
-    # sc_map_ss_fg_prob: [1, 64, 64] * [1, 64, 1] => [1, 64, 1].
-    sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, fg_mask).permute(0, 2, 1)
-    mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, fg_mask).permute(0, 2, 1)
-
     return loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
             loss_sc_mc_bg_match, sc_map_ss_fg_prob, mc_map_ms_fg_prob
