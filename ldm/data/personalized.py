@@ -643,7 +643,6 @@ class PersonalizedBase(Dataset):
 
         subj_prompt_comps = []
         cls_prompt_comps  = []
-        comps_are_appearances = []
 
         if self.is_animal:
             subj_type = "animal" 
@@ -651,15 +650,12 @@ class PersonalizedBase(Dataset):
             subj_type = "object"
 
         for _ in range(self.num_compositions_per_image):
-            compositions_partial, are_appearances = sample_compositions(1, subj_type, is_training=True)
-            # Only sampled one instance, so compositions_partial and are_appearances are lists of length 1.
+            compositions_partial = sample_compositions(1, subj_type, is_training=True)
             composition_partial = compositions_partial[0]
-            comp_is_appearance  = are_appearances[0]
             subj_prompt_comp    = subj_prompt_single + " " + composition_partial
             cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
             subj_prompt_comps.append(subj_prompt_comp)
             cls_prompt_comps.append(cls_prompt_comp)
-            comps_are_appearances.append(comp_is_appearance)
 
             if self.broad_class == 1:
                 subj_prompt_comp_fp = subj_prompt_single_fp + " " + composition_partial
@@ -704,10 +700,6 @@ class PersonalizedBase(Dataset):
                 # *_comp_bg prompts are for static delta loss on training images.
                 example["subj_prompt_comp_fp_bg"]   = "|".join([ subj_prompt_comp_fp.format(compos_placeholder_string_with_bg) for subj_prompt_comp_fp in subj_prompt_comps_fp])
                 example["cls_prompt_comp_fp_bg"]    = "|".join([ cls_prompt_comp_fp.format(compos_cls_delta_token_with_bg)     for cls_prompt_comp_fp  in cls_prompt_comps_fp])
-
-        # comps_are_appearances is a list of length num_compositions_per_image. So in the collated batch, 
-        # "comps_are_appearances" is a list of lists and needs concat.
-        example["comps_are_appearances"]    = comps_are_appearances
 
     def repl_bg_as_wbg(self, prompt):
         if self.wds_background_string is None:

@@ -1814,17 +1814,19 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
     # sc_map_ss_prob:   [1, 64, 64]. 
     # Pairwise matching probs (9 subj comp image tokens) -> (9 subj single image tokens).
     # Normalize among subj comp tokens (sc dim)
-    sc_map_ss_prob  = F.softmax(sc_map_ss_score, dim=1)
+    sc_map_ss_prob0  = F.softmax(sc_map_ss_score, dim=1)
     # Add a small value to the diagonal of sc_map_ss_prob to encourage the contributions 
     # from the tokens at the same locations.
-    sc_map_ss_prob  = add_to_prob_mat_diagonal(sc_map_ss_prob, 0.1, renormalize_dim=1)
+    sc_map_ss_prob  = add_to_prob_mat_diagonal(sc_map_ss_prob0, 0.1, renormalize_dim=1)
 
     mc_map_ms_score = torch.matmul(mc_q.transpose(1, 2), ms_q_gs)
     # Normalize among mix comp tokens (mc dim).
-    mc_map_ms_prob  = F.softmax(mc_map_ms_score, dim=1)
+    mc_map_ms_prob0  = F.softmax(mc_map_ms_score, dim=1)
     # Add a small value to the diagonal of mc_map_ms_prob to encourage the contributions
     # from the tokens at the same locations.
-    mc_map_ms_prob  = add_to_prob_mat_diagonal(mc_map_ms_prob, 0.1, renormalize_dim=1)
+    mc_map_ms_prob  = add_to_prob_mat_diagonal(mc_map_ms_prob0, 0.1, renormalize_dim=1)
+
+    # breakpoint()
 
     # ss_feat, sc_feat, ms_feat, mc_feat: [4, 1280, 64] => [1, 1280, 64].
     ss_feat, sc_feat, ms_feat, mc_feat = ca_outfeat.chunk(4)

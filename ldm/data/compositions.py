@@ -121,17 +121,23 @@ all_backgrounds = [ "a beach", "a table", "a park", "a concert", "a gym", "a lib
                     "a building", 
                   ]
 
+Debug_Prompts = False #True
+PRESET_DEBUG_PROMPTS = [ 'on a cobblestone street', 'on top of a wooden floor' ]
 
 def sample_compositions(N, subj_type, is_training=False):
     compositions = []
-    are_appearances  = []
 
+    if Debug_Prompts:
+        K = len(PRESET_DEBUG_PROMPTS)
+        for i in range(N):
+            idx = np.random.choice(K)
+            compositions.append(PRESET_DEBUG_PROMPTS[idx])
+        return compositions
+    
     if subj_type == 'animal':
         composition_regexs = all_composition_regexs
-        appearance_start_idx = len(all_action_regexs)
     elif subj_type == 'object':
         composition_regexs = static_composition_regexs
-        appearance_start_idx = len(static_action_regexs)
     else:
         raise ValueError(f"Unknown subject type: {subj_type}")
     
@@ -151,7 +157,6 @@ def sample_compositions(N, subj_type, is_training=False):
 
     for i in range(N):
         idx = np.random.choice(K)
-        is_appearance = (idx >= appearance_start_idx)
 
         composition = exrex.getone(composition_regexs[idx])
         # Disable another object in the image for non-animal subjects,
@@ -226,9 +231,8 @@ def sample_compositions(N, subj_type, is_training=False):
                 composition = composition[2:]
         
         compositions.append(composition)
-        are_appearances.append(is_appearance)
         
-    return compositions, are_appearances
+    return compositions
 
 if __name__ == "__main__":
     print("Test:")
