@@ -2808,13 +2808,10 @@ class LatentDiffusion(DDPM):
                 if loss_ms_mc_match > 0:
                     loss_dict.update({f'{prefix}/ms_mc_match': loss_ms_mc_match.mean().detach()})
 
-                # Seems it's not so important whether fg attns in subj comp and subj single 
-                # instances are similar or not (observe the attns between mix comp 
-                # and mix single instances). So scale down loss_comp_subj_fg_attn_preserve.
-                elastic_matching_loss_scale = 0.2
+                elastic_matching_loss_scale = 1
                 # loss_comp_single_map_align is L1 loss on attn maps, so its magnitude is small.
-                # We need to scale it up to make it comparable to other losses.
-                comp_single_map_align_loss_scale = 6
+                # But this loss is always very small, so no need to scale it up.
+                comp_single_map_align_loss_scale = 1
                 # mix single - mix comp matching loss is less important, so scale it down.
                 ms_mc_match_loss_scale = 0.1
                 comp_subj_bg_attn_suppress_loss_scale = 0.02
