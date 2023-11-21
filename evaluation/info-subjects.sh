@@ -14,7 +14,7 @@ set -g broad_classes  1                 1                     1                1
 set -g are_faces     1                  1                     1                1            1              1            1            1                 0          1            0            1                    1            1              0                     1            1              1             1               1            1             1              1                   1                     1
 #                     objects    humans/animals    cartoon characters
 set -g lrs            6e-4       8e-4              6e-4
-set -g inf_z_prefixes     ""         "portrait of"     ""
+set -g inf_z_prefixes     ""         "face portrait of"     ""
 set -g maxiters       2500       4500              2500
 # All subjects are humans/animals. The other two classes are listed for completeness.
 # Individual LR for each class in the broad classes, according to their difficulties / inherent complexity.
