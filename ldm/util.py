@@ -1796,7 +1796,7 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
-        return 0, 0, 0, None, None
+        return 0, 0, 0, 0, None, None
 
     single_q_grad_scaler    = gen_gradient_scaler(single_q_grad_scale)
     single_feat_grad_scaler = gen_gradient_scaler(single_feat_grad_scale)
@@ -1855,23 +1855,31 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
     # single_grad_scale = 0.1: 0.1 gs on subj single / mix single features.
     # single features are still updated (although more slowly), to reduce the chance of 
     # generating single images without facial details.
-    loss_sc_ss_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat_gs, 
-                                            exponent=2, do_demean_first=False,
-                                            first_n_dims_to_flatten=2, ref_grad_scale=1)
-    loss_mc_ms_match = calc_ref_cosine_loss(mc_recon_ms_fg_feat, ms_fg_feat_gs, 
-                                            exponent=2, do_demean_first=False,
-                                            first_n_dims_to_flatten=2, ref_grad_scale=1)
+    loss_sc_ss_fg_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat_gs, 
+                                                exponent=2, do_demean_first=False,
+                                                first_n_dims_to_flatten=2, ref_grad_scale=1)
+    loss_mc_ms_fg_match = calc_ref_cosine_loss(mc_recon_ms_fg_feat, ms_fg_feat_gs, 
+                                                exponent=2, do_demean_first=False,
+                                                first_n_dims_to_flatten=2, ref_grad_scale=1)
     
-    '''
-    loss_sc_ss_match = power_loss(sc_recon_ss_fg_feat - ss_fg_feat_gs, exponent=2)
-    loss_mc_ms_match = power_loss(mc_recon_ms_fg_feat - ms_fg_feat_gs, exponent=2)
-    '''
-
+    
+    # Those image tokens that don't map to fg image tokens in subj single instance
+    # are considered as bg image tokens.
+    # Since sc_map_ss_prob and mc_map_ms_prob are very close to each other (error is 1e-5),
+    # we use sc_bg_prob as mc_bg_prob.
+    # Note sc_bg_prob is a soft mask, not a hard mask.
+    sc_bg_prob = 1 - sc_map_ss_fg_prob
+    # sc_bg_feat: [1, 1280, 64] * [1, 64, 64] => [1, 1280, 64]
+    sc_bg_feat = torch.matmul(sc_feat, sc_bg_prob)
+    # mc_bg_feat: [1, 1280, 64] * [1, 64, 64] => [1, 1280, 64]
+    mc_bg_feat = torch.matmul(mc_feat, sc_bg_prob)
+    loss_sc_mc_bg_match = power_loss(sc_bg_feat - mc_bg_feat, exponent=2)
+    
     # fg_mask: [1, 64] => [1, 64, 1].
     fg_mask = fg_mask.float().unsqueeze(2)
     # sc_map_ss_fg_prob: [1, 64, 64] * [1, 64, 1] => [1, 64, 1].
     sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, fg_mask).permute(0, 2, 1)
     mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, fg_mask).permute(0, 2, 1)
 
-    return loss_comp_single_map_align, loss_sc_ss_match, loss_mc_ms_match, \
-            sc_map_ss_fg_prob, mc_map_ms_fg_prob
+    return loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
+            loss_sc_mc_bg_match, sc_map_ss_fg_prob, mc_map_ms_fg_prob

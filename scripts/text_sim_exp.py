@@ -6,7 +6,9 @@ triplets = [ ['camel', 'giraffe', 'cashmere'],
              ['dietitian', 'pharmacist', 'nutritious'], 
              ['snake', 'twisted', 'gecko'],
              ['reflections of earth', 'sphere', 'civilization'],
-             ['fear', 'scream', 'wolf']
+             ['fear', 'scream', 'wolf'],
+             ['snail', 'table', 'cake'],
+             ["camel", "giraffe", "door"]
            ]  
 
 for triplet in triplets:

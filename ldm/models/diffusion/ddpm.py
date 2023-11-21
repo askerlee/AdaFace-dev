@@ -2787,8 +2787,8 @@ class LatentDiffusion(DDPM):
                 # the background in the training images, which is not desirable.
                 # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
                 # excluding the instance from the fg_bg_preserve_loss.
-                loss_comp_single_map_align, loss_ss_sc_match, loss_ms_mc_match, \
-                loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress \
+                loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
+                loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress \
                  = \
                     self.calc_comp_fg_bg_preserve_loss(ca_outfeats, 
                                                        extra_info['ca_layers_activations']['attnscore'], 
@@ -2803,21 +2803,25 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/comp_mix_bg_attn_suppress': loss_comp_mix_bg_attn_suppress.mean().detach()})
                 if loss_comp_single_map_align > 0:
                     loss_dict.update({f'{prefix}/comp_single_map_align': loss_comp_single_map_align.mean().detach()})
-                if loss_ss_sc_match > 0:
-                    loss_dict.update({f'{prefix}/ss_sc_match': loss_ss_sc_match.mean().detach()})
-                if loss_ms_mc_match > 0:
-                    loss_dict.update({f'{prefix}/ms_mc_match': loss_ms_mc_match.mean().detach()})
+                if loss_sc_ss_fg_match > 0:
+                    loss_dict.update({f'{prefix}/sc_ss_fg_match': loss_sc_ss_fg_match.mean().detach()})
+                if loss_mc_ms_fg_match > 0:
+                    loss_dict.update({f'{prefix}/mc_ms_fg_match': loss_mc_ms_fg_match.mean().detach()})
+                if loss_sc_mc_bg_match > 0:
+                    loss_dict.update({f'{prefix}/sc_mc_bg_match': loss_sc_mc_bg_match.mean().detach()})
 
                 elastic_matching_loss_scale = 1
                 # loss_comp_single_map_align is L1 loss on attn maps, so its magnitude is small.
                 # But this loss is always very small, so no need to scale it up.
                 comp_single_map_align_loss_scale = 1
                 # mix single - mix comp matching loss is less important, so scale it down.
-                ms_mc_match_loss_scale = 0.1
+                ms_mc_fg_match_loss_scale = 0.1
+                sc_mc_bg_match_loss_scale = 0.5
                 comp_subj_bg_attn_suppress_loss_scale = 0.05
                 # No need to scale down loss_comp_mix_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
                 loss_comp_fg_bg_preserve = loss_comp_single_map_align * comp_single_map_align_loss_scale \
-                                           + (loss_ss_sc_match + loss_ms_mc_match * ms_mc_match_loss_scale) \
+                                           + (loss_sc_ss_fg_match + loss_mc_ms_fg_match * ms_mc_fg_match_loss_scale
+                                                + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
                                               * elastic_matching_loss_scale \
                                            + (loss_comp_subj_bg_attn_suppress + loss_comp_mix_bg_attn_suppress) \
                                               * comp_subj_bg_attn_suppress_loss_scale
@@ -2833,59 +2837,57 @@ class LatentDiffusion(DDPM):
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     * comp_fg_bg_preserve_loss_scale
 
-            # subj_indices_2b is used in calc_prompt_mix_loss(), as it's used 
-            # to index subj single and subj comp embeddings.
-            # The indices will be shifted along the batch dimension (size doubled) 
-            # within calc_prompt_mix_loss() to index all the 4 blocks.
-            loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill \
-                = self.calc_prompt_mix_loss(ca_outfeats, 
-                                            extra_info['ca_layers_activations']['attnscore'], 
-                                            extra_info['subj_indices_2b'], 
-                                            BLOCK_SIZE)
+            # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill, 
+            # as it should be accurate (?).
+            # So if loss_comp_fg_bg_preserve is active, then loss_mix_prompt_distill is not computed.
+            if loss_comp_fg_bg_preserve == 0:
+                # subj_indices_2b is used in calc_prompt_mix_loss(), as it's used 
+                # to index subj single and subj comp embeddings.
+                # The indices will be shifted along the batch dimension (size doubled) 
+                # within calc_prompt_mix_loss() to index all the 4 blocks.
+                loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill \
+                    = self.calc_prompt_mix_loss(ca_outfeats, 
+                                                extra_info['ca_layers_activations']['attnscore'], 
+                                                extra_info['subj_indices_2b'], 
+                                                BLOCK_SIZE)
 
-            if loss_feat_delta_align > 0:
-                loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach()})
-            if loss_subj_attn_delta_align > 0:
-                loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach()})
-            if loss_subj_attn_norm_distill > 0:
-                loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach()})
+                if loss_feat_delta_align > 0:
+                    loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach()})
+                if loss_subj_attn_delta_align > 0:
+                    loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach()})
+                if loss_subj_attn_norm_distill > 0:
+                    loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach()})
 
-            # loss_subj_attn_delta_align_* use L2 losses, 
-            # so no need to use dynamic loss scale.
-            subj_attn_delta_distill_loss_scale = 1 #0.5
-            # If normalize_subj_attn, then more relaxed on subj attn magnitudes.
-            subj_attn_norm_distill_loss_scale_base  = 1 
-            
-            if extra_info['normalize_subj_attn']:
-                subj_attn_delta_distill_loss_scale      *= 0.5
-                subj_attn_norm_distill_loss_scale_base  *= 0.5
+                # loss_subj_attn_delta_align_* use L2 losses, 
+                # so no need to use dynamic loss scale.
+                subj_attn_delta_distill_loss_scale = 1 #0.5
+                # If normalize_subj_attn, then more relaxed on subj attn magnitudes.
+                subj_attn_norm_distill_loss_scale_base  = 1 
+                
+                if extra_info['normalize_subj_attn']:
+                    subj_attn_delta_distill_loss_scale      *= 0.5
+                    subj_attn_norm_distill_loss_scale_base  *= 0.5
 
-            # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
-            # subj_attn_norm_distill_loss_base: 4 for non-faces or 8 for faces.
-            subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
-                                                                     self.subj_attn_norm_distill_loss_base,
-                                                                     subj_attn_norm_distill_loss_scale_base)
+                # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
+                # subj_attn_norm_distill_loss_base: 4 for non-faces or 8 for faces.
+                subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
+                                                                        self.subj_attn_norm_distill_loss_base,
+                                                                        subj_attn_norm_distill_loss_scale_base)
 
-            feat_delta_align_scale = 2
+                feat_delta_align_scale = 2
 
-            loss_mix_prompt_distill =   loss_subj_attn_delta_align * subj_attn_delta_distill_loss_scale \
-                                        + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
-                                        + loss_feat_delta_align    * feat_delta_align_scale
-                                        
-            if loss_mix_prompt_distill > 0:
-                loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
+                loss_mix_prompt_distill =   loss_subj_attn_delta_align * subj_attn_delta_distill_loss_scale \
+                                            + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
+                                            + loss_feat_delta_align    * feat_delta_align_scale
+                                            
+                if loss_mix_prompt_distill > 0:
+                    loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
 
-            if loss_comp_fg_bg_preserve > 0:
-                # Scale down loss_mix_prompt_distill if loss_comp_fg_bg_preserve is active.
-                # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill partly,
-                # as it's more accurate.
-                mix_prompt_distill_loss_scale = 0.5
-            else:
                 mix_prompt_distill_loss_scale = 1
 
-            # mix_prompt_distill_weight: 2e-4.
-            loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
-                    * self.mix_prompt_distill_weight
+                # mix_prompt_distill_weight: 2e-4.
+                loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
+                        * self.mix_prompt_distill_weight
 
         # If subj_comp_key_ortho_loss_weight = 0, we still monitor loss_subj_comp_key_ortho 
         # and loss_subj_comp_value_ortho.
@@ -3660,7 +3662,7 @@ class LatentDiffusion(DDPM):
                                       fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
-            return 0, 0, 0
+            return 0, 0, 0, 0, 0, 0
 
         feat_distill_layer_weights = { # 7:  1., 8: 1.,   
                                         12: 1.,
@@ -3691,8 +3693,10 @@ class LatentDiffusion(DDPM):
         mix_grad_scaler     = gen_gradient_scaler(mix_grad_scale)
 
         loss_comp_single_map_align      = 0
-        loss_ss_sc_match                = 0
-        loss_ms_mc_match                = 0
+        loss_sc_ss_fg_match             = 0
+        loss_mc_ms_fg_match             = 0
+        loss_sc_mc_bg_match             = 0
+
         loss_comp_subj_bg_attn_suppress = 0
         loss_comp_mix_bg_attn_suppress  = 0
 
@@ -3737,15 +3741,19 @@ class LatentDiffusion(DDPM):
             fg_attn_mask_pooled = fg_attn_mask_pooled.reshape(*fg_attn_mask_pooled.shape[:2], -1)
 
             # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64]
-            loss_layer_comp_single_align_map, loss_layer_ss_sc_match, loss_layer_ms_mc_match, \
-            sc_map_ss_fg_prob, mc_map_ms_fg_prob \
+            loss_layer_comp_single_align_map, loss_layer_ss_sc_fg_match, loss_layer_ms_mc_fg_match, \
+            loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob, mc_map_ms_fg_prob \
                 = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, fg_attn_mask_pooled, 
                                              single_q_grad_scale=0.1, single_feat_grad_scale=0.01)
 
-            loss_ss_sc_match += loss_layer_ss_sc_match * feat_distill_layer_weight
-            loss_ms_mc_match += loss_layer_ms_mc_match * feat_distill_layer_weight
             loss_comp_single_map_align = loss_layer_comp_single_align_map * feat_distill_layer_weight
+            loss_sc_ss_fg_match += loss_layer_ss_sc_fg_match * feat_distill_layer_weight
+            loss_mc_ms_fg_match += loss_layer_ms_mc_fg_match * feat_distill_layer_weight
+            loss_sc_mc_bg_match += loss_layer_sc_mc_bg_match * feat_distill_layer_weight
 
+            if sc_map_ss_fg_prob is None or mc_map_ms_fg_prob is None:
+                continue
+            
             ##### unet_attn_score fg preservation loss & bg suppression loss #####
             unet_attn_score = ca_attnscores[unet_layer_idx]
             # attn_score_mat: [4, 8, 256, 77] => [4, 77, 8, 256] 
@@ -3798,8 +3806,8 @@ class LatentDiffusion(DDPM):
             loss_comp_subj_bg_attn_suppress += loss_layer_subj_bg_attn_suppress * feat_distill_layer_weight
             loss_comp_mix_bg_attn_suppress  += loss_layer_mix_bg_attn_suppress  * feat_distill_layer_weight
 
-        return loss_comp_single_map_align, loss_ss_sc_match, loss_ms_mc_match, \
-               loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress
+        return loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
+               loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress
                
 
     # SSB_SIZE: subject sub-batch size.
