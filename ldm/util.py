@@ -1791,7 +1791,7 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
         prob_mat = prob_mat / prob_mat.sum(dim=renormalize_dim, keepdim=True)
     return prob_mat
 
-def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, 
+def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25,
                                single_q_grad_scale=0.1, single_feat_grad_scale=0.01,
                                mix_feat_grad_scale=0.2):
     # fg_mask: [1, 1, 64] => [1, 64]
@@ -1814,18 +1814,18 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
     sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2), ss_q_gs)
     # sc_map_ss_prob:   [1, 64, 64]. 
     # Pairwise matching probs (9 subj comp image tokens) -> (9 subj single image tokens).
-    # Normalize among subj comp tokens (sc dim)
-    sc_map_ss_prob0  = F.softmax(sc_map_ss_score, dim=1)
+    # Normalize among subj single tokens (ss dim)
+    sc_map_ss_prob0  = F.softmax(sc_map_ss_score, dim=2)
     # Add a small value to the diagonal of sc_map_ss_prob to encourage the contributions 
     # from the tokens at the same locations.
-    sc_map_ss_prob  = add_to_prob_mat_diagonal(sc_map_ss_prob0, 0.1, renormalize_dim=1)
+    sc_map_ss_prob  = add_to_prob_mat_diagonal(sc_map_ss_prob0, 0.1, renormalize_dim=2)
 
     mc_map_ms_score = torch.matmul(mc_q.transpose(1, 2), ms_q_gs)
-    # Normalize among mix comp tokens (mc dim).
-    mc_map_ms_prob0  = F.softmax(mc_map_ms_score, dim=1)
+    # Normalize among mix single tokens (ms dim).
+    mc_map_ms_prob0  = F.softmax(mc_map_ms_score, dim=2)
     # Add a small value to the diagonal of mc_map_ms_prob to encourage the contributions
     # from the tokens at the same locations.
-    mc_map_ms_prob  = add_to_prob_mat_diagonal(mc_map_ms_prob0, 0.1, renormalize_dim=1)
+    mc_map_ms_prob  = add_to_prob_mat_diagonal(mc_map_ms_prob0, 0.1, renormalize_dim=2)
 
     # breakpoint()
 
@@ -1875,9 +1875,8 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
     # If this prob is low, i.e., the image token doesn't match to any tokens in the fg areas 
     # in the subj single instance, then this token is probably background.
     # So sc_whole_ss_map_prob.mean(dim=2) is always 1.
-    sc_map_ss_fg_prob_below_mean = sc_map_ss_fg_prob.mean(dim=2, keepdim=True) - sc_map_ss_fg_prob
-    mc_map_ss_fg_prob_below_mean = mc_map_ms_fg_prob.mean(dim=2, keepdim=True) - mc_map_ms_fg_prob
-
+    sc_map_ss_fg_prob_below_mean = fg_bg_cutoff_prob - sc_map_ss_fg_prob
+    mc_map_ss_fg_prob_below_mean = fg_bg_cutoff_prob - mc_map_ms_fg_prob
     # Remove large negative values (corresponding to large positive probs in 
     # sc_ss_map_prob, mc_ms_map_prob at fg areas of the corresponding single instances),
     # which are likely to be foreground areas. 

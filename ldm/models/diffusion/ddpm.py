@@ -3744,6 +3744,7 @@ class LatentDiffusion(DDPM):
             loss_layer_comp_single_align_map, loss_layer_ss_sc_fg_match, loss_layer_ms_mc_fg_match, \
             loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
                 = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, fg_attn_mask_pooled, 
+                                             fg_bg_cutoff_prob=0.25,
                                              single_q_grad_scale=0.1, single_feat_grad_scale=0.01,
                                              mix_feat_grad_scale=0.2)
 

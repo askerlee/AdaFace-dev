@@ -121,8 +121,10 @@ all_backgrounds = [ "a beach", "a table", "a park", "a concert", "a gym", "a lib
                     "a building", 
                   ]
 
-Debug_Prompts = False #True
-PRESET_DEBUG_PROMPTS = [ 'on a cobblestone street', 'on top of a wooden floor' ]
+Debug_Prompts = False #True # 
+PRESET_DEBUG_PROMPTS = [ 'with a city in the background', 
+                        #'on a cobblestone street', 'on top of a wooden floor' 
+                       ]
 
 def sample_compositions(N, subj_type, is_training=False):
     compositions = []
