@@ -466,7 +466,7 @@ class DDPM(pl.LightningModule):
                             'use_wds_cls_captions':         False,
                             'use_fp_trick':                 False,
                             'reuse_init_conds':             False,
-                            'comp_init_with_fg_area':       False,
+                            'comp_init_fg_with_training_img':       False,
                           }
         
     # This shared_step() is overridden by LatentDiffusion::shared_step() and never called. 
@@ -1336,17 +1336,18 @@ class LatentDiffusion(DDPM):
                 # get_input() uses image, aug_mask and fg_mask.
                 x_start, _ = self.get_input(batch, self.first_stage_key)
 
-            # Slightly larger than 0.5, since comp_init_with_fg_area is disabled under reuse_init_conds.
-            # So in all distillation iterations, comp_init_with_fg_area percentage will be around 0.5.
-            # NOTE: If use_wds_comp, then to preserve the foreground, we always enable comp_init_with_fg_area.
+            # Slightly larger than 0.5, since comp_init_fg_with_training_img is disabled under reuse_init_conds.
+            # So in all distillation iterations, comp_init_fg_with_training_img percentage will be around 0.5.
+            # NOTE: If use_wds_comp, then to preserve the foreground, we always enable comp_init_fg_with_training_img.
             # But in this case, the background areas will not be replaced with random noises.
-            p_comp_init_with_fg_area = 0 if self.iter_flags['use_wds_comp'] else 0.7
-            # If reuse_init_conds, comp_init_with_fg_area may be set to True later
-            # if the previous iteration has comp_init_with_fg_area = True.
-            self.iter_flags['comp_init_with_fg_area'] = self.iter_flags['do_mix_prompt_distillation'] \
-                                                          and not self.iter_flags['reuse_init_conds'] \
-                                                          and self.iter_flags['fg_mask_avail_ratio'] > 0 \
-                                                          and random.random() < p_comp_init_with_fg_area
+            p_comp_init_fg_with_training_img = 0 if self.iter_flags['use_wds_comp'] else 0.7
+            # If reuse_init_conds, comp_init_fg_with_training_img may be set to True later
+            # if the previous iteration has comp_init_fg_with_training_img = True.
+            self.iter_flags['comp_init_fg_with_training_img'] \
+                = self.iter_flags['do_mix_prompt_distillation'] \
+                    and not self.iter_flags['reuse_init_conds'] \
+                    and self.iter_flags['fg_mask_avail_ratio'] > 0 \
+                    and random.random() < p_comp_init_fg_with_training_img
 
             # Mainly use background token on recon iters.
             if self.iter_flags['is_compos_iter']:
@@ -1365,7 +1366,7 @@ class LatentDiffusion(DDPM):
             # Only use_background_token on recon iters.
             # No need to check do_mix_prompt_distillation, because if do_mix_prompt_distillation,
             # in most iterations p_use_background_token = 0, except for 50% of the iterations when
-            # comp_init_with_fg_area = True.
+            # comp_init_fg_with_training_img = True.
             self.iter_flags['use_background_token'] = self.use_background_token \
                                                       and random.random() < p_use_background_token
                         
@@ -1494,7 +1495,7 @@ class LatentDiffusion(DDPM):
             self.iter_flags['filtered_fg_mask']         = self.cached_inits['filtered_fg_mask']
             self.iter_flags['use_background_token']     = self.cached_inits['use_background_token']
             self.iter_flags['use_wds_comp']             = self.cached_inits['use_wds_comp']
-            self.iter_flags['comp_init_with_fg_area']   = self.cached_inits['comp_init_with_fg_area']
+            self.iter_flags['comp_init_fg_with_training_img']   = self.cached_inits['comp_init_fg_with_training_img']
 
         # Gradually reduce recon_loss_weight from 1 to 0.5 over the whole course of training.
         self.iter_flags['recon_loss_weight'] = self.recon_loss_weight 
@@ -1986,7 +1987,7 @@ class LatentDiffusion(DDPM):
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
         # Don't consider img_mask in compositional iterations. Because in compositional iterations,
-        # the original images don't play a role (even if comp_init_with_fg_area,
+        # the original images don't play a role (even if comp_init_fg_with_training_img,
         # we still don't consider the actual pixels out of the subject areas, so img_mask doesn't matter).
         extra_info['img_mask']  = img_mask if not self.iter_flags['is_compos_iter'] else None
 
@@ -1999,8 +2000,8 @@ class LatentDiffusion(DDPM):
                 # cond is already organized as (subj single, subj comp, mix single, mix comp). 
                 # No need to manipulate.
                 # noise will be kept as the sampled random noise at the beginning of p_losses(). 
-                # NOTE: If reuse_init_conds, and the previous iter has comp_init_with_fg_area=True, then 
-                # the current iter will also have comp_init_with_fg_area=True. 
+                # NOTE: If reuse_init_conds, and the previous iter has comp_init_fg_with_training_img=True, then 
+                # the current iter will also have comp_init_fg_with_training_img=True. 
                 # But x_start is the denoised result from the previous iteration (noises have been added above), 
                 # so we don't add noise to it again.
                 x_start = self.cached_inits['x_start']
@@ -2043,9 +2044,9 @@ class LatentDiffusion(DDPM):
                 # This may help the model ignore the background in the training images given prompts, 
                 # i.e., give prompts higher priority over the background.
 
-                if self.iter_flags['comp_init_with_fg_area'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
+                if self.iter_flags['comp_init_fg_with_training_img'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
                     # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
-                    # Therefore, using fg_mask for comp_init_with_fg_area will force the model remember 
+                    # Therefore, using fg_mask for comp_init_fg_with_training_img will force the model remember 
                     # the background in the training images, which is not desirable.
                     # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
                     # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
@@ -2219,7 +2220,7 @@ class LatentDiffusion(DDPM):
             # The subject indices are applied to every of the half-batch instances, 
             # so extra_info['subj_indices_1b'] is enough.
             # (extra_info['subj_indices_2b'][1] just repeats extra_info['subj_indices_1b'][1] twice.)
-            k_cls_scale_layerwise_range = [0.85, 0.6] if self.iter_flags['comp_init_with_fg_area'] else [1.0, 0.8]
+            k_cls_scale_layerwise_range = [1.0, 0.8] if self.iter_flags['comp_init_fg_with_training_img'] else [1.0, 0.8]
             c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, \
                              emb_k_mixer, emb_k_layers_cls_mix_scales = \
                 mix_static_vk_embeddings(cond[0], extra_info['subj_indices_1b'][1], 
@@ -2527,9 +2528,9 @@ class LatentDiffusion(DDPM):
                     # t[0] == t[1], t[2] == t[3]. t: [952, 851, 952, 851]
                     t_sel       = t[better_cand_idx].repeat(4)
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
-                    # If comp_init_with_fg_area, then in order to let mix prompts attend to fg areas, we let
+                    # If comp_init_fg_with_training_img, then in order to let mix prompts attend to fg areas, we let
                     # the keys to be mostly subject embeddings, and the values are unchanged.
-                    k_cls_scale_layerwise_range = [0.85, 0.6] if self.iter_flags['comp_init_with_fg_area'] else [1.0, 0.8]
+                    k_cls_scale_layerwise_range = [1.0, 0.8] if self.iter_flags['comp_init_fg_with_training_img'] else [1.0, 0.8]
                     # Mix embeddings to get c_static_emb_orig_vk for cond_orig.
                     # Do mixing on saved cond_orig instead of the updated "cond".
                     # cond_orig is the 4-type prompt embeddings (subj single, subj comp, mix single, mix comp).
@@ -2610,7 +2611,7 @@ class LatentDiffusion(DDPM):
                                           'filtered_fg_mask':       filtered_fg_mask,
                                           'use_background_token':   self.iter_flags['use_background_token'],
                                           'use_wds_comp':           self.iter_flags['use_wds_comp'],
-                                          'comp_init_with_fg_area': self.iter_flags['comp_init_with_fg_area'],
+                                          'comp_init_fg_with_training_img': self.iter_flags['comp_init_fg_with_training_img'],
                                         }
                     
                     # Do not put cached_inits_available on self.iter_flags, as iter_flags will be reset
@@ -2775,15 +2776,15 @@ class LatentDiffusion(DDPM):
             # NOTE: loss_comp_fg_bg_preserve is applied only when this 
             # iteration is teachable, because at such iterations the unet gradient is enabled.
             # The current iteration may be a fresh iteration or a reuse_init_conds iteration.
-            # In both cases, if comp_init_with_fg_area, then we need to preserve the fg/bg areas.
-            # Although fg_mask_avail_ratio > 0 when comp_init_with_fg_area,
+            # In both cases, if comp_init_fg_with_training_img, then we need to preserve the fg/bg areas.
+            # Although fg_mask_avail_ratio > 0 when comp_init_fg_with_training_img,
             # fg_mask_avail_ratio may have been updated after doing teacher filtering 
             # (since x_start has been filtered, masks are also filtered accordingly, 
             # and the same as to fg_mask_avail_ratio). So we need to check it here.
-            if self.iter_flags['comp_init_with_fg_area'] and self.iter_flags['fg_mask_avail_ratio'] > 0 \
+            if self.iter_flags['comp_init_fg_with_training_img'] and self.iter_flags['fg_mask_avail_ratio'] > 0 \
               and self.comp_fg_bg_preserve_loss_weight > 0:
                 # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
-                # Therefore, using fg_mask for comp_init_with_fg_area will force the model remember 
+                # Therefore, using fg_mask for comp_init_fg_with_training_img will force the model remember 
                 # the background in the training images, which is not desirable.
                 # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
                 # excluding the instance from the fg_bg_preserve_loss.
@@ -3651,7 +3652,7 @@ class LatentDiffusion(DDPM):
         return loss_subj_comp_key_ortho, loss_subj_comp_value_ortho
 
     # Intuition of comp_fg_bg_preserve_loss: 
-    # In distillation iterations, if comp_init_with_fg_area, then at fg_mask areas, x_start is initialized with 
+    # In distillation iterations, if comp_init_fg_with_training_img, then at fg_mask areas, x_start is initialized with 
     # the noisy input images. (Otherwise in distillation iterations, x_start is initialized as pure noise.)
     # Essentially, it's to mask the background out of the input images with noise.
     # Therefore, intermediate features at the foreground with single prompts should be close to those of the original images.
