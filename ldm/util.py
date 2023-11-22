@@ -1793,7 +1793,7 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
 
 def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, 
                                single_q_grad_scale=0.1, single_feat_grad_scale=0.01,
-                               mix_feat_grad_scale=0.1):
+                               mix_feat_grad_scale=0.2):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
@@ -1892,15 +1892,12 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask,
     # Note sc_bg_prob is a soft mask, not a hard mask.
     # sc_bg_prob: [1, 1, 64]. Can be viewed as a token-wise weight, used
     # to give CA layer output features different weights at different tokens.
-    sc_bg_prob = (sc_map_ss_fg_prob_below_mean + mc_map_ss_fg_prob_below_mean) / 2
-    # sc_bg_feat: [1, 1280, 64] * [1, 1, 64] => [1, 1280, 64]
-    sc_bg_feat = sc_feat * sc_bg_prob
-
     mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
-    mc_feat_gs = mix_feat_grad_scaler(mc_feat)
-    # mc_bg_feat_gs: [1, 1280, 64] * [1, 1, 64] => [1, 1280, 64]
-    mc_bg_feat_gs = mc_feat_gs * sc_bg_prob
-    loss_sc_mc_bg_match = power_loss(sc_bg_feat - mc_bg_feat_gs, exponent=2)
+    comp_bg_prob = mix_feat_grad_scaler(mc_map_ss_fg_prob_below_mean)
+    mc_feat_gs   = mix_feat_grad_scaler(mc_feat)
+    # sc_mc_bg_feat_diff: [1, 1280, 64] * [1, 1, 64] => [1, 1280, 64]
+    sc_mc_bg_feat_diff = (sc_feat - mc_feat_gs) * comp_bg_prob
+    loss_sc_mc_bg_match = power_loss(sc_mc_bg_feat_diff, exponent=2)
     
     return loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
-            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean
+           loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean
