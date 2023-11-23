@@ -1900,8 +1900,15 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     comp_bg_prob = mix_feat_grad_scaler(mc_map_ss_fg_prob_below_mean)
     mc_feat_gs   = mix_feat_grad_scaler(mc_feat)
     # sc_mc_bg_feat_diff: [1, 1280, 64] * [1, 1, 64] => [1, 1280, 64]
-    sc_mc_bg_feat_diff = (sc_feat - mc_feat_gs) * comp_bg_prob
-    loss_sc_mc_bg_match = power_loss(sc_mc_bg_feat_diff, exponent=2)
+    # sc_mc_bg_feat_diff = (sc_feat - mc_feat_gs) * comp_bg_prob
+    #loss_sc_mc_bg_match = power_loss(sc_mc_bg_feat_diff, exponent=2)
+    # sc_bg_feat: [1, 1280, 64] * [1, 1, 64] => [1, 1280, 64]
+    sc_bg_feat = sc_feat    * comp_bg_prob
+    mc_bg_feat = mc_feat_gs * comp_bg_prob
+
+    loss_sc_mc_bg_match = calc_ref_cosine_loss(sc_bg_feat, mc_bg_feat, 
+                                               exponent=2, do_demean_first=False,
+                                               first_n_dims_to_flatten=2, ref_grad_scale=1)
     
     return loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean
