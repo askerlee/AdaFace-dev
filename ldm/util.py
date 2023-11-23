@@ -381,27 +381,28 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         # Remove useless tokens, e.g., the placeholder suffix token(s) and padded tokens.
         if emb_mask_i is not None:
             try:
-                # truncate_mask is squeezed to 1D, so that it can be used to index the
-                # 4D tensor delta_i, ref_delta_i, emb_mask_i. 
-                truncate_mask = (emb_mask_i > 0).squeeze()
-                delta_i       = delta_i[:, :, truncate_mask]
-                ref_delta_i   = ref_delta_i[:, :, truncate_mask]
+                delta_i_flattened_dims_shape = delta_i.shape[:first_n_dims_to_flatten]
+                truncate_mask = (emb_mask_i > 0).squeeze(-1).expand(delta_i_flattened_dims_shape)
+                
+                delta_i       = delta_i[truncate_mask]
+                ref_delta_i   = ref_delta_i[truncate_mask]
                 # Make emb_mask_i have the same shape as delta_i, 
                 # except the last (embedding) dimension for computing the cosine loss.
                 # delta_i: [1, 16, 20, 768]. 
-                # emb_mask_i: [1, 1, 76, 1] => [1, 1, 20] => [1, 16, 20].
+                # emb_mask_i: [1, 1, 77, 1] => [1, 16, 77] => [1, 16, 20].
                 # Expanding to same shape is necessary, since the cosine of each embedding has an 
                 # individual weight (no broadcasting happens).
-                emb_mask_i    = emb_mask_i[:, :, truncate_mask, 0].expand(delta_i.shape[:first_n_dims_to_flatten])
+                emb_mask_i    = emb_mask_i.squeeze(-1).expand(delta_i_flattened_dims_shape)[truncate_mask]
             except:
                 breakpoint()
 
-        # Flatten delta and ref_delta, by tucking the layer and token dimensions into the batch dimension.
-        # delta_i: [2464, 768], ref_delta_i: [2464, 768]
-        delta_i     = delta_i.reshape(delta_i.shape[:first_n_dims_to_flatten].numel(), -1)
-        ref_delta_i = ref_delta_i.reshape(delta_i.shape)
-        # emb_mask_i should have first_n_dims_to_flatten dims before flattening.
-        emb_mask_i  = emb_mask_i.flatten() if emb_mask_i is not None else None
+        else:
+            # Flatten delta and ref_delta, by tucking the layer and token dimensions into the batch dimension.
+            # delta_i: [2464, 768], ref_delta_i: [2464, 768]
+            delta_i     = delta_i.reshape(delta_i.shape[:first_n_dims_to_flatten].numel(), -1)
+            ref_delta_i = ref_delta_i.reshape(delta_i.shape)
+            # emb_mask_i should have first_n_dims_to_flatten dims before flattening.
+            emb_mask_i  = emb_mask_i.flatten() if emb_mask_i is not None else None
 
         # A bias vector to a set of conditioning embeddings doesn't change the attention matrix 
         # (though changes the V tensor). So the bias is better removed.
