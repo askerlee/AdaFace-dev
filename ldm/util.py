@@ -354,7 +354,7 @@ def demean(x):
 
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
-# emb_mask: [2, 77, 1]. Could be fractional, e.g., 0.5, to discount some tokens.
+# emb_mask: [2, 1, 77, 1]. Could be fractional, e.g., 0.5, to discount some tokens.
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
 def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
                         exponent=2, do_demean_first=False, repair_ref_bound_zeros=False,
@@ -386,8 +386,13 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
                 truncate_mask = (emb_mask_i > 0).squeeze()
                 delta_i       = delta_i[:, :, truncate_mask]
                 ref_delta_i   = ref_delta_i[:, :, truncate_mask]
-                # Make emb_mask_i have the same shape as delta_i without the last (embedding) dimension.
-                emb_mask_i    = emb_mask_i[:, :, truncate_mask, 0].expand(delta_i.shape[:-1])
+                # Make emb_mask_i have the same shape as delta_i, 
+                # except the last (embedding) dimension for computing the cosine loss.
+                # delta_i: [1, 16, 20, 768]. 
+                # emb_mask_i: [1, 1, 76, 1] => [1, 1, 20] => [1, 16, 20].
+                # Expanding to same shape is necessary, since the cosine of each embedding has an 
+                # individual weight (no broadcasting happens).
+                emb_mask_i    = emb_mask_i[:, :, truncate_mask, 0].expand(delta_i.shape[:first_n_dims_to_flatten])
             except:
                 breakpoint()
 
@@ -395,6 +400,7 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         # delta_i: [2464, 768], ref_delta_i: [2464, 768]
         delta_i     = delta_i.reshape(delta_i.shape[:first_n_dims_to_flatten].numel(), -1)
         ref_delta_i = ref_delta_i.reshape(delta_i.shape)
+        # emb_mask_i should have first_n_dims_to_flatten dims before flattening.
         emb_mask_i  = emb_mask_i.flatten() if emb_mask_i is not None else None
 
         # A bias vector to a set of conditioning embeddings doesn't change the attention matrix 
@@ -458,6 +464,8 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         loss_i = F.cosine_embedding_loss(delta_i, ref_delta_i_pow, 
                                          torch.ones_like(delta_i[:, 0]) * cosine_label, 
                                          reduction='none')
+        # emb_mask_i has been flatten to 1D. So it gives different embeddings 
+        # different relative weights (after normalization).
         if emb_mask_i is not None:
             loss_i = (loss_i * emb_mask_i).sum() / emb_mask_i.sum()
         else:
@@ -1896,19 +1904,22 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     # Note sc_bg_prob is a soft mask, not a hard mask.
     # sc_bg_prob: [1, 1, 64]. Can be viewed as a token-wise weight, used
     # to give CA layer output features different weights at different tokens.
-    mix_feat_grad_scaler = gen_gradient_scaler(mix_feat_grad_scale)
-    comp_bg_prob = mix_feat_grad_scaler(mc_map_ss_fg_prob_below_mean)
-    mc_feat_gs   = mix_feat_grad_scaler(mc_feat)
+
     # sc_mc_bg_feat_diff: [1, 1280, 64] * [1, 1, 64] => [1, 1280, 64]
     # sc_mc_bg_feat_diff = (sc_feat - mc_feat_gs) * comp_bg_prob
     #loss_sc_mc_bg_match = power_loss(sc_mc_bg_feat_diff, exponent=2)
-    # sc_bg_feat: [1, 1280, 64] * [1, 1, 64] => [1, 1280, 64]
-    sc_bg_feat = sc_feat    * comp_bg_prob
-    mc_bg_feat = mc_feat_gs * comp_bg_prob
+    
+    # sc_feat, mc_feat: [1, 1280, 64] => [1, 64, 1280].
+    sc_feat = sc_feat.permute(0, 2, 1)
+    mc_feat = mc_feat.permute(0, 2, 1)
+    # comp_bg_prob: [1, 1, 64] => [1, 64, 1].
+    comp_bg_prob = mc_map_ss_fg_prob_below_mean.permute(0, 2, 1)
 
-    loss_sc_mc_bg_match = calc_ref_cosine_loss(sc_bg_feat, mc_bg_feat, 
+    loss_sc_mc_bg_match = calc_ref_cosine_loss(sc_feat, mc_feat, 
+                                               emb_mask=comp_bg_prob,
                                                exponent=2, do_demean_first=False,
-                                               first_n_dims_to_flatten=2, ref_grad_scale=1)
+                                               first_n_dims_to_flatten=2, 
+                                               ref_grad_scale=mix_feat_grad_scale)
     
     return loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean
