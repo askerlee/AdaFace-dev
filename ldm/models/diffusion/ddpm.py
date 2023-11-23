@@ -2307,7 +2307,7 @@ class LatentDiffusion(DDPM):
                 # But only the indices to the first block are extracted in calc_fg_bg_complementary_loss().
                 # do_sqrt_norm=False: we only care about the sum of fg attn scores vs. bg attn scores. 
                 # So we don't do sqrt norm.
-                loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_mask_contrast = \
+                loss_fg_bg_complementary, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_fg_bg_mask_contrast = \
                             self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attnscore'],
                                                                 extra_info['subj_indices'],
                                                                 extra_info['bg_indices'],
@@ -2319,17 +2319,17 @@ class LatentDiffusion(DDPM):
                                                                 )
 
                 loss_dict.update({f'{prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach()})
-                # If fg_mask is None, then loss_fg_mask_align = loss_bg_mask_align = 0.
-                if loss_fg_mask_align > 0:
-                    loss_dict.update({f'{prefix}/fg_mask_align': loss_fg_mask_align.mean().detach()})
-                if loss_bg_mask_align > 0:
-                    loss_dict.update({f'{prefix}/bg_mask_align': loss_bg_mask_align.mean().detach()})
+                # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
+                if loss_subj_mb_suppress > 0:
+                    loss_dict.update({f'{prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach()})
+                if loss_bg_mf_suppress > 0:
+                    loss_dict.update({f'{prefix}/bg_mf_suppress': loss_bg_mf_suppress.mean().detach()})
                 if loss_fg_bg_mask_contrast > 0:
                     loss_dict.update({f'{prefix}/fg_bg_mask_contrast': loss_fg_bg_mask_contrast.mean().detach()})
 
                 loss += self.fg_bg_complementary_loss_weight \
-                         * (loss_fg_bg_complementary + loss_fg_mask_align \
-                            + loss_bg_mask_align + loss_fg_bg_mask_contrast)
+                         * (loss_fg_bg_complementary + loss_subj_mb_suppress \
+                            + loss_bg_mf_suppress + loss_fg_bg_mask_contrast)
 
             if self.iter_flags['use_wds_comp'] and self.fg_wds_complementary_loss_weight > 0:
                 #print(c_in)
@@ -2354,11 +2354,11 @@ class LatentDiffusion(DDPM):
 
                 wds_comp_extra_indices = comp_extra_mask.nonzero(as_tuple=True)
 
-                # loss_fg_mask_align_wds is the same as above if an instance both use_wds_comp and use_background_token.
+                # loss_subj_mb_suppress_wds is the same as above if an instance both use_wds_comp and use_background_token.
                 # Otherwise it's different. It's ok if the loss is double-counted sometimes.
                 # do_sqrt_norm=True: wds_comp_extra prompts are usually much longer, so we do sqrt norm to scale down 
                 # wds_comp_extra attn scores.
-                loss_fg_wds_complementary, loss_fg_mask_align_wds, loss_wds_mask_align, loss_fg_wds_mask_contrast = \
+                loss_fg_wds_complementary, loss_subj_mb_suppress_wds, loss_wds_mask_align, loss_fg_wds_mask_contrast = \
                             self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attnscore'],
                                                                 subj_indices_ext,
                                                                 wds_comp_extra_indices,
@@ -2370,9 +2370,9 @@ class LatentDiffusion(DDPM):
                                                                )
 
                 loss_dict.update({f'{prefix}/fg_wds_complem': loss_fg_wds_complementary.mean().detach()})
-                # If fg_mask is None, then loss_fg_mask_align_wds = loss_wds_mask_align = 0.
-                if loss_fg_mask_align_wds > 0:
-                    loss_dict.update({f'{prefix}/loss_fg_mask_align_wds': loss_fg_mask_align_wds.mean().detach()})
+                # If fg_mask is None, then loss_subj_mb_suppress_wds = loss_wds_mask_align = 0.
+                if loss_subj_mb_suppress_wds > 0:
+                    loss_dict.update({f'{prefix}/subj_mb_suppress_wds': loss_subj_mb_suppress_wds.mean().detach()})
                 if loss_wds_mask_align > 0:
                     loss_dict.update({f'{prefix}/wds_mask_align': loss_wds_mask_align.mean().detach()})
                 if loss_fg_wds_mask_contrast > 0:
@@ -2383,7 +2383,7 @@ class LatentDiffusion(DDPM):
                 loss += self.fg_wds_complementary_loss_weight \
                          * (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
                             + loss_wds_mask_align     * wds_mask_align_loss_scale \
-                            + loss_fg_mask_align_wds + loss_fg_wds_mask_contrast)
+                            + loss_subj_mb_suppress_wds + loss_fg_wds_mask_contrast)
 
             instance_fg_weights = 1
             if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
@@ -2818,7 +2818,7 @@ class LatentDiffusion(DDPM):
                 # mix single - mix comp matching loss is less important, so scale it down.
                 ms_mc_fg_match_loss_scale = 0.1
                 sc_mc_bg_match_loss_scale = 2
-                comp_subj_bg_attn_suppress_loss_scale = 0.05
+                comp_subj_bg_attn_suppress_loss_scale = 0.02
                 # No need to scale down loss_comp_mix_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
                 loss_comp_fg_bg_preserve = loss_comp_single_map_align * comp_single_map_align_loss_scale \
                                            + (loss_sc_ss_fg_match + loss_mc_ms_fg_match * ms_mc_fg_match_loss_scale
@@ -3242,12 +3242,12 @@ class LatentDiffusion(DDPM):
         K_bg = len(bg_indices[0]) // len(torch.unique(bg_indices[0]))
 
         loss_fg_bg_complementary = 0
-        loss_fg_mask_align = 0
-        loss_bg_mask_align = 0
+        loss_subj_mb_suppress = 0
+        loss_bg_mf_suppress = 0
         loss_fg_bg_mask_contrast = 0
 
-        subj_mb_contrast_scale                = 0.01
-        bg_mf_contrast_scale                  = 0.1
+        subj_mb_suppress_scale                = 0.05
+        bg_mf_suppress_scale                  = 0.1
         fgbg_emb_contrast_scale               = 0.05
         mfmb_contrast_score_margin            = 0.4
         subj_bg_contrast_at_mf_score_margin   = 0.4 * K_fg / K_bg     # 0.9
@@ -3346,7 +3346,7 @@ class LatentDiffusion(DDPM):
                 # Mainly protect subject emb activations on fg areas.
                 # Also   protect subject emb activations on bg areas, to a lesser degree.
                 subj_score_at_mf_grad_scale = 0.1
-                subj_score_at_mb_grad_scale = 0.3
+                subj_score_at_mb_grad_scale = 1
                 subj_score_at_mf_grad_scaler = gen_gradient_scaler(subj_score_at_mf_grad_scale)
                 subj_score_at_mb_grad_scaler = gen_gradient_scaler(subj_score_at_mb_grad_scale)
 
@@ -3370,21 +3370,21 @@ class LatentDiffusion(DDPM):
                 # to be at least larger by mfmb_contrast_score_margin = 1 than 
                 # subj_score_at_mb at any background locations.
                 # If not, clip() > 0, incurring a loss.
-                # layer_subj_mfmb_contrast: [BLOCK_SIZE, 8, 64].
-                layer_subj_mfmb_contrast        = subj_score_at_mb + mfmb_contrast_score_margin - avg_subj_score_at_mf
+                # layer_subj_mb_suppress: [BLOCK_SIZE, 8, 64].
+                layer_subj_mb_suppress        = subj_score_at_mb + mfmb_contrast_score_margin - avg_subj_score_at_mf
                 # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
                 # activations conform to the margin restrictions.
-                loss_layer_subj_mfmb_contrast   = masked_mean(layer_subj_mfmb_contrast, 
-                                                              layer_subj_mfmb_contrast > 0, 
-                                                              instance_weights=instance_mask)
+                loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_suppress, 
+                                                            layer_subj_mb_suppress > 0, 
+                                                            instance_weights=instance_mask)
                 # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
                 # to be at least larger by mfmb_contrast_score_margin = 1 than
                 # bg_score_at_mf at any foreground locations.
                 # If not, clip() > 0, incurring a loss.
-                layer_bg_mfmb_contrast          = bg_score_at_mf + mfmb_contrast_score_margin - avg_bg_score_at_mb
-                loss_layer_bg_mfmb_contrast     = masked_mean(layer_bg_mfmb_contrast, 
-                                                              layer_bg_mfmb_contrast > 0, 
-                                                              instance_weights=instance_mask)
+                layer_bg_mf_suppress          = bg_score_at_mf + mfmb_contrast_score_margin - avg_bg_score_at_mb
+                loss_layer_bg_mf_suppress     = masked_mean(layer_bg_mf_suppress, 
+                                                            layer_bg_mf_suppress > 0, 
+                                                            instance_weights=instance_mask)
                 # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations)
                 # to be at least larger by subj_bg_contrast_at_mf_score_margin = 0.8 than
                 # bg_score_at_mf at any foreground locations.
@@ -3403,13 +3403,13 @@ class LatentDiffusion(DDPM):
                                                                   layer_bg_subj_contrast_at_mb > 0, 
                                                                   instance_weights=instance_mask)
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, 
-                # so loss_fg_mask_align is much smaller than loss_bg_mask_align.
-                # subj_mb_contrast_scale: 0.1.
-                loss_fg_mask_align          += loss_layer_subj_mfmb_contrast \
-                                                * attn_align_layer_weight * subj_mb_contrast_scale
-                # bg_mf_contrast_scale: 0.3. More penalty of bg emb activations on fg areas.
-                loss_bg_mask_align          += loss_layer_bg_mfmb_contrast \
-                                                * attn_align_layer_weight * bg_mf_contrast_scale
+                # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
+                # subj_mb_suppress_scale: 0.1.
+                loss_subj_mb_suppress       += loss_layer_subj_mb_suppress \
+                                                * attn_align_layer_weight * subj_mb_suppress_scale
+                # bg_mf_suppress_scale: 0.3. More penalty of bg emb activations on fg areas.
+                loss_bg_mf_suppress         += loss_layer_bg_mf_suppress \
+                                                * attn_align_layer_weight * bg_mf_suppress_scale
                 # fgbg_emb_contrast_scale: 0.2. Balanced penalty of fg emb activation 
                 # contrast on fg and bg areas.
                 loss_fg_bg_mask_contrast    += (loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
@@ -3418,7 +3418,7 @@ class LatentDiffusion(DDPM):
                 #print(f'subj_contrast: {loss_layer_subj_contrast:.4f}, subj_bg_contrast_at_mf: {loss_layer_subj_bg_contrast_at_mf:.4f},')
                 #print(f"bg_contrast:   {loss_layer_bg_contrast:.4f},   subj_bg_contrast_at_mb: {loss_layer_subj_bg_contrast_at_mb:.4f}")
 
-        return loss_fg_bg_complementary, loss_fg_mask_align, loss_bg_mask_align, loss_fg_bg_mask_contrast
+        return loss_fg_bg_complementary, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_fg_bg_mask_contrast
 
     # SSB_SIZE: subject sub-batch size.
     # bg_indices could be None if iter_flags['use_background_token'] = False.
