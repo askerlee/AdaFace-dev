@@ -31,7 +31,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        save_grid, chunk_list, normalize_dict_values, \
                        distribute_embedding_to_M_tokens, fix_emb_scales, \
                        halve_token_indices, double_token_indices, extend_indices_N_by_n, \
-                       extend_indices_B_by_n_times, join_list_of_indices, split_indices_by_instance, \
+                       extend_indices_B_by_n_times, split_indices_by_instance, \
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
                        anneal_t, rand_annealed, anneal_value, calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
@@ -111,6 +111,7 @@ class DDPM(pl.LightningModule):
                  fg_bg_complementary_loss_weight=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
+                 fg_bg_token_emb_ortho_loss_weight=0.,
                  wds_bg_recon_discount=1.,
                  do_clip_teacher_filtering=False,
                  use_background_token=False,
@@ -148,6 +149,7 @@ class DDPM(pl.LightningModule):
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
+        self.fg_bg_token_emb_ortho_loss_weight      = fg_bg_token_emb_ortho_loss_weight
         self.do_clip_teacher_filtering              = do_clip_teacher_filtering
         self.prompt_mix_scheme                      = 'mix_hijk'
         self.wds_bg_recon_discount                  = wds_bg_recon_discount
@@ -2671,6 +2673,14 @@ class LatentDiffusion(DDPM):
             loss += loss_static_emb_reg * self.static_embedding_reg_weight \
                     + loss_ada_emb_reg  * self.ada_embedding_reg_weight
 
+        if self.fg_bg_token_emb_ortho_loss_weight >= 0:
+            # If use_background_token, then loss_fg_bg_token_emb_ortho is nonzero.
+            # Otherwise, loss_fg_bg_token_emb_ortho is zero.
+            loss_fg_bg_token_emb_ortho = self.embedding_manager.calc_fg_bg_token_embs_ortho_loss()
+            if loss_fg_bg_token_emb_ortho > 0:
+                loss_dict.update({f'{prefix}/fg_bg_token_emb_ortho': loss_fg_bg_token_emb_ortho.mean().detach()})
+            loss += loss_fg_bg_token_emb_ortho * self.fg_bg_token_emb_ortho_loss_weight
+
         if self.do_static_prompt_delta_reg:
             # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
             # Use subj_indices_1b here, since this index is used to extract 
@@ -2741,7 +2751,7 @@ class LatentDiffusion(DDPM):
                 if loss_bg_subj_embs_align != 0:
                     loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach()})
                 
-                bg_subj_embs_align_loss_scale  = 1
+                bg_subj_embs_align_loss_scale  = 0 # disabled. # 1
                 loss += (loss_padding_subj_embs_align 
                            + loss_bg_subj_embs_align * bg_subj_embs_align_loss_scale) \
                         * self.padding_embs_align_loss_weight

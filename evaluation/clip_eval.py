@@ -46,12 +46,19 @@ class CLIPEvaluator(object):
         images = self.preprocess(images).to(self.device)
         return self.model.encode_image(images)
 
-    def get_text_features(self, text: str, norm: bool = True) -> torch.Tensor:
+    def get_text_features(self, text: str, norm: bool = True, get_token_emb: bool = False) -> torch.Tensor:
 
         tokens = clip.tokenize(text).to('cpu')
 
-        text_features = self.encode_text(tokens).detach()
-
+        if get_token_emb:
+            text_features = self.model.token_embedding(tokens).detach()
+            # tokens, is_valid_text: [1, 77].
+            is_valid_text = (tokens != 0) & (tokens != 49406) & (tokens != 49407)
+            # text_features: [1, 77, 768] => [n, 768]
+            text_features = text_features[is_valid_text]
+        else:
+            # tokens: [1, 77]. text_features: [1, 768].
+            text_features = self.encode_text(tokens).detach()
         if norm:
             text_features /= text_features.norm(dim=-1, keepdim=True)
 
@@ -88,9 +95,9 @@ class CLIPEvaluator(object):
         else:
             raise NotImplementedError
 
-    def text_pairwise_similarity(self, textset1, textset2, reduction='mean'):
-        textset1_features = [ self.get_text_features(t) for t in textset1 ]
-        textset2_features = [ self.get_text_features(t) for t in textset2 ]
+    def text_pairwise_similarity(self, textset1, textset2, reduction='mean', get_token_emb=False):
+        textset1_features = [ self.get_text_features(t, get_token_emb=get_token_emb) for t in textset1 ]
+        textset2_features = [ self.get_text_features(t, get_token_emb=get_token_emb) for t in textset2 ]
         textset1_features = torch.cat(textset1_features, dim=0)
         textset2_features = torch.cat(textset2_features, dim=0)
 

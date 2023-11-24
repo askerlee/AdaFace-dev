@@ -25,6 +25,9 @@ else:
 
 def calc_stats(emb_name, embeddings):
     print("%s:" %emb_name)
+    if embeddings.ndim > 2:
+        embeddings = embeddings.reshape(-1, embeddings.size(-1))
+
     emb_mean = embeddings.mean(0, keepdim=True).repeat(embeddings.size(0), 1)
     l1_loss = F.l1_loss(embeddings, emb_mean)
     # F.l2_loss doesn't take sqrt. So the loss is very small. 
@@ -42,8 +45,11 @@ def simple_stats(emb_name, embeddings):
 for emb_ckpt_filename in emb_ckpt_files:
     emb_ckpt = torch.load(emb_ckpt_filename, map_location='cpu')
     print("%s STATIC:" %emb_ckpt_filename)
-    for key in emb_ckpt['string_to_param']:
-        embeddings = emb_ckpt['string_to_param'][key]
+
+    key2emb = {}
+
+    for key in emb_ckpt['string_to_static_embedder']:
+        embeddings = emb_ckpt['string_to_static_embedder'][key]
         if isinstance(embeddings, StaticLayerwiseEmbedding):
             print("basis_comm_weights:")
             print(embeddings.basis_comm_weights.detach().cpu().numpy())
@@ -55,7 +61,10 @@ for emb_ckpt_filename in emb_ckpt_files:
             calc_stats("basis_vecs_rand", embeddings.basis_vecs[N:])
             if not isinstance(embeddings.bias, int):
                 calc_stats("bias", embeddings.bias)
-            embeddings = embeddings(False)
+            embeddings = embeddings()
+            # embeddings: [16, 9, 768] -> [16, 768]
+            embeddings = embeddings.mean(dim=1)
+            key2emb[key] = embeddings
 
         calc_stats("embeddings", embeddings)
         if embeddings.size(0) > 1:
@@ -76,10 +85,16 @@ for emb_ckpt_filename in emb_ckpt_files:
                 N = embeddings.N
                 calc_stats("basis_vecs_pos", embeddings.basis_vecs[:N])
                 calc_stats("basis_vecs_rand", embeddings.basis_vecs[N:])
-                for i, layer_map in enumerate(embeddings.layer_maps):
-                    calc_stats(f"map-{i} weight", layer_map.weight)
-                    simple_stats(f"map-{i} bias", layer_map.bias)
+                for i, layer_coeff_map in enumerate(embeddings.layer_coeff_maps):
+                    calc_stats(f"map-{i} weight", layer_coeff_map.weight)
+                    simple_stats(f"map-{i} bias", layer_coeff_map.bias)
 
                 if not isinstance(embeddings.bias, int):
                     calc_stats("biases", embeddings.bias)
+        print()
+
+    if 'y' in key2emb and 'z' in key2emb:
+        # key2emb['y']: [16, 768], key2emb['z']: [16, 768]
+        # -> [16]
+        print("y-z cosine:\n{}".format(F.cosine_similarity(key2emb['y'], key2emb['z'])))
         print()

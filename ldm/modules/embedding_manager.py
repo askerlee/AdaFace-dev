@@ -7,7 +7,8 @@ import torch.nn.functional as F
 import numpy as np
 
 from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
-                     split_indices_by_instance, add_noise_to_embedding, anneal_value
+                     split_indices_by_instance, add_noise_to_embedding, anneal_value, \
+                     calc_ref_cosine_loss
 
 from functools import partial
 from collections import OrderedDict
@@ -332,13 +333,15 @@ class Embedding3d(nn.Module):
         else:
             return self.embedding[layer_idx, token_idx]
     
-    # The computation graph of new_embedding is disconnected.
+    # For EMA embeddings, the computation graph of new_embedding is disconnected.
     # Otherwise the computation graph from the previous iteration will be retained, causing OOM.
-    def cache_layer(self, layer_idx, new_embedding, token_idx=None):
-        if token_idx is None:
-            self.embedding.data[layer_idx] = new_embedding
+    def cache_layer(self, layer_idx, new_embedding, has_grad=False):
+        if has_grad:
+            embedding2 = self.embedding.clone()
+            embedding2[layer_idx] = new_embedding
+            self.embedding = nn.Parameter(embedding2, requires_grad=True)
         else:
-            self.embedding.data[layer_idx, token_idx] = new_embedding
+            self.embedding.data[layer_idx] = new_embedding
 
         self.cached_layers[layer_idx] = 1
 
@@ -470,11 +473,8 @@ class StaticLayerwiseEmbedding(nn.Module):
         print(f"StaticLayerwiseEmbedding {token_string} initialized with {self.K} total embs, {self.N} init vectors ({init_words}), {self.r} basis vectors")
 
     # Return static embeddings of all layers together.
-    def forward(self, only_bias=False):
+    def forward(self):
         with torch.autocast(device_type=self.device_type, enabled=False):
-            if only_bias:
-                return self.bias
-
             # self.basis_comm_weights: [1, K, r] broadcasted to [16, K, r].
             basis_weights   = self.basis_rand_weights   + self.basis_comm_weights
             # torch.matmul: matrix multiplication.
@@ -924,6 +924,7 @@ class EmbeddingManager(nn.Module):
             self.background_strings = background_strings
         else:
             self.background_strings = []
+        self.subject_strings = [ s for s in placeholder_strings if s not in self.background_strings ]
 
         # hasattr(text_embedder, 'tokenizer') -> True
         if hasattr(text_embedder, 'tokenizer'): # using Stable Diffusion's CLIP encoder
@@ -1057,7 +1058,9 @@ class EmbeddingManager(nn.Module):
                 self.initial_embeddings[placeholder_string] = None
 
         self.layer_idx = -1
-        self.static_subj_embs_dict = {}            
+        self.static_subj_embs_dict = {}   
+        self.ada_subj_embs_dict    = {}
+
         self.clear_ada_layer_temp_info()
         self.clear_placeholder_indices(placeholder_type='all')
         self.clear_prompt_masks()
@@ -1102,12 +1105,20 @@ class EmbeddingManager(nn.Module):
         if self.gen_ada_embedding:
             # self.layer_idx, self.ca_infeat, self.time_emb were cached by 
             # a previous call of  cache_layer_features_for_ada() from UNet.
-            ada_embedded_text = \
+            ada_embedded_text, ada_subj_embs_dict = \
                 self.get_ada_embedding(self.layer_idx, self.layer_attn_components, self.time_emb,
                                        tokenized_text, embedded_text)
 
+            ca_layer_idx = self.layer_idx2ca_layer_idx[self.layer_idx]
+            # Cache the ada embeddings to be used in embedding orthogonal loss later.
+            for k in ada_subj_embs_dict:
+                self.ada_subj_embs_dict[k].cache_layer(ca_layer_idx, 
+                                                       ada_subj_embs_dict[k], 
+                                                       has_grad=True)
+
             # Release ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
+                        
             # No prompt repeating happened in get_ada_embedding(), 
             # so pass the original tokenized_text as tokenized_text_repeated.
             self.update_prompt_masks(tokenized_text, tokenized_text)
@@ -1122,10 +1133,19 @@ class EmbeddingManager(nn.Module):
                             self.get_static_embedding(tokenized_text, embedded_text.clone(), 
                                                       self.string_to_static_embedder_dict,
                                                       B, N, self.num_unet_ca_layers, device)
-            # Cache the static embeddings to be used in ada embedding computation later.
+            # Cache the static embeddings to be used in ada embedding computation and
+            # embedding orthogonal loss later.
+            self.static_subj_embs_dict = {}
+            self.ada_subj_embs_dict = {}
+
             for k in static_subj_embs_dict:
                 self.static_subj_embs_dict[k] = static_subj_embs_dict[k]
-            
+                # Initialize the ada token embedding cache for each token.
+                self.ada_subj_embs_dict[k]    = Embedding3d(self.num_unet_ca_layers, 
+                                                            self.token2num_vectors[k], 
+                                                            self.token_dim)
+                self.ada_subj_embs_dict[k].to(device)
+
             # Update the prompt token embedding mask.
             # tokenized_text_repeated is repeated 16 times along the batch dimension.
             self.update_prompt_masks(tokenized_text, tokenized_text_repeated)
@@ -1247,6 +1267,7 @@ class EmbeddingManager(nn.Module):
     ):
         BS, device = tokenized_text.shape[0], tokenized_text.device
         cached_infeat_bg = None
+        ada_subj_embs_dict = {}
 
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
         layer_static_prompt_embs   = layer_attn_components['layer_static_prompt_embs']
@@ -1399,7 +1420,10 @@ class EmbeddingManager(nn.Module):
                     
                 embedded_text[placeholder_indices_k] = subj_ada_embedding_k_gs
 
-        return embedded_text
+            # Remove the batch dim.
+            ada_subj_embs_dict[placeholder_string] = subj_ada_embedding.mean(dim=0)
+
+        return embedded_text, ada_subj_embs_dict
 
     def attn_postmix(self, embedded_text):
         assert self.attn_postmix_weight > 0
@@ -1877,13 +1901,13 @@ class EmbeddingManager(nn.Module):
                     # ada_prompt_embs: [2, 77, 768].
                     # ada_prompt_embs[token_indices]: [18, 768] => [2, 9, 768].
                     VALID_BS = token_indices[0].unique().shape[0]
-                    token_embs = ada_prompt_embs[token_indices].reshape(
+                    token_prompt_embs = ada_prompt_embs[token_indices].reshape(
                                         VALID_BS, -1, ada_prompt_embs.shape[2])
                     # LitEma requires an nn.Module to do updating. 
                     # So we use token_emb_cache_obj as a dummy Embedding3d to update the EMA embedding.
                     # We can update after the ada embeddings of all layers are cached into token_emb_cache_obj.
                     # ada_subj_embs_dict[k].mean(dim=0): [9, 768].
-                    token_emb_cache_obj.cache_layer(ca_layer_idx, token_embs.mean(dim=0))
+                    token_emb_cache_obj.cache_layer(ca_layer_idx, token_prompt_embs.mean(dim=0))
 
                 if len(token_emb_cache_obj.cached_layers) == token_emb_cache_obj.num_layers:
                     if self.string_to_emb_ema_dict[k] is None:
@@ -1892,7 +1916,7 @@ class EmbeddingManager(nn.Module):
                         # requires_grad=True, to allow EMA embeddings to be updated by SGD.
                         self.string_to_emb_ema_dict[k] = LitEma(token_emb_cache_obj, decay=0.998, requires_grad=True)
                         # Put the newly initialized LitEma object on CUDA.
-                        self.string_to_emb_ema_dict[k].to(token_embs.device)
+                        self.string_to_emb_ema_dict[k].to(token_prompt_embs.device)
                     else:
                         # Update EMA embeddings.
                         self.string_to_emb_ema_dict[k](token_emb_cache_obj)
@@ -2247,6 +2271,59 @@ class EmbeddingManager(nn.Module):
         else:
             return self.embedding_attractor_loss()
 
+    def calc_fg_bg_token_embs_ortho_loss(self, fg_bg_token_lists=None):
+        if fg_bg_token_lists is None:
+            fg_bg_token_lists = [ self.subject_strings, self.background_strings ]
+        
+        loss_fg_bg_token_emb_ortho = 0.
+        num_fg_bg_pairs = 0
+
+        for fg_token in fg_bg_token_lists[0]:
+            for bg_token in fg_bg_token_lists[1]:
+                try:
+                    fg_static_token_emb = self.static_subj_embs_dict[fg_token]
+                    bg_static_token_emb = self.static_subj_embs_dict[bg_token]
+                    fg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[fg_token]
+                    bg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[bg_token]
+                except KeyError:
+                    continue
+
+                if len(fg_ada_token_emb_cache_obj.cached_layers) == fg_ada_token_emb_cache_obj.num_layers:
+                    fg_ada_token_emb = fg_ada_token_emb_cache_obj.embedding
+                else:
+                    fg_ada_token_emb = 0
+                
+                if len(bg_ada_token_emb_cache_obj.cached_layers) == bg_ada_token_emb_cache_obj.num_layers:
+                    bg_ada_token_emb = bg_ada_token_emb_cache_obj.embedding
+                else:
+                    bg_ada_token_emb = 0
+
+                
+                # fg_hybrid_token_emb: [16, 9, 768]. 16: num layers. 9: num vectors.
+                # bg_hybrid_token_emb: [16, 4, 768]. 16: num layers. 4: num vectors.
+                fg_hybrid_token_emb = fg_static_token_emb * (1 - self.ada_emb_weight) \
+                                        + fg_ada_token_emb  * self.ada_emb_weight
+                bg_hybrid_token_emb = bg_static_token_emb * (1 - self.ada_emb_weight) \
+                                        + bg_ada_token_emb  * self.ada_emb_weight
+                
+                # fg_hybrid_token_emb, bg_hybrid_token_emb: [16, 768]. 16: num layers.
+                fg_hybrid_token_mean_emb = fg_hybrid_token_emb.mean(dim=1)
+                bg_hybrid_token_mean_emb = bg_hybrid_token_emb.mean(dim=1)
+
+                loss_fg_bg_pair_token_emb_ortho = \
+                    calc_ref_cosine_loss(bg_hybrid_token_mean_emb, fg_hybrid_token_mean_emb, 
+                                         exponent=2, do_demean_first=False,
+                                         first_n_dims_to_flatten=1, 
+                                         ref_grad_scale=0.25)
+                
+                loss_fg_bg_token_emb_ortho += loss_fg_bg_pair_token_emb_ortho
+                num_fg_bg_pairs += 1
+        
+        if num_fg_bg_pairs == 0:
+            return 0.
+        else:
+            return loss_fg_bg_token_emb_ortho / num_fg_bg_pairs
+    
 if __name__ == '__main__':
     # The example code below is obsolete.    
     attnpool = AttentionalPooler()
