@@ -2272,7 +2272,7 @@ class EmbeddingManager(nn.Module):
         else:
             return self.embedding_attractor_loss()
 
-    def calc_fg_bg_token_embs_ortho_loss(self, fg_bg_token_lists=None):
+    def calc_fg_bg_token_embs_ortho_loss(self, fg_bg_token_lists=None, fg_grad_scale=0.1):
         if fg_bg_token_lists is None:
             fg_bg_token_lists = [ self.subject_strings, self.background_strings ]
         
@@ -2315,7 +2315,7 @@ class EmbeddingManager(nn.Module):
                     calc_ref_cosine_loss(bg_hybrid_token_mean_emb, fg_hybrid_token_mean_emb, 
                                          exponent=2, do_demean_first=False,
                                          first_n_dims_to_flatten=1, 
-                                         ref_grad_scale=0.25)
+                                         ref_grad_scale=fg_grad_scale)
                 
                 loss_fg_bg_token_emb_ortho += loss_fg_bg_pair_token_emb_ortho
                 num_fg_bg_pairs += 1
