@@ -1080,8 +1080,9 @@ class EmbeddingManager(nn.Module):
         self.postmix_attn_LN    = None
         self.initialize_attn_postmix_components(attn_postmix_weight)
 
-        print("EmbeddingManager on {} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, background_strings={}, attn_postmix_weight={}".format(
-               placeholder_strings, self.token2num_vectors, str2lora_rank, ada_emb_weight, self.background_strings, self.attn_postmix_weight))
+        print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, attn_postmix_weight={}".format(
+               self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
+               ada_emb_weight, self.attn_postmix_weight))
             
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
