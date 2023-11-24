@@ -3248,10 +3248,13 @@ class LatentDiffusion(DDPM):
                 continue
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
+            # [2, 8, 256, 77] / [2, 8, 64, 77] =>
+            # [2, 77, 8, 256] / [2, 77, 8, 64]
+            attnscore_mat = unet_attn_score.permute(0, 3, 1, 2)
 
             # subj_score: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
-            subj_score = sel_emb_attns_by_indices(unet_attn_score, subj_indices,
-                                                    do_sum=True, do_mean=False, do_sqrt_norm=False)
+            subj_score = sel_emb_attns_by_indices(attnscore_mat, subj_indices,
+                                                  do_sum=True, do_mean=False, do_sqrt_norm=False)
 
             fg_mask2 = resize_mask_for_feat_or_attn(subj_score, fg_mask, "fg_mask", 
                                                     num_spatial_dims=1,
