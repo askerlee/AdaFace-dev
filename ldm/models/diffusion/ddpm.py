@@ -3231,6 +3231,10 @@ class LatentDiffusion(DDPM):
         subj_mb_suppress_scale      = 0.025
         mfmb_contrast_score_margin  = 0.4
 
+        # Protect subject emb activations on fg areas.
+        subj_score_at_mf_grad_scale = 0.1
+        subj_score_at_mf_grad_scaler = gen_gradient_scaler(subj_score_at_mf_grad_scale)
+
         # In each instance, subj_indices has K_fg times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
@@ -3269,6 +3273,7 @@ class LatentDiffusion(DDPM):
                 continue
 
             subj_score_at_mf = subj_score * fg_mask3
+            subj_score_at_mf = subj_score_at_mf_grad_scaler(subj_score_at_mf)
             # subj_score_at_mb: [BLOCK_SIZE, 8, 64].
             # mb: mask foreground locations, mask background locations.
             subj_score_at_mb = subj_score * bg_mask3
@@ -3287,17 +3292,17 @@ class LatentDiffusion(DDPM):
             # to be at least larger by mfmb_contrast_score_margin = 0.4 than 
             # subj_score_at_mb at any background locations.
             # If not, clamp() > 0, incurring a loss.
-            # layer_subj_mb_suppress: [BLOCK_SIZE, 8, 64].
-            layer_subj_mb_suppress        = subj_score_at_mb + mfmb_contrast_score_margin - avg_subj_score_at_mf
+            # layer_subj_mb_excess: [BLOCK_SIZE, 8, 64].
+            layer_subj_mb_excess    = subj_score_at_mb + mfmb_contrast_score_margin - avg_subj_score_at_mf
             # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
             # activations conform to the margin restrictions.
-            loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_suppress, 
-                                                        layer_subj_mb_suppress > 0, 
+            loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_excess, 
+                                                        layer_subj_mb_excess > 0, 
                                                         instance_weights=instance_mask)
 
             # loss_layer_subj_bg_contrast_at_mf is usually 0, 
             # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
-            # subj_mb_suppress_scale: 0.1.
+            # subj_mb_suppress_scale: 0.025.
             loss_subj_mb_suppress   += loss_layer_subj_mb_suppress \
                                        * attn_align_layer_weight * subj_mb_suppress_scale
     
@@ -3359,6 +3364,9 @@ class LatentDiffusion(DDPM):
         mfmb_contrast_score_margin            = 0.4
         subj_bg_contrast_at_mf_score_margin   = 0.4 * K_fg / K_bg     # 0.9
         bg_subj_contrast_at_mb_score_margin   = 0.4
+
+        subj_score_at_mf_grad_scale = 0.1
+        subj_score_at_mf_grad_scaler = gen_gradient_scaler(subj_score_at_mf_grad_scale)
 
         # In each instance, subj_indices has K_fg times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
@@ -3435,26 +3443,19 @@ class LatentDiffusion(DDPM):
                 # subj_score_at_mf: [BLOCK_SIZE, 8, 64].
                 # subj, bg: subject embedding,         background embedding.
                 # mf,   mb: mask foreground locations, mask background locations.
-                # sum(dim=(1,2)): avoid summing across the batch dimension. 
-                # It's meaningless to average among the instances.
                 subj_score_at_mf = subj_score * fg_mask3
+                # Protect subject emb activations on fg areas.
+                subj_score_at_mf = subj_score_at_mf_grad_scaler(subj_score_at_mf)
+
                 bg_score_at_mf   = bg_score   * fg_mask3
                 subj_score_at_mb = subj_score * bg_mask3
                 bg_score_at_mb   = bg_score   * bg_mask3
 
-                # Mainly protect subject emb activations on fg areas.
-                # Also   protect subject emb activations on bg areas, to a lesser degree.
-                subj_score_at_mf_grad_scale = 0.1
-                subj_score_at_mb_grad_scale = 1
-                subj_score_at_mf_grad_scaler = gen_gradient_scaler(subj_score_at_mf_grad_scale)
-                subj_score_at_mb_grad_scaler = gen_gradient_scaler(subj_score_at_mb_grad_scale)
-
-                subj_score_at_mf = subj_score_at_mf_grad_scaler(subj_score_at_mf)
-                subj_score_at_mb = subj_score_at_mb_grad_scaler(subj_score_at_mb)
-
                 # fg_mask3: [BLOCK_SIZE, 8, 64]
                 # avg_subj_score_at_mf: [BLOCK_SIZE, 1, 1]
                 # keepdim=True, since scores at all locations will use them as references (subtract them).
+                # sum(dim=(1,2)): avoid summing across the batch dimension. 
+                # It's meaningless to average among the instances.
                 avg_subj_score_at_mf = masked_mean(subj_score_at_mf, fg_mask3, dim=(1,2), keepdim=True)
                 avg_subj_score_at_mb = masked_mean(subj_score_at_mb, bg_mask3, dim=(1,2), keepdim=True)
                 avg_bg_score_at_mf   = masked_mean(bg_score_at_mf,   fg_mask3, dim=(1,2), keepdim=True)
@@ -3469,12 +3470,12 @@ class LatentDiffusion(DDPM):
                 # to be at least larger by mfmb_contrast_score_margin = 0.4 than 
                 # subj_score_at_mb at any background locations.
                 # If not, clamp() > 0, incurring a loss.
-                # layer_subj_mb_suppress: [BLOCK_SIZE, 8, 64].
-                layer_subj_mb_suppress        = subj_score_at_mb + mfmb_contrast_score_margin - avg_subj_score_at_mf
+                # layer_subj_mb_excess: [BLOCK_SIZE, 8, 64].
+                layer_subj_mb_excess    = subj_score_at_mb + mfmb_contrast_score_margin - avg_subj_score_at_mf
                 # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
                 # activations conform to the margin restrictions.
-                loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_suppress, 
-                                                            layer_subj_mb_suppress > 0, 
+                loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_excess, 
+                                                            layer_subj_mb_excess > 0, 
                                                             instance_weights=instance_mask)
                 # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
                 # to be at least larger by mfmb_contrast_score_margin = 1 than
