@@ -3232,7 +3232,7 @@ class LatentDiffusion(DDPM):
         mfmb_contrast_score_margin  = 0.4
 
         # Protect subject emb activations on fg areas.
-        subj_score_at_mf_grad_scale = 0.1
+        subj_score_at_mf_grad_scale = 0.5
         subj_score_at_mf_grad_scaler = gen_gradient_scaler(subj_score_at_mf_grad_scale)
 
         # In each instance, subj_indices has K_fg times as many elements as bg_indices.
@@ -3368,7 +3368,7 @@ class LatentDiffusion(DDPM):
         subj_bg_contrast_at_mf_score_margin   = 0.4 * K_fg / K_bg     # 0.9
         bg_subj_contrast_at_mb_score_margin   = 0.4
 
-        subj_score_at_mf_grad_scale = 0.1
+        subj_score_at_mf_grad_scale = 0.5
         subj_score_at_mf_grad_scaler = gen_gradient_scaler(subj_score_at_mf_grad_scale)
 
         # In each instance, subj_indices has K_fg times as many elements as bg_indices.
