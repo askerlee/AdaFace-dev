@@ -3319,7 +3319,7 @@ class LatentDiffusion(DDPM):
                                       fg_mask=None, instance_mask=None,
                                       do_sqrt_norm=False):
         
-        if subj_indices is None or bg_indices is None or len(bg_indices) == 0:
+        if subj_indices is None:
             return 0, 0, 0, 0
         
         if subj_indices is not None and bg_indices is None:
