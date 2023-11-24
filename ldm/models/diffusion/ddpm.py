@@ -2312,14 +2312,14 @@ class LatentDiffusion(DDPM):
                 # So we don't do sqrt norm.
                 loss_fg_bg_complementary, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_fg_bg_mask_contrast = \
                             self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attnscore'],
-                                                                extra_info['subj_indices'],
-                                                                extra_info['bg_indices'],
-                                                                BLOCK_SIZE=x_start.shape[0],
-                                                                fg_grad_scale=0.1,
-                                                                fg_mask=fg_mask,
-                                                                instance_mask=batch_have_fg_mask,
-                                                                do_sqrt_norm=False
-                                                                )
+                                                               extra_info['subj_indices'],
+                                                               extra_info['bg_indices'],
+                                                               BLOCK_SIZE=x_start.shape[0],
+                                                               fg_grad_scale=0.1,
+                                                               fg_mask=fg_mask,
+                                                               instance_mask=batch_have_fg_mask,
+                                                               do_sqrt_norm=False
+                                                               )
 
                 if loss_fg_bg_complementary > 0:
                     loss_dict.update({f'{prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach()})
@@ -2331,9 +2331,9 @@ class LatentDiffusion(DDPM):
                 if loss_fg_bg_mask_contrast > 0:
                     loss_dict.update({f'{prefix}/fg_bg_mask_contrast': loss_fg_bg_mask_contrast.mean().detach()})
 
-                loss += self.fg_bg_complementary_loss_weight \
-                         * (loss_fg_bg_complementary + loss_subj_mb_suppress \
-                            + loss_bg_mf_suppress + loss_fg_bg_mask_contrast)
+                loss += (loss_fg_bg_complementary + loss_subj_mb_suppress \
+                          + loss_bg_mf_suppress + loss_fg_bg_mask_contrast) \
+                        * self.fg_bg_complementary_loss_weight
 
             if self.iter_flags['use_wds_comp'] and self.fg_wds_complementary_loss_weight > 0:
                 #print(c_in)
@@ -2373,7 +2373,8 @@ class LatentDiffusion(DDPM):
                                                                 do_sqrt_norm=True
                                                                )
 
-                loss_dict.update({f'{prefix}/fg_wds_complem': loss_fg_wds_complementary.mean().detach()})
+                if loss_fg_wds_complementary > 0:
+                    loss_dict.update({f'{prefix}/fg_wds_complem': loss_fg_wds_complementary.mean().detach()})
                 # If fg_mask is None, then loss_subj_mb_suppress_wds = loss_wds_mask_align = 0.
                 if loss_subj_mb_suppress_wds > 0:
                     loss_dict.update({f'{prefix}/subj_mb_suppress_wds': loss_subj_mb_suppress_wds.mean().detach()})
@@ -2384,12 +2385,11 @@ class LatentDiffusion(DDPM):
 
                 fg_wds_comple_loss_scale    = 1
                 wds_mask_align_loss_scale   = 1
-                loss += self.fg_wds_complementary_loss_weight \
-                         * (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
-                            + loss_wds_mask_align     * wds_mask_align_loss_scale \
-                            + loss_subj_mb_suppress_wds + loss_fg_wds_mask_contrast)
+                loss += (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
+                          + loss_wds_mask_align     * wds_mask_align_loss_scale \
+                          + loss_subj_mb_suppress_wds + loss_fg_wds_mask_contrast) \
+                        * self.fg_wds_complementary_loss_weight
 
-            instance_fg_weights = 1
             if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
                 # bg loss is ignored.
                 instance_bg_weights = 0
@@ -2412,7 +2412,7 @@ class LatentDiffusion(DDPM):
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
-                                                 instance_fg_weights=instance_fg_weights,
+                                                 instance_fg_weights=1,
                                                  instance_bg_weights=instance_bg_weights)
 
             loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
