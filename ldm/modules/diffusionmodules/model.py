@@ -191,6 +191,7 @@ class AttnBlock(nn.Module):
         w_ = torch.bmm(q,k)     # b,hw,hw    w[b,i,j]=sum_c q[b,i,c]k[b,c,j]
         # w_: [2, 4096, 4096]
         w_ = w_ * (int(c)**(-0.5))
+        w_ = torch.nn.functional.softmax(w_, dim=2)
 
         # If mask is not None, then at least one of aug_mask and fg_mask is not None.
         if mask is not None:
@@ -211,20 +212,24 @@ class AttnBlock(nn.Module):
 
                 # mask_pair_homo(subj_i1, subj_i2) = True.      mask_pair_homo(subj_i1, bg_i2) = False. 
                 # mask_pair_homo(bg_i1, bg_i2)     = False.
+                # fg_mask2.sum(dim=(1,2)) = [2712., 1268.]. fg_mask_pair_homo.sum() = 2712 ** 2 + 1268 ** 2 = 8962768.
                 fg_mask_pair_homo = torch.matmul(fg_mask2.transpose(-1, -2), fg_mask2).bool()
                 # neg_mask_pair_homo(bg_i1, bg_i2)     = True.  neg_mask_pair_homo(subj_i1, subj_i2) = False.
                 # neg_mask_pair_homo(bg_i1, subj_i2)   = False.
+                # bg_mask2.sum(dim=(1,2)) = [1257., 1282.]. bg_mask_pair_homo.sum() = 1257 ** 2 + 1282 ** 2 = 3223573.
                 bg_mask_pair_homo = torch.matmul(bg_mask2.transpose(-1, -2), bg_mask2).bool()
                 # mask_pair_hetero: whether each pixel pairs (i,j) are heterogeneous, i.e., 
                 # one is in subject areas and the other in background areas.
                 # mask_pair_hetero(subj_i1, subj_i2) = False, mask_pair_hetero(bg_i1, bg_i2) = False.
+                # mask_pair_hetero.sum() = 21368091.
                 mask_pair_hetero   = ~ (fg_mask_pair_homo | bg_mask_pair_homo)
-                max_neg_value = -torch.finfo(w_.dtype).max
+                # max_neg_value = -torch.finfo(w_.dtype).max
                 # masked_fill_: fill max_neg_value when mask_pair_hetero is True, 
                 # i.e., when pixel pairs (i,j) are from different types of areas.
-                w_.masked_fill_(mask_pair_hetero, max_neg_value)
-
-        w_ = torch.nn.functional.softmax(w_, dim=2)
+                # w_.masked_fill_(mask_pair_hetero, max_neg_value)
+                # Filling with -inf before softmax will lead to equal probs (1/4096) in certain rows/columns, 
+                # instead of 0 probs which we wish to achieve.
+                w_.masked_fill_(mask_pair_hetero, 0)
 
         # attend to values
         v = v.reshape(b,c,h*w)
