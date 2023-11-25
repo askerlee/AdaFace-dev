@@ -3238,7 +3238,7 @@ class LatentDiffusion(DDPM):
         # K_fg: 9, number of embeddings per subject token.
         K_fg = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
         loss_subj_mb_suppress       = 0
-        subj_mb_suppress_scale      = 0.025
+        subj_mb_suppress_scale      = 0.1
         mfmb_contrast_score_margin  = 0.4
 
         # Protect subject emb activations on fg areas.
@@ -3315,7 +3315,7 @@ class LatentDiffusion(DDPM):
 
             # loss_layer_subj_bg_contrast_at_mf is usually 0, 
             # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
-            # subj_mb_suppress_scale: 0.025.
+            # subj_mb_suppress_scale: 0.1.
             loss_subj_mb_suppress   += loss_layer_subj_mb_suppress \
                                        * attn_align_layer_weight * subj_mb_suppress_scale
     
@@ -3371,9 +3371,9 @@ class LatentDiffusion(DDPM):
         loss_bg_mf_suppress = 0
         loss_fg_bg_mask_contrast = 0
 
-        subj_mb_suppress_scale                = 0.025
+        subj_mb_suppress_scale                = 0.1
         bg_mf_suppress_scale                  = 0.1
-        fgbg_emb_contrast_scale               = 0.05
+        fgbg_emb_contrast_scale               = 0.1
         mfmb_contrast_score_margin            = 0.4
         subj_bg_contrast_at_mf_score_margin   = 0.4 * K_fg / K_bg     # 0.9
         bg_subj_contrast_at_mb_score_margin   = 0.4
@@ -3523,7 +3523,7 @@ class LatentDiffusion(DDPM):
                 # bg_mf_suppress_scale: 0.3. More penalty of bg emb activations on fg areas.
                 loss_bg_mf_suppress         += loss_layer_bg_mf_suppress \
                                                 * attn_align_layer_weight * bg_mf_suppress_scale
-                # fgbg_emb_contrast_scale: 0.2. Balanced penalty of fg emb activation 
+                # fgbg_emb_contrast_scale: 0.1. Balanced penalty of fg emb activation 
                 # contrast on fg and bg areas.
                 loss_fg_bg_mask_contrast    += (loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
                                                 * attn_align_layer_weight * fgbg_emb_contrast_scale
