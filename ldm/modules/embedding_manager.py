@@ -268,6 +268,7 @@ class AttentionalPooler(nn.Module):
             # float_tensor.bool() converts 0.1/0.2... to True.
             img_mask = img_mask.bool()
             max_neg_value = -torch.finfo(sim_scores.dtype).max
+            # masked_fill_() will broadcast img_mask to sim_scores's shape [B, 2, 4096].
             sim_scores.masked_fill_(~img_mask, max_neg_value)
 
             # Prepare to be used by v_pooler.

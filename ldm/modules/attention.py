@@ -255,10 +255,14 @@ class CrossAttention(nn.Module):
         # Otherwise, the whole column of 77 sim values will all be max_neg_value, 
         # which lead to nan after softmax.
         if exists(mask):
-            # mask: [2, 1, 64, 64] -> [16, 1, 4096]
+            # mask: [2, 1, 64, 64] -> [2, 4096]
             mask = rearrange(mask, 'b ... -> b (...)')
             max_neg_value = -torch.finfo(sim.dtype).max
+            # mask: [2, 4096] -> [16, 1, 4096]
             mask = repeat(mask.bool(), 'b j -> (b h) () j', h=h)
+            # sim: [16, 4096, 4096]. mask will be broadcasted to [16, 4096, 4096].
+            # So some rows in dim 1 (e.g. [0, :, 4095]) of sim will be masked out (all elements in [0, :, 4095] is -inf).
+            # But not all elements in [0, 4095, :] is -inf. Since the softmax is done along dim 2, this is fine.
             sim.masked_fill_(~mask, max_neg_value)
 
         # sim: [64, 4096, 77]. 64: bs * h.
