@@ -57,7 +57,8 @@ model:
     wds_bg_recon_discount:              0.05
     do_clip_teacher_filtering:          True
     
-    optimizer_type: AdamW     # sophia
+    optimizer_type: AdamW     # AdamW or sophia.
+    optimizer_bits: 8         # 8 or 32.
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:

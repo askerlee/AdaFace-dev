@@ -1908,7 +1908,7 @@ class EmbeddingManager(nn.Module):
                     # LitEma requires an nn.Module to do updating. 
                     # So we use token_emb_cache_obj as a dummy Embedding3d to update the EMA embedding.
                     # We can update after the ada embeddings of all layers are cached into token_emb_cache_obj.
-                    # ada_subj_embs_dict[k].mean(dim=0): [9, 768].
+                    # token_prompt_embs.mean(dim=0): [9, 768].
                     token_emb_cache_obj.cache_layer(ca_layer_idx, token_prompt_embs.mean(dim=0))
 
                 if len(token_emb_cache_obj.cached_layers) == token_emb_cache_obj.num_layers:
@@ -2283,8 +2283,8 @@ class EmbeddingManager(nn.Module):
         for fg_token in fg_bg_token_lists[0]:
             for bg_token in fg_bg_token_lists[1]:
                 try:
-                    fg_static_token_emb = self.static_subj_embs_dict[fg_token]
-                    bg_static_token_emb = self.static_subj_embs_dict[bg_token]
+                    fg_static_token_emb         = self.static_subj_embs_dict[fg_token]
+                    bg_static_token_emb         = self.static_subj_embs_dict[bg_token]
                     fg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[fg_token]
                     bg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[bg_token]
                 except KeyError:
@@ -2300,7 +2300,6 @@ class EmbeddingManager(nn.Module):
                 else:
                     bg_ada_token_emb = 0
 
-                
                 # fg_hybrid_token_emb: [16, 9, 768]. 16: num layers. 9: num vectors.
                 # bg_hybrid_token_emb: [16, 4, 768]. 16: num layers. 4: num vectors.
                 fg_hybrid_token_emb = fg_static_token_emb * (1 - self.ada_emb_weight) \

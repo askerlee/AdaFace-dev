@@ -21,6 +21,7 @@ from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
+import bitsandbytes as bnb
 
 from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
@@ -92,6 +93,7 @@ class DDPM(pl.LightningModule):
                  conditioning_key=None,
                  parameterization="eps",  # all assuming fixed variance schedules
                  optimizer_type='AdamW',
+                 optimizer_bits=32,
                  scheduler_config=None,
                  use_positional_encodings=False,
                  learn_logvar=False,
@@ -178,6 +180,7 @@ class DDPM(pl.LightningModule):
             print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
 
         self.optimizer_type = optimizer_type
+        self.optimizer_bits = optimizer_bits
         self.use_scheduler = scheduler_config is not None
         if self.use_scheduler:
             self.scheduler_config = scheduler_config
@@ -3238,7 +3241,7 @@ class LatentDiffusion(DDPM):
         # K_fg: 9, number of embeddings per subject token.
         K_fg = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
         loss_subj_mb_suppress       = 0
-        subj_mb_suppress_scale      = 0.1
+        subj_mb_suppress_scale      = 0.05
         mfmb_contrast_score_margin  = 0.4
 
         # Protect subject emb activations on fg areas.
@@ -3315,7 +3318,7 @@ class LatentDiffusion(DDPM):
 
             # loss_layer_subj_bg_contrast_at_mf is usually 0, 
             # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
-            # subj_mb_suppress_scale: 0.1.
+            # subj_mb_suppress_scale: 0.05.
             loss_subj_mb_suppress   += loss_layer_subj_mb_suppress \
                                        * attn_align_layer_weight * subj_mb_suppress_scale
     
@@ -3371,9 +3374,9 @@ class LatentDiffusion(DDPM):
         loss_bg_mf_suppress = 0
         loss_fg_bg_mask_contrast = 0
 
-        subj_mb_suppress_scale                = 0.1
+        subj_mb_suppress_scale                = 0.05
         bg_mf_suppress_scale                  = 0.1
-        fgbg_emb_contrast_scale               = 0.1
+        fgbg_emb_contrast_scale               = 0.05
         mfmb_contrast_score_margin            = 0.4
         subj_bg_contrast_at_mf_score_margin   = 0.4 * K_fg / K_bg     # 0.9
         bg_subj_contrast_at_mb_score_margin   = 0.4
@@ -3517,13 +3520,13 @@ class LatentDiffusion(DDPM):
                                                                   instance_weights=instance_mask)
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, 
                 # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
-                # subj_mb_suppress_scale: 0.1.
+                # subj_mb_suppress_scale: 0.05.
                 loss_subj_mb_suppress       += loss_layer_subj_mb_suppress \
                                                 * attn_align_layer_weight * subj_mb_suppress_scale
-                # bg_mf_suppress_scale: 0.3. More penalty of bg emb activations on fg areas.
+                # bg_mf_suppress_scale: 0.1. More penalty of bg emb activations on fg areas.
                 loss_bg_mf_suppress         += loss_layer_bg_mf_suppress \
                                                 * attn_align_layer_weight * bg_mf_suppress_scale
-                # fgbg_emb_contrast_scale: 0.1. Balanced penalty of fg emb activation 
+                # fgbg_emb_contrast_scale: 0.05. Balanced penalty of fg emb activation 
                 # contrast on fg and bg areas.
                 loss_fg_bg_mask_contrast    += (loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
                                                 * attn_align_layer_weight * fgbg_emb_contrast_scale
@@ -4394,8 +4397,13 @@ class LatentDiffusion(DDPM):
         model_lr = self.model_lr
         weight_decay = self.weight_decay
 
-        OptimizerClass = torch.optim.AdamW
-
+        if self.optimizer_bits == 32:
+            OptimizerClass = torch.optim.AdamW
+        elif self.optimizer_bits == 8:
+            OptimizerClass = bnb.optim.Adam8bit
+        else:
+            raise NotImplementedError()
+        
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 
             embedding_params = list(self.embedding_manager.optimized_parameters())
