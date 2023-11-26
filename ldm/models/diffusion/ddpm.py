@@ -1989,14 +1989,6 @@ class LatentDiffusion(DDPM):
         cfg_scales_for_clip_loss = None
         c_static_emb, c_in, extra_info = cond
 
-        # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
-        # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
-        # (img_mask is not used in the prompt-guided cross-attention layers).
-        # Don't consider img_mask in compositional iterations. Because in compositional iterations,
-        # the original images don't play a role (even if comp_init_fg_with_training_img,
-        # we still don't consider the actual pixels out of the subject areas, so img_mask doesn't matter).
-        extra_info['img_mask']  = img_mask if not self.iter_flags['is_compos_iter'] else None
-
         inj_noise_t = None
 
         if self.iter_flags['is_compos_iter']:
@@ -2265,19 +2257,22 @@ class LatentDiffusion(DDPM):
         if not self.iter_flags['do_teacher_filter']:
             extra_info['capture_distill_attn'] = True
 
-        # The image mask here is used when computing Ada embeddings in embedding_manager.
-        # Do not consider mask on compositional reg iterations (except use_wds_comp iters), 
+        # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
+        # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
+        # (img_mask is not used in the prompt-guided cross-attention layers).
+        # Don't consider img_mask in compositional iterations. Because in compositional iterations,
+        # the original images don't play a role (even if comp_init_fg_with_training_img,
+        # we still don't consider the actual pixels out of the subject areas, so img_mask doesn't matter).
+        extra_info['img_mask']  = None if self.iter_flags['is_compos_iter'] else img_mask
+
+        # img_mask is also used when computing Ada embeddings in embedding_manager.
+        # So we pass img_mask to embedding_manager here.
+        # Do not consider mask on compositional distillation iterations, 
         # as in such iters, the original pixels (out of the fg_mask) do not matter and 
         # can freely compose any contents.
-        # img_mask is used by the ada embedding generator. 
-        # So we pass img_mask to embedding_manager here.
-        if self.iter_flags['is_compos_iter'] and not self.iter_flags['use_wds_comp']:
-            emb_man_img_mask = None
-        else:
-            emb_man_img_mask = img_mask
         emb_man_volatile_ds = { 'subj_indices':   subj_indices,
                                 'bg_indices':     bg_indices,
-                                'img_mask':       emb_man_img_mask }
+                                'img_mask':       extra_info['img_mask'] }
 
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
@@ -2565,16 +2560,12 @@ class LatentDiffusion(DDPM):
                     # Update c_static_emb.
                     cond_orig_qv = (c_static_emb_orig_vk, cond_orig[1], extra_info)
 
-                    # Checking is_compos_iter is not necessary as this branch implies is_compos_iter.
-                    # Use here to keep it consistent with the previous emb_man_volatile_ds code.
-                    if self.iter_flags['is_compos_iter'] and not self.iter_flags['use_wds_comp']:
-                        emb_man_img_mask = None
-                    else:
-                        emb_man_img_mask = img_mask
+                    # This branch implies a compositional distillation iter.
+                    extra_info['img_mask']  = None
 
                     emb_man_volatile_ds = { 'subj_indices':   extra_info['subj_indices_2b'],
                                             'bg_indices':     extra_info['bg_indices'],
-                                            'img_mask':       emb_man_img_mask }              
+                                            'img_mask':       None }              
                     # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
                     # on mix reg and ada embeddings is generated for the delta loss. 
                     # (The previous call to guided_denoise() didn't enable gradients, 
@@ -2593,8 +2584,8 @@ class LatentDiffusion(DDPM):
 
                     # Update masks according to x_start_sel. Select the masks corresponding to 
                     # the better candidate, indexed by [better_cand_idx] (Keep it as a list).
-                    img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
-                        repeat_selected_instances([better_cand_idx], 4, img_mask, fg_mask, 
+                    fg_mask, filtered_fg_mask, batch_have_fg_mask = \
+                        repeat_selected_instances([better_cand_idx], 4, fg_mask, 
                                                   filtered_fg_mask, batch_have_fg_mask)
                     self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
                     # Cache x_recon for the next iteration with a smaller t.
@@ -2615,7 +2606,8 @@ class LatentDiffusion(DDPM):
                     self.cached_inits = { 'x_start':                x_recon_sel_rep, 
                                           'delta_prompts':          cond_orig[2]['delta_prompts'],
                                           't':                      t_sel,
-                                          'img_mask':               img_mask,
+                                          # reuse_init_conds implies a compositional iter. So img_mask is always None.
+                                          'img_mask':               None,   
                                           'fg_mask':                fg_mask,
                                           'batch_have_fg_mask':     batch_have_fg_mask,
                                           'filtered_fg_mask':       filtered_fg_mask,
