@@ -58,7 +58,7 @@ model:
     do_clip_teacher_filtering:          True
     
     optimizer_type: AdamW     # AdamW or sophia.
-    optimizer_bits: 8         # 8 or 32.
+    optimizer_bits: 32         # 8 or 32. 8 bit doesn't save much RAM and performs worse.
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:

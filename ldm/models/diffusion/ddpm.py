@@ -21,7 +21,6 @@ from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
-import bitsandbytes as bnb
 
 from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, instantiate_from_config, \
@@ -4400,6 +4399,7 @@ class LatentDiffusion(DDPM):
         if self.optimizer_bits == 32:
             OptimizerClass = torch.optim.AdamW
         elif self.optimizer_bits == 8:
+            import bitsandbytes as bnb
             OptimizerClass = bnb.optim.Adam8bit
         else:
             raise NotImplementedError()
