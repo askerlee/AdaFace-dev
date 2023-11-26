@@ -859,7 +859,9 @@ class LatentDiffusion(DDPM):
                     # Initialize the ada embedding cache, so that the subsequent calls to 
                     # self.get_layer_ada_embedding() will store the ada embedding 
                     # for each layer into the cache. 
-                    # The cache will be used in calc_prompt_emb_delta_loss().
+                    # It also updates the EMA of ada embeddings.
+                    # Since get_learned_conditioning() is always called before the loss computations,
+                    # it won't cause computation graph errors.
                     self.embedding_manager.clear_ada_prompt_embeddings_cache()
                     extra_info['ada_embedder'] = ada_embedder
 

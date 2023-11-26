@@ -81,8 +81,8 @@ model:
         use_layerwise_embedding: True
         layerwise_lora_rank_token_ratio: 2
         ada_emb_weight: 0.5
+        emb_ema_as_pooling_probe_weight: 0.5  # Should be the same as ada_emb_weight.
         ada_use_attn_pooler: True
-        emb_ema_as_pooling_probe_weight: 0.5
         specialized_comp_embs_mod: -1
         contrast_fgbg_init_coeff:  0
         attn_postmix_weight: 0

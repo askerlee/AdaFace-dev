@@ -2284,28 +2284,37 @@ class EmbeddingManager(nn.Module):
             for bg_token in fg_bg_token_lists[1]:
                 try:
                     fg_static_token_emb         = self.static_subj_embs_dict[fg_token]
+                    #fg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[fg_token]
+                    fg_ada_token_emb_ema_obj    = self.string_to_emb_ema_dict[fg_token]
                     bg_static_token_emb         = self.static_subj_embs_dict[bg_token]
-                    fg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[fg_token]
                     bg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[bg_token]
                 except KeyError:
                     continue
 
+                '''
                 if len(fg_ada_token_emb_cache_obj.cached_layers) == fg_ada_token_emb_cache_obj.num_layers:
                     fg_ada_token_emb = fg_ada_token_emb_cache_obj.embedding
                 else:
                     fg_ada_token_emb = 0
-                
+                '''
+
+                if fg_ada_token_emb_ema_obj is not None:
+                    fg_ada_token_emb_ema = fg_ada_token_emb_ema_obj.embedding
+                else:
+                    fg_ada_token_emb_ema = 0
+
                 if len(bg_ada_token_emb_cache_obj.cached_layers) == bg_ada_token_emb_cache_obj.num_layers:
                     bg_ada_token_emb = bg_ada_token_emb_cache_obj.embedding
                 else:
                     bg_ada_token_emb = 0
 
+                ada_emb_ema_weight  = self.emb_ema_as_pooling_probe_weight
                 # fg_hybrid_token_emb: [16, 9, 768]. 16: num layers. 9: num vectors.
                 # bg_hybrid_token_emb: [16, 4, 768]. 16: num layers. 4: num vectors.
-                fg_hybrid_token_emb = fg_static_token_emb * (1 - self.ada_emb_weight) \
-                                        + fg_ada_token_emb  * self.ada_emb_weight
-                bg_hybrid_token_emb = bg_static_token_emb * (1 - self.ada_emb_weight) \
-                                        + bg_ada_token_emb  * self.ada_emb_weight
+                fg_hybrid_token_emb = fg_static_token_emb * (1 - ada_emb_ema_weight) \
+                                        + fg_ada_token_emb_ema * ada_emb_ema_weight
+                bg_hybrid_token_emb = bg_static_token_emb * (1 - ada_emb_ema_weight) \
+                                        + bg_ada_token_emb  * ada_emb_ema_weight
                 
                 # fg_hybrid_token_emb, bg_hybrid_token_emb: [16, 768]. 16: num layers.
                 fg_hybrid_token_mean_emb = fg_hybrid_token_emb.mean(dim=1)
