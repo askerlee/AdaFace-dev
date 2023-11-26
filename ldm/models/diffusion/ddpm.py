@@ -109,6 +109,7 @@ class DDPM(pl.LightningModule):
                  mix_prompt_distill_weight=0.,
                  subj_attn_norm_distill_loss_base=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
+                 sc_mc_bg_match_loss_base=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
@@ -147,6 +148,7 @@ class DDPM(pl.LightningModule):
         self.mix_prompt_distill_weight              = mix_prompt_distill_weight
         self.subj_attn_norm_distill_loss_base       = subj_attn_norm_distill_loss_base
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
+        self.sc_mc_bg_match_loss_base               = sc_mc_bg_match_loss_base
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
@@ -2827,8 +2829,13 @@ class LatentDiffusion(DDPM):
                 comp_single_map_align_loss_scale = 1
                 # mix single - mix comp matching loss is less important, so scale it down.
                 ms_mc_fg_match_loss_scale = 0.1
-                sc_mc_bg_match_loss_scale = 2
                 comp_subj_bg_attn_suppress_loss_scale = 0.02
+                sc_mc_bg_match_loss_scale_base = 2
+                # sc_mc_bg_match_loss_base: 0.2. 
+                sc_mc_bg_match_loss_scale = calc_dyn_loss_scale(loss_sc_mc_bg_match,
+                                                                self.sc_mc_bg_match_loss_base,
+                                                                sc_mc_bg_match_loss_scale_base)
+                
                 # No need to scale down loss_comp_mix_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
                 loss_comp_fg_bg_preserve = loss_comp_single_map_align * comp_single_map_align_loss_scale \
                                            + (loss_sc_ss_fg_match + loss_mc_ms_fg_match * ms_mc_fg_match_loss_scale
@@ -2882,8 +2889,8 @@ class LatentDiffusion(DDPM):
                 # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
                 # subj_attn_norm_distill_loss_base: 4 for non-faces or 8 for faces.
                 subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
-                                                                        self.subj_attn_norm_distill_loss_base,
-                                                                        subj_attn_norm_distill_loss_scale_base)
+                                                                         self.subj_attn_norm_distill_loss_base,
+                                                                         subj_attn_norm_distill_loss_scale_base)
 
                 feat_delta_align_scale = 2
 
