@@ -3861,7 +3861,8 @@ class LatentDiffusion(DDPM):
             fg_attn_mask_pooled = fg_attn_mask_pooled.reshape(*fg_attn_mask_pooled.shape[:2], -1)
 
             # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64]
-            loss_layer_comp_single_align_map, loss_layer_ss_sc_fg_match, loss_layer_ms_mc_fg_match, \
+            # removed loss_layer_ms_mc_fg_match to save computation.
+            loss_layer_comp_single_align_map, loss_layer_ss_sc_fg_match, \
             loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
                 = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, fg_attn_mask_pooled, 
                                              fg_bg_cutoff_prob=0.25,
@@ -3870,7 +3871,7 @@ class LatentDiffusion(DDPM):
 
             loss_comp_single_map_align = loss_layer_comp_single_align_map * feat_distill_layer_weight
             loss_sc_ss_fg_match += loss_layer_ss_sc_fg_match * feat_distill_layer_weight
-            loss_mc_ms_fg_match += loss_layer_ms_mc_fg_match * feat_distill_layer_weight
+            # loss_mc_ms_fg_match += loss_layer_ms_mc_fg_match * feat_distill_layer_weight
             loss_sc_mc_bg_match += loss_layer_sc_mc_bg_match * feat_distill_layer_weight
 
             if sc_map_ss_fg_prob_below_mean is None or mc_map_ss_fg_prob_below_mean is None:

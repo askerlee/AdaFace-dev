@@ -1854,16 +1854,17 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     # torch.einsum('b d i, b i j -> b d j', sc_feat, sc_map_ss_prob) is equivalent to
     # torch.matmul(sc_feat, sc_map_ss_prob). But maybe matmul is faster?
     sc_recon_ss_feat = torch.matmul(sc_feat, sc_map_ss_prob)
-    mc_recon_ms_feat = torch.matmul(mc_feat, mc_map_ms_prob)
+    # mc_recon_ms_feat = torch.matmul(mc_feat, mc_map_ms_prob)
 
     # fg_mask: bool of [1, 64] with R_fg True values.
     # Apply mask, permute features to the last dim. [1, 1280, 64] => [1, 64, 1280] => [R_fg, 1280]
-    ss_fg_feat, ms_fg_feat, sc_recon_ss_fg_feat, mc_recon_ms_fg_feat = \
+    ss_fg_feat, sc_recon_ss_fg_feat = \
         [ feat.permute(0, 2, 1)[fg_mask] for feat in \
-            [ss_feat, ms_feat, sc_recon_ss_feat, mc_recon_ms_feat] ]
+            [ss_feat, sc_recon_ss_feat] ]
+        # ms_fg_feat, mc_recon_ms_fg_feat = ... ms_feat, mc_recon_ms_feat
     
     ss_fg_feat_gs = single_feat_grad_scaler(ss_fg_feat)
-    ms_fg_feat_gs = single_feat_grad_scaler(ms_fg_feat)
+    # ms_fg_feat_gs = single_feat_grad_scaler(ms_fg_feat)
 
     # Span the fg_mask to both H and W dimensions.
     fg_mask_HW = fg_mask.unsqueeze(1) * fg_mask.unsqueeze(2)
@@ -1875,9 +1876,9 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     loss_sc_ss_fg_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat_gs, 
                                                 exponent=2, do_demean_first=False,
                                                 first_n_dims_to_flatten=2, ref_grad_scale=1)
-    loss_mc_ms_fg_match = calc_ref_cosine_loss(mc_recon_ms_fg_feat, ms_fg_feat_gs, 
-                                                exponent=2, do_demean_first=False,
-                                                first_n_dims_to_flatten=2, ref_grad_scale=1)
+    #loss_mc_ms_fg_match = calc_ref_cosine_loss(mc_recon_ms_fg_feat, ms_fg_feat_gs, 
+    #                                            exponent=2, do_demean_first=False,
+    #                                            first_n_dims_to_flatten=2, ref_grad_scale=1)
         
     # fg_mask: [1, 64] => [1, 64, 1].
     fg_mask = fg_mask.float().unsqueeze(2)
@@ -1924,5 +1925,6 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
                                                first_n_dims_to_flatten=2, 
                                                ref_grad_scale=mix_feat_grad_scale)
     
-    return loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
+    return loss_comp_single_map_align, loss_sc_ss_fg_match, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean
+            # loss_mc_ms_fg_match, 
