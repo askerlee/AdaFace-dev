@@ -2837,7 +2837,7 @@ class LatentDiffusion(DDPM):
                                                                 self.sc_mc_bg_match_loss_base,
                                                                 sc_mc_bg_match_loss_scale_base,
                                                                 min_scale_base_ratio=1,
-                                                                max_scale_base_ratio=2)
+                                                                max_scale_base_ratio=3)
                 
                 # No need to scale down loss_comp_mix_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
                 loss_comp_fg_bg_preserve = loss_comp_single_map_align * comp_single_map_align_loss_scale \
