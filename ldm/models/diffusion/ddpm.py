@@ -2674,7 +2674,8 @@ class LatentDiffusion(DDPM):
         if self.fg_bg_token_emb_ortho_loss_weight >= 0:
             # If use_background_token, then loss_fg_bg_token_emb_ortho is nonzero.
             # Otherwise, loss_fg_bg_token_emb_ortho is zero.
-            loss_fg_bg_token_emb_ortho = self.embedding_manager.calc_fg_bg_token_embs_ortho_loss(fg_grad_scale=0.1)
+            loss_fg_bg_token_emb_ortho = \
+                self.embedding_manager.calc_fg_bg_token_embs_ortho_loss(ada_grad_scale=0.1, fg_grad_scale=0.4)
             if loss_fg_bg_token_emb_ortho > 0:
                 loss_dict.update({f'{prefix}/fg_bg_token_emb_ortho': loss_fg_bg_token_emb_ortho.mean().detach()})
             loss += loss_fg_bg_token_emb_ortho * self.fg_bg_token_emb_ortho_loss_weight
