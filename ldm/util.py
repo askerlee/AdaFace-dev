@@ -1774,14 +1774,20 @@ def calc_dyn_loss_scale(loss, loss_base, loss_scale_base, min_scale_base_ratio=1
     scale = max(min(max_scale, scale), min_scale)
     return scale
 
+def to_float(x):
+    if isinstance(x, torch.Tensor):
+        return x.item()
+    else:
+        return x
+    
 def normalized_sum(losses_list, do_normalize=True):
     loss_sum = sum(losses_list)
     if not do_normalize or len(losses_list) == 0:
         return loss_sum
     
-    normalized_losses_list = [ loss / (loss.item() + 1e-8) for loss in losses_list ]
+    normalized_losses_list = [ loss / (to_float(loss) + 1e-8) for loss in losses_list ]
     # Restore original loss_sum.
-    normalized_loss_sum = sum(normalized_losses_list) * loss_sum / len(normalized_losses_list)
+    normalized_loss_sum = sum(normalized_losses_list) * to_float(loss_sum) / len(normalized_losses_list)
     return normalized_loss_sum
 
 # embeddings: [N, 768]. 
