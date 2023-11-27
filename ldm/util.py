@@ -1764,13 +1764,15 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
 
     return loss_static_prompt_delta, loss_ada_prompt_delta
 
-def calc_dyn_loss_scale(loss, loss_base, loss_scale_base, min_is_base=False):
+def calc_dyn_loss_scale(loss, loss_base, loss_scale_base, min_scale_base_ratio=1, max_scale_base_ratio=2):
     # Setting loss_base to 0 will disable the loss.
     if loss_base == 0:
         return 0
-    if min_is_base and loss <= loss_base:
-        return loss_scale_base
-    return loss.item() * loss_scale_base / loss_base
+    scale = loss.item() * loss_scale_base / loss_base
+    min_scale = loss_scale_base * min_scale_base_ratio
+    max_scale = loss_scale_base * max_scale_base_ratio
+    scale = max(min(max_scale, scale), min_scale)
+    return scale
 
 # embeddings: [N, 768]. 
 # noise_rel_std_range: the noise std / embeddings std falls within this range.
