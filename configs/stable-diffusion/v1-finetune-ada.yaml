@@ -177,5 +177,5 @@ lightning:
     # max_decay_steps and max_steps will be customized in main.py accordingly.
     max_steps: 3500
     limit_val_batches: 0.0
-    grad_clip: 1
+    grad_clip: 0.5
     

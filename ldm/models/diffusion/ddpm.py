@@ -1348,7 +1348,7 @@ class LatentDiffusion(DDPM):
             # So in all distillation iterations, comp_init_fg_with_training_img percentage will be around 0.5.
             # NOTE: If use_wds_comp, then to preserve the foreground, we always enable comp_init_fg_with_training_img.
             # But in this case, the background areas will not be replaced with random noises.
-            p_comp_init_fg_with_training_img = 0 if self.iter_flags['use_wds_comp'] else 0.7
+            p_comp_init_fg_with_training_img = 0 if self.iter_flags['use_wds_comp'] else 0.8
             # If reuse_init_conds, comp_init_fg_with_training_img may be set to True later
             # if the previous iteration has comp_init_fg_with_training_img = True.
             self.iter_flags['comp_init_fg_with_training_img'] \
