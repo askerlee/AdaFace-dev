@@ -35,7 +35,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
                        anneal_t, rand_annealed, anneal_value, calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
-                       gen_comp_extra_indices_by_block, calc_elastic_matching_loss
+                       gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -3075,10 +3075,9 @@ class LatentDiffusion(DDPM):
         mix_attn_grad_scale  = 0.05  
         mix_attn_grad_scaler = gen_gradient_scaler(mix_attn_grad_scale)
 
-        loss_subj_attn_delta_align   = 0
-        loss_feat_delta_align        = 0
-
-        loss_subj_attn_norm_distill     = 0
+        loss_layers_subj_attn_delta_align   = []
+        loss_layers_feat_delta_align        = []
+        loss_layers_subj_attn_norm_distill  = []
 
         for unet_layer_idx, ca_outfeat in ca_outfeats.items():
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_norm_distill_layer_weights):
@@ -3122,8 +3121,8 @@ class LatentDiffusion(DDPM):
                                                     use_cosine_loss=True, cosine_exponent=3,
                                                     delta_types=['feat_to_ref'])
 
-                    loss_subj_attn_delta_align  += loss_dict_layer_subj_attn_delta_align['feat_to_ref'] \
-                                                       * attn_delta_distill_layer_weight
+                    loss_layers_subj_attn_delta_align.append(loss_dict_layer_subj_attn_delta_align['feat_to_ref'] \
+                                                             * attn_delta_distill_layer_weight)
 
                     '''
                     I don't know why, but loss_comp_attn_delta_distill greatly hurts the performance.
@@ -3153,8 +3152,8 @@ class LatentDiffusion(DDPM):
                 loss_layer_subj_single_attn_norm = (subj_single_subj_attn.mean(dim=-1) - mix_single_subj_attn_gs.mean(dim=-1)).abs().mean()
                 # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
                 # smaller magnitudes than the delta loss. So it will be scaled up later in p_losses().
-                loss_subj_attn_norm_distill   += ( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \
-                                                  * attn_norm_distill_layer_weight
+                loss_layers_subj_attn_norm_distill.append(( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \
+                                                          * attn_norm_distill_layer_weight)
 
             if unet_layer_idx not in feat_distill_layer_weights:
                 continue
@@ -3218,7 +3217,11 @@ class LatentDiffusion(DDPM):
             # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
             # and 2) the embeddings are amendable to composition.
             loss_layer_feat_delta_align = ortho_l2loss(comp_feat_delta, single_feat_delta, mean=True)
-            loss_feat_delta_align += loss_layer_feat_delta_align * feat_distill_layer_weight
+            loss_layers_feat_delta_align.append(loss_layer_feat_delta_align * feat_distill_layer_weight)
+
+        loss_feat_delta_align       = normalized_sum(loss_layers_feat_delta_align)
+        loss_subj_attn_delta_align  = normalized_sum(loss_layers_subj_attn_delta_align)
+        loss_subj_attn_norm_distill = normalized_sum(loss_layers_subj_attn_norm_distill)
 
         return loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill
 
@@ -3243,7 +3246,6 @@ class LatentDiffusion(DDPM):
         attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
         # K_fg: 9, number of embeddings per subject token.
         K_fg = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
-        loss_subj_mb_suppress       = 0
         subj_mb_suppress_scale      = 0.05
         mfmb_contrast_score_margin  = 0.4
 
@@ -3258,6 +3260,8 @@ class LatentDiffusion(DDPM):
         # BLOCK_SIZE = 2, so we only keep instances indexed by [0, 1].
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
         subj_indices = (subj_indices[0][:BLOCK_SIZE*K_fg], subj_indices[1][:BLOCK_SIZE*K_fg])
+
+        loss_layers_subj_mb_suppress    = []
 
         for unet_layer_idx, unet_attn_score in ca_attnscores.items():
             if (unet_layer_idx not in attn_align_layer_weights):
@@ -3322,8 +3326,10 @@ class LatentDiffusion(DDPM):
             # loss_layer_subj_bg_contrast_at_mf is usually 0, 
             # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
             # subj_mb_suppress_scale: 0.05.
-            loss_subj_mb_suppress   += loss_layer_subj_mb_suppress \
-                                       * attn_align_layer_weight * subj_mb_suppress_scale
+            loss_layers_subj_mb_suppress.append(loss_layer_subj_mb_suppress \
+                                                * attn_align_layer_weight * subj_mb_suppress_scale)
+            
+        loss_subj_mb_suppress = normalized_sum(loss_layers_subj_mb_suppress)
     
         return loss_subj_mb_suppress
     
@@ -3372,10 +3378,10 @@ class LatentDiffusion(DDPM):
         # K_bg: 4, number of embeddings per background token.
         K_bg = len(bg_indices[0]) // len(torch.unique(bg_indices[0]))
 
-        loss_fg_bg_complementary = 0
-        loss_subj_mb_suppress = 0
-        loss_bg_mf_suppress = 0
-        loss_fg_bg_mask_contrast = 0
+        loss_layers_fg_bg_complementary = []
+        loss_layers_subj_mb_suppress    = []
+        loss_layers_bg_mf_suppress      = []
+        loss_layers_fg_bg_mask_contrast = []
 
         subj_mb_suppress_scale                = 0.05
         bg_mf_suppress_scale                  = 0.1
@@ -3437,7 +3443,7 @@ class LatentDiffusion(DDPM):
                                      debug=False)
 
             # loss_fg_bg_complementary doesn't need fg_mask.
-            loss_fg_bg_complementary += loss_layer_fg_bg_comple * attn_align_layer_weight
+            loss_layers_fg_bg_complementary.append(loss_layer_fg_bg_comple * attn_align_layer_weight)
 
             if (fg_mask is not None) and (instance_mask is None or instance_mask.sum() > 0):
                 fg_mask2 = resize_mask_for_feat_or_attn(subj_score, fg_mask, "fg_mask", 
@@ -3524,18 +3530,23 @@ class LatentDiffusion(DDPM):
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, 
                 # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
                 # subj_mb_suppress_scale: 0.05.
-                loss_subj_mb_suppress       += loss_layer_subj_mb_suppress \
-                                                * attn_align_layer_weight * subj_mb_suppress_scale
+                loss_layers_subj_mb_suppress.append(loss_layer_subj_mb_suppress \
+                                                    * attn_align_layer_weight * subj_mb_suppress_scale)
                 # bg_mf_suppress_scale: 0.1. More penalty of bg emb activations on fg areas.
-                loss_bg_mf_suppress         += loss_layer_bg_mf_suppress \
-                                                * attn_align_layer_weight * bg_mf_suppress_scale
+                loss_layers_bg_mf_suppress.append(loss_layer_bg_mf_suppress \
+                                                    * attn_align_layer_weight * bg_mf_suppress_scale)
                 # fgbg_emb_contrast_scale: 0.05. Balanced penalty of fg emb activation 
                 # contrast on fg and bg areas.
-                loss_fg_bg_mask_contrast    += (loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
-                                                * attn_align_layer_weight * fgbg_emb_contrast_scale
+                loss_layers_fg_bg_mask_contrast.append((loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
+                                                        * attn_align_layer_weight * fgbg_emb_contrast_scale)
                 #print(f'layer {unet_layer_idx}')
                 #print(f'subj_contrast: {loss_layer_subj_contrast:.4f}, subj_bg_contrast_at_mf: {loss_layer_subj_bg_contrast_at_mf:.4f},')
                 #print(f"bg_contrast:   {loss_layer_bg_contrast:.4f},   subj_bg_contrast_at_mb: {loss_layer_subj_bg_contrast_at_mb:.4f}")
+
+        loss_fg_bg_complementary = normalized_sum(loss_layers_fg_bg_complementary)
+        loss_subj_mb_suppress    = normalized_sum(loss_layers_subj_mb_suppress)
+        loss_bg_mf_suppress      = normalized_sum(loss_layers_bg_mf_suppress)
+        loss_fg_bg_mask_contrast = normalized_sum(loss_layers_fg_bg_mask_contrast)
 
         return loss_fg_bg_complementary, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_fg_bg_mask_contrast
 
@@ -3587,8 +3598,8 @@ class LatentDiffusion(DDPM):
             # bg_indices: ([0, 1], [11, 12]).
             bg_indices = (bg_indices[0][:SSB_SIZE*K_bg], bg_indices[1][:SSB_SIZE*K_bg])
 
-        loss_fg_xlayer_consist = 0
-        loss_bg_xlayer_consist = 0
+        loss_layers_fg_xlayer_consist = []
+        loss_layers_bg_xlayer_consist = []
 
         for unet_layer_idx, unet_attn_score in ca_attnscores.items():
             if (unet_layer_idx not in attn_align_layer_weights):
@@ -3639,11 +3650,14 @@ class LatentDiffusion(DDPM):
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
 
             loss_layer_fg_xlayer_consist = ortho_l2loss(subj_attn, subj_attn_xlayer, mean=True)
-            loss_fg_xlayer_consist += loss_layer_fg_xlayer_consist * attn_align_layer_weight
+            loss_layers_fg_xlayer_consist.append(loss_layer_fg_xlayer_consist * attn_align_layer_weight)
             
             if bg_indices is not None:
                 loss_layer_bg_xlayer_consist = ortho_l2loss(bg_attn, bg_attn_xlayer, mean=True)
-                loss_bg_xlayer_consist += loss_layer_bg_xlayer_consist * attn_align_layer_weight
+                loss_layers_bg_xlayer_consist.append(loss_layer_bg_xlayer_consist * attn_align_layer_weight)
+
+        loss_fg_xlayer_consist = normalized_sum(loss_layers_fg_xlayer_consist)
+        loss_bg_xlayer_consist = normalized_sum(loss_layers_bg_xlayer_consist)
 
         return loss_fg_xlayer_consist, loss_bg_xlayer_consist
 
@@ -3812,13 +3826,13 @@ class LatentDiffusion(DDPM):
         mix_grad_scale      = 0.02
         mix_grad_scaler     = gen_gradient_scaler(mix_grad_scale)
 
-        loss_comp_single_map_align      = 0
-        loss_sc_ss_fg_match             = 0
-        loss_mc_ms_fg_match             = 0
-        loss_sc_mc_bg_match             = 0
+        loss_layers_comp_single_map_align      = []
+        loss_layers_sc_ss_fg_match             = []
+        loss_layers_mc_ms_fg_match             = []
+        loss_layers_sc_mc_bg_match             = []
 
-        loss_comp_subj_bg_attn_suppress = 0
-        loss_comp_mix_bg_attn_suppress  = 0
+        loss_layers_comp_subj_bg_attn_suppress = []
+        loss_layers_comp_mix_bg_attn_suppress  = []
 
         for unet_layer_idx, ca_outfeat in ca_outfeats.items():
             if unet_layer_idx not in feat_distill_layer_weights:
@@ -3869,10 +3883,10 @@ class LatentDiffusion(DDPM):
                                              single_q_grad_scale=0.1, single_feat_grad_scale=0.01,
                                              mix_feat_grad_scale=0.2)
 
-            loss_comp_single_map_align = loss_layer_comp_single_align_map * feat_distill_layer_weight
-            loss_sc_ss_fg_match += loss_layer_ss_sc_fg_match * feat_distill_layer_weight
+            loss_layers_comp_single_map_align.append(loss_layer_comp_single_align_map * feat_distill_layer_weight)
+            loss_layers_sc_ss_fg_match.append(loss_layer_ss_sc_fg_match * feat_distill_layer_weight)
             # loss_mc_ms_fg_match += loss_layer_ms_mc_fg_match * feat_distill_layer_weight
-            loss_sc_mc_bg_match += loss_layer_sc_mc_bg_match * feat_distill_layer_weight
+            loss_layers_sc_mc_bg_match.append(loss_layer_sc_mc_bg_match * feat_distill_layer_weight)
 
             if sc_map_ss_fg_prob_below_mean is None or mc_map_ss_fg_prob_below_mean is None:
                 continue
@@ -3911,8 +3925,16 @@ class LatentDiffusion(DDPM):
             loss_layer_mix_bg_attn_suppress  = masked_mean(mix_comp_subj_attn_gs,  
                                                            mc_map_ss_fg_prob_below_mean)
 
-            loss_comp_subj_bg_attn_suppress += loss_layer_subj_bg_attn_suppress * feat_distill_layer_weight
-            loss_comp_mix_bg_attn_suppress  += loss_layer_mix_bg_attn_suppress  * feat_distill_layer_weight
+            loss_layers_comp_subj_bg_attn_suppress.append(loss_layer_subj_bg_attn_suppress * feat_distill_layer_weight)
+            loss_layers_comp_mix_bg_attn_suppress.append(loss_layer_mix_bg_attn_suppress  * feat_distill_layer_weight)
+
+        loss_comp_single_map_align      = normalized_sum(loss_layers_comp_single_map_align)
+        loss_sc_ss_fg_match             = normalized_sum(loss_layers_sc_ss_fg_match)
+        # loss_mc_ms_fg_match is disabled for efficiency.
+        loss_mc_ms_fg_match             = 0 # normalized_sum(loss_layers_mc_ms_fg_match)
+        loss_sc_mc_bg_match             = normalized_sum(loss_layers_sc_mc_bg_match)
+        loss_comp_subj_bg_attn_suppress = normalized_sum(loss_layers_comp_subj_bg_attn_suppress)
+        loss_comp_mix_bg_attn_suppress  = normalized_sum(loss_layers_comp_mix_bg_attn_suppress)
 
         return loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
                loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress

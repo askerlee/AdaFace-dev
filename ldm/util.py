@@ -1774,6 +1774,16 @@ def calc_dyn_loss_scale(loss, loss_base, loss_scale_base, min_scale_base_ratio=1
     scale = max(min(max_scale, scale), min_scale)
     return scale
 
+def normalized_sum(losses_list, do_normalize=True):
+    loss_sum = sum(losses_list)
+    if not do_normalize or len(losses_list) == 0:
+        return loss_sum
+    
+    normalized_losses_list = [ loss / (loss.item() + 1e-8) for loss in losses_list ]
+    # Restore original loss_sum.
+    normalized_loss_sum = sum(normalized_losses_list) * loss_sum / len(normalized_losses_list)
+    return normalized_loss_sum
+
 # embeddings: [N, 768]. 
 # noise_rel_std_range: the noise std / embeddings std falls within this range.
 def add_noise_to_embedding(embeddings, noise_rel_std_range, add_noise_prob):
@@ -1933,3 +1943,4 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     return loss_comp_single_map_align, loss_sc_ss_fg_match, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean
             # loss_mc_ms_fg_match, 
+
