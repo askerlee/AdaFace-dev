@@ -1853,15 +1853,20 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     # can compare the values of the recon subj single tokens with the original values at the fg area.
     # torch.einsum('b d i, b i j -> b d j', sc_feat, sc_map_ss_prob) is equivalent to
     # torch.matmul(sc_feat, sc_map_ss_prob). But maybe matmul is faster?
-    sc_recon_ss_feat = torch.matmul(sc_feat, sc_map_ss_prob)
+    # sc_map_ss_fg_prob: 
+    fg_mask_B, fg_mask_N = fg_mask.nonzero(as_tuple=True)
+    # sc_map_ss_fg_prob: [1, 64, 64] => [1, 64, N_fg]
+    sc_map_ss_fg_prob = sc_map_ss_prob[:, :, fg_mask_N]
+    # sc_recon_ss_fg_feat: [1, 1280, 64] * [1, 64, N_fg] => [1, 1280, N_fg]
+    sc_recon_ss_fg_feat = torch.matmul(sc_feat, sc_map_ss_fg_prob)
+    # sc_recon_ss_fg_feat: [1, 1280, N_fg] => [1, N_fg, 1280]
+    sc_recon_ss_fg_feat = sc_recon_ss_fg_feat.permute(0, 2, 1)
     # mc_recon_ms_feat = torch.matmul(mc_feat, mc_map_ms_prob)
 
-    # fg_mask: bool of [1, 64] with R_fg True values.
-    # Apply mask, permute features to the last dim. [1, 1280, 64] => [1, 64, 1280] => [R_fg, 1280]
-    ss_fg_feat, sc_recon_ss_fg_feat = \
-        [ feat.permute(0, 2, 1)[fg_mask] for feat in \
-            [ss_feat, sc_recon_ss_feat] ]
-        # ms_fg_feat, mc_recon_ms_fg_feat = ... ms_feat, mc_recon_ms_feat
+    # fg_mask: bool of [1, 64] with N_fg True values.
+    # Apply mask, permute features to the last dim. [1, 1280, 64] => [1, 64, 1280] => [N_fg, 1280]
+    ss_fg_feat =  ss_feat.permute(0, 2, 1)[:, fg_mask_N]
+    # ms_fg_feat, mc_recon_ms_fg_feat = ... ms_feat, mc_recon_ms_feat
     
     ss_fg_feat_gs = single_feat_grad_scaler(ss_fg_feat)
     # ms_fg_feat_gs = single_feat_grad_scaler(ms_fg_feat)
