@@ -4444,7 +4444,7 @@ class LatentDiffusion(DDPM):
             if self.unfreeze_model: 
                 model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
                 opt = OptimizerClass([{"params": embedding_params, "lr": lr}, {"params": model_params}], lr=model_lr)
-            # Otherwise, train only embedding
+            # Otherwise, train only embeddings
             else:
                 opt = OptimizerClass(embedding_params, lr=lr, weight_decay=weight_decay)
         else:
