@@ -1781,12 +1781,12 @@ def to_float(x):
         return x
 
 # norm_pow: 0 (no normalization), 0.5 (sqrt), 1 (normalization by L2 norm).
-def normalized_sum(losses_list, norm_pow=0):
+def normalized_sum(losses_list, norm_pow=0.5):
     loss_sum = sum(losses_list)
     if norm_pow == 0 or len(losses_list) == 0:
         return loss_sum
     
-    normalized_losses_list = [ loss / np.power(to_float(loss) + 1e-8, norm_pow) for loss in losses_list ]
+    normalized_losses_list = [ loss / np.power(np.abs(to_float(loss)) + 1e-8, norm_pow) for loss in losses_list ]
     new_loss_sum = sum(normalized_losses_list)
     # Restore original loss_sum.
     normalized_loss_sum = new_loss_sum * to_float(loss_sum) / (to_float(new_loss_sum) + 1e-8)

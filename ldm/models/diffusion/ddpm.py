@@ -3918,14 +3918,16 @@ class LatentDiffusion(DDPM):
 
             mix_comp_subj_attn_gs = mix_grad_scaler(mix_comp_subj_attn)
 
-            subj_comp_subj_attn_pos = subj_comp_subj_attn.clamp(min=0)
-            mix_comp_subj_attn_gs_pos = mix_comp_subj_attn_gs.clamp(min=0)
+            #subj_comp_subj_attn_pos = subj_comp_subj_attn.clamp(min=0)
+            #mix_comp_subj_attn_gs_pos = mix_comp_subj_attn_gs.clamp(min=0)
 
             # Suppress the subj attention scores on background areas in comp instances.
             # subj_comp_subj_attn: [1, 8, 64]. ss_bg_mask_map_to_sc: [1, 1, 64].
-            loss_layer_subj_bg_attn_suppress = masked_mean(subj_comp_subj_attn_pos, 
+            # Some elements in subj_comp_subj_attn are negative. 
+            # We allow pushing them to -inf, which seems to perform better.
+            loss_layer_subj_bg_attn_suppress = masked_mean(subj_comp_subj_attn, #_pos, 
                                                            sc_map_ss_fg_prob_below_mean)
-            loss_layer_mix_bg_attn_suppress  = masked_mean(mix_comp_subj_attn_gs_pos,  
+            loss_layer_mix_bg_attn_suppress  = masked_mean(mix_comp_subj_attn_gs, #_pos,  
                                                            mc_map_ss_fg_prob_below_mean)
 
             loss_layers_comp_subj_bg_attn_suppress.append(loss_layer_subj_bg_attn_suppress * feat_distill_layer_weight)
