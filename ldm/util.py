@@ -1781,7 +1781,7 @@ def to_float(x):
         return x
 
 # norm_pow: 0 (no normalization), 0.5 (sqrt), 1 (normalization by L2 norm).
-def normalized_sum(losses_list, norm_pow=0.5):
+def normalized_sum(losses_list, norm_pow=0):
     loss_sum = sum(losses_list)
     if norm_pow == 0 or len(losses_list) == 0:
         return loss_sum
