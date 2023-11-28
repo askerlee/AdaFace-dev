@@ -506,7 +506,7 @@ class UNetModel(nn.Module):
         self.num_heads_upsample = num_heads_upsample
         self.predict_codebook_ids = n_embed is not None
         self.debug_attn = False
-        self.conv_attn_layerwise_scales_grad_scaler = gen_gradient_scaler(0.1)
+        self.conv_attn_layerwise_scales_grad_scaler = gen_gradient_scaler(0.01)
 
         self.backup_vars = { 
                             'use_conv_attn_kernel_size:layerwise':      [-1]   * 16,
