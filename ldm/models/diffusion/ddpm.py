@@ -2847,8 +2847,7 @@ class LatentDiffusion(DDPM):
                                            + (loss_comp_subj_bg_attn_suppress + loss_comp_mix_bg_attn_suppress) \
                                               * comp_subj_bg_attn_suppress_loss_scale
                 
-                if loss_comp_fg_bg_preserve > 0:
-                    loss_dict.update({f'{prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach()})
+                loss_dict.update({f'{prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach()})
 
             else:
                 loss_comp_fg_bg_preserve = 0
