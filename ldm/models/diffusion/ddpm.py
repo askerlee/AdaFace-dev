@@ -704,13 +704,11 @@ class LatentDiffusion(DDPM):
             self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
             # embedding_manager.optimized_parameters(): string_to_static_embedder_dict, 
             # which maps custom tokens to embeddings
-            for param in self.embedding_manager.optimized_parameters():
-                param.requires_grad = True
-            self.num_vectors_per_token = max(self.embedding_manager.token2num_vectors.values())
+            #for param in self.embedding_manager.optimized_parameters():
+            #    param.requires_grad = True
         else:
             # For DreamBooth.
             self.embedding_manager = None
-            self.num_vectors_per_token = 1
 
         self.generation_cache = []
         self.generation_cache_img_colors = []
@@ -4440,15 +4438,26 @@ class LatentDiffusion(DDPM):
         
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 
-            embedding_params = list(self.embedding_manager.optimized_parameters())
+            embedding_params_with_lr_ratios = self.embedding_manager.optimized_parameters()
+
+            embedding_params_with_lrs = []
+            for param_with_lr_ratio in embedding_params_with_lr_ratios:
+                params = param_with_lr_ratio['params']
+                param_lr = lr * param_with_lr_ratio['lr_ratio']
+                # Not sure if it's necessary to set requires_grad=True here.
+                for param in params:
+                    param.requires_grad = True
+                    
+                embedding_params_with_lrs.append({'params': params, 'lr': param_lr})
+
             # unfreeze_model:
             # Are we allowing the base model to train? If so, set two different parameter groups.
             if self.unfreeze_model: 
                 model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
-                opt = OptimizerClass([{"params": embedding_params, "lr": lr}, {"params": model_params}], lr=model_lr)
+                opt = OptimizerClass(embedding_params_with_lrs + [{"params": model_params, "lr": model_lr}])
             # Otherwise, train only embeddings
             else:
-                opt = OptimizerClass(embedding_params, lr=lr, weight_decay=weight_decay)
+                opt = OptimizerClass(embedding_params_with_lrs, weight_decay=weight_decay)
         else:
             params = list(self.model.parameters())
             if self.cond_stage_trainable:

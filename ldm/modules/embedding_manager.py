@@ -2070,19 +2070,22 @@ class EmbeddingManager(nn.Module):
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def optimized_parameters(self):
-        params = list(self.string_to_static_embedder_dict.parameters()) \
-               + list(self.string_to_ada_embedder_dict.parameters()) \
-               + list(self.string_to_emb_ema_dict.parameters()) \
-               + [ self.emb_global_scale_score ]
-        
-        if self.conv_attn_layerwise_scale_learnable:
-            params = params + [self.conv_attn_layerwise_scales]
+        normal_params = list(self.string_to_static_embedder_dict.parameters()) \
+                        + list(self.string_to_ada_embedder_dict.parameters()) \
+                        + list(self.string_to_emb_ema_dict.parameters()) \
+                        + [ self.emb_global_scale_score ]
             
         if self.attn_postmix_weight > 0:
-            params = params + list(self.postmix_attn_layer.parameters()) \
+            normal_params = normal_params + list(self.postmix_attn_layer.parameters()) \
                             + list(self.postmix_attn_LN.parameters())
-        
-        return params
+                
+        params_with_lr_ratios = [ { 'params': normal_params, 'lr_ratio': 1 } ]
+
+        if self.conv_attn_layerwise_scale_learnable:
+            slow_params = [self.conv_attn_layerwise_scales]
+            params_with_lr_ratios = params_with_lr_ratios + [ { 'params': slow_params,   'lr_ratio': 0.01 } ]
+
+        return params_with_lr_ratios
         
     def embedding_attractor_loss(self):
         loss = 0.
