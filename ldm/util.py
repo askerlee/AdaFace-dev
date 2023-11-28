@@ -1779,15 +1779,17 @@ def to_float(x):
         return x.item()
     else:
         return x
-    
-def normalized_sum(losses_list, do_normalize=True):
+
+# norm_pow: 0 (no normalization), 0.5 (sqrt), 1 (normalization by L2 norm).
+def normalized_sum(losses_list, norm_pow=0.5):
     loss_sum = sum(losses_list)
-    if not do_normalize or len(losses_list) == 0:
+    if norm_pow == 0 or len(losses_list) == 0:
         return loss_sum
     
-    normalized_losses_list = [ loss / (to_float(loss) + 1e-8) for loss in losses_list ]
+    normalized_losses_list = [ loss / np.power(to_float(loss) + 1e-8, norm_pow) for loss in losses_list ]
+    new_loss_sum = sum(normalized_losses_list)
     # Restore original loss_sum.
-    normalized_loss_sum = sum(normalized_losses_list) * to_float(loss_sum) / len(normalized_losses_list)
+    normalized_loss_sum = new_loss_sum * to_float(loss_sum) / (to_float(new_loss_sum) + 1e-8)
     return normalized_loss_sum
 
 # embeddings: [N, 768]. 
