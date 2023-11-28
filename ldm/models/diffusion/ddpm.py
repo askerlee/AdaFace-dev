@@ -3924,7 +3924,7 @@ class LatentDiffusion(DDPM):
             # Suppress the subj attention scores on background areas in comp instances.
             # subj_comp_subj_attn: [1, 8, 64]. ss_bg_mask_map_to_sc: [1, 1, 64].
             # Some elements in subj_comp_subj_attn are negative. 
-            # We allow pushing them to -inf, which seems to perform better.
+            # We allow pushing them to -inf, doing which seems to perform better.
             loss_layer_subj_bg_attn_suppress = masked_mean(subj_comp_subj_attn, #_pos, 
                                                            sc_map_ss_fg_prob_below_mean)
             loss_layer_mix_bg_attn_suppress  = masked_mean(mix_comp_subj_attn_gs, #_pos,  
