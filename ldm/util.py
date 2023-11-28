@@ -1790,6 +1790,8 @@ def normalized_sum(losses_list, norm_pow=0.5):
     new_loss_sum = sum(normalized_losses_list)
     # Restore original loss_sum.
     normalized_loss_sum = new_loss_sum * to_float(loss_sum) / (to_float(new_loss_sum) + 1e-8)
+    if torch.isnan(normalized_loss_sum):
+        breakpoint()
     return normalized_loss_sum
 
 # embeddings: [N, 768]. 
