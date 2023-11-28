@@ -468,7 +468,7 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         # emb_mask_i has been flatten to 1D. So it gives different embeddings 
         # different relative weights (after normalization).
         if emb_mask_i is not None:
-            loss_i = (loss_i * emb_mask_i).sum() / emb_mask_i.sum()
+            loss_i = (loss_i * emb_mask_i).sum() / (emb_mask_i.sum() + 1e-8)
         else:
             loss_i = loss_i.mean()
 
