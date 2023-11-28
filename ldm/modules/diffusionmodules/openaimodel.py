@@ -2,7 +2,7 @@ from abc import abstractmethod
 from functools import partial
 import math
 from typing import Iterable
-from ldm.util import distribute_embedding_to_M_tokens
+from ldm.util import distribute_embedding_to_M_tokens, gen_gradient_scaler
 
 import numpy as np
 import torch as th
@@ -506,6 +506,7 @@ class UNetModel(nn.Module):
         self.num_heads_upsample = num_heads_upsample
         self.predict_codebook_ids = n_embed is not None
         self.debug_attn = False
+        self.conv_attn_layerwise_scales_grad_scaler = gen_gradient_scaler(0.1)
 
         self.backup_vars = { 
                             'use_conv_attn_kernel_size:layerwise':      [-1]   * 16,
@@ -988,6 +989,9 @@ class UNetModel(nn.Module):
             # This setting is based on the empirical observations of 
             # the learned conv_attn_layerwise_scales.      
             conv_attn_layerwise_scales = [1] * 16
+        else:
+            # Avoid conv_attn_layerwise_scales being updated too quickly.
+            conv_attn_layerwise_scales = self.conv_attn_layerwise_scales_grad_scaler(conv_attn_layerwise_scales)
 
         use_conv_attn_kernel_sizes = np.ones(16, dtype=int) * use_conv_attn_kernel_size
         # Most layers use use_conv_attn_kernel_size as the conv attn kernel size.
