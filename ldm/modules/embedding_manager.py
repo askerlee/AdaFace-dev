@@ -2083,7 +2083,7 @@ class EmbeddingManager(nn.Module):
 
         if self.conv_attn_layerwise_scale_learnable:
             slow_params = [self.conv_attn_layerwise_scales]
-            params_with_lr_ratios = params_with_lr_ratios + [ { 'params': slow_params,   'lr_ratio': 0.01 } ]
+            params_with_lr_ratios = params_with_lr_ratios + [ { 'params': slow_params,   'lr_ratio': 0.1 } ]
 
         return params_with_lr_ratios
         
