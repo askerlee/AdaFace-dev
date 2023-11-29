@@ -57,7 +57,7 @@ model:
     fg_wds_complementary_loss_weight:   0 #1e-4
     wds_bg_recon_discount:              0.05
     
-    optimizer_type: AdamW     # AdamW or sophia.
+    optimizer_type: NAdam      # AdamW     # AdamW or NAdam.
     optimizer_bits: 32         # 8 or 32. 8 bit doesn't save much RAM and performs worse.
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler

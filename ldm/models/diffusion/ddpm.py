@@ -4429,7 +4429,13 @@ class LatentDiffusion(DDPM):
         weight_decay = self.weight_decay
 
         if self.optimizer_bits == 32:
-            OptimizerClass = torch.optim.AdamW
+            if self.optimizer_type == 'AdamW':
+                OptimizerClass = torch.optim.AdamW
+            elif self.optimizer_type == 'NAdam':
+                OptimizerClass = partial(torch.optim.NAdam, decoupled_weight_decay=True)
+            else:
+                raise NotImplementedError()
+            
         elif self.optimizer_bits == 8:
             import bitsandbytes as bnb
             OptimizerClass = bnb.optim.Adam8bit
