@@ -4432,7 +4432,9 @@ class LatentDiffusion(DDPM):
             if self.optimizer_type == 'AdamW':
                 OptimizerClass = torch.optim.AdamW
             elif self.optimizer_type == 'NAdam':
-                OptimizerClass = partial(torch.optim.NAdam, decoupled_weight_decay=True)
+                # In torch 1.13, decoupled_weight_decay is not supported. 
+                # But since we disabled weight decay, it doesn't matter.
+                OptimizerClass = torch.optim.NAdam
             else:
                 raise NotImplementedError()
             
