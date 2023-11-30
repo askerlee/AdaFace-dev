@@ -1954,3 +1954,10 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean
             # loss_mc_ms_fg_match, 
 
+def gen_cfg_scales_for_stu_tea(tea_scale, stu_scale, num_teachers, device):
+    cfg_scales_for_teacher   = torch.ones(num_teachers) * tea_scale
+    cfg_scales_for_student   = torch.ones(num_teachers) * stu_scale
+    cfg_scales_for_clip_loss = torch.cat([cfg_scales_for_student, cfg_scales_for_teacher], dim=0)
+    cfg_scales_for_clip_loss = cfg_scales_for_clip_loss.to(device)
+    return cfg_scales_for_clip_loss
+

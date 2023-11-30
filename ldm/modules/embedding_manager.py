@@ -1839,7 +1839,8 @@ class EmbeddingManager(nn.Module):
         # the margin area contains no signal, so we use img_mask to mask it out. 
         # Each image has its own img_mask, so img_mask has a shape of [B, 1, H, W].
         self.img_mask = volatile_ds['img_mask']
-
+        self.prompt_emb_mask = volatile_ds['prompt_emb_mask']
+        
     # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
     # not just the ada or static embeddings of the subject.
     def cache_ada_prompt_embedding(self, layer_idx, embedding):
