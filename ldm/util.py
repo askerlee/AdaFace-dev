@@ -1388,7 +1388,7 @@ def mix_embeddings(mix_scheme, c1, c2, mix_indices=None,
 
     return c_mix
 
-def gen_emb_mixer(BS, subj_indices_1b, CLS_SCALE_LAYERWISE_RANGE, device, use_layerwise_embedding=True,
+def gen_emb_mixer(BS, subj_indices_1b_N, CLS_SCALE_LAYERWISE_RANGE, device, use_layerwise_embedding=True,
                   N_LAYERS=16, sync_layer_indices=[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]):
     
     CLS_FIRST_LAYER_SCALE, CLS_FINAL_LAYER_SCALE = CLS_SCALE_LAYERWISE_RANGE
@@ -1413,17 +1413,17 @@ def gen_emb_mixer(BS, subj_indices_1b, CLS_SCALE_LAYERWISE_RANGE, device, use_la
         emb_k_or_v_layers_cls_mix_scales = AVG_SCALE * torch.ones(N_LAYERS, device=device).repeat(BS, 1)
 
     # First mix the static embeddings.
-    # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_1b,
+    # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_1b_N,
     # where they are subj_comp_emb * emb_k_or_v_layers_cls_mix_scales + cls_comp_emb * (1 - emb_k_or_v_layers_cls_mix_scales).
     # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
-    # Each is of a single instance. So only provides subj_indices_1b 
+    # Each is of a single instance. So only provides subj_indices_1b_N 
     # (multiple token indices of the same instance).
     # emb_v_mixer will be reused later to mix ada embeddings, so make it a functional.
-    emb_v_mixer = partial(mix_embeddings, 'add', mix_indices=subj_indices_1b)
+    emb_v_mixer = partial(mix_embeddings, 'add', mix_indices=subj_indices_1b_N)
     return emb_v_mixer, emb_k_or_v_layers_cls_mix_scales
 
 # t_frac is a float scalar. 
-def mix_static_vk_embeddings(c_static_emb, subj_indices_1b, 
+def mix_static_vk_embeddings(c_static_emb, subj_indices_1b_N, 
                              training_percent,
                              t_frac=1.0, 
                              use_layerwise_embedding=True,
@@ -1447,14 +1447,14 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_1b,
     assert 0 - 1e-6 <= training_percent <= 1 + 1e-6
 
     emb_v_mixer, emb_v_layers_cls_mix_scales = \
-        gen_emb_mixer(BS, subj_indices_1b, V_CLS_SCALE_LAYERWISE_RANGE, c_static_emb.device,
+        gen_emb_mixer(BS, subj_indices_1b_N, V_CLS_SCALE_LAYERWISE_RANGE, c_static_emb.device,
                       use_layerwise_embedding, N_LAYERS, sync_layer_indices)
     # Part of subject embedding is mixed into mix_emb_v. 
     # Proportions of cls_emb into mix_emb_v are specified by emb_v_layers_cls_mix_scales.
     mix_emb_v = emb_v_mixer(cls_emb, subj_emb, c1_mix_scale=emb_v_layers_cls_mix_scales.view(-1))
 
     emb_k_mixer, emb_k_layers_cls_mix_scales = \
-        gen_emb_mixer(BS, subj_indices_1b, K_CLS_SCALE_LAYERWISE_RANGE, c_static_emb.device,
+        gen_emb_mixer(BS, subj_indices_1b_N, K_CLS_SCALE_LAYERWISE_RANGE, c_static_emb.device,
                         use_layerwise_embedding, N_LAYERS, sync_layer_indices)
     # Part of subject embedding is mixed into mix k embedding.
     # Proportions of cls_emb into mix_emb_k are specified by emb_k_layers_cls_mix_scales.
