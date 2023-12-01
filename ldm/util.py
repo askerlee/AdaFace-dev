@@ -1556,29 +1556,34 @@ def extract_first_index_in_each_instance(token_indices):
 
 # cls_subj_indices, cls_comp_indices could be None. 
 # In that case, subj_comp_emb_align is pushed towards 0.
-def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_comp_indices, 
+def calc_layer_subj_comp_k_or_v_ortho_loss(seq_ks, subj_subj_indices, subj_comp_indices, 
                                            cls_subj_indices, cls_comp_indices,
+                                           all_token_weights=None, 
                                            do_demean_first=True, cls_grad_scale=0.05):
 
     # Put the 4 subject embeddings in the 2nd to last dimension for torch.mm().
     # The ortho losses on different "instances" are computed separately 
     # and there's no interaction among them.
 
-    # unet_seq_k: [B, H, N, D] = [2, 8, 77, 160].
+    # seq_ks: [B, H, N, D] = [2, 8, 77, 160].
     # H = 8, number of attention heads. D: 160, number of image tokens.
-    # unet_seq_k: [B, H, N, D] -> [B, N, H, D] = [2, 77, 8, 160].
-    unet_seq_k = unet_seq_k.permute(0, 2, 1, 3)
+    # seq_ks: [B, H, N, D] -> [B, N, H, D] = [2, 77, 8, 160].
+    seq_ks = seq_ks.permute(0, 2, 1, 3)
 
     # subj_subj_ks, cls_subj_ks: [4,  8, 160] => [1, 4,  8, 160] => [1, 8, 160]
     # subj_comp_ks, cls_comp_ks: [15, 8, 160] => [1, 15, 8, 160] => [1, 8, 160]
-    subj_subj_ks    = sel_emb_attns_by_indices(unet_seq_k, subj_subj_indices, 
-                                                do_sum=False, do_mean=True, do_sqrt_norm=False)
-    subj_comp_ks    = sel_emb_attns_by_indices(unet_seq_k, subj_comp_indices,
-                                                do_sum=False, do_mean=True, do_sqrt_norm=False)
-    cls_subj_ks     = sel_emb_attns_by_indices(unet_seq_k, cls_subj_indices,
-                                                do_sum=False, do_mean=True, do_sqrt_norm=False)
-    cls_comp_ks     = sel_emb_attns_by_indices(unet_seq_k, cls_comp_indices,
-                                                do_sum=False, do_mean=True, do_sqrt_norm=False)
+    subj_subj_ks    = sel_emb_attns_by_indices(seq_ks, subj_subj_indices, 
+                                               all_token_weights=all_token_weights,
+                                               do_sum=False, do_mean=True, do_sqrt_norm=False)
+    subj_comp_ks    = sel_emb_attns_by_indices(seq_ks, subj_comp_indices, 
+                                               all_token_weights=all_token_weights,
+                                               do_sum=False, do_mean=True, do_sqrt_norm=False)
+    cls_subj_ks     = sel_emb_attns_by_indices(seq_ks, cls_subj_indices, 
+                                               all_token_weights=all_token_weights,
+                                               do_sum=False, do_mean=True, do_sqrt_norm=False)
+    cls_comp_ks     = sel_emb_attns_by_indices(seq_ks, cls_comp_indices, 
+                                               all_token_weights=all_token_weights,
+                                               do_sum=False, do_mean=True, do_sqrt_norm=False)
 
     # The orthogonal projection of subj_subj_ks against subj_comp_ks_sum.
     # subj_comp_ks_sum will broadcast to the K_fg dimension of subj_subj_ks.
@@ -1595,22 +1600,33 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k, subj_subj_indices, subj_c
     # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
     loss_layer_subj_comp_key_ortho = \
         calc_ref_cosine_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
-                                batch_mask=None, exponent=2,
-                                do_demean_first=do_demean_first, 
-                                first_n_dims_to_flatten=2,
-                                ref_grad_scale=cls_grad_scale,
-                                aim_to_align=True)
+                             batch_mask=None, exponent=2,
+                             do_demean_first=do_demean_first, 
+                             first_n_dims_to_flatten=2,
+                             ref_grad_scale=cls_grad_scale,
+                             aim_to_align=True)
 
     return loss_layer_subj_comp_key_ortho
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.
-def sel_emb_attns_by_indices(attn_mat, indices, do_sum=True, do_mean=False, do_sqrt_norm=False):
+# indices are applied on the first 2 dims of attn_mat.
+def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, 
+                             do_sum=True, do_mean=False, do_sqrt_norm=False):
 
     indices_by_instance = split_indices_by_instance(indices)
 
-    # bg_attn_i: [K_bg_i, 8, 64] -> [1, K_bg_i, 8, 64] 
+    # emb_attns[0]: [1, 9, 8, 64]
     # 8: 8 attention heads. Last dim 64: number of image tokens.
     emb_attns   = [ attn_mat[inst_indices].unsqueeze(0) for inst_indices in indices_by_instance ]
+    if all_token_weights is not None:
+        # all_token_weights: [4, 77].
+        # token_weights_by_instance[0]: [1, 9, 1, 1].
+        token_weights = [ all_token_weights[inst_indices].reshape(1, -1, 1, 1) for inst_indices in indices_by_instance ]
+    else:
+        token_weights = [ 1 ] * len(indices_by_instance)
+
+    # Apply token weights.
+    emb_attns = [ emb_attns[i] * token_weights[i] for i in range(len(indices_by_instance)) ]
 
     # sum among K_bg_i bg embeddings -> [1, 8, 64]
     if do_sum:

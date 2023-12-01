@@ -2975,6 +2975,7 @@ class LatentDiffusion(DDPM):
                 loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho \
                     = self.calc_subj_comp_ortho_loss(extra_info['ca_layers_activations']['k'], 
                                                      extra_info['ca_layers_activations']['v'], 
+                                                     extra_info['ca_layers_activations']['attnscore'], 
                                                      subj_indices_4b_by_block, comp_extra_indices_4b_by_block,
                                                      cls_grad_scale=0.05,
                                                      is_4type_batch=True)
@@ -3003,6 +3004,7 @@ class LatentDiffusion(DDPM):
                 loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho \
                     = self.calc_subj_comp_ortho_loss(extra_info['ca_layers_activations']['k'], 
                                                      extra_info['ca_layers_activations']['v'], 
+                                                     extra_info['ca_layers_activations']['attnscore'], 
                                                     # Param subj_indices_by_block is a list of blocks.
                                                     # subj_indices_ext is only 1 block. So put it in a list.
                                                     [subj_indices_ext], comp_extra_indices_1b_by_block,
@@ -3707,7 +3709,7 @@ class LatentDiffusion(DDPM):
         return loss_fg_xlayer_consist, loss_bg_xlayer_consist
 
     # DISABLED. No obvious improvement.
-    def calc_subj_comp_ortho_loss(self, unet_ks, unet_vs, 
+    def calc_subj_comp_ortho_loss(self, ca_ks, ca_vs, ca_attnscores,
                                   subj_indices_by_block, comp_extra_indices_by_block, 
                                   cls_grad_scale=0.05, is_4type_batch=True):
 
@@ -3747,28 +3749,35 @@ class LatentDiffusion(DDPM):
             cls_subj_indices  = subj_indices_by_block[3]
             cls_comp_indices  = comp_extra_indices_by_block[3]
 
-        for unet_layer_idx, unet_seq_k in unet_ks.items():
+        for unet_layer_idx, seq_k in ca_ks.items():
             if (unet_layer_idx not in k_ortho_layer_weights):
                 continue
+
+            # attn_score_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
+            # We don't need BP through attention into UNet.
+            attn_score_mat = ca_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
+            avg_attn_scores = attn_score_mat.mean(dim=(2,3), keepdim=False).clamp(min=0)
 
             # No need to pass is_4type_batch to calc_layer_subj_comp_k_or_v_ortho_loss().
             # It can decide by checking whether cls_subj_indices/cls_comp_indices are None.
             loss_layer_subj_comp_key_ortho = \
-                calc_layer_subj_comp_k_or_v_ortho_loss(unet_seq_k,
-                                                        subj_subj_indices, 
-                                                        subj_comp_indices, 
-                                                        cls_subj_indices, 
-                                                        cls_comp_indices,
-                                                        do_demean_first=emb_kq_do_demean_first, 
-                                                        cls_grad_scale=cls_grad_scale)
+                calc_layer_subj_comp_k_or_v_ortho_loss(seq_k, 
+                                                       subj_subj_indices, 
+                                                       subj_comp_indices, 
+                                                       cls_subj_indices, 
+                                                       cls_comp_indices,
+                                                       all_token_weights=avg_attn_scores,
+                                                       do_demean_first=emb_kq_do_demean_first, 
+                                                       cls_grad_scale=cls_grad_scale)
             loss_layer_subj_comp_value_ortho = \
-                calc_layer_subj_comp_k_or_v_ortho_loss(unet_vs[unet_layer_idx], 
-                                                        subj_subj_indices, 
-                                                        subj_comp_indices, 
-                                                        cls_subj_indices, 
-                                                        cls_comp_indices,
-                                                        do_demean_first=emb_kq_do_demean_first, 
-                                                        cls_grad_scale=cls_grad_scale)
+                calc_layer_subj_comp_k_or_v_ortho_loss(ca_vs[unet_layer_idx], 
+                                                       subj_subj_indices, 
+                                                       subj_comp_indices, 
+                                                       cls_subj_indices, 
+                                                       cls_comp_indices,
+                                                       all_token_weights=avg_attn_scores,
+                                                       do_demean_first=emb_kq_do_demean_first, 
+                                                       cls_grad_scale=cls_grad_scale)
                     
             k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
             v_ortho_layer_weight = v_ortho_layer_weights[unet_layer_idx]
