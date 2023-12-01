@@ -2516,8 +2516,6 @@ class LatentDiffusion(DDPM):
                 # 0.33/0.008: 15% instances will meet these thresholds.
                 clip_loss_thres             = 0.28
                 cls_subj_clip_margin        = 0.002
-                clip_loss_thres_base        = 0.26
-                cls_subj_clip_margin_base   = 0.003
 
                 # are_insts_teachable: The teacher instances are only teachable if both 
                 # the teacher and student are qualified (<= clip_loss_thres), 
@@ -3928,7 +3926,7 @@ class LatentDiffusion(DDPM):
                 = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, fg_attn_mask_pooled, 
                                              fg_bg_cutoff_prob=0.25,
                                              single_q_grad_scale=0.1, single_feat_grad_scale=0.01,
-                                             mix_feat_grad_scale=0.2)
+                                             mix_feat_grad_scale=0.05)
 
             loss_layers_comp_single_map_align.append(loss_layer_comp_single_align_map * feat_distill_layer_weight)
             loss_layers_sc_ss_fg_match.append(loss_layer_ss_sc_fg_match * feat_distill_layer_weight)

@@ -1832,7 +1832,7 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
 
 def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25,
                                single_q_grad_scale=0.1, single_feat_grad_scale=0.01,
-                               mix_feat_grad_scale=0.2):
+                               mix_feat_grad_scale=0.05):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
