@@ -2317,7 +2317,7 @@ class LatentDiffusion(DDPM):
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
                                 emb_man_volatile_ds=emb_man_volatile_ds,
-                                inj_noise_t=inj_noise_t,
+                                inj_noise_t=None, #inj_noise_t,
                                 unet_has_grad=not self.iter_flags['do_teacher_filter'], 
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 # do_pixel_recon is not used for the iter_type 'do_normal_recon'.
@@ -2431,7 +2431,8 @@ class LatentDiffusion(DDPM):
                         * self.fg_wds_complementary_loss_weight
 
             if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
-                # bg loss is ignored.
+                # bg loss is almost completely ignored. But giving it a little weight may help suppress 
+                # subj embeddings' contribution to the background (serving as a contrast to the fg).
                 bg_pixel_weight = 0.01
             else:
                 if self.iter_flags['use_wds_comp']:
