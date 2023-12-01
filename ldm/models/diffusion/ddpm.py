@@ -2047,7 +2047,7 @@ class LatentDiffusion(DDPM):
                 # x_start is of ORIG_BS = 2. So BLOCK_SIZE=1. We can't afford BLOCK_SIZE=2,
                 # which will bloat to batch size of 8 for the 4-type prompts.
                 # Randomly choose t from the largest 150 timesteps, so as to match the completely noisy x_start.
-                BLOCK_SIZE  = max(x_start.shape[0] // self.num_candidate_teachers, 1)
+                BLOCK_SIZE = max(x_start.shape[0] // self.num_candidate_teachers, 1)
                 # At 60% of the chance, randomly initialize x_start and t. Note the batch size is still 2 here.
                 # At 40% of the chance, use a noisy x_start based on the training images. 
                 # This may help the model ignore the background in the training images given prompts, 
@@ -2180,11 +2180,11 @@ class LatentDiffusion(DDPM):
                     # But still keep the code here, in case we want to use_background_token 
                     # in compositional iterations.
                     subj_indices2, _ = extend_indices_B_by_n_times(extra_info['subj_indices_1b'], 
-                                                                  self.num_candidate_teachers,
-                                                                  BLOCK_SIZE)
-                    bg_indices2, _   = extend_indices_B_by_n_times(extra_info['bg_indices_1b'],
-                                                                  self.num_candidate_teachers,
-                                                                  BLOCK_SIZE)
+                                                                   self.num_candidate_teachers,
+                                                                   BLOCK_SIZE)
+                    bg_indices2,   _ = extend_indices_B_by_n_times(extra_info['bg_indices_1b'],
+                                                                   self.num_candidate_teachers,
+                                                                   BLOCK_SIZE)
                     subj_single_emb_mask, subj_comp_emb_mask, cls_single_emb_mask, cls_comp_emb_mask = \
                         chunk_list(prompt_emb_mask, 4)
                     # prompt_emb_mask2: [4 or 6, 77, 1]
@@ -2432,10 +2432,10 @@ class LatentDiffusion(DDPM):
 
             if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
                 # bg loss is ignored.
-                instance_bg_weights = 0
+                bg_pixel_weight = 0.01
             else:
                 if self.iter_flags['use_wds_comp']:
-                    # instance_fg_weights/instance_bg_weights are instanse-specific 1D tensors.
+                    # fg_pixel_weight/bg_pixel_weight are scalars.
                     # an instance of  use_wds_comp: instance_bg_weight is 0.05, instance_fg_weight is 1.
                     # an instance not use_wds_comp: instance_bg_weight is 1,    instance_fg_weight is 1.
                     # NOTE: We discount the bg weight of the use_wds_comp instances, as bg areas are supposed 
@@ -2444,16 +2444,16 @@ class LatentDiffusion(DDPM):
                     # background features into the subject embeddings, which hurt both authenticity and compositionality.
                     ## NOTE: We discount the fg weight of the use_wds_comp instances, as they are less natural and
                     ## may incur too high loss to the model (even in the fg areas).
-                    instance_bg_weights = self.wds_bg_recon_discount
+                    bg_pixel_weight = self.wds_bg_recon_discount
                 else:
                     # use_background_token == True and not self.iter_flags['use_wds_comp'].
                     # bg loss is somewhat discounted.
-                    instance_bg_weights = 1
-
+                    bg_pixel_weight = 0.5
+                
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
-                                                 instance_fg_weights=1,
-                                                 instance_bg_weights=instance_bg_weights)
+                                                 fg_pixel_weight=1,
+                                                 bg_pixel_weight=bg_pixel_weight)
 
             loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
 
@@ -3033,11 +3033,11 @@ class LatentDiffusion(DDPM):
         return loss, loss_dict
 
     # pixel-wise recon loss. 
-    # instance_fg_weights, instance_bg_weights: could be 1D tensors of batch size, or scalars.
+    # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
     # img_mask, fg_mask: [2, 1, 64, 64].
     # model_output, target: [2, 4, 64, 64]
     def calc_recon_loss(self, model_output, target, img_mask, fg_mask, 
-                        instance_fg_weights=1, instance_bg_weights=1):
+                        fg_pixel_weight=1, bg_pixel_weight=1):
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         model_output = model_output * img_mask
         target       = target       * img_mask
@@ -3045,12 +3045,11 @@ class LatentDiffusion(DDPM):
 
         # fg_mask,              weighted_fg_mask.sum(): 1747, 1747
         # bg_mask=(1-fg_mask),  weighted_fg_mask.sum(): 6445, 887
-        weighted_fg_mask = fg_mask       * img_mask * instance_fg_weights
-        weighted_bg_mask = (1 - fg_mask) * img_mask * instance_bg_weights
+        weighted_fg_mask = fg_mask       * img_mask * fg_pixel_weight
+        weighted_bg_mask = (1 - fg_mask) * img_mask * bg_pixel_weight
         weighted_fg_mask = weighted_fg_mask.expand_as(loss_recon_pixels)
         weighted_bg_mask = weighted_bg_mask.expand_as(loss_recon_pixels)
 
-        # recon loss only on the foreground pixels.
         loss_recon = (  (loss_recon_pixels * weighted_fg_mask).sum()     \
                       + (loss_recon_pixels * weighted_bg_mask).sum() )   \
                      / (weighted_fg_mask.sum() + weighted_bg_mask.sum())
