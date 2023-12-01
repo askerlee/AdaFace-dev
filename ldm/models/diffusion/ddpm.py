@@ -2433,7 +2433,7 @@ class LatentDiffusion(DDPM):
             if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
                 # bg loss is almost completely ignored. But giving it a little weight may help suppress 
                 # subj embeddings' contribution to the background (serving as a contrast to the fg).
-                bg_pixel_weight = 0.01
+                bg_pixel_weight = 0 #0.01
             else:
                 if self.iter_flags['use_wds_comp']:
                     # fg_pixel_weight/bg_pixel_weight are scalars.

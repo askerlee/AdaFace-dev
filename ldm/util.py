@@ -368,7 +368,7 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         if batch_mask.sum() == 0:
             return 0
     else:
-        batch_mask = torch.ones(B)
+        batch_mask = torch.ones(B, device=delta.device)
 
     # Calculate the loss for each sample in the batch, 
     # as the mask may be different for each sample.
@@ -462,15 +462,16 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         # If not aim_to_align, then cosine_label = -1, i.e., the cosine loss will 
         # push delta_i to be orthogonal with ref_delta_i.
         cosine_label = 1 if aim_to_align else -1
-        loss_i = F.cosine_embedding_loss(delta_i, ref_delta_i_pow, 
-                                         torch.ones_like(delta_i[:, 0]) * cosine_label, 
-                                         reduction='none')
+        # losses_i: 1D tensor of losses for each embedding.
+        losses_i = F.cosine_embedding_loss(delta_i, ref_delta_i_pow, 
+                                           torch.ones_like(delta_i[:, 0]) * cosine_label, 
+                                           reduction='none')
         # emb_mask_i has been flatten to 1D. So it gives different embeddings 
         # different relative weights (after normalization).
         if emb_mask_i is not None:
-            loss_i = (loss_i * emb_mask_i).sum() / (emb_mask_i.sum() + 1e-8)
+            loss_i = (losses_i * emb_mask_i).sum() / (emb_mask_i.sum() + 1e-8)
         else:
-            loss_i = loss_i.mean()
+            loss_i = losses_i.mean()
 
         loss_i = loss_i * batch_mask[i]
 
@@ -1807,6 +1808,13 @@ def add_noise_to_embedding(embeddings, noise_rel_std_range, add_noise_prob):
     embeddings = embeddings + noise
     return embeddings
 
+def gen_cfg_scales_for_stu_tea(tea_scale, stu_scale, num_teachers, device):
+    cfg_scales_for_teacher   = torch.ones(num_teachers) * tea_scale
+    cfg_scales_for_student   = torch.ones(num_teachers) * stu_scale
+    cfg_scales_for_clip_loss = torch.cat([cfg_scales_for_student, cfg_scales_for_teacher], dim=0)
+    cfg_scales_for_clip_loss = cfg_scales_for_clip_loss.to(device)
+    return cfg_scales_for_clip_loss
+
 # prob_mat: [1, 64, 64].
 def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
     # diagonal_delta: [64, 64].
@@ -1953,11 +1961,3 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     return loss_comp_single_map_align, loss_sc_ss_fg_match, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean
             # loss_mc_ms_fg_match, 
-
-def gen_cfg_scales_for_stu_tea(tea_scale, stu_scale, num_teachers, device):
-    cfg_scales_for_teacher   = torch.ones(num_teachers) * tea_scale
-    cfg_scales_for_student   = torch.ones(num_teachers) * stu_scale
-    cfg_scales_for_clip_loss = torch.cat([cfg_scales_for_student, cfg_scales_for_teacher], dim=0)
-    cfg_scales_for_clip_loss = cfg_scales_for_clip_loss.to(device)
-    return cfg_scales_for_clip_loss
-
