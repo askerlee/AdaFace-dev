@@ -75,8 +75,8 @@ def parse_args():
     parser.add_argument("--use_pre_neg_prompt", action='store_true',
                         help="use predefined negative prompts")
     parser.add_argument(
-        "--compel_weight_level", type=float, default=argparse.SUPPRESS,
-        help="compel-style prompt weighting level (weight=1.1**L)",
+        "--compel_cfg_weight_level", type=float, default=2, #argparse.SUPPRESS,
+        help="compel-style prompt cfg weighting level (weight=1.1**L)",
     )
 
     # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.
@@ -495,8 +495,8 @@ if __name__ == "__main__":
         elif args.use_pre_neg_prompt:
             command_line += f" --use_pre_neg_prompt"
 
-        if hasattr(args, 'compel_weight_level'):
-            command_line += f" --compel_weight_level {args.compel_weight_level}"
+        if hasattr(args, 'compel_cfg_weight_level'):
+            command_line += f" --compel_cfg_weight_level {args.compel_cfg_weight_level}"
 
         if args.use_first_gt_img_as_init:
             command_line += f" --use_first_gt_img_as_init --init_img_weight {args.init_img_weight}"
