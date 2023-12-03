@@ -60,6 +60,12 @@ def parse_args():
         action='store_true',
         help="use predefined negative prompts",
     )
+    parser.add_argument(
+        "--compel_weight_level",
+        type=float,
+        default=1,
+        help="compel-style prompt weighting level (weight=1.1**L)",
+    )
 
     parser.add_argument(
         "--outdir",
@@ -701,6 +707,12 @@ def main(opt):
                                 # c / ref_c are tuples of (cond, prompts, extra_info).
                                 c = (c0_mix, c[1], c[2])
 
+                            if opt.compel_weight_level != 1:
+                                static_prompt_embs = c[0]
+                                compel_weight = 1.1 ** opt.compel_weight_level
+                                static_prompt_embs_weighted = (static_prompt_embs - uc[0]) * compel_weight + uc[0]
+                                c = (static_prompt_embs_weighted, c[1], c[2])
+                                
                             if opt.debug and ref_c is None:
                                 c[2]['debug_attn'] = True
 
