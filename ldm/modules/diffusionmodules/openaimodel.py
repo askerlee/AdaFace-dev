@@ -2,7 +2,7 @@ from abc import abstractmethod
 from functools import partial
 import math
 from typing import Iterable
-from ldm.util import distribute_embedding_to_M_tokens, gen_gradient_scaler
+from ldm.util import distribute_embedding_to_M_tokens, prob_apply_compel_cfg
 
 import numpy as np
 import torch as th
@@ -853,6 +853,9 @@ class UNetModel(nn.Module):
         emb_k_mixer           = extra_info.get('emb_k_mixer', None)            if extra_info is not None else None
         emb_v_layers_cls_mix_scales = extra_info.get('emb_v_layers_cls_mix_scales', None)   if extra_info is not None else None
         emb_k_layers_cls_mix_scales = extra_info.get('emb_k_layers_cls_mix_scales', None)   if extra_info is not None else None
+        compel_cfg_weight_level     = extra_info.get('compel_cfg_weight_level', 1.) if extra_info is not None else 1.
+        apply_compel_cfg_prob       = extra_info.get('apply_compel_cfg_prob', 0.5)   if extra_info is not None else 0.5
+        empty_context               = extra_info.get('empty_context', None) if extra_info is not None else None
         debug_attn            = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
 
         # If uncond (null) condition is active, then subj_indices = None.
@@ -972,6 +975,7 @@ class UNetModel(nn.Module):
             else:
                 layer_context = layer_static_context
 
+            layer_context = prob_apply_compel_cfg(layer_context, empty_context, apply_compel_cfg_prob, compel_cfg_weight_level)
             # subj_indices is passed from extra_info, which was obtained when generating static embeddings.
             # Return subj_indices to cross attention layers for conv attn computation.
             return layer_context, subj_indices, bg_indices

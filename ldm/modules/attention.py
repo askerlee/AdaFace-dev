@@ -202,7 +202,7 @@ class CrossAttention(nn.Module):
         else:
             subj_indices = bg_indices = None
 
-        if type(context) == tuple:
+        if isinstance(context, (list, tuple)):
             v_context, k_context  = context
         else:
             v_context = k_context = context

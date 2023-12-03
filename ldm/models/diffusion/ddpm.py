@@ -115,6 +115,8 @@ class DDPM(pl.LightningModule):
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
                  fg_bg_token_emb_ortho_loss_weight=0.,
+                 compel_cfg_weight_level=1.,
+                 apply_compel_cfg_prob=0.,
                  wds_bg_recon_discount=1.,
                  do_clip_teacher_filtering=False,
                  num_candidate_teachers=2,
@@ -155,6 +157,8 @@ class DDPM(pl.LightningModule):
         self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
         self.fg_bg_token_emb_ortho_loss_weight      = fg_bg_token_emb_ortho_loss_weight
+        self.compel_cfg_weight_level                = compel_cfg_weight_level
+        self.apply_compel_cfg_prob                  = apply_compel_cfg_prob
         self.do_clip_teacher_filtering              = do_clip_teacher_filtering
         self.num_candidate_teachers                 = num_candidate_teachers
         self.prompt_mix_scheme                      = 'mix_hijk'
@@ -728,10 +732,15 @@ class LatentDiffusion(DDPM):
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
         if self.global_step == 0:
             self.create_clip_evaluator(next(self.parameters()).device)
+            self.empty_context = None
+
             with torch.no_grad():
-                # uncond_context_tea_filter is only used for clip teacher filtering.
-                self.uncond_context_tea_filter = self.get_learned_conditioning([""] * self.num_candidate_teachers)
-                self.uncond_context_2b = self.get_learned_conditioning([""] * 2)
+                # empty_context_tea_filter is only used for clip teacher filtering.
+                self.empty_context_tea_filter = self.get_learned_conditioning([""] * self.num_candidate_teachers)
+                self.empty_context_2b = self.get_learned_conditioning([""] * 2)
+                empty_context_info = self.get_learned_conditioning([""])
+                # empty_context: [16, 77, 768] -> [1, 77, 768]
+                self.empty_context = empty_context_info[0][[0]]
 
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
@@ -857,6 +866,9 @@ class LatentDiffusion(DDPM):
                                 'conv_attn_layerwise_scales':   self.embedding_manager.get_conv_attn_layerwise_scales(),
                                 'normalize_subj_attn':          self.embedding_manager.normalize_subj_attn,
                                 'is_training':                  self.embedding_manager.training,
+                                'compel_cfg_weight_level':      self.compel_cfg_weight_level,
+                                'apply_compel_cfg_prob':        self.apply_compel_cfg_prob,
+                                'empty_context':                self.empty_context,
                              }
 
                 if self.use_ada_embedding:
@@ -2000,7 +2012,7 @@ class LatentDiffusion(DDPM):
         bg_indices2         = bg_indices      = extra_info['bg_indices']
         prompt_emb_mask2    = prompt_emb_mask = extra_info['prompt_emb_mask']
         cfg_scales_for_clip_loss = None
-        uncond_context      = self.uncond_context_2b
+        uncond_context      = self.empty_context_2b
 
         if self.iter_flags['is_compos_iter']:
             # Only reuse_init_conds if do_mix_prompt_distillation.
@@ -2192,7 +2204,7 @@ class LatentDiffusion(DDPM):
                         torch.cat( [subj_comp_emb_mask.repeat(self.num_candidate_teachers, 1, 1),
                                     cls_comp_emb_mask.repeat(self.num_candidate_teachers, 1, 1)], dim=0)
 
-                    uncond_context = self.uncond_context_tea_filter
+                    uncond_context = self.empty_context_tea_filter
                     # Update masks to be a b-fold * 2 structure.
                     # Before repeating, img_mask, fg_mask, batch_have_fg_mask should all 
                     # have a batch size of 2*BLOCK_SIZE. So repeat_selected_instances() 
@@ -2610,7 +2622,7 @@ class LatentDiffusion(DDPM):
                         gen_cfg_scales_for_stu_tea(6, 5, BLOCK_SIZE * 2, x_start.device)
 
                     cfg_info = { 'cfg_scales':     cfg_scales_for_clip_loss,
-                                 'uncond_context': self.uncond_context_2b }
+                                 'uncond_context': self.empty_context_2b }
                              
                     # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
                     # on mix reg and ada embeddings is generated for the delta loss. 
