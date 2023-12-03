@@ -710,8 +710,10 @@ def main(opt):
                             if opt.compel_cfg_weight_level != 1:
                                 c[2]['compel_cfg_weight_level'] = opt.compel_cfg_weight_level
                                 c[2]['apply_compel_cfg_prob'] = 1.0
-                                c[2]['empty_context'] = uc[0]
-                                
+                                # uc[0] is [16, 77, 768] (one embedding repeated 16 times). 
+                                # Only take one instance.
+                                c[2]['empty_context'] = uc[0][[0]]
+
                                 '''
                                 static_prompt_embs = c[0]
                                 compel_weight = 1.1 ** opt.compel_cfg_weight_level
