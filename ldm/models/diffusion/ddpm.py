@@ -158,6 +158,7 @@ class DDPM(pl.LightningModule):
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
         self.fg_bg_token_emb_ortho_loss_weight      = fg_bg_token_emb_ortho_loss_weight
         self.compel_cfg_weight_level                = compel_cfg_weight_level
+        self.empty_context                          = None
         self.apply_compel_cfg_prob                  = apply_compel_cfg_prob
         self.do_clip_teacher_filtering              = do_clip_teacher_filtering
         self.num_candidate_teachers                 = num_candidate_teachers
@@ -732,7 +733,6 @@ class LatentDiffusion(DDPM):
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
         if self.global_step == 0:
             self.create_clip_evaluator(next(self.parameters()).device)
-            self.empty_context = None
 
             with torch.no_grad():
                 # empty_context_tea_filter is only used for clip teacher filtering.

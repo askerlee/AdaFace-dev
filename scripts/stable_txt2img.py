@@ -708,11 +708,17 @@ def main(opt):
                                 c = (c0_mix, c[1], c[2])
 
                             if opt.compel_cfg_weight_level != 1:
+                                c[2]['compel_cfg_weight_level'] = opt.compel_cfg_weight_level
+                                c[2]['apply_compel_cfg_prob'] = 1.0
+                                c[2]['empty_context'] = uc[0]
+                                
+                                '''
                                 static_prompt_embs = c[0]
                                 compel_weight = 1.1 ** opt.compel_cfg_weight_level
                                 static_prompt_embs_weighted = (static_prompt_embs - uc[0]) * compel_weight + uc[0]
                                 c = (static_prompt_embs_weighted, c[1], c[2])
-                                
+                                '''
+
                             if opt.debug and ref_c is None:
                                 c[2]['debug_attn'] = True
 
