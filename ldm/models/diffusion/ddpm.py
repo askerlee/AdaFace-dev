@@ -158,7 +158,7 @@ class DDPM(pl.LightningModule):
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
         self.fg_bg_token_emb_ortho_loss_weight      = fg_bg_token_emb_ortho_loss_weight
         # type(compel_cfg_weight_level_range) = ListConfig. So convert it to list.
-        self.compel_cfg_weight_level_range          = list(compel_cfg_weight_level_range)
+        self.compel_cfg_weight_level_range          = list(compel_cfg_weight_level_range) if compel_cfg_weight_level_range is not None else None
         self.empty_context                          = None
         self.apply_compel_cfg_prob                  = apply_compel_cfg_prob
         self.do_clip_teacher_filtering              = do_clip_teacher_filtering
