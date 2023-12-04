@@ -975,7 +975,10 @@ class UNetModel(nn.Module):
             else:
                 layer_context = layer_static_context
 
-            layer_context = prob_apply_compel_cfg(layer_context, empty_context, apply_compel_cfg_prob, compel_cfg_weight_level)
+            layer_context = prob_apply_compel_cfg(layer_context, empty_context, 
+                                                  apply_compel_cfg_prob, compel_cfg_weight_level,
+                                                  skipped_token_indices=bg_indices)
+            
             # subj_indices is passed from extra_info, which was obtained when generating static embeddings.
             # Return subj_indices to cross attention layers for conv attn computation.
             return layer_context, subj_indices, bg_indices
