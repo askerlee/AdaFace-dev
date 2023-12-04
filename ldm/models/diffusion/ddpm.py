@@ -1364,7 +1364,13 @@ class LatentDiffusion(DDPM):
             # So in all distillation iterations, comp_init_fg_with_training_img percentage will be around 0.5.
             # NOTE: If use_wds_comp, then to preserve the foreground, we always enable comp_init_fg_with_training_img.
             # But in this case, the background areas will not be replaced with random noises.
-            p_comp_init_fg_with_training_img = 0 if self.iter_flags['use_wds_comp'] else 1.0
+            # p_comp_init_fg_with_training_img = 0 if self.iter_flags['use_wds_comp'] else 1.0
+            # p_comp_init_fg_with_training_img: 0.8 -> 1.0 over first 25% of the training, 
+            # then keep at 1.0.
+            # That is, mix_prompt_distill loss is only enabled at the first 25% of the training 
+            # as bootstrapping, then disabled (only keep comp_fg_bg_preserve_loss).
+            p_comp_init_fg_with_training_img = anneal_value(self.training_percent, 0.25, (0.8, 1))
+
             # If reuse_init_conds, comp_init_fg_with_training_img may be set to True later
             # if the previous iteration has comp_init_fg_with_training_img = True.
             self.iter_flags['comp_init_fg_with_training_img'] \

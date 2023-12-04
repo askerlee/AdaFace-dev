@@ -42,7 +42,7 @@ model:
     subj_comp_key_ortho_loss_weight:    2e-4 
     subj_comp_value_ortho_loss_weight:  0     # disabled. # 1e-5
     # typical loss_mix_prompt_distill: 4, * weight -> 1.2e-3.
-    mix_prompt_distill_weight:          1e-4
+    mix_prompt_distill_weight:          2e-4
     # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
     # subj_attn_norm_distill_loss is DISABLED for faces, but enabled for objects.
     subj_attn_norm_distill_loss_base:   0   
