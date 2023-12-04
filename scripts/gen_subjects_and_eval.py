@@ -127,7 +127,13 @@ def parse_args():
                         help="Template of parent directory to save generated samples")
     parser.add_argument("--scores_csv", type=str, default=None,
                         help="CSV file to save the evaluation scores")
-    
+    parser.add_argument(
+        "--n_rows",
+        type=int,
+        default=0,
+        help="rows in the grid (default: batch_size)",
+    )
+        
     # File path containing composition case information
     parser.add_argument("--subjfile", type=str, default="evaluation/info-subjects.sh", 
                         help="subject info script file")
@@ -510,6 +516,9 @@ if __name__ == "__main__":
                 # Tell stable_txt2img.py to do face-specific evaluation.
                 command_line += f" --calc_face_sim"
 
+        if args.n_rows > 0:
+            command_line += f" --n_rows {args.n_rows}"
+            
         if args.debug:
             command_line += f" --debug"
             
