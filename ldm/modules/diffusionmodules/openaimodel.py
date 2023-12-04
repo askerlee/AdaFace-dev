@@ -853,7 +853,7 @@ class UNetModel(nn.Module):
         emb_k_mixer           = extra_info.get('emb_k_mixer', None)            if extra_info is not None else None
         emb_v_layers_cls_mix_scales = extra_info.get('emb_v_layers_cls_mix_scales', None)   if extra_info is not None else None
         emb_k_layers_cls_mix_scales = extra_info.get('emb_k_layers_cls_mix_scales', None)   if extra_info is not None else None
-        compel_cfg_weight_level     = extra_info.get('compel_cfg_weight_level', 1.) if extra_info is not None else 1.
+        compel_cfg_weight_level_range   = extra_info.get('compel_cfg_weight_level_range', None) if extra_info is not None else None
         apply_compel_cfg_prob       = extra_info.get('apply_compel_cfg_prob', 0.5)   if extra_info is not None else 0.5
         empty_context               = extra_info.get('empty_context', None) if extra_info is not None else None
         debug_attn            = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
@@ -976,7 +976,7 @@ class UNetModel(nn.Module):
                 layer_context = layer_static_context
 
             layer_context = prob_apply_compel_cfg(layer_context, empty_context, 
-                                                  apply_compel_cfg_prob, compel_cfg_weight_level,
+                                                  apply_compel_cfg_prob, compel_cfg_weight_level_range,
                                                   skipped_token_indices=None)
             
             # subj_indices is passed from extra_info, which was obtained when generating static embeddings.

@@ -1529,11 +1529,17 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_1b_N,
     
     return c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, emb_k_mixer, emb_k_layers_cls_mix_scales
 
-def prob_apply_compel_cfg(layer_context, empty_context, apply_compel_cfg_prob, compel_cfg_weight_level,
+def prob_apply_compel_cfg(layer_context, empty_context, apply_compel_cfg_prob, compel_cfg_weight_level_or_range,
                           skipped_token_indices=None):
-    if empty_context is None or compel_cfg_weight_level == 1 or random.random() > apply_compel_cfg_prob:
+    if (empty_context is None) or (compel_cfg_weight_level_or_range is None) \
+      or (random.random() > apply_compel_cfg_prob):
         return layer_context
-    
+        
+    if isinstance(compel_cfg_weight_level_or_range, (list, tuple)):
+        compel_cfg_weight_level = random.uniform(*compel_cfg_weight_level_or_range)
+    else:
+        compel_cfg_weight_level = compel_cfg_weight_level_or_range
+
     compel_cfg_weight = 1.1 ** compel_cfg_weight_level
     if isinstance(layer_context, (list, tuple)):
         # Already determined to apply compel cfg weight. So set apply_compel_cfg_prob = 1.

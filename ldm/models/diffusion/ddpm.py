@@ -115,7 +115,7 @@ class DDPM(pl.LightningModule):
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
                  fg_bg_token_emb_ortho_loss_weight=0.,
-                 compel_cfg_weight_level=1.,
+                 compel_cfg_weight_level_range=None,
                  apply_compel_cfg_prob=0.,
                  wds_bg_recon_discount=1.,
                  do_clip_teacher_filtering=False,
@@ -157,7 +157,8 @@ class DDPM(pl.LightningModule):
         self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
         self.fg_bg_token_emb_ortho_loss_weight      = fg_bg_token_emb_ortho_loss_weight
-        self.compel_cfg_weight_level                = compel_cfg_weight_level
+        # type(compel_cfg_weight_level_range) = ListConfig. So convert it to list.
+        self.compel_cfg_weight_level_range          = list(compel_cfg_weight_level_range)
         self.empty_context                          = None
         self.apply_compel_cfg_prob                  = apply_compel_cfg_prob
         self.do_clip_teacher_filtering              = do_clip_teacher_filtering
@@ -866,7 +867,7 @@ class LatentDiffusion(DDPM):
                                 'conv_attn_layerwise_scales':   self.embedding_manager.get_conv_attn_layerwise_scales(),
                                 'normalize_subj_attn':          self.embedding_manager.normalize_subj_attn,
                                 'is_training':                  self.embedding_manager.training,
-                                'compel_cfg_weight_level':      self.compel_cfg_weight_level,
+                                'compel_cfg_weight_level_range': self.compel_cfg_weight_level_range,
                                 'apply_compel_cfg_prob':        self.apply_compel_cfg_prob,
                                 'empty_context':                self.empty_context,
                              }
