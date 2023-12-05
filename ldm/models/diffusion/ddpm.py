@@ -1369,7 +1369,7 @@ class LatentDiffusion(DDPM):
             # then keep at 1.0.
             # That is, mix_prompt_distill loss is only enabled at the first 25% of the training 
             # as bootstrapping, then disabled (only keep comp_fg_bg_preserve_loss).
-            p_comp_init_fg_with_training_img = anneal_value(self.training_percent, 0.25, (0.8, 1))
+            p_comp_init_fg_with_training_img = anneal_value(self.training_percent, 0.5, (0.7, 0.9))
 
             # If reuse_init_conds, comp_init_fg_with_training_img may be set to True later
             # if the previous iteration has comp_init_fg_with_training_img = True.
@@ -2049,19 +2049,17 @@ class LatentDiffusion(DDPM):
                 # so as to match the once-denoised x_start.
                 # generate the full batch size of t, but actually only use the first block of BLOCK_SIZE.
                 # This is to make the code consistent with the non-comp case and avoid unnecessary confusion.
-                t_mid = torch.randint(int(self.num_timesteps * 0.4), int(self.num_timesteps * 0.7), 
+                t_mid = torch.randint(int(self.num_timesteps * 0.3), int(self.num_timesteps * 0.6), 
                                       (x_start.shape[0],), device=x_start.device)
                 # t_upperbound: old t - 150. That is, at least 150 steps away from the previous t.
                 t_upperbound = prev_t - int(self.num_timesteps * 0.15)
                 # t should be at least 150 steps away from the previous t, 
                 # so that the noise level is sufficiently different.
                 t = torch.minimum(t_mid, t_upperbound)
-                # Decrease t slightly to decrease noise amount and preserve more semantics.
-                inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0))
-
             else:
                 # Fresh compositional iter. May do teacher filtering.
-                t_tail = torch.randint(int(self.num_timesteps * 0.8), self.num_timesteps, (x_start.shape[0],), device=x_start.device)
+                t_tail = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
+                                       (x_start.shape[0],), device=x_start.device)
                 t = t_tail
                 # x_start is of ORIG_BS = 2. So BLOCK_SIZE=1. We can't afford BLOCK_SIZE=2,
                 # which will bloat to batch size of 8 for the 4-type prompts.
@@ -2240,12 +2238,10 @@ class LatentDiffusion(DDPM):
                     # x_start is denoised from a 1-repeat-4 x_start in the previous iteration 
                     # (precisely speaking, a 1-repeat-2 x_start that's repeated again to 
                     # approximate a 1-repeat-4 x_start).
-                    # But noise, t and inj_noise_t are not 1-repeat-4. 
+                    # But noise, t are not 1-repeat-4. 
                     # So we still need to make them 1-repeat-4.
                     noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
                     t       = t[:BLOCK_SIZE].repeat(4)
-                    if inj_noise_t is not None:
-                        inj_noise_t = inj_noise_t[:BLOCK_SIZE].repeat(4)
 
                     # Update masks to be a 1-repeat-4 structure.
                     img_mask, fg_mask, batch_have_fg_mask = \
@@ -2302,9 +2298,6 @@ class LatentDiffusion(DDPM):
                 # Do not add extra noise for use_wds_comp instances, since such instances are 
                 # kind of "Out-of-Domain" at the background, and are intrinsically difficult to denoise.
                 inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0))
-            else:
-                # Increase t slightly to increase noise amount and increase robustness.
-                inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.2))
             # No need to update masks.
 
         extra_info['capture_distill_attn'] = not self.iter_flags['do_teacher_filter']
@@ -2336,7 +2329,8 @@ class LatentDiffusion(DDPM):
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
                                 emb_man_volatile_ds=emb_man_volatile_ds,
-                                inj_noise_t=None, #inj_noise_t,
+                                # inj_noise_t is not None only if use_wds_comp.
+                                inj_noise_t=inj_noise_t,
                                 unet_has_grad=not self.iter_flags['do_teacher_filter'], 
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 # do_pixel_recon is not used for the iter_type 'do_normal_recon'.
