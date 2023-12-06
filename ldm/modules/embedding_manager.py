@@ -545,6 +545,7 @@ class AdaEmbedding(nn.Module):
         self.is_fg_only = (fg_emb_count == self.K) 
         self.is_bg_only = (bg_emb_count == self.K)
         self.is_one_stream_only = self.is_fg_only or self.is_bg_only
+
         self.r = r
         self.use_attn_pooler = use_attn_pooler
 
@@ -716,7 +717,7 @@ class AdaEmbedding(nn.Module):
     # time_emb: [B, 1280].
     def forward(self, layer_idx, layer_attn_components, time_emb, 
                 layer_subj_emb_probe, layer_static_extra_emb_mean, 
-                img_mask=None, cached_pooled_infeat=None):
+                img_mask=None, cached_infeat_pooled=None):
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         pooler  = self.poolers[ca_layer_idx]
         ## Some Linears mainly use either fg or bg features. So we reduce cross weights.
@@ -724,8 +725,8 @@ class AdaEmbedding(nn.Module):
         #    self.reduce_fg_bg_cross_weights(ca_layer_idx)
 
         if not self.is_fg_only and self.use_cached_bg:
-            # cached_pooled_infeat must be provided when use_cached_bg.
-            if cached_pooled_infeat is None:
+            # cached_infeat_pooled must be provided when use_cached_bg.
+            if cached_infeat_pooled is None:
                 breakpoint()
         
         if self.debug:
@@ -735,8 +736,12 @@ class AdaEmbedding(nn.Module):
             # Even if ca_infeat is grad-scaled, the pooler still receives the full gradient.
             # But the grad is scaled when it's further passed to the UNet.
 
-            if self.use_attn_pooler and self.is_bg_only and self.use_cached_bg:
-                infeat_pooled = cached_pooled_infeat
+            if self.use_attn_pooler and self.use_cached_bg:
+                # Note that the fg of the subj is the bg of the bg token, 
+                # and the bg of the subj is the fg of the bg token.
+                infeat_pooled = cached_infeat_pooled
+                infeat_pooled['fg_out'],  infeat_pooled['bg_out'] \
+                    = infeat_pooled['bg_out'], infeat_pooled['fg_out']
                 infeat_fg_bg  = None
                 infeat_bg     = None
                 # Do not mask weights in this case, as infeat_pooled only contains bg features, and 
@@ -750,28 +755,22 @@ class AdaEmbedding(nn.Module):
                                           bg_q_emb=layer_static_extra_emb_mean,
                                           img_mask=img_mask)
 
-                if self.use_attn_pooler:
-                    # infeat_fg, infeat_bg: [2, 320]
-                    infeat_fg, infeat_bg = infeat_pooled['fg_out'], infeat_pooled['bg_out']
-                    attn_fg, attn_bg     = infeat_pooled['attn_fg'], infeat_pooled['attn_bg']
+            if self.use_attn_pooler:
+                # infeat_fg, infeat_bg: [2, 320]
+                infeat_fg, infeat_bg = infeat_pooled['fg_out'],  infeat_pooled['bg_out']
+                attn_fg,    attn_bg  = infeat_pooled['attn_fg'], infeat_pooled['attn_bg']
+                # Only keep 'fg_out' and 'bg_out' in infeat_pooled, 
+                # before it is cached for use by the next (bg) token.
+                # If the current token is the bg token, then the cached infeat won't be reused again.
+                infeat_pooled['attn_fg'] = None
+                infeat_pooled['attn_bg'] = None
 
-                    if self.use_cached_bg:
-                        # Combine infeat_bg obtained from the attn pooler and cached_pooled_infeat.
-                        # cached_bg_weight is initialized as 0.5, and updated through BP.
-                        infeat_bg = cached_pooled_infeat * self.cached_bg_weight + infeat_bg * (1 - self.cached_bg_weight)
-                    # infeat_fg_bg: [2, 640]
-                    infeat_fg_bg = torch.cat([infeat_fg, infeat_bg], dim=-1)
-                else:
-                    infeat_fg_bg = infeat_pooled
-                    infeat_bg    = None
-                    attn_fg, attn_bg = None, None
-
-                if self.is_fg_only:
-                    infeat_pooled = infeat_fg
-                elif self.is_bg_only:       # implies not self.use_cached_bg.
-                    infeat_pooled = infeat_bg
-                else:
-                    infeat_pooled = infeat_fg_bg
+                # infeat_fg_bg: [2, 640]
+                infeat_fg_bg = torch.cat([infeat_fg, infeat_bg], dim=-1)
+            else:
+                infeat_fg_bg = infeat_pooled
+                infeat_bg    = None
+                attn_fg, attn_bg = None, None
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
@@ -793,7 +792,7 @@ class AdaEmbedding(nn.Module):
             # infeat_time_semb: cat(ln(infeat_pooled), ln(time_emb), ln(static_emb_mean)) as the input features.
             # If self.in_static_emb_dim == 0, then layer_static_extra_emb_mean is ignored, i.e.,
             # infeat_time_semb = cat(ln(infeat_pooled), ln(time_emb)).
-            infeat_time_semb    = self.layer_lncat3s[ca_layer_idx](infeat_pooled, time_feat, layer_static_extra_emb_mean)
+            infeat_time_semb    = self.layer_lncat3s[ca_layer_idx](infeat_fg_bg, time_feat, layer_static_extra_emb_mean)
 
             # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
             # Consider the last dim. 
@@ -834,8 +833,8 @@ class AdaEmbedding(nn.Module):
             if ca_layer_idx == 24:
                 self.call_count += 1
 
-        # Return infeat_bg to be used by another ada_embedder that specializes on the background.
-        return out_vecs, infeat_bg, attn_fg, attn_bg
+        # Return infeat_pooled to be used by another ada_embedder that specializes on the background.
+        return out_vecs, infeat_pooled, attn_fg, attn_bg
 
 # text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -1273,7 +1272,7 @@ class EmbeddingManager(nn.Module):
             embedded_text,          # [B, N, 768]. Identical B copies along the batch dimension.
     ):
         BS, device = tokenized_text.shape[0], tokenized_text.device
-        cached_pooled_infeat = None
+        cached_infeat_pooled = None
         ada_subj_embs_dict  = {}
         token2fg_bg_attn    = {}
         
@@ -1283,7 +1282,7 @@ class EmbeddingManager(nn.Module):
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
         # This order ensures that the background Ada embedder can always use 
-        # cached_pooled_infeat produced by the previous subject Ada embedder.
+        # cached_infeat_pooled produced by the previous subject Ada embedder.
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             token_is_bg = (placeholder_string in self.background_strings)
             # There's only one vector per token, we can do a simple replacement
@@ -1315,20 +1314,20 @@ class EmbeddingManager(nn.Module):
                 self.calc_layer_static_extra_emb_mean(layer_static_prompt_embs, self.prompt_emb_mask, 
                                                       list_of_indices_to_mask, dropout_prob=0.2)
 
-            # Clear the infeat_bg cache before generating subject embedding(s) of a subject token.
+            # Clear cached_infeat_pooled before generating subject embedding(s) of a subject token.
             # If the next token is the background token, the keep the cache, so that the background
-            # token will reuse the infeat_bg computed by the previous subject token.
+            # token will reuse the cached_infeat_pooled computed by the previous subject token.
             if not token_is_bg:
-                cached_pooled_infeat = None
+                cached_infeat_pooled = None
 
             ada_embedder = self.string_to_ada_embedder_dict[placeholder_string].to(device)
             assert isinstance(ada_embedder, AdaEmbedding)
 
-            # When it's the turn of the background Ada embedder, the cached_pooled_infeat
+            # When it's the turn of the background Ada embedder, the cached_infeat_pooled
             # should have been computed by the previous subject Ada embedder. 
             # Otherwise it's a bug.
             if token_is_bg \
-              and ada_embedder.use_cached_bg and cached_pooled_infeat is None:
+              and ada_embedder.use_cached_bg and cached_infeat_pooled is None:
                 breakpoint()
 
             # placeholder_indices_1st obtained above is different from self.placeholder_indices_fg.
@@ -1385,13 +1384,13 @@ class EmbeddingManager(nn.Module):
             # a call to get_static_embedding(). 
             # The pipeline is generate static embeddings first, then generate the ada embeddings. 
             # So this assumption should always hold.
-            # For background Ada embedder, cached_pooled_infeat is only used when
+            # For background Ada embedder, cached_infeat_pooled is only used when
             # use_cached_bg. Otherwise, it's ignored.
-            subj_ada_embedding, infeat_bg, attn_fg, attn_bg = \
+            subj_ada_embedding, infeat_pooled, attn_fg, attn_bg = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
                                      layer_subj_emb_probe,
                                      layer_static_extra_emb_mean, 
-                                     self.img_mask, cached_pooled_infeat)
+                                     self.img_mask, cached_infeat_pooled)
 
             if self.img_mask is not None and self.img_mask.max() > 1:
                 breakpoint()
@@ -1400,8 +1399,8 @@ class EmbeddingManager(nn.Module):
                 # Cache the bg infeat computed by the first (fg) ada embedder, 
                 # to be used by the second Ada embedder and the background Ada embedder.
                 # NOTE: this assumes the background token always appears after the subject tokens.
-                # Otherwise the cached_pooled_infeat is not available when the background Ada embedder accesses it.
-                cached_pooled_infeat    = infeat_bg
+                # Otherwise the cached_infeat_pooled is not available when the background Ada embedder accesses it.
+                cached_infeat_pooled    = infeat_pooled
                 token2fg_bg_attn[placeholder_string] = (attn_fg, attn_bg)
 
             for k in range(self.token2num_vectors[placeholder_string]):
