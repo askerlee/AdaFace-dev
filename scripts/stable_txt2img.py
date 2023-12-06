@@ -708,7 +708,7 @@ def main(opt):
                                 c = (c0_mix, c[1], c[2])
 
                             if opt.compel_cfg_weight_level != 0:
-                                c[2]['compel_cfg_weight_level'] = opt.compel_cfg_weight_level
+                                c[2]['compel_cfg_weight_level_range'] = (opt.compel_cfg_weight_level, opt.compel_cfg_weight_level)
                                 c[2]['apply_compel_cfg_prob'] = 1.0
                                 # uc[0] is [16, 77, 768] (one embedding repeated 16 times). 
                                 # Only take one instance.
