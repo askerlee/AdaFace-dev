@@ -976,7 +976,7 @@ class UNetModel(nn.Module):
                 layer_context = layer_static_context
 
             # Only apply compel cfg in mix_hijk iterations.
-            if iter_type.startswith("mix_"):
+            if (is_training and iter_type.startswith("mix_")) or not is_training:
                 # layer_context could be a tensor or a tuple of tensors.
                 compel_batch_mask = torch.ones(B, dtype=torch.float, device=x.device)
                 # Only apply compel cfg to the mix instances, not to the subject instances.
