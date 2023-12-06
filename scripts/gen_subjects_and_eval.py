@@ -56,7 +56,7 @@ def parse_args():
                         help="use predefined negative prompts")
     parser.add_argument(
         "--compel_cfg_weight_level", type=float, default=2, #argparse.SUPPRESS,
-        help="compel-style prompt cfg weighting level (weight=1.1**L)",
+        help="compel-style prompt cfg weighting level (weight=1.1**L). Set to 0 to disable compel cfg",
     )
 
     # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.

@@ -63,8 +63,8 @@ def parse_args():
     parser.add_argument(
         "--compel_cfg_weight_level",
         type=float,
-        default=1,
-        help="compel-style prompt cfg weighting level (weight=1.1**L)",
+        default=0,
+        help="compel-style prompt cfg weighting level (weight=1.1**L). Set to 0 to disable compel cfg",
     )
 
     parser.add_argument(
