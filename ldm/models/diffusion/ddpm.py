@@ -2049,7 +2049,7 @@ class LatentDiffusion(DDPM):
                 # so as to match the once-denoised x_start.
                 # generate the full batch size of t, but actually only use the first block of BLOCK_SIZE.
                 # This is to make the code consistent with the non-comp case and avoid unnecessary confusion.
-                t_mid = torch.randint(int(self.num_timesteps * 0.3), int(self.num_timesteps * 0.6), 
+                t_mid = torch.randint(int(self.num_timesteps * 0.4), int(self.num_timesteps * 0.7), 
                                       (x_start.shape[0],), device=x_start.device)
                 # t_upperbound: old t - 150. That is, at least 150 steps away from the previous t.
                 t_upperbound = prev_t - int(self.num_timesteps * 0.15)
@@ -2058,7 +2058,7 @@ class LatentDiffusion(DDPM):
                 t = torch.minimum(t_mid, t_upperbound)
             else:
                 # Fresh compositional iter. May do teacher filtering.
-                t_tail = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
+                t_tail = torch.randint(int(self.num_timesteps * 0.8), int(self.num_timesteps * 1), 
                                        (x_start.shape[0],), device=x_start.device)
                 t = t_tail
                 # x_start is of ORIG_BS = 2. So BLOCK_SIZE=1. We can't afford BLOCK_SIZE=2,
@@ -2120,8 +2120,8 @@ class LatentDiffusion(DDPM):
                         # In filtered_fg_mask, the padded areas are filled with 0. 
                         # So these pixels always take values from the random tensor.
                         x_start = torch.where(filtered_fg_mask.bool(), x_start_scaled_padded, torch.randn_like(x_start))
-                        # Gradually increase the fg area's noise amount from 0.2 to 0.6.
-                        fg_noise_amount = rand_annealed(self.training_percent, final_percent=1, mean_range=(0.2, 0.6))
+                        # Gradually increase the fg area's noise amount from 0.1 to 0.5.
+                        fg_noise_amount = rand_annealed(self.training_percent, final_percent=1, mean_range=(0.1, 0.5))
                         # At the fg area, keep 80% (beginning of training) ~ 40% (end of training) 
                         # of the original x_start values and add 20% ~ 60% of noise. 
                         # x_start: [2, 4, 64, 64]
