@@ -736,17 +736,15 @@ class AdaEmbedding(nn.Module):
             # Even if ca_infeat is grad-scaled, the pooler still receives the full gradient.
             # But the grad is scaled when it's further passed to the UNet.
 
+            # bg token and use_cached_bg=True.
+            # But by default, the bg token uses 2/3 of the bg features, and 1/3 of the fg features. 
+            cached_bg_used = False
             if self.use_attn_pooler and self.use_cached_bg:
-                # Note that the fg of the subj is the bg of the bg token, 
-                # and the bg of the subj is the fg of the bg token.
-                infeat_pooled = cached_infeat_pooled
-                infeat_pooled['fg_out'],  infeat_pooled['bg_out'] \
-                    = infeat_pooled['bg_out'], infeat_pooled['fg_out']
-                infeat_fg_bg  = None
-                infeat_bg     = None
-                # Do not mask weights in this case, as infeat_pooled only contains bg features, and 
-                # H = 1, i.e., the in_features of the Linear is not doubled.
-            else:
+                infeat_bg     = cached_infeat_pooled['bg_out']
+                cached_bg_used = True
+            if not (cached_bg_used and self.is_bg_only):
+                # Either cached_bg_used, or not is_bg_only.
+                # In either case, we need to get features using pooler.
                 # layer_subj_emb_probe should be quite similar to the ada embedding at this layer.
                 # So we use layer_subj_emb_probe as an approximate query to do the attention-based pooling.
                 # layer_subj_emb_probe: [768]. layer_static_extra_emb_mean: [2, 768].
@@ -757,20 +755,19 @@ class AdaEmbedding(nn.Module):
 
             if self.use_attn_pooler:
                 # infeat_fg, infeat_bg: [2, 320]
-                infeat_fg, infeat_bg = infeat_pooled['fg_out'],  infeat_pooled['bg_out']
-                attn_fg,    attn_bg  = infeat_pooled['attn_fg'], infeat_pooled['attn_bg']
-                # Only keep 'fg_out' and 'bg_out' in infeat_pooled, 
-                # before it is cached for use by the next (bg) token.
-                # If the current token is the bg token, then the cached infeat won't be reused again.
-                infeat_pooled['attn_fg'] = None
-                infeat_pooled['attn_bg'] = None
+                infeat_fg = infeat_pooled['fg_out']
+                if not cached_bg_used:
+                    infeat_bg = infeat_pooled['bg_out']
+                # infeat_fg won't be used in future calls, so it is released now.
+                del infeat_pooled['fg_out']
 
                 # infeat_fg_bg: [2, 640]
                 infeat_fg_bg = torch.cat([infeat_fg, infeat_bg], dim=-1)
             else:
+                # Since not use_attn_pooler, always cached_bg_used = False. 
+                # So we always use freshly pooled features. 
+                # In this case, infeat_pooled is a tensor.
                 infeat_fg_bg = infeat_pooled
-                infeat_bg    = None
-                attn_fg, attn_bg = None, None
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
@@ -834,7 +831,7 @@ class AdaEmbedding(nn.Module):
                 self.call_count += 1
 
         # Return infeat_pooled to be used by another ada_embedder that specializes on the background.
-        return out_vecs, infeat_pooled, attn_fg, attn_bg
+        return out_vecs, infeat_pooled
 
 # text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -1386,7 +1383,7 @@ class EmbeddingManager(nn.Module):
             # So this assumption should always hold.
             # For background Ada embedder, cached_infeat_pooled is only used when
             # use_cached_bg. Otherwise, it's ignored.
-            subj_ada_embedding, infeat_pooled, attn_fg, attn_bg = \
+            subj_ada_embedding, infeat_pooled = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
                                      layer_subj_emb_probe,
                                      layer_static_extra_emb_mean, 
@@ -1401,7 +1398,7 @@ class EmbeddingManager(nn.Module):
                 # NOTE: this assumes the background token always appears after the subject tokens.
                 # Otherwise the cached_infeat_pooled is not available when the background Ada embedder accesses it.
                 cached_infeat_pooled    = infeat_pooled
-                token2fg_bg_attn[placeholder_string] = (attn_fg, attn_bg)
+                token2fg_bg_attn[placeholder_string] = (infeat_pooled['attn_fg'], infeat_pooled['attn_bg'])
 
             for k in range(self.token2num_vectors[placeholder_string]):
                 # embedded_text[placeholder_indices_1st] indexes the embedding at each instance in the batch.

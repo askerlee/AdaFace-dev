@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import random
 
 from ldm.modules.diffusionmodules.util import (
     checkpoint,
@@ -976,18 +977,18 @@ class UNetModel(nn.Module):
                 layer_context = layer_static_context
 
             # Only apply compel cfg in mix_hijk iterations.
-            if (is_training and iter_type.startswith("mix_")) or not is_training:
+            if apply_compel_cfg_prob > 0:
                 # layer_context could be a tensor or a tuple of tensors.
                 compel_batch_mask = torch.ones(B, dtype=torch.float, device=x.device)
-                # If is_training and mix_hijk, only apply compel cfg to the mix instances, 
-                # not to the subject instances.
+                # If is_training, at 50% chance, only apply compel cfg to the mix instances, 
+                # not to the subject instances. At 50% chance, apply compel cfg to all instances.
                 # If not is_training, the second half of the batch is always the empty prompt instances.
                 # So only apply compel cfg to the first half of the batch.
-                if is_training:
+                if is_training and random.random() < 0.5:
                     compel_batch_mask[:B // 2] = 0
                 else:
                     compel_batch_mask[B // 2:] = 0
-                    
+
                 layer_context = prob_apply_compel_cfg(layer_context, empty_context, 
                                                       apply_compel_cfg_prob, compel_cfg_weight_level_range,
                                                       skipped_token_indices=None,
