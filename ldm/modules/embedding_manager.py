@@ -185,7 +185,6 @@ class AttentionalPooler(nn.Module):
         ca_x_gs  = self.infeat_grad_scaler(ca_x)
         ca_q_gs = self.infeat_grad_scaler(ca_q)
 
-
         x = ca_x_gs
         k = ca_q_gs
         # k: query from the UNet attention layer. Used as key here.
@@ -310,7 +309,8 @@ class AttentionalPooler(nn.Module):
         bg_out = self.ln_bg_out(bg_out)
         # out: N, 1, D -> N, D, i.e., ([2, 768], [2, 768]).
         # Make the output shape consistent with MaskedAvgPool2d.
-        return fg_out.squeeze(1), bg_out.squeeze(1)
+        return { 'fg_out': fg_out.squeeze(1), 'bg_out': bg_out.squeeze(1), 
+                 'attn_fg': attn_fg, 'attn_bg': attn_bg }
 
 # init_embedding: [L, M, 768].
 class Embedding3d(nn.Module):
@@ -752,7 +752,8 @@ class AdaEmbedding(nn.Module):
 
                 if self.use_attn_pooler:
                     # infeat_fg, infeat_bg: [2, 320]
-                    infeat_fg, infeat_bg = infeat_pooled
+                    infeat_fg, infeat_bg = infeat_pooled['fg_out'], infeat_pooled['bg_out']
+                    attn_fg, attn_bg     = infeat_pooled['attn_fg'], infeat_pooled['attn_bg']
 
                     if self.use_cached_bg:
                         # Combine infeat_bg obtained from the attn pooler and cached_infeat_bg.
@@ -763,6 +764,7 @@ class AdaEmbedding(nn.Module):
                 else:
                     infeat_fg_bg = infeat_pooled
                     infeat_bg    = None
+                    attn_fg, attn_bg = None, None
 
                 if self.is_fg_only:
                     infeat_pooled = infeat_fg
@@ -833,7 +835,7 @@ class AdaEmbedding(nn.Module):
                 self.call_count += 1
 
         # Return infeat_bg to be used by another ada_embedder that specializes on the background.
-        return out_vecs, infeat_bg
+        return out_vecs, infeat_bg, attn_fg, attn_bg
 
 # text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -1269,8 +1271,9 @@ class EmbeddingManager(nn.Module):
     ):
         BS, device = tokenized_text.shape[0], tokenized_text.device
         cached_infeat_bg = None
-        ada_subj_embs_dict = {}
-
+        ada_subj_embs_dict  = {}
+        token2fg_bg_attn    = {}
+        
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
         layer_static_prompt_embs   = layer_attn_components['layer_static_prompt_embs']
 
@@ -1381,7 +1384,7 @@ class EmbeddingManager(nn.Module):
             # So this assumption should always hold.
             # For background Ada embedder, cached_infeat_bg is only used when
             # use_cached_bg. Otherwise, it's ignored.
-            subj_ada_embedding, infeat_bg = \
+            subj_ada_embedding, infeat_bg, attn_fg, attn_bg = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
                                      layer_subj_emb_probe,
                                      layer_static_extra_emb_mean, 

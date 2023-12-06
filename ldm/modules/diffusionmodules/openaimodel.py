@@ -5,7 +5,7 @@ from typing import Iterable
 from ldm.util import distribute_embedding_to_M_tokens, prob_apply_compel_cfg
 
 import numpy as np
-import torch as th
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -43,7 +43,7 @@ class AttentionPool2d(nn.Module):
         output_dim: int = None,
     ):
         super().__init__()
-        self.positional_embedding = nn.Parameter(th.randn(embed_dim, spacial_dim ** 2 + 1) / embed_dim ** 0.5)
+        self.positional_embedding = nn.Parameter(torch.randn(embed_dim, spacial_dim ** 2 + 1) / embed_dim ** 0.5)
         self.qkv_proj = conv_nd(1, embed_dim, 3 * embed_dim, 1)
         self.c_proj = conv_nd(1, embed_dim, output_dim or embed_dim, 1)
         self.num_heads = embed_dim // num_heads_channels
@@ -52,7 +52,7 @@ class AttentionPool2d(nn.Module):
     def forward(self, x):
         b, c, *_spatial = x.shape
         x = x.reshape(b, c, -1)  # NC(HW)
-        x = th.cat([x.mean(dim=-1, keepdim=True), x], dim=-1)  # NC(HW+1)
+        x = torch.cat([x.mean(dim=-1, keepdim=True), x], dim=-1)  # NC(HW+1)
         x = x + self.positional_embedding[None, :, :].to(x.dtype)  # NC(HW+1)
         x = self.qkv_proj(x)
         x = self.attention(x)
@@ -269,7 +269,7 @@ class ResBlock(TimestepBlock):
             emb_out = emb_out[..., None]
         if self.use_scale_shift_norm:
             out_norm, out_rest = self.out_layers[0], self.out_layers[1:]
-            scale, shift = th.chunk(emb_out, 2, dim=1)
+            scale, shift = torch.chunk(emb_out, 2, dim=1)
             h = out_norm(h) * (1 + scale) + shift
             h = out_rest(h)
         else:
@@ -344,7 +344,7 @@ def count_flops_attn(model, _x, y):
     # The first computes the weight matrix, the second computes
     # the combination of the value vectors.
     matmul_ops = 2 * b * (num_spatial ** 2) * c
-    model.total_ops += th.DoubleTensor([matmul_ops])
+    model.total_ops += torch.DoubleTensor([matmul_ops])
 
 
 class QKVAttentionLegacy(nn.Module):
@@ -367,11 +367,11 @@ class QKVAttentionLegacy(nn.Module):
         ch = width // (3 * self.n_heads)
         q, k, v = qkv.reshape(bs * self.n_heads, ch * 3, length).split(ch, dim=1)
         scale = 1 / math.sqrt(math.sqrt(ch))
-        weight = th.einsum(
+        weight = torch.einsum(
             "bct,bcs->bts", q * scale, k * scale
         )  # More stable with f16 than dividing afterwards
-        weight = th.softmax(weight.float(), dim=-1).type(weight.dtype)
-        a = th.einsum("bts,bcs->bct", weight, v)
+        weight = torch.softmax(weight.float(), dim=-1).type(weight.dtype)
+        a = torch.einsum("bts,bcs->bct", weight, v)
         return a.reshape(bs, -1, length)
 
     @staticmethod
@@ -399,13 +399,13 @@ class QKVAttention(nn.Module):
         ch = width // (3 * self.n_heads)
         q, k, v = qkv.chunk(3, dim=1)
         scale = 1 / math.sqrt(math.sqrt(ch))
-        weight = th.einsum(
+        weight = torch.einsum(
             "bct,bcs->bts",
             (q * scale).view(bs * self.n_heads, ch, length),
             (k * scale).view(bs * self.n_heads, ch, length),
         )  # More stable with f16 than dividing afterwards
-        weight = th.softmax(weight.float(), dim=-1).type(weight.dtype)
-        a = th.einsum("bts,bcs->bct", weight, v.reshape(bs * self.n_heads, ch, length))
+        weight = torch.softmax(weight.float(), dim=-1).type(weight.dtype)
+        a = torch.einsum("bts,bcs->bct", weight, v.reshape(bs * self.n_heads, ch, length))
         return a.reshape(bs, -1, length)
 
     @staticmethod
@@ -500,7 +500,7 @@ class UNetModel(nn.Module):
         self.conv_resample = conv_resample
         self.num_classes = num_classes
         self.use_checkpoint = use_checkpoint
-        self.dtype = th.float16 if use_fp16 else th.float32
+        self.dtype = torch.float16 if use_fp16 else torch.float32
         self.num_heads = num_heads
         self.num_head_channels = num_head_channels
         self.num_heads_upsample = num_heads_upsample
@@ -860,9 +860,9 @@ class UNetModel(nn.Module):
 
         # If uncond (null) condition is active, then subj_indices = None.
         subj_indices_B, subj_indices_N = subj_indices if subj_indices is not None else (None, None)
+        B = x.shape[0]
 
         if use_layerwise_context:
-            B = x.shape[0]
             # If use_layerwise_context, then context is static layerwise embeddings.
             # context: [16*B, N, 768] reshape => [B, 16, N, 768] permute => [16, B, N, 768]
             context = context.reshape(B, 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
@@ -937,7 +937,7 @@ class UNetModel(nn.Module):
                         mix_layer_ada_context_v = cls_layer_ada_context
                         emb_v_cls_mix_scale = 0
                             
-                    layer_ada_context_v = th.cat([subj_layer_ada_context, mix_layer_ada_context_v], dim=0)
+                    layer_ada_context_v = torch.cat([subj_layer_ada_context, mix_layer_ada_context_v], dim=0)
                     # layer_static_context_v, layer_ada_context_v: [2, 77, 768]
                     # layer_hyb_context_v: hybrid (static and ada) layer context 
                     # fed to the current UNet layer, [2, 77, 768]
@@ -956,7 +956,7 @@ class UNetModel(nn.Module):
                         mix_layer_ada_context_k = cls_layer_ada_context 
                         emb_k_cls_mix_scale = 0
 
-                    layer_ada_context_k = th.cat([subj_layer_ada_context, mix_layer_ada_context_k], dim=0)
+                    layer_ada_context_k = torch.cat([subj_layer_ada_context, mix_layer_ada_context_k], dim=0)
 
                     # Replace layer_static_context with layer_static_context_k.
                     layer_hyb_context_k = layer_static_context_k * static_emb_weight \
@@ -977,9 +977,14 @@ class UNetModel(nn.Module):
 
             # Only apply compel cfg in mix_hijk iterations.
             if iter_type.startswith("mix_"):
+                # layer_context could be a tensor or a tuple of tensors.
+                compel_batch_mask = torch.ones(B, dtype=torch.float, device=x.device)
+                # Only apply compel cfg to the mix instances, not to the subject instances.
+                compel_batch_mask[:B // 2] = 0
                 layer_context = prob_apply_compel_cfg(layer_context, empty_context, 
                                                       apply_compel_cfg_prob, compel_cfg_weight_level_range,
-                                                      skipped_token_indices=None)
+                                                      skipped_token_indices=None,
+                                                      batch_mask=compel_batch_mask)
                 
             # subj_indices is passed from extra_info, which was obtained when generating static embeddings.
             # Return subj_indices to cross attention layers for conv attn computation.
@@ -1106,7 +1111,7 @@ class UNetModel(nn.Module):
         for module in self.output_blocks:
             get_layer_idx_context = partial(get_layer_context, layer_idx)
             skip_h = hs.pop()
-            h = th.cat([h, skip_h], dim=1)
+            h = torch.cat([h, skip_h], dim=1)
 
             # layer_context: [2, 77, 768], emb: [2, 1280].
             h = module(h, emb, get_layer_idx_context, mask=img_mask)
@@ -1186,7 +1191,7 @@ class EncoderUNetModel(nn.Module):
         self.channel_mult = channel_mult
         self.conv_resample = conv_resample
         self.use_checkpoint = use_checkpoint
-        self.dtype = th.float16 if use_fp16 else th.float32
+        self.dtype = torch.float16 if use_fp16 else torch.float32
         self.num_heads = num_heads
         self.num_head_channels = num_head_channels
         self.num_heads_upsample = num_heads_upsample
@@ -1353,7 +1358,7 @@ class EncoderUNetModel(nn.Module):
         h = self.middle_block(h, emb)
         if self.pool.startswith("spatial"):
             results.append(h.type(x.dtype).mean(dim=(2, 3)))
-            h = th.cat(results, axis=-1)
+            h = torch.cat(results, axis=-1)
             return self.out(h)
         else:
             h = h.type(x.dtype)
