@@ -866,7 +866,6 @@ class EmbeddingManager(nn.Module):
             emb_ema_as_pooling_probe_weight=0,
             training_add_noise_std_range=None,
             training_add_noise_prob=None,
-            normalize_subj_attn=False,
             use_conv_attn_kernel_size=-1,
             conv_attn_layerwise_scale_learnable=False,
             contrast_fgbg_init_coeff=0,
@@ -901,7 +900,7 @@ class EmbeddingManager(nn.Module):
         self.initialize_conv_attn_layerwise_scales(1, learnable=conv_attn_layerwise_scale_learnable)
         
         self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
-        self.set_embs_attn_tricks(use_conv_attn_kernel_size, contrast_fgbg_init_coeff, normalize_subj_attn)
+        self.set_embs_attn_tricks(use_conv_attn_kernel_size, contrast_fgbg_init_coeff)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
 
@@ -1608,11 +1607,8 @@ class EmbeddingManager(nn.Module):
     # contrast_fgbg_init_coeff = None:      Not specified.
     # contrast_fgbg_init_coeff = 0:         Disabled.
     # During inference, contrast_fgbg_init_coeff is used as contrast_fgbg_coeff.
-    # normalize_subj_attn  = None:          Not specified.
-    # normalize_subj_attn  = False:         Disabled.
     def set_embs_attn_tricks(self, use_conv_attn_kernel_size=None, 
                              contrast_fgbg_init_coeff=None,
-                             normalize_subj_attn=None,
                              bg_attn_behavior_in_inference='zero'):
         if use_conv_attn_kernel_size is not None:
             self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
@@ -1635,10 +1631,6 @@ class EmbeddingManager(nn.Module):
         # while contrast_fgbg_init_coeff <= 0, it won't have effect.
         self.bg_attn_behavior_in_inference = bg_attn_behavior_in_inference
         print(f"Setting bg_attn_behavior_in_inference = {bg_attn_behavior_in_inference}")
-
-        if normalize_subj_attn is not None:
-            self.normalize_subj_attn = normalize_subj_attn
-            print(f"Setting normalize_subj_attn = {normalize_subj_attn}")
 
     def get_contrast_fgbg_coeff(self, training_percent=0):
         if self.training:
@@ -1798,7 +1790,6 @@ class EmbeddingManager(nn.Module):
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
                      # Learnable weights for scaling conv attns.
                      "conv_attn_layerwise_scales":      self.conv_attn_layerwise_scales,
-                     "normalize_subj_attn":             self.normalize_subj_attn,
                      "use_conv_attn_kernel_size":       self.use_conv_attn_kernel_size,
                      "contrast_fgbg_init_coeff":        self.contrast_fgbg_init_coeff
                    }, 
@@ -1849,11 +1840,9 @@ class EmbeddingManager(nn.Module):
             # The four options should coexist in the ckpt.
             use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
             contrast_fgbg_init_coeff    = ckpt.get("contrast_fgbg_init_coeff",  None)
-            normalize_subj_attn         = ckpt.get("normalize_subj_attn",       None)
 
             self.set_embs_attn_tricks(use_conv_attn_kernel_size, 
-                                      contrast_fgbg_init_coeff,
-                                      normalize_subj_attn)
+                                      contrast_fgbg_init_coeff)
 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):

@@ -881,47 +881,6 @@ def contrast_fgbg_attns_in_attn_mat(attn_mat, subj_indices, bg_indices, H,
 
     return attn_mat2.reshape(attn_mat_shape)
 
-def normalize_attn_at_indices(attn_mat, subj_indices, H):
-    # attn_mat: [32, 4096, 77]. 32: B * H. B = 4, H = 8.
-    attn_mat_shape = attn_mat.shape
-    # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77]. 32: B * H.
-    attn_mat = attn_mat.reshape(-1, H, *attn_mat.shape[1:])
-    subj_indices_B, subj_indices_N = subj_indices
-    # subj_attn: [B*M, 8, 4096].
-    subj_attn = attn_mat[subj_indices_B, :, :, subj_indices_N]
-    dtype = subj_attn.dtype
-    subj_attn  = subj_attn.float()
-    subj_attn2 = subj_attn.clone()
-
-    # The distribution is skewed towards larger positive values.
-    # x > mean + 0.65 * std: we usually get 0.7 - 0.85 quantile.
-    # x > mean + 0.45 * std: we usually get 0.6 - 0.7 quantile.
-    # x > mean + 0.25 * std: we usually get 0.4 - 0.6 quantile.
-    # x > mean - 0.45 * std: we usually get 0.3 - 0.4 quantile.
-    std_quantiles = [0.65, 0.45, 0.25, -0.1]
-    scale_step = 0.7
-
-    means = subj_attn.mean(dim=2, keepdim=True)
-    stds = subj_attn.std(dim=2, keepdim=True)
-    # calc_and_print_stats(subj_attn, "subj_attn")
-
-    for std_quantile in std_quantiles:
-        # quantile() is computed on the last dim (4096).
-        boundary = means + stds * std_quantile
-        # If v > 0.65 std or v < 0,     then v *= 1.
-        # If 0.45 std < v < 0.65 std,   then v *= 0.7.
-        # If 0.25 std < v < 0.45 std,   then v *= 0.7 ^ 2 = 0.49.
-        # If        0 < v < -0.1 std,   then v *= 0.7 ^ 3 = 0.343.
-        # Don't change negative values, as scaling them will make them larger.
-        subj_attn2[(subj_attn < boundary) & (subj_attn >= 0)] *= scale_step
-        #quantile_count = (subj_attn < boundary).sum().item()
-        #percentage = quantile_count / subj_attn.numel()
-        #print(f"quantile {std_quantile} std: {quantile_count} / {percentage:.2f}")
-
-    attn_mat2 = attn_mat.clone()
-    attn_mat2[subj_indices_B, :, :, subj_indices_N] = subj_attn2.to(dtype)   
-    return attn_mat2.reshape(attn_mat_shape)
-
 # Distribute an embedding to M positions, each with sqrt(M) fraction of the original embedding.
 # text_embedding: [B, N, D]
 def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):

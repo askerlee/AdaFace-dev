@@ -515,7 +515,6 @@ class UNetModel(nn.Module):
                             'bg_attn_behavior_in_inference':            'zero',
                             'conv_attn_layer_scale:layerwise':          None,
                             'save_attn_vars':                           False,
-                            'normalize_subj_attn':                      False,
                             'is_training':                              True,
                            }
 
@@ -846,7 +845,6 @@ class UNetModel(nn.Module):
         conv_attn_layerwise_scales   = extra_info.get('conv_attn_layerwise_scales', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
         bg_indices            = extra_info.get('bg_indices', None)             if extra_info is not None else None
-        normalize_subj_attn   = extra_info.get('normalize_subj_attn', False)   if extra_info is not None else False
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
         emb_k_mixer           = extra_info.get('emb_k_mixer', None)            if extra_info is not None else None
@@ -1035,7 +1033,6 @@ class UNetModel(nn.Module):
                                                              bg_attn_behavior_in_inference,
                                                           'conv_attn_layer_scale:layerwise':
                                                              conv_attn_layerwise_scales,
-                                                          'normalize_subj_attn': normalize_subj_attn,
                                                           'is_training': is_training },
                                        ca_layer_indices = None )
             

@@ -864,7 +864,6 @@ class LatentDiffusion(DDPM):
                                 # conv_attn_layerwise_scales: a list of 16 tensor scalars, 
                                 # used to scale conv attention at each CA layer.
                                 'conv_attn_layerwise_scales':   self.embedding_manager.get_conv_attn_layerwise_scales(),
-                                'normalize_subj_attn':          self.embedding_manager.normalize_subj_attn,
                                 'is_training':                  self.embedding_manager.training,
                                 'compel_cfg_weight_level_range': self.compel_cfg_weight_level_range,
                                 'apply_compel_cfg_prob':        self.apply_compel_cfg_prob,
@@ -2938,12 +2937,7 @@ class LatentDiffusion(DDPM):
                 # loss_subj_attn_delta_align_* use L2 losses, 
                 # so no need to use dynamic loss scale.
                 subj_attn_delta_distill_loss_scale = 1 #0.5
-                # If normalize_subj_attn, then more relaxed on subj attn magnitudes.
                 subj_attn_norm_distill_loss_scale_base  = 1 
-                
-                if extra_info['normalize_subj_attn']:
-                    subj_attn_delta_distill_loss_scale      *= 0.5
-                    subj_attn_norm_distill_loss_scale_base  *= 0.5
 
                 # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
                 # subj_attn_norm_distill_loss_base: 4 for non-faces or 8 for faces.

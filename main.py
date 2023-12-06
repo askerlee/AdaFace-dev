@@ -231,11 +231,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--contrast_fgbg_init_coeff",
                         type=float, default=0,
                         help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")
-            
-    parser.add_argument("--normalize_subj_attn", 
-        type=str2bool, nargs="?", const=True, default=argparse.SUPPRESS,
-        help="Whether to normalize the subject embedding attention scores")
-    
+
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=-1,
         help="Layerwise lora rank")
@@ -755,9 +751,7 @@ if __name__ == "__main__":
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
         config.model.params.personalization_config.params.placeholder_strings = [opt.placeholder_string]
         config.model.params.personalization_config.params.num_vectors_per_token = { opt.placeholder_string: opt.num_vectors_per_token}
-        if hasattr(opt, 'normalize_subj_attn'):
-            config.model.params.personalization_config.params.normalize_subj_attn = opt.normalize_subj_attn
-            
+
         # placeholder_string
         config.data.params.train.params.placeholder_string       = opt.placeholder_string
         config.data.params.validation.params.placeholder_string  = opt.placeholder_string

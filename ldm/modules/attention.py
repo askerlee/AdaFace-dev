@@ -174,7 +174,6 @@ class CrossAttention(nn.Module):
         self.shift_attn_maps_for_diff_embs = True
         self.infeat_size            = None
         self.conv_attn_layer_scale  = 1.0
-        self.normalize_subj_attn    = False
         self.contrast_fgbg_coeff    = 0
         self.is_training            = True
         self.bg_attn_behavior_in_inference = 'zero'  # 'zero', 'copy_fg', 'contrast_fg'
@@ -242,9 +241,6 @@ class CrossAttention(nn.Module):
                                                        bg_attn_behavior=bg_attn_behavior,
                                                        contrast_coeff=self.contrast_fgbg_coeff)
 
-            if self.normalize_subj_attn:
-                sim = normalize_attn_at_indices(sim, subj_indices, h)
-            
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].
         # img_mask should only be provided and applied if not context_provided. 

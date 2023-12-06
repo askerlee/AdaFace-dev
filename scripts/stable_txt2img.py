@@ -290,12 +290,6 @@ def parse_args():
                         type=str, default="zero", choices=["zero", "contrast_fg", "copy_fg"],
                         help="How to handle bg attention in inference, if contrast_fgbg_inf_coeff is enabled. ")
 
-    # If normalize_subj_attn is not specified, then use the 'normalize_subj_attn' in the checkpoint.
-    # If 'normalize_subj_attn' doesn't exist in the checkpoint, then normalize_subj_attn is False.
-    parser.add_argument("--normalize_subj_attn", type=str2bool, nargs="?", 
-                        const=True, default=argparse.SUPPRESS,
-                        help="Whether to normalize the subject embedding attention scores")
-    
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
@@ -412,13 +406,11 @@ def main(opt):
             assert opt.num_vectors_per_token >= K * K, \
                     f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
         
-        # command line --contrast_fgbg_inf_coeff and --normalize_subj_attn override the checkpoint.
+        # command line --contrast_fgbg_inf_coeff overrides the checkpoint.
         # If not specified, passed None's will be ignored in set_embs_attn_tricks().
         contrast_fgbg_coeff = opt.contrast_fgbg_inf_coeff if hasattr(opt, 'contrast_fgbg_inf_coeff') else None
-        normalize_subj_attn = opt.normalize_subj_attn    if hasattr(opt, 'normalize_subj_attn')  else None
         model.embedding_manager.set_embs_attn_tricks(opt.use_conv_attn_kernel_size, 
                                                      contrast_fgbg_coeff,
-                                                     normalize_subj_attn,
                                                      opt.bg_attn_behavior_in_inference)
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
