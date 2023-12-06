@@ -738,6 +738,8 @@ class AdaEmbedding(nn.Module):
 
             # bg token and use_cached_bg=True.
             # But by default, the bg token uses 2/3 of the bg features, and 1/3 of the fg features. 
+            # But if use_cached_bg=True, then the 1/3 of the fg features are replaced 
+            # by the cached bg features.
             cached_bg_used = False
             if self.use_attn_pooler and self.use_cached_bg:
                 infeat_bg     = cached_infeat_pooled['bg_out']
@@ -865,7 +867,6 @@ class EmbeddingManager(nn.Module):
             # If specialized_comp_embs_mod > 0, say 3, then 1/3 of the embeddings 
             # are specialized for composition, and 2/3 are ordinary embeddings.
             specialized_comp_embs_mod=-1,
-            attn_postmix_weight=0.,
             training_add_noise_std_range=None,
             training_add_noise_prob=None,
             normalize_subj_attn=False,
@@ -1075,13 +1076,9 @@ class EmbeddingManager(nn.Module):
         self.fg_specialized_embs_grad_scale  = 0.33
         self.fg_specialized_embs_grad_scaler = gen_gradient_scaler(self.fg_specialized_embs_grad_scale)
 
-        self.postmix_attn_layer = None
-        self.postmix_attn_LN    = None
-        self.initialize_attn_postmix_components(attn_postmix_weight)
-
-        print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}, attn_postmix_weight={}".format(
+        print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
-               ada_emb_weight, self.attn_postmix_weight))
+               ada_emb_weight))
             
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
@@ -1430,71 +1427,6 @@ class EmbeddingManager(nn.Module):
 
         return embedded_text, ada_subj_embs_dict, token2fg_bg_attn
 
-    def attn_postmix(self, embedded_text):
-        assert self.attn_postmix_weight > 0
-        if self.placeholder_indices_fg is None:
-            return embedded_text
-        
-        extra_embs_mask = self.prompt_emb_mask.squeeze(2).clone()
-        # extra_embs_mask is used to generate the indices to the extra embeddings.
-        # Exclude fg embeddings from the extra embeddings.
-        #extra_embs_mask[self.placeholder_indices_fg] = 0
-        #if self.placeholder_indices_bg is not None:
-        #    # Treat background tokens as padding tokens, and exclude them from cross-attention.
-        #    extra_embs_mask[self.placeholder_indices_bg] = 0
-
-        attn_embedded_text = embedded_text.clone()
-        fg_indices_by_instance = split_indices_by_instance(self.placeholder_indices_fg)
-
-        # Different instance in the batch have different numbers of extra embeddings.
-        # So we cannot batch them together, and have to process them one by one.
-        for instance_fg_indices in fg_indices_by_instance:
-            batch_idx = instance_fg_indices[0][0]
-            # Number of subject embeddings.
-            M = len(instance_fg_indices[0])
-            if M > 1 and self.specialized_comp_embs_mod > 0:
-                # Only the odd embeddings participate in cross-attention.
-                # If M=9, (0..8), then sel_fg_indices = odd_fg_indices = 1, 3, 5, 7 (4 vecs).
-                odd_fg_indices_B = instance_fg_indices[0][1::2]
-                odd_fg_indices_N = instance_fg_indices[1][1::2]
-                sel_fg_indices = (odd_fg_indices_B, odd_fg_indices_N)
-
-                ''' 
-                even_fg_indices_B = instance_fg_indices[0][::2]
-                even_fg_indices_N = instance_fg_indices[1][::2]
-                even_fg_indices = (even_fg_indices_B, even_fg_indices_N)
-                even_fg_embs = embedded_text[even_fg_indices]
-                # even_fg_embs.norm: [11.4719,  8.8858,  9.1466,  9.2511,  8.9282]
-                # print("even_fg_embs: ", even_fg_embs.norm(dim=1).mean())
-                '''
-            else:
-                # All subject embeddings participate in cross-attention.
-                sel_fg_indices = instance_fg_indices
-
-            inst_sel_fg_embs = embedded_text[sel_fg_indices]
-            inst_extra_embs_indices = extra_embs_mask[batch_idx].nonzero(as_tuple=True)[0]
-            inst_extra_embs = embedded_text[batch_idx][inst_extra_embs_indices]
-            # nn.MultiheadAttention returns (output, attn_output_weights). We only need the output.
-            # inst_extra_embs: [6, 768]. attn_inst_sel_fg_embs: [4, 768] or [9, 768]
-            # attn_output_weights: [4, 6] or [9, 6].
-            # attn_inst_sel_fg_embs.norm: 300~500. Don't know why they are so large. 
-            # Anyway need LN first.
-            attn_inst_sel_fg_embs = self.postmix_attn_layer(inst_sel_fg_embs, inst_extra_embs, inst_extra_embs)[0]
-            attn_inst_sel_fg_embs = self.postmix_attn_LN(attn_inst_sel_fg_embs)
-            # print("attn_inst_sel_fg_embs: ", torch.norm(attn_inst_sel_fg_embs, dim=1).mean())
-
-            # Still normalize according to M even if the subset < M, 
-            # so that the attn_inst_sel_fg_embs are of the same scale 
-            # as other fg embs. If M = 9, then NORM = 1/3.
-            NORM = 1 / np.sqrt(M)
-            attn_inst_sel_fg_embs = attn_inst_sel_fg_embs * NORM * self.get_emb_global_scale()
-            attn_embedded_text[sel_fg_indices] = attn_inst_sel_fg_embs.type(embedded_text.dtype)
-
-        # Linearly combine the original embedding and the attention embedding.
-        postmix_embedded_text = (1 - self.attn_postmix_weight) * embedded_text \
-                                 + self.attn_postmix_weight * attn_embedded_text
-        return postmix_embedded_text
-    
     def specialized_gs_on_embs(self, fg_embedding_k, k, iter_type):
         if iter_type == 'recon_iter':
             # All embeddings will be updated in a recon_iter.
@@ -1781,37 +1713,6 @@ class EmbeddingManager(nn.Module):
             return contrast_fgbg_coeff
         else:
             return self.contrast_fgbg_init_coeff
-        
-    def initialize_attn_postmix_components(self, attn_postmix_weight, 
-                                            postmix_attn_layer=None, 
-                                            postmix_attn_LN=None):
-        self.attn_postmix_weight = attn_postmix_weight
-        print(f"Setting attn_postmix_weight = {attn_postmix_weight}")
-        if self.attn_postmix_weight > 0:
-            if postmix_attn_layer is not None:
-                # Assign existing postmix_attn_layer (LN).
-                # If they already exist, replace them.
-                self.postmix_attn_layer = postmix_attn_layer
-                self.postmix_attn_LN    = postmix_attn_LN
-                print("Assigning existing postmix_attn_layer (LN).")
-            elif self.postmix_attn_layer is None:
-                # If postmix_attn_layer (LN) don't exist, create new ones.
-                # num_heads=8, consistent with the number of heads in the UNet cross-attention layer.
-                self.postmix_attn_layer = nn.MultiheadAttention(self.token_dim, num_heads=8, dropout=0.1, batch_first=True)
-                self.postmix_attn_LN    = nn.LayerNorm(self.token_dim, elementwise_affine=True)
-                print("Creating new postmix_attn_layer (LN).")
-            else:
-                # If postmix_attn_layer (LN) exist, and no postmix_attn_layer (LN) are passed in,
-                # leave them unchanged.
-                print("postmix_attn_layer (LN) already created. Do nothing.")
-        # Setting attn_postmix_weight = 0 is sufficient to disable attn_postmix.
-        # For debugging purposes, do not clear postmix_attn_layer (LN) 
-        # even if attn_postmix_weight = 0.
-        #else:
-        #    # If postmix_attn_layer (LN) exist, clear them.
-        #    self.postmix_attn_layer = None
-        #    self.postmix_attn_LN    = None
-        #    print("Clearing postmix_attn_layer (LN).")
 
     def set_emb_ema_as_pooling_probe_weight(self, emb_ema_as_pooling_probe_weight):
         self.emb_ema_as_pooling_probe_weight = emb_ema_as_pooling_probe_weight
@@ -1960,9 +1861,6 @@ class EmbeddingManager(nn.Module):
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
                      # Learnable weights for scaling conv attns.
                      "conv_attn_layerwise_scales":      self.conv_attn_layerwise_scales,
-                     "attn_postmix_weight":             self.attn_postmix_weight,
-                     "postmix_attn_layer":              self.postmix_attn_layer,
-                     "postmix_attn_LN":                 self.postmix_attn_LN,
                      "specialized_comp_embs_mod":       self.specialized_comp_embs_mod,
                      "normalize_subj_attn":             self.normalize_subj_attn,
                      "use_conv_attn_kernel_size":       self.use_conv_attn_kernel_size,
@@ -2013,11 +1911,6 @@ class EmbeddingManager(nn.Module):
             if "conv_attn_layerwise_scales" in ckpt:
                 self.initialize_conv_attn_layerwise_scales(1, ckpt["conv_attn_layerwise_scales"])
 
-            if "attn_postmix_weight" in ckpt:
-                self.initialize_attn_postmix_components(ckpt["attn_postmix_weight"], 
-                                                        ckpt["postmix_attn_layer"], 
-                                                        ckpt["postmix_attn_LN"])
-            
             if "specialized_comp_embs_mod" in ckpt:
                 self.set_specialized_comp_embs_mod(ckpt["specialized_comp_embs_mod"])
             # The four options should coexist in the ckpt.
@@ -2078,11 +1971,7 @@ class EmbeddingManager(nn.Module):
                         + list(self.string_to_ada_embedder_dict.parameters()) \
                         + list(self.string_to_emb_ema_dict.parameters()) \
                         + [ self.emb_global_scale_score ]
-            
-        if self.attn_postmix_weight > 0:
-            normal_params = normal_params + list(self.postmix_attn_layer.parameters()) \
-                            + list(self.postmix_attn_LN.parameters())
-                
+
         params_with_lr_ratios = [ { 'params': normal_params, 'lr_ratio': 1 } ]
 
         if self.conv_attn_layerwise_scale_learnable:

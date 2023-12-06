@@ -62,9 +62,7 @@ def parse_args():
     parser.add_argument("--specialized_comp_embs_mod",
                         type=int, default=-1,
                         help="Modulus used to identify a subset of subject embeddings specialized for composition (default: -1, disabled)")
-    parser.add_argument("--attn_postmix_weight", type=float, default=argparse.SUPPRESS,
-                        help="Weight of post-mixing attention. 0 to disable.")
-    
+
     parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
     
@@ -490,9 +488,7 @@ if __name__ == "__main__":
                             
         if args.specialized_comp_embs_mod > 0:
             command_line += f" --specialized_comp_embs_mod {args.specialized_comp_embs_mod}"
-        if hasattr(args, 'attn_postmix_weight'):
-            command_line += f" --attn_postmix_weight {args.attn_postmix_weight}"
-            
+
         if args.background_string and args.include_bg_string:
             command_line += f" --background_string {args.background_string}"
 

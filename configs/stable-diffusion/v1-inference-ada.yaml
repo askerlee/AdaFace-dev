@@ -35,7 +35,6 @@ model:
         emb_ema_as_pooling_probe_weight: 0.5
         specialized_comp_embs_mod: -1
         contrast_fgbg_init_coeff:  0
-        attn_postmix_weight: 0
                 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

@@ -908,11 +908,7 @@ class LatentDiffusion(DDPM):
         # The scales of static subject embeddings are fixed in get_learned_conditioning().
         ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_fg, 
                                            extra_scale=emb_global_scale)
-        
-        # Only do attn postmixing to ada embeddings, not to static/class embeddings, to simplify the logic.
-        if self.embedding_manager.attn_postmix_weight > 0:
-            ada_embedded_text = self.embedding_manager.attn_postmix(ada_embedded_text)
-            
+
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, clear_ada_prompt_embeddings_cache() should have been called somewhere.
         self.embedding_manager.cache_ada_prompt_embedding(layer_idx, ada_embedded_text)

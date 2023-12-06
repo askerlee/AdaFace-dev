@@ -307,9 +307,7 @@ def parse_args():
     parser.add_argument("--specialized_comp_embs_mod",
                         type=int, default=-1,
                         help="Modulus used to identify a subset of subject embeddings specialized for composition (default: -1, disabled)")
-    parser.add_argument("--attn_postmix_weight", type=float, default=argparse.SUPPRESS,
-                        help="Weight of post-mixing attention.")
-    
+
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
     parser.add_argument("--bb_type", type=str, default="")
@@ -420,8 +418,6 @@ def main(opt):
         # So it can override the ckpt setting.
         if opt.specialized_comp_embs_mod > 0:
             model.embedding_manager.set_specialized_comp_embs_mod(opt.specialized_comp_embs_mod)
-        if hasattr(opt, 'attn_postmix_weight'):
-            model.embedding_manager.initialize_attn_postmix_components(opt.attn_postmix_weight)
 
         if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
             K = opt.use_conv_attn_kernel_size
