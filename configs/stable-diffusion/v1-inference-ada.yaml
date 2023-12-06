@@ -33,7 +33,6 @@ model:
         ada_emb_weight: 0.5
         ada_use_attn_pooler: True
         emb_ema_as_pooling_probe_weight: 0.5
-        contrast_fgbg_init_coeff:  0
                 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

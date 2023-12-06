@@ -6,8 +6,7 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices, \
-                     contrast_fgbg_attns_in_attn_mat
+from ldm.util import replace_rows_by_conv_attn
 
 def exists(val):
     return val is not None
@@ -174,9 +173,7 @@ class CrossAttention(nn.Module):
         self.shift_attn_maps_for_diff_embs = True
         self.infeat_size            = None
         self.conv_attn_layer_scale  = 1.0
-        self.contrast_fgbg_coeff    = 0
         self.is_training            = True
-        self.bg_attn_behavior_in_inference = 'zero'  # 'zero', 'copy_fg', 'contrast_fg'
         
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -228,18 +225,6 @@ class CrossAttention(nn.Module):
                                                 h, self.scale, self.conv_attn_layer_scale, 
                                                 conv_attn_mix_weight=1,
                                                 shift_attn_maps_for_diff_embs=self.shift_attn_maps_for_diff_embs)
-
-            if self.contrast_fgbg_coeff > 0 and bg_indices is not None:
-                # During inference, if bg tokens are included in the prompt, 
-                # we set bg attn to 0 to prevent it from affecting the generation.
-                if self.bg_attn_behavior_in_inference is not None and (not self.is_training):
-                    bg_attn_behavior = self.bg_attn_behavior_in_inference
-                else:
-                    bg_attn_behavior = 'contrast_fg'
-
-                sim = contrast_fgbg_attns_in_attn_mat(sim, subj_indices, bg_indices, h,
-                                                       bg_attn_behavior=bg_attn_behavior,
-                                                       contrast_coeff=self.contrast_fgbg_coeff)
 
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].

@@ -868,7 +868,6 @@ class EmbeddingManager(nn.Module):
             training_add_noise_prob=None,
             use_conv_attn_kernel_size=-1,
             conv_attn_layerwise_scale_learnable=False,
-            contrast_fgbg_init_coeff=0,
             **kwargs
     ):
         super().__init__()
@@ -900,7 +899,7 @@ class EmbeddingManager(nn.Module):
         self.initialize_conv_attn_layerwise_scales(1, learnable=conv_attn_layerwise_scale_learnable)
         
         self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
-        self.set_embs_attn_tricks(use_conv_attn_kernel_size, contrast_fgbg_init_coeff)
+        self.set_embs_attn_tricks(use_conv_attn_kernel_size)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
 
@@ -1065,9 +1064,6 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_token_indices_cache = {}
         self.iter_type = None       # 'recon_iter' or 'distill_iter'
-        # 2/3 of embs are protected and receive 1/3 of normal grads in distillation iterations.
-        self.fg_specialized_embs_grad_scale  = 0.33
-        self.fg_specialized_embs_grad_scaler = gen_gradient_scaler(self.fg_specialized_embs_grad_scale)
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
@@ -1604,44 +1600,11 @@ class EmbeddingManager(nn.Module):
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
 
-    # contrast_fgbg_init_coeff = None:      Not specified.
-    # contrast_fgbg_init_coeff = 0:         Disabled.
-    # During inference, contrast_fgbg_init_coeff is used as contrast_fgbg_coeff.
-    def set_embs_attn_tricks(self, use_conv_attn_kernel_size=None, 
-                             contrast_fgbg_init_coeff=None,
-                             bg_attn_behavior_in_inference='zero'):
+    def set_embs_attn_tricks(self, use_conv_attn_kernel_size=None):
         if use_conv_attn_kernel_size is not None:
             self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
             extra_msg = ", DISABLED" if use_conv_attn_kernel_size is -1 else ""
             print(f"Setting use_conv_attn_kernel_size = {use_conv_attn_kernel_size}{extra_msg}")
-
-        if contrast_fgbg_init_coeff is not None:
-            if contrast_fgbg_init_coeff is None:
-                self.contrast_fgbg_init_coeff = 0
-            else:
-                self.contrast_fgbg_init_coeff = contrast_fgbg_init_coeff
-
-            extra_msg = ", DISABLED" if contrast_fgbg_init_coeff <= 0 else ""
-            print(f"Setting contrast_fgbg_init_coeff = {contrast_fgbg_init_coeff}{extra_msg}")
-
-        # bg_attn_behavior_in_inference is only in effect if 
-        # contrast_fgbg_init_coeff > 0 (contrast_fgbg enabled).
-        # So we can safely override the existing value 
-        # (even if it's inappropriately set during training or during inference 
-        # while contrast_fgbg_init_coeff <= 0, it won't have effect.
-        self.bg_attn_behavior_in_inference = bg_attn_behavior_in_inference
-        print(f"Setting bg_attn_behavior_in_inference = {bg_attn_behavior_in_inference}")
-
-    def get_contrast_fgbg_coeff(self, training_percent=0):
-        if self.training:
-            # contrast_fgbg_coeff will gradually decrease from contrast_fgbg_init_coeff to 0,
-            # at the beginning 1/4 of all training iterations (if total iters = 4500, 
-            # then stop attn contrast at the 1125-th iter).
-            contrast_fgbg_coeff = anneal_value(training_percent, 0.25, 
-                                               [self.contrast_fgbg_init_coeff, 0])
-            return contrast_fgbg_coeff
-        else:
-            return self.contrast_fgbg_init_coeff
 
     def set_emb_ema_as_pooling_probe_weight(self, emb_ema_as_pooling_probe_weight):
         self.emb_ema_as_pooling_probe_weight = emb_ema_as_pooling_probe_weight
@@ -1791,7 +1754,6 @@ class EmbeddingManager(nn.Module):
                      # Learnable weights for scaling conv attns.
                      "conv_attn_layerwise_scales":      self.conv_attn_layerwise_scales,
                      "use_conv_attn_kernel_size":       self.use_conv_attn_kernel_size,
-                     "contrast_fgbg_init_coeff":        self.contrast_fgbg_init_coeff
                    }, 
                     ckpt_path)
 
@@ -1837,12 +1799,8 @@ class EmbeddingManager(nn.Module):
             if "conv_attn_layerwise_scales" in ckpt:
                 self.initialize_conv_attn_layerwise_scales(1, ckpt["conv_attn_layerwise_scales"])
 
-            # The four options should coexist in the ckpt.
             use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
-            contrast_fgbg_init_coeff    = ckpt.get("contrast_fgbg_init_coeff",  None)
-
-            self.set_embs_attn_tricks(use_conv_attn_kernel_size, 
-                                      contrast_fgbg_init_coeff)
+            self.set_embs_attn_tricks(use_conv_attn_kernel_size)
 
             for k in ckpt["string_to_token"]:
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):

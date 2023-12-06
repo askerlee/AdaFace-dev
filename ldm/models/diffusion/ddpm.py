@@ -852,8 +852,6 @@ class LatentDiffusion(DDPM):
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
                                 'use_ada_context':               self.use_ada_embedding,
                                 'use_conv_attn_kernel_size':     self.embedding_manager.use_conv_attn_kernel_size,
-                                'contrast_fgbg_coeff':           self.embedding_manager.get_contrast_fgbg_coeff(self.training_percent),
-                                'bg_attn_behavior_in_inference': self.embedding_manager.bg_attn_behavior_in_inference,
                                 # Setting up 'subj_indices' here is necessary for inference.
                                 # During training, 'subj_indices' will be overwritten in p_losses().
                                 # Although 'bg_indices' is usually not used during inference,

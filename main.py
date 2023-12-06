@@ -228,10 +228,6 @@ def get_parser(**parser_kwargs):
                         help="Use convolutional attention of subject tokens with this kernel size."
                              "Default: None, not specified.")
 
-    parser.add_argument("--contrast_fgbg_init_coeff",
-                        type=float, default=0,
-                        help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")
-
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=-1,
         help="Layerwise lora rank")
@@ -812,10 +808,6 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.use_conv_attn_kernel_size \
                 = opt.use_conv_attn_kernel_size
 
-        if hasattr(opt, 'contrast_fgbg_init_coeff'):
-            config.model.params.personalization_config.params.contrast_fgbg_init_coeff \
-                = opt.contrast_fgbg_init_coeff
-            
         if hasattr(opt, 'composition_regs_iter_gap'):
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
 

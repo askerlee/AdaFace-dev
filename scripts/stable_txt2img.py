@@ -283,13 +283,6 @@ def parse_args():
                         help="Use convolutional attention of subject tokens with this kernel size."
                              "Default: None, not specified.")
 
-    parser.add_argument("--contrast_fgbg_inf_coeff",
-                        type=float, default=0,
-                        help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")
-    parser.add_argument("--bg_attn_behavior_in_inference",
-                        type=str, default="zero", choices=["zero", "contrast_fg", "copy_fg"],
-                        help="How to handle bg attention in inference, if contrast_fgbg_inf_coeff is enabled. ")
-
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
@@ -406,12 +399,7 @@ def main(opt):
             assert opt.num_vectors_per_token >= K * K, \
                     f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
         
-        # command line --contrast_fgbg_inf_coeff overrides the checkpoint.
-        # If not specified, passed None's will be ignored in set_embs_attn_tricks().
-        contrast_fgbg_coeff = opt.contrast_fgbg_inf_coeff if hasattr(opt, 'contrast_fgbg_inf_coeff') else None
-        model.embedding_manager.set_embs_attn_tricks(opt.use_conv_attn_kernel_size, 
-                                                     contrast_fgbg_coeff,
-                                                     opt.bg_attn_behavior_in_inference)
+        model.embedding_manager.set_embs_attn_tricks(opt.use_conv_attn_kernel_size)
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
@@ -839,8 +827,6 @@ def main(opt):
                         experiment_sig += "-" + opt.bb_type
                     if opt.neg_prompt != "":
                         experiment_sig += "-neg"
-                    if opt.contrast_fgbg_inf_coeff != 0:
-                        experiment_sig += f"-contrast{opt.contrast_fgbg_inf_coeff:.1f}"
 
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                     if opt.from_file:
