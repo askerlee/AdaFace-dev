@@ -979,8 +979,15 @@ class UNetModel(nn.Module):
             if (is_training and iter_type.startswith("mix_")) or not is_training:
                 # layer_context could be a tensor or a tuple of tensors.
                 compel_batch_mask = torch.ones(B, dtype=torch.float, device=x.device)
-                # Only apply compel cfg to the mix instances, not to the subject instances.
-                compel_batch_mask[:B // 2] = 0
+                # If is_training and mix_hijk, only apply compel cfg to the mix instances, 
+                # not to the subject instances.
+                # If not is_training, the second half of the batch is always the empty prompt instances.
+                # So only apply compel cfg to the first half of the batch.
+                if is_training:
+                    compel_batch_mask[:B // 2] = 0
+                else:
+                    compel_batch_mask[B // 2:] = 0
+                    
                 layer_context = prob_apply_compel_cfg(layer_context, empty_context, 
                                                       apply_compel_cfg_prob, compel_cfg_weight_level_range,
                                                       skipped_token_indices=None,
