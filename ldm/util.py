@@ -812,37 +812,6 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_at
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)
 
-def replace_rows_of_copycat_embs(attn_mat, subj_indices, attn_copycat_emb_mod, H):
-    # attn_mat: [32, 4096, 77]. 32: B * H. B = 4, H = 8.
-    attn_mat_shape = attn_mat.shape
-    # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77]. 32: B * H.
-    attn_mat = attn_mat.reshape(-1, H, *attn_mat.shape[1:])
-    subj_indices_B, subj_indices_N = subj_indices
-    subj_indices_B_uniq = torch.unique(subj_indices_B)
-    # BS: sub-batch size that contains the subject token. 
-    # Probably BS < the full batch size.
-    BS = len(subj_indices_B_uniq)
-    # M: number of embeddings for each subject token.
-    M  = len(subj_indices_B) // BS
-    # subj_attn: [BS*M, 8, 4096] -> [BS, M, 8, 4096]
-    subj_attn = attn_mat[subj_indices_B, :, :, subj_indices_N].reshape(BS, M, H, -1)
-    # If M = 9, attn_copycat_emb_mod = 3, then 
-    # copycat_src_indices: 0, 3, 6. 
-    # copycat_dst_indices: 1, 4, 7.
-    copycat_src_indices = torch.arange(1, M, attn_copycat_emb_mod, device=attn_mat.device)
-    copycat_dst_indices = copycat_src_indices + 1
-    assert len(copycat_dst_indices) > 0, \
-        f"attn_copycat_emb_mod {attn_copycat_emb_mod} is too large for kernel number = {M}."
-
-    subj_attn2 = subj_attn.clone()
-    # Copy the copycat_src_indices attention rows to copycat_dst_indices attention rows.
-    # subj_attn2[:, [1,4,7]] = subj_attn[:, [0,3,6]].
-    subj_attn2[:, copycat_dst_indices] = subj_attn[:, copycat_src_indices]
-    attn_mat2 = attn_mat.clone()
-    attn_mat2[subj_indices_B, :, :, subj_indices_N] = subj_attn2.reshape(BS * M, H, -1)
-    
-    return attn_mat2.reshape(attn_mat_shape)
-
 # bg_attn_behavior: 'contrast_fg', 'copy_fg', 'zero'.
 # During training, always bg_attn_behavior = 'contrast_fg'.
 # contrast_coeff: controls the degree of contrast.

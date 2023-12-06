@@ -47,21 +47,13 @@ def parse_args():
     parser.add_argument("--use_conv_attn_kernel_size",
                         type=int, default=argparse.SUPPRESS, 
                         help="Use convolutional attention at subject tokens")
-    parser.add_argument("--attn_copycat_emb_mod",
-                        type=int, default=argparse.SUPPRESS,
-                        help="Modulo used to identify embedding indices used for copycat attention. "
-                             "Default -1: disabled.")
-    
+
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
     parser.add_argument("--normalize_subj_attn", type=str2bool, nargs="?", 
                         const=True, default=argparse.SUPPRESS,
                         help="Whether to normalize the subject embedding attention scores")
-        
-    parser.add_argument("--specialized_comp_embs_mod",
-                        type=int, default=-1,
-                        help="Modulus used to identify a subset of subject embeddings specialized for composition (default: -1, disabled)")
 
     parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
@@ -471,8 +463,6 @@ if __name__ == "__main__":
             command_line += f" --placeholder_string {args.orig_placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
         if hasattr(args, 'use_conv_attn_kernel_size'):
             command_line += f" --use_conv_attn_kernel_size {args.use_conv_attn_kernel_size}"
-        if hasattr(args, 'attn_copycat_emb_mod'):
-            command_line += f" --attn_copycat_emb_mod {args.attn_copycat_emb_mod}"
         if hasattr(args, 'contrast_fgbg_inf_coeff'):
             command_line += f" --contrast_fgbg_inf_coeff {args.contrast_fgbg_inf_coeff}"
         if hasattr(args, 'bg_attn_behavior_in_inference'):
@@ -486,9 +476,6 @@ if __name__ == "__main__":
             else:
                 command_line += f" --normalize_subj_attn 0"
                             
-        if args.specialized_comp_embs_mod > 0:
-            command_line += f" --specialized_comp_embs_mod {args.specialized_comp_embs_mod}"
-
         if args.background_string and args.include_bg_string:
             command_line += f" --background_string {args.background_string}"
 

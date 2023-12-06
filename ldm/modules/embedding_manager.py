@@ -864,15 +864,11 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight=0.5, 
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
-            # If specialized_comp_embs_mod > 0, say 3, then 1/3 of the embeddings 
-            # are specialized for composition, and 2/3 are ordinary embeddings.
-            specialized_comp_embs_mod=-1,
             training_add_noise_std_range=None,
             training_add_noise_prob=None,
             normalize_subj_attn=False,
             use_conv_attn_kernel_size=-1,
             conv_attn_layerwise_scale_learnable=False,
-            attn_copycat_emb_mod=-1,
             contrast_fgbg_init_coeff=0,
             **kwargs
     ):
@@ -905,8 +901,7 @@ class EmbeddingManager(nn.Module):
         self.initialize_conv_attn_layerwise_scales(1, learnable=conv_attn_layerwise_scale_learnable)
         
         self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
-        self.set_embs_attn_tricks(use_conv_attn_kernel_size, attn_copycat_emb_mod, 
-                                  contrast_fgbg_init_coeff, normalize_subj_attn)
+        self.set_embs_attn_tricks(use_conv_attn_kernel_size, contrast_fgbg_init_coeff, normalize_subj_attn)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
 
@@ -1071,7 +1066,6 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_token_indices_cache = {}
         self.iter_type = None       # 'recon_iter' or 'distill_iter'
-        self.set_specialized_comp_embs_mod(specialized_comp_embs_mod)
         # 2/3 of embs are protected and receive 1/3 of normal grads in distillation iterations.
         self.fg_specialized_embs_grad_scale  = 0.33
         self.fg_specialized_embs_grad_scaler = gen_gradient_scaler(self.fg_specialized_embs_grad_scale)
@@ -1229,17 +1223,13 @@ class EmbeddingManager(nn.Module):
                 # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
                 subj_static_embedding_k = subj_static_embedding[:, k]
-                if self.iter_type is not None and not token_is_bg and self.specialized_comp_embs_mod > 0:
-                    subj_static_embedding_k_gs = self.specialized_gs_on_embs(subj_static_embedding_k, k, self.iter_type)
-                else:
-                    subj_static_embedding_k_gs = subj_static_embedding_k
 
                 if self.training and self.training_add_noise_std_range is not None:
-                    subj_static_embedding_k_gs = add_noise_to_embedding(subj_static_embedding_k_gs, 
-                                                                        self.training_add_noise_std_range,
-                                                                        self.training_add_noise_prob[self.iter_type])
+                    subj_static_embedding_k = add_noise_to_embedding(subj_static_embedding_k, 
+                                                                     self.training_add_noise_std_range,
+                                                                     self.training_add_noise_prob[self.iter_type])
                     
-                embedded_text[placeholder_indices_k] = subj_static_embedding_k_gs.repeat(REAL_OCCURS_IN_BATCH, 1)
+                embedded_text[placeholder_indices_k] = subj_static_embedding_k.repeat(REAL_OCCURS_IN_BATCH, 1)
 
             # Cache the placeholder indices for mix prompt distillation.
             # Note placeholder_indices are recomputed in update_placeholder_indices(), 
@@ -1410,57 +1400,18 @@ class EmbeddingManager(nn.Module):
                 placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k)
                 # subj_ada_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
                 subj_ada_embedding_k = subj_ada_embedding[placeholder_indices_1st[0], k]
-                if self.iter_type is not None and not token_is_bg and self.specialized_comp_embs_mod > 0:
-                    subj_ada_embedding_k_gs = self.specialized_gs_on_embs(subj_ada_embedding_k, k, self.iter_type)
-                else:
-                    subj_ada_embedding_k_gs = subj_ada_embedding_k
 
                 if self.training and self.training_add_noise_std_range is not None:
-                    subj_ada_embedding_k_gs = add_noise_to_embedding(subj_ada_embedding_k_gs, 
-                                                                     self.training_add_noise_std_range,
-                                                                     self.training_add_noise_prob[self.iter_type])
+                    subj_ada_embedding_k = add_noise_to_embedding(subj_ada_embedding_k, 
+                                                                  self.training_add_noise_std_range,
+                                                                  self.training_add_noise_prob[self.iter_type])
                     
-                embedded_text[placeholder_indices_k] = subj_ada_embedding_k_gs
+                embedded_text[placeholder_indices_k] = subj_ada_embedding_k
 
             # Remove the batch dim.
             ada_subj_embs_dict[placeholder_string] = subj_ada_embedding.mean(dim=0)
 
         return embedded_text, ada_subj_embs_dict, token2fg_bg_attn
-
-    def specialized_gs_on_embs(self, fg_embedding_k, k, iter_type):
-        if iter_type == 'recon_iter':
-            # All embeddings will be updated in a recon_iter.
-            return fg_embedding_k
-        
-            """             
-            # In a recon_iter, do gs if k is odd, not if k is even.
-            # So vectors 0, 2, ..., 8 (5 vecs) are not gs'ed and are specialized to recon.
-            #    Vectors 1, 3, ..., 7 (4 vecs) are gs'ed and are specialized to distill.
-            if k % 2 == 0:
-                return fg_embedding_k
-            else:
-                return self.fg_specialized_embs_grad_scaler(fg_embedding_k)
-            """            
-
-        elif iter_type == 'distill_iter':
-            # The rationale is some compositional iterations are quite noisy (side views, 
-            # long distance from camera, no faces, etc). These iterations will be mainly handled
-            # by the unprotected embeddings. 
-            # The protected embeddings will be updated more slowly in such cases.
-            # If F = specialized_comp_embs_mod > 0, say 3, then 1/3 of the embeddings 
-            # are specialized for composition distillation, and 2/3 are ordinary embeddings.
-            # In a distill_iter, do gs if k / F != 0 (6 embs), no gs if k / F = 0 (3 embs) 
-            # If F = 3, M = 9, then
-            # vectors 0, 3, 6 (3 vecs) have full grad, unprotected, and are specialized to distillation.
-            # These embeddings will be updated fast in cases of noisy compositional iterations.
-            # Vectors 1, 2, ..., 8 (6 vecs) are 0.5 grad and are protected 
-            # from being updated fast during distillation iterations (therefore keeping authenticity).
-            if k % self.specialized_comp_embs_mod != 0:
-                return self.fg_specialized_embs_grad_scaler(fg_embedding_k)
-            else:
-                return fg_embedding_k
-        else:
-            breakpoint()
 
     # Update prompt_emb_mask and prompt_token_attn_mask.
     # tokenized_text: [B, N] = [2/4, 77].
@@ -1602,6 +1553,9 @@ class EmbeddingManager(nn.Module):
             ada_emb_weight = self.ada_emb_weight        
         return ada_emb_weight
  
+    def get_ada_subj_attn_dict(self):
+        return self.ada_subj_attn_dict
+    
     def set_training_add_noise_specs(self, training_add_noise_std_range, training_add_noise_prob):
         self.training_add_noise_std_range = training_add_noise_std_range
         self.training_add_noise_prob      = training_add_noise_prob
@@ -1651,21 +1605,12 @@ class EmbeddingManager(nn.Module):
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
         self.ada_emb_weight = ada_emb_weight
 
-    # If specialized_comp_embs_mod > 0, say 3, then 1/3 of the embeddings 
-    # are specialized for composition, and 2/3 are ordinary embeddings.
-    def set_specialized_comp_embs_mod(self, specialized_comp_embs_mod):
-        self.specialized_comp_embs_mod = specialized_comp_embs_mod
-        print(f"Setting specialized_comp_embs_mod = {specialized_comp_embs_mod}")
-
-    # attn_copycat_emb_mod = None:          Not specified.
-    # attn_copycat_emb_mod = -1 or 0:       Disabled.
     # contrast_fgbg_init_coeff = None:      Not specified.
     # contrast_fgbg_init_coeff = 0:         Disabled.
     # During inference, contrast_fgbg_init_coeff is used as contrast_fgbg_coeff.
     # normalize_subj_attn  = None:          Not specified.
     # normalize_subj_attn  = False:         Disabled.
     def set_embs_attn_tricks(self, use_conv_attn_kernel_size=None, 
-                             attn_copycat_emb_mod=None, 
                              contrast_fgbg_init_coeff=None,
                              normalize_subj_attn=None,
                              bg_attn_behavior_in_inference='zero'):
@@ -1673,14 +1618,6 @@ class EmbeddingManager(nn.Module):
             self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
             extra_msg = ", DISABLED" if use_conv_attn_kernel_size is -1 else ""
             print(f"Setting use_conv_attn_kernel_size = {use_conv_attn_kernel_size}{extra_msg}")
-
-        # If attn_copycat_emb_mod is None (not specified), we don't override the existing value.
-        if attn_copycat_emb_mod is not None:
-            self.attn_copycat_emb_mod = attn_copycat_emb_mod
-            if self.attn_copycat_emb_mod <= 0:
-                extra_msg = ", DISABLED"
-
-            print(f"Setting attn_copycat_emb_mod = {attn_copycat_emb_mod}{extra_msg}")
 
         if contrast_fgbg_init_coeff is not None:
             if contrast_fgbg_init_coeff is None:
@@ -1861,10 +1798,8 @@ class EmbeddingManager(nn.Module):
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
                      # Learnable weights for scaling conv attns.
                      "conv_attn_layerwise_scales":      self.conv_attn_layerwise_scales,
-                     "specialized_comp_embs_mod":       self.specialized_comp_embs_mod,
                      "normalize_subj_attn":             self.normalize_subj_attn,
                      "use_conv_attn_kernel_size":       self.use_conv_attn_kernel_size,
-                     "attn_copycat_emb_mod":            self.attn_copycat_emb_mod,
                      "contrast_fgbg_init_coeff":        self.contrast_fgbg_init_coeff
                    }, 
                     ckpt_path)
@@ -1911,16 +1846,12 @@ class EmbeddingManager(nn.Module):
             if "conv_attn_layerwise_scales" in ckpt:
                 self.initialize_conv_attn_layerwise_scales(1, ckpt["conv_attn_layerwise_scales"])
 
-            if "specialized_comp_embs_mod" in ckpt:
-                self.set_specialized_comp_embs_mod(ckpt["specialized_comp_embs_mod"])
             # The four options should coexist in the ckpt.
             use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
             contrast_fgbg_init_coeff    = ckpt.get("contrast_fgbg_init_coeff",  None)
-            attn_copycat_emb_mod        = ckpt.get("attn_copycat_emb_mod",      None)
             normalize_subj_attn         = ckpt.get("normalize_subj_attn",       None)
 
             self.set_embs_attn_tricks(use_conv_attn_kernel_size, 
-                                      attn_copycat_emb_mod,
                                       contrast_fgbg_init_coeff,
                                       normalize_subj_attn)
 

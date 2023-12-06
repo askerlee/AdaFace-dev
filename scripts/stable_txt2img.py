@@ -282,12 +282,7 @@ def parse_args():
                         type=int, default=None,
                         help="Use convolutional attention of subject tokens with this kernel size."
                              "Default: None, not specified.")
-    
-    parser.add_argument("--attn_copycat_emb_mod",
-                        type=int, default=None,
-                        help="Modulo used to identify embedding indices used for copycat attention. "
-                            "Default -1: disabled.")
-    
+
     parser.add_argument("--contrast_fgbg_inf_coeff",
                         type=float, default=0,
                         help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")
@@ -304,9 +299,6 @@ def parse_args():
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
-    parser.add_argument("--specialized_comp_embs_mod",
-                        type=int, default=-1,
-                        help="Modulus used to identify a subset of subject embeddings specialized for composition (default: -1, disabled)")
 
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
@@ -414,10 +406,6 @@ def main(opt):
 
         if hasattr(opt, 'emb_ema_as_pooling_probe'):
             model.embedding_manager.set_emb_ema_as_pooling_probe(opt.emb_ema_as_pooling_probe)
-        # specialized_comp_embs_mod is set after loading the ckpt. 
-        # So it can override the ckpt setting.
-        if opt.specialized_comp_embs_mod > 0:
-            model.embedding_manager.set_specialized_comp_embs_mod(opt.specialized_comp_embs_mod)
 
         if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
             K = opt.use_conv_attn_kernel_size
@@ -429,7 +417,6 @@ def main(opt):
         contrast_fgbg_coeff = opt.contrast_fgbg_inf_coeff if hasattr(opt, 'contrast_fgbg_inf_coeff') else None
         normalize_subj_attn = opt.normalize_subj_attn    if hasattr(opt, 'normalize_subj_attn')  else None
         model.embedding_manager.set_embs_attn_tricks(opt.use_conv_attn_kernel_size, 
-                                                     opt.attn_copycat_emb_mod,
                                                      contrast_fgbg_coeff,
                                                      normalize_subj_attn,
                                                      opt.bg_attn_behavior_in_inference)

@@ -852,7 +852,6 @@ class LatentDiffusion(DDPM):
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
                                 'use_ada_context':               self.use_ada_embedding,
                                 'use_conv_attn_kernel_size':     self.embedding_manager.use_conv_attn_kernel_size,
-                                'attn_copycat_emb_mod':          self.embedding_manager.attn_copycat_emb_mod,
                                 'contrast_fgbg_coeff':           self.embedding_manager.get_contrast_fgbg_coeff(self.training_percent),
                                 'bg_attn_behavior_in_inference': self.embedding_manager.bg_attn_behavior_in_inference,
                                 # Setting up 'subj_indices' here is necessary for inference.
@@ -909,10 +908,12 @@ class LatentDiffusion(DDPM):
         ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_fg, 
                                            extra_scale=emb_global_scale)
 
+        ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
+
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, clear_ada_prompt_embeddings_cache() should have been called somewhere.
         self.embedding_manager.cache_ada_prompt_embedding(layer_idx, ada_embedded_text)
-        return ada_embedded_text, self.embedding_manager.get_ada_emb_weight() #, self.embedding_manager.token_attn_weights
+        return ada_embedded_text, self.embedding_manager.get_ada_emb_weight(), ada_subj_attn_dict
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)

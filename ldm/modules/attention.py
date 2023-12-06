@@ -7,7 +7,7 @@ from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
 from ldm.util import replace_rows_by_conv_attn, normalize_attn_at_indices, \
-                     replace_rows_of_copycat_embs, contrast_fgbg_attns_in_attn_mat
+                     contrast_fgbg_attns_in_attn_mat
 
 def exists(val):
     return val is not None
@@ -175,7 +175,6 @@ class CrossAttention(nn.Module):
         self.infeat_size            = None
         self.conv_attn_layer_scale  = 1.0
         self.normalize_subj_attn    = False
-        self.attn_copycat_emb_mod   = -1
         self.contrast_fgbg_coeff    = 0
         self.is_training            = True
         self.bg_attn_behavior_in_inference = 'zero'  # 'zero', 'copy_fg', 'contrast_fg'
@@ -231,9 +230,6 @@ class CrossAttention(nn.Module):
                                                 conv_attn_mix_weight=1,
                                                 shift_attn_maps_for_diff_embs=self.shift_attn_maps_for_diff_embs)
 
-            if self.attn_copycat_emb_mod > 0:
-                sim = replace_rows_of_copycat_embs(sim, subj_indices, self.attn_copycat_emb_mod, h)
-            
             if self.contrast_fgbg_coeff > 0 and bg_indices is not None:
                 # During inference, if bg tokens are included in the prompt, 
                 # we set bg attn to 0 to prevent it from affecting the generation.

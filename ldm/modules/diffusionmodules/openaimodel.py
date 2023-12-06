@@ -511,7 +511,6 @@ class UNetModel(nn.Module):
         self.backup_vars = { 
                             'use_conv_attn_kernel_size:layerwise':      [-1]   * 16,
                             'shift_attn_maps_for_diff_embs:layerwise':  [True] * 16,
-                            'attn_copycat_emb_mod':                     -1,
                             'contrast_fgbg_coeff':                      0,
                             'bg_attn_behavior_in_inference':            'zero',
                             'conv_attn_layer_scale:layerwise':          None,
@@ -842,7 +841,6 @@ class UNetModel(nn.Module):
         is_training           = extra_info.get('is_training', True)            if extra_info is not None else True
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn_kernel_size   = extra_info.get('use_conv_attn_kernel_size',  None)   if extra_info is not None else None
-        attn_copycat_emb_mod        = extra_info.get('attn_copycat_emb_mod',  -1)     if extra_info is not None else -1
         contrast_fgbg_coeff         = extra_info.get('contrast_fgbg_coeff',    0)     if extra_info is not None else 0
         bg_attn_behavior_in_inference = extra_info.get('bg_attn_behavior_in_inference', 'zero') if extra_info is not None else 'zero'
         conv_attn_layerwise_scales   = extra_info.get('conv_attn_layerwise_scales', None) if extra_info is not None else None
@@ -902,7 +900,7 @@ class UNetModel(nn.Module):
                 #              'an illustration of a dirty cat, , ,  swimming in the ocean, with backlight', 
                 #              'an illustration of a dirty cat, , ,  swimming in the ocean, with backlight']
                 # The 1st and 2nd, and 3rd and 4th prompts are the same, if it's a do_teacher_filter iteration.
-                layer_ada_context, ada_emb_weight \
+                layer_ada_context, ada_emb_weight, ada_subj_attn_dict \
                     = ada_embedder(context_in, layer_idx, layer_attn_components, emb)
                 static_emb_weight = 1 - ada_emb_weight
 
@@ -1032,7 +1030,6 @@ class UNetModel(nn.Module):
         old_ca_flags, _ = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn_kernel_size:layerwise': use_conv_attn_kernel_sizes,
                                                           'shift_attn_maps_for_diff_embs:layerwise': shift_attn_maps_for_diff_embs,
-                                                          'attn_copycat_emb_mod': attn_copycat_emb_mod,
                                                           'contrast_fgbg_coeff':  contrast_fgbg_coeff,
                                                           'bg_attn_behavior_in_inference': 
                                                              bg_attn_behavior_in_inference,

@@ -228,16 +228,6 @@ def get_parser(**parser_kwargs):
                         help="Use convolutional attention of subject tokens with this kernel size."
                              "Default: None, not specified.")
 
-    parser.add_argument("--specialized_comp_embs_mod",
-                        type=int, default=-1,
-                        help="Modulus used to identify a subset of subject embeddings "
-                             "specialized for composition (default: -1, disabled)")
-
-    parser.add_argument("--attn_copycat_emb_mod",
-        type=int, default=-1,
-        help="Modulo of embedding indices to be used for copycat attention. "
-             "Default -1: disabled.")
-    
     parser.add_argument("--contrast_fgbg_init_coeff",
                         type=float, default=0,
                         help="The degree of subtracting bg attn from fg attn (default: 0, disabled).")
@@ -828,10 +818,6 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.use_conv_attn_kernel_size \
                 = opt.use_conv_attn_kernel_size
 
-        config.model.params.personalization_config.params.specialized_comp_embs_mod \
-            = opt.specialized_comp_embs_mod
-        config.model.params.personalization_config.params.attn_copycat_emb_mod \
-            = opt.attn_copycat_emb_mod
         if hasattr(opt, 'contrast_fgbg_init_coeff'):
             config.model.params.personalization_config.params.contrast_fgbg_init_coeff \
                 = opt.contrast_fgbg_init_coeff
