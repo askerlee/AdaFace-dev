@@ -29,7 +29,7 @@ model:
     use_ada_embedding:          True
     use_fp_trick:               True
     do_clip_teacher_filtering:  True
-    num_candidate_teachers:     3
+    num_candidate_teachers:     2
     composition_regs_iter_gap:          3
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     static_embedding_reg_weight:        2e-5
@@ -45,7 +45,7 @@ model:
     mix_prompt_distill_weight:          1e-4
     # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
     # subj_attn_norm_distill_loss is DISABLED for faces, but enabled for objects.
-    subj_attn_norm_distill_loss_base:   0   
+    subj_attn_norm_distill_loss_base:   1e-4   
     comp_fg_bg_preserve_loss_weight:    1e-3
     sc_mc_bg_match_loss_base:           0.2      # 0 to disable.
     # fg_bg_comple: used in non-wds recon iters.
