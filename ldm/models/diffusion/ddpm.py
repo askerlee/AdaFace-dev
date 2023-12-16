@@ -4496,12 +4496,6 @@ class LatentDiffusion(DDPM):
     # pytorch_lightning/core/optimizer.py:
     # optim_conf = model.trainer._call_lightning_module_hook("configure_optimizers", pl_module=model)
     def configure_optimizers(self):
-        # self.learning_rate and self.weight_decay are set in main.py.
-        # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
-        lr = self.learning_rate
-        model_lr = self.model_lr
-        weight_decay = self.weight_decay
-
         if self.optimizer_bits == 32:
             if self.optimizer_type == 'AdamW':
                 OptimizerClass = torch.optim.AdamW
@@ -4517,7 +4511,12 @@ class LatentDiffusion(DDPM):
             OptimizerClass = bnb.optim.Adam8bit
         else:
             raise NotImplementedError()
-        
+
+        # self.learning_rate and self.weight_decay are set in main.py.
+        # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
+        lr = self.learning_rate
+        betas = (0.9, 0.995)
+
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 
             embedding_params_with_lr_ratios = self.embedding_manager.optimized_parameters()
@@ -4536,10 +4535,12 @@ class LatentDiffusion(DDPM):
             # Are we allowing the base model to train? If so, set two different parameter groups.
             if self.unfreeze_model: 
                 model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
-                opt = OptimizerClass(embedding_params_with_lrs + [{"params": model_params, "lr": model_lr}])
+                opt = OptimizerClass(embedding_params_with_lrs + [{"params": model_params, "lr": self.model_lr}],
+                                     betas=betas)
             # Otherwise, train only embeddings
             else:
-                opt = OptimizerClass(embedding_params_with_lrs, weight_decay=weight_decay)
+                opt = OptimizerClass(embedding_params_with_lrs, weight_decay=self.weight_decay,
+                                     betas=betas)
         else:
             params = list(self.model.parameters())
             if self.cond_stage_trainable:
@@ -4547,9 +4548,10 @@ class LatentDiffusion(DDPM):
                 params = params + list(self.cond_stage_model.parameters())
             if self.learn_logvar:
                 print('Diffusion model optimizing logvar')
-                params.ap
+                params.append(self.logvar)
 
-            opt = OptimizerClass(params, lr=lr, weight_decay=weight_decay)
+            opt = OptimizerClass(params, lr=lr, weight_decay=self.weight_decay,
+                                 betas=betas)
 
         if self.use_scheduler:
             assert 'target' in self.scheduler_config
