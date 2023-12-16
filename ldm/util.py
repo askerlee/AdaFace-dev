@@ -1113,17 +1113,20 @@ def rand_annealed(training_percent, final_percent, mean_range,
 
 # true_prob_range = (p_init, p_final). 
 # The prob of flipping true is gradually annealed from p_init to p_final.
-def bool_annealed(training_percent, final_percent, true_prob_range):
+def draw_annealed_bool(training_percent, final_percent, true_prob_range):
     true_p_annealed = anneal_value(training_percent, final_percent, value_range=true_prob_range)
     # Flip a coin, with prob of true being true_p_annealed.    
     return random.random() < true_p_annealed
 
+# ratio_range: range of fluctuation ratios (could > 1 or < 1).
+# keep_prob_range: range of annealed prob of keeping the original t. If (0, 0.5),
+# then gradually increase the prob of keeping the original t from 0 to 0.5.
 def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0, 0.5)):
-    t_anneal = t.clone()
+    t_annealed = t.clone()
     # Gradually increase the chance of keeping the original t from 0 to 0.5.
-    do_keep = bool_annealed(training_percent, final_percent=1., true_prob_range=keep_prob_range)
+    do_keep = draw_annealed_bool(training_percent, final_percent=1., true_prob_range=keep_prob_range)
     if do_keep:
-        return t_anneal
+        return t_annealed
     
     ratio_lb, ratio_ub = ratio_range
     assert ratio_lb < ratio_ub
@@ -1131,9 +1134,10 @@ def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0
     for i, ti in enumerate(t):
         ti_lowerbound = max(int(ti * ratio_lb), 0)
         ti_upperbound = min(int(ti * ratio_ub) + 1, num_timesteps)
-        t_anneal[i] = np.random.randint(ti_lowerbound, ti_upperbound)
+        # Draw t_annealeded from [t, t*1.3], if ratio_range = (1, 1.3).
+        t_annealed[i] = np.random.randint(ti_lowerbound, ti_upperbound)
 
-    return t_anneal
+    return t_annealed
 
 # feat_or_attn: 4D features or 3D attention. If it's attention, then
 # its geometrical dimensions (H, W) have been flatten to 1D (last dim).

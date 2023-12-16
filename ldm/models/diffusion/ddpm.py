@@ -1932,16 +1932,12 @@ class LatentDiffusion(DDPM):
     # to speed up, no BP is done on these instances, so unet_has_grad=False.
     def guided_denoise(self, x_start, noise, t, cond, 
                        emb_man_volatile_ds,
-                       inj_noise_t=None, 
                        unet_has_grad=True, do_pixel_recon=False, cfg_info=None):
         
-        if inj_noise_t is not None:
-            # We can choose to add amount of noises different from t.
-            x_noisy = self.q_sample(x_start=x_start, t=inj_noise_t, noise=noise)
-        else:
-            x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-
         self.embedding_manager.set_volatile_ds(emb_man_volatile_ds)
+
+        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+
         # model_output is the predicted noise.
         # if not unet_has_grad, we save RAM by not storing the computation graph.
         if not unet_has_grad:
@@ -2022,7 +2018,6 @@ class LatentDiffusion(DDPM):
 
         c_static_emb, c_in, extra_info = cond
 
-        inj_noise_t = None
         subj_indices2       = subj_indices    = extra_info['subj_indices']
         bg_indices2         = bg_indices      = extra_info['bg_indices']
         token2indices2      = token2indices   = extra_info['token2indices']
@@ -2221,7 +2216,7 @@ class LatentDiffusion(DDPM):
                     # prompt_emb_mask2: [4 or 6, 77, 1]
                     prompt_emb_mask2 = \
                         torch.cat( [subj_comp_emb_mask.repeat(self.num_candidate_teachers, 1, 1),
-                                    cls_comp_emb_mask.repeat(self.num_candidate_teachers, 1, 1)], dim=0)
+                                     cls_comp_emb_mask.repeat(self.num_candidate_teachers, 1, 1)], dim=0)
 
                     uncond_context = self.empty_context_tea_filter
                     # Update masks to be a b-fold * 2 structure.
@@ -2311,7 +2306,10 @@ class LatentDiffusion(DDPM):
                 # Decrease t slightly to decrease noise amount and preserve more semantics.
                 # Do not add extra noise for use_wds_comp instances, since such instances are 
                 # kind of "Out-of-Domain" at the background, and are intrinsically difficult to denoise.
-                inj_noise_t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0))
+                t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0))
+            else:
+                t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
+                             keep_prob_range=(0.5, 0.3))
             # No need to update masks.
 
         extra_info['capture_distill_attn'] = not self.iter_flags['do_teacher_filter']
@@ -2344,8 +2342,6 @@ class LatentDiffusion(DDPM):
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
                                 emb_man_volatile_ds=emb_man_volatile_ds,
-                                # inj_noise_t is not None only if use_wds_comp.
-                                inj_noise_t=inj_noise_t,
                                 unet_has_grad=not self.iter_flags['do_teacher_filter'], 
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 # do_pixel_recon is not used for the iter_type 'do_normal_recon'.
