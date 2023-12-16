@@ -13,6 +13,7 @@ from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_ea
 from functools import partial
 from collections import OrderedDict
 import random
+import copy
 
 # When debugging, make the printed tensors less messy.
 torch.set_printoptions(precision=4, sci_mode=False)
@@ -78,7 +79,7 @@ def calc_stats(emb_name, embeddings):
 
 # LNCat3 can be used on 2 or 3 input tensors.
 class LNCat3(nn.Module):
-    def __init__(self, chan1, chan2, chan3, dim=1):
+    def __init__(self, chan1, chan2, chan3=0, dim=1):
         super().__init__()
         self.ln1 = nn.LayerNorm(chan1, elementwise_affine=True)
         self.ln2 = nn.LayerNorm(chan2, elementwise_affine=True)
@@ -90,7 +91,7 @@ class LNCat3(nn.Module):
 
         self.dim = dim
 
-    def forward(self, x1, x2, x3):
+    def forward(self, x1, x2, x3=None):
         x1 = self.ln1(x1)
         x2 = self.ln2(x2)
         if (x3 is None) or (self.ln3 is None):
@@ -175,25 +176,27 @@ class AttentionalPooler(nn.Module):
     # fg_q_emb: [768,] static subject embedding of this layer. Used as query here.
     # Use UNet feature query as k, and subject token as q, to compute the attention, 
     # which aggregates the original UNet layer input features x.
-    def forward(self, layer_attn_components, fg_q_emb, bg_q_emb=None, img_mask=None):
+    def forward(self, layer_attn_components, fg_q_emb, bg_q_emb, img_mask=None):
         # x and q have the same shape.
         ca_x, ca_q, ca_to_k, ca_x_size \
                 = layer_attn_components['x'], layer_attn_components['q'], \
                   layer_attn_components['to_k'], layer_attn_components['infeat_size']
                            
         # By default, infeat_grad_scaler does 0.5 gs.
-        ca_x_gs  = self.infeat_grad_scaler(ca_x)
+        ca_x_gs = self.infeat_grad_scaler(ca_x)
         ca_q_gs = self.infeat_grad_scaler(ca_q)
 
         x = ca_x_gs
         k = ca_q_gs
-        # k: query from the UNet attention layer. Used as key here.
-        # No need to go through ca_to_k() here, as it's already the projected query 
+        # k: query (i.e., projected image features) from the UNet cross-attention layer. 
+        # Repurposed as key here.
+        # No need to be projected by a ca_to_k() layer, as it's already the projected query 
         # in UNet cross-attn layer.
         k = self.ln_k(k)
-        # x is x1 in BasicTransformerBlock, which is added with x_ca, a transformation of cross-attn v.
-        # cross-attn v is the projection of the prompt embedding. So in order to provide proper x_ca,
-        # we include x as the input to the attentional pooler (which provides input to the ada embedder).
+        # x is x1 in BasicTransformerBlock, which will be added with x_ca output from the cross-attn layer.
+        # cross-attn v is the projection of the prompt embedding. So in order to yield proper x_ca,
+        # we add x to k, so x is part of the v of the attentional pooler (whose output is the 
+        # input features to the ada embedder).
         # On the other hand, k is cross-attn q, which is multiplied with the 
         # cross-attn k (projection of the prompt embedding). In order to provide proper cross-attn k,
         # we include k as the input to the attentional pooler.
@@ -203,8 +206,6 @@ class AttentionalPooler(nn.Module):
         # Use to_k of the UNet attention layer as to_q here, 
         # as the subject embedding is used as the key in UNet.
         to_q = ca_to_k
-        # Simplify the flow by avoiding checking whether bg_q_emb is None later.
-
         # fg_q_emb: [768] => [1, 768].
         fg_q_emb = fg_q_emb.unsqueeze(0)
 
@@ -219,16 +220,10 @@ class AttentionalPooler(nn.Module):
         except:
             breakpoint()
 
-        if bg_q_emb is None:
-            bg_q_emb_absent = True
-            # bg_q: [N, 1, 320]
-            bg_q = torch.zeros_like(fg_q)
-        else:
-            bg_q_emb_absent = False
-            # bg_q_emb: [N, 768] -> [N, 1, 768].
-            bg_q_emb = bg_q_emb.unsqueeze(1)
-            # bg_q: [N, 1, 768] -> [N, 1, 320].
-            bg_q = to_q(self.ln_bg_q(bg_q_emb))
+        # bg_q_emb: [N, 768] -> [N, 1, 768].
+        bg_q_emb = bg_q_emb.unsqueeze(1)
+        # bg_q: [N, 1, 768] -> [N, 1, 320].
+        bg_q = to_q(self.ln_bg_q(bg_q_emb))
 
         # fg_q: [B, 1, 320], k: [B, 4096, 320], v: [B, 4096, 320]. 
         # The 320 dims of q,k consist of 8 heads, each head having 40 dims.
@@ -242,17 +237,20 @@ class AttentionalPooler(nn.Module):
         # k: [B, 4096, 320] -> [B, 320, 4096]
         fg_q_ln, bg_q_ln, k_ln = map(lambda t: t.permute(0, 2, 1), (fg_q_ln, bg_q_ln, k_ln))
 
-        # lora_q: [B, 320, 1] -> [B, 128, 1].
-        # NOTE: 320 and 128 are multi-head concatenated, 8*40 and 8*16.
+        # NOTE: 320 and 64 are multi-head concatenated, 8*40 and 8*8.
+        # lora_to_fg_q, lora_to_bg_q: Conv1d of 8 groups, each group corresponding to a head.
+        # In each group, reduce dimension 40 -> 8. 
+        # So the overall computation complexity is 8*40*8=320*8, instead of 320*64.
         lora_fg_q = self.lora_to_fg_q(fg_q_ln)
+        # During training, at 20% of the chance, bg_q_emb is dropped out to be 0. 
+        # For these cases, lora_bg_q is 0 => sim_scores[:, 1] = 0, i.e., bg attn is uniform.
         lora_bg_q = self.lora_to_bg_q(bg_q_ln)
-        # lora_k: [B, 320, 4096] -> [B, 128, 4096].
+        # lora_k: [B, 320, 4096] -> [B, 64, 4096].
         lora_k = self.lora_to_k(k_ln)
-
-        # lora_fg_q, lora_bg_q: [B, 128, 1]    -> [B, 1, 128]
-        # lora_k:               [8, 128, 4096] -> [8, 4096, 128]
+        # lora_fg_q, lora_bg_q: [B, 64, 1]    -> [B, 1, 64]
+        # lora_k:               [8, 64, 4096] -> [8, 4096, 64]
         lora_fg_q, lora_bg_q, lora_k = map(lambda t: t.permute(0, 2, 1), (lora_fg_q, lora_bg_q, lora_k))
-        # lora_q: [B, 2, 128]. Two artificial tokens, each with 128 dims.
+        # lora_q: [B, 2, 64]. Two artificial tokens, each with 64 dims.
         lora_q = torch.cat([lora_fg_q, lora_bg_q], dim=1)
 
         # Dot product of the last dim. sim_scores: [B, 2, 4096].
@@ -275,19 +273,20 @@ class AttentionalPooler(nn.Module):
 
         # attn: [B, 2, 4096]. 2: fg/bg, 4096: image patches.
         # ** If only normalizing across the token (2) dimension, the performance is poor. **
-        # Compatible with old checkpoints.
-        if 'is_fgbg_competitive' in self.__dict__ and self.is_fgbg_competitive:
+        if self.is_fgbg_competitive:
             # Attention probs are normalized across the joint space of fg/bg (2) and image patches (4096).
             # This means the fg attention on patch p_0 is competitive with all other patches {p_i}
             # in the image, as well as with bg on p_0. 
-            # Although after ln_fg_out, the overall scales of fg and bg, respectively, 
-            # are normalized (removed), it still gives more flexibility to each individual patch
-            # how much attention it will receive from an fg embedding (relative to bg embeddings).
+            # Although after ln_fg_out, the overall scales of fg and bg, 
+            # are normalized (removed), respectively, it still gives more flexibility 
+            # to each individual patch how much attention it will receive from an fg embedding 
+            # (relative to bg embeddings).
             sim_scores_shape = sim_scores.shape
             attn = sim_scores.reshape(sim_scores.shape[0], -1).softmax(dim=1)
             attn = attn.reshape(sim_scores_shape)
         else:
             # Attention probs are normalized across the image patches (4096) dimension.
+            # fg attn and bg attn are independent of each other.
             attn = sim_scores.softmax(dim=-1)
 
         # attn_fg, attn_bg: [B, 1, 4096].
@@ -298,14 +297,8 @@ class AttentionalPooler(nn.Module):
         fg_out = einsum('b i j, b j d -> b i d', attn_fg, v)
         fg_out = self.ln_fg_out(fg_out)
 
-        if bg_q_emb_absent:
-            # v: [B, 4096, 320]. 
-            # Use the residual of the mean input features subtracted by fg_out as bg_out.
-            bg_out = self.v_pooler(v, img_mask) - fg_out
-        else:
-            # bg_out: [B, 1, 320], similarly computed as fg_out.
-            bg_out = einsum('b i j, b j d -> b i d', attn_bg, v)
-
+        # bg_out: [B, 1, 320], similarly computed as fg_out.
+        bg_out = einsum('b i j, b j d -> b i d', attn_bg, v)
         bg_out = self.ln_bg_out(bg_out)
         # out: N, 1, D -> N, D, i.e., ([2, 768], [2, 768]).
         # Make the output shape consistent with MaskedAvgPool2d.
@@ -528,7 +521,6 @@ class AdaEmbedding(nn.Module):
         assert num_layers == len(layer_idx2ca_layer_idx), f"num_layers={num_layers} != len(layer_idx2ca_layer_idx)={len(layer_idx2ca_layer_idx)}"
         self.num_layers = num_layers
         self.out_emb_dim = out_emb_dim
-        self.in_static_emb_dim = 0 #out_emb_dim
         self.K = num_vectors_per_token
         self.fg_emb_count = fg_emb_count
         self.bg_emb_count = bg_emb_count
@@ -635,9 +627,9 @@ class AdaEmbedding(nn.Module):
             # output dim: r * K, will be reshaped to [K, r].
             # This Linear outputs K sets of r-dim vectors, 
             # each set being the coefficients of the r basis vectors. 
-            layer_coeff_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD + self.in_static_emb_dim, 
+            layer_coeff_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD, 
                                                 r * self.K, bias=True) )
-            layer_lncat3s.append(LNCat3(self.attn_infeat_dims[i] * H, TD, self.in_static_emb_dim))
+            layer_lncat3s.append(LNCat3(self.attn_infeat_dims[i] * H, TD))
             # A specific LayerNorm is applied on each of the K embeddings in each layer.
             layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
             layers_out_lns.append(layer_out_lns)
@@ -683,7 +675,7 @@ class AdaEmbedding(nn.Module):
         for layer_idx in layer_range:
             SINGLE_D = self.attn_infeat_dims[layer_idx]
             TD       = self.TDs[layer_idx]
-            assert self.layer_coeff_maps[layer_idx].in_features == SINGLE_D * 2 + TD + self.in_static_emb_dim
+            assert self.layer_coeff_maps[layer_idx].in_features == SINGLE_D * 2 + TD
             layer_coeff_map_weight = self.layer_coeff_maps[layer_idx].weight.data
             # The weight of Linear has shape [out_features, in_features]. 
             # Split the first dim, out_features => [K, r].
@@ -788,14 +780,12 @@ class AdaEmbedding(nn.Module):
             else:
                 time_feat = time_emb[:, :TD]
 
-            # infeat_time_semb: cat(ln(infeat_pooled), ln(time_emb), ln(static_emb_mean)) as the input features.
-            # If self.in_static_emb_dim == 0, then layer_static_extra_emb_mean is ignored, i.e.,
-            # infeat_time_semb = cat(ln(infeat_pooled), ln(time_emb)).
-            infeat_time_semb    = self.layer_lncat3s[ca_layer_idx](infeat_fg_bg, time_feat, layer_static_extra_emb_mean)
+            # infeat_time_emb: cat(ln(infeat_pooled), ln(time_emb)) as the input features.
+            infeat_time_emb    = self.layer_lncat3s[ca_layer_idx](infeat_fg_bg, time_feat)
 
             # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
             # Consider the last dim. 
-            basis_dyn_coeffs = self.layer_coeff_maps[ca_layer_idx](infeat_time_semb).reshape(-1, self.K, self.r)
+            basis_dyn_coeffs = self.layer_coeff_maps[ca_layer_idx](infeat_time_emb).reshape(-1, self.K, self.r)
 
             # bias: [1, K, 768]
             bias = self.bias[ca_layer_idx].unsqueeze(0)
@@ -1055,14 +1045,14 @@ class EmbeddingManager(nn.Module):
         self.ada_subj_embs_dict    = {}
         self.ada_subj_attn_dict    = {}
         self.clear_ada_layer_temp_info()
-        self.clear_placeholder_indices(placeholder_type='all')
+        self.clear_placeholder_indices()
         self.clear_prompt_masks()
         self.img_mask = None
         self.loss_call_count = 0
         # Store the text_embedder to compute the delta loss.
         self.text_embedder  = text_embedder
         self.ada_prompt_embeddings_cache    = {}
-        self.ada_prompt_token_indices_cache = {}
+        self.ada_prompt_token2indices_cache = {}
         self.iter_type = None       # 'recon_iter' or 'distill_iter'
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
@@ -1113,7 +1103,7 @@ class EmbeddingManager(nn.Module):
             return ada_embedded_text
 
         else:
-            self.clear_placeholder_indices(placeholder_type='all')
+            self.clear_placeholder_indices()
             self.clear_prompt_masks()
             # We need to clone embedded_text, as sometimes (when it's not layerwise, such as TI) 
             # the modification in get_static_embedding() is in-place. 
@@ -1234,9 +1224,10 @@ class EmbeddingManager(nn.Module):
             # If num_vectors_per_token > 1, then repeat the indices and add to offsets.
             # If background_strings is None, then always update the indices. Otherwise, 
             # skip updating placeholder indices of the background string.
-            self.update_placeholder_indices(orig_tokenized_text, placeholder_token, self.token2num_vectors[placeholder_string],
+            self.update_placeholder_indices(orig_tokenized_text, placeholder_string, placeholder_token, 
+                                            self.token2num_vectors[placeholder_string],
                                             token_is_bg=token_is_bg)
-
+        
         return embedded_text, tokenized_text, static_subj_embs_dict
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
@@ -1278,8 +1269,10 @@ class EmbeddingManager(nn.Module):
             # For fg (subject) tokens, exclude fg embeddings from computing layer_static_extra_emb_mean. 
             # For bg (junk) tokens,    exclude fg embeddings from computing layer_static_extra_emb_mean.
             if token_is_bg:
-                # Why mask bg indices for bg ada? If bg embeddings accidentally attent to fg,
-                # then it will self-reinforce and contaminate the bg embeddings with fg features.
+                # Chance is bg embeddings may accidentally attent to fg areas,
+                # then self-reinforce and contaminate the bg embeddings with fg features.
+                # However, if we mask out bg embeddings from computing layer_static_extra_emb_mean,
+                # the performance will drop a lot.
                 list_of_indices_to_mask = [self.placeholder_indices_fg] #, self.placeholder_indices_bg]  
             else:
                 ## Why not mask bg indices for fg ada? bg embeddings are supposed to be of a similar nature 
@@ -1287,8 +1280,9 @@ class EmbeddingManager(nn.Module):
                 ## will make fg and bg embeddings more orthogonal (i.e., attend to different areas).
                 list_of_indices_to_mask = [self.placeholder_indices_fg]
 
-            # layer_static_prompt_embs:   [4, 77, 768]. 
-            # prompt_emb_mask: [4, 77, 1].
+            # layer_static_prompt_embs: [4, 77, 768]. 
+            # prompt_emb_mask: [4, 77, 1], which excludes SOT and padding tokens.
+            # list_of_indices_to_mask: extra tokens to exclude, esp. the fg tokens.
             layer_static_extra_emb_mean = \
                 self.calc_layer_static_extra_emb_mean(layer_static_prompt_embs, self.prompt_emb_mask, 
                                                       list_of_indices_to_mask, dropout_prob=0.2)
@@ -1464,7 +1458,7 @@ class EmbeddingManager(nn.Module):
             self.prompt_token_attn_mask = None
             
     # layer_static_prompt_embs: [4, 77, 768].
-    # emb_mask:          [4, 77, 1].
+    # emb_mask:          [4, 77, 1]. Set to 1 to include / 0 to exclude from the mean.
     # (Note sometimes the batch size of emb_mask is different from layer_static_prompt_embs).
     def calc_layer_static_extra_emb_mean(self, layer_static_prompt_embs, emb_mask, 
                                          list_of_indices_to_mask, dropout_prob=0.2):
@@ -1472,10 +1466,11 @@ class EmbeddingManager(nn.Module):
         count_of_masked_indices = sum([ (indices_to_mask is not None) for indices_to_mask in list_of_indices_to_mask])
         assert count_of_masked_indices > 0
 
-        for indices_to_mask in list_of_indices_to_mask:
-            if indices_to_mask is not None:
-                # Mask out embeddings.
-                emb_mask[indices_to_mask] = 0
+        if list_of_indices_to_mask is not None:
+            for indices_to_mask in list_of_indices_to_mask:
+                if indices_to_mask is not None:
+                    # Mask out embeddings.
+                    emb_mask[indices_to_mask] = 0
 
         if layer_static_prompt_embs.shape[0] < emb_mask.shape[0]:
             # In teacher filtering stage within prompt distillation iterations,
@@ -1498,26 +1493,23 @@ class EmbeddingManager(nn.Module):
 
         return layer_static_extra_emb_mean
     
-    def clear_placeholder_indices(self, placeholder_type='all'):
-        if placeholder_type == 'all':
-            self.placeholder_indices_fg = None
-            self.placeholder_indices_bg = None
-        elif placeholder_type == 'fg':
-            self.placeholder_indices_fg = None
-        elif placeholder_type == 'bg':
-            self.placeholder_indices_bg = None
+    def clear_placeholder_indices(self):
+        self.placeholder_indices_fg = None
+        self.placeholder_indices_bg = None
+        self.token2indices = {}
 
     def clear_prompt_masks(self):
         self.prompt_emb_mask = None
         self.prompt_token_attn_mask = None
 
-    def update_placeholder_indices(self, tokenized_text, placeholder_token, num_vectors_per_token, token_is_bg):
+    def update_placeholder_indices(self, tokenized_text, placeholder_string, placeholder_token, num_vectors_per_token, token_is_bg):
         placeholder_indices = torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
         placeholder_indices_B, placeholder_indices_N = extract_first_index_in_each_instance(placeholder_indices)
 
         if len(placeholder_indices_B) == 0:
             if token_is_bg:
                 self.placeholder_indices_bg = None
+                self.token2indices[placeholder_string] = None
             return
 
         if num_vectors_per_token > 1:
@@ -1539,7 +1531,9 @@ class EmbeddingManager(nn.Module):
             self.placeholder_indices_bg = placeholder_indices
         else:
             self.placeholder_indices_fg = placeholder_indices
-            
+        
+        self.token2indices[placeholder_string] = placeholder_indices
+
     def get_ada_emb_weight(self):
         if self.training:
             # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
@@ -1629,6 +1623,7 @@ class EmbeddingManager(nn.Module):
     def set_volatile_ds(self, volatile_ds):
         self.placeholder_indices_fg = volatile_ds['subj_indices']
         self.placeholder_indices_bg = volatile_ds['bg_indices']
+        self.token2indices          = volatile_ds['token2indices']
         # There are image margins after the original image is scaled down, or 
         # after using wds overlay images as input.
         # When doing attentional pooling / average pooling of image features, 
@@ -1643,8 +1638,7 @@ class EmbeddingManager(nn.Module):
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         self.ada_prompt_embeddings_cache[ca_layer_idx] = embedding
         # If there are multiple layers, only the last placeholder_indices are cached.
-        self.ada_prompt_token_indices_cache = { 'fg': self.placeholder_indices_fg,
-                                                'bg': self.placeholder_indices_bg }
+        self.ada_prompt_token2indices_cache = copy.copy(self.token2indices)
 
     def get_cached_ada_prompt_embeddings_as_tensor(self):
         # No tokens appear in the current prompt. So the ada prompt embedding cache is empty.
@@ -1666,17 +1660,11 @@ class EmbeddingManager(nn.Module):
     # not just the ada or static embeddings of the subject.
     def clear_ada_prompt_embeddings_cache(self):
         if len(self.ada_prompt_embeddings_cache) == self.num_layers_per_embedder:
-            self.update_emb_ema(self.ada_prompt_token_indices_cache['fg'],
-                                self.ada_prompt_token_indices_cache['bg'])
+            self.update_emb_ema(self.ada_prompt_token2indices_cache)
 
         self.ada_prompt_embeddings_cache = {}
 
-    def update_emb_ema(self, fg_indices, bg_indices):
-        # Don't update EMA embeddings in SGD-enabled iterations.
-        # Otherwise it will cause computation graph error.
-        if fg_indices is None and bg_indices is None:
-            return
-        
+    def update_emb_ema(self, token2indices):
         if self.training and self.emb_ema_as_pooling_probe_weight > 0:
             for k, token_emb_cache_obj in self.token2emb_cache.items():
                 # If all layers of ada embeddings have been cached in token_emb_cache_obj,
@@ -1686,10 +1674,9 @@ class EmbeddingManager(nn.Module):
                 # token2emb_cache is used to compute EMA of ada embeddings.
                 token_emb_cache_obj  = self.token2emb_cache[k]
 
-                if k in self.background_strings:
-                    token_indices = bg_indices
-                else:
-                    token_indices = fg_indices
+                if k not in token2indices:
+                    continue
+                token_indices = token2indices[k]
                 
                 # token k doesn't appear in this prompt (should be bg token).
                 if token_indices is None:
@@ -1700,6 +1687,8 @@ class EmbeddingManager(nn.Module):
                     # ada_prompt_embs: [2, 77, 768].
                     # ada_prompt_embs[token_indices]: [18, 768] => [2, 9, 768].
                     VALID_BS = token_indices[0].unique().shape[0]
+                    if VALID_BS > ada_prompt_embs.shape[0]:
+                        breakpoint()
                     token_prompt_embs = ada_prompt_embs[token_indices].reshape(
                                         VALID_BS, -1, ada_prompt_embs.shape[2])
                     # LitEma requires an nn.Module to do updating. 
@@ -1721,7 +1710,6 @@ class EmbeddingManager(nn.Module):
                         self.string_to_emb_ema_dict[k](token_emb_cache_obj)
 
                     token_emb_cache_obj.reset_cached_layer_tracker()
-
 
     def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings=None):
         if num_vectors_per_token is None or type(num_vectors_per_token) == int:
@@ -1825,11 +1813,6 @@ class EmbeddingManager(nn.Module):
                         self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
                         self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
 
-                        # Compatible with old checkpoints.
-                        if 'layer_maps' in ckpt["string_to_ada_embedder"][km]._modules:
-                            self.string_to_ada_embedder_dict[km2].layer_coeff_maps = \
-                                ckpt["string_to_ada_embedder"][km].layer_maps
-                            
                         if self.emb_ema_as_pooling_probe_weight > 0:
                             self.string_to_emb_ema_dict[km2]     = ckpt["string_to_emb_ema_dict"][km]
                         
