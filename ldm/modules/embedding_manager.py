@@ -171,6 +171,7 @@ class AttentionalPooler(nn.Module):
         # v_pooler is used only if fg_q_emb is None.
         self.v_pooler = MaskedAvgPool1d(dim=1, keepdim=True)
         self.is_fgbg_competitive = True
+        self.attn_drop = nn.Dropout(0.1)
 
     # k: query in the UNet attention layer. Used as key here.
     # fg_q_emb: [768,] static subject embedding of this layer. Used as query here.
@@ -289,6 +290,7 @@ class AttentionalPooler(nn.Module):
             # fg attn and bg attn are independent of each other.
             attn = sim_scores.softmax(dim=-1)
 
+        attn = self.attn_drop(attn)
         # attn_fg, attn_bg: [B, 1, 4096].
         attn_fg, attn_bg = attn.split(1, dim=1)
 
@@ -1259,7 +1261,7 @@ class EmbeddingManager(nn.Module):
             # embedded_text: [B, N, 768].
             # tokenized_text: [B, N].
             placeholder_indices = torch.where(tokenized_text == placeholder_token.to(device))
-            # Skip generating the ada embedding if there's no placeholder token in the batch.
+            # Skip generating the ada embedding if the corresponding placeholder token is not in the batch.
             if placeholder_indices[0].numel() == 0:
                 continue
 
