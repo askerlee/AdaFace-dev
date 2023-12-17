@@ -2574,6 +2574,7 @@ class LatentDiffusion(DDPM):
                                           keep_prob_range=(0, 0))
                         # Extra noise is added to comp instances, but not to single instances.
                         # So we interleave base_t and comp_t.
+                        # Since base_t and comp_t are 0-d tensors, we cannot use torch.cat().
                         t_sel  = torch.stack([base_t, comp_t, base_t, comp_t])
 
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
