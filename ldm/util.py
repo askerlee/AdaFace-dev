@@ -1138,7 +1138,7 @@ def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0
             # Draw t_annealeded from [t, t*1.3], if ratio_range = (1, 1.3).
             t_annealed[i] = np.random.randint(ti_lowerbound, ti_upperbound)
     else:
-        t_lowerbound = min(max(int(ti * ratio_lb), 0), num_timesteps - 1)
+        t_lowerbound = min(max(int(t * ratio_lb), 0), num_timesteps - 1)
         t_upperbound = min(int(t * ratio_ub) + 1, num_timesteps)
         t_annealed = torch.tensor(np.random.randint(t_lowerbound, t_upperbound), 
                                   dtype=t.dtype, device=t.device)
