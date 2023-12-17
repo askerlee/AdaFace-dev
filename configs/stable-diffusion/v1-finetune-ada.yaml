@@ -61,7 +61,7 @@ model:
     wds_bg_recon_discount:              0.05
     
     optimizer_type: AdamW      # NAdam     # AdamW or NAdam.
-    adam_betas: [0.99, 0.995]  # Better than [0.9, 0.999].
+    adam_betas: [0.99, 0.9925]  # Better than [0.9, 0.999].
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:
