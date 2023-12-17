@@ -16,7 +16,7 @@ from queue import Queue
 from inspect import isfunction
 from PIL import Image, ImageDraw, ImageFont
 from torchvision.utils import make_grid, draw_bounding_boxes
-import random
+import random, math
 
 def log_txt_as_img(wh, xc, size=10):
     # wh a tuple of (width, height)
@@ -1719,6 +1719,64 @@ def add_noise_to_embedding(embeddings, noise_rel_std_range, add_noise_prob):
     noise = torch.randn_like(embeddings) * noise_std
     embeddings = embeddings + noise
     return embeddings
+
+# At scaled background, fill new x_start with random values (100% noise). 
+# At scaled foreground, fill new x_start with noised scaled x_start. 
+def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
+                                       training_percent, base_scale_range=(0.7, 1.0),
+                                       fg_noise_anneal_mean_range=(0.1, 0.5)):
+    x_start_origsize = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
+    fg_mask_percent = filtered_fg_mask.float().sum() / filtered_fg_mask.numel()
+    # print(fg_mask_percent)
+    base_scale_range_lb, base_scale_range_ub = base_scale_range
+
+    if fg_mask_percent > 0.1:
+        # If fg areas are larger (>= 1/10 of the whole image), then scale down
+        # more aggressively, to avoid it dominating the whole image.
+        # Don't take extra_scale linearly to this ratio, which will make human
+        # faces (usually taking around 20%-40%) too small.
+        # Example: fg_mask_percent = 0.2, extra_scale = 0.5 ** 0.35 = 0.78.
+        extra_scale = math.pow(0.1 / fg_mask_percent.item(), 0.35)
+        scale_range_lb = base_scale_range_lb * extra_scale
+        # scale_range_ub is at least 0.5.
+        scale_range_ub = max(0.5, base_scale_range_ub * extra_scale)
+        fg_rand_scale = np.random.uniform(scale_range_lb, scale_range_ub)
+    else:
+        # fg areas are small. Scale the fg area to 70%-100% of the original size.
+        fg_rand_scale = np.random.uniform(base_scale_range_lb, base_scale_range_ub)
+
+    # Resize x_start_origsize and filtered_fg_mask by rand_scale. They have different numbers of channels,
+    # so we need to concatenate them at dim 1 before resizing.
+    x_mask = torch.cat([x_start_origsize, fg_mask, filtered_fg_mask], dim=1)
+    x_mask_scaled = F.interpolate(x_mask, scale_factor=fg_rand_scale, mode='bilinear', align_corners=False)
+
+    # Pad filtered_fg_mask_scaled to the original size, with left/right padding roughly equal
+    pad_w1 = int((x_start.shape[3] - x_mask_scaled.shape[3]) / 2)
+    pad_w2 =      x_start.shape[3] - x_mask_scaled.shape[3] - pad_w1
+    pad_h1 = int((x_start.shape[2] - x_mask_scaled.shape[2]) / 2)
+    pad_h2 =      x_start.shape[2] - x_mask_scaled.shape[2] - pad_h1
+    x_mask_scaled_padded = F.pad(x_mask_scaled, 
+                                    (pad_w1, pad_w2, pad_h1, pad_h2),
+                                    mode='constant', value=0)
+
+    # Unpack x_start, fg_mask and filtered_fg_mask from x_mask_scaled_padded.
+    # x_start_scaled_padded: [2, 4, 64, 64]. fg_mask/filtered_fg_mask: [2, 1, 64, 64].
+    x_start_scaled_padded, fg_mask, filtered_fg_mask \
+        = x_mask_scaled_padded[:, :4], x_mask_scaled_padded[:, [4]], \
+            x_mask_scaled_padded[:, [5]]
+
+    # In filtered_fg_mask, the padded areas are filled with 0. 
+    # So these pixels always take values from the random tensor.
+    # In fg area, x_start takes values from x_start_scaled_padded 
+    # (the fg of x_start_scaled_padded is a scaled-down version of the fg of the original x_start).
+    x_start = torch.where(filtered_fg_mask.bool(), x_start_scaled_padded, torch.randn_like(x_start))
+    # Gradually increase the fg area's noise amount with mean increasing from 0.1 to 0.5.
+    fg_noise_amount = rand_annealed(training_percent, final_percent=1, mean_range=fg_noise_anneal_mean_range)
+    # At the fg area, keep 90% (beginning of training) ~ 50% (end of training) 
+    # of the original x_start values and add 10% ~ 50% of noise. 
+    # x_start: [2, 4, 64, 64]
+    x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
+    return x_start, fg_mask, filtered_fg_mask
 
 def gen_cfg_scales_for_stu_tea(tea_scale, stu_scale, num_teachers, device):
     cfg_scales_for_teacher   = torch.ones(num_teachers) * tea_scale

@@ -45,7 +45,7 @@ model:
     mix_prompt_distill_weight:          1e-4
     # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
     # subj_attn_norm_distill_loss is DISABLED for faces, but enabled for objects.
-    subj_attn_norm_distill_loss_base:   0   
+    subj_attn_norm_distill_loss_base:   1e-4
     comp_fg_bg_preserve_loss_weight:    1e-3
     sc_mc_bg_match_loss_base:           0.2      # 0 to disable.
     # fg_bg_comple: used in non-wds recon iters.
@@ -61,7 +61,7 @@ model:
     wds_bg_recon_discount:              0.05
     
     optimizer_type: AdamW      # NAdam     # AdamW or NAdam.
-    optimizer_bits: 32         # 8 or 32. 8 bit doesn't save much RAM and performs worse.
+    adam_betas: [0.99, 0.995]  # Better than [0.9, 0.999].
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:
