@@ -2568,7 +2568,7 @@ class LatentDiffusion(DDPM):
                         # Extra noise is added to comp instances, but not to single instances.
                         # So we interleave the extra noise with zeros.
                         extra_noise = torch.cat([zeros_1b, extra_noise_1b, zeros_1b, extra_noise_1b], dim=0)
-                        x_start_sel += extra_noise * 0.2
+                        x_start_sel = x_start_sel * 0.8 + extra_noise * 0.2
 
                     noise_sel   = noise[best_cand_idx].repeat(4, 1, 1, 1)
                     # t[0] == t[1], t[2] == t[3]. t: [952, 851, 952, 851]
