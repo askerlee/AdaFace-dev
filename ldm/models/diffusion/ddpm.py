@@ -2574,7 +2574,7 @@ class LatentDiffusion(DDPM):
                                           keep_prob_range=(0, 0))
                         # Extra noise is added to comp instances, but not to single instances.
                         # So we interleave base_t and comp_t.
-                        t_sel  = torch.cat([base_t, comp_t, base_t, comp_t], dim=0)
+                        t_sel  = torch.stack([base_t, comp_t, base_t, comp_t])
 
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
                     # If comp_do_init_x_with_fg_from_training_image, then in order to let mix prompts attend to fg areas, we let
