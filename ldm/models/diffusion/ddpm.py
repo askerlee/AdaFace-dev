@@ -2569,8 +2569,8 @@ class LatentDiffusion(DDPM):
                         base_t = t[best_cand_idx]
                         # keep_prob_range=(0, 0): never keep the original t as comp_t, i.e., 
                         # always increase base_t to get comp_t.
-                        # Because 'comp_insts_add_more_noise' is already a random bool.
-                        comp_t = anneal_t(base_t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
+                        # Because 'comp_insts_add_more_noise' is already a random bool that takes True.
+                        comp_t = anneal_t(base_t, self.training_percent, self.num_timesteps, ratio_range=(1.1, 1.3), 
                                           keep_prob_range=(0, 0))
                         # Extra noise is added to comp instances, but not to single instances.
                         # So we interleave base_t and comp_t.

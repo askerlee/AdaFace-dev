@@ -1133,7 +1133,7 @@ def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0
 
     if t.ndim > 0:
         for i, ti in enumerate(t):
-            ti_lowerbound = max(int(ti * ratio_lb), 0)
+            ti_lowerbound = min(max(int(ti * ratio_lb), 0), num_timesteps - 1)
             ti_upperbound = min(int(ti * ratio_ub) + 1, num_timesteps)
             # Draw t_annealeded from [t, t*1.3], if ratio_range = (1, 1.3).
             t_annealed[i] = np.random.randint(ti_lowerbound, ti_upperbound)
