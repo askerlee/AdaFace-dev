@@ -2562,17 +2562,20 @@ class LatentDiffusion(DDPM):
                     # Repeat 4 times and use them as the condition to do denoising again.
                     # x_start[0] == x_start[2], x_start[1] == x_start[3].
                     x_start_sel = x_start[[best_cand_idx]].repeat(4, 1, 1, 1)
-                    if 'comp_insts_add_more_noise' in self.iter_flags:
-                        extra_noise_1b  = torch.randn_like(x_start[[best_cand_idx]])
-                        zeros_1b        = torch.zeros_like(x_start[[best_cand_idx]])
-                        # Extra noise is added to comp instances, but not to single instances.
-                        # So we interleave the extra noise with zeros.
-                        extra_noise = torch.cat([zeros_1b, extra_noise_1b, zeros_1b, extra_noise_1b], dim=0)
-                        x_start_sel = x_start_sel * 0.8 + extra_noise * 0.2
-
-                    noise_sel   = noise[best_cand_idx].repeat(4, 1, 1, 1)
+                    noise_sel   = noise[[best_cand_idx]].repeat(4, 1, 1, 1)
                     # t[0] == t[1], t[2] == t[3]. t: [952, 851, 952, 851]
                     t_sel       = t[best_cand_idx].repeat(4)
+                    if 'comp_insts_add_more_noise' in self.iter_flags:
+                        base_t = t[best_cand_idx]
+                        # keep_prob_range=(0, 0): never keep the original t as comp_t, i.e., 
+                        # always increase base_t to get comp_t.
+                        # Because 'comp_insts_add_more_noise' is already a random bool.
+                        comp_t = anneal_t(base_t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
+                                          keep_prob_range=(0, 0))
+                        # Extra noise is added to comp instances, but not to single instances.
+                        # So we interleave base_t and comp_t.
+                        t_sel  = torch.cat([base_t, comp_t, base_t, comp_t], dim=0)
+
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
                     # If comp_do_init_x_with_fg_from_training_image, then in order to let mix prompts attend to fg areas, we let
                     # the keys to be mostly subject embeddings, and the values are unchanged.
