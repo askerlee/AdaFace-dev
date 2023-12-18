@@ -153,6 +153,7 @@ class CrossAttention(nn.Module):
         self.scale = dim_head ** -0.5
         self.heads = heads
 
+        # always query_dim == inner_dim.
         self.to_q = nn.Linear(query_dim,   inner_dim, bias=False)
         self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
         self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
@@ -300,6 +301,7 @@ class BasicTransformerBlock(nn.Module):
         return checkpoint(self._forward, (x, context, mask), self.parameters(), self.checkpoint)
 
     def _forward(self, x, context=None, mask=None):
+        # x1 dim  ==  x dim  ==  attn1 dim  ==  attn2 query_dim.
         x1 = self.attn1(self.norm1(x), mask=mask) + x
         # The mask is of the key (context). 
         # If key is text prompt, then we shouldn't provide img_mask.

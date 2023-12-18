@@ -148,16 +148,16 @@ class AttentionalPooler(nn.Module):
         self.layer_inner_dim = feat_dim
         self.lora_attn_score_scale = lora_dim ** -0.5
 
-        self.lora_ln_fg_q  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
-        self.lora_ln_bg_q  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
-        self.lora_ln_k     = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
+        self.lora_fg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
+        self.lora_bg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
+        self.lora_k_ln     = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
 
         self.lora_to_k     = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
         self.lora_to_fg_q  = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
         self.lora_to_bg_q  = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
 
-        self.ln_fg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
-        self.ln_bg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
+        #self.ln_fg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
+        #self.ln_bg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
         self.layer_idx = layer_idx
 
@@ -168,6 +168,7 @@ class AttentionalPooler(nn.Module):
         self.v_pooler = MaskedAvgPool1d(dim=1, keepdim=True)
         self.is_fgbg_competitive = True
         self.attn_drop = nn.Dropout(0.1)
+        self.out_drop  = nn.Dropout(0.1)
 
     # k: query in the UNet attention layer. Used as key here.
     # fg_q_emb: [768,] static subject embedding of this layer. Used as query here.
@@ -188,9 +189,9 @@ class AttentionalPooler(nn.Module):
         k = ca_q_gs
         # k: query (i.e., projected image features) from the UNet cross-attention layer. 
         # Repurposed as key here.
-        # No need to be projected by a ca_to_k() layer, as it's already the projected query 
-        # in UNet cross-attn layer.
-        k_ln    = self.lora_ln_k(k)
+        # the to_q() of the UNet cross-attention layer doesn't change the dimension of k,
+        # i.e., k dim = x dim. Therefore, x + k_ln is legal.
+        k_ln    = self.lora_k_ln(k)
         # x is x1 in BasicTransformerBlock, which will be added with x_ca output from the cross-attn layer.
         # cross-attn v is the projection of the prompt embedding. So in order to yield proper x_ca,
         # we add x to k, so x is part of the v of the attentional pooler (whose output is the 
@@ -199,7 +200,7 @@ class AttentionalPooler(nn.Module):
         # cross-attn k (projection of the prompt embedding). In order to provide proper cross-attn k,
         # we include k as the input to the attentional pooler.
         # Therefore, v = x + k. We can also concat(x, k), but it will double the feature dimension.
-        v = x + k_ln
+        v = (x + k_ln) / 2
 
         # Use to_k of the UNet attention layer as to_q here, 
         # as the subject embedding is used as the key in UNet.
@@ -227,8 +228,8 @@ class AttentionalPooler(nn.Module):
         # The 320 dims of q,k consist of 8 heads, each head having 40 dims.
         #breakpoint()
 
-        fg_q_ln = self.lora_ln_fg_q(fg_q)
-        bg_q_ln = self.lora_ln_bg_q(bg_q)
+        fg_q_ln = self.lora_fg_q_ln(fg_q)
+        bg_q_ln = self.lora_bg_q_ln(bg_q)
 
         # q: [B, 1, 320]    -> [B, 320, 1]
         # k: [B, 4096, 320] -> [B, 320, 4096]
@@ -298,11 +299,14 @@ class AttentionalPooler(nn.Module):
         # Do attentional feature pooling on v.
         # fg_out: [B, 1, 320]. 320: feature dimension. 
         fg_out = einsum('b i j, b j d -> b i d', attn_fg, v)
-        fg_out = self.ln_fg_out(fg_out)
+        # fg_out = self.ln_fg_out(fg_out)
+        fg_out  = self.out_drop(fg_out)
 
         # bg_out: [B, 1, 320], similarly computed as fg_out.
         bg_out = einsum('b i j, b j d -> b i d', attn_bg, v)
-        bg_out = self.ln_bg_out(bg_out)
+        # bg_out = self.ln_bg_out(bg_out)
+        bg_out  = self.out_drop(bg_out)
+
         # out: N, 1, D -> N, D, i.e., ([2, 768], [2, 768]).
         # Make the output shape consistent with MaskedAvgPool2d.
         return { 'fg_out': fg_out.squeeze(1), 'bg_out': bg_out.squeeze(1), 
