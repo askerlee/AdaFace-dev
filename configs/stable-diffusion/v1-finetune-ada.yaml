@@ -84,6 +84,9 @@ model:
         use_layerwise_embedding: True
         layerwise_lora_rank_token_ratio: 2
         ada_emb_weight: 0.5
+        # During training, 0.1 prob to take 0, 0.1 prob to take 1, 
+        # 0.8 prob to take 0.5 + fluctuation.
+        p_ada_emb_weight_01: 0.1
         emb_ema_as_pooling_probe_weight: 0.5  # Should be the same as ada_emb_weight.
         ada_use_attn_pooler: True
         conv_attn_layerwise_scale_learnable: True

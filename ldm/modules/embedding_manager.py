@@ -174,7 +174,7 @@ class AttentionalPooler(nn.Module):
     # Use UNet feature query as k, and subject token as q, to compute the attention, 
     # which aggregates the original UNet layer input features x.
     # bg_q_emb: [N, 768].
-    def forward(self, layer_attn_components, fg_q_emb, bg_q_emb, img_mask=None):
+    def forward(self, layer_attn_components, fg_q_emb, bg_q_emb, img_mask=None, debug=False):
         # x and q have the same shape.
         ca_x, ca_q, ca_to_k, ca_x_size \
                 = layer_attn_components['x'], layer_attn_components['q'], \
@@ -291,8 +291,9 @@ class AttentionalPooler(nn.Module):
         attn_fg, attn_bg = attn.split(1, dim=1)
         attn_fg_sum = attn_fg.sum(dim=(1,2))
         if torch.any(attn_fg_sum == 0):
-            print(f"AttentionalPooler: attn_fg_sum is 0: {attn_fg_sum}")
-            # breakpoint()
+            if debug:
+                print(f"AttentionalPooler: attn_fg_sum is 0: {attn_fg_sum}")
+                breakpoint()
 
         # Do attentional feature pooling on v.
         # fg_out: [B, 1, 320]. 320: feature dimension. 
@@ -747,7 +748,8 @@ class AdaEmbedding(nn.Module):
                 infeat_pooled    = pooler(layer_attn_components, 
                                           fg_q_emb=layer_subj_emb_probe, 
                                           bg_q_emb=layer_static_extra_emb_mean,
-                                          img_mask=img_mask)
+                                          img_mask=img_mask,
+                                          debug=self.debug)
 
             if self.use_attn_pooler:
                 # infeat_fg, infeat_bg: [2, 320]
@@ -854,6 +856,7 @@ class EmbeddingManager(nn.Module):
             layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             ada_emb_weight=0.5, 
+            p_ada_emb_weight_01=0.1,
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
             training_add_noise_std_range=None,
@@ -871,7 +874,7 @@ class EmbeddingManager(nn.Module):
         self.initial_embeddings  = nn.ParameterDict() # These should not be optimized
         self.token2emb_cache = nn.ParameterDict() # These should not be optimized
 
-        self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
+        self.set_ada_emb_weight(ada_emb_weight, p_ada_emb_weight_01, is_first_time_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
         self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight
         self.emb_ema_grad_scale = 0.05
@@ -1546,8 +1549,14 @@ class EmbeddingManager(nn.Module):
 
     def get_ada_emb_weight(self):
         if self.training:
-            # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
-            ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)
+            p01 = self.p_ada_emb_weight_01
+            is_ada_emb_weight_01 = \
+                np.random.choice([0, 1, 2], p=(p01, p01, 1 - 2 * p01))
+            if is_ada_emb_weight_01 == 0 or is_ada_emb_weight_01 == 1:
+                ada_emb_weight = is_ada_emb_weight_01
+            else:
+                # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
+                ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)
         else:
             ada_emb_weight = self.ada_emb_weight        
         return ada_emb_weight
@@ -1596,13 +1605,17 @@ class EmbeddingManager(nn.Module):
             emb_global_scale = emb_global_scale        
         return emb_global_scale
     
-    def set_ada_emb_weight(self, ada_emb_weight, is_first_time_print=False):
+    def set_ada_emb_weight(self, ada_emb_weight, p_ada_emb_weight_01, is_first_time_print=False):
         if is_first_time_print:
-            print(f"Setting ada_emb_weight = {ada_emb_weight}")
+            print(f"Setting ada_emb_weight = {ada_emb_weight}, p_ada_emb_weight_01={p_ada_emb_weight_01}")
         else:
             if self.ada_emb_weight != ada_emb_weight:
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
+            if self.p_ada_emb_weight_01 != p_ada_emb_weight_01:
+                print(f"p_ada_emb_weight_01: {self.p_ada_emb_weight_01} => {p_ada_emb_weight_01}")
+
         self.ada_emb_weight = ada_emb_weight
+        self.p_ada_emb_weight_01 = p_ada_emb_weight_01
 
     def set_embs_attn_tricks(self, use_conv_attn_kernel_size=None):
         if use_conv_attn_kernel_size is not None:
