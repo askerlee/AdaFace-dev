@@ -156,10 +156,6 @@ class AttentionalPooler(nn.Module):
         self.lora_to_fg_q  = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
         self.lora_to_bg_q  = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
 
-        self.ln_x       = nn.LayerNorm(feat_dim,      elementwise_affine=True)
-        self.ln_k       = nn.LayerNorm(feat_dim,      elementwise_affine=True)
-        self.ln_fg_q    = nn.LayerNorm(token_emb_dim, elementwise_affine=True)
-        self.ln_bg_q    = nn.LayerNorm(token_emb_dim, elementwise_affine=True)
         self.ln_fg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
         self.ln_bg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
@@ -194,7 +190,7 @@ class AttentionalPooler(nn.Module):
         # Repurposed as key here.
         # No need to be projected by a ca_to_k() layer, as it's already the projected query 
         # in UNet cross-attn layer.
-        k = self.ln_k(k)
+        k_ln    = self.lora_ln_k(k)
         # x is x1 in BasicTransformerBlock, which will be added with x_ca output from the cross-attn layer.
         # cross-attn v is the projection of the prompt embedding. So in order to yield proper x_ca,
         # we add x to k, so x is part of the v of the attentional pooler (whose output is the 
@@ -203,7 +199,7 @@ class AttentionalPooler(nn.Module):
         # cross-attn k (projection of the prompt embedding). In order to provide proper cross-attn k,
         # we include k as the input to the attentional pooler.
         # Therefore, v = x + k. We can also concat(x, k), but it will double the feature dimension.
-        v = self.ln_x(x + k)
+        v = x + k_ln
 
         # Use to_k of the UNet attention layer as to_q here, 
         # as the subject embedding is used as the key in UNet.
@@ -215,7 +211,7 @@ class AttentionalPooler(nn.Module):
         # as the subject embedding is used as the key in UNet.
         # After applying to_q on fg_q_emb, fg_q consists of 8 heads.
         # fg_q: [1, 768] -> [1, 320].
-        fg_q = to_q(self.ln_fg_q(fg_q_emb))
+        fg_q = to_q(fg_q_emb)
         # fg_q: [1, 320] -> [N, 1, 320]
         try:
             fg_q = repeat(fg_q, 'n d -> b n d', b=x.shape[0])
@@ -225,7 +221,7 @@ class AttentionalPooler(nn.Module):
         # bg_q_emb: [N, 768] -> [N, 1, 768].
         bg_q_emb = bg_q_emb.unsqueeze(1)
         # bg_q: [N, 1, 768] -> [N, 1, 320].
-        bg_q = to_q(self.ln_bg_q(bg_q_emb))
+        bg_q = to_q(bg_q_emb)
 
         # fg_q: [B, 1, 320], k: [B, 4096, 320], v: [B, 4096, 320]. 
         # The 320 dims of q,k consist of 8 heads, each head having 40 dims.
@@ -233,7 +229,6 @@ class AttentionalPooler(nn.Module):
 
         fg_q_ln = self.lora_ln_fg_q(fg_q)
         bg_q_ln = self.lora_ln_bg_q(bg_q)
-        k_ln    = self.lora_ln_k(k)
 
         # q: [B, 1, 320]    -> [B, 320, 1]
         # k: [B, 4096, 320] -> [B, 320, 4096]
@@ -297,7 +292,7 @@ class AttentionalPooler(nn.Module):
         attn_fg_sum = attn_fg.sum(dim=(1,2))
         if torch.any(attn_fg_sum == 0):
             print(f"AttentionalPooler: attn_fg_sum is 0: {attn_fg_sum}")
-            breakpoint()
+            # breakpoint()
 
         # Do attentional feature pooling on v.
         # fg_out: [B, 1, 320]. 320: feature dimension. 
