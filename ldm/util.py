@@ -1121,7 +1121,7 @@ def draw_annealed_bool(training_percent, final_percent, true_prob_range):
 # ratio_range: range of fluctuation ratios (could > 1 or < 1).
 # keep_prob_range: range of annealed prob of keeping the original t. If (0, 0.5),
 # then gradually increase the prob of keeping the original t from 0 to 0.5.
-def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0, 0.5)):
+def anneal_t_keep_prob(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0, 0.5)):
     t_annealed = t.clone()
     # Gradually increase the chance of keeping the original t from 0 to 0.5.
     do_keep = draw_annealed_bool(training_percent, final_percent=1., true_prob_range=keep_prob_range)
@@ -1129,6 +1129,28 @@ def anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0
         return t_annealed
     
     ratio_lb, ratio_ub = ratio_range
+    assert ratio_lb < ratio_ub
+
+    if t.ndim > 0:
+        for i, ti in enumerate(t):
+            ti_lowerbound = min(max(int(ti * ratio_lb), 0), num_timesteps - 1)
+            ti_upperbound = min(int(ti * ratio_ub) + 1, num_timesteps)
+            # Draw t_annealeded from [t, t*1.3], if ratio_range = (1, 1.3).
+            t_annealed[i] = np.random.randint(ti_lowerbound, ti_upperbound)
+    else:
+        t_lowerbound = min(max(int(t * ratio_lb), 0), num_timesteps - 1)
+        t_upperbound = min(int(t * ratio_ub) + 1, num_timesteps)
+        t_annealed = torch.tensor(np.random.randint(t_lowerbound, t_upperbound), 
+                                  dtype=t.dtype, device=t.device)
+
+    return t_annealed
+
+# init_ratio_range, final_ratio_range: ranges of fluctuation ratios (could > 1 or < 1).
+# Gradually shift ratio_range from init_ratio_range to final_ratio_range.
+def anneal_t_ratio(t, training_percent, num_timesteps, init_ratio_range, final_ratio_range):
+    t_annealed = t.clone()    
+    ratio_lb = anneal_value(training_percent, final_percent=1., value_range=(init_ratio_range[0], final_ratio_range[0]))
+    ratio_ub = anneal_value(training_percent, final_percent=1., value_range=(init_ratio_range[1], final_ratio_range[1]))
     assert ratio_lb < ratio_ub
 
     if t.ndim > 0:

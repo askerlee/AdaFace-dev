@@ -33,7 +33,8 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        halve_token_indices, double_token_indices, extend_indices_N_by_n, \
                        extend_indices_B_by_n_times, split_indices_by_instance, \
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
-                       anneal_t, rand_annealed, anneal_value, calc_layer_subj_comp_k_or_v_ortho_loss, \
+                       anneal_t_keep_prob, anneal_t_ratio, anneal_value, \
+                       calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
                        gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image
@@ -2086,15 +2087,15 @@ class LatentDiffusion(DDPM):
                     # If use_wds_comp, then don't fill up the background with gaussian noise 
                     # by doing nothing to x_start.
                     if not self.iter_flags['use_wds_comp']:
-                        if random.random() < 0.4:
+                        if random.random() < 0.25:
                             self.iter_flags['comp_insts_add_more_noise'] = True
                             # By 50% chance, single instances (subj single, mix single) are initialized 
-                            # with less noise, i.e., mean total noise amount is 0.1-0.3.
-                            # At a later step, Comp instances (subj comp, mix comp) are added with 0.2 more noise
-                            # so that the mean total noise amount become 0.3-0.5.
-                            fg_noise_anneal_mean_range = (0.1, 0.4)
+                            # with less noise, i.e., mean total noise amount is 0.1-0.4.
+                            # At a later step, Comp instances (subj comp, mix comp) are added with 
+                            # 0.1 more noise (= +200 timesteps) so that the mean total noise amount become 0.2-0.5.
+                            fg_noise_anneal_mean_range = (0.1, 0.3)
                         else:
-                            fg_noise_anneal_mean_range = (0.1, 0.5)
+                            fg_noise_anneal_mean_range = (0.1, 0.4)
 
                         x_start, fg_mask, filtered_fg_mask = \
                             init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
@@ -2273,10 +2274,11 @@ class LatentDiffusion(DDPM):
                 # Decrease t slightly to decrease noise amount and preserve more semantics.
                 # Do not add extra noise for use_wds_comp instances, since such instances are 
                 # kind of "Out-of-Domain" at the background, and are intrinsically difficult to denoise.
-                t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0))
+                t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0),
+                                       keep_prob_range=(0.5, 0.3))
             else:
-                t = anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
-                             keep_prob_range=(0.5, 0.3))
+                t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
+                                       keep_prob_range=(0.5, 0.3))
             # No need to update masks.
 
         extra_info['capture_distill_attn'] = not self.iter_flags['do_teacher_filter']
@@ -2570,8 +2572,10 @@ class LatentDiffusion(DDPM):
                         # keep_prob_range=(0, 0): never keep the original t as comp_t, i.e., 
                         # always increase base_t to get comp_t.
                         # Because 'comp_insts_add_more_noise' is already a random bool that takes True.
-                        comp_t = anneal_t(base_t, self.training_percent, self.num_timesteps, ratio_range=(1.1, 1.3), 
-                                          keep_prob_range=(0, 0))
+                        comp_t = anneal_t_ratio(base_t, self.training_percent, self.num_timesteps, 
+                                                init_ratio_range =(1.,  1.2), 
+                                                final_ratio_range=(1.2, 1.4))
+                        
                         # Extra noise is added to comp instances, but not to single instances.
                         # So we interleave base_t and comp_t.
                         # Since base_t and comp_t are 0-d tensors, we cannot use torch.cat().
