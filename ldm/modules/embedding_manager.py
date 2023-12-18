@@ -856,7 +856,7 @@ class EmbeddingManager(nn.Module):
             layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             ada_emb_weight=0.5, 
-            p_ada_emb_weight_01=0.1,
+            p_ada_emb_weight_01=0,
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
             training_add_noise_std_range=None,
@@ -1765,6 +1765,7 @@ class EmbeddingManager(nn.Module):
                      "token2num_vectors":               self.token2num_vectors,
                      "emb_global_scale_score":          self.emb_global_scale_score,
                      "ada_emb_weight":                  self.ada_emb_weight,  
+                     "p_ada_emb_weight_01":             self.p_ada_emb_weight_01,
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
                      # Learnable weights for scaling conv attns.
                      "conv_attn_layerwise_scales":      self.conv_attn_layerwise_scales,
@@ -1800,7 +1801,8 @@ class EmbeddingManager(nn.Module):
             ckpt = torch.load(ckpt_path, map_location='cpu')
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
             if "ada_emb_weight" in ckpt:
-                self.set_ada_emb_weight(ckpt["ada_emb_weight"], is_first_time_print=False)
+                p_ada_emb_weight_01 = ckpt.get("p_ada_emb_weight_01", 0)
+                self.set_ada_emb_weight(ckpt["ada_emb_weight"], p_ada_emb_weight_01, is_first_time_print=False)
 
             if "emb_global_scale_score" in ckpt:
                 self.emb_global_scale_score = ckpt["emb_global_scale_score"]
