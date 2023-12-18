@@ -177,9 +177,8 @@ class AttentionalPooler(nn.Module):
     # bg_q_emb: [N, 768].
     def forward(self, layer_attn_components, fg_q_emb, bg_q_emb, img_mask=None, debug=False):
         # x and q have the same shape.
-        ca_x, ca_q, ca_to_k, ca_x_size \
-                = layer_attn_components['x'], layer_attn_components['q'], \
-                  layer_attn_components['to_k'], layer_attn_components['infeat_size']
+        ca_x, ca_q, ca_to_k, ca_x_size, ca_scale \
+                = [ layer_attn_components[key] for key in ('x', 'q', 'to_k', 'infeat_size', 'scale') ]
                            
         # By default, infeat_grad_scaler does 0.5 gs.
         ca_x_gs = self.infeat_grad_scaler(ca_x)
@@ -252,7 +251,12 @@ class AttentionalPooler(nn.Module):
         lora_q = torch.cat([lora_fg_q, lora_bg_q], dim=1)
 
         # Dot product of the last dim. sim_scores: [B, 2, 4096].
-        sim_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) * self.lora_attn_score_scale
+        # The sim_scores are too large. So we scale them down by ca_scale (= sqrt(dim_head)),
+        # in addition to lora_attn_score_scale.
+        # TODO: find the root cause why the sim_scores are too large.
+        # Maybe because of wrong magnitudes of lora_q and lora_k?
+        sim_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) \
+                        * self.lora_attn_score_scale * ca_scale
 
         if img_mask is not None:
             # img_mask: [B, 1, 64, 64] 
