@@ -1550,10 +1550,14 @@ class EmbeddingManager(nn.Module):
     def get_ada_emb_weight(self):
         if self.training:
             p01 = self.p_ada_emb_weight_01
-            is_ada_emb_weight_01 = \
-                np.random.choice([0, 1, 2], p=(p01, p01, 1 - 2 * p01))
-            if is_ada_emb_weight_01 == 0 or is_ada_emb_weight_01 == 1:
-                ada_emb_weight = is_ada_emb_weight_01
+            if p01 > 0:
+                is_ada_emb_weight_01 = \
+                    np.random.choice([0, 1, 2], p=(p01, p01, 1 - 2 * p01))
+                if is_ada_emb_weight_01 == 0 or is_ada_emb_weight_01 == 1:
+                    ada_emb_weight = is_ada_emb_weight_01
+                else:
+                    # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
+                    ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)                    
             else:
                 # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
                 ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)
@@ -1605,7 +1609,7 @@ class EmbeddingManager(nn.Module):
             emb_global_scale = emb_global_scale        
         return emb_global_scale
     
-    def set_ada_emb_weight(self, ada_emb_weight, p_ada_emb_weight_01, is_first_time_print=False):
+    def set_ada_emb_weight(self, ada_emb_weight, p_ada_emb_weight_01=0, is_first_time_print=False):
         if is_first_time_print:
             print(f"Setting ada_emb_weight = {ada_emb_weight}, p_ada_emb_weight_01={p_ada_emb_weight_01}")
         else:
