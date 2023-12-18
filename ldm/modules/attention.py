@@ -21,11 +21,6 @@ def default(val, d):
         return val
     return d() if isfunction(d) else d
 
-
-def max_neg_value(t):
-    return -torch.finfo(t.dtype).max
-
-
 def init_(tensor):
     dim = tensor.shape[-1]
     std = 1 / math.sqrt(dim)
@@ -251,6 +246,15 @@ class CrossAttention(nn.Module):
             ada_subj_attn = ada_subj_attn_dict[subj_token]
             # ada_subj_attn: [8, 8, 4096] -> [64, 4096, 1].
             ada_subj_attn = ada_subj_attn.repeat(1, h, 1).reshape(-1, sim.shape[1], 1)
+            if exists(mask):
+                ada_subj_attn_mean = ada_subj_attn.sum(dim=(1,2), keepdim=True) / mask.sum(dim=(1,2), keepdim=True)
+            else:
+                ada_subj_attn_mean = ada_subj_attn.mean(dim=(1,2), keepdim=True)
+            
+            ada_subj_attn_normed = ada_subj_attn / (ada_subj_attn_mean + 1e-6)
+            ada_subj_attn_normed = torch.clamp(ada_subj_attn_normed, min=0.0, max=1.0)
+            # BUG: Still buggy. Don't enable yet.
+            # sim = sim * ada_subj_attn_normed
             pass #breakpoint()
 
         # sim: [64, 4096, 77]. 64: bs * h.
