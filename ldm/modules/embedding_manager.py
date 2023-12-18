@@ -305,7 +305,7 @@ class AttentionalPooler(nn.Module):
         # out: N, 1, D -> N, D, i.e., ([2, 768], [2, 768]).
         # Make the output shape consistent with MaskedAvgPool2d.
         return { 'fg_out': fg_out.squeeze(1), 'bg_out': bg_out.squeeze(1), 
-                 'attn_fg': attn_fg, 'attn_bg': attn_bg }
+                 'attn_fg': attn_fg }
 
 # init_embedding: [L, M, 768].
 class Embedding3d(nn.Module):
@@ -1083,7 +1083,7 @@ class EmbeddingManager(nn.Module):
         if self.gen_ada_embedding:
             # self.layer_idx, self.ca_infeat, self.time_emb were cached by 
             # a previous call of  cache_layer_features_for_ada() from UNet.
-            ada_embedded_text, ada_subj_embs_dict, token2fg_bg_attn = \
+            ada_embedded_text, ada_subj_embs_dict, token2fg_attn = \
                 self.get_ada_embedding(self.layer_idx, self.layer_attn_components, self.time_emb,
                                        tokenized_text, embedded_text)
 
@@ -1093,8 +1093,8 @@ class EmbeddingManager(nn.Module):
                 self.ada_subj_embs_dict[k].cache_layer(ca_layer_idx, 
                                                        ada_subj_embs_dict[k], 
                                                        has_grad=True)
-                if k in token2fg_bg_attn:
-                    self.ada_subj_attn_dict[k] = token2fg_bg_attn[k]
+                if k in token2fg_attn:
+                    self.ada_subj_attn_dict[k] = token2fg_attn[k]
 
             # Release ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
@@ -1246,7 +1246,7 @@ class EmbeddingManager(nn.Module):
         BS, device = tokenized_text.shape[0], tokenized_text.device
         cached_infeat_pooled = None
         ada_subj_embs_dict  = {}
-        token2fg_bg_attn    = {}
+        token2fg_attn       = {}
         
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
         layer_static_prompt_embs   = layer_attn_components['layer_static_prompt_embs']
@@ -1376,7 +1376,7 @@ class EmbeddingManager(nn.Module):
                 # NOTE: this assumes the background token always appears after the subject tokens.
                 # Otherwise the cached_infeat_pooled is not available when the background Ada embedder accesses it.
                 cached_infeat_pooled    = infeat_pooled
-                token2fg_bg_attn[placeholder_string] = (infeat_pooled['attn_fg'], infeat_pooled['attn_bg'])
+                token2fg_attn[placeholder_string] = infeat_pooled['attn_fg']
 
             for k in range(self.token2num_vectors[placeholder_string]):
                 # embedded_text[placeholder_indices_1st] indexes the embedding at each instance in the batch.
@@ -1402,7 +1402,7 @@ class EmbeddingManager(nn.Module):
             # Remove the batch dim.
             ada_subj_embs_dict[placeholder_string] = subj_ada_embedding.mean(dim=0)
 
-        return embedded_text, ada_subj_embs_dict, token2fg_bg_attn
+        return embedded_text, ada_subj_embs_dict, token2fg_attn
 
     # Update prompt_emb_mask and prompt_token_attn_mask.
     # tokenized_text: [B, N] = [2/4, 77].

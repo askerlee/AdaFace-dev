@@ -840,7 +840,6 @@ class UNetModel(nn.Module):
         use_conv_attn_kernel_size   = extra_info.get('use_conv_attn_kernel_size',  None)   if extra_info is not None else None
         conv_attn_layerwise_scales   = extra_info.get('conv_attn_layerwise_scales', None) if extra_info is not None else None
         subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
-        bg_indices            = extra_info.get('bg_indices', None)             if extra_info is not None else None
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
         emb_k_mixer           = extra_info.get('emb_k_mixer', None)            if extra_info is not None else None
@@ -988,7 +987,7 @@ class UNetModel(nn.Module):
                 
             # subj_indices is passed from extra_info, which was obtained when generating static embeddings.
             # Return subj_indices to cross attention layers for conv attn computation.
-            return layer_context, subj_indices, bg_indices
+            return layer_context, ada_subj_attn_dict, subj_indices
 
         # conv_attn_layerwise_scales are not specified. So use the default value 0.5.
         # Here conv_attn_layerwise_scales is a list of scalars, not a learnable tensor.

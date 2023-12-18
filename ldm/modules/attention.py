@@ -193,9 +193,10 @@ class CrossAttention(nn.Module):
             # Don't do conv attn if uncond is active.
             layer_attn_components = { 'x': x, 'q': q, 'to_k': self.to_k, 
                                       'infeat_size': self.infeat_size, 'scale': self.scale }
-            context, subj_indices, bg_indices = context(layer_attn_components)
+            context, ada_subj_attn_dict, subj_indices = context(layer_attn_components)
         else:
-            subj_indices = bg_indices = None
+            ada_subj_attn_dict = None
+            subj_indices = None
 
         if isinstance(context, (list, tuple)):
             v_context, k_context  = context
@@ -225,6 +226,11 @@ class CrossAttention(nn.Module):
                                                 h, self.scale, self.conv_attn_layer_scale, 
                                                 conv_attn_mix_weight=1,
                                                 shift_attn_maps_for_diff_embs=self.shift_attn_maps_for_diff_embs)
+
+        if (ada_subj_attn_dict is not None) and len(ada_subj_attn_dict) > 0:
+            subj_token = ada_subj_attn_dict.keys()[0]
+            ada_subj_attn = ada_subj_attn_dict[subj_token]
+            pass #breakpoint()
 
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].
