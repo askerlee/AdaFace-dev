@@ -227,11 +227,6 @@ class CrossAttention(nn.Module):
                                                 conv_attn_mix_weight=1,
                                                 shift_attn_maps_for_diff_embs=self.shift_attn_maps_for_diff_embs)
 
-        if (ada_subj_attn_dict is not None) and len(ada_subj_attn_dict) > 0:
-            subj_token = ada_subj_attn_dict.keys()[0]
-            ada_subj_attn = ada_subj_attn_dict[subj_token]
-            pass #breakpoint()
-
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].
         # img_mask should only be provided and applied if not context_provided. 
@@ -247,6 +242,16 @@ class CrossAttention(nn.Module):
             # So some rows in dim 1 (e.g. [0, :, 4095]) of sim will be masked out (all elements in [0, :, 4095] is -inf).
             # But not all elements in [0, 4095, :] is -inf. Since the softmax is done along dim 2, this is fine.
             sim.masked_fill_(~mask, max_neg_value)
+
+        if (ada_subj_attn_dict is not None) and len(ada_subj_attn_dict) > 0:
+            # A quick and dirty hack. Only works when there's one subject only.
+            # TODO: extend to multiple subjects.
+            subj_token = list(ada_subj_attn_dict.keys())[0]
+            # ada_subj_attn: [8, 1, 4096]. sim: [64, 4096, 77] (8 heads).
+            ada_subj_attn = ada_subj_attn_dict[subj_token]
+            # ada_subj_attn: [8, 8, 4096] -> [64, 4096, 1].
+            ada_subj_attn = ada_subj_attn.repeat(1, h, 1).reshape(-1, sim.shape[1], 1)
+            pass #breakpoint()
 
         # sim: [64, 4096, 77]. 64: bs * h.
         # attention, what we cannot get enough of
