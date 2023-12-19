@@ -156,7 +156,7 @@ class AttentionalPooler(nn.Module):
         # n_heads greater than the product of the corresponding q and k in the cross-attn layer.
         # We need to scale down the sim scores by n_heads to make them comparable
         # to the sim scores from the cross-attn layer.
-        self.lora_attn_score_scale = self.n_heads * (self.lora_dim ** -0.5) 
+        self.lora_attn_score_scale = (self.lora_dim ** -0.5) / self.n_heads
 
         self.lora_fg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
         self.lora_bg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
