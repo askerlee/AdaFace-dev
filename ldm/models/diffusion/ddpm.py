@@ -2087,7 +2087,7 @@ class LatentDiffusion(DDPM):
                     # If use_wds_comp, then don't fill up the background with gaussian noise 
                     # by doing nothing to x_start.
                     if not self.iter_flags['use_wds_comp']:
-                        if random.random() < 0.25:
+                        if random.random() < 0: #0.25:
                             self.iter_flags['comp_insts_add_more_noise'] = True
                             # By 50% chance, single instances (subj single, mix single) are initialized 
                             # with less noise, i.e., mean total noise amount is 0.1-0.4.
