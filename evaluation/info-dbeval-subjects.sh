@@ -34,5 +34,5 @@ set -g maxiters         2000       3000              2000
 # No suffix for the DreamBooth eval set, as they are objects/animals, as opposed to faces.
 set -g db_suffix           ""
 set -g data_folder         dbeval-dataset
-set -g misc_train_opts     --use_fp_trick 0  --subj_attn_norm_distill_loss_base 2e-4
+set -g misc_train_opts     --use_fp_trick 0
 set -g misc_infer_opts     --use_pre_neg_prompt

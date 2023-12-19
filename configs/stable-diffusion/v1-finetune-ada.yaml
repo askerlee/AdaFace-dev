@@ -45,7 +45,7 @@ model:
     mix_prompt_distill_weight:          1e-4
     # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
     # subj_attn_norm_distill_loss is DISABLED for faces, but enabled for objects.
-    subj_attn_norm_distill_loss_base:   1e-4
+    subj_attn_norm_distill_loss_base:   5
     comp_fg_bg_preserve_loss_weight:    1e-3
     sc_mc_bg_match_loss_base:           0.2      # 0 to disable.
     # fg_bg_comple: used in non-wds recon iters.

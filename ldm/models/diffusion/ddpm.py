@@ -2943,16 +2943,16 @@ class LatentDiffusion(DDPM):
                 subj_attn_norm_distill_loss_scale_base  = 1 
 
                 # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
-                # subj_attn_norm_distill_loss_base: 4 for non-faces or 8 for faces.
+                # subj_attn_norm_distill_loss_base: 5.
                 subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
                                                                          self.subj_attn_norm_distill_loss_base,
                                                                          subj_attn_norm_distill_loss_scale_base)
 
                 feat_delta_align_scale = 2
 
-                loss_mix_prompt_distill =   loss_subj_attn_delta_align * subj_attn_delta_distill_loss_scale \
+                loss_mix_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_distill_loss_scale \
                                             + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
-                                            + loss_feat_delta_align    * feat_delta_align_scale
+                                            + loss_feat_delta_align       * feat_delta_align_scale
                                             
                 if loss_mix_prompt_distill > 0:
                     loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})

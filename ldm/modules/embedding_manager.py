@@ -161,7 +161,7 @@ class AttentionalPooler(nn.Module):
         # The to_q, to_k, to_v projections in the cross-attnion layer don't have bias. 
         # So we don't use bias here.
         # If layer_inner_dim == 1280, lora_dim == 160, n_heads == 8, 
-        # then lora_to_k.weight is [160, 160, 1]. It's actually 8 * (1280/8 * 160/8).
+        # then lora_to_k.weight is [160, 160, 1]. It's actually 8 groups, each (1280/8 * 160/8).
         self.lora_to_k     = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
         self.lora_to_fg_q  = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
         self.lora_to_bg_q  = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
