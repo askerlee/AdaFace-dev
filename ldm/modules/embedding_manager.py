@@ -7,8 +7,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
-                     split_indices_by_instance, add_noise_to_embedding, anneal_value, \
-                     calc_ref_cosine_loss
+                     add_noise_to_embedding, calc_ref_cosine_loss
 
 from functools import partial
 from collections import OrderedDict
@@ -166,6 +165,10 @@ class AttentionalPooler(nn.Module):
         self.lora_bg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
         self.lora_k_ln     = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
 
+        # The to_q, to_k, to_v projections in the cross-attnion layer don't have bias. 
+        # So we don't use bias here.
+        # If layer_inner_dim == 1280, lora_dim == 160, n_heads == 8, 
+        # then lora_to_k.weight is [160, 160, 1]. It's actually 8 * (1280/8 * 160/8).
         self.lora_to_k     = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
         self.lora_to_fg_q  = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
         self.lora_to_bg_q  = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
@@ -213,6 +216,8 @@ class AttentionalPooler(nn.Module):
         # cross-attn k (projection of the prompt embedding). In order to provide proper cross-attn k,
         # we include k as the input to the attentional pooler.
         # Therefore, v = x + k. We can also concat(x, k), but it will double the feature dimension.
+        #calc_stats("x", x)
+        #calc_stats("k_ln", k_ln)
         v = (x + k_ln) / 2
 
         # Use to_k of the UNet attention layer as to_q here, 
