@@ -142,7 +142,7 @@ class MaskedAvgPool1d(nn.Module):
 
 # Set infeat_grad_scale < 1 to reduce the gradient flow into the UNet.
 # feat_dims (ca_infeat_dims) = [ 320,  320,  640, 640, 1280, 1280, 1280, 1280, 
-#                                  1280, 1280, 640, 640, 640,  320,  320,  320 ]
+#                                1280, 1280, 640, 640, 640,  320,  320,  320 ]
 class AttentionalPooler(nn.Module):
     def __init__(self, layer_idx, feat_dim, feat_to_lora_dim_ratio=8,
                  infeat_grad_scale=0.5):
@@ -152,18 +152,7 @@ class AttentionalPooler(nn.Module):
         self.n_heads = 8    
         self.layer_inner_dim = feat_dim
         self.lora_dim = feat_dim // feat_to_lora_dim_ratio
-        # nn.Conv1d weights are initialized as Uniform(-..., sqrt( n_heads / fan_in )).
-        # nn.Linear weights are initialized as Uniform(-..., sqrt( 1 / fan_in )).
-        # So nn.Conv1d weights are sqrt(n_heads) times greater than those of nn.Linear.
-        # Since lora_q and lora_k both go through nn.Conv1d, their product is 
-        # n_heads greater than the product of the corresponding q and k in the cross-attn layer.
-        # To match the sim scores from the cross-attn layer, 
-        # we need to scale down the sim scores by n_heads. However, 
-        # seems normalizing by n_heads is too aggressive and slows down the learning. 
-        # So we take the sqrt(n_heads) instead.
-        # self.lora_dim * self.n_heads is actually feat_dim. 
-        # So lora_attn_score_scale is identical to the score scale used in the cross-attn layer.
-        self.lora_attn_score_scale = (self.lora_dim * self.n_heads) ** -0.5
+        self.lora_attn_score_scale = self.lora_dim ** -0.5
 
         self.lora_fg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
         self.lora_bg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
