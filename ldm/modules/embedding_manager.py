@@ -204,7 +204,7 @@ class AttentionalPooler(nn.Module):
         # We have to normalize k_ln by sqrt(n_heads) to match the scale of x. 
         # Otherwise k will dominate x in v.
         # TODO: why the scale of x is sqrt(n_heads) smaller than that of lora_k_ln(k)?
-        k_ln    = self.lora_k_ln(k) * (self.n_heads ** -0.5)
+        k_ln    = self.lora_k_ln(k)
         # x is x1 in BasicTransformerBlock, which will be added with x_ca output from the cross-attn layer.
         # cross-attn v is the projection of the prompt embedding. So in order to yield proper x_ca,
         # we add x to k, so x is part of the v of the attentional pooler (whose output is the 
@@ -215,7 +215,12 @@ class AttentionalPooler(nn.Module):
         # Therefore, v = x + k. We can also concat(x, k), but it will double the feature dimension.
         #calc_stats(f"{self.layer_idx}-x",       x,      mean_dim=-1)
         #calc_stats(f"{self.layer_idx}-k_ln",    k_ln,   mean_dim=-1)
-        v = (x + k_ln) / 2
+        # The magnitude of k_ln is roughly 2x of x. So k_ln dominates v. 
+        # But adding x to k_ln enriches the features slightly.
+        v = (x + k_ln) * (self.n_heads ** -0.5)
+        # Use v as k. Originally we use normalized k_ln as k. But since v is enriched than k_ln,
+        # we use v as k.
+        k = v
 
         # Use to_k of the UNet attention layer as to_q here, 
         # as the subject embedding is used as the key in UNet.
@@ -248,7 +253,7 @@ class AttentionalPooler(nn.Module):
         # q: [B, 1, 320]    -> [B, 320, 1]
         # k: [B, 4096, 320] -> [B, 320, 4096]
         # Permute dims to match the dim order of nn.Conv1d.
-        fg_q_ln, bg_q_ln, k_ln = map(lambda t: t.permute(0, 2, 1), (fg_q_ln, bg_q_ln, k_ln))
+        fg_q_ln, bg_q_ln, k = map(lambda t: t.permute(0, 2, 1), (fg_q_ln, bg_q_ln, k))
 
         # NOTE: 320 and 64 are multi-head concatenated, 8*40 and 8*8.
         # lora_to_fg_q, lora_to_bg_q: nn.Conv1d of 8 groups, each group corresponding to a head.
@@ -259,7 +264,7 @@ class AttentionalPooler(nn.Module):
         # For these cases, lora_bg_q is 0 => sim_scores[:, 1] = 0, i.e., bg attn is uniform.
         lora_bg_q = self.lora_to_bg_q(bg_q_ln)
         # lora_k: [B, 320, 4096] -> [B, 64, 4096].
-        lora_k = self.lora_to_k(k_ln)
+        lora_k = self.lora_to_k(k)
         # lora_fg_q, lora_bg_q: [B, 64, 1]    -> [B, 1, 64]
         # lora_k:               [8, 64, 4096] -> [8, 4096, 64]
         lora_fg_q, lora_bg_q, lora_k = map(lambda t: t.permute(0, 2, 1), (lora_fg_q, lora_bg_q, lora_k))
