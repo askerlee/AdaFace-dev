@@ -2940,7 +2940,10 @@ class LatentDiffusion(DDPM):
                 # loss_subj_attn_delta_align_* use L2 losses, 
                 # so no need to use dynamic loss scale.
                 subj_attn_delta_distill_loss_scale = 1 #0.5
-                subj_attn_norm_distill_loss_scale_base  = 1 
+                # loss_feat_delta_align is around 0.5~1.5. loss_subj_attn_delta_align is around 0.3~0.6.
+                # loss_subj_attn_norm_distill is usually 5~10. 
+                # So scale it down by 0.2 to match the other two. New range: 1~2.
+                subj_attn_norm_distill_loss_scale_base  = 0.2
 
                 # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
                 # subj_attn_norm_distill_loss_base: 5.
