@@ -138,7 +138,7 @@ class MaskedAvgPool1d(nn.Module):
         return x
 
 # Set infeat_grad_scale < 1 to reduce the gradient flow into the UNet.
-# feat_dims (attn_infeat_dims) = [ 320,  320,  640, 640, 1280, 1280, 1280, 1280, 
+# feat_dims (ca_infeat_dims) = [ 320,  320,  640, 640, 1280, 1280, 1280, 1280, 
 #                                  1280, 1280, 640, 640, 640,  320,  320,  320 ]
 class AttentionalPooler(nn.Module):
     def __init__(self, layer_idx, feat_dim, feat_to_lora_dim_ratio=8,
@@ -154,9 +154,13 @@ class AttentionalPooler(nn.Module):
         # So nn.Conv1d weights are sqrt(n_heads) times greater than those of nn.Linear.
         # Since lora_q and lora_k both go through nn.Conv1d, their product is 
         # n_heads greater than the product of the corresponding q and k in the cross-attn layer.
-        # We need to scale down the sim scores by n_heads to make them comparable
-        # to the sim scores from the cross-attn layer.
-        self.lora_attn_score_scale = (self.lora_dim ** -0.5) / self.n_heads
+        # To match the sim scores from the cross-attn layer, 
+        # we need to scale down the sim scores by n_heads. However, 
+        # seems normalizing by n_heads is too aggressive and slows down the learning. 
+        # So we take the sqrt(n_heads) instead.
+        # self.lora_dim * self.n_heads is actually feat_dim. 
+        # So lora_attn_score_scale is identical to the score scale used in the cross-attn layer.
+        self.lora_attn_score_scale = (self.lora_dim * self.n_heads) ** -0.5
 
         self.lora_fg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
         self.lora_bg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
@@ -236,17 +240,17 @@ class AttentionalPooler(nn.Module):
         # fg_q: [B, 1, 320], k: [B, 4096, 320], v: [B, 4096, 320]. 
         # The 320 dims of q,k consist of 8 heads, each head having 40 dims.
         #breakpoint()
-
         fg_q_ln = self.lora_fg_q_ln(fg_q)
         bg_q_ln = self.lora_bg_q_ln(bg_q)
 
         # q: [B, 1, 320]    -> [B, 320, 1]
         # k: [B, 4096, 320] -> [B, 320, 4096]
+        # Permute dims to match the dim order of nn.Conv1d.
         fg_q_ln, bg_q_ln, k_ln = map(lambda t: t.permute(0, 2, 1), (fg_q_ln, bg_q_ln, k_ln))
 
         # NOTE: 320 and 64 are multi-head concatenated, 8*40 and 8*8.
-        # lora_to_fg_q, lora_to_bg_q: Conv1d of 8 groups, each group corresponding to a head.
-        # In each group, reduce dimension 40 -> 8. 
+        # lora_to_fg_q, lora_to_bg_q: nn.Conv1d of 8 groups, each group corresponding to a head.
+        # In each group, reduce dimension 40 -> 5. 
         # So the overall computation complexity is 8*40*8=320*8, instead of 320*64.
         lora_fg_q = self.lora_to_fg_q(fg_q_ln)
         # During training, at 20% of the chance, bg_q_emb is dropped out to be 0. 
@@ -257,7 +261,8 @@ class AttentionalPooler(nn.Module):
         # lora_fg_q, lora_bg_q: [B, 64, 1]    -> [B, 1, 64]
         # lora_k:               [8, 64, 4096] -> [8, 4096, 64]
         lora_fg_q, lora_bg_q, lora_k = map(lambda t: t.permute(0, 2, 1), (lora_fg_q, lora_bg_q, lora_k))
-        # lora_q: [B, 2, 64]. Two artificial tokens, each with 64 dims.
+        # lora_fg_q, lora_bg_q are two artificial tokens, each with 64 dims.
+        # lora_q: [B, 2, 64]. 
         lora_q = torch.cat([lora_fg_q, lora_bg_q], dim=1)
 
         # Dot product of the last dim. sim_scores: [B, 2, 4096].
@@ -529,8 +534,8 @@ class AdaEmbedding(nn.Module):
                  out_emb_dim=768, r=12, 
                  init_words=None, init_vecs=None, 
                  # 16 cross-attention layers.
-                 attn_infeat_dims = [ 320,  320,  640, 640, 1280, 1280, 1280, 1280, 
-                                      1280, 1280, 640, 640, 640,  320,  320,  320 ],
+                 ca_infeat_dims = [ 320,  320,  640, 640, 1280, 1280, 1280, 1280, 
+                                    1280, 1280, 640, 640, 640,  320,  320,  320 ],
                  # skipped_layers = [0, 3, 6, 9, 10, 11, 13, 14, 15],
                  layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                             17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },
@@ -615,12 +620,12 @@ class AdaEmbedding(nn.Module):
         # Always set the last basis vector to 0.
         self.basis_vecs.data[:, -1] = 0
 
-        self.attn_infeat_dims = list(attn_infeat_dims)
+        self.ca_infeat_dims = list(ca_infeat_dims)
         # self.infeat_dims = [ 320 for i in range(25) ]
 
         poolers = []
         for i in range(num_layers):
-            infeat_dim = self.attn_infeat_dims[i]
+            infeat_dim = self.ca_infeat_dims[i]
 
             if self.use_attn_pooler:
                 pooler = AttentionalPooler(i, infeat_dim, infeat_grad_scale=0.5)
@@ -639,17 +644,17 @@ class AdaEmbedding(nn.Module):
 
         for i in range(num_layers):
             # Time embedding dimension is the same as the input feature dimension.
-            # So TD = TD_frac * attn_infeat_dims[i].
-            TD = int(self.TD_frac * self.attn_infeat_dims[i])
+            # So TD = TD_frac * ca_infeat_dims[i].
+            TD = int(self.TD_frac * self.ca_infeat_dims[i])
             self.TDs.append(TD)
 
-            # input  dim: self.attn_infeat_dims[i] + TD, since first TD dims of time_emb is part of the input features.
+            # input  dim: self.ca_infeat_dims[i] + TD, since first TD dims of time_emb is part of the input features.
             # output dim: r * K, will be reshaped to [K, r].
             # This Linear outputs K sets of r-dim vectors, 
             # each set being the coefficients of the r basis vectors. 
-            layer_coeff_maps.append( nn.Linear(self.attn_infeat_dims[i] * H + TD, 
+            layer_coeff_maps.append( nn.Linear(self.ca_infeat_dims[i] * H + TD, 
                                                 r * self.K, bias=True) )
-            layer_lncat3s.append(LNCat3(self.attn_infeat_dims[i] * H, TD))
+            layer_lncat3s.append(LNCat3(self.ca_infeat_dims[i] * H, TD))
             # A specific LayerNorm is applied on each of the K embeddings in each layer.
             layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
             layers_out_lns.append(layer_out_lns)
@@ -671,9 +676,9 @@ class AdaEmbedding(nn.Module):
         self.call_count = 0
         self.debug = False
 
-    # If masked_layer_idx is specified, then only mask for one layer. Otherwise, mask for all layers.
+    # If reduced_layer_idx is specified, then only mask for one layer. Otherwise, mask for all layers.
     # When generating ada embeddings for each layer in turn, only masking one layer will reduce processing time.
-    def reduce_fg_bg_cross_weights(self, masked_layer_idx=None):
+    def reduce_fg_bg_cross_weights(self, reduced_layer_idx=None):
         # If token_is_bg: 
         # its "fg infeat" is the attn pooled infeat using the main embedding, in this case, the bg embedding.
         # Therefore, "fg infeat" is of the background.
@@ -689,11 +694,11 @@ class AdaEmbedding(nn.Module):
 
         assert self.H == 2
 
-        layer_range = range(self.num_layers) if masked_layer_idx is None else [masked_layer_idx]
+        layer_range = range(self.num_layers) if reduced_layer_idx is None else [reduced_layer_idx]
         cross_weight_max_ratio = 0.01
 
         for layer_idx in layer_range:
-            SINGLE_D = self.attn_infeat_dims[layer_idx]
+            SINGLE_D = self.ca_infeat_dims[layer_idx]
             TD       = self.TDs[layer_idx]
             assert self.layer_coeff_maps[layer_idx].in_features == SINGLE_D * 2 + TD
             layer_coeff_map_weight = self.layer_coeff_maps[layer_idx].weight.data
@@ -761,33 +766,34 @@ class AdaEmbedding(nn.Module):
             if self.use_attn_pooler and self.use_cached_bg:
                 infeat_bg     = cached_infeat_pooled['bg_out']
                 cached_bg_used = True
-            if not (cached_bg_used and self.is_bg_only):
+            if not (self.is_bg_only and cached_bg_used):
                 # Either cached_bg_used, or not is_bg_only.
                 # In either case, we need to get features using pooler.
                 # layer_subj_emb_probe should be quite similar to the ada embedding at this layer.
                 # So we use layer_subj_emb_probe as an approximate query to do the attention-based pooling.
                 # layer_subj_emb_probe: [768]. layer_static_extra_emb_mean: [2, 768].
-                infeat_pooled    = pooler(layer_attn_components, 
-                                          fg_q_emb=layer_subj_emb_probe, 
-                                          bg_q_emb=layer_static_extra_emb_mean,
-                                          img_mask=img_mask,
-                                          debug=self.debug)
+                infeat_pooled_dict  = pooler(layer_attn_components, 
+                                            fg_q_emb=layer_subj_emb_probe, 
+                                            bg_q_emb=layer_static_extra_emb_mean,
+                                            img_mask=img_mask,
+                                            debug=self.debug)
 
             if self.use_attn_pooler:
                 # infeat_fg, infeat_bg: [2, 320]
-                infeat_fg = infeat_pooled['fg_out']
+                infeat_fg = infeat_pooled_dict['fg_out']
                 if not cached_bg_used:
-                    infeat_bg = infeat_pooled['bg_out']
+                    infeat_bg = infeat_pooled_dict['bg_out']
                 # infeat_fg won't be used in future calls, so it is released now.
-                del infeat_pooled['fg_out']
+                # But infeat_pooled_dict['bg_out'] may be cached and used in future calls.
+                del infeat_pooled_dict['fg_out']
 
                 # infeat_fg_bg: [2, 640]
                 infeat_fg_bg = torch.cat([infeat_fg, infeat_bg], dim=-1)
             else:
                 # Since not use_attn_pooler, always cached_bg_used = False. 
                 # So we always use freshly pooled features. 
-                # In this case, infeat_pooled is a tensor.
-                infeat_fg_bg = infeat_pooled
+                # In this case, infeat_pooled_dict is a tensor.
+                infeat_fg_bg = infeat_pooled_dict
 
             # time_emb has a fixed dimension of 1280. But infeat has variable dimensions.
             # Only use the first TD dimensions of the time embedding, 
@@ -797,24 +803,20 @@ class AdaEmbedding(nn.Module):
             # as the leading dimensions are most sensitive to time change, 
             # and the last dimensions tend to be the same for all time steps.
             # TD is typically C_layer/4, so that the time embeddings won't dominate 
-            # the image features infeat_pooled.
+            # the image features infeat_fg_bg.
             TD = self.TDs[ca_layer_idx]
             
+            time_feat = time_emb[:, :TD]
             ablate_time = False
             if ablate_time:
-                time_feat = torch.zeros_like(time_emb[:, :TD])
-            else:
-                time_feat = time_emb[:, :TD]
+                time_feat = torch.zeros_like(time_feat)
 
-            # infeat_time_emb: cat(ln(infeat_pooled), ln(time_emb)) as the input features.
+            # infeat_time_emb: cat(ln(infeat_fg_bg), ln(time_emb)) as the input features.
             infeat_time_emb    = self.layer_lncat3s[ca_layer_idx](infeat_fg_bg, time_feat)
 
             # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
             # Consider the last dim. 
             basis_dyn_coeffs = self.layer_coeff_maps[ca_layer_idx](infeat_time_emb).reshape(-1, self.K, self.r)
-
-            # bias: [1, K, 768]
-            bias = self.bias[ca_layer_idx].unsqueeze(0)
 
             # self.N: number of pre_vecs.
             if self.N > 0:
@@ -831,6 +833,9 @@ class AdaEmbedding(nn.Module):
             out_vecs0 = torch.stack([ out_lns[k](out_vecs_unnorm[k]) for k in range(self.K) ], dim=1)
             # out_emb_dim: 768.
             out_vecs0 = out_vecs0 / np.sqrt(self.out_emb_dim)
+
+            # bias: [1, K, 768]
+            bias = self.bias[ca_layer_idx].unsqueeze(0)
             # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
             out_vecs  = out_vecs0 + bias
 
@@ -848,8 +853,8 @@ class AdaEmbedding(nn.Module):
             if ca_layer_idx == 24:
                 self.call_count += 1
 
-        # Return infeat_pooled to be used by another ada_embedder that specializes on the background.
-        return out_vecs, infeat_pooled
+        # Return infeat_pooled_dict to be used by another ada_embedder that specializes on the background.
+        return out_vecs, infeat_pooled_dict
 
 # text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -1390,7 +1395,7 @@ class EmbeddingManager(nn.Module):
             # So this assumption should always hold.
             # For background Ada embedder, cached_infeat_pooled is only used when
             # use_cached_bg. Otherwise, it's ignored.
-            subj_ada_embedding, infeat_pooled = \
+            subj_ada_embedding, infeat_pooled_dict = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
                                      layer_subj_emb_probe,
                                      layer_static_extra_emb_mean, 
@@ -1404,12 +1409,12 @@ class EmbeddingManager(nn.Module):
                 # to be used by the second Ada embedder and the background Ada embedder.
                 # NOTE: this assumes the background token always appears after the subject tokens.
                 # Otherwise the cached_infeat_pooled is not available when the background Ada embedder accesses it.
-                cached_infeat_pooled    = infeat_pooled
+                cached_infeat_pooled    = infeat_pooled_dict
                 placeholder_indices_B   = placeholder_indices_1st[0]
-                token2fg_attn[placeholder_string] = torch.ones_like(infeat_pooled['attn_fg'])
+                token2fg_attn[placeholder_string] = torch.ones_like(infeat_pooled_dict['attn_fg'])
                 # Only assign ada subj attn_fg to instances that contain the placeholder token.
                 # In other instances that don't contain the placeholder token, the attn_fg is all 1.
-                token2fg_attn[placeholder_string][placeholder_indices_B] = infeat_pooled['attn_fg'][placeholder_indices_B]
+                token2fg_attn[placeholder_string][placeholder_indices_B] = infeat_pooled_dict['attn_fg'][placeholder_indices_B]
 
             for k in range(self.token2num_vectors[placeholder_string]):
                 # embedded_text[placeholder_indices_1st] indexes the embedding at each instance in the batch.
