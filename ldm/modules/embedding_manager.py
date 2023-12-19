@@ -149,7 +149,12 @@ class AttentionalPooler(nn.Module):
         self.n_heads = 8    
         self.layer_inner_dim = feat_dim
         self.lora_dim = feat_dim // feat_to_lora_dim_ratio
-        self.lora_attn_score_scale = self.lora_dim ** -0.5
+        # nn.Conv1d weights are initialized as Uniform(-..., sqrt( n_heads / fan_in )).
+        # nn.Linear weights are initialized as Uniform(-..., sqrt( 1 / fan_in )).
+        # So nn.Conv1d weights are sqrt(n_heads) times greater than those of nn.Linear.
+        # We need to scale down the sim scores by sqrt(n_heads) to make them comparable
+        # to the sim scores from the cross-attn layer.
+        self.lora_attn_score_scale = (self.lora_dim * self.n_heads) ** -0.5
 
         self.lora_fg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
         self.lora_bg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
