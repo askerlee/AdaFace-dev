@@ -65,9 +65,13 @@ def reg_loss(x, loss_type='l2', selector=None):
     else:
         breakpoint()
 
-def calc_stats(emb_name, embeddings):
+def calc_stats(emb_name, embeddings, mean_dim=0):
     print("%s:" %emb_name)
-    emb_mean = embeddings.mean(0, keepdim=True).repeat(embeddings.size(0), 1)
+    repeat_count = [1] * embeddings.ndim
+    repeat_count[mean_dim] = embeddings.shape[mean_dim]
+    # Average across the mean_dim dim. 
+    # Make emb_mean the same size as embeddings, as required by F.l1_loss.
+    emb_mean = embeddings.mean(mean_dim, keepdim=True).repeat(repeat_count)
     l1_loss = F.l1_loss(embeddings, emb_mean)
     # F.l2_loss doesn't take sqrt. So the loss is very small. 
     # Compute it manually.
@@ -176,6 +180,7 @@ class AttentionalPooler(nn.Module):
         #self.ln_fg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
         #self.ln_bg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
+        # layer_idx is recorded for debugging purpose.
         self.layer_idx = layer_idx
 
         self.infeat_grad_scale = infeat_grad_scale      # Default 0.5
@@ -207,7 +212,10 @@ class AttentionalPooler(nn.Module):
         # Repurposed as key here.
         # the to_q() of the UNet cross-attention layer doesn't change the dimension of k,
         # i.e., k dim = x dim. Therefore, x + k_ln is legal.
-        k_ln    = self.lora_k_ln(k)
+        # We have to normalize k_ln by sqrt(n_heads) to match the scale of x. 
+        # Otherwise k will dominate x in v.
+        # TODO: why the scale of x is sqrt(n_heads) smaller than that of lora_k_ln(k)?
+        k_ln    = self.lora_k_ln(k) * (self.n_heads ** -0.5)
         # x is x1 in BasicTransformerBlock, which will be added with x_ca output from the cross-attn layer.
         # cross-attn v is the projection of the prompt embedding. So in order to yield proper x_ca,
         # we add x to k, so x is part of the v of the attentional pooler (whose output is the 
@@ -216,8 +224,8 @@ class AttentionalPooler(nn.Module):
         # cross-attn k (projection of the prompt embedding). In order to provide proper cross-attn k,
         # we include k as the input to the attentional pooler.
         # Therefore, v = x + k. We can also concat(x, k), but it will double the feature dimension.
-        #calc_stats("x", x)
-        #calc_stats("k_ln", k_ln)
+        #calc_stats(f"{self.layer_idx}-x",       x,      mean_dim=-1)
+        #calc_stats(f"{self.layer_idx}-k_ln",    k_ln,   mean_dim=-1)
         v = (x + k_ln) / 2
 
         # Use to_k of the UNet attention layer as to_q here, 
