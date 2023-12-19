@@ -509,13 +509,13 @@ class StaticLayerwiseEmbedding(nn.Module):
             #                          2     for k ...
             # Otherwise embeddings in out_vecs_ln will be in wrong order.
             out_vecs_ln = [ self.layers_out_lns[i][k](out_vecs_unnorm[k][i]) for i in range(self.num_layers) for k in range(self.K) ]
-            out_vecs_ln = torch.stack(out_vecs_ln, dim=0).reshape(self.num_layers, self.K, -1) / np.sqrt(self.out_emb_dim)
+            out_vecs0 = torch.stack(out_vecs_ln, dim=0).reshape(self.num_layers, self.K, -1) / np.sqrt(self.out_emb_dim)
 
             # Different layers and embeddings have different biases.
             # self.bias: [16, K, 768].
-            out_vecs_ln = out_vecs_ln + self.bias
+            out_vecs = out_vecs0 + self.bias
             # Return static embeddings of all layers together: [16, K, 768].
-            return out_vecs_ln
+            return out_vecs
 
 class AdaEmbedding(nn.Module):
     # num_layers: 16 (9 layers out of 25 of UNet are skipped).
@@ -690,7 +690,7 @@ class AdaEmbedding(nn.Module):
         assert self.H == 2
 
         layer_range = range(self.num_layers) if masked_layer_idx is None else [masked_layer_idx]
-        cross_weight_max_ratio = 0.01 #25
+        cross_weight_max_ratio = 0.01
 
         for layer_idx in layer_range:
             SINGLE_D = self.attn_infeat_dims[layer_idx]
@@ -708,21 +708,26 @@ class AdaEmbedding(nn.Module):
                 # self.emb_infeat_types: [0, 0, 0, 0, 1, 1, 1, 1, 2]. 0 = fg, 1 = bg, 2 = fg_bg
                 emb_infeat_type = self.emb_infeat_types[emb_idx]
                 if emb_infeat_type == 0:
-                    # fg embeddings. Take full fg infeat and 0.3 of bg infeat as input.
-                    fg_in_mean_weight   = layer_coeff_map_weight_emb[:, :SINGLE_D].abs().mean().item()
-                    f2b_mean_weight     = layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2].abs().mean().item()
-                    f2b_down_scale      = min(1, cross_weight_max_ratio * fg_in_mean_weight / (f2b_mean_weight + 1e-6))
-                    layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2] *= f2b_down_scale
-                    #print(f"Layer {layer_idx} emb {emb_idx} fg_in_mean_weight {fg_in_mean_weight:.3f} f2b_mean_weight {f2b_mean_weight:.3f} f2b_down_scale {f2b_down_scale:.3f}")
+                    # layer_coeff_map_weight_emb: [r, in_features]. 
+                    # fg_to_fg_coeff_mean_weight: the average weight of the mapping from fg infeat 
+                    # to the r basis vector coeffs.
+                    fg_to_fg_coeff_mean_weight  = layer_coeff_map_weight_emb[:, :SINGLE_D].abs().mean().item()
+                    # bg_to_fg_coeff_mean_weight: the average weight of the mapping from bg infeat to 
+                    # the r basis vector coeffs.
+                    bg_to_fg_coeff_mean_weight  = layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2].abs().mean().item()
+                    # Scale down the weights from bg infeat to fg coeffs, so that this mean weight
+                    # is at most cross_weight_max_ratio of the mean weight from fg infeat to fg coeffs.
+                    b2f_down_scale  = min(1, cross_weight_max_ratio * fg_to_fg_coeff_mean_weight / (bg_to_fg_coeff_mean_weight + 1e-6))
+                    layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2] *= b2f_down_scale
+                    #print(f"Layer {layer_idx} emb {emb_idx} fg_to_fg_coeff_mean_weight {fg_to_fg_coeff_mean_weight:.3f} bg_to_fg_coeff_mean_weight {bg_to_fg_coeff_mean_weight:.3f} b2f_down_scale {b2f_down_scale:.3f}")
                 elif emb_infeat_type == 1:
                     # bg embeddings. Take full bg infeat and 0.3 of fg infeat as input.
-                    bg_in_mean_weight   = layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2].abs().mean().item()
-                    b2f_mean_weight     = layer_coeff_map_weight_emb[:, :SINGLE_D].abs().mean().item()
-                    b2f_down_scale      = min(1, cross_weight_max_ratio * bg_in_mean_weight / (b2f_mean_weight + 1e-6))
-                    layer_coeff_map_weight_emb[:, :SINGLE_D] *= b2f_down_scale
-                    #print(f"Layer {layer_idx} emb {emb_idx} bg_in_mean_weight {bg_in_mean_weight:.3f} b2f_mean_weight {b2f_mean_weight:.3f} b2f_down_scale {b2f_down_scale:.3f}")
+                    bg_to_bg_coeff_mean_weight  = layer_coeff_map_weight_emb[:, SINGLE_D:SINGLE_D*2].abs().mean().item()
+                    fg_to_bg_coeff_mean_weight  = layer_coeff_map_weight_emb[:, :SINGLE_D].abs().mean().item()
+                    f2b_down_scale      = min(1, cross_weight_max_ratio * bg_to_bg_coeff_mean_weight / (fg_to_bg_coeff_mean_weight + 1e-6))
+                    layer_coeff_map_weight_emb[:, :SINGLE_D] *= f2b_down_scale
+                    #print(f"Layer {layer_idx} emb {emb_idx} bg_to_bg_coeff_mean_weight {bg_to_bg_coeff_mean_weight:.3f} fg_to_bg_coeff_mean_weight {fg_to_bg_coeff_mean_weight:.3f} f2b_down_scale {f2b_down_scale:.3f}")
                 # Otherwise, emb_infeat_type == 2, no scaling is needed.
-
 
     # ca_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. ca_layer_idx: 0 ~ 15.
