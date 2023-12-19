@@ -138,23 +138,26 @@ class MaskedAvgPool1d(nn.Module):
         return x
 
 # Set infeat_grad_scale < 1 to reduce the gradient flow into the UNet.
+# feat_dims (attn_infeat_dims) = [ 320,  320,  640, 640, 1280, 1280, 1280, 1280, 
+#                                  1280, 1280, 640, 640, 640,  320,  320,  320 ]
 class AttentionalPooler(nn.Module):
-    def __init__(self, layer_idx, feat_dim, token_emb_dim, lora_dim=64,
+    def __init__(self, layer_idx, feat_dim, feat_to_lora_dim_ratio=8,
                  infeat_grad_scale=0.5):
         super().__init__()
         # Set to the same number of heads as the CrossAttention layers.
         # All CrossAttention layers in UNet have 8 heads.
         self.n_heads = 8    
         self.layer_inner_dim = feat_dim
-        self.lora_attn_score_scale = lora_dim ** -0.5
+        self.lora_dim = feat_dim // feat_to_lora_dim_ratio
+        self.lora_attn_score_scale = self.lora_dim ** -0.5
 
         self.lora_fg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
         self.lora_bg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
         self.lora_k_ln     = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
 
-        self.lora_to_k     = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
-        self.lora_to_fg_q  = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
-        self.lora_to_bg_q  = nn.Conv1d(self.layer_inner_dim, lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
+        self.lora_to_k     = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
+        self.lora_to_fg_q  = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
+        self.lora_to_bg_q  = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
 
         #self.ln_fg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
         #self.ln_bg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
@@ -614,7 +617,7 @@ class AdaEmbedding(nn.Module):
             infeat_dim = self.attn_infeat_dims[i]
 
             if self.use_attn_pooler:
-                pooler = AttentionalPooler(i, infeat_dim, out_emb_dim, infeat_grad_scale=0.5)
+                pooler = AttentionalPooler(i, infeat_dim, infeat_grad_scale=0.5)
             else:
                 pooler = MaskedAvgPool1d() #MaskedAvgPool2d()
             poolers.append(pooler)
