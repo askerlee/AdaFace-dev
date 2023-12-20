@@ -252,8 +252,15 @@ class CrossAttention(nn.Module):
             else:
                 ada_subj_attn_mean = ada_subj_attn.mean(dim=(1,2), keepdim=True)
             
-            ada_subj_attn_normed = ada_subj_attn / (ada_subj_attn_mean + 1e-6)
-            ada_subj_attn_normed = torch.clamp(ada_subj_attn_normed, min=0.0, max=1.0)
+            if ada_subj_attn_mean > 1e-4:
+                ada_subj_attn_normed = ada_subj_attn / ada_subj_attn_mean
+                # Only reduce the bg attn (of image tokens other than the subject area) 
+                # of the subject tokens, not to increase fg attn. So we cap the attn to 1.0.
+                ada_subj_attn_normed = torch.clamp(ada_subj_attn_normed, min=0.0, max=1.0)
+            else:
+                # subj attn is almost 0 everywhere. No point to use it to do reweighting.
+                ada_subj_attn_normed = torch.ones_like(ada_subj_attn)
+
             # BUG: Still buggy. Don't enable yet.
             # sim = sim * ada_subj_attn_normed
             pass #breakpoint()

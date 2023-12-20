@@ -61,7 +61,7 @@ model:
     wds_bg_recon_discount:              0.05
     
     optimizer_type: AdamW      # NAdam     # AdamW or NAdam.
-    adam_betas: [0.99, 0.995]  # Better than [0.9, 0.999].
+    adam_betas: [0.99, 0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:
