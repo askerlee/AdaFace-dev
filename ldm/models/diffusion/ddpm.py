@@ -846,8 +846,13 @@ class LatentDiffusion(DDPM):
                     static_embeddings = static_embeddings.mode()
                 
                 # Fix the scales of the static subject embeddings.
-                static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_fg, num_layers=self.N_LAYERS)
-                static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_bg, num_layers=self.N_LAYERS)
+                static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_fg, 
+                                                   num_layers=self.N_LAYERS)
+                # Gradually increase the scales of the background embeddings, 
+                # so that they will absorb more high-freq noisy features.
+                self.bg_emb_extra_scale = anneal_value(self.training_percent, 1, value_range=(1, 2))
+                static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_bg, 
+                                                   num_layers=self.N_LAYERS, extra_scale=self.bg_emb_extra_scale)
 
                 extra_info = { 
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
@@ -906,8 +911,12 @@ class LatentDiffusion(DDPM):
         # The scales of static subject embeddings are fixed in get_learned_conditioning().
         ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_fg, 
                                            extra_scale=emb_global_scale)
+        # self.bg_emb_extra_scale is gradually increased from 1 (beginning of training) 
+        # to 2 (end of training) in get_learned_conditioning().
+        # Gradually increase the scales of the background embeddings, 
+        # so that they will absorb more high-freq noisy features.
         ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_bg, 
-                                           extra_scale=1)
+                                           extra_scale=self.bg_emb_extra_scale)
 
         ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
 

@@ -34,7 +34,7 @@ model:
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     static_embedding_reg_weight:        2e-5
     # typical loss_ada_em_reg is ~5e-2, * weight -> 5e-5.
-    ada_embedding_reg_weight:           1.5e-3
+    ada_embedding_reg_weight:           1e-3
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:        2e-4
     padding_embs_align_loss_weight:     3e-4 # 0 to disable.
