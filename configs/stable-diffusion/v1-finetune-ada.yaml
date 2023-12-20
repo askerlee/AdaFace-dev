@@ -84,15 +84,13 @@ model:
         use_layerwise_embedding: True
         layerwise_lora_rank_token_ratio: 2
         ada_emb_weight: 0.5
-        # During training, p prob to take 0, p prob to take 1, 
-        # (1 - 2*p) prob to take 0.5 + fluctuation.
-        p_ada_emb_weight_01: 0
         emb_ema_as_pooling_probe_weight: 0.5  # Should be the same as ada_emb_weight.
         ada_use_attn_pooler: True
         conv_attn_layerwise_scale_learnable: True
-        training_add_noise_std_range:  [ 0.1, 0.3 ]
+        training_begin_add_noise_std_range:  [ 0.1, 0.2 ]
+        training_end_add_noise_std_range:    [ 0.1, 0.4 ]
         # probs for recon_iter and distill_iter, respectively
-        training_add_noise_prob:   { 'recon_iter': 0.6, 'distill_iter': 0.3 }
+        training_add_noise_prob:   { 'recon_iter': 0.6, 'distill_iter': 0.4 }
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

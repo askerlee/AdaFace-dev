@@ -1715,11 +1715,15 @@ def normalized_sum(losses_list, norm_pow=0):
 
 # embeddings: [N, 768]. 
 # noise_rel_std_range: the noise std / embeddings std falls within this range.
-def add_noise_to_embedding(embeddings, noise_rel_std_range, add_noise_prob):
+def add_noise_to_embedding(embeddings, training_percent,
+                           begin_noise_rel_std_range, 
+                           end_noise_rel_std_range, 
+                           add_noise_prob):
     if random.random() > add_noise_prob:
         return embeddings
     
-    noise_rel_std_lb, noise_rel_std_ub = noise_rel_std_range
+    noise_rel_std_lb = anneal_value(training_percent, 1, begin_noise_rel_std_range[0], end_noise_rel_std_range[0])
+    noise_rel_std_ub = anneal_value(training_percent, 1, begin_noise_rel_std_range[1], end_noise_rel_std_range[1])
     emb_std_mean = embeddings.std(dim=-1).mean()
     noise_std = np.random.uniform(noise_rel_std_lb, noise_rel_std_ub) * emb_std_mean
     noise = torch.randn_like(embeddings) * noise_std

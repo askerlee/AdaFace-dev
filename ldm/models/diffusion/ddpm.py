@@ -850,7 +850,7 @@ class LatentDiffusion(DDPM):
                                                    num_layers=self.N_LAYERS)
                 # Gradually increase the scales of the background embeddings, 
                 # so that they will absorb more high-freq noisy features.
-                self.bg_emb_extra_scale = anneal_value(self.training_percent, 1, value_range=(1, 2))
+                self.bg_emb_extra_scale = anneal_value(self.training_percent, 1, value_range=(1, 1.5))
                 static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_bg, 
                                                    num_layers=self.N_LAYERS, extra_scale=self.bg_emb_extra_scale)
 
@@ -1281,6 +1281,8 @@ class LatentDiffusion(DDPM):
         # NOTE: captions (batch['caption'] or batch['caption_bg'])
         # are only for image reconstruction iterations.
         x_start, _ = self.get_input(batch, self.first_stage_key)
+        # Update the training_percent of embedding_manager.
+        self.embedding_manager.training_percent = self.training_percent
 
         batch_have_fg_mask                      = batch['has_fg_mask']
         # Temporarily disable fg_mask for debugging.

@@ -890,10 +890,10 @@ class EmbeddingManager(nn.Module):
             layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             ada_emb_weight=0.5, 
-            p_ada_emb_weight_01=0,
             ada_use_attn_pooler=True,
             emb_ema_as_pooling_probe_weight=0,
-            training_add_noise_std_range=None,
+            training_begin_add_noise_std_range=None,
+            training_end_add_noise_std_range=None,
             training_add_noise_prob=None,
             use_conv_attn_kernel_size=-1,
             conv_attn_layerwise_scale_learnable=False,
@@ -908,7 +908,7 @@ class EmbeddingManager(nn.Module):
         self.initial_embeddings  = nn.ParameterDict() # These should not be optimized
         self.token2emb_cache = nn.ParameterDict() # These should not be optimized
 
-        self.set_ada_emb_weight(ada_emb_weight, p_ada_emb_weight_01, is_first_time_print=True)
+        self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
         self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight
         self.emb_ema_grad_scale = 0.05
@@ -927,7 +927,9 @@ class EmbeddingManager(nn.Module):
         self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
         self.initialize_conv_attn_layerwise_scales(1, learnable=conv_attn_layerwise_scale_learnable)
         
-        self.set_training_add_noise_specs(training_add_noise_std_range, training_add_noise_prob)
+        self.set_training_add_noise_specs(training_begin_add_noise_std_range, 
+                                          training_end_add_noise_std_range,
+                                          training_add_noise_prob)
         self.set_embs_attn_tricks(use_conv_attn_kernel_size)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
@@ -1088,6 +1090,7 @@ class EmbeddingManager(nn.Module):
         self.clear_prompt_masks()
         self.img_mask = None
         self.loss_call_count = 0
+        self.training_percent = 0
         # Store the text_embedder to compute the delta loss.
         self.text_embedder  = text_embedder
         self.ada_prompt_embeddings_cache    = {}
@@ -1248,9 +1251,11 @@ class EmbeddingManager(nn.Module):
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
                 subj_static_embedding_k = subj_static_embedding[:, k]
 
-                if self.training and self.training_add_noise_std_range is not None:
+                if self.training and self.training_begin_add_noise_std_range is not None:
                     subj_static_embedding_k = add_noise_to_embedding(subj_static_embedding_k, 
-                                                                     self.training_add_noise_std_range,
+                                                                     self.training_percent,
+                                                                     self.training_begin_add_noise_std_range,
+                                                                     self.training_end_add_noise_std_range,
                                                                      self.training_add_noise_prob[self.iter_type])
                     
                 embedded_text[placeholder_indices_k] = subj_static_embedding_k.repeat(REAL_OCCURS_IN_BATCH, 1)
@@ -1437,9 +1442,11 @@ class EmbeddingManager(nn.Module):
                 # subj_ada_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
                 subj_ada_embedding_k = subj_ada_embedding[placeholder_indices_1st[0], k]
 
-                if self.training and self.training_add_noise_std_range is not None:
-                    subj_ada_embedding_k = add_noise_to_embedding(subj_ada_embedding_k, 
-                                                                  self.training_add_noise_std_range,
+                if self.training and self.training_begin_add_noise_std_range is not None:
+                    subj_ada_embedding_k = add_noise_to_embedding(subj_ada_embedding_k,  
+                                                                  self.training_percent,
+                                                                  self.training_begin_add_noise_std_range,
+                                                                  self.training_end_add_noise_std_range,
                                                                   self.training_add_noise_prob[self.iter_type])
                     
                 embedded_text[placeholder_indices_k] = subj_ada_embedding_k
@@ -1583,18 +1590,8 @@ class EmbeddingManager(nn.Module):
 
     def get_ada_emb_weight(self):
         if self.training:
-            p01 = self.p_ada_emb_weight_01
-            if p01 > 0:
-                is_ada_emb_weight_01 = \
-                    np.random.choice([0, 1, 2], p=(p01, p01, 1 - 2 * p01))
-                if is_ada_emb_weight_01 == 0 or is_ada_emb_weight_01 == 1:
-                    ada_emb_weight = is_ada_emb_weight_01
-                else:
-                    # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
-                    ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)                    
-            else:
-                # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
-                ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)
+            # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
+            ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)
         else:
             ada_emb_weight = self.ada_emb_weight        
         return ada_emb_weight
@@ -1602,13 +1599,17 @@ class EmbeddingManager(nn.Module):
     def get_ada_subj_attn_dict(self):
         return self.ada_subj_attn_dict
     
-    def set_training_add_noise_specs(self, training_add_noise_std_range, training_add_noise_prob):
-        self.training_add_noise_std_range = training_add_noise_std_range
+    def set_training_add_noise_specs(self, training_begin_add_noise_std_range, 
+                                     training_end_add_noise_std_range,
+                                     training_add_noise_prob):
+        self.training_begin_add_noise_std_range = training_begin_add_noise_std_range
+        self.training_end_add_noise_std_range   = training_end_add_noise_std_range
         self.training_add_noise_prob      = training_add_noise_prob
-        if training_add_noise_std_range is None:
+        if training_begin_add_noise_std_range is None and training_end_add_noise_std_range is None:
             print(f"Disable training_add_noise")
         else:
-            print(f"training_add_noise_std_range = {training_add_noise_std_range} with prob = {training_add_noise_prob}")
+            print(f"training add_noise std range: {training_begin_add_noise_std_range}-{training_end_add_noise_std_range}"
+                  ", with prob = {training_add_noise_prob}")
 
     def initialize_conv_attn_layerwise_scales(self, default_conv_attn_scale=1, 
                                               conv_attn_layerwise_scales=None,
@@ -1643,17 +1644,14 @@ class EmbeddingManager(nn.Module):
             emb_global_scale = emb_global_scale        
         return emb_global_scale
     
-    def set_ada_emb_weight(self, ada_emb_weight, p_ada_emb_weight_01=0, is_first_time_print=False):
+    def set_ada_emb_weight(self, ada_emb_weight, is_first_time_print=False):
         if is_first_time_print:
-            print(f"Setting ada_emb_weight = {ada_emb_weight}, p_ada_emb_weight_01={p_ada_emb_weight_01}")
+            print(f"Setting ada_emb_weight = {ada_emb_weight}")
         else:
             if self.ada_emb_weight != ada_emb_weight:
                 print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
-            if self.p_ada_emb_weight_01 != p_ada_emb_weight_01:
-                print(f"p_ada_emb_weight_01: {self.p_ada_emb_weight_01} => {p_ada_emb_weight_01}")
 
         self.ada_emb_weight = ada_emb_weight
-        self.p_ada_emb_weight_01 = p_ada_emb_weight_01
 
     def set_embs_attn_tricks(self, use_conv_attn_kernel_size=None):
         if use_conv_attn_kernel_size is not None:
@@ -1799,7 +1797,6 @@ class EmbeddingManager(nn.Module):
                      "token2num_vectors":               self.token2num_vectors,
                      "emb_global_scale_score":          self.emb_global_scale_score,
                      "ada_emb_weight":                  self.ada_emb_weight,  
-                     "p_ada_emb_weight_01":             self.p_ada_emb_weight_01,
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
                      # Learnable weights for scaling conv attns.
                      "conv_attn_layerwise_scales":      self.conv_attn_layerwise_scales,
@@ -1835,8 +1832,7 @@ class EmbeddingManager(nn.Module):
             ckpt = torch.load(ckpt_path, map_location='cpu')
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
             if "ada_emb_weight" in ckpt:
-                p_ada_emb_weight_01 = ckpt.get("p_ada_emb_weight_01", 0)
-                self.set_ada_emb_weight(ckpt["ada_emb_weight"], p_ada_emb_weight_01, is_first_time_print=False)
+                self.set_ada_emb_weight(ckpt["ada_emb_weight"], is_first_time_print=False)
 
             if "emb_global_scale_score" in ckpt:
                 self.emb_global_scale_score = ckpt["emb_global_scale_score"]
@@ -1900,7 +1896,8 @@ class EmbeddingManager(nn.Module):
 
         if self.conv_attn_layerwise_scale_learnable:
             slow_params = [self.conv_attn_layerwise_scales]
-            params_with_lr_ratios = params_with_lr_ratios + [ { 'params': slow_params,   'lr_ratio': 0.2 } ]
+            params_with_lr_ratios = params_with_lr_ratios + \
+                                    [ { 'params': slow_params,   'lr_ratio': 0.1 } ]
 
         return params_with_lr_ratios
         
