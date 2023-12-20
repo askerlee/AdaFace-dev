@@ -357,9 +357,10 @@ def demean(x):
 # emb_mask: [2, 1, 77, 1]. Could be fractional, e.g., 0.5, to discount some tokens.
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
 def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
-                        exponent=2, do_demean_first=False, repair_ref_bound_zeros=False,
+                        exponent=2, do_demean_first=False,
                         first_n_dims_to_flatten=3,
-                        ref_grad_scale=0, aim_to_align=True, debug=False):
+                        ref_grad_scale=0, aim_to_align=True, 
+                        margin=0, debug=False):
     B = delta.shape[0]
     loss = 0
     if batch_mask is not None:
@@ -419,37 +420,6 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         if do_demean_first:
             delta_i      = demean(delta_i)
             ref_delta_i2 = demean(ref_delta_i)
-        # If do demean, then no need to repair_ref_bound_zeros. 
-        # Since after demean, boundary zeros have been converted to negative values (for lower bound zeros) 
-        # or positive values (for upper bound zeros).
-        elif repair_ref_bound_zeros:
-            min_value, max_value = ref_delta_i.min(), ref_delta_i.max()
-            if min_value.abs() < 1e-6 or max_value.abs() < 1e-6:
-                ref_delta_i2 = ref_delta_i.clone()
-                # zero_to_nonzero_scale: convert zero to the scale of the average of non-zero values.
-                zero_to_nonzero_scale = 0.03
-                # 0 is either the lower bound or the upper bound, i.e., 
-                # non-zero values are either all positive or all negative.
-                if min_value.abs() < 1e-6 and (ref_delta_i > min_value).any():
-                    # 0 is the lower bound. non-zero values are all positive.
-                    # Convert to a small (relative to the magnitude of positive elements) negative value.
-                    # We don't need a larger negative value, since the purpose is to let the cosine loss
-                    # push the corresponding elements in delta_i to the negative direction. 
-                    # If these values are too negative, the gradients will be too large and the delta loss
-                    # pushes too aggressively to the negative direction, similar to what demean leads to. 
-                    # Demean on masks has been verified to help composition but hurts subject authenticity too much.
-                    # Probably because demean is too aggressive towards the negative direction.
-                    # If ref_delta is a segmentation mask, then the mean is 1, and RHS is -0.03.
-                    ref_delta_i2[ref_delta_i == min_value] = ref_delta_i[ref_delta_i > min_value].mean() \
-                                                             * -zero_to_nonzero_scale
-                # max_value.abs() < 1e-6. non-zero values are all negative.
-                elif max_value.abs() < 1e-6 and (ref_delta_i < max_value).any():
-                    # Convert to a small (relative to the magnitude of negative elements) positive value.
-                    # mean() is negative, so RHS is positive.
-                    ref_delta_i2[ref_delta_i == max_value] = ref_delta_i[ref_delta_i < max_value].mean() \
-                                                             * -zero_to_nonzero_scale
-            else:
-                ref_delta_i2 = ref_delta_i
         else:
             ref_delta_i2 = ref_delta_i
 
@@ -474,6 +444,12 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
             loss_i = losses_i.mean()
 
         loss_i = loss_i * batch_mask[i]
+
+        if margin > 0:
+            # Only incurs loss when loss_i is larger than margin.
+            # If the loss is above the margin, subtracting the margin won't change the gradient,
+            # as the margin is constant.            
+            loss_i = torch.clamp(loss_i - margin, min=0)
 
         loss += loss_i
 
@@ -1484,7 +1460,7 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(seq_ks, subj_subj_indices, subj_comp_
                                            cls_subj_indices, cls_comp_indices,
                                            all_token_weights=None, 
                                            do_demean_first=True, cls_grad_scale=0.05,
-                                           margin=0.5):
+                                           margin=0.6):
 
     # Put the 4 subject embeddings in the 2nd to last dimension for torch.mm().
     # The ortho losses on different "instances" are computed separately 
@@ -1529,12 +1505,9 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(seq_ks, subj_subj_indices, subj_comp_
                              do_demean_first=do_demean_first, 
                              first_n_dims_to_flatten=2,
                              ref_grad_scale=cls_grad_scale,
-                             aim_to_align=True)
+                             aim_to_align=True,
+                             margin=margin)
 
-    # Only incurs loss when loss_layer_subj_comp_key_ortho is larger than margin.
-    # If the loss is above the margin, subtracting the margin won't change the gradient 
-    # as the margin is constant.
-    loss_layer_subj_comp_key_ortho = torch.clamp(loss_layer_subj_comp_key_ortho - margin, min=0)
     return loss_layer_subj_comp_key_ortho
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.
