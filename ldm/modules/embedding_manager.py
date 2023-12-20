@@ -1324,7 +1324,7 @@ class EmbeddingManager(nn.Module):
             # list_of_indices_to_mask: extra tokens to exclude, esp. the fg tokens.
             layer_static_extra_emb_mean = \
                 self.calc_layer_static_extra_emb_mean(layer_static_prompt_embs, self.prompt_emb_mask, 
-                                                      list_of_indices_to_mask, dropout_prob=0.2)
+                                                      list_of_indices_to_mask, dropout_prob=0.1)
 
             # Clear cached_infeat_pooled before generating subject embedding(s) of a subject token.
             # If the next token is the background token, the keep the cache, so that the background
@@ -1508,7 +1508,7 @@ class EmbeddingManager(nn.Module):
     # emb_mask:          [4, 77, 1]. Set to 1 to include / 0 to exclude from the mean.
     # (Note sometimes the batch size of emb_mask is different from layer_static_prompt_embs).
     def calc_layer_static_extra_emb_mean(self, layer_static_prompt_embs, emb_mask, 
-                                         list_of_indices_to_mask, dropout_prob=0.2):
+                                         list_of_indices_to_mask, dropout_prob=0.1):
         emb_mask = emb_mask.clone()
         count_of_masked_indices = sum([ (indices_to_mask is not None) for indices_to_mask in list_of_indices_to_mask])
         assert count_of_masked_indices > 0
