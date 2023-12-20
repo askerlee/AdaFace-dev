@@ -357,10 +357,10 @@ def demean(x):
 # emb_mask: [2, 1, 77, 1]. Could be fractional, e.g., 0.5, to discount some tokens.
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
 def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
-                        exponent=2, do_demean_first=False,
-                        first_n_dims_to_flatten=3,
-                        ref_grad_scale=0, aim_to_align=True, 
-                        margin=0, debug=False):
+                         exponent=2, do_demean_first=False,
+                         first_n_dims_to_flatten=3,
+                         ref_grad_scale=0, aim_to_align=True, 
+                         margin=0, debug=False):
     B = delta.shape[0]
     loss = 0
     if batch_mask is not None:
@@ -1544,13 +1544,13 @@ def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None,
     emb_attns = torch.cat(emb_attns, dim=0)
     return emb_attns
                 
-def gen_comp_extra_indices_by_block(prompt_emb_mask, subj_indices, bg_indices, block_size):
+def gen_comp_extra_indices_by_block(prompt_emb_mask, list_indices_to_mask, block_size):
     # prompt_emb_mask: [4, 77, 1] => [4, 77]
     comp_extra_mask = prompt_emb_mask.squeeze(-1).clone()
-    # Mask out the foreground embeddings.
-    comp_extra_mask[subj_indices] = 0
-    if bg_indices is not None:
-        comp_extra_mask[bg_indices] = 0
+    # Mask out the foreground and background embeddings.
+    for indices_to_mask in list_indices_to_mask:
+        if indices_to_mask is not None:
+            comp_extra_mask[indices_to_mask] = 0
 
     comp_extra_indices = comp_extra_mask.nonzero(as_tuple=True)
     # split_indices_by_block() returns a generator. Convert to a list.

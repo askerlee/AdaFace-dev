@@ -847,7 +847,7 @@ class LatentDiffusion(DDPM):
                 
                 # Fix the scales of the static subject embeddings.
                 static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_fg, num_layers=self.N_LAYERS)
-                # static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_bg, num_layers=self.N_LAYERS)
+                static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_bg, num_layers=self.N_LAYERS)
 
                 extra_info = { 
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
@@ -906,6 +906,8 @@ class LatentDiffusion(DDPM):
         # The scales of static subject embeddings are fixed in get_learned_conditioning().
         ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_fg, 
                                            extra_scale=emb_global_scale)
+        ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_bg, 
+                                           extra_scale=1)
 
         ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
 
@@ -2980,7 +2982,7 @@ class LatentDiffusion(DDPM):
 
                 comp_extra_indices_4b_by_block = \
                     gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
-                                                    subj_indices_4b, bg_indices_4b, block_size=BLOCK_SIZE)
+                                                    (subj_indices_4b, bg_indices_4b), block_size=BLOCK_SIZE)
 
                 loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho \
                     = self.calc_subj_comp_ortho_loss(extra_info['ca_layers_activations']['k'], 
@@ -3009,7 +3011,7 @@ class LatentDiffusion(DDPM):
                 # comp_extra_indices_1b_by_block is a list that contains 1 block only.
                 comp_extra_indices_1b_by_block = \
                     gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
-                                                    subj_indices_ext, bg_indices, block_size=BLOCK_SIZE)
+                                                    (subj_indices_ext, bg_indices), block_size=BLOCK_SIZE)
                                 
                 loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho \
                     = self.calc_subj_comp_ortho_loss(extra_info['ca_layers_activations']['k'], 
