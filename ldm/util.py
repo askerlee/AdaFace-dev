@@ -1483,7 +1483,8 @@ def extract_first_index_in_each_instance(token_indices):
 def calc_layer_subj_comp_k_or_v_ortho_loss(seq_ks, subj_subj_indices, subj_comp_indices, 
                                            cls_subj_indices, cls_comp_indices,
                                            all_token_weights=None, 
-                                           do_demean_first=True, cls_grad_scale=0.05):
+                                           do_demean_first=True, cls_grad_scale=0.05,
+                                           margin=0.5):
 
     # Put the 4 subject embeddings in the 2nd to last dimension for torch.mm().
     # The ortho losses on different "instances" are computed separately 
@@ -1530,6 +1531,10 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(seq_ks, subj_subj_indices, subj_comp_
                              ref_grad_scale=cls_grad_scale,
                              aim_to_align=True)
 
+    # Only incurs loss when loss_layer_subj_comp_key_ortho is larger than margin.
+    # If the loss is above the margin, subtracting the margin won't change the gradient 
+    # as the margin is constant.
+    loss_layer_subj_comp_key_ortho = torch.clamp(loss_layer_subj_comp_key_ortho - margin, min=0)
     return loss_layer_subj_comp_key_ortho
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.
