@@ -3779,7 +3779,7 @@ class LatentDiffusion(DDPM):
                                                        all_token_weights=avg_attn_scores,
                                                        do_demean_first=emb_kq_do_demean_first, 
                                                        cls_grad_scale=cls_grad_scale,
-                                                       margin=0.5)
+                                                       margin=0.6)
             loss_layer_subj_comp_value_ortho = \
                 calc_layer_subj_comp_k_or_v_ortho_loss(ca_vs[unet_layer_idx], 
                                                        subj_subj_indices, 
