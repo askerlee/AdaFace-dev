@@ -13,7 +13,7 @@ set -g broad_classes  1                 1                     1                1
 # $are_faces are used only for evaluation, not for training.
 set -g are_faces     1                  1                     1                1            1              1            1            1                 0          1            0            1                    1            1              0                     1            1              1             1               1            1             1              1                   1                     1
 #                     objects    humans/animals    cartoon characters
-set -g lrs            6e-4       8e-4              6e-4
+set -g lrs            7e-4       1e-3              7e-4
 set -g inf_z_prefixes     ""         "face portrait of"     ""
 set -g maxiters       2000       3000              2000
 # All subjects are humans/animals. The other two classes are listed for completeness.
