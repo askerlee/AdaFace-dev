@@ -178,7 +178,6 @@ class AttentionalPooler(nn.Module):
         self.layer_idx = layer_idx
 
         self.infeat_grad_scale = infeat_grad_scale      # Default 0.5
-        self.infeat_grad_scaler = gen_gradient_scaler(self.infeat_grad_scale)
 
         # v_pooler is used only if fg_q_emb is None.
         self.v_pooler = MaskedAvgPool1d(dim=1, keepdim=True)
@@ -195,10 +194,11 @@ class AttentionalPooler(nn.Module):
         # x and q have the same shape.
         ca_x, ca_q, ca_to_k, ca_x_size \
                 = [ layer_attn_components[key] for key in ('x', 'q', 'to_k', 'infeat_size') ]
-                           
+
+        infeat_grad_scaler = gen_gradient_scaler(self.infeat_grad_scale)
         # By default, infeat_grad_scaler does 0.5 gs.
-        ca_x_gs = self.infeat_grad_scaler(ca_x)
-        ca_q_gs = self.infeat_grad_scaler(ca_q)
+        ca_x_gs = infeat_grad_scaler(ca_x)
+        ca_q_gs = infeat_grad_scaler(ca_q)
 
         x = ca_x_gs
         k = ca_q_gs
