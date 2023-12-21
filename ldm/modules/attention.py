@@ -257,7 +257,8 @@ class CrossAttention(nn.Module):
             # of the subject tokens, not to increase fg attn. So we cap the attn to 1.0.
             # min=0.4: Don't scale down attn too much, in case the attn is inaccurate (esp. during training),
             # and the model should have a chance to recover from the inaccurate attn.
-            ada_subj_attn_normed = torch.clamp(ada_subj_attn_normed, min=0.4, max=1.0)
+            subj_attn_lb = 0.4 if self.is_training else 0.1
+            ada_subj_attn_normed = torch.clamp(ada_subj_attn_normed, min=subj_attn_lb, max=1.0)
             # ada_subj_attn_normed: [64, 4096, 1] -> [8, 8, 4096, 1].
             ada_subj_attn_normed = rearrange(ada_subj_attn_normed, '(b h) i j -> b h i j', h=h)
             # During inference, sim.dtype is float16, while ada_subj_attn_normed.dtype is float32.
