@@ -260,6 +260,9 @@ class CrossAttention(nn.Module):
             ada_subj_attn_normed = torch.clamp(ada_subj_attn_normed, min=0.4, max=1.0)
             # ada_subj_attn_normed: [64, 4096, 1] -> [8, 8, 4096, 1].
             ada_subj_attn_normed = rearrange(ada_subj_attn_normed, '(b h) i j -> b h i j', h=h)
+            # During inference, sim.dtype is float16, while ada_subj_attn_normed.dtype is float32.
+            # So we need to convert the type of ada_subj_attn_normed from float to sim.dtype. 
+            ada_subj_attn_normed = ada_subj_attn_normed.type(sim.dtype)
             # attn_mat_shape: [32, 4096, 77]
             attn_mat_shape = sim.shape
             # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77].
