@@ -2821,10 +2821,10 @@ class LatentDiffusion(DDPM):
                 if loss_bg_subj_embs_align != 0:
                     loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach()})
                 
+                bg_subj_embs_align_loss_scale  = 0.1 # disabled. # 1
                 loss_padding_embs_align = (loss_padding_subj_embs_align 
                                             + loss_bg_subj_embs_align * bg_subj_embs_align_loss_scale)
                 
-                bg_subj_embs_align_loss_scale  = 0.1 # disabled. # 1
                 padding_embs_align_loss_scale_base = 1
                 # padding_embs_align_loss_base: 0.15. If loss_padding_embs_align >> 0.15, 
                 # it will be penalized more heavily.
