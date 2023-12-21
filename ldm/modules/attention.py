@@ -223,21 +223,31 @@ class CrossAttention(nn.Module):
                                                 conv_attn_mix_weight=1,
                                                 shift_attn_maps_for_diff_embs=self.shift_attn_maps_for_diff_embs)
 
-        if (ada_subj_attn_dict is not None) and len(ada_subj_attn_dict) > 0:
+        if (ada_subj_attn_dict is not None) and len(ada_subj_attn_dict) > 0 and subj_indices is not None:
             # TODO: extend to multiple subjects.
             # A quick and dirty hack. Only works when there's one subject only.
             subj_token = list(ada_subj_attn_dict.keys())[0]
-            # ada_subj_attn: [64, 1, 4096]. sim: [64, 4096, 77] (8 heads).
+            # ada_subj_attn: [64, 1, 4096]. Contains probabilities instead of attn scores.
+            # sim: [64, 4096, 77] (8 heads).
             ada_subj_attn = ada_subj_attn_dict[subj_token]
             # ada_subj_attn: [64, 1, 4096] -> [64, 4096, 1].
-            ada_subj_attn = ada_subj_attn.transpose(1, 2)
+            # ada_subj_attn ** 0.5: take the sqrt to make attention probs less polarized.
+            # TODO: Not sure why, but if sqrt is taken, nan will occur.
+            ATTN_POW = 1 #0.5
+            ada_subj_attn = ada_subj_attn.transpose(1, 2) ** ATTN_POW
+
+            # mask is never provided for cross attn with text prompt.
             if exists(mask):
-                ada_subj_attn_mean = ada_subj_attn.sum(dim=(1,2), keepdim=True) / mask.sum(dim=(1,2), keepdim=True)
+                # mask: [4, 1, 64, 64] -> [4, 4096]
+                mask = rearrange(mask, 'b ... -> b (...)')
+                # mask: [4, 4096] -> [4*8, 4096, 1]
+                mask = repeat(mask, 'b j -> (b h) j ()', h=h)
+                ada_subj_attn_mean = (ada_subj_attn * mask).sum(dim=(1,2), keepdim=True) / mask.sum(dim=(1,2), keepdim=True)
             else:
                 ada_subj_attn_mean = ada_subj_attn.mean(dim=(1,2), keepdim=True)
             
             # subj_attn_is_nonzero: bool of [64].
-            subj_attn_is_nonzero = ada_subj_attn_mean.squeeze() < 1e-4
+            subj_attn_is_nonzero = ada_subj_attn_mean.squeeze() > 1e-4
             ada_subj_attn_normed = torch.ones_like(ada_subj_attn)
             if subj_attn_is_nonzero.sum() > 0:
                 # If ada_subj_attn[i] is almost 0 everywhere (subj_attn_is_nonzero[i] = False), 
@@ -248,10 +258,22 @@ class CrossAttention(nn.Module):
             # min=0.4: Don't scale down attn too much, in case the attn is inaccurate (esp. during training),
             # and the model should have a chance to recover from the inaccurate attn.
             ada_subj_attn_normed = torch.clamp(ada_subj_attn_normed, min=0.4, max=1.0)
+            # ada_subj_attn_normed: [64, 4096, 1] -> [8, 8, 4096, 1].
+            ada_subj_attn_normed = rearrange(ada_subj_attn_normed, '(b h) i j -> b h i j', h=h)
+            # attn_mat_shape: [32, 4096, 77]
+            attn_mat_shape = sim.shape
+            # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77].
+            attn_mat = rearrange(sim, '(b h) i j -> b h i j', h=h)
+            # Clone to make attn_mat2 a non-leaf node. Otherwise, 
+            # we can't do in-place assignment like attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.    
+            attn_mat2 = attn_mat.clone()
+            indices_B, indices_N = subj_indices
+            # attn_mat2[indices_B, :, :, indices_N]: [6, 8, 4096, 77] -> [2*9, 8, 4096].
+            # ada_subj_attn_normed[indices_B]: [6, 8, 4096, 1] -> [2*9, 8, 4096].
+            attn_mat2[indices_B, :, :, indices_N] = attn_mat[indices_B, :, :, indices_N] * ada_subj_attn_normed[indices_B, :, :, 0]
+            sim = attn_mat2.reshape(attn_mat_shape)            
+            #breakpoint()
 
-            # BUG: Still buggy. Don't enable yet.
-            # sim = sim * ada_subj_attn_normed
-            pass #breakpoint()
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].
         # img_mask should only be provided and applied if not context_provided. 
@@ -314,8 +336,7 @@ class BasicTransformerBlock(nn.Module):
         # x1 dim  ==  x dim  ==  attn1 dim  ==  attn2 query_dim.
         x1 = self.attn1(self.norm1(x), mask=mask) + x
         # The mask is of the key (context). 
-        # If key is text prompt, then we shouldn't provide img_mask.
-        # Otherwise nan will occur.
+        # TODO: If key is text prompt, and we provide img_mask, then nan will occur.
         x_ca = self.attn2(self.norm2(x1), context=context)
         x2 = x1 + x_ca
 
