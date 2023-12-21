@@ -287,6 +287,15 @@ class AttentionalPooler(nn.Module):
         sim_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) \
                         * self.lora_attn_score_scale
 
+        # Average sim scores across the heads. avg_sim_scores: [B, 2, 4096].
+        avg_sim_scores = rearrange(sim_scores, '(b h) i j -> b h i j', h=self.n_heads).mean(dim=1, keepdim=True)
+        avg_sim_scores = repeat(avg_sim_scores, 'b 1 i j -> b h i j', h=self.n_heads)
+        avg_sim_scores = rearrange(avg_sim_scores, 'b h i j -> (b h) i j', h=self.n_heads)
+
+        # Use avg_sim_scores to smooth sim_scores. 
+        # Otherwise, sim_scores of some particular heads may have too large variances.
+        sim_scores = sim_scores * 0.5 + avg_sim_scores * 0.5
+
         if img_mask is not None:
             # img_mask: [B, 1, 64, 64] 
             img_mask = F.interpolate(img_mask, size=ca_x_size, mode='nearest')
