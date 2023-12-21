@@ -106,6 +106,7 @@ class DDPM(pl.LightningModule):
                  ada_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
                  padding_embs_align_loss_weight=0.,
+                 padding_embs_align_loss_base=0.,
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_value_ortho_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
@@ -148,6 +149,7 @@ class DDPM(pl.LightningModule):
         self.composition_regs_iter_gap          = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
         self.padding_embs_align_loss_weight     = padding_embs_align_loss_weight
+        self.padding_embs_align_loss_base       = padding_embs_align_loss_base
         self.subj_comp_key_ortho_loss_weight        = subj_comp_key_ortho_loss_weight
         self.subj_comp_value_ortho_loss_weight      = subj_comp_value_ortho_loss_weight
         self.mix_prompt_distill_weight              = mix_prompt_distill_weight
@@ -2819,9 +2821,18 @@ class LatentDiffusion(DDPM):
                 if loss_bg_subj_embs_align != 0:
                     loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach()})
                 
+                loss_padding_embs_align = (loss_padding_subj_embs_align 
+                                            + loss_bg_subj_embs_align * bg_subj_embs_align_loss_scale)
+                
                 bg_subj_embs_align_loss_scale  = 0.1 # disabled. # 1
-                loss += (loss_padding_subj_embs_align 
-                           + loss_bg_subj_embs_align * bg_subj_embs_align_loss_scale) \
+                padding_embs_align_loss_scale_base = 1
+                # padding_embs_align_loss_base: 0.15. If loss_padding_embs_align >> 0.15, 
+                # it will be penalized more heavily.
+                padding_embs_align_loss_scale = calc_dyn_loss_scale(loss_padding_embs_align,
+                                                                    self.padding_embs_align_loss_base,
+                                                                    padding_embs_align_loss_scale_base)
+                                                                    
+                loss += loss_padding_embs_align * padding_embs_align_loss_scale \
                         * self.padding_embs_align_loss_weight
 
         if self.fg_bg_xlayer_consist_loss_weight > 0 \
