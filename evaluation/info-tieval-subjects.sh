@@ -21,7 +21,7 @@ set -g sel_set        1               5
 #                     objects    animals           cartoon characters
 set -g lrs            7e-4       1e-3              7e-4
 set -g inf_z_prefixes  ""     "portrait of"         ""
-set -g maxiters       2000       3000              2000
+set -g maxiters       1500       2000              1500
 # Individual LR for each class in the broad classes, according to their difficulties / inherent complexity.
 # A prefix of "portrait of" for animals/humans suggests SD to focus on the face area of the subject.
 

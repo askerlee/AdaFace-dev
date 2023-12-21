@@ -653,7 +653,7 @@ class AdaEmbedding(nn.Module):
             infeat_dim = self.ca_infeat_dims[i]
 
             if self.use_attn_pooler:
-                pooler = AttentionalPooler(i, infeat_dim, infeat_grad_scale=0.5)
+                pooler = AttentionalPooler(i, infeat_dim, infeat_grad_scale=1) #0.5)
             else:
                 pooler = MaskedAvgPool1d() #MaskedAvgPool2d()
             poolers.append(pooler)
