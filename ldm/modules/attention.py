@@ -223,6 +223,35 @@ class CrossAttention(nn.Module):
                                                 conv_attn_mix_weight=1,
                                                 shift_attn_maps_for_diff_embs=self.shift_attn_maps_for_diff_embs)
 
+        if (ada_subj_attn_dict is not None) and len(ada_subj_attn_dict) > 0:
+            # TODO: extend to multiple subjects.
+            # A quick and dirty hack. Only works when there's one subject only.
+            subj_token = list(ada_subj_attn_dict.keys())[0]
+            # ada_subj_attn: [64, 1, 4096]. sim: [64, 4096, 77] (8 heads).
+            ada_subj_attn = ada_subj_attn_dict[subj_token]
+            # ada_subj_attn: [64, 1, 4096] -> [64, 4096, 1].
+            ada_subj_attn = ada_subj_attn.transpose(1, 2)
+            if exists(mask):
+                ada_subj_attn_mean = ada_subj_attn.sum(dim=(1,2), keepdim=True) / mask.sum(dim=(1,2), keepdim=True)
+            else:
+                ada_subj_attn_mean = ada_subj_attn.mean(dim=(1,2), keepdim=True)
+            
+            # subj_attn_is_nonzero: bool of [64].
+            subj_attn_is_nonzero = ada_subj_attn_mean.squeeze() < 1e-4
+            ada_subj_attn_normed = torch.ones_like(ada_subj_attn)
+            if subj_attn_is_nonzero.sum() > 0:
+                # If ada_subj_attn[i] is almost 0 everywhere (subj_attn_is_nonzero[i] = False), 
+                # then no point to use ada_subj_attn to do reweighting, and keep ada_subj_attn_normed[i] to be all-1. 
+                ada_subj_attn_normed[subj_attn_is_nonzero] = ada_subj_attn[subj_attn_is_nonzero] / ada_subj_attn_mean[subj_attn_is_nonzero]
+            # max=1:   Only reduce the bg attn (of image tokens other than the subject area) 
+            # of the subject tokens, not to increase fg attn. So we cap the attn to 1.0.
+            # min=0.4: Don't scale down attn too much, in case the attn is inaccurate (esp. during training),
+            # and the model should have a chance to recover from the inaccurate attn.
+            ada_subj_attn_normed = torch.clamp(ada_subj_attn_normed, min=0.4, max=1.0)
+
+            # BUG: Still buggy. Don't enable yet.
+            # sim = sim * ada_subj_attn_normed
+            pass #breakpoint()
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].
         # img_mask should only be provided and applied if not context_provided. 
@@ -238,33 +267,6 @@ class CrossAttention(nn.Module):
             # So some rows in dim 1 (e.g. [0, :, 4095]) of sim will be masked out (all elements in [0, :, 4095] is -inf).
             # But not all elements in [0, 4095, :] is -inf. Since the softmax is done along dim 2, this is fine.
             sim.masked_fill_(~mask, max_neg_value)
-
-        if (ada_subj_attn_dict is not None) and len(ada_subj_attn_dict) > 0:
-            # A quick and dirty hack. Only works when there's one subject only.
-            # TODO: extend to multiple subjects.
-            subj_token = list(ada_subj_attn_dict.keys())[0]
-            # ada_subj_attn: [8, 1, 4096]. sim: [64, 4096, 77] (8 heads).
-            ada_subj_attn = ada_subj_attn_dict[subj_token]
-            # ada_subj_attn: [8, 8, 4096] -> [64, 4096, 1].
-            ada_subj_attn = ada_subj_attn.repeat(1, h, 1).reshape(-1, sim.shape[1], 1)
-            if exists(mask):
-                ada_subj_attn_mean = ada_subj_attn.sum(dim=(1,2), keepdim=True) / mask.sum(dim=(1,2), keepdim=True)
-            else:
-                ada_subj_attn_mean = ada_subj_attn.mean(dim=(1,2), keepdim=True)
-            
-            subj_attn_is_nonzero = ada_subj_attn_mean.squeeze() < 1e-4
-            ada_subj_attn_normed = torch.ones_like(ada_subj_attn)
-            # If ada_subj_attn[i] is almost 0 everywhere, then keep ada_subj_attn_normed[i] to be all-1. 
-            # I.e., no point to use ada_subj_attn to do reweighting.
-            if subj_attn_is_nonzero.sum() > 0:
-                ada_subj_attn_normed[subj_attn_is_nonzero] = ada_subj_attn[subj_attn_is_nonzero] / ada_subj_attn_mean[subj_attn_is_nonzero]
-            # Only reduce the bg attn (of image tokens other than the subject area) 
-            # of the subject tokens, not to increase fg attn. So we cap the attn to 1.0.
-            ada_subj_attn_normed = torch.clamp(ada_subj_attn_normed, min=0.0, max=1.0)
-
-            # BUG: Still buggy. Don't enable yet.
-            # sim = sim * ada_subj_attn_normed
-            pass #breakpoint()
 
         # sim: [64, 4096, 77]. 64: bs * h.
         # attention, what we cannot get enough of

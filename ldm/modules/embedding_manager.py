@@ -158,10 +158,15 @@ class AttentionalPooler(nn.Module):
         self.lora_bg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
         self.lora_k_ln     = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
 
-        # The to_q, to_k, to_v projections in the cross-attnion layer don't have bias. 
-        # So we don't use bias here.
+        # lora: Do dimension reduction to each head individually.
+        # Most compute is spent on lora_to_k, as it's applied to all image tokens.
+        # lora_to_k takes 8*(1280/8 * 1280/8/8) * N = 1280*160 = 25600*N flops, where N is the number of patches.
+        # Without lora_to_k, most compute is spent on q*k, whose total flops is 
+        # 8*(1280/8 * 1280/8) * N * 2 = 409600*N flops. So it's roughly a 16x reduction.
         # If layer_inner_dim == 1280, lora_dim == 160, n_heads == 8, 
         # then lora_to_k.weight is [160, 160, 1]. It's actually 8 groups, each (1280/8 * 160/8).
+        # The to_q, to_k, to_v projections in the cross-attnion layer don't have bias. 
+        # So we don't use bias here.
         self.lora_to_k     = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
         self.lora_to_fg_q  = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
         self.lora_to_bg_q  = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
@@ -199,11 +204,6 @@ class AttentionalPooler(nn.Module):
         k = ca_q_gs
         # k: query (i.e., projected image features) from the UNet cross-attention layer. 
         # Repurposed as key here.
-        # the to_q() of the UNet cross-attention layer doesn't change the dimension of k,
-        # i.e., k dim = x dim. Therefore, x + k_ln is legal.
-        # We have to normalize k_ln by sqrt(n_heads) to match the scale of x. 
-        # Otherwise k will dominate x in v.
-        # TODO: why the scale of x is sqrt(n_heads) smaller than that of lora_k_ln(k)?
         k_ln    = self.lora_k_ln(k)
         # x is x1 in BasicTransformerBlock, which will be added with x_ca output from the cross-attn layer.
         # cross-attn v is the projection of the prompt embedding. So in order to yield proper x_ca,
@@ -215,8 +215,13 @@ class AttentionalPooler(nn.Module):
         # Therefore, v = x + k. We can also concat(x, k), but it will double the feature dimension.
         #calc_stats(f"{self.layer_idx}-x",       x,      mean_dim=-1)
         #calc_stats(f"{self.layer_idx}-k_ln",    k_ln,   mean_dim=-1)
-        # The magnitude of k_ln is roughly 2x of x. So k_ln dominates v. 
-        # But adding x to k_ln enriches the features slightly.
+        # NOTE: The magnitude of k_ln is roughly 2x of x. So k_ln dominates v. 
+        # But adding x to k_ln may enrich the features slightly and improve the performance slightly.
+        # the to_q() of the UNet cross-attention layer doesn't change the dimension of k,
+        # i.e., k dim = x dim. Therefore, x + k_ln is legal.
+        # k_ln is roughly sqrt(n_heads) times of the scale of x.
+        # So we have to normalize v by sqrt(n_heads) to match the scale of x. 
+        # TODO: find out why the scale of x is sqrt(n_heads) smaller than that of lora_k_ln(k)?
         v = (x + k_ln) * (self.n_heads ** -0.5)
         # Use v as k. Originally we use normalized k_ln as k. But since v is enriched than k_ln,
         # we use v as k.
@@ -272,6 +277,9 @@ class AttentionalPooler(nn.Module):
         # lora_q: [B, 2, 64]. 
         lora_q = torch.cat([lora_fg_q, lora_bg_q], dim=1)
 
+        # Tuck the 8 heads into the batch dim.
+        lora_q, lora_k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=self.n_heads), (lora_q, lora_k, v))
+
         # Dot product of the last dim. sim_scores: [B, 2, 4096].
         # The sim_scores are too large. So we scale them down by lora_attn_score_scale.
         # The root cause why the sim_scores are too large is due to the different initialization 
@@ -283,14 +291,13 @@ class AttentionalPooler(nn.Module):
             # img_mask: [B, 1, 64, 64] 
             img_mask = F.interpolate(img_mask, size=ca_x_size, mode='nearest')
             # N, 1, H, W -> N, 1, L=H*W
-            # => [B, 1, 4096]
-            img_mask = rearrange(img_mask, 'b ... -> b 1 (...)')
+            # -> [B, 8, 4096]
             # float_tensor.bool() converts 0.1/0.2... to True.
-            img_mask = img_mask.bool()
+            img_mask = rearrange(img_mask, 'b ... -> b 1 (...)')
+            img_mask = repeat(img_mask.bool(), 'b 1 j -> (b h) () j', h=self.n_heads)
             max_neg_value = -torch.finfo(sim_scores.dtype).max
             # masked_fill_() will broadcast img_mask to sim_scores's shape [B, 2, 4096].
             sim_scores.masked_fill_(~img_mask, max_neg_value)
-
             # Prepare to be used by v_pooler.
             img_mask = img_mask.permute(0, 2, 1)
 
@@ -313,7 +320,7 @@ class AttentionalPooler(nn.Module):
             attn = sim_scores.softmax(dim=-1)
 
         attn = self.attn_drop(attn)
-        # attn_fg, attn_bg: [B, 1, 4096].
+        # attn_fg, attn_bg: [B*h, 1, 4096].
         attn_fg, attn_bg = attn.split(1, dim=1)
         attn_fg_sum = attn_fg.sum(dim=(1,2))
         if torch.any(attn_fg_sum == 0):
@@ -331,6 +338,8 @@ class AttentionalPooler(nn.Module):
         bg_out = einsum('b i j, b j d -> b i d', attn_bg, v)
         # bg_out = self.ln_bg_out(bg_out)
         bg_out  = self.out_drop(bg_out)
+
+        fg_out, bg_out = map(lambda out: rearrange(out, '(b h) n d -> b n (h d)', h=self.n_heads), (fg_out, bg_out))
 
         # out: N, 1, D -> N, D, i.e., ([2, 768], [2, 768]).
         # Make the output shape consistent with MaskedAvgPool2d.
