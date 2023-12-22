@@ -2039,7 +2039,7 @@ class EmbeddingManager(nn.Module):
                 basis_reg_weight = basis_reg_weight_base * torch.norm(embobj.basis_vecs, dim=-1).mean().item() ** T
 
                 # N: number of pre_vecs (init_vecs).
-                if embobj.N > 0:
+                if embobj.N > 0 and pre_vecs_reg_weight > 0:
                     # If pre_vecs has a K dim (shape [K, 1, 768]), then init_vecs is automatically broadcasted.
                     loss_pre_vecs = reg_loss(embobj.pre_vecs - init_vecs, loss_type=euc_loss_type)
                 else:
