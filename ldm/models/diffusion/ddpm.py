@@ -806,7 +806,7 @@ class LatentDiffusion(DDPM):
         model = instantiate_from_config(config, text_embedder=text_embedder)
 
         if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
-            model.load(config.params.embedding_manager_ckpt)
+            model.load(config.params.embedding_manager_ckpt, retain_pre_vecs=True)
         
         return model
 
@@ -2543,10 +2543,14 @@ class LatentDiffusion(DDPM):
                 # Repeat to match the number of instances in the batch.
                 # log_image_colors: take values in {0, 1, 2, 3}, 
                 # i.e., no box, green, red, purple boxes respectively.
-                # no box: not teachable;                 green:  teachable in the first iter and not reused;
-                # red: teachable in the first iter but not in the second iter; purple: teachable in both iters.
+                # 0 no box: not teachable; 
+                # 1 green:  teachable in the first iter and not reused yet 
+                # (because it's not in the second iter yet).
+                # 2 red:    teachable in the first iter but not in the second iter; 
+                # 3 purple: teachable in both iters.
                 # If self.iter_flags['do_teacher_filter'] and an instance is teachable, then in the log image file, 
                 # log_image_flag = 1, so the instance has a green bounary box in the logged image.
+                # log_image_colors: 3 * 2. [subj comp * 3, mix comp * 3]
                 log_image_colors = are_insts_teachable.repeat(2).int()
                 if self.iter_flags['reuse_init_conds']:
                     # If reuse_init_conds and an instance is teachable, then in the log image file,
@@ -2583,6 +2587,10 @@ class LatentDiffusion(DDPM):
                     noise_sel   = noise[[best_cand_idx]].repeat(4, 1, 1, 1)
                     # t[0] == t[1], t[2] == t[3]. t: [952, 851, 952, 851]
                     t_sel       = t[best_cand_idx].repeat(4)
+                    # Mark the best candidate with a purple box, although it's in the first iteration.
+                    log_image_colors[best_cand_idx] = 3
+                    log_image_colors[best_cand_idx + self.num_candidate_teachers] = 3
+
                     if 'comp_insts_add_more_noise' in self.iter_flags:
                         base_t = t[best_cand_idx]
                         # keep_prob_range=(0, 0): never keep the original t as comp_t, i.e., 

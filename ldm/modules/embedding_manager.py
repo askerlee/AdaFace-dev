@@ -1823,7 +1823,12 @@ class EmbeddingManager(nn.Module):
                     ckpt_path)
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
-    def load(self, ckpt_paths):
+    # retain_pre_vecs: whether to retain the pre-specified vectors in the current emb man instance.
+    # If we have instantiated subject A, and want to use subject B's ckpt to initialize the params,
+    # then we should retain the pre-specified vectors of the current subject.
+    # Otherwise, the params of subject A will be dragged towards the pre-specified vectors
+    # of subject B.
+    def load(self, ckpt_paths, retain_pre_vecs=False):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         self.string_to_token_dict           = {}
@@ -1887,14 +1892,21 @@ class EmbeddingManager(nn.Module):
                     # If there are pseudo-tokens within multi-embedding tokens, load them as well.
                     if km.startswith(k):
                         km2 = km.replace(k, k2)
+                        
+                        old_static_pre_vecs = self.string_to_static_embedder_dict[km2]
+                        old_ada_pre_vecs    = self.string_to_ada_embedder_dict[km2]
                         self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
                         self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
+                        if retain_pre_vecs:
+                            self.string_to_static_embedder_dict[km2].pre_vecs = old_static_pre_vecs
+                            self.string_to_ada_embedder_dict[km2].pre_vecs    = old_ada_pre_vecs
 
                         if self.emb_ema_as_pooling_probe_weight > 0:
                             self.string_to_emb_ema_dict[km2]     = ckpt["string_to_emb_ema_dict"][km]
                         
                         if km in ckpt["token2num_vectors"]:
                             token2num_vectors[km2] = ckpt["token2num_vectors"][km]
+
                         print(f"Loaded {km}->{km2} from {ckpt_path}")
                         ada = self.string_to_ada_embedder_dict[km2]
                         print(f"{km2}: {ada.fg_emb_count}/{ada.bg_emb_count}/{ada.K} fg/bg/total embeddings")
