@@ -1823,18 +1823,17 @@ class EmbeddingManager(nn.Module):
                     ckpt_path)
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
-    # retain_pre_vecs: whether to retain the pre-specified vectors in the current emb man instance.
-    # If we have instantiated subject A, and want to use subject B's ckpt to initialize the params,
-    # then we should retain the pre-specified vectors of the current subject.
-    # Otherwise, the params of subject A will be dragged towards the pre-specified vectors
-    # of subject B.
-    def load(self, ckpt_paths, retain_pre_vecs=False):
+    def load(self, ckpt_paths):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         self.string_to_token_dict           = {}
+        self.string_to_emb_ema_dict         = nn.ModuleDict()
+
+        old_static_pre_vecs = {}
+        old_ada_pre_vecs    = {}        
+
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
-        self.string_to_emb_ema_dict         = nn.ModuleDict()
         
         token2num_vectors                   = {}
 
@@ -1893,14 +1892,8 @@ class EmbeddingManager(nn.Module):
                     if km.startswith(k):
                         km2 = km.replace(k, k2)
 
-                        old_static_pre_vecs = self.string_to_static_embedder_dict[km2].pre_vecs
-                        old_ada_pre_vecs    = self.string_to_ada_embedder_dict[km2].pre_vecs
                         self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
                         self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
-                        if retain_pre_vecs:
-                            self.string_to_static_embedder_dict[km2].pre_vecs = old_static_pre_vecs
-                            self.string_to_ada_embedder_dict[km2].pre_vecs    = old_ada_pre_vecs
-
                         if self.emb_ema_as_pooling_probe_weight > 0:
                             self.string_to_emb_ema_dict[km2]     = ckpt["string_to_emb_ema_dict"][km]
                         
@@ -2028,6 +2021,7 @@ class EmbeddingManager(nn.Module):
                 # init_vecs is used to regularize pre_vecs.
                 # init_vecs could be scalar 0, if initial embeddings are not specified.
                 # In this case, loss_pre_vecs becomes the zero-centered attractor loss.
+                # init_vecs, init_word_embeddings: [N, 768].
                 init_vecs = self.initial_embeddings[key]
 
                 # bias, pre_vecs, basis_vecs exist in 
@@ -2052,8 +2046,16 @@ class EmbeddingManager(nn.Module):
 
                 # N: number of pre_vecs (init_vecs).
                 if embobj.N > 0 and pre_vecs_reg_weight > 0:
-                    # If pre_vecs has a K dim (shape [K, 1, 768]), then init_vecs is automatically broadcasted.
-                    loss_pre_vecs = reg_loss(embobj.pre_vecs - init_vecs, loss_type=euc_loss_type)
+                    # pre_vecs has a K dim: [K, N, 768].
+                    # init_vecs: [N, 768] => [1, N, 768].
+                    init_vecs = init_vecs.unsqueeze(0)
+                    # Shape inconsistency happens when we load a checkpoint 
+                    # that is trained for a different subject as initialization.
+                    if embobj.pre_vecs.shape[1] != init_vecs.shape[1]:
+                        min_N = min(embobj.pre_vecs.shape[1], init_vecs.shape[1])
+
+                    loss_pre_vecs = reg_loss(embobj.pre_vecs[:, :min_N] - init_vecs[:, :min_N], 
+                                             loss_type=euc_loss_type)
                 else:
                     loss_pre_vecs = 0.
 

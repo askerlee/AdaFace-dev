@@ -806,7 +806,7 @@ class LatentDiffusion(DDPM):
         model = instantiate_from_config(config, text_embedder=text_embedder)
 
         if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
-            model.load(config.params.embedding_manager_ckpt, retain_pre_vecs=True)
+            model.load(config.params.embedding_manager_ckpt)
         
         return model
 
