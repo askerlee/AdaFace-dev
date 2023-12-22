@@ -2053,7 +2053,9 @@ class EmbeddingManager(nn.Module):
                     # that is trained for a different subject as initialization.
                     if embobj.pre_vecs.shape[1] != init_vecs.shape[1]:
                         min_N = min(embobj.pre_vecs.shape[1], init_vecs.shape[1])
-
+                    else:
+                        min_N = embobj.pre_vecs.shape[1]
+                        
                     loss_pre_vecs = reg_loss(embobj.pre_vecs[:, :min_N] - init_vecs[:, :min_N], 
                                              loss_type=euc_loss_type)
                 else:
