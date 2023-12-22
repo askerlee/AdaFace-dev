@@ -2260,7 +2260,8 @@ class LatentDiffusion(DDPM):
             # The subject indices are applied to every of the half-batch instances, 
             # so extra_info['subj_indices_1b'] is enough.
             # (extra_info['subj_indices_2b'][1] just repeats extra_info['subj_indices_1b'][1] twice.)
-            k_cls_scale_layerwise_range = [1.0, 1.0] if self.iter_flags['comp_do_init_x_with_fg_from_training_image'] else [1.0, 1.0]
+            k_cls_scale_layerwise_range = [1.0, 1.0]  if self.iter_flags['comp_do_init_x_with_fg_from_training_image'] else [1.0, 1.0]
+            v_cls_scale_layerwise_range = [1.0, 0.85] if self.iter_flags['comp_do_init_x_with_fg_from_training_image'] else [1.0, 0.7]
             c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, \
                              emb_k_mixer, emb_k_layers_cls_mix_scales = \
                 mix_static_vk_embeddings(cond[0], extra_info['subj_indices_1b'][1], 
@@ -2268,7 +2269,7 @@ class LatentDiffusion(DDPM):
                                          t_frac = t_frac, 
                                          use_layerwise_embedding = self.use_layerwise_embedding,
                                          N_LAYERS = self.N_LAYERS,
-                                         V_CLS_SCALE_LAYERWISE_RANGE=[1.0, 0.7],
+                                         V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range,
                                          K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range)
           
             # Update cond[0] to c_static_emb_vk.
@@ -2599,7 +2600,8 @@ class LatentDiffusion(DDPM):
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
                     # If comp_do_init_x_with_fg_from_training_image, then in order to let mix prompts attend to fg areas, we let
                     # the keys to be mostly subject embeddings, and the values are unchanged.
-                    k_cls_scale_layerwise_range = [1.0, 1.0] if self.iter_flags['comp_do_init_x_with_fg_from_training_image'] else [1.0, 1.0]
+                    k_cls_scale_layerwise_range = [1.0, 1.0]  if self.iter_flags['comp_do_init_x_with_fg_from_training_image'] else [1.0, 1.0]
+                    v_cls_scale_layerwise_range = [1.0, 0.85] if self.iter_flags['comp_do_init_x_with_fg_from_training_image'] else [1.0, 0.7]
                     # Mix embeddings to get c_static_emb_orig_vk for cond_orig.
                     # Do mixing on saved cond_orig instead of the updated "cond".
                     # cond_orig is the 4-type prompt embeddings (subj single, subj comp, mix single, mix comp).
@@ -2612,7 +2614,7 @@ class LatentDiffusion(DDPM):
                                                  t_frac = t_frac, 
                                                  use_layerwise_embedding = self.use_layerwise_embedding,
                                                  N_LAYERS = self.N_LAYERS,
-                                                 V_CLS_SCALE_LAYERWISE_RANGE=[1.0, 0.7],
+                                                 V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range,
                                                  K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range)
                     
                     extra_info['emb_v_mixer']                   = emb_v_mixer
