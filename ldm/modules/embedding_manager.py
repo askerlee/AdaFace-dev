@@ -1892,9 +1892,9 @@ class EmbeddingManager(nn.Module):
                     # If there are pseudo-tokens within multi-embedding tokens, load them as well.
                     if km.startswith(k):
                         km2 = km.replace(k, k2)
-                        
-                        old_static_pre_vecs = self.string_to_static_embedder_dict[km2]
-                        old_ada_pre_vecs    = self.string_to_ada_embedder_dict[km2]
+
+                        old_static_pre_vecs = self.string_to_static_embedder_dict[km2].pre_vecs
+                        old_ada_pre_vecs    = self.string_to_ada_embedder_dict[km2].pre_vecs
                         self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
                         self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
                         if retain_pre_vecs:
