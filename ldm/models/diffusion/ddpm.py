@@ -1297,7 +1297,7 @@ class LatentDiffusion(DDPM):
         self.iter_flags['wds_comp_avail_ratio'] = batch['has_wds_comp'].sum() / batch['has_wds_comp'].shape[0]
 
         # If cached_inits_available, cached_inits are only used if do_mix_prompt_distillation = True.
-        self.iter_flags['reuse_init_conds']  = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
+        self.iter_flags['reuse_init_conds']  = (self.iter_flags['do_mix_prompt_distillation'] \
                                                 and self.cached_inits_available)
 
         # do_teacher_filter: If not reuse_init_conds and do_teacher_filtering, then we choose the better instance 
@@ -2522,8 +2522,8 @@ class LatentDiffusion(DDPM):
                 # (it may be a bit premature to make this decision now, as the images are only denoised once).
                 # 0.35/0.006: 30%-40% instances will meet these thresholds.
                 # 0.33/0.008: 15% instances will meet these thresholds.
-                clip_loss_thres             = 0.28
-                cls_subj_clip_margin        = 0.002
+                clip_loss_thres         = 0.28
+                cls_subj_clip_margin    = 0.002
 
                 # are_insts_teachable: The teacher instances are only teachable if both 
                 # the teacher and student are qualified (<= clip_loss_thres), 
