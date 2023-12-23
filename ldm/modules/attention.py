@@ -286,17 +286,10 @@ class CrossAttention(nn.Module):
             self.cached_activations['attn'] = rearrange(attn, '(b h) i j -> b h i j', h=h)
             self.cached_activations['attnscore'] = rearrange(sim,  '(b h) i j -> b h i j', h=h)
 
-            if ada_subj_attn_normed is not None:
-                # ada_subj_attn_normed: [64, 4096, 1] -> [8, 8, 4096, 1].
-                self.cached_activations['ada_subj_attn_normed'] = rearrange(ada_subj_attn_normed, '(b h) n d -> b h n d', h=h)
-            else:
-                self.cached_activations['ada_subj_attn_normed'] = None
-            if ada_bg_attn_normed is not None:
-                # ada_bg_attn_normed: [64, 4096, 1] -> [8, 8, 4096, 1].
-                self.cached_activations['ada_bg_attn_normed'] = rearrange(ada_bg_attn_normed, '(b h) n d -> b h n d', h=h)
-            else:
-                self.cached_activations['ada_bg_attn_normed'] = None
-                
+            # ada_subj_attn_normed, ada_bg_attn_normed: [6, 8, 4096, 1].
+            self.cached_activations['ada_subj_attn_normed'] = ada_subj_attn_normed
+            self.cached_activations['ada_bg_attn_normed']   = ada_bg_attn_normed
+
         return out
 
 
