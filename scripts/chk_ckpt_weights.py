@@ -60,3 +60,12 @@ for k in tokens:
         print(f"{prev_iteration} -> {iteration}: {prev_mean:.4f}, {curr_mean:.4f}, {delta:.4f}")
 
         prev_emb_ckpt = emb_ckpt
+
+        print("{iteration} Attn Poolers:")
+        attn_poolers = emb_ckpt['string_to_ada_embedder'][k].poolers
+        for i, attn_pooler in enumerate(attn_poolers):
+            lora_to_fg_q_mean = attn_pooler.lora_to_fg_q.weight.abs().mean()
+            lora_to_bg_q_mean = attn_pooler.lora_to_bg_q.weight.abs().mean()
+            lora_to_k_mean = attn_pooler.lora_to_k.weight.abs().mean()
+
+            print(f"Layer {i}: lora_to_fg_q: {lora_to_fg_q_mean:.4f}, lora_to_bg_q: {lora_to_bg_q_mean:.4f}, lora_to_k: {lora_to_k_mean:.4f}")
