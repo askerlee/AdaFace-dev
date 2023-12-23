@@ -6,7 +6,7 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn
+from ldm.util import replace_rows_by_conv_attn, normalize_ada_subj_attn, reweight_attn_rows
 
 def exists(val):
     return val is not None
@@ -227,56 +227,24 @@ class CrossAttention(nn.Module):
             # TODO: extend to multiple subjects.
             # A quick and dirty hack. Only works when there's one subject only.
             subj_token = list(ada_subj_attn_dict.keys())[0]
-            # ada_subj_attn: [64, 1, 4096]. Contains probabilities instead of attn scores.
-            # sim: [64, 4096, 77] (8 heads).
-            ada_subj_attn = ada_subj_attn_dict[subj_token]
-            # ada_subj_attn: [64, 1, 4096] -> [64, 4096, 1].
-            # ada_subj_attn ** 0.5: take the sqrt to make attention probs less polarized.
-            # TODO: Not sure why, but if sqrt is taken, nan will occur.
-            ATTN_POW = 1 #0.5
-            ada_subj_attn = ada_subj_attn.transpose(1, 2) ** ATTN_POW
 
-            # mask is never provided for cross attn with text prompt.
-            if exists(mask):
-                # mask: [4, 1, 64, 64] -> [4, 4096]
-                mask = rearrange(mask, 'b ... -> b (...)')
-                # mask: [4, 4096] -> [4*8, 4096, 1]
-                mask = repeat(mask, 'b j -> (b h) j ()', h=h)
-                ada_subj_attn_mean = (ada_subj_attn * mask).sum(dim=(1,2), keepdim=True) / mask.sum(dim=(1,2), keepdim=True)
-            else:
-                ada_subj_attn_mean = ada_subj_attn.mean(dim=(1,2), keepdim=True)
-            
-            # subj_attn_is_nonzero: bool of [64].
-            subj_attn_is_nonzero = ada_subj_attn_mean.squeeze() > 1e-4
-            ada_subj_attn_normed = torch.ones_like(ada_subj_attn)
-            if subj_attn_is_nonzero.sum() > 0:
-                # If ada_subj_attn[i] is almost 0 everywhere (subj_attn_is_nonzero[i] = False), 
-                # then no point to use ada_subj_attn to do reweighting, and keep ada_subj_attn_normed[i] to be all-1. 
-                ada_subj_attn_normed[subj_attn_is_nonzero] = ada_subj_attn[subj_attn_is_nonzero] / ada_subj_attn_mean[subj_attn_is_nonzero]
-            # max=1:   Only reduce the bg attn (of image tokens other than the subject area) 
-            # of the subject tokens, not to increase fg attn. So we cap the attn to 1.0.
-            # min=0.4: Don't scale down attn too much, in case the attn is inaccurate (esp. during training),
+            # if training, subj_attn_lb = 0.4. If inference, subj_attn_lb = 0.1.
+            # subj_attn_lb=0.4: Don't scale down attn too much, in case the attn is inaccurate (esp. during training),
             # and the model should have a chance to recover from the inaccurate attn.
             subj_attn_lb = 0.4 if self.is_training else 0.1
-            ada_subj_attn_normed = torch.clamp(ada_subj_attn_normed, min=subj_attn_lb, max=1.0)
-            # ada_subj_attn_normed: [64, 4096, 1] -> [8, 8, 4096, 1].
-            ada_subj_attn_normed = rearrange(ada_subj_attn_normed, '(b h) i j -> b h i j', h=h)
-            # During inference, sim.dtype is float16, while ada_subj_attn_normed.dtype is float32.
-            # So we need to convert the type of ada_subj_attn_normed from float to sim.dtype. 
-            ada_subj_attn_normed = ada_subj_attn_normed.type(sim.dtype)
-            # attn_mat_shape: [32, 4096, 77]
-            attn_mat_shape = sim.shape
-            # attn_mat: [32, 4096, 77] => [4, 8, 4096, 77].
-            attn_mat = rearrange(sim, '(b h) i j -> b h i j', h=h)
-            # Clone to make attn_mat2 a non-leaf node. Otherwise, 
-            # we can't do in-place assignment like attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.    
-            attn_mat2 = attn_mat.clone()
-            indices_B, indices_N = subj_indices
-            # attn_mat2[indices_B, :, :, indices_N]: [6, 8, 4096, 77] -> [2*9, 8, 4096].
-            # ada_subj_attn_normed[indices_B]: [6, 8, 4096, 1] -> [2*9, 8, 4096].
-            attn_mat2[indices_B, :, :, indices_N] = attn_mat[indices_B, :, :, indices_N] * ada_subj_attn_normed[indices_B, :, :, 0]
-            sim = attn_mat2.reshape(attn_mat_shape)            
-            #breakpoint()
+            # ada_subj_attn: [48, 1, 4096]. Contains probabilities instead of attn scores.
+            # ada_subj_attn_normed: [6, 8, 4096, 1].
+            ada_subj_attn_normed = normalize_ada_subj_attn(ada_subj_attn_dict[subj_token]['attn_fg'],
+                                                           subj_attn_lb=subj_attn_lb, num_heads=h,
+                                                           dtype=sim.dtype)
+            ada_bg_attn_normed   = normalize_ada_subj_attn(ada_subj_attn_dict[subj_token]['attn_bg'],
+                                                           subj_attn_lb=subj_attn_lb, num_heads=h,
+                                                           dtype=sim.dtype)
+            
+            # sim: [48, 4096, 77] (8 heads).
+            sim = reweight_attn_rows(sim, ada_subj_attn_normed, subj_indices, h)
+        else:
+            ada_subj_attn_normed = None
 
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].
@@ -318,6 +286,17 @@ class CrossAttention(nn.Module):
             self.cached_activations['attn'] = rearrange(attn, '(b h) i j -> b h i j', h=h)
             self.cached_activations['attnscore'] = rearrange(sim,  '(b h) i j -> b h i j', h=h)
 
+            if ada_subj_attn_normed is not None:
+                # ada_subj_attn_normed: [64, 4096, 1] -> [8, 8, 4096, 1].
+                self.cached_activations['ada_subj_attn_normed'] = rearrange(ada_subj_attn_normed, '(b h) n d -> b h n d', h=h)
+            else:
+                self.cached_activations['ada_subj_attn_normed'] = None
+            if ada_bg_attn_normed is not None:
+                # ada_bg_attn_normed: [64, 4096, 1] -> [8, 8, 4096, 1].
+                self.cached_activations['ada_bg_attn_normed'] = rearrange(ada_bg_attn_normed, '(b h) n d -> b h n d', h=h)
+            else:
+                self.cached_activations['ada_bg_attn_normed'] = None
+                
         return out
 
 

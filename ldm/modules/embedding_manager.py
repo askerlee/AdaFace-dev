@@ -353,7 +353,7 @@ class AttentionalPooler(nn.Module):
         # out: N, 1, D -> N, D, i.e., ([2, 768], [2, 768]).
         # Make the output shape consistent with MaskedAvgPool2d.
         return { 'fg_out': fg_out.squeeze(1), 'bg_out': bg_out.squeeze(1), 
-                 'attn_fg': attn_fg }
+                 'attn_fg': attn_fg, 'attn_bg': attn_bg }
 
 # init_embedding: [L, M, 768].
 class Embedding3d(nn.Module):
@@ -1141,7 +1141,7 @@ class EmbeddingManager(nn.Module):
         if self.gen_ada_embedding:
             # self.layer_idx, self.ca_infeat, self.time_emb were cached by 
             # a previous call of  cache_layer_features_for_ada() from UNet.
-            ada_embedded_text, ada_subj_embs_dict, token2fg_attn = \
+            ada_embedded_text, ada_subj_embs_dict, token2ada_attn = \
                 self.get_ada_embedding(self.layer_idx, self.layer_attn_components, self.time_emb,
                                        tokenized_text, embedded_text)
 
@@ -1151,8 +1151,8 @@ class EmbeddingManager(nn.Module):
                 self.ada_subj_embs_dict[k].cache_layer(ca_layer_idx, 
                                                        ada_subj_embs_dict[k], 
                                                        has_grad=True)
-                if k in token2fg_attn:
-                    self.ada_subj_attn_dict[k] = token2fg_attn[k]
+                if k in token2ada_attn:
+                    self.ada_subj_attn_dict[k] = token2ada_attn[k]
 
             # Release ada-specific intermediate variables.
             self.clear_ada_layer_temp_info()
@@ -1305,8 +1305,8 @@ class EmbeddingManager(nn.Module):
     ):
         BS, device = tokenized_text.shape[0], tokenized_text.device
         cached_infeat_pooled = None
-        ada_subj_embs_dict  = {}
-        token2fg_attn       = {}
+        ada_subj_embs_dict   = {}
+        token2ada_attn       = {}
         
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
         layer_static_prompt_embs   = layer_attn_components['layer_static_prompt_embs']
@@ -1372,11 +1372,13 @@ class EmbeddingManager(nn.Module):
                    and (self.placeholder_indices_fg[0].unique().shape != placeholder_indices_1st[0].shape):
                 breakpoint()
 
-            # static_subj_embs_dict[placeholder_string]: static_subj_embeddings, [(BS/2)*K, 768].
+            # layer_static_prompt_embs[curr_subj_indices]: subj_static_embedding, [(BS/2)*K, 768].
             # BS/2: In distillation iterations, only half instances of the batch contain the subject token.
             # If (BS/2) > 1 or K > 1, then take the mean embedding of the K embeddings.
-            # Even if BS/2 > 1, the K static embeddings of different instances are the same.
-            # layer_subj_emb_probe: [768].
+            # Even if BS/2 > 1, the K static embeddings of different instances are the same. 
+            # So it's ok to take the mean of all of them.
+            # layer_static_subj_emb, layer_subj_emb_probe: [768].
+            # layer_subj_emb_probe will be repeated by BS times to match the batch size in attn pooler.
             curr_subj_indices = self.placeholder_indices_fg if not token_is_bg else self.placeholder_indices_bg
             layer_static_subj_emb = layer_static_prompt_embs[curr_subj_indices].mean(dim=0)
 
@@ -1440,11 +1442,24 @@ class EmbeddingManager(nn.Module):
                 # NOTE: this assumes the background token always appears after the subject tokens.
                 # Otherwise the cached_infeat_pooled is not available when the background Ada embedder accesses it.
                 cached_infeat_pooled    = infeat_pooled_dict
-                placeholder_indices_B   = placeholder_indices_1st[0]
-                token2fg_attn[placeholder_string] = torch.ones_like(infeat_pooled_dict['attn_fg'])
-                # Only assign ada subj attn_fg to instances that contain the placeholder token.
-                # In other instances that don't contain the placeholder token, the attn_fg is all 1.
-                token2fg_attn[placeholder_string][placeholder_indices_B] = infeat_pooled_dict['attn_fg'][placeholder_indices_B]
+                # During training, emb man self.training is True. 
+                # This is in contrast to the UNet, whose self.training is always False 
+                # (therefore cannot be used as an indicator).
+                token2ada_attn.setdefault(placeholder_string, {})
+
+                if self.training:
+                    token2ada_attn[placeholder_string]['attn_fg'] = infeat_pooled_dict['attn_fg']
+                    token2ada_attn[placeholder_string]['attn_bg'] = infeat_pooled_dict['attn_bg']
+                else:
+                    # During inference, the second half of the batch is the unconditional prompts 
+                    # which don't contain the placeholder token.
+                    # Only assign ada subj attn_fg to instances that contain the placeholder token.
+                    # In other instances that don't contain the placeholder token, the attn_fg is all 1.
+                    placeholder_indices_B   = placeholder_indices_1st[0]
+                    token2ada_attn[placeholder_string]['attn_fg'] = torch.ones_like(infeat_pooled_dict['attn_fg'])
+                    token2ada_attn[placeholder_string]['attn_bg'] = torch.ones_like(infeat_pooled_dict['attn_bg'])
+                    token2ada_attn[placeholder_string]['attn_fg'][placeholder_indices_B] = infeat_pooled_dict['attn_fg'][placeholder_indices_B]
+                    token2ada_attn[placeholder_string]['attn_bg'][placeholder_indices_B] = infeat_pooled_dict['attn_bg'][placeholder_indices_B]
 
             for k in range(self.token2num_vectors[placeholder_string]):
                 # embedded_text[placeholder_indices_1st] indexes the embedding at each instance in the batch.
@@ -1472,7 +1487,7 @@ class EmbeddingManager(nn.Module):
             # Remove the batch dim.
             ada_subj_embs_dict[placeholder_string] = subj_ada_embedding.mean(dim=0)
 
-        return embedded_text, ada_subj_embs_dict, token2fg_attn
+        return embedded_text, ada_subj_embs_dict, token2ada_attn
 
     # Update prompt_emb_mask and prompt_token_attn_mask.
     # tokenized_text: [B, N] = [2/4, 77].
@@ -2004,7 +2019,7 @@ class EmbeddingManager(nn.Module):
         ada_static_loss_boost_ratio = 2
         ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
 
-        ada_attn_poolers_reg_weight = 0.2
+        ada_attn_poolers_reg_weight = 0.001
 
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.

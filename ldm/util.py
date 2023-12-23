@@ -788,6 +788,55 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_at
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)
 
+# dtype: sim.dtype.
+# During inference, sim.dtype is float16, while ada_subj_attn_normed.dtype is float32.
+# So we need to convert the type of ada_subj_attn_normed from float to sim.dtype. 
+def normalize_ada_subj_attn(ada_subj_attn, subj_attn_lb, num_heads, dtype):
+    # ada_subj_attn: [48, 1, 4096] -> [48, 4096, 1].
+    ada_subj_attn       = ada_subj_attn.transpose(1, 2)
+    # ada_subj_attn_mean: [48, 4096, 1] -> [48, 1, 1].
+    ada_subj_attn_mean  = ada_subj_attn.mean(dim=(1,2), keepdim=True)
+    
+    # subj_attn_is_nonzero: bool of [48].
+    subj_attn_is_nonzero = ada_subj_attn_mean.squeeze() > 1e-4
+    ada_subj_attn_normed = torch.ones_like(ada_subj_attn)
+    if subj_attn_is_nonzero.sum() > 0:
+        # If ada_subj_attn[i] is almost 0 everywhere (subj_attn_is_nonzero[i] = False), 
+        # then no point to use ada_subj_attn to do reweighting, and keep ada_subj_attn_normed[i] to be all-1. 
+        ada_subj_attn_normed[subj_attn_is_nonzero] = ada_subj_attn[subj_attn_is_nonzero] / ada_subj_attn_mean[subj_attn_is_nonzero]
+
+    # clamp() max=1:   Only reduce the bg attn (of image tokens other than the subject area) 
+    # of the subject tokens, not to increase fg attn. So we cap the attn to 1.0.
+    # if training, subj_attn_lb = 0.4. If inference, subj_attn_lb = 0.1.
+    # subj_attn_lb=0.4: Don't scale down attn too much, in case the attn is inaccurate (esp. during training),
+    # and the model should have a chance to recover from the inaccurate attn.
+    ada_subj_attn_normed = torch.clamp(ada_subj_attn_normed, min=subj_attn_lb, max=1.0)
+    # ada_subj_attn_normed: [48, 4096, 1] -> [6, 8, 4096, 1].
+    ada_subj_attn_normed = rearrange(ada_subj_attn_normed, '(b h) i j -> b h i j', h=num_heads)
+    # During inference, sim.dtype is float16, while ada_subj_attn_normed.dtype is float32.
+    # So we need to convert the type of ada_subj_attn_normed from float to sim.dtype. 
+    ada_subj_attn_normed = ada_subj_attn_normed.type(dtype)
+
+    return ada_subj_attn_normed
+
+# attn_mat: [48, 4096, 77].
+# weight: ada_subj_attn_normed. [6, 8, 4096, 1].
+def reweight_attn_rows(attn_mat, weight, row_indices, num_heads):
+    # attn_mat_shape: [48, 4096, 77]
+    attn_mat_shape = attn_mat.shape
+    # attn_mat: [48, 4096, 77] => [6, 8, 4096, 77].
+    attn_mat = rearrange(attn_mat, '(b h) i j -> b h i j', h=num_heads)
+    # Clone to make attn_mat2 a non-leaf node. Otherwise, 
+    # we can't do in-place assignment like attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.    
+    attn_mat2 = attn_mat.clone()
+    indices_B, indices_N = row_indices
+    # attn_mat2[indices_B, :, :, indices_N]: [6, 8, 4096, 77] -> [2*9, 8, 4096].
+    # ada_subj_attn_normed[indices_B]: [6, 8, 4096, 1] -> [2*9, 8, 4096].
+    attn_mat2[indices_B, :, :, indices_N] = attn_mat[indices_B, :, :, indices_N] * weight[indices_B, :, :, 0]
+    attn_mat2 = attn_mat2.reshape(attn_mat_shape)          
+
+    return attn_mat2
+
 # Distribute an embedding to M positions, each with sqrt(M) fraction of the original embedding.
 # text_embedding: [B, N, D]
 def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):
