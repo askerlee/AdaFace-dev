@@ -2993,16 +2993,18 @@ class LatentDiffusion(DDPM):
             if loss_mix_prompt_distill > 0:
                 loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
 
-            mix_prompt_distill_loss_scale = 1
+            if loss_comp_fg_bg_preserve == 0:
+                mix_prompt_distill_loss_scale = 1
+            else:
+                # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill, 
+                # as it should be more accurate (?).
+                # So if loss_comp_fg_bg_preserve is active (>0), then loss_mix_prompt_distill 
+                # is discounted to 30%.
+                mix_prompt_distill_loss_scale = 0.3
 
             # mix_prompt_distill_weight: 1e-4.
-            # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill, 
-            # as it should be more accurate (?).
-            # So if loss_comp_fg_bg_preserve is active (>0), then loss_mix_prompt_distill 
-            # is halved.
-            if loss_comp_fg_bg_preserve == 0:
-                loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
-                        * self.mix_prompt_distill_weight / 2
+            loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
+                    * self.mix_prompt_distill_weight
 
         # If subj_comp_key_ortho_loss_weight = 0, we still monitor loss_subj_comp_key_ortho 
         # and loss_subj_comp_value_ortho.
