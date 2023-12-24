@@ -31,6 +31,12 @@ for emb_path in os.listdir(emb_folder):
 
 iterations = sorted(iter2path.keys())
 
+emb_path = os.path.join(emb_folder, iter2path[iterations[0]])
+emb_ckpt = torch.load(emb_path)
+tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
+
+'''
+
 for idx, iteration in enumerate(iterations):
     print(iteration)
     emb_path = os.path.join(emb_folder, iter2path[iteration])
@@ -41,9 +47,6 @@ for idx, iteration in enumerate(iterations):
             print(weight_name)
             print(emb_ckpt[weight_name].data)
 
-tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
-
-'''
 for k in tokens:
     print(f"Token: {k}")
 
@@ -83,10 +86,11 @@ for k in tokens:
             print(f"Layer {i}: {layer_coeff_map_mean:.4f}")
 '''
 
-print("Attn Poolers:")
 
 for k in tokens:
     print(f"Token: {k}")
+
+    print("Attn Poolers:")
 
     for idx, iteration in enumerate(iterations):
         if iteration % 100 != 0:
@@ -104,10 +108,7 @@ for k in tokens:
 
             print(f"{iteration}-{i}: lora_to_fg_q: {lora_to_fg_q_mean:.4f}, lora_to_bg_q: {lora_to_bg_q_mean:.4f}, lora_to_k: {lora_to_k_mean:.4f}")
 
-print("layer_coeff_maps weight:")
-
-for k in tokens:
-    print(f"Token: {k}")
+    print("layer_coeff_maps weight:")
 
     for idx, iteration in enumerate(iterations):
         if iteration % 100 != 0:
@@ -124,9 +125,7 @@ for k in tokens:
 
         print(f"{iteration}: {layer_coeff_map_means}")
 
-print("layer_coeff_maps bias:")
-for k in tokens:
-    print(f"Token: {k}")
+    print("layer_coeff_maps bias:")
 
     for idx, iteration in enumerate(iterations):
         if iteration % 100 != 0:
@@ -142,4 +141,6 @@ for k in tokens:
         layer_coeff_map_means = np.array(layer_coeff_map_means)
 
         print(f"{iteration}: {layer_coeff_map_means}")
-        
+
+    print()
+    

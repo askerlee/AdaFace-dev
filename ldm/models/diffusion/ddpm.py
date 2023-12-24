@@ -2951,54 +2951,58 @@ class LatentDiffusion(DDPM):
                     * comp_fg_bg_preserve_loss_scale
 
             # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill, 
-            # as it should be accurate (?).
-            # So if loss_comp_fg_bg_preserve is active, then loss_mix_prompt_distill is not computed.
+            # as it should be more accurate (?).
+            # So if loss_comp_fg_bg_preserve is active, then loss_mix_prompt_distill is halved.
+            # subj_indices_2b is used in calc_prompt_mix_loss(), as it's used 
+            # to index subj single and subj comp embeddings.
+            # The indices will be shifted along the batch dimension (size doubled) 
+            # within calc_prompt_mix_loss() to index all the 4 blocks.
+            loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill \
+                = self.calc_prompt_mix_loss(ca_outfeats, 
+                                            extra_info['ca_layers_activations']['attnscore'], 
+                                            extra_info['subj_indices_2b'], 
+                                            BLOCK_SIZE)
+
+            if loss_feat_delta_align > 0:
+                loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach()})
+            if loss_subj_attn_delta_align > 0:
+                loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach()})
+            if loss_subj_attn_norm_distill > 0:
+                loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach()})
+
+            # loss_subj_attn_delta_align_* use L2 losses, 
+            # so no need to use dynamic loss scale.
+            subj_attn_delta_distill_loss_scale = 0 #1 #0.5
+            # loss_feat_delta_align is around 0.5~1.5. loss_subj_attn_delta_align is around 0.3~0.6.
+            # loss_subj_attn_norm_distill is usually 5~10. 
+            # So scale it down by 0.2 to match the other two. New range: 1~2.
+            subj_attn_norm_distill_loss_scale_base  = 0.2
+
+            # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
+            # subj_attn_norm_distill_loss_base: 5.
+            subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
+                                                                        self.subj_attn_norm_distill_loss_base,
+                                                                        subj_attn_norm_distill_loss_scale_base)
+
+            feat_delta_align_scale = 2
+
+            loss_mix_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_distill_loss_scale \
+                                        + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
+                                        + loss_feat_delta_align       * feat_delta_align_scale
+                                        
+            if loss_mix_prompt_distill > 0:
+                loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
+
+            mix_prompt_distill_loss_scale = 1
+
+            # mix_prompt_distill_weight: 1e-4.
+            # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill, 
+            # as it should be more accurate (?).
+            # So if loss_comp_fg_bg_preserve is active (>0), then loss_mix_prompt_distill 
+            # is halved.
             if loss_comp_fg_bg_preserve == 0:
-                # subj_indices_2b is used in calc_prompt_mix_loss(), as it's used 
-                # to index subj single and subj comp embeddings.
-                # The indices will be shifted along the batch dimension (size doubled) 
-                # within calc_prompt_mix_loss() to index all the 4 blocks.
-                loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill \
-                    = self.calc_prompt_mix_loss(ca_outfeats, 
-                                                extra_info['ca_layers_activations']['attnscore'], 
-                                                extra_info['subj_indices_2b'], 
-                                                BLOCK_SIZE)
-
-                if loss_feat_delta_align > 0:
-                    loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach()})
-                if loss_subj_attn_delta_align > 0:
-                    loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach()})
-                if loss_subj_attn_norm_distill > 0:
-                    loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach()})
-
-                # loss_subj_attn_delta_align_* use L2 losses, 
-                # so no need to use dynamic loss scale.
-                subj_attn_delta_distill_loss_scale = 0 #1 #0.5
-                # loss_feat_delta_align is around 0.5~1.5. loss_subj_attn_delta_align is around 0.3~0.6.
-                # loss_subj_attn_norm_distill is usually 5~10. 
-                # So scale it down by 0.2 to match the other two. New range: 1~2.
-                subj_attn_norm_distill_loss_scale_base  = 0.2
-
-                # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
-                # subj_attn_norm_distill_loss_base: 5.
-                subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
-                                                                         self.subj_attn_norm_distill_loss_base,
-                                                                         subj_attn_norm_distill_loss_scale_base)
-
-                feat_delta_align_scale = 2
-
-                loss_mix_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_distill_loss_scale \
-                                            + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
-                                            + loss_feat_delta_align       * feat_delta_align_scale
-                                            
-                if loss_mix_prompt_distill > 0:
-                    loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
-
-                mix_prompt_distill_loss_scale = 1
-
-                # mix_prompt_distill_weight: 2e-4.
                 loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
-                        * self.mix_prompt_distill_weight
+                        * self.mix_prompt_distill_weight / 2
 
         # If subj_comp_key_ortho_loss_weight = 0, we still monitor loss_subj_comp_key_ortho 
         # and loss_subj_comp_value_ortho.
