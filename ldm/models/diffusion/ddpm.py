@@ -3010,7 +3010,7 @@ class LatentDiffusion(DDPM):
                 # as it should be more accurate (?).
                 # So if loss_comp_fg_bg_preserve is active (>0), then loss_mix_prompt_distill 
                 # is discounted to half.
-                mix_prompt_distill_loss_scale = 0.5
+                mix_prompt_distill_loss_scale = 0.25
 
             # mix_prompt_distill_weight: 1e-4.
             loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
