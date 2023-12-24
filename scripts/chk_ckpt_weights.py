@@ -3,6 +3,9 @@ from evaluation.eval_utils import find_first_match
 import sys
 import os
 import re
+import numpy as np
+
+np.set_printoptions(precision=4, suppress=True)
 
 ckpt_sig = sys.argv[1]
 if len(sys.argv) > 2:
@@ -40,6 +43,7 @@ for idx, iteration in enumerate(iterations):
 
 tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
 
+'''
 for k in tokens:
     print(f"Token: {k}")
 
@@ -61,11 +65,81 @@ for k in tokens:
 
         prev_emb_ckpt = emb_ckpt
 
+        ada_embedder = emb_ckpt['string_to_ada_embedder'][k]
         print("{iteration} Attn Poolers:")
-        attn_poolers = emb_ckpt['string_to_ada_embedder'][k].poolers
+        attn_poolers = ada_embedder.poolers
         for i, attn_pooler in enumerate(attn_poolers):
             lora_to_fg_q_mean = attn_pooler.lora_to_fg_q.weight.abs().mean()
             lora_to_bg_q_mean = attn_pooler.lora_to_bg_q.weight.abs().mean()
             lora_to_k_mean = attn_pooler.lora_to_k.weight.abs().mean()
 
             print(f"Layer {i}: lora_to_fg_q: {lora_to_fg_q_mean:.4f}, lora_to_bg_q: {lora_to_bg_q_mean:.4f}, lora_to_k: {lora_to_k_mean:.4f}")
+
+        print("")
+        print("{iteration} layer_coeff_maps:")
+
+        for i, layer_coeff_map in enumerate(ada_embedder.layer_coeff_maps):
+            layer_coeff_map_mean = layer_coeff_map.weight.abs().mean()
+            print(f"Layer {i}: {layer_coeff_map_mean:.4f}")
+'''
+
+print("Attn Poolers:")
+
+for k in tokens:
+    print(f"Token: {k}")
+
+    for idx, iteration in enumerate(iterations):
+        if iteration % 100 != 0:
+            continue
+
+        emb_path = os.path.join(emb_folder, iter2path[iteration])
+        emb_ckpt = torch.load(emb_path)
+
+        ada_embedder = emb_ckpt['string_to_ada_embedder'][k]
+        attn_poolers = ada_embedder.poolers
+        for i, attn_pooler in enumerate(attn_poolers):
+            lora_to_fg_q_mean = attn_pooler.lora_to_fg_q.weight.abs().mean()
+            lora_to_bg_q_mean = attn_pooler.lora_to_bg_q.weight.abs().mean()
+            lora_to_k_mean = attn_pooler.lora_to_k.weight.abs().mean()
+
+            print(f"{iteration}-{i}: lora_to_fg_q: {lora_to_fg_q_mean:.4f}, lora_to_bg_q: {lora_to_bg_q_mean:.4f}, lora_to_k: {lora_to_k_mean:.4f}")
+
+print("layer_coeff_maps weight:")
+
+for k in tokens:
+    print(f"Token: {k}")
+
+    for idx, iteration in enumerate(iterations):
+        if iteration % 100 != 0:
+            continue
+                
+        emb_path = os.path.join(emb_folder, iter2path[iteration])
+        emb_ckpt = torch.load(emb_path)
+
+        ada_embedder = emb_ckpt['string_to_ada_embedder'][k]
+        attn_poolers = ada_embedder.poolers
+
+        layer_coeff_map_means = [ layer_coeff_map.weight.abs().mean().item() for layer_coeff_map in ada_embedder.layer_coeff_maps ]
+        layer_coeff_map_means = np.array(layer_coeff_map_means)
+
+        print(f"{iteration}: {layer_coeff_map_means}")
+
+print("layer_coeff_maps bias:")
+for k in tokens:
+    print(f"Token: {k}")
+
+    for idx, iteration in enumerate(iterations):
+        if iteration % 100 != 0:
+            continue
+                
+        emb_path = os.path.join(emb_folder, iter2path[iteration])
+        emb_ckpt = torch.load(emb_path)
+
+        ada_embedder = emb_ckpt['string_to_ada_embedder'][k]
+        attn_poolers = ada_embedder.poolers
+
+        layer_coeff_map_means = [ layer_coeff_map.bias.abs().mean().item() for layer_coeff_map in ada_embedder.layer_coeff_maps ]
+        layer_coeff_map_means = np.array(layer_coeff_map_means)
+
+        print(f"{iteration}: {layer_coeff_map_means}")
+        

@@ -2009,7 +2009,7 @@ class EmbeddingManager(nn.Module):
         # becomes too large (1~2), and may overpower the dynamic part.
         bias_reg_weight_base        = 0.1
         basis_reg_weight_base       = 0.1
-        ada_maps_weight_reg_weight  = 1.
+        ada_maps_weight_reg_weight  = 0.1
         # If ada_maps_bias_reg_weight = 0.02, map biases are usually very small (< 0.001)
         # If ada_maps_bias_reg_weight = 0.001, map biases are still very small. 
         # So this weight doesn't matter much.
