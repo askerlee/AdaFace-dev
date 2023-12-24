@@ -2526,7 +2526,7 @@ class LatentDiffusion(DDPM):
                 # 0.35/0.006: 30%-40% instances will meet these thresholds.
                 # 0.33/0.008: 15% instances will meet these thresholds.
                 clip_loss_thres         = 0.28
-                cls_subj_clip_margin    = 0.002
+                cls_subj_clip_margin    = 0 #0.002
 
                 # are_insts_teachable: The teacher instances are only teachable if both 
                 # the teacher and student are qualified (<= clip_loss_thres), 
@@ -3009,8 +3009,8 @@ class LatentDiffusion(DDPM):
                 # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill, 
                 # as it should be more accurate (?).
                 # So if loss_comp_fg_bg_preserve is active (>0), then loss_mix_prompt_distill 
-                # is disabled.
-                mix_prompt_distill_loss_scale = 0
+                # is discounted to half.
+                mix_prompt_distill_loss_scale = 0.5
 
             # mix_prompt_distill_weight: 1e-4.
             loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
