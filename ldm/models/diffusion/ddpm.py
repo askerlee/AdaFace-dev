@@ -171,7 +171,8 @@ class DDPM(pl.LightningModule):
         
         self.use_background_token                   = use_background_token
         self.use_fp_trick                           = use_fp_trick
-        self.comp_init_fg_from_training_image_count  = 0
+        self.comp_init_fg_from_training_image_fresh_count  = 0
+        self.comp_init_fg_from_training_image_reuse_count  = 0
 
         self.cached_inits_available          = False
         self.cached_inits                    = None
@@ -2940,10 +2941,14 @@ class LatentDiffusion(DDPM):
                 
                 loss_dict.update({f'{prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach()})
                 # Keep track of the number of iterations that use comp_init_fg_from_training_image.
-                self.comp_init_fg_from_training_image_count += 1
-                comp_init_fg_from_training_image_frac = self.comp_init_fg_from_training_image_count / self.global_step
-                loss_dict.update({f'{prefix}/comp_init_fg_from_training_image_frac': comp_init_fg_from_training_image_frac})
-
+                if self.iter_flags['reuse_init_conds']:
+                    self.comp_init_fg_from_training_image_reuse_count += 1
+                else:
+                    self.comp_init_fg_from_training_image_fresh_count += 1
+                comp_init_fg_from_training_image_reuse_frac = self.comp_init_fg_from_training_image_reuse_count / self.global_step
+                loss_dict.update({f'{prefix}/comp_init_fg_from_training_image_reuse_frac': comp_init_fg_from_training_image_reuse_frac})
+                comp_init_fg_from_training_image_fresh_frac = self.comp_init_fg_from_training_image_fresh_count / self.global_step
+                loss_dict.update({f'{prefix}/comp_init_fg_from_training_image_fresh_frac': comp_init_fg_from_training_image_fresh_frac})
             else:
                 loss_comp_fg_bg_preserve = 0
 
@@ -3004,8 +3009,8 @@ class LatentDiffusion(DDPM):
                 # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill, 
                 # as it should be more accurate (?).
                 # So if loss_comp_fg_bg_preserve is active (>0), then loss_mix_prompt_distill 
-                # is discounted to 30%.
-                mix_prompt_distill_loss_scale = 0.3
+                # is disabled.
+                mix_prompt_distill_loss_scale = 0
 
             # mix_prompt_distill_weight: 1e-4.
             loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
