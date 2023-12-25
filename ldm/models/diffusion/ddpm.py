@@ -121,7 +121,7 @@ class DDPM(pl.LightningModule):
                  apply_compel_cfg_prob=0.,
                  wds_bg_recon_discount=1.,
                  do_clip_teacher_filtering=False,
-                 num_candidate_teachers=2,
+                 num_candidate_teachers=3,
                  use_background_token=False,
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
                  use_fp_trick=True,      
@@ -1587,9 +1587,7 @@ class LatentDiffusion(DDPM):
                     N_EMBEDS = ORIG_BS * self.N_LAYERS
                     
                     # Recon iters don't do_ada_prompt_delta_reg.
-                    if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_prompt_delta_reg']:
-                        # In distillation iterations, the full batch size cannot fit in the RAM.
-                        # So we have to halve the batch size. 
+                    if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_prompt_delta_reg']:                        
                         # BLOCK_SIZE is at least 1. So if ORIG_BS == 1, then BLOCK_SIZE = 1.
                         BLOCK_SIZE  = max(ORIG_BS // self.num_candidate_teachers, 1)
                         # Only keep the first half of batched prompts to save RAM.
@@ -2142,16 +2140,36 @@ class LatentDiffusion(DDPM):
 
             else:
                 # First iteration of a two-iteration do_mix_prompt_distillation.
-                # Generate a batch of 4 instances in *two* sets, each set with the *2* instances. 
-                # Within each set, the same initial x_start, noise and t are used.
-                # Then filter, find the best teachable set (if any) and pass to the recursive iteration.
-                # If no teachable set is found, skip recursion and the prompt mix reg.
+                # If num_candidate_teachers=6, generate a batch of 12 instances in *two* sets, 
+                # each set with *num_candidate_teachers* instances. 
+                # Within each set, we set static prompt embeddings to be the same,
+                # but initial x_start, noise and t are different (x_start and t may have repetitions
+                # if ORIG_BS < num_candidate_teachers).
+                # The corresponding instances across the two sets have the same initial 
+                # x_start, noise and t, but different prompt embeddings (subj vs. mix).
+                # Then do a no_grad generation, find the best teachable set (if any) and pass to 
+                # a with_grad generation for distillation loss computation.
+                # If no teachable instances are found, skip the with_grad generation and the distillation loss.
                 # Note x_start[0] = x_start[2] != x_start[1] = x_start[3].
                 # That means, instances are arranged as: 
                 # (subj comp 1, ..., subj comp N, mix comp 1, ..., mix comp N).
-                # N = self.num_candidate_teachers = 2 or 3.
-                # If batch size = 2 / 3, this doubles the batch size to 4 / 6.
+                # If BS=3, then N = self.num_candidate_teachers = 3 or 6.
+                # If batch size = 3 and N = 6, then we quadruple the batch size to 12
+                # (6 subj comp, 6 mix comp).
                 if self.iter_flags['do_teacher_filter']:
+                    ORIG_BS = x_start.shape[0]
+                    assert self.num_candidate_teachers % ORIG_BS == 0, \
+                        f"num_candidate_teachers ({self.num_candidate_teachers}) must be a multiple of batch size ({ORIG_BS})."
+
+                    X_REPL = self.num_candidate_teachers // ORIG_BS
+                    if X_REPL > 1:
+                        # First repeat x_start and t by X_REPL times.
+                        x_start = x_start.repeat(X_REPL, 1, 1, 1)
+                        t       = t.repeat(X_REPL)
+                        # noise is NOT repeated by X_REPL times, to achieve diversity.
+                        noise   = torch.randn_like(x_start)
+
+                    # Then repeat twice to get two sets of instances.
                     x_start = x_start.repeat(2, 1, 1, 1)
                     # noise and t are repeated in the same way as x_start for two sets. 
                     # Set 1 is for two subj comp instances, set 2 is for two mix comp instances.
@@ -2525,7 +2543,7 @@ class LatentDiffusion(DDPM):
                 # (it may be a bit premature to make this decision now, as the images are only denoised once).
                 # 0.35/0.006: 30%-40% instances will meet these thresholds.
                 # 0.33/0.008: 15% instances will meet these thresholds.
-                clip_loss_thres         = 0.3 #0.28
+                clip_loss_thres         = 0.28
                 cls_subj_clip_margin    = 0.002
 
                 # are_insts_teachable: The teacher instances are only teachable if both 
