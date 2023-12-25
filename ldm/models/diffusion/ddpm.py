@@ -912,7 +912,7 @@ class LatentDiffusion(DDPM):
         # DO NOT call sample_last_layers_skip_weights() here, to make the ada embeddings are generated with 
         # CLIP skip weights consistent with the static embeddings.
         ada_prompt_embedding = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
-        print('ada', ada_prompt_embedding.abs().max())
+        #print('ada', ada_prompt_embedding.abs().max())
         emb_global_scale     = self.embedding_manager.get_emb_global_scale()
         # The scales of ada embeddings are fixed here.
         # The scales of static subject embeddings are fixed in get_learned_conditioning().
