@@ -843,20 +843,22 @@ class LatentDiffusion(DDPM):
                 if randomize_clip_weights:
                     self.cond_stage_model.sample_last_layers_skip_weights()
 
-                # static_embeddings: [128, 77, 768]
-                static_embeddings = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
-                # static_embeddings is tensor. So the following statement is False.
-                if isinstance(static_embeddings, DiagonalGaussianDistribution):
-                    static_embeddings = static_embeddings.mode()
+                # static_prompt_embedding: [128, 77, 768]
+                static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
+                # static_prompt_embedding = torch.clamp(static_prompt_embedding, min=-5., max=5.)
+                print('static', static_prompt_embedding.abs().max())
+                # static_prompt_embedding is tensor. So the following statement is False.
+                if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
+                    static_prompt_embedding = static_prompt_embedding.mode()
                 
                 # Fix the scales of the static subject embeddings.
-                static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_fg, 
-                                                   num_layers=self.N_LAYERS)
+                static_prompt_embedding = fix_emb_scales(static_prompt_embedding, self.embedding_manager.placeholder_indices_fg, 
+                                                         num_layers=self.N_LAYERS)
                 # Gradually increase the scales of the background embeddings, 
                 # so that they will absorb more high-freq noisy features.
                 self.bg_emb_extra_scale = anneal_value(self.training_percent, 1, value_range=(1, 1.5))
-                static_embeddings = fix_emb_scales(static_embeddings, self.embedding_manager.placeholder_indices_bg, 
-                                                   num_layers=self.N_LAYERS, extra_scale=self.bg_emb_extra_scale)
+                static_prompt_embedding = fix_emb_scales(static_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
+                                                         num_layers=self.N_LAYERS, extra_scale=self.bg_emb_extra_scale)
 
                 extra_info = { 
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
@@ -890,7 +892,7 @@ class LatentDiffusion(DDPM):
                     self.embedding_manager.clear_ada_prompt_embeddings_cache()
                     extra_info['ada_embedder'] = ada_embedder
 
-                c = (static_embeddings, cond_in, extra_info)
+                c = (static_prompt_embedding, cond_in, extra_info)
             else:
                 c = self.cond_stage_model(cond_in)
         else:
@@ -909,25 +911,27 @@ class LatentDiffusion(DDPM):
         self.embedding_manager.cache_layer_features_for_ada(layer_idx, layer_attn_components, time_emb)
         # DO NOT call sample_last_layers_skip_weights() here, to make the ada embeddings are generated with 
         # CLIP skip weights consistent with the static embeddings.
-        ada_embedded_text = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
-        emb_global_scale  = self.embedding_manager.get_emb_global_scale()
+        ada_prompt_embedding = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
+        print('ada', ada_prompt_embedding.abs().max())
+        emb_global_scale     = self.embedding_manager.get_emb_global_scale()
         # The scales of ada embeddings are fixed here.
         # The scales of static subject embeddings are fixed in get_learned_conditioning().
-        ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_fg, 
-                                           extra_scale=emb_global_scale)
+        ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, self.embedding_manager.placeholder_indices_fg, 
+                                              extra_scale=emb_global_scale)
         # self.bg_emb_extra_scale is gradually increased from 1 (beginning of training) 
         # to 2 (end of training) in get_learned_conditioning().
         # Gradually increase the scales of the background embeddings, 
         # so that they will absorb more high-freq noisy features.
-        ada_embedded_text = fix_emb_scales(ada_embedded_text, self.embedding_manager.placeholder_indices_bg, 
-                                           extra_scale=self.bg_emb_extra_scale)
+        ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
+                                              extra_scale=self.bg_emb_extra_scale)
+        #ada_prompt_embedding = torch.clamp(ada_prompt_embedding, min=-5., max=5.)
 
         ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
 
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, clear_ada_prompt_embeddings_cache() should have been called somewhere.
-        self.embedding_manager.cache_ada_prompt_embedding(layer_idx, ada_embedded_text)
-        return ada_embedded_text, self.embedding_manager.get_ada_emb_weight(), ada_subj_attn_dict
+        self.embedding_manager.cache_ada_prompt_embedding(layer_idx, ada_prompt_embedding)
+        return ada_prompt_embedding, self.embedding_manager.get_ada_emb_weight(), ada_subj_attn_dict
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)
@@ -2102,16 +2106,7 @@ class LatentDiffusion(DDPM):
                     # If use_wds_comp, then don't fill up the background with gaussian noise 
                     # by doing nothing to x_start.
                     if not self.iter_flags['use_wds_comp']:
-                        if random.random() < 0: #0.25:
-                            self.iter_flags['comp_insts_add_more_noise'] = True
-                            # By 50% chance, single instances (subj single, mix single) are initialized 
-                            # with less noise, i.e., mean total noise amount is 0.1-0.4.
-                            # At a later step, Comp instances (subj comp, mix comp) are added with 
-                            # 0.1 more noise (= +200 timesteps) so that the mean total noise amount become 0.2-0.5.
-                            fg_noise_anneal_mean_range = (0.1, 0.3)
-                        else:
-                            fg_noise_anneal_mean_range = (0.1, 0.4)
-
+                        fg_noise_anneal_mean_range = (0.1, 0.4)
                         x_start, fg_mask, filtered_fg_mask = \
                             init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
                                                                self.training_percent,
@@ -2158,16 +2153,22 @@ class LatentDiffusion(DDPM):
                 # (6 subj comp, 6 mix comp).
                 if self.iter_flags['do_teacher_filter']:
                     ORIG_BS = x_start.shape[0]
-                    assert self.num_candidate_teachers % ORIG_BS == 0, \
-                        f"num_candidate_teachers ({self.num_candidate_teachers}) must be a multiple of batch size ({ORIG_BS})."
-
-                    X_REPL = self.num_candidate_teachers // ORIG_BS
+                    NEW_BS  = self.num_candidate_teachers * BLOCK_SIZE
+                    # It's possible that num_candidate_teachers % ORIG_BS > 0.
+                    # In this case, we repeat x_start and t by X_REPL times, then truncate them 
+                    # to num_candidate_teachers instances.
+                    X_REPL = math.ceil(NEW_BS / ORIG_BS)
                     if X_REPL > 1:
                         # First repeat x_start and t by X_REPL times.
                         x_start = x_start.repeat(X_REPL, 1, 1, 1)
                         t       = t.repeat(X_REPL)
                         # noise is NOT repeated by X_REPL times, to achieve diversity.
                         noise   = torch.randn_like(x_start)
+                    if self.num_candidate_teachers % ORIG_BS > 0:
+                        # Then truncate them to num_candidate_teachers instances.
+                        x_start = x_start[:NEW_BS]
+                        t       = t[:NEW_BS]
+                        noise   = noise[:NEW_BS]
 
                     # Then repeat twice to get two sets of instances.
                     x_start = x_start.repeat(2, 1, 1, 1)
@@ -2209,6 +2210,9 @@ class LatentDiffusion(DDPM):
                     bg_indices2,   _ = extend_indices_B_by_n_times(extra_info['bg_indices_1b'],
                                                                    self.num_candidate_teachers,
                                                                    BLOCK_SIZE)
+                    # We have to reinitialize token2indices2. It originally points to token2indices. 
+                    # Without reinitialization, the following code will rewrite the contents of token2indices.
+                    token2indices2 = {}
                     for k in token2indices:
                         token2indices2[k], _ = extend_indices_B_by_n_times(extra_info['token2indices_1b'][k],
                                                                            self.num_candidate_teachers,
@@ -2227,15 +2231,13 @@ class LatentDiffusion(DDPM):
                     # have a batch size of 2*BLOCK_SIZE. So repeat_selected_instances() 
                     # won't discard part of them, but simply repeat them twice.
                     img_mask, fg_mask, batch_have_fg_mask = \
-                        repeat_selected_instances(slice(0, BLOCK_SIZE * self.num_candidate_teachers), 
-                                                  2, img_mask, fg_mask, batch_have_fg_mask)
+                        repeat_selected_instances(slice(0, NEW_BS), 2, img_mask, fg_mask, batch_have_fg_mask)
                     self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
 
                     # do_mix_prompt_distillation. We need to compute CLIP scores for teacher filtering.
                     # Set up cfg configs for guidance to denoise images, which are input to CLIP.
                     # Teachers are slightly more aggressive, to increase the teachable fraction.   
-                    cfg_scales_for_clip_loss = \
-                        gen_cfg_scales_for_stu_tea(6, 5, BLOCK_SIZE * self.num_candidate_teachers, x_start.device)
+                    cfg_scales_for_clip_loss = gen_cfg_scales_for_stu_tea(6, 5, NEW_BS, x_start.device)
 
                 # Not self.iter_flags['do_teacher_filter']. This branch is do_mix_prompt_distillation.
                 # So it's either reuse_init_conds, or not do_clip_teacher_filtering (globally).
@@ -2263,6 +2265,7 @@ class LatentDiffusion(DDPM):
                     cfg_scales_for_clip_loss = \
                         gen_cfg_scales_for_stu_tea(6, 5, BLOCK_SIZE * 2, x_start.device)
 
+                    token2indices2 = token2indices
                     # use cached x_start and cond. cond already has the 4-type structure. 
                     # No change to cond here.
                     # NOTE cond is mainly determined by the prompts c_in. Since c_in is inherited from
@@ -2341,8 +2344,8 @@ class LatentDiffusion(DDPM):
                                 'prompt_emb_mask':  prompt_emb_mask2 }
         
         # cfg_scales: classifier-free guidance scales.
-        cfg_info={ 'cfg_scales':     cfg_scales_for_clip_loss,
-                   'uncond_context': uncond_context }
+        cfg_info = { 'cfg_scales':     cfg_scales_for_clip_loss,
+                     'uncond_context': uncond_context }
         
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
@@ -2370,125 +2373,9 @@ class LatentDiffusion(DDPM):
                                 
         ###### do_normal_recon ######
         if self.iter_flags['do_normal_recon']:
-            if self.fg_bg_complementary_loss_weight > 0:
-                # NOTE: Do not check iter_flags['use_background_token'] here. If use_background_token, 
-                # then loss_fg_bg_complementary, loss_bg_mf_suppress, loss_fg_bg_mask_contrast 
-                # will be nonzero. Otherwise, they are zero, and only loss_subj_mb_suppress is computed.
-                # extra_info['subj_indices'] and extra_info['bg_indices'] are used, instead of
-                # extra_info['subj_indices_1b'] and extra_info['bg_indices_1b']. 
-                # But only the indices to the first block are extracted in calc_fg_bg_complementary_loss().
-                # do_sqrt_norm=False: we only care about the sum of fg attn scores vs. bg attn scores. 
-                # So we don't do sqrt norm.
-                loss_fg_bg_complementary, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_fg_bg_mask_contrast = \
-                            self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attnscore'],
-                                                               extra_info['subj_indices'],
-                                                               extra_info['bg_indices'],
-                                                               BLOCK_SIZE=x_start.shape[0],
-                                                               fg_grad_scale=0.1,
-                                                               fg_mask=fg_mask,
-                                                               instance_mask=batch_have_fg_mask,
-                                                               do_sqrt_norm=False
-                                                               )
-
-                if loss_fg_bg_complementary > 0:
-                    loss_dict.update({f'{prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach()})
-                # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
-                if loss_subj_mb_suppress > 0:
-                    loss_dict.update({f'{prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach()})
-                if loss_bg_mf_suppress > 0:
-                    loss_dict.update({f'{prefix}/bg_mf_suppress': loss_bg_mf_suppress.mean().detach()})
-                if loss_fg_bg_mask_contrast > 0:
-                    loss_dict.update({f'{prefix}/fg_bg_mask_contrast': loss_fg_bg_mask_contrast.mean().detach()})
-
-                loss += (loss_fg_bg_complementary + loss_subj_mb_suppress \
-                          + loss_bg_mf_suppress + loss_fg_bg_mask_contrast) \
-                        * self.fg_bg_complementary_loss_weight
-
-            if self.iter_flags['use_wds_comp'] and self.fg_wds_complementary_loss_weight > 0:
-                #print(c_in)
-                # extra_info['subj_indices'] and extra_info['bg_indices'] are used, instead of
-                # extra_info['subj_indices_1b'] and extra_info['bg_indices_1b']. 
-
-                # prompt_emb_mask: [2, 77, 1] -> [2, 77].
-                comp_extra_mask = extra_info['prompt_emb_mask'].squeeze(-1).clone()
-                # use_wds_cls_captions: cls token follows the subject tokens, and 
-                # precedes wds extra tokens.
-                # So we extend the subject indices by 1, to include the cls embedding as part of 
-                # the subject embeddings.
-                subj_indices_ext = extra_info['subj_indices']
-                if self.iter_flags['use_wds_cls_captions']:
-                    subj_indices_ext = extend_indices_N_by_n(subj_indices_ext, n=1)
-                # Mask out subject embeddings.
-                comp_extra_mask[subj_indices_ext] = 0
-                # Mask out background embeddings as well, as we want to encourage the subject embeddings
-                # to be complementary to the wds embeddings, without considering the background embeddings.
-                if self.iter_flags['use_background_token']:
-                    comp_extra_mask[extra_info['bg_indices']] = 0
-
-                wds_comp_extra_indices = comp_extra_mask.nonzero(as_tuple=True)
-
-                # loss_subj_mb_suppress_wds is the same as above if an instance both use_wds_comp and use_background_token.
-                # Otherwise it's different. It's ok if the loss is double-counted sometimes.
-                # do_sqrt_norm=True: wds_comp_extra prompts are usually much longer, so we do sqrt norm to scale down 
-                # wds_comp_extra attn scores.
-                loss_fg_wds_complementary, loss_subj_mb_suppress_wds, loss_wds_mask_align, loss_fg_wds_mask_contrast = \
-                            self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attnscore'],
-                                                                subj_indices_ext,
-                                                                wds_comp_extra_indices,
-                                                                BLOCK_SIZE=x_start.shape[0],
-                                                                fg_grad_scale=0.1, 
-                                                                fg_mask=fg_mask,
-                                                                instance_mask=batch_have_fg_mask,
-                                                                do_sqrt_norm=True
-                                                               )
-
-                if loss_fg_wds_complementary > 0:
-                    loss_dict.update({f'{prefix}/fg_wds_complem': loss_fg_wds_complementary.mean().detach()})
-                # If fg_mask is None, then loss_subj_mb_suppress_wds = loss_wds_mask_align = 0.
-                if loss_subj_mb_suppress_wds > 0:
-                    loss_dict.update({f'{prefix}/subj_mb_suppress_wds': loss_subj_mb_suppress_wds.mean().detach()})
-                if loss_wds_mask_align > 0:
-                    loss_dict.update({f'{prefix}/wds_mask_align': loss_wds_mask_align.mean().detach()})
-                if loss_fg_wds_mask_contrast > 0:
-                    loss_dict.update({f'{prefix}/fg_wds_mask_contrast': loss_fg_wds_mask_contrast.mean().detach()})
-
-                fg_wds_comple_loss_scale    = 1
-                wds_mask_align_loss_scale   = 1
-                loss += (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
-                          + loss_wds_mask_align     * wds_mask_align_loss_scale \
-                          + loss_subj_mb_suppress_wds + loss_fg_wds_mask_contrast) \
-                        * self.fg_wds_complementary_loss_weight
-
-            if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
-                # bg loss is almost completely ignored. But giving it a little weight may help suppress 
-                # subj embeddings' contribution to the background (serving as a contrast to the fg).
-                bg_pixel_weight = 0 #0.01
-            else:
-                if self.iter_flags['use_wds_comp']:
-                    # fg_pixel_weight/bg_pixel_weight are scalars.
-                    # an instance of  use_wds_comp: instance_bg_weight is 0.05, instance_fg_weight is 1.
-                    # an instance not use_wds_comp: instance_bg_weight is 1,    instance_fg_weight is 1.
-                    # NOTE: We discount the bg weight of the use_wds_comp instances, as bg areas are supposed 
-                    # to be attended with wds comp extra embeddings. However, the attention may not be perfect,
-                    # and subject embeddings may be tempted to attend to the background, which will mix the 
-                    # background features into the subject embeddings, which hurt both authenticity and compositionality.
-                    ## NOTE: We discount the fg weight of the use_wds_comp instances, as they are less natural and
-                    ## may incur too high loss to the model (even in the fg areas).
-                    bg_pixel_weight = self.wds_bg_recon_discount
-                else:
-                    # use_background_token == True and not self.iter_flags['use_wds_comp'].
-                    # bg loss is somewhat discounted.
-                    bg_pixel_weight = 0.5
-                
-            # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-            loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
-                                                 fg_pixel_weight=1,
-                                                 bg_pixel_weight=bg_pixel_weight)
-
-            loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
-
-            # iter_flags['recon_loss_weight']: gradually decrease from 1 to 0.5 during the course of training.
-            loss += self.iter_flags['recon_loss_weight'] * loss_recon
+            loss += self.calc_normal_recon_losses(x_start, model_output, target, extra_info,
+                                                  img_mask, fg_mask, batch_have_fg_mask,
+                                                  loss_dict, prefix)
         ###### end of do_normal_recon ######
 
         ###### begin of preparation for is_compos_iter ######
@@ -2501,7 +2388,7 @@ class LatentDiffusion(DDPM):
             # So cls_comp_prompts is used to compute the CLIP text-image matching loss on
             # images guided by the subject or mixed embeddings.
             if self.iter_flags['do_teacher_filter']:
-                del extra_info['ca_layers_activations']
+                #del extra_info['ca_layers_activations']
                 clip_images_code  = x_recon
                 # 4 sets of cls_comp_prompts for (subj comp 1, subj comp 2, mix comp 1, mix comp 2).                
                 clip_prompts_comp = extra_info['cls_comp_prompts'] * self.num_candidate_teachers * 2
@@ -2538,6 +2425,9 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/reuse_loss_clip_subj_comp': losses_clip_subj_comp.mean().detach()})
                 loss_dict.update({f'{prefix}/reuse_loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach()})
 
+            # If reuse_init_conds, we still check whether the instances are teachable.
+            # But it's not called teacher filtering, as there's only one teacher. If it's not teachable,
+            # then we skip the distillation loss.
             if self.iter_flags['do_teacher_filter'] or self.iter_flags['reuse_init_conds']:
                 # Discard instances that seem to be too far from the text 
                 # (it may be a bit premature to make this decision now, as the images are only denoised once).
@@ -2593,11 +2483,15 @@ class LatentDiffusion(DDPM):
                     # clear_ada_prompt_embeddings_cache() will implicitly clear the cache.
                     self.embedding_manager.clear_ada_prompt_embeddings_cache()
 
-                    # best_cand_idx: max of diffs among instances 0, 1, 2.
+                    # best_cand_idx: max of diffs among teachable instances.
                     # text-image better aligned -> smaller clip loss.
                     # For a 4-instance batch to be teachable, subj comp instances should have larger clip loss
                     # than mix comp instances. So loss_diffs_subj_mix should be positive, and the larger, 
                     # the more teachable. Therefore we find the argmax of loss_diffs_subj_mix.
+                    # Sometimes the max among loss_diffs_subj_mix is not teachable (> clip_loss_thres),
+                    # so we set the loss_diffs_subj_mix of non-teachable instances to be a very large 
+                    # negative number, so that non-teachable instances will never be selected as the best candidate.
+                    loss_diffs_subj_mix[~are_insts_teachable] = -1e5
                     best_cand_idx = torch.argmax(loss_diffs_subj_mix).item()
 
                     # Choose the x_start, noise, and t of the better candidate. 
@@ -2610,20 +2504,6 @@ class LatentDiffusion(DDPM):
                     # Mark the best candidate with a purple box, although it's in the first iteration.
                     log_image_colors[best_cand_idx] = 3
                     log_image_colors[best_cand_idx + self.num_candidate_teachers] = 3
-
-                    if 'comp_insts_add_more_noise' in self.iter_flags:
-                        base_t = t[best_cand_idx]
-                        # keep_prob_range=(0, 0): never keep the original t as comp_t, i.e., 
-                        # always increase base_t to get comp_t.
-                        # Because 'comp_insts_add_more_noise' is already a random bool that takes True.
-                        comp_t = anneal_t_ratio(base_t, self.training_percent, self.num_timesteps, 
-                                                init_ratio_range =(1.,  1.2), 
-                                                final_ratio_range=(1.2, 1.4))
-                        
-                        # Extra noise is added to comp instances, but not to single instances.
-                        # So we interleave base_t and comp_t.
-                        # Since base_t and comp_t are 0-d tensors, we cannot use torch.cat().
-                        t_sel  = torch.stack([base_t, comp_t, base_t, comp_t])
 
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
                     # If comp_init_fg_from_training_image, then in order to let mix prompts attend to fg areas, we let
@@ -2656,19 +2536,25 @@ class LatentDiffusion(DDPM):
 
                     # This branch implies a compositional distillation iter.
                     extra_info['img_mask']  = None
+                    extra_info['capture_distill_attn'] = True
 
                     emb_man_volatile_ds = { 'subj_indices':     extra_info['subj_indices_2b'],
                                             'bg_indices':       extra_info['bg_indices'],
                                             'token2indices':    extra_info['token2indices_2b'],
                                             'img_mask':         None,
-                                            'prompt_emb_mask':  extra_info['prompt_emb_mask'] }    
+                                            'prompt_emb_mask':  extra_info['prompt_emb_mask'] }
+
+
+                    
+                    if self.global_step == 24:
+                        breakpoint()
 
                     cfg_scales_for_clip_loss = \
                         gen_cfg_scales_for_stu_tea(6, 5, BLOCK_SIZE * 2, x_start.device)
 
                     cfg_info = { 'cfg_scales':     cfg_scales_for_clip_loss,
                                  'uncond_context': self.empty_context_2b }
-                             
+
                     # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
                     # on mix reg and ada embeddings is generated for the delta loss. 
                     # (The previous call to guided_denoise() didn't enable gradients, 
@@ -3009,8 +2895,8 @@ class LatentDiffusion(DDPM):
             # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
             # subj_attn_norm_distill_loss_base: 5.
             subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
-                                                                        self.subj_attn_norm_distill_loss_base,
-                                                                        subj_attn_norm_distill_loss_scale_base)
+                                                                     self.subj_attn_norm_distill_loss_base,
+                                                                     subj_attn_norm_distill_loss_scale_base)
 
             feat_delta_align_scale = 2
 
@@ -3111,6 +2997,134 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
+    # Major losses for normal_recon iterations. 
+    # (But there are still other losses used after calling this function.)
+    def calc_normal_recon_losses(self, x_start, model_output, target, extra_info,
+                                 img_mask, fg_mask, batch_have_fg_mask, loss_dict, prefix):
+        loss = 0
+
+        if self.fg_bg_complementary_loss_weight > 0:
+            # NOTE: Do not check iter_flags['use_background_token'] here. If use_background_token, 
+            # then loss_fg_bg_complementary, loss_bg_mf_suppress, loss_fg_bg_mask_contrast 
+            # will be nonzero. Otherwise, they are zero, and only loss_subj_mb_suppress is computed.
+            # extra_info['subj_indices'] and extra_info['bg_indices'] are used, instead of
+            # extra_info['subj_indices_1b'] and extra_info['bg_indices_1b']. 
+            # But only the indices to the first block are extracted in calc_fg_bg_complementary_loss().
+            # do_sqrt_norm=False: we only care about the sum of fg attn scores vs. bg attn scores. 
+            # So we don't do sqrt norm.
+            loss_fg_bg_complementary, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_fg_bg_mask_contrast = \
+                        self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attnscore'],
+                                                            extra_info['subj_indices'],
+                                                            extra_info['bg_indices'],
+                                                            BLOCK_SIZE=x_start.shape[0],
+                                                            fg_grad_scale=0.1,
+                                                            fg_mask=fg_mask,
+                                                            instance_mask=batch_have_fg_mask,
+                                                            do_sqrt_norm=False
+                                                            )
+
+            if loss_fg_bg_complementary > 0:
+                loss_dict.update({f'{prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach()})
+            # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
+            if loss_subj_mb_suppress > 0:
+                loss_dict.update({f'{prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach()})
+            if loss_bg_mf_suppress > 0:
+                loss_dict.update({f'{prefix}/bg_mf_suppress': loss_bg_mf_suppress.mean().detach()})
+            if loss_fg_bg_mask_contrast > 0:
+                loss_dict.update({f'{prefix}/fg_bg_mask_contrast': loss_fg_bg_mask_contrast.mean().detach()})
+
+            loss += (loss_fg_bg_complementary + loss_subj_mb_suppress \
+                        + loss_bg_mf_suppress + loss_fg_bg_mask_contrast) \
+                    * self.fg_bg_complementary_loss_weight
+
+        if self.iter_flags['use_wds_comp'] and self.fg_wds_complementary_loss_weight > 0:
+            #print(c_in)
+            # extra_info['subj_indices'] and extra_info['bg_indices'] are used, instead of
+            # extra_info['subj_indices_1b'] and extra_info['bg_indices_1b']. 
+
+            # prompt_emb_mask: [2, 77, 1] -> [2, 77].
+            comp_extra_mask = extra_info['prompt_emb_mask'].squeeze(-1).clone()
+            # use_wds_cls_captions: cls token follows the subject tokens, and 
+            # precedes wds extra tokens.
+            # So we extend the subject indices by 1, to include the cls embedding as part of 
+            # the subject embeddings.
+            subj_indices_ext = extra_info['subj_indices']
+            if self.iter_flags['use_wds_cls_captions']:
+                subj_indices_ext = extend_indices_N_by_n(subj_indices_ext, n=1)
+            # Mask out subject embeddings.
+            comp_extra_mask[subj_indices_ext] = 0
+            # Mask out background embeddings as well, as we want to encourage the subject embeddings
+            # to be complementary to the wds embeddings, without considering the background embeddings.
+            if self.iter_flags['use_background_token']:
+                comp_extra_mask[extra_info['bg_indices']] = 0
+
+            wds_comp_extra_indices = comp_extra_mask.nonzero(as_tuple=True)
+
+            # loss_subj_mb_suppress_wds is the same as above if an instance both use_wds_comp and use_background_token.
+            # Otherwise it's different. It's ok if the loss is double-counted sometimes.
+            # do_sqrt_norm=True: wds_comp_extra prompts are usually much longer, so we do sqrt norm to scale down 
+            # wds_comp_extra attn scores.
+            loss_fg_wds_complementary, loss_subj_mb_suppress_wds, loss_wds_mask_align, loss_fg_wds_mask_contrast = \
+                        self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attnscore'],
+                                                            subj_indices_ext,
+                                                            wds_comp_extra_indices,
+                                                            BLOCK_SIZE=x_start.shape[0],
+                                                            fg_grad_scale=0.1, 
+                                                            fg_mask=fg_mask,
+                                                            instance_mask=batch_have_fg_mask,
+                                                            do_sqrt_norm=True
+                                                            )
+
+            if loss_fg_wds_complementary > 0:
+                loss_dict.update({f'{prefix}/fg_wds_complem': loss_fg_wds_complementary.mean().detach()})
+            # If fg_mask is None, then loss_subj_mb_suppress_wds = loss_wds_mask_align = 0.
+            if loss_subj_mb_suppress_wds > 0:
+                loss_dict.update({f'{prefix}/subj_mb_suppress_wds': loss_subj_mb_suppress_wds.mean().detach()})
+            if loss_wds_mask_align > 0:
+                loss_dict.update({f'{prefix}/wds_mask_align': loss_wds_mask_align.mean().detach()})
+            if loss_fg_wds_mask_contrast > 0:
+                loss_dict.update({f'{prefix}/fg_wds_mask_contrast': loss_fg_wds_mask_contrast.mean().detach()})
+
+            fg_wds_comple_loss_scale    = 1
+            wds_mask_align_loss_scale   = 1
+            loss += (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
+                        + loss_wds_mask_align     * wds_mask_align_loss_scale \
+                        + loss_subj_mb_suppress_wds + loss_fg_wds_mask_contrast) \
+                    * self.fg_wds_complementary_loss_weight
+
+        if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
+            # bg loss is almost completely ignored. But giving it a little weight may help suppress 
+            # subj embeddings' contribution to the background (serving as a contrast to the fg).
+            bg_pixel_weight = 0 #0.01
+        else:
+            if self.iter_flags['use_wds_comp']:
+                # fg_pixel_weight/bg_pixel_weight are scalars.
+                # an instance of  use_wds_comp: instance_bg_weight is 0.05, instance_fg_weight is 1.
+                # an instance not use_wds_comp: instance_bg_weight is 1,    instance_fg_weight is 1.
+                # NOTE: We discount the bg weight of the use_wds_comp instances, as bg areas are supposed 
+                # to be attended with wds comp extra embeddings. However, the attention may not be perfect,
+                # and subject embeddings may be tempted to attend to the background, which will mix the 
+                # background features into the subject embeddings, which hurt both authenticity and compositionality.
+                ## NOTE: We discount the fg weight of the use_wds_comp instances, as they are less natural and
+                ## may incur too high loss to the model (even in the fg areas).
+                bg_pixel_weight = self.wds_bg_recon_discount
+            else:
+                # use_background_token == True and not self.iter_flags['use_wds_comp'].
+                # bg loss is somewhat discounted.
+                bg_pixel_weight = 0.5
+            
+        # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+        loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
+                                                fg_pixel_weight=1,
+                                                bg_pixel_weight=bg_pixel_weight)
+
+        loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
+
+        # iter_flags['recon_loss_weight']: gradually decrease from 1 to 0.5 during the course of training.
+        loss += self.iter_flags['recon_loss_weight'] * loss_recon
+
+        return loss
+        
     # pixel-wise recon loss. 
     # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
     # img_mask, fg_mask: [2, 1, 64, 64].

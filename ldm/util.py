@@ -1687,12 +1687,12 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
         prompt_emb_mask_weighted = None
 
     use_ortho_subtract = True
-    # cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
+    # static_cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
     # Delta embedding between class single and comp embeddings.
     # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
-    # static_delta: [1, 16, 77, 768]. Different values for each layer along dim=1.
+    # static_subj_delta: [1, 16, 77, 768]. Different values for each layer along dim=1.
     # Delta embedding between subject single and comp embeddings.
-    # static_delta / ada_delta should be aligned with cls_delta.
+    # static_subj_delta / ada_subj_delta should be aligned with cls_delta.
     if use_ortho_subtract:
         static_subj_delta   = ortho_subtract(static_subj_comp_emb, static_subj_single_emb)
         static_cls_delta    = ortho_subtract(static_cls_comp_emb,  static_cls_single_emb)
@@ -1704,6 +1704,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
         calc_ref_cosine_loss(static_subj_delta, static_cls_delta, 
                                emb_mask=prompt_emb_mask_weighted,
                                do_demean_first=True,
+                               first_n_dims_to_flatten=3,
                                aim_to_align=True)
 
     if do_ada_prompt_delta_reg and ada_embeddings is not None:
