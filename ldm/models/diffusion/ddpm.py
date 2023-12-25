@@ -846,7 +846,7 @@ class LatentDiffusion(DDPM):
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
                 # static_prompt_embedding = torch.clamp(static_prompt_embedding, min=-5., max=5.)
-                print('static', static_prompt_embedding.abs().max())
+                #print('static', static_prompt_embedding.abs().max())
                 # static_prompt_embedding is tensor. So the following statement is False.
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
                     static_prompt_embedding = static_prompt_embedding.mode()
