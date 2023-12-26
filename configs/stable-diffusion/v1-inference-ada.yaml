@@ -18,7 +18,9 @@ model:
     use_ema: False
     use_layerwise_embedding: True
     use_ada_embedding: True
-        
+    # By default, SOT embeddings have a max value around 33. We cut it half to 16. 
+    prompt_embedding_clamp_value:      16
+            
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
