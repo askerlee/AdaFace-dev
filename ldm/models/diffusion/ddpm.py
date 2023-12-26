@@ -189,7 +189,7 @@ class DDPM(pl.LightningModule):
 
         self.cached_inits_available          = False
         self.cached_inits                    = None
-        self.init_iter_flags()
+        self.init_iteration_flags()
 
         # Training flags. 
         # No matter wheter the scheme is layerwise or not,
@@ -486,7 +486,7 @@ class DDPM(pl.LightningModule):
         x = x.to(memory_format=torch.contiguous_format).float()
         return x
 
-    def init_iter_flags(self):
+    def init_iteration_flags(self):
         self.iter_flags = { 'calc_clip_loss':               False,
                             'do_normal_recon':              True,
                             'is_compos_iter':               False,
@@ -510,7 +510,7 @@ class DDPM(pl.LightningModule):
         return loss, loss_dict
 
     def training_step(self, batch, batch_idx):
-        self.init_iter_flags()
+        self.init_iteration_flags()
 
         self.training_percent = self.global_step / self.trainer.max_steps
 
@@ -863,7 +863,7 @@ class LatentDiffusion(DDPM):
 
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
-                # static_prompt_embedding = torch.clamp(static_prompt_embedding, min=-5., max=5.)
+                static_prompt_embedding = torch.clamp(static_prompt_embedding, min=-5., max=5.)
                 #print('static', static_prompt_embedding.abs().max())
                 # static_prompt_embedding is tensor. So the following statement is False.
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
@@ -942,7 +942,7 @@ class LatentDiffusion(DDPM):
         # so that they will absorb more high-freq noisy features.
         ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
                                               extra_scale=self.bg_emb_extra_scale)
-        #ada_prompt_embedding = torch.clamp(ada_prompt_embedding, min=-5., max=5.)
+        ada_prompt_embedding = torch.clamp(ada_prompt_embedding, min=-5., max=5.)
 
         ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
 
@@ -2496,6 +2496,8 @@ class LatentDiffusion(DDPM):
                 # Only do distillation if at least one of teacher instances is teachable.
                 if self.iter_flags['do_teacher_filter'] and self.iter_flags['is_teachable']:
                     # No need the intermediates of the twin-comp instances. Release them to save RAM.
+                    # Cannot release the intermediates outside the "if" branch, as the intermediates
+                    # will be used in a reuse_init_conds iter.
                     self.release_plosses_intermediates(locals())
                     # clear_ada_prompt_embeddings_cache() will implicitly clear the cache.
                     self.embedding_manager.clear_ada_prompt_embeddings_cache()
@@ -2561,15 +2563,11 @@ class LatentDiffusion(DDPM):
                                             'img_mask':         None,
                                             'prompt_emb_mask':  extra_info['prompt_emb_mask'] }
 
-
                     cfg_scales_for_clip_loss = \
                         gen_cfg_scales_for_stu_tea(6, 5, BLOCK_SIZE * 2, x_start.device)
 
                     cfg_info = { 'cfg_scales':     cfg_scales_for_clip_loss,
                                  'uncond_context': self.empty_context_2b }
-
-                    #if self.global_step == 16:
-                    #    breakpoint()
 
                     # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
                     # on mix reg and ada embeddings is generated for the delta loss. 

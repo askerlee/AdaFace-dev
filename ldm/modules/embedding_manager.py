@@ -2010,10 +2010,7 @@ class EmbeddingManager(nn.Module):
         bias_reg_weight_base        = 0.1
         basis_reg_weight_base       = 0.1
         ada_maps_weight_reg_weight  = 0.1
-        # If ada_maps_bias_reg_weight = 0.02, map biases are usually very small (< 0.001)
-        # If ada_maps_bias_reg_weight = 0.001, map biases are still very small. 
-        # So this weight doesn't matter much.
-        ada_maps_bias_reg_weight    = 0.001   # 0.02 -> 0.001
+        ada_maps_bias_reg_weight    = 0 #0.001   # 0.001 -> 0
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
