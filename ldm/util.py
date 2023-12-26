@@ -350,21 +350,18 @@ def power_loss(a, exponent=2, rev_pow=False):
         loss = loss.pow(1/exponent)
     return loss
 
-def clamp_prompt_embedding(emb, clamp_value, is_compos_iter, 
-                           is_training, batch_is_uncond_prompt=False):
-    if clamp_value <= 0 or batch_is_uncond_prompt:
-        return emb
+def clamp_prompt_embedding(clamp_value, *embs):
+    if clamp_value <= 0:
+        if len(embs) == 1:
+            return embs[0]
+        else:
+            return embs
     
-    # compisitional iterations or inference: only clamp the first half batch.
-    if is_compos_iter or not is_training:
-        emb_h1, emb_h2 = emb.chunk(2, dim=0)
-        emb_h1 = torch.clamp(emb_h1, min=-clamp_value, max=clamp_value)
-        emb = torch.cat([emb_h1, emb_h2], dim=0)
-    # Otherwise, it's normal recon iterations during training. Clamp the whole batch.
+    if len(embs) == 1:
+        return torch.clamp(embs[0], min=-clamp_value, max=clamp_value) if embs[0] is not None else None
     else:
-        emb = torch.clamp(emb, min=-clamp_value, max=clamp_value)
-
-    return emb
+        return [ torch.clamp(e, min=-clamp_value, max=clamp_value) if e is not None else None \
+                    for e in embs ]
 
 def demean(x):
     return x - x.mean(dim=-1, keepdim=True)
@@ -377,7 +374,10 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
                          exponent=2, do_demean_first=False,
                          first_n_dims_to_flatten=3,
                          ref_grad_scale=0, aim_to_align=True, 
-                         margin=0, debug=False):
+                         margin=0, clamp_value=-1,
+                         debug=False):
+    delta, ref_delta = clamp_prompt_embedding(clamp_value, delta, ref_delta)
+
     B = delta.shape[0]
     loss = 0
     if batch_mask is not None:
@@ -1688,7 +1688,10 @@ def extract_last_chunk_of_indices(token_indices, total_num_chunks=3):
 # static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
 # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
 def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mask,
-                               do_ada_prompt_delta_reg):
+                               do_ada_prompt_delta_reg, prompt_embedding_clamp_value):
+    static_embeddings, ada_embeddings = \
+        clamp_prompt_embedding(prompt_embedding_clamp_value, static_embeddings, ada_embeddings)
+
     # static_embeddings / ada_embeddings contain 4 types of embeddings:
     # subj_single, subj_comp, cls_single, cls_comp.
     # static_embeddings: [4, 16, 77, 768].

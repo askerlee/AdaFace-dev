@@ -854,14 +854,7 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
-    def get_learned_conditioning(self, cond_in, randomize_clip_weights=False, batch_is_uncond_prompt=False):
-        if not batch_is_uncond_prompt:
-            are_null_prompts = [ len(c) == 0 for c in cond_in ]
-            # Manual check finds all prompts in cond_in are empty strings. 
-            # Therefore, batch_is_uncond_prompt is True.
-            if np.all(are_null_prompts):
-                batch_is_uncond_prompt = True
-
+    def get_learned_conditioning(self, cond_in, randomize_clip_weights=False):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
@@ -885,10 +878,6 @@ class LatentDiffusion(DDPM):
                 self.bg_emb_extra_scale = anneal_value(self.training_percent, 1, value_range=(1, 1.5))
                 static_prompt_embedding = fix_emb_scales(static_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
                                                          num_layers=self.N_LAYERS, extra_scale=self.bg_emb_extra_scale)
-
-                static_prompt_embedding = clamp_prompt_embedding(static_prompt_embedding, self.prompt_embedding_clamp_value,
-                                                                 self.iter_flags['is_compos_iter'], self.embedding_manager.training,
-                                                                 batch_is_uncond_prompt=batch_is_uncond_prompt)
 
                 extra_info = { 
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
@@ -954,8 +943,6 @@ class LatentDiffusion(DDPM):
         # so that they will absorb more high-freq noisy features.
         ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
                                               extra_scale=self.bg_emb_extra_scale)
-        ada_prompt_embedding = clamp_prompt_embedding(ada_prompt_embedding, self.prompt_embedding_clamp_value,
-                                                      self.iter_flags['is_compos_iter'], self.embedding_manager.training)
 
         ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
 
@@ -2617,7 +2604,8 @@ class LatentDiffusion(DDPM):
                         # ada_embeddings is the ada embedding after mixing.
                         extra_info['c_static_emb_4b'], ada_embeddings,
                         extra_info['prompt_emb_mask'],
-                        self.iter_flags['do_ada_prompt_delta_reg']
+                        self.iter_flags['do_ada_prompt_delta_reg'],
+                        self.prompt_embedding_clamp_value
                     )
 
             if self.iter_flags['do_ada_prompt_delta_reg'] and ada_embeddings is not None:
@@ -2665,7 +2653,8 @@ class LatentDiffusion(DDPM):
                     = self.calc_padding_embs_align_loss(static_embeddings, ada_embeddings,
                                                         extra_info['prompt_emb_mask'],
                                                         subj_indices, bg_indices, SSB_SIZE, 
-                                                        self.iter_flags['is_compos_iter'])
+                                                        self.iter_flags['is_compos_iter'],
+                                                        emb_clamp_value=self.prompt_embedding_clamp_value)
 
                 if loss_padding_subj_embs_align != 0:
                     loss_dict.update({f'{prefix}/padding_subj_embs_align': loss_padding_subj_embs_align.mean().detach().item() })
@@ -4087,7 +4076,7 @@ class LatentDiffusion(DDPM):
     # (subj-single and subj-comp instances).
     def calc_padding_embs_align_loss(self, static_prompt_embeddings, ada_embeddings, 
                                      prompt_emb_mask, subj_indices, bg_indices,
-                                     SSB_SIZE, is_compos_iter):
+                                     SSB_SIZE, is_compos_iter, emb_clamp_value=-1):
         # If do_normal_recon:
         # static_prompt_embeddings: [8, 16, 77, 768].
         # ada_embeddings:           [2, 16, 77, 768].
@@ -4096,6 +4085,9 @@ class LatentDiffusion(DDPM):
         # static_prompt_embeddings: [4, 16, 77, 768].
         # ada_embeddings:           [4, 16, 77, 768].
         # prompt_emb_mask:          [4, 77,   1].
+
+        static_prompt_embeddings, ada_embeddings = \
+            clamp_prompt_embedding(emb_clamp_value, static_prompt_embeddings, ada_embeddings)
 
         if ada_embeddings is not None:
             # During training, ada_emb_weight is randomly drawn from [0.4, 0.7].

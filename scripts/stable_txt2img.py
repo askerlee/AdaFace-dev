@@ -590,8 +590,7 @@ def main(opt):
 
         if opt.scale != 1.0:
             try:
-                uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt],
-                                                    batch_is_uncond_prompt=True)
+                uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt])
             except:
                 breakpoint()
         else:

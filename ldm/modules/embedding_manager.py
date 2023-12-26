@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
-                     add_noise_to_embedding, calc_ref_cosine_loss
+                     add_noise_to_embedding, calc_ref_cosine_loss, clamp_prompt_embedding
 
 from functools import partial
 from collections import OrderedDict
@@ -915,6 +915,7 @@ class EmbeddingManager(nn.Module):
             training_add_noise_prob=None,
             use_conv_attn_kernel_size=-1,
             conv_attn_layerwise_scale_learnable=False,
+            prompt_embedding_clamp_value=-1,
             **kwargs
     ):
         super().__init__()
@@ -1114,6 +1115,7 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_token2indices_cache = {}
         self.iter_type = None       # 'recon_iter' or 'distill_iter'
+        self.prompt_embedding_clamp_value = prompt_embedding_clamp_value
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
@@ -1310,7 +1312,8 @@ class EmbeddingManager(nn.Module):
         
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
         layer_static_prompt_embs   = layer_attn_components['layer_static_prompt_embs']
-
+        layer_static_prompt_embs   = clamp_prompt_embedding(self.prompt_embedding_clamp_value, layer_static_prompt_embs)
+        
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
         # This order ensures that the background Ada embedder can always use 
@@ -2160,13 +2163,6 @@ class EmbeddingManager(nn.Module):
                 else:
                     fg_ada_token_emb = 0
 
-                '''
-                if fg_ada_token_emb_ema_obj is not None:
-                    fg_ada_token_emb_ema = fg_ada_token_emb_ema_obj.embedding
-                else:
-                    fg_ada_token_emb_ema = 0
-                '''
-
                 if len(bg_ada_token_emb_cache_obj.cached_layers) == bg_ada_token_emb_cache_obj.num_layers:
                     bg_ada_token_emb = bg_ada_token_emb_cache_obj.embedding
                 else:
@@ -2182,6 +2178,9 @@ class EmbeddingManager(nn.Module):
                 bg_hybrid_token_emb = bg_static_token_emb * (1 - ada_emb_ema_weight) \
                                         + ada_grad_scaler(bg_ada_token_emb)  * ada_emb_ema_weight
                 
+                fg_hybrid_token_emb, bg_hybrid_token_emb = \
+                    clamp_prompt_embedding(self.prompt_embedding_clamp_value, fg_hybrid_token_emb, bg_hybrid_token_emb)
+                
                 # fg_hybrid_token_emb, bg_hybrid_token_emb: [16, 768]. 16: num layers.
                 fg_hybrid_token_mean_emb = fg_hybrid_token_emb.mean(dim=1)
                 bg_hybrid_token_mean_emb = bg_hybrid_token_emb.mean(dim=1)
@@ -2190,7 +2189,8 @@ class EmbeddingManager(nn.Module):
                     calc_ref_cosine_loss(bg_hybrid_token_mean_emb, fg_hybrid_token_mean_emb, 
                                          exponent=2, do_demean_first=False,
                                          first_n_dims_to_flatten=1, 
-                                         ref_grad_scale=fg_grad_scale)
+                                         ref_grad_scale=fg_grad_scale,
+                                         clamp_value=self.prompt_embedding_clamp_value)
                 
                 loss_fg_bg_token_emb_ortho += loss_fg_bg_pair_token_emb_ortho
                 num_fg_bg_pairs += 1
