@@ -2389,112 +2389,21 @@ class LatentDiffusion(DDPM):
 
         loss = 0
                                 
-        ###### do_normal_recon ######
         if self.iter_flags['do_normal_recon']:
             loss += self.calc_normal_recon_losses(x_start, model_output, target, extra_info,
                                                   img_mask, fg_mask, batch_have_fg_mask,
                                                   loss_dict, prefix)
-        ###### end of do_normal_recon ######
-
+            
         ###### begin of preparation for is_compos_iter ######
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
         if self.iter_flags['is_compos_iter'] and self.iter_flags['calc_clip_loss']:
-            # Images generated both under subj_comp_prompts and cls_comp_prompts 
-            # are subject to the CLIP text-image matching evaluation.
-            # If self.iter_flags['do_teacher_filter'] (implying do_mix_prompt_distillation), 
-            # the batch is (subj_comp_emb, subj_comp_emb, mix_comp_emb,  mix_comp_emb).
-            # So cls_comp_prompts is used to compute the CLIP text-image matching loss on
-            # images guided by the subject or mixed embeddings.
+            clip_images, are_insts_teachable, loss_diffs_subj_mix, log_image_colors = self.calc_clip_losses()
+            is_teachable = are_insts_teachable.any()
+            self.iter_flags['is_teachable'] = is_teachable
+
+            # Only do distillation if at least one of teacher instances is teachable.
             if self.iter_flags['do_teacher_filter']:
-                #del extra_info['ca_layers_activations']
-                clip_images_code  = x_recon
-                # 4 sets of cls_comp_prompts for (subj comp 1, subj comp 2, mix comp 1, mix comp 2).                
-                clip_prompts_comp = extra_info['cls_comp_prompts'] * self.num_candidate_teachers * 2
-            else:
-                # Either self.iter_flags['reuse_init_conds'], or a pure ada delta loss iter.
-                # A batch of either type has the (subj_single, subj_comp, mix_single, mix_comp) structure.
-                # Only evaluate the CLIP loss on the comp images. 
-                # So the batch size of clip_images_code is halved.
-                # If teachable, the whole batch of x_recon is still used for distillation.
-                x_recon_subj_single, x_recon_subj_comp, x_recon_mix_single, x_recon_mix_comp = \
-                    x_recon.chunk(4)
-                clip_images_code = torch.cat([x_recon_subj_comp, x_recon_mix_comp], dim=0)
-                clip_prompts_comp = extra_info['cls_comp_prompts'] * 2
-
-            # Use CLIP loss as a metric to evaluate the compositionality of the generated images 
-            # and do distillation selectively.
-            # DO NOT use CLIP loss to optimize the model. It will hurt the performance.
-            with torch.no_grad():
-                clip_images = self.decode_first_stage(clip_images_code)
-                losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   
-                                                                                     clip_images,  
-                                                                                     reduction='diag')
-
-            # Instances are arranged as: 
-            # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
-            losses_clip_subj_comp, losses_clip_mix_comp \
-                = losses_clip_comp.chunk(2)
-            
-            if not self.iter_flags['reuse_init_conds']:
-                loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean().detach().item() })
-                loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach().item() })
-            else:
-                loss_dict.update({f'{prefix}/reuse_loss_clip_subj_comp': losses_clip_subj_comp.mean().detach().item() })
-                loss_dict.update({f'{prefix}/reuse_loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach().item() })
-
-            # If reuse_init_conds, we still check whether the instances are teachable.
-            # But it's not called teacher filtering, as there's only one teacher. If it's not teachable,
-            # then we skip the distillation loss.
-            if self.iter_flags['do_teacher_filter'] or self.iter_flags['reuse_init_conds']:
-                # Discard instances that seem to be too far from the text 
-                # (it may be a bit premature to make this decision now, as the images are only denoised once).
-                # 0.35/0.006: 30%-40% instances will meet these thresholds.
-                # 0.33/0.008: 15% instances will meet these thresholds.
-                clip_loss_thres         = 0.28
-                cls_subj_clip_margin    = 0.002
-
-                # are_insts_teachable: The teacher instances are only teachable if both 
-                # the teacher and student are qualified (<= clip_loss_thres), 
-                # and the compositional clip loss is smaller than the student.
-                # If the student is qualified (<= clip_loss_thres), and the 
-                # teacher is teachable, then the teacher is also qualified, 
-                # as it has to have a smaller loss to be teachable. 
-                # So only need to check losses_clip_subj_comp against clip_loss_thres.
-                loss_diffs_subj_mix = losses_clip_subj_comp - losses_clip_mix_comp
-                are_insts_teachable = (losses_clip_subj_comp <= clip_loss_thres) & (loss_diffs_subj_mix > cls_subj_clip_margin)
-                # print(losses_clip_subj_comp, losses_clip_mix_comp)
-                # If any of the two instances is teachable, we consider it as a teachable iteration,
-                # and select the better one (with larger loss diff) to teach.
-                self.iter_flags['is_teachable']  = are_insts_teachable.sum() > 0
-                # Number of filtered pairs is half of the batch size. 
-                # Repeat to match the number of instances in the batch.
-                # log_image_colors: take values in {0, 1, 2, 3}, 
-                # i.e., no box, green, red, purple boxes respectively.
-                # 0 no box: not teachable; 
-                # 1 green:  teachable in the first iter and not reused yet 
-                # (because it's not in the second iter yet).
-                # 2 red:    teachable in the first iter but not in the second iter; 
-                # 3 purple: teachable in both iters.
-                # If self.iter_flags['do_teacher_filter'] and an instance is teachable, then in the log image file, 
-                # log_image_flag = 1, so the instance has a green bounary box in the logged image.
-                # log_image_colors: 3 * 2. [subj comp * 3, mix comp * 3]
-                log_image_colors = are_insts_teachable.repeat(2).int()
-                if self.iter_flags['reuse_init_conds']:
-                    # If reuse_init_conds and an instance is teachable, then in the log image file,
-                    # log_image_flag = 3, so the instance has a purple bounary box in the logged image.
-                    log_image_colors += 2
-
-                self.num_total_teacher_filter_iters += 1
-                self.num_teachable_iters += int(self.iter_flags['is_teachable'])
-                teachable_frac = self.num_teachable_iters / self.num_total_teacher_filter_iters
-                loss_dict.update({f'{prefix}/teachable_frac': teachable_frac})
-                self.num_total_reuse_filter_iters += int(self.iter_flags['reuse_init_conds'])
-                self.num_reuse_teachable_iters += int(self.iter_flags['reuse_init_conds'] and self.iter_flags['is_teachable'])
-                reuse_teachable_frac = self.num_reuse_teachable_iters / self.num_total_reuse_filter_iters 
-                loss_dict.update({f'{prefix}/reuse_teachable_frac': reuse_teachable_frac})
-
-                # Only do distillation if at least one of teacher instances is teachable.
-                if self.iter_flags['do_teacher_filter'] and self.iter_flags['is_teachable']:
+                if self.iter_flags['is_teachable']:
                     # No need the intermediates of the twin-comp instances. Release them to save RAM.
                     # Cannot release the intermediates outside the "if" branch, as the intermediates
                     # will be used in a reuse_init_conds iter.
@@ -2535,14 +2444,14 @@ class LatentDiffusion(DDPM):
                     # but cond  has been re-organized as (subj comp, subj comp, mix comp, mix comp). 
                     # So we use cond_orig.
                     c_static_emb_orig_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, \
-                                          emb_k_mixer, emb_k_layers_cls_mix_scales = \
+                                            emb_k_mixer, emb_k_layers_cls_mix_scales = \
                         mix_static_vk_embeddings(cond_orig[0], extra_info['subj_indices_1b'][1], 
-                                                 self.training_percent,
-                                                 t_frac = t_frac, 
-                                                 use_layerwise_embedding = self.use_layerwise_embedding,
-                                                 N_LAYERS = self.N_LAYERS,
-                                                 V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range,
-                                                 K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range)
+                                                    self.training_percent,
+                                                    t_frac = t_frac, 
+                                                    use_layerwise_embedding = self.use_layerwise_embedding,
+                                                    N_LAYERS = self.N_LAYERS,
+                                                    V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range,
+                                                    K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range)
                     
                     extra_info['emb_v_mixer']                   = emb_v_mixer
                     extra_info['emb_k_mixer']                   = emb_k_mixer
@@ -2567,7 +2476,7 @@ class LatentDiffusion(DDPM):
                         gen_cfg_scales_for_stu_tea(6, 5, BLOCK_SIZE * 2, x_start.device)
 
                     cfg_info = { 'cfg_scales':     cfg_scales_for_clip_loss,
-                                 'uncond_context': self.empty_context_2b }
+                                    'uncond_context': self.empty_context_2b }
 
                     # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
                     # on mix reg and ada embeddings is generated for the delta loss. 
@@ -2606,16 +2515,16 @@ class LatentDiffusion(DDPM):
                     # is half-repeat-2 of (the reconstructed images of) x_start_sel. 
                     # Doing half-repeat-2 on masks won't change them, as they are 1-repeat-4.
                     self.cached_inits = { 'x_start':                x_recon_sel_rep, 
-                                          'delta_prompts':          cond_orig[2]['delta_prompts'],
-                                          't':                      t_sel,
-                                          # reuse_init_conds implies a compositional iter. So img_mask is always None.
-                                          'img_mask':               None,   
-                                          'fg_mask':                fg_mask,
-                                          'batch_have_fg_mask':     batch_have_fg_mask,
-                                          'filtered_fg_mask':       filtered_fg_mask,
-                                          'use_background_token':   self.iter_flags['use_background_token'],
-                                          'use_wds_comp':           self.iter_flags['use_wds_comp'],
-                                          'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
+                                            'delta_prompts':          cond_orig[2]['delta_prompts'],
+                                            't':                      t_sel,
+                                            # reuse_init_conds implies a compositional iter. So img_mask is always None.
+                                            'img_mask':               None,   
+                                            'fg_mask':                fg_mask,
+                                            'batch_have_fg_mask':     batch_have_fg_mask,
+                                            'filtered_fg_mask':       filtered_fg_mask,
+                                            'use_background_token':   self.iter_flags['use_background_token'],
+                                            'use_wds_comp':           self.iter_flags['use_wds_comp'],
+                                            'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
                                         }
                     
                     # Do not put cached_inits_available on self.iter_flags, as iter_flags will be reset
@@ -2638,6 +2547,8 @@ class LatentDiffusion(DDPM):
 
                 # Otherwise, it's an reuse_init_conds iter, and a teachable instance is found.
                 # Do nothing.
+                else:
+                    pass
 
             else:
                 # Not do_teacher_filter, nor reuse_init_conds. 
@@ -2651,7 +2562,7 @@ class LatentDiffusion(DDPM):
             self.cache_and_log_generations(clip_images, log_image_colors)
 
         else:
-            # Not is_compos_iter. Distillation won't be done in this iter, so is_teachable = False.
+            # Not a compositional iter. Distillation won't be done in this iter, so is_teachable = False.
             self.iter_flags['is_teachable'] = False
         ###### end of preparation for is_compos_iter ######
 
@@ -3137,7 +3048,104 @@ class LatentDiffusion(DDPM):
         loss += self.iter_flags['recon_loss_weight'] * loss_recon
 
         return loss
+
+    def calc_clip_losses(self, x_recon, extra_info, loss_dict, prefix):
+        # Images generated both under subj_comp_prompts and cls_comp_prompts 
+        # are subject to the CLIP text-image matching evaluation.
+        # If self.iter_flags['do_teacher_filter'] (implying do_mix_prompt_distillation), 
+        # the batch is (subj_comp_emb, subj_comp_emb, mix_comp_emb,  mix_comp_emb).
+        # So cls_comp_prompts is used to compute the CLIP text-image matching loss on
+        # images guided by the subject or mixed embeddings.
+        if self.iter_flags['do_teacher_filter']:
+            #del extra_info['ca_layers_activations']
+            clip_images_code  = x_recon
+            # 4 sets of cls_comp_prompts for (subj comp 1, subj comp 2, mix comp 1, mix comp 2).                
+            clip_prompts_comp = extra_info['cls_comp_prompts'] * self.num_candidate_teachers * 2
+        else:
+            # Either self.iter_flags['reuse_init_conds'], or a pure ada delta loss iter.
+            # A batch of either type has the (subj_single, subj_comp, mix_single, mix_comp) structure.
+            # Only evaluate the CLIP loss on the comp images. 
+            # So the batch size of clip_images_code is halved.
+            # If teachable, the whole batch of x_recon is still used for distillation.
+            x_recon_subj_single, x_recon_subj_comp, x_recon_mix_single, x_recon_mix_comp = \
+                x_recon.chunk(4)
+            clip_images_code = torch.cat([x_recon_subj_comp, x_recon_mix_comp], dim=0)
+            clip_prompts_comp = extra_info['cls_comp_prompts'] * 2
+
+        # Use CLIP loss as a metric to evaluate the compositionality of the generated images 
+        # and do distillation selectively.
+        # DO NOT use CLIP loss to optimize the model. It will hurt the performance.
+        with torch.no_grad():
+            clip_images = self.decode_first_stage(clip_images_code)
+            losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   
+                                                                                 clip_images,  
+                                                                                 reduction='diag')
+
+        # Instances are arranged as: 
+        # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
+        losses_clip_subj_comp, losses_clip_mix_comp \
+            = losses_clip_comp.chunk(2)
         
+        if not self.iter_flags['reuse_init_conds']:
+            loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean().detach().item() })
+            loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach().item() })
+        else:
+            loss_dict.update({f'{prefix}/reuse_loss_clip_subj_comp': losses_clip_subj_comp.mean().detach().item() })
+            loss_dict.update({f'{prefix}/reuse_loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach().item() })
+
+        # If reuse_init_conds, we still check whether the instances are teachable.
+        # But it's not called teacher filtering, as there's only one teacher. If it's not teachable,
+        # then we skip the distillation loss.
+        if self.iter_flags['do_teacher_filter'] or self.iter_flags['reuse_init_conds']:
+            # Discard instances that seem to be too far from the text 
+            # (it may be a bit premature to make this decision now, as the images are only denoised once).
+            # 0.35/0.006: 30%-40% instances will meet these thresholds.
+            # 0.33/0.008: 15% instances will meet these thresholds.
+            clip_loss_thres         = 0.28
+            cls_subj_clip_margin    = 0.002
+
+            # are_insts_teachable: The teacher instances are only teachable if both 
+            # the teacher and student are qualified (<= clip_loss_thres), 
+            # and the compositional clip loss is smaller than the student.
+            # If the student is qualified (<= clip_loss_thres), and the 
+            # teacher is teachable, then the teacher is also qualified, 
+            # as it has to have a smaller loss to be teachable. 
+            # So only need to check losses_clip_subj_comp against clip_loss_thres.
+            loss_diffs_subj_mix = losses_clip_subj_comp - losses_clip_mix_comp
+            are_insts_teachable = (losses_clip_subj_comp <= clip_loss_thres) & (loss_diffs_subj_mix > cls_subj_clip_margin)
+            # print(losses_clip_subj_comp, losses_clip_mix_comp)
+            # If any of the two instances is teachable, we consider it as a teachable iteration,
+            # and select the better one (with larger loss diff) to teach.
+            self.iter_flags['is_teachable']  = are_insts_teachable.sum() > 0
+            # Number of filtered pairs is half of the batch size. 
+            # Repeat to match the number of instances in the batch.
+            # log_image_colors: take values in {0, 1, 2, 3}, 
+            # i.e., no box, green, red, purple boxes respectively.
+            # 0 no box: not teachable; 
+            # 1 green:  teachable in the first iter and not reused yet 
+            # (because it's not in the second iter yet).
+            # 2 red:    teachable in the first iter but not in the second iter; 
+            # 3 purple: teachable in both iters.
+            # If self.iter_flags['do_teacher_filter'] and an instance is teachable, then in the log image file, 
+            # log_image_flag = 1, so the instance has a green bounary box in the logged image.
+            # log_image_colors: 3 * 2. [subj comp * 3, mix comp * 3]
+            log_image_colors = are_insts_teachable.repeat(2).int()
+            if self.iter_flags['reuse_init_conds']:
+                # If reuse_init_conds and an instance is teachable, then in the log image file,
+                # log_image_flag = 3, so the instance has a purple bounary box in the logged image.
+                log_image_colors += 2
+
+            self.num_total_teacher_filter_iters += 1
+            self.num_teachable_iters += int(self.iter_flags['is_teachable'])
+            teachable_frac = self.num_teachable_iters / self.num_total_teacher_filter_iters
+            loss_dict.update({f'{prefix}/teachable_frac': teachable_frac})
+            self.num_total_reuse_filter_iters += int(self.iter_flags['reuse_init_conds'])
+            self.num_reuse_teachable_iters += int(self.iter_flags['reuse_init_conds'] and self.iter_flags['is_teachable'])
+            reuse_teachable_frac = self.num_reuse_teachable_iters / self.num_total_reuse_filter_iters 
+            loss_dict.update({f'{prefix}/reuse_teachable_frac': reuse_teachable_frac})
+
+        return clip_images, are_insts_teachable, loss_diffs_subj_mix, log_image_colors
+
     # pixel-wise recon loss. 
     # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
     # img_mask, fg_mask: [2, 1, 64, 64].
