@@ -865,12 +865,6 @@ class LatentDiffusion(DDPM):
 
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
-                static_prompt_embedding = clamp_prompt_embedding(static_prompt_embedding, self.prompt_embedding_clamp_value,
-                                                                 self.iter_flags['is_compos_iter'], self.embedding_manager.training)
-                if self.prompt_embedding_clamp_value > 0:
-                    static_prompt_embedding = torch.clamp(static_prompt_embedding, 
-                                                          min=-self.prompt_embedding_clamp_value, 
-                                                          max= self.prompt_embedding_clamp_value)
                     
                 # static_prompt_embedding is tensor. So the following statement is False.
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
@@ -884,6 +878,9 @@ class LatentDiffusion(DDPM):
                 self.bg_emb_extra_scale = anneal_value(self.training_percent, 1, value_range=(1, 1.5))
                 static_prompt_embedding = fix_emb_scales(static_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
                                                          num_layers=self.N_LAYERS, extra_scale=self.bg_emb_extra_scale)
+
+                static_prompt_embedding = clamp_prompt_embedding(static_prompt_embedding, self.prompt_embedding_clamp_value,
+                                                                 self.iter_flags['is_compos_iter'], self.embedding_manager.training)
 
                 extra_info = { 
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
@@ -949,10 +946,8 @@ class LatentDiffusion(DDPM):
         # so that they will absorb more high-freq noisy features.
         ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
                                               extra_scale=self.bg_emb_extra_scale)
-        if self.prompt_embedding_clamp_value > 0:
-            ada_prompt_embedding = torch.clamp(ada_prompt_embedding, 
-                                               min=-self.prompt_embedding_clamp_value, 
-                                               max= self.prompt_embedding_clamp_value)
+        ada_prompt_embedding = clamp_prompt_embedding(ada_prompt_embedding, self.prompt_embedding_clamp_value,
+                                                      self.iter_flags['is_compos_iter'], self.embedding_manager.training)
 
         ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
 
