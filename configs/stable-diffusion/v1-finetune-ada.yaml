@@ -30,7 +30,7 @@ model:
     use_fp_trick:               True
     do_clip_teacher_filtering:  True
     num_candidate_teachers:     4
-    composition_regs_iter_gap:          2
+    composition_regs_iter_gap:          3
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     static_embedding_reg_weight:        2e-5
     # typical loss_ada_em_reg is ~5e-2, * weight -> 5e-5.
