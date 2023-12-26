@@ -1194,6 +1194,18 @@ def anneal_t_ratio(t, training_percent, num_timesteps, init_ratio_range, final_r
 
     return t_annealed
 
+def select_piecewise_value(ranged_values, curr_pos, range_ub=1.0):
+    for i, (range_lb, value) in enumerate(ranged_values):
+        if i < len(ranged_values) - 1:
+            range_ub = ranged_values[i + 1][0]
+        else:
+            range_ub = 1.0
+
+        if range_lb <= curr_pos < range_ub:
+            return value
+
+    raise ValueError(f"curr_pos {curr_pos} is out of range.")
+
 # feat_or_attn: 4D features or 3D attention. If it's attention, then
 # its geometrical dimensions (H, W) have been flatten to 1D (last dim).
 # mask:      always 4D.

@@ -37,7 +37,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
-                       gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image
+                       gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, select_piecewise_value
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -101,7 +101,7 @@ class DDPM(pl.LightningModule):
                  logvar_init=0.,
                  use_layerwise_embedding=False,
                  use_ada_embedding=False,
-                 composition_regs_iter_gap=-1,
+                 composition_regs_iter_gaps=None,
                  static_embedding_reg_weight=0.,
                  ada_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
@@ -146,7 +146,16 @@ class DDPM(pl.LightningModule):
         self.static_embedding_reg_weight = static_embedding_reg_weight
         self.ada_embedding_reg_weight    = ada_embedding_reg_weight
 
-        self.composition_regs_iter_gap          = composition_regs_iter_gap
+        if isinstance(composition_regs_iter_gaps, int):
+            if composition_regs_iter_gaps <= 0:
+                self.composition_regs_iter_gaps = None
+            else:
+                self.composition_regs_iter_gaps = [[0, composition_regs_iter_gaps]]
+        else:
+            assert isinstance(composition_regs_iter_gaps, (list, type(None))), \
+                f"composition_regs_iter_gaps must be int, list or None, but got {composition_regs_iter_gaps}"
+            self.composition_regs_iter_gaps = composition_regs_iter_gaps
+
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
         self.padding_embs_align_loss_weight     = padding_embs_align_loss_weight
         self.padding_embs_align_loss_base       = padding_embs_align_loss_base
@@ -180,9 +189,9 @@ class DDPM(pl.LightningModule):
 
         # Training flags. 
         # No matter wheter the scheme is layerwise or not,
-        # as long as composition_regs_iter_gap > 0 and prompt_emb_delta_reg_weight > 0, 
+        # as long as composition_regs_iter_gaps is not None, and prompt_emb_delta_reg_weight > 0, 
         # do static comp delta reg.
-        self.do_static_prompt_delta_reg = self.composition_regs_iter_gap > 0 \
+        self.do_static_prompt_delta_reg = self.composition_regs_iter_gaps is not None \
                                             and self.prompt_emb_delta_reg_weight > 0
         # Is this for DreamBooth training? Will be overwritten in LatentDiffusion ctor.
         self.is_dreambooth                  = False
@@ -504,6 +513,7 @@ class DDPM(pl.LightningModule):
         # How many regularizations are done intermittently during the training iterations?
         cand_reg_types = []
         cand_reg_probs = []
+
         # do_mix_prompt_distillation implies do_ada_prompt_delta_reg.
         # So if do_mix_prompt_distillation is enabled (mix_prompt_distill_weight > 0),
         # then no need to put do_ada_prompt_delta_reg in cand_reg_types.
@@ -524,29 +534,30 @@ class DDPM(pl.LightningModule):
         cand_reg_probs = np.array(cand_reg_probs) / np.sum(cand_reg_probs)
 
         # If N_CAND_REGS == 0, then no intermittent regularizations, set the two flags to False.
-        if N_CAND_REGS > 0 and self.composition_regs_iter_gap > 0 \
-            and self.global_step % self.composition_regs_iter_gap == 0:
-            # Alternate among the regularizations in cand_reg_types. 
-            # If both do_ada_prompt_delta_reg and do_mix_prompt_distillation,
-            # then alternate between do_ada_prompt_delta_reg and do_mix_prompt_distillation.
-            # The two regularizations cannot be done in the same batch, as they require
-            # different handling of prompts and are calculated by different loss functions.
-            # reg_type_idx = (self.global_step // self.composition_regs_iter_gap) % N_CAND_REGS
-            reg_type_idx = np.random.choice(N_CAND_REGS, p=cand_reg_probs)
-            iter_reg_type     = cand_reg_types[reg_type_idx]
-            if iter_reg_type   == 'do_ada_prompt_delta_reg':
-                self.iter_flags['do_mix_prompt_distillation']  = False
-                self.iter_flags['do_ada_prompt_delta_reg'] = True
-            # do_mix_prompt_distillation => do_ada_prompt_delta_reg = True.
-            elif iter_reg_type == 'do_mix_prompt_distillation':
-                self.iter_flags['do_mix_prompt_distillation']  = True
-                self.iter_flags['do_ada_prompt_delta_reg'] = True
+        if N_CAND_REGS > 0 and self.composition_regs_iter_gaps is not None:
+            self.composition_regs_iter_gap = select_piecewise_value(self.composition_regs_iter_gaps, self.training_percent)
+            if self.global_step % self.composition_regs_iter_gap == 0:
+                # Alternate among the regularizations in cand_reg_types. 
+                # If both do_ada_prompt_delta_reg and do_mix_prompt_distillation,
+                # then alternate between do_ada_prompt_delta_reg and do_mix_prompt_distillation.
+                # The two regularizations cannot be done in the same batch, as they require
+                # different handling of prompts and are calculated by different loss functions.
+                # reg_type_idx = (self.global_step // self.composition_regs_iter_gap) % N_CAND_REGS
+                reg_type_idx = np.random.choice(N_CAND_REGS, p=cand_reg_probs)
+                iter_reg_type     = cand_reg_types[reg_type_idx]
+                if iter_reg_type   == 'do_ada_prompt_delta_reg':
+                    self.iter_flags['do_mix_prompt_distillation']  = False
+                    self.iter_flags['do_ada_prompt_delta_reg'] = True
+                # do_mix_prompt_distillation => do_ada_prompt_delta_reg = True.
+                elif iter_reg_type == 'do_mix_prompt_distillation':
+                    self.iter_flags['do_mix_prompt_distillation']  = True
+                    self.iter_flags['do_ada_prompt_delta_reg'] = True
 
-            self.iter_flags['is_compos_iter'] = True
-            # Always calculate clip loss during comp reg iterations, even if self.iter_flags['do_teacher_filter'] is False.
-            # This is to monitor how well the model performs on compositionality.
-            self.iter_flags['calc_clip_loss'] = True
-            self.iter_flags['do_normal_recon']    = False
+                self.iter_flags['is_compos_iter']   = True
+                # Always calculate clip loss during comp reg iterations, even if self.iter_flags['do_teacher_filter'] is False.
+                # This is to monitor how well the model performs on compositionality.
+                self.iter_flags['calc_clip_loss']   = True
+                self.iter_flags['do_normal_recon']  = False
 
         if self.is_dreambooth:
             # DreamBooth uses ConcatDataset to make batch a tuple of train_batch and reg_batch.
@@ -2414,7 +2425,6 @@ class LatentDiffusion(DDPM):
                 losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   
                                                                                      clip_images,  
                                                                                      reduction='diag')
-                #print(clip_prompts_comp)
 
             # Instances are arranged as: 
             # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
@@ -2689,7 +2699,7 @@ class LatentDiffusion(DDPM):
             if loss_ada_prompt_delta != 0:
                 loss_dict.update({f'{prefix}/ada_prompt_delta':     loss_ada_prompt_delta.mean().detach().item() })
 
-            # loss_ada_prompt_delta is only applied every self.composition_regs_iter_gap iterations. 
+            # loss_ada_prompt_delta is only applied every composition_regs_iter_gap iterations. 
             # So it should be scaled up proportionally to composition_regs_iter_gap. 
             # Divide it by 2 to reduce the proportion of ada emb loss relative to 
             # loss_static_prompt_delta in the total loss.

@@ -272,9 +272,9 @@ def get_parser(**parser_kwargs):
                         default=[0.7, 1.0],
                         help="Range of random scaling on training images (set to 1 1 to disable)")
 
-    parser.add_argument("--composition_regs_iter_gap",
+    parser.add_argument("--composition_regs_iter_gaps",
                         type=int, default=argparse.SUPPRESS,
-                        help="Gap between iterations for composition regularization. "
+                        help="Gaps between iterations for composition regularization. "
                              "Set to -1 to disable for ablation.")
     
     # num_compositions_per_image: a value > 1 leads to better performance on prompt compositions
@@ -811,8 +811,8 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.use_conv_attn_kernel_size \
                 = opt.use_conv_attn_kernel_size
 
-        if hasattr(opt, 'composition_regs_iter_gap'):
-            config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
+        if hasattr(opt, 'composition_regs_iter_gaps'):
+            config.model.params.composition_regs_iter_gaps = opt.composition_regs_iter_gaps
 
         config.data.params.train.params.num_compositions_per_image = opt.num_compositions_per_image
         config.data.params.train.params.rand_scale_range = opt.rand_scale_range
