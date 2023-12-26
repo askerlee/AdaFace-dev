@@ -350,6 +350,21 @@ def power_loss(a, exponent=2, rev_pow=False):
         loss = loss.pow(1/exponent)
     return loss
 
+def clamp_prompt_embedding(emb, clamp_value, is_compos_iter, is_training):
+    if clamp_value <= 0:
+        return emb
+    
+    # compisitional iterations or inference: only clamp the first half batch.
+    if is_compos_iter or not is_training:
+        emb_h1, emb_h2 = emb.chunk(2, dim=0)
+        emb_h1 = torch.clamp(emb_h1, min=-clamp_value, max=clamp_value)
+        emb = torch.cat([emb_h1, emb_h2], dim=0)
+    # Otherwise, it's normal recon iterations during training. Clamp the whole batch.
+    else:
+        emb = torch.clamp(emb, min=-clamp_value, max=clamp_value)
+
+    return emb
+
 def demean(x):
     return x - x.mean(dim=-1, keepdim=True)
 
@@ -1054,12 +1069,15 @@ def extend_indices_N_by_n(indices, n):
 
     return (indices_B_ext, indices_N_ext)
 
-def extend_indices_B_by_n_times(indices, n, offset):
+def extend_indices_B_by_n_times(indices, n, block_offset):
     if indices is None:
         return None, None
     
     indices_B, indices_N = indices
-    indices_B_ext = [ indices_B + offset * i for i in range(n) ]
+    # The original indices_B corresponds to block_offset instances -> the block 0.
+    # Extending with n blocks, each block is offseted by (block_offset * i),
+    # so that block 0 is adjacent to block 1.
+    indices_B_ext = [ (indices_B + block_offset * i) for i in range(n) ]
     indices_N_ext = [ indices_N ] * n
     indices_ext_by_block = list(zip(indices_B_ext, indices_N_ext))
 

@@ -33,11 +33,11 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        halve_token_indices, double_token_indices, extend_indices_N_by_n, \
                        extend_indices_B_by_n_times, split_indices_by_instance, \
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
-                       anneal_t_keep_prob, anneal_t_ratio, anneal_value, \
+                       anneal_t_keep_prob, anneal_value, select_piecewise_value, \
                        calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
-                       gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, select_piecewise_value
+                       gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, clamp_prompt_embedding
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -865,6 +865,8 @@ class LatentDiffusion(DDPM):
 
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
+                static_prompt_embedding = clamp_prompt_embedding(static_prompt_embedding, self.prompt_embedding_clamp_value,
+                                                                 self.iter_flags['is_compos_iter'], self.embedding_manager.training)
                 if self.prompt_embedding_clamp_value > 0:
                     static_prompt_embedding = torch.clamp(static_prompt_embedding, 
                                                           min=-self.prompt_embedding_clamp_value, 
@@ -2232,17 +2234,17 @@ class LatentDiffusion(DDPM):
                     # in compositional iterations.
                     subj_indices2, _ = extend_indices_B_by_n_times(extra_info['subj_indices_1b'], 
                                                                    self.num_candidate_teachers,
-                                                                   BLOCK_SIZE)
+                                                                   block_offset=BLOCK_SIZE)
                     bg_indices2,   _ = extend_indices_B_by_n_times(extra_info['bg_indices_1b'],
                                                                    self.num_candidate_teachers,
-                                                                   BLOCK_SIZE)
+                                                                   block_offset=BLOCK_SIZE)
                     # We have to reinitialize token2indices2. It originally points to token2indices. 
                     # Without reinitialization, the following code will rewrite the contents of token2indices.
                     token2indices2 = {}
                     for k in token2indices:
                         token2indices2[k], _ = extend_indices_B_by_n_times(extra_info['token2indices_1b'][k],
                                                                            self.num_candidate_teachers,
-                                                                           BLOCK_SIZE)
+                                                                           block_offset=BLOCK_SIZE)
                         
                     subj_single_emb_mask, subj_comp_emb_mask, cls_single_emb_mask, cls_comp_emb_mask = \
                         chunk_list(prompt_emb_mask, 4)
@@ -2486,7 +2488,7 @@ class LatentDiffusion(DDPM):
                         gen_cfg_scales_for_stu_tea(6, 5, BLOCK_SIZE * 2, x_start.device)
 
                     cfg_info = { 'cfg_scales':     cfg_scales_for_clip_loss,
-                                    'uncond_context': self.empty_context_2b }
+                                 'uncond_context': self.empty_context_2b }
 
                     # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
                     # on mix reg and ada embeddings is generated for the delta loss. 
@@ -2863,8 +2865,10 @@ class LatentDiffusion(DDPM):
                                     else None
                 # subj_indices_4b: Extend subj_indices_1b to subj_indices_4b, by adding offset to batch indices.
                 # bg_indices_4b:   Extend bg_indices_1b   to bg_indices_4b,   by adding offset to batch indices.
-                subj_indices_4b, subj_indices_4b_by_block = extend_indices_B_by_n_times(subj_indices_1b, n=4, offset=BLOCK_SIZE)
-                bg_indices_4b,   bg_indices_4b_by_block   = extend_indices_B_by_n_times(bg_indices_1b,   n=4, offset=BLOCK_SIZE)
+                subj_indices_4b, subj_indices_4b_by_block = \
+                    extend_indices_B_by_n_times(subj_indices_1b, n=4, block_offset=BLOCK_SIZE)
+                bg_indices_4b,   bg_indices_4b_by_block   = \
+                    extend_indices_B_by_n_times(bg_indices_1b,   n=4, block_offset=BLOCK_SIZE)
 
                 comp_extra_indices_4b_by_block = \
                     gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
