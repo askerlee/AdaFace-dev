@@ -2405,7 +2405,9 @@ class LatentDiffusion(DDPM):
         ###### begin of preparation for is_compos_iter ######
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
         if self.iter_flags['is_compos_iter'] and self.iter_flags['calc_clip_loss']:
-            clip_images, are_insts_teachable, loss_diffs_subj_mix, log_image_colors = self.calc_clip_losses()
+            clip_images, are_insts_teachable, loss_diffs_subj_mix, log_image_colors = \
+                    self.calc_clip_losses(x_recon, extra_info, loss_dict, prefix)
+            
             is_teachable = are_insts_teachable.any()
             self.iter_flags['is_teachable'] = is_teachable
 
