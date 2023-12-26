@@ -854,7 +854,14 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
-    def get_learned_conditioning(self, cond_in, randomize_clip_weights=True):
+    def get_learned_conditioning(self, cond_in, randomize_clip_weights=False, batch_is_uncond_prompt=False):
+        if not batch_is_uncond_prompt:
+            are_null_prompts = [ len(c) == 0 for c in cond_in ]
+            # Manual check finds all prompts in cond_in are empty strings. 
+            # Therefore, batch_is_uncond_prompt is True.
+            if np.all(are_null_prompts):
+                batch_is_uncond_prompt = True
+
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
@@ -880,7 +887,8 @@ class LatentDiffusion(DDPM):
                                                          num_layers=self.N_LAYERS, extra_scale=self.bg_emb_extra_scale)
 
                 static_prompt_embedding = clamp_prompt_embedding(static_prompt_embedding, self.prompt_embedding_clamp_value,
-                                                                 self.iter_flags['is_compos_iter'], self.embedding_manager.training)
+                                                                 self.iter_flags['is_compos_iter'], self.embedding_manager.training,
+                                                                 batch_is_uncond_prompt=batch_is_uncond_prompt)
 
                 extra_info = { 
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
@@ -1641,7 +1649,8 @@ class LatentDiffusion(DDPM):
                     # delta_prompts: the concatenation of
                     # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
                     # extra_info: a dict that contains extra info.
-                    c_static_emb, _, extra_info = self.get_learned_conditioning(delta_prompts)
+                    c_static_emb, _, extra_info = \
+                        self.get_learned_conditioning(delta_prompts, randomize_clip_weights=True)
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
 
@@ -1771,7 +1780,7 @@ class LatentDiffusion(DDPM):
                             # generate embeddings from the captions from scratch.
                             # subj_indices and bg_indices in captions should be the same.
                             # Embeddings of subject prompts (including "captions") don't need patching.
-                            c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions)
+                            c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions, randomize_clip_weights=True)
                             # print(captions)
                             extra_info['subj_indices'] = extra_info0['subj_indices']
                             extra_info['bg_indices']   = extra_info0['bg_indices']
@@ -1804,7 +1813,7 @@ class LatentDiffusion(DDPM):
                     # it's called by self.validation_step().
                     assert self.iter_flags['do_normal_recon']
                     c_static_emb, c_in, extra_info0 = \
-                        self.get_learned_conditioning(captions)
+                        self.get_learned_conditioning(captions, randomize_clip_weights=True)
                     
                     extra_info['subj_indices']      = extra_info0['subj_indices']
                     extra_info['bg_indices']        = extra_info0['bg_indices']

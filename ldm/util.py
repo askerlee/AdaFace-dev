@@ -350,8 +350,9 @@ def power_loss(a, exponent=2, rev_pow=False):
         loss = loss.pow(1/exponent)
     return loss
 
-def clamp_prompt_embedding(emb, clamp_value, is_compos_iter, is_training):
-    if clamp_value <= 0:
+def clamp_prompt_embedding(emb, clamp_value, is_compos_iter, 
+                           is_training, batch_is_uncond_prompt=False):
+    if clamp_value <= 0 or batch_is_uncond_prompt:
         return emb
     
     # compisitional iterations or inference: only clamp the first half batch.
