@@ -2411,9 +2411,9 @@ class LatentDiffusion(DDPM):
             is_teachable = are_insts_teachable.any()
             self.iter_flags['is_teachable'] = is_teachable
 
-            # Only do distillation if at least one of teacher instances is teachable.
-            if self.iter_flags['do_teacher_filter']:
-                if self.iter_flags['is_teachable']:
+            if self.do_clip_teacher_filtering:
+                # Only do distillation if at least one of teacher instances is teachable.
+                if self.iter_flags['do_teacher_filter'] and self.iter_flags['is_teachable']:
                     # No need the intermediates of the twin-comp instances. Release them to save RAM.
                     # Cannot release the intermediates outside the "if" branch, as the intermediates
                     # will be used in a reuse_init_conds iter.
@@ -2567,7 +2567,7 @@ class LatentDiffusion(DDPM):
                 self.iter_flags['is_teachable'] = True
                 # Since not self.iter_flags['do_teacher_filter']/reuse_init_conds, log_image_colors are all 0,
                 # i.e., no box to be drawn on the images in cache_and_log_generations().
-                log_image_colors = torch.zeros(clip_images.shape[0], device=x_start.device)
+                log_image_colors = torch.zeros(clip_images.shape[0], dtype=int, device=x_start.device)
 
             self.cache_and_log_generations(clip_images, log_image_colors)
 
