@@ -863,7 +863,7 @@ class LatentDiffusion(DDPM):
 
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
-                static_prompt_embedding = torch.clamp(static_prompt_embedding, min=-5., max=5.)
+                # static_prompt_embedding = torch.clamp(static_prompt_embedding, min=-5., max=5.)
                 #print('static', static_prompt_embedding.abs().max())
                 # static_prompt_embedding is tensor. So the following statement is False.
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
@@ -942,7 +942,7 @@ class LatentDiffusion(DDPM):
         # so that they will absorb more high-freq noisy features.
         ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
                                               extra_scale=self.bg_emb_extra_scale)
-        ada_prompt_embedding = torch.clamp(ada_prompt_embedding, min=-5., max=5.)
+        #ada_prompt_embedding = torch.clamp(ada_prompt_embedding, min=-5., max=5.)
 
         ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
 
