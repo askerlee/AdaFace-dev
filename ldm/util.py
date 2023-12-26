@@ -233,8 +233,9 @@ def ortho_subtract(a, b, on_last_n_dims=1, return_align_coeffs=False):
         a2 = a
         b2 = b
 
-    dot_a_b = torch.einsum('...i,...i->...', a2, b2)
-    dot_b_b = torch.einsum('...i,...i->...', b2, b2)
+    dot_a_b = (a2 * b2).sum(dim=-1)
+    dot_b_b = (b2 * b2).sum(dim=-1)
+
     w_optimal = dot_a_b / (dot_b_b + 1e-6)
     result = a2 - b2 * w_optimal.unsqueeze(-1)
 
@@ -884,12 +885,13 @@ def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1,
                    scale=-1, extra_scale=1):
     if placeholder_indices is None:
         return text_embedding
+    
     placeholder_indices_B, placeholder_indices_N = placeholder_indices
     M = len(torch.unique(placeholder_indices_N))
     B = text_embedding.shape[0]
     B0 = B // num_layers
     B_IND = len(torch.unique(placeholder_indices_B))
-
+    
     # The default scale is 1 / sqrt(M).
     if scale == -1:
         scale = 1 / np.sqrt(M)
@@ -1702,10 +1704,10 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
 
     loss_static_prompt_delta   = \
         calc_ref_cosine_loss(static_subj_delta, static_cls_delta, 
-                               emb_mask=prompt_emb_mask_weighted,
-                               do_demean_first=True,
-                               first_n_dims_to_flatten=3,
-                               aim_to_align=True)
+                             emb_mask=prompt_emb_mask_weighted,
+                             do_demean_first=True,
+                             first_n_dims_to_flatten=3,
+                             aim_to_align=True)
 
     if do_ada_prompt_delta_reg and ada_embeddings is not None:
         # ada_embeddings: [4, 16, 77, 768]
@@ -1724,9 +1726,10 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
 
         loss_ada_prompt_delta = \
             calc_ref_cosine_loss(ada_subj_delta, ada_cls_delta, 
-                                   emb_mask=prompt_emb_mask_weighted,
-                                   do_demean_first=True,
-                                   aim_to_align=True)
+                                 emb_mask=prompt_emb_mask_weighted,
+                                 do_demean_first=True,
+                                 first_n_dims_to_flatten=3,
+                                 aim_to_align=True)
 
     else:
         loss_ada_prompt_delta = 0

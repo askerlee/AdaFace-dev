@@ -738,6 +738,9 @@ class LatentDiffusion(DDPM):
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
         if self.global_step == 0:
+            # Make the behavior deterministic for debugging purposes.
+            # In normal runs, disable this statement.
+            #random.seed(10000)
             self.create_clip_evaluator(next(self.parameters()).device)
 
             with torch.no_grad():
@@ -2129,8 +2132,8 @@ class LatentDiffusion(DDPM):
                 cfg_scales_for_clip_loss = torch.ones_like(t) * 5
 
                 # Update masks to be a 4-fold structure.
-                img_mask, fg_mask, batch_have_fg_mask = \
-                    repeat_selected_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, batch_have_fg_mask)
+                img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
+                    repeat_selected_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
                 self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
 
             else:
@@ -2230,8 +2233,8 @@ class LatentDiffusion(DDPM):
                     # Before repeating, img_mask, fg_mask, batch_have_fg_mask should all 
                     # have a batch size of 2*BLOCK_SIZE. So repeat_selected_instances() 
                     # won't discard part of them, but simply repeat them twice.
-                    img_mask, fg_mask, batch_have_fg_mask = \
-                        repeat_selected_instances(slice(0, NEW_BS), 2, img_mask, fg_mask, batch_have_fg_mask)
+                    img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
+                        repeat_selected_instances(slice(0, NEW_BS), 2, img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
                     self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
 
                     # do_mix_prompt_distillation. We need to compute CLIP scores for teacher filtering.
@@ -2258,8 +2261,8 @@ class LatentDiffusion(DDPM):
                     t       = t[:BLOCK_SIZE].repeat(4)
 
                     # Update masks to be a 1-repeat-4 structure.
-                    img_mask, fg_mask, batch_have_fg_mask = \
-                        repeat_selected_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, batch_have_fg_mask)
+                    img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
+                        repeat_selected_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
                     self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
 
                     cfg_scales_for_clip_loss = \
@@ -2419,11 +2422,11 @@ class LatentDiffusion(DDPM):
                 = losses_clip_comp.chunk(2)
             
             if not self.iter_flags['reuse_init_conds']:
-                loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean().detach()})
-                loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach()})
+                loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean().detach().item() })
+                loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach().item() })
             else:
-                loss_dict.update({f'{prefix}/reuse_loss_clip_subj_comp': losses_clip_subj_comp.mean().detach()})
-                loss_dict.update({f'{prefix}/reuse_loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach()})
+                loss_dict.update({f'{prefix}/reuse_loss_clip_subj_comp': losses_clip_subj_comp.mean().detach().item() })
+                loss_dict.update({f'{prefix}/reuse_loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach().item() })
 
             # If reuse_init_conds, we still check whether the instances are teachable.
             # But it's not called teacher filtering, as there's only one teacher. If it's not teachable,
@@ -2545,15 +2548,14 @@ class LatentDiffusion(DDPM):
                                             'prompt_emb_mask':  extra_info['prompt_emb_mask'] }
 
 
-                    
-                    if self.global_step == 24:
-                        breakpoint()
-
                     cfg_scales_for_clip_loss = \
                         gen_cfg_scales_for_stu_tea(6, 5, BLOCK_SIZE * 2, x_start.device)
 
                     cfg_info = { 'cfg_scales':     cfg_scales_for_clip_loss,
                                  'uncond_context': self.empty_context_2b }
+
+                    #if self.global_step == 16:
+                    #    breakpoint()
 
                     # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
                     # on mix reg and ada embeddings is generated for the delta loss. 
@@ -2573,9 +2575,8 @@ class LatentDiffusion(DDPM):
 
                     # Update masks according to x_start_sel. Select the masks corresponding to 
                     # the better candidate, indexed by [best_cand_idx] (Keep it as a list).
-                    fg_mask, filtered_fg_mask, batch_have_fg_mask = \
-                        repeat_selected_instances([best_cand_idx], 4, fg_mask, 
-                                                  filtered_fg_mask, batch_have_fg_mask)
+                    img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
+                        repeat_selected_instances([best_cand_idx], 4, img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
                     self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
                     # Cache x_recon for the next iteration with a smaller t.
                     # Note the 4 types of prompts have to be the same as this iter, 
@@ -2651,9 +2652,9 @@ class LatentDiffusion(DDPM):
                 loss_ada_emb_reg    = 0
 
             if loss_static_emb_reg > 0:
-                loss_dict.update({f'{prefix}/loss_static_emb_reg': loss_static_emb_reg.mean().detach()})
+                loss_dict.update({f'{prefix}/loss_static_emb_reg': loss_static_emb_reg.mean().detach().item() })
             if loss_ada_emb_reg > 0:
-                loss_dict.update({f'{prefix}/loss_ada_emb_reg':    loss_ada_emb_reg.mean().detach()})
+                loss_dict.update({f'{prefix}/loss_ada_emb_reg':    loss_ada_emb_reg.mean().detach().item() })
 
             loss += loss_static_emb_reg * self.static_embedding_reg_weight \
                     + loss_ada_emb_reg  * self.ada_embedding_reg_weight
@@ -2664,7 +2665,7 @@ class LatentDiffusion(DDPM):
             loss_fg_bg_token_emb_ortho = \
                 self.embedding_manager.calc_fg_bg_token_embs_ortho_loss(ada_grad_scale=0.1, fg_grad_scale=0.4)
             if loss_fg_bg_token_emb_ortho > 0:
-                loss_dict.update({f'{prefix}/fg_bg_token_emb_ortho': loss_fg_bg_token_emb_ortho.mean().detach()})
+                loss_dict.update({f'{prefix}/fg_bg_token_emb_ortho': loss_fg_bg_token_emb_ortho.mean().detach().item() })
             loss += loss_fg_bg_token_emb_ortho * self.fg_bg_token_emb_ortho_loss_weight
 
         if self.do_static_prompt_delta_reg:
@@ -2684,9 +2685,9 @@ class LatentDiffusion(DDPM):
                 # The cached ada prompt embeddings are useless now, release them.
                 self.embedding_manager.clear_ada_prompt_embeddings_cache()
 
-            loss_dict.update({f'{prefix}/static_prompt_delta':      loss_static_prompt_delta.mean().detach()})
+            loss_dict.update({f'{prefix}/static_prompt_delta':      loss_static_prompt_delta.mean().detach().item() })
             if loss_ada_prompt_delta != 0:
-                loss_dict.update({f'{prefix}/ada_prompt_delta':     loss_ada_prompt_delta.mean().detach()})
+                loss_dict.update({f'{prefix}/ada_prompt_delta':     loss_ada_prompt_delta.mean().detach().item() })
 
             # loss_ada_prompt_delta is only applied every self.composition_regs_iter_gap iterations. 
             # So it should be scaled up proportionally to composition_regs_iter_gap. 
@@ -2728,14 +2729,14 @@ class LatentDiffusion(DDPM):
                                                         self.iter_flags['is_compos_iter'])
 
                 if loss_padding_subj_embs_align != 0:
-                    loss_dict.update({f'{prefix}/padding_subj_embs_align': loss_padding_subj_embs_align.mean().detach()})
+                    loss_dict.update({f'{prefix}/padding_subj_embs_align': loss_padding_subj_embs_align.mean().detach().item() })
                 # Monitor loss_padding_cls_embs_align, viewed as a reference to loss_padding_subj_embs_align.
                 # We don't optimize loss_padding_cls_embs_align.
                 if loss_padding_cls_embs_align != 0:
-                    loss_dict.update({f'{prefix}/padding_cls_embs_align': loss_padding_cls_embs_align.mean().detach()})
+                    loss_dict.update({f'{prefix}/padding_cls_embs_align': loss_padding_cls_embs_align.mean().detach().item() })
                     loss_padding_cls_embs_align = 0
                 if loss_bg_subj_embs_align != 0:
-                    loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach()})
+                    loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach().item() })
                 
                 bg_subj_embs_align_loss_scale  = 0.1 # disabled. # 1
                 loss_padding_embs_align = (loss_padding_subj_embs_align 
@@ -2766,9 +2767,9 @@ class LatentDiffusion(DDPM):
                                                     extra_info['bg_indices'],
                                                     SSB_SIZE)
             if loss_fg_xlayer_consist > 0:
-                loss_dict.update({f'{prefix}/fg_xlayer_consist': loss_fg_xlayer_consist.mean().detach()})
+                loss_dict.update({f'{prefix}/fg_xlayer_consist': loss_fg_xlayer_consist.mean().detach().item() })
             if loss_bg_xlayer_consist > 0:
-                loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach()})
+                loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach().item() })
 
             bg_xlayer_consist_loss_scale = 0.5
 
@@ -2807,18 +2808,18 @@ class LatentDiffusion(DDPM):
                                                        extra_info['subj_indices_1b'], BLOCK_SIZE)
                 
                 if loss_comp_subj_bg_attn_suppress > 0:
-                    loss_dict.update({f'{prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach()})
+                    loss_dict.update({f'{prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach().item() })
                 # comp_mix_bg_attn_suppress is not optimized, and only recorded for monitoring.
                 if loss_comp_mix_bg_attn_suppress > 0:
-                    loss_dict.update({f'{prefix}/comp_mix_bg_attn_suppress': loss_comp_mix_bg_attn_suppress.mean().detach()})
+                    loss_dict.update({f'{prefix}/comp_mix_bg_attn_suppress': loss_comp_mix_bg_attn_suppress.mean().detach().item() })
                 if loss_comp_single_map_align > 0:
-                    loss_dict.update({f'{prefix}/comp_single_map_align': loss_comp_single_map_align.mean().detach()})
+                    loss_dict.update({f'{prefix}/comp_single_map_align': loss_comp_single_map_align.mean().detach().item() })
                 if loss_sc_ss_fg_match > 0:
-                    loss_dict.update({f'{prefix}/sc_ss_fg_match': loss_sc_ss_fg_match.mean().detach()})
+                    loss_dict.update({f'{prefix}/sc_ss_fg_match': loss_sc_ss_fg_match.mean().detach().item() })
                 if loss_mc_ms_fg_match > 0:
-                    loss_dict.update({f'{prefix}/mc_ms_fg_match': loss_mc_ms_fg_match.mean().detach()})
+                    loss_dict.update({f'{prefix}/mc_ms_fg_match': loss_mc_ms_fg_match.mean().detach().item() })
                 if loss_sc_mc_bg_match > 0:
-                    loss_dict.update({f'{prefix}/sc_mc_bg_match': loss_sc_mc_bg_match.mean().detach()})
+                    loss_dict.update({f'{prefix}/sc_mc_bg_match': loss_sc_mc_bg_match.mean().detach().item() })
 
                 elastic_matching_loss_scale = 1
                 # loss_comp_single_map_align is L1 loss on attn maps, so its magnitude is small.
@@ -2843,7 +2844,7 @@ class LatentDiffusion(DDPM):
                                            + (loss_comp_subj_bg_attn_suppress + loss_comp_mix_bg_attn_suppress) \
                                               * comp_subj_bg_attn_suppress_loss_scale
                 
-                loss_dict.update({f'{prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach()})
+                loss_dict.update({f'{prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
                 # Keep track of the number of iterations that use comp_init_fg_from_training_image.
                 if self.iter_flags['reuse_init_conds']:
                     self.comp_init_fg_from_training_image_reuse_count += 1
@@ -2878,11 +2879,11 @@ class LatentDiffusion(DDPM):
                                             BLOCK_SIZE)
 
             if loss_feat_delta_align > 0:
-                loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach()})
+                loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach().item() })
             if loss_subj_attn_delta_align > 0:
-                loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach()})
+                loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach().item() })
             if loss_subj_attn_norm_distill > 0:
-                loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach()})
+                loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
 
             # loss_subj_attn_delta_align_* use L2 losses, 
             # so no need to use dynamic loss scale.
@@ -2905,7 +2906,7 @@ class LatentDiffusion(DDPM):
                                         + loss_feat_delta_align       * feat_delta_align_scale
                                         
             if loss_mix_prompt_distill > 0:
-                loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach()})
+                loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach().item() })
 
             if loss_comp_fg_bg_preserve == 0:
                 mix_prompt_distill_loss_scale = 1
@@ -2945,9 +2946,9 @@ class LatentDiffusion(DDPM):
                                                      is_4type_batch=True)
 
                 if loss_subj_comp_key_ortho != 0:
-                    loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
+                    loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach().item() })
                 if loss_subj_comp_value_ortho != 0:
-                    loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
+                    loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach().item() })
 
             elif self.iter_flags['do_normal_recon'] and self.iter_flags['use_wds_comp']:
                 subj_indices_ext = extra_info['subj_indices_1b']
@@ -2977,9 +2978,9 @@ class LatentDiffusion(DDPM):
                                                     is_4type_batch=False)
                 
                 if loss_subj_comp_key_ortho != 0:
-                    loss_dict.update({f'{prefix}/subj_wds_key_ortho':   loss_subj_comp_key_ortho.mean().detach()})
+                    loss_dict.update({f'{prefix}/subj_wds_key_ortho':   loss_subj_comp_key_ortho.mean().detach().item() })
                 if loss_subj_comp_value_ortho != 0:
-                    loss_dict.update({f'{prefix}/subj_wds_value_ortho': loss_subj_comp_value_ortho.mean().detach()})
+                    loss_dict.update({f'{prefix}/subj_wds_value_ortho': loss_subj_comp_value_ortho.mean().detach().item() })
 
             else:
                 loss_subj_comp_key_ortho   = 0
@@ -2993,7 +2994,7 @@ class LatentDiffusion(DDPM):
                     + (loss_subj_comp_value_ortho * ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight
 
         self.release_plosses_intermediates(locals())
-        loss_dict.update({f'{prefix}/loss': loss.mean().detach()})
+        loss_dict.update({f'{prefix}/loss': loss.mean().detach().item() })
 
         return loss, loss_dict
 
