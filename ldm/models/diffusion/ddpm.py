@@ -125,7 +125,8 @@ class DDPM(pl.LightningModule):
                  num_candidate_teachers=3,
                  use_background_token=False,
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
-                 use_fp_trick=True,      
+                 use_fp_trick=True,
+                 prompt_embedding_clamp_value=-1,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -184,6 +185,7 @@ class DDPM(pl.LightningModule):
         
         self.use_background_token                   = use_background_token
         self.use_fp_trick                           = use_fp_trick
+        self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
 
@@ -863,8 +865,11 @@ class LatentDiffusion(DDPM):
 
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
-                # static_prompt_embedding = torch.clamp(static_prompt_embedding, min=-5., max=5.)
-                #print('static', static_prompt_embedding.abs().max())
+                if self.prompt_embedding_clamp_value > 0:
+                    static_prompt_embedding = torch.clamp(static_prompt_embedding, 
+                                                          min=-self.prompt_embedding_clamp_value, 
+                                                          max= self.prompt_embedding_clamp_value)
+                    
                 # static_prompt_embedding is tensor. So the following statement is False.
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
                     static_prompt_embedding = static_prompt_embedding.mode()
@@ -942,7 +947,10 @@ class LatentDiffusion(DDPM):
         # so that they will absorb more high-freq noisy features.
         ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
                                               extra_scale=self.bg_emb_extra_scale)
-        #ada_prompt_embedding = torch.clamp(ada_prompt_embedding, min=-5., max=5.)
+        if self.prompt_embedding_clamp_value > 0:
+            ada_prompt_embedding = torch.clamp(ada_prompt_embedding, 
+                                               min=-self.prompt_embedding_clamp_value, 
+                                               max= self.prompt_embedding_clamp_value)
 
         ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
 
