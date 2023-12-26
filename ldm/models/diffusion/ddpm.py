@@ -50,6 +50,7 @@ from functools import partial
 import random
 from safetensors.torch import load_file as safetensors_load_file
 import sys
+import collections
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -152,7 +153,10 @@ class DDPM(pl.LightningModule):
             else:
                 self.composition_regs_iter_gaps = [[0, composition_regs_iter_gaps]]
         else:
-            assert isinstance(composition_regs_iter_gaps, (list, type(None))), \
+            # If composition_regs_iter_gaps is specified as a list in config yaml,
+            # its actual type is 'omegaconf.listconfig.ListConfig'. 
+            # But it's still a collections.abc.Iterable.
+            assert isinstance(composition_regs_iter_gaps, (collections.abc.Iterable, type(None))), \
                 f"composition_regs_iter_gaps must be int, list or None, but got {composition_regs_iter_gaps}"
             self.composition_regs_iter_gaps = composition_regs_iter_gaps
 
