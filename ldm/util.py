@@ -974,8 +974,6 @@ def save_grid(samples, img_flags, grid_filepath, nrow, do_normalize=False):
     if img_flags is not None and not isinstance(img_flags, torch.Tensor):
         img_flags = torch.cat(img_flags, 0)
 
-    breakpoint()
-    
     if grid.dtype != torch.uint8:
         if do_normalize:
             grid = torch.clamp((grid + 1.0) / 2.0, min=0.0, max=1.0)
