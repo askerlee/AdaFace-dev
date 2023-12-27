@@ -1989,8 +1989,8 @@ class LatentDiffusion(DDPM):
 
         # Save ada embeddings generated during apply_model(), to be used in delta loss. 
         # Otherwise it will be overwritten by uncond denoising.
-        # ada_embeddings: [4, 16, 77, 768] or None, if subj token doesn't appear in the prompts.
-        ada_embeddings = self.embedding_manager.get_cached_ada_prompt_embeddings_as_tensor()
+        # ada_prompt_embeddings: [4, 16, 77, 768] or None, if subj token doesn't appear in the prompts.
+        ada_prompt_embeddings = self.embedding_manager.get_cached_ada_prompt_embeddings_as_tensor()
 
         # Get model output of both conditioned and uncond prompts.
         # Unconditional prompts and reconstructed images are never involved in optimization.
@@ -2026,7 +2026,7 @@ class LatentDiffusion(DDPM):
         else:
             x_recon = None
         
-        return model_output, x_recon, ada_embeddings
+        return model_output, x_recon, ada_prompt_embeddings
 
     # Release part of the computation graph on unused instances to save RAM.
     def release_plosses_intermediates(self, local_vars):
@@ -3119,7 +3119,10 @@ class LatentDiffusion(DDPM):
             # as it has to have a smaller loss to be teachable. 
             # So only need to check losses_clip_subj_comp against clip_loss_thres.
             loss_diffs_subj_mix = losses_clip_subj_comp - losses_clip_mix_comp
-            are_insts_teachable = (losses_clip_subj_comp <= clip_loss_thres) & (loss_diffs_subj_mix > cls_subj_clip_margin)
+            # Old version: are_insts_teachable = (losses_clip_subj_comp <= clip_loss_thres) & (loss_diffs_subj_mix > cls_subj_clip_margin)
+            # This is unreasonable as we shouldn't filter on losses_clip_subj_comp. On the contrary,
+            # the worse the student is, the more benefit it will get from the teacher.
+            are_insts_teachable = (losses_clip_mix_comp <= clip_loss_thres) & (loss_diffs_subj_mix > cls_subj_clip_margin)
             # print(losses_clip_subj_comp, losses_clip_mix_comp)
             # If any of the two instances is teachable, we consider it as a teachable iteration,
             # and select the better one (with larger loss diff) to teach.
@@ -4074,26 +4077,26 @@ class LatentDiffusion(DDPM):
     # The subject sub-batch size SSB_SIZE = 2 (1 * BLOCK_SIZE).
     # If is_compos_iter, then subject sub-batch size SSB_SIZE = 2 * BLOCK_SIZE. 
     # (subj-single and subj-comp instances).
-    def calc_padding_embs_align_loss(self, static_prompt_embeddings, ada_embeddings, 
+    def calc_padding_embs_align_loss(self, static_prompt_embeddings, ada_prompt_embeddings, 
                                      prompt_emb_mask, subj_indices, bg_indices,
                                      SSB_SIZE, is_compos_iter, emb_clamp_value=-1):
         # If do_normal_recon:
         # static_prompt_embeddings: [8, 16, 77, 768].
-        # ada_embeddings:           [2, 16, 77, 768].
+        # ada_prompt_embeddings:    [2, 16, 77, 768].
         # prompt_emb_mask:          [8, 77, 1].
         # Otherwise, is_compos_iter:
         # static_prompt_embeddings: [4, 16, 77, 768].
-        # ada_embeddings:           [4, 16, 77, 768].
+        # ada_prompt_embeddings:    [4, 16, 77, 768].
         # prompt_emb_mask:          [4, 77,   1].
 
-        static_prompt_embeddings, ada_embeddings = \
-            clamp_prompt_embedding(emb_clamp_value, static_prompt_embeddings, ada_embeddings)
+        static_prompt_embeddings, ada_prompt_embeddings = \
+            clamp_prompt_embedding(emb_clamp_value, static_prompt_embeddings, ada_prompt_embeddings)
 
-        if ada_embeddings is not None:
+        if ada_prompt_embeddings is not None:
             # During training, ada_emb_weight is randomly drawn from [0.4, 0.7].
             ada_emb_weight = self.embedding_manager.get_ada_emb_weight() 
             cond_prompt_embeddings = static_prompt_embeddings * (1 - ada_emb_weight) \
-                                      + ada_embeddings * ada_emb_weight
+                                      + ada_prompt_embeddings * ada_emb_weight
         else:
             cond_prompt_embeddings = static_prompt_embeddings
         
