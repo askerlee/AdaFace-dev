@@ -43,7 +43,7 @@ model:
     padding_embs_align_loss_weight:     2e-4 # 0 to disable.
     padding_embs_align_loss_base:       0.15
     # typical loss_subj_comp_key_ortho is 0.2, * weight -> 2e-7
-    subj_comp_key_ortho_loss_weight:    2e-4 # disabled. # 1e-4 
+    subj_comp_key_ortho_loss_weight:    0 #2e-4 # disabled. # 1e-4 
     subj_comp_value_ortho_loss_weight:  0 # disabled. # 1e-5
     # typical loss_mix_prompt_distill: 4, * weight -> 1.2e-3.
     mix_prompt_distill_weight:          1e-4
