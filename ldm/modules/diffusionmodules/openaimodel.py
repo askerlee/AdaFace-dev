@@ -1031,7 +1031,7 @@ class UNetModel(nn.Module):
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).
         # None here means ca_flags have been applied to all layers.
         ca_flags_stack.append([ old_ca_flags, None, None, None ])
-
+        
         if capture_distill_attn or debug_attn:
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
             distill_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]

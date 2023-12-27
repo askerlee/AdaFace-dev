@@ -898,6 +898,8 @@ class LatentDiffusion(DDPM):
                                 'compel_cfg_weight_level_range': self.compel_cfg_weight_level_range,
                                 'apply_compel_cfg_prob':        self.apply_compel_cfg_prob,
                                 'empty_context':                self.empty_context,
+                                # Will set to True in p_losses() if in compositional iterations.
+                                'capture_distill_attn':         False,
                              }
 
                 if self.use_ada_embedding:
@@ -2363,6 +2365,8 @@ class LatentDiffusion(DDPM):
                                 'prompt_emb_mask':  prompt_emb_mask2 }
         
         # cfg_scales: classifier-free guidance scales.
+        # By default, 'capture_distill_attn' = False in a generated context, including uncond_context.
+        # So we don't need to set it explicitly.
         cfg_info = { 'cfg_scales':     cfg_scales_for_clip_loss,
                      'uncond_context': uncond_context }
         
