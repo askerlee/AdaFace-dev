@@ -2398,7 +2398,7 @@ class LatentDiffusion(DDPM):
         ###### begin of preparation for is_compos_iter ######
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
         if self.iter_flags['is_compos_iter'] and self.iter_flags['calc_clip_loss']:
-            clip_images, are_insts_teachable, loss_diffs_subj_mix, log_image_colors = \
+            clip_images, are_insts_teachable, best_cand_idx, log_image_colors = \
                     self.calc_clip_losses(x_recon, extra_info, loss_dict, prefix)
             
             is_teachable = are_insts_teachable.any()
@@ -2413,17 +2413,6 @@ class LatentDiffusion(DDPM):
                     self.release_plosses_intermediates(locals())
                     # clear_ada_prompt_embeddings_cache() will implicitly clear the cache.
                     self.embedding_manager.clear_ada_prompt_embeddings_cache()
-
-                    # best_cand_idx: max of diffs among teachable instances.
-                    # text-image better aligned -> smaller clip loss.
-                    # For a 4-instance batch to be teachable, subj comp instances should have larger clip loss
-                    # than mix comp instances. So loss_diffs_subj_mix should be positive, and the larger, 
-                    # the more teachable. Therefore we find the argmax of loss_diffs_subj_mix.
-                    # Sometimes the max among loss_diffs_subj_mix is not teachable (> clip_loss_thres),
-                    # so we set the loss_diffs_subj_mix of non-teachable instances to be a very large 
-                    # negative number, so that non-teachable instances will never be selected as the best candidate.
-                    loss_diffs_subj_mix[~are_insts_teachable] = -1e5
-                    best_cand_idx = torch.argmax(loss_diffs_subj_mix).item()
 
                     # Choose the x_start, noise, and t of the better candidate. 
                     # Repeat 4 times and use them as the condition to do denoising again.
@@ -3092,7 +3081,9 @@ class LatentDiffusion(DDPM):
         # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
         losses_clip_subj_comp, losses_clip_mix_comp \
             = losses_clip_comp.chunk(2)
-        
+
+        loss_diffs_subj_mix = losses_clip_subj_comp - losses_clip_mix_comp
+
         if not self.iter_flags['reuse_init_conds']:
             loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean().detach().item() })
             loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach().item() })
@@ -3118,7 +3109,6 @@ class LatentDiffusion(DDPM):
             # teacher is teachable, then the teacher is also qualified, 
             # as it has to have a smaller loss to be teachable. 
             # So only need to check losses_clip_subj_comp against clip_loss_thres.
-            loss_diffs_subj_mix = losses_clip_subj_comp - losses_clip_mix_comp
             # Old version: are_insts_teachable = (losses_clip_subj_comp <= clip_loss_thres) & (loss_diffs_subj_mix > cls_subj_clip_margin)
             # This is unreasonable as we shouldn't filter on losses_clip_subj_comp. On the contrary,
             # the worse the student is, the more benefit it will get from the teacher.
@@ -3127,23 +3117,17 @@ class LatentDiffusion(DDPM):
             # If any of the two instances is teachable, we consider it as a teachable iteration,
             # and select the better one (with larger loss diff) to teach.
             self.iter_flags['is_teachable']  = are_insts_teachable.sum() > 0
-            # Number of filtered pairs is half of the batch size. 
-            # Repeat to match the number of instances in the batch.
-            # log_image_colors: take values in {0, 1, 2, 3}, 
-            # i.e., no box, green, red, purple boxes respectively.
-            # 0 no box: not teachable; 
-            # 1 green:  teachable in the first iter and not reused yet 
-            # (because it's not in the second iter yet).
-            # 2 red:    teachable in the first iter but not in the second iter; 
-            # 3 purple: teachable in both iters.
-            # If self.iter_flags['do_teacher_filter'] and an instance is teachable, then in the log image file, 
-            # log_image_flag = 1, so the instance has a green bounary box in the logged image.
-            # log_image_colors: 3 * 2. [subj comp * 3, mix comp * 3]
-            log_image_colors = are_insts_teachable.repeat(2).int()
-            if self.iter_flags['reuse_init_conds']:
-                # If reuse_init_conds and an instance is teachable, then in the log image file,
-                # log_image_flag = 3, so the instance has a purple bounary box in the logged image.
-                log_image_colors += 2
+
+            # best_cand_idx: max of diffs among teachable instances.
+            # text-image better aligned -> smaller clip loss.
+            # For a 4-instance batch to be teachable, subj comp instances should have larger clip loss
+            # than mix comp instances. So loss_diffs_subj_mix should be positive, and the larger, 
+            # the more teachable. Therefore we find the argmax of loss_diffs_subj_mix.
+            # Sometimes the max among loss_diffs_subj_mix is not teachable (> clip_loss_thres),
+            # so we set the loss_diffs_subj_mix of non-teachable instances to be a very large 
+            # negative number, so that non-teachable instances will never be selected as the best candidate.
+            loss_diffs_subj_mix[~are_insts_teachable] = -1e5
+            best_cand_idx = torch.argmax(loss_diffs_subj_mix).item()
 
             self.num_total_teacher_filter_iters += 1
             self.num_teachable_iters += int(self.iter_flags['is_teachable'])
@@ -3154,7 +3138,29 @@ class LatentDiffusion(DDPM):
             reuse_teachable_frac = self.num_reuse_teachable_iters / self.num_total_reuse_filter_iters 
             loss_dict.update({f'{prefix}/reuse_teachable_frac': reuse_teachable_frac})
 
-        return clip_images, are_insts_teachable, loss_diffs_subj_mix, log_image_colors
+        else:
+            are_insts_teachable = torch.ones_like(losses_clip_subj_comp, dtype=torch.bool)
+            best_cand_idx = 0
+
+        # Number of filtered pairs is half of the batch size. 
+        # Repeat to match the number of instances in the batch.
+        # log_image_colors: take values in {0, 1, 2, 3}, 
+        # i.e., no box, green, red, purple boxes respectively.
+        # 0 no box: not teachable; 
+        # 1 green:  teachable in the first iter and not reused yet 
+        # (because it's not in the second iter yet).
+        # 2 red:    teachable in the first iter but not in the second iter; 
+        # 3 purple: teachable in both iters.
+        # If self.iter_flags['do_teacher_filter'] and an instance is teachable, then in the log image file, 
+        # log_image_flag = 1, so the instance has a green bounary box in the logged image.
+        # log_image_colors: 3 * 2. [subj comp * 3, mix comp * 3]
+        log_image_colors = are_insts_teachable.repeat(2).int()
+        if self.iter_flags['reuse_init_conds']:
+            # If reuse_init_conds and an instance is teachable, then in the log image file,
+            # log_image_flag = 3, so the instance has a purple bounary box in the logged image.
+            log_image_colors += 2
+
+        return clip_images, are_insts_teachable, best_cand_idx, log_image_colors
 
     # pixel-wise recon loss. 
     # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.

@@ -95,6 +95,8 @@ model:
         training_end_add_noise_std_range:    [ 0.1, 0.4 ]
         # probs for recon_iter and distill_iter, respectively
         training_add_noise_prob:   { 'recon_iter': 0.6, 'distill_iter': 0.4 }
+        # By default, SOT embeddings have a max value around 33. We cut it to 22. 
+        # Only used when computing losses, not used for CFG.        
         prompt_embedding_clamp_value:      22
 
     unet_config:

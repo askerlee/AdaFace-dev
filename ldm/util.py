@@ -352,17 +352,11 @@ def power_loss(a, exponent=2, rev_pow=False):
 
 def clamp_prompt_embedding(clamp_value, *embs):
     if clamp_value <= 0:
-        if len(embs) == 1:
-            return embs[0]
-        else:
-            return embs
+        return embs[0] if len(embs) == 1 else embs
     
-    if len(embs) == 1:
-        return torch.clamp(embs[0], min=-clamp_value, max=clamp_value) if embs[0] is not None else None
-    else:
-        return [ torch.clamp(e, min=-clamp_value, max=clamp_value) if e is not None else None \
-                    for e in embs ]
-
+    clamp = lambda e: torch.clamp(e, min=-clamp_value, max=clamp_value) if e is not None else None
+    return clamp(embs[0]) if len(embs) == 1 else [clamp(e) for e in embs]
+    
 def demean(x):
     return x - x.mean(dim=-1, keepdim=True)
 
