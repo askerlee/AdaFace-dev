@@ -30,7 +30,7 @@ model:
     use_fp_trick:               True
     # By default, SOT embeddings have a max value around 33. We cut it to 22. 
     # Only used when computing losses, not used for CFG.
-    prompt_embedding_clamp_value:      11
+    prompt_embedding_clamp_value:      5
     do_clip_teacher_filtering:  True
     num_candidate_teachers:     4
     composition_regs_iter_gaps:         3
@@ -97,7 +97,7 @@ model:
         training_add_noise_prob:   { 'recon_iter': 0.6, 'distill_iter': 0.4 }
         # By default, SOT embeddings have a max value around 33. We cut it to 22. 
         # Only used when computing losses, not used for CFG.        
-        prompt_embedding_clamp_value:      11
+        prompt_embedding_clamp_value:      5
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
