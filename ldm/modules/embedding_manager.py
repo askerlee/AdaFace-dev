@@ -973,7 +973,9 @@ class EmbeddingManager(nn.Module):
         self.cls_string2embeddings = {}
 
         assert list_initializer_words is not None, "list_initializer_words must be specified"
-
+        if list_initializer_weights is None:
+            list_initializer_weights = [ None ] * len(placeholder_strings)
+            
         for placeholder_idx, placeholder_string in enumerate(placeholder_strings):
             token_is_bg =  (placeholder_string in self.background_strings)
             # get_token_for_string <= get_clip_token_for_string.

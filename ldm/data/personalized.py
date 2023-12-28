@@ -139,6 +139,7 @@ class PersonalizedBase(Dataset):
                  compos_placeholder_prefix=None,   
                  # cls token used to compute the delta loss.
                  cls_delta_token=None,  
+                 cls_uses_subj_init_words=False,
                  # background tokens used to compute the delta loss.
                  cls_bg_delta_tokens=None,
                 # num_vectors_per_token: how many vectors in each layer are allocated to model 
@@ -211,6 +212,11 @@ class PersonalizedBase(Dataset):
             self.compos_placeholder_prefixes   = re.split("\s*,\s*", compos_placeholder_prefix)
         else:
             self.compos_placeholder_prefixes   = None
+
+        # z -> z0. 
+        # z0 will be mapped to the weighted average of the initializer word embeddings of z.
+        if cls_uses_subj_init_words:
+            cls_delta_token = self.placeholder_string + '0'
 
         if cls_delta_token is None:
             if verbose:
