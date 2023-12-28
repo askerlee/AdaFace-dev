@@ -139,7 +139,7 @@ class PersonalizedBase(Dataset):
                  compos_placeholder_prefix=None,   
                  # cls token used to compute the delta loss.
                  cls_delta_token=None,  
-                 cls_uses_subj_init_words=False,
+                 cls_uses_subj_init_words=True,
                  # background tokens used to compute the delta loss.
                  cls_bg_delta_tokens=None,
                 # num_vectors_per_token: how many vectors in each layer are allocated to model 
