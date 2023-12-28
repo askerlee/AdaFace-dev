@@ -21,7 +21,7 @@ model:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
         placeholder_strings: ["*"]
-        initializer_words: []
+        list_initializer_words: []
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

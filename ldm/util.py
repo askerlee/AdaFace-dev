@@ -966,7 +966,93 @@ def gen_gradient_scaler(alpha):
     else:
         assert alpha == 0
         return lambda x: x.detach()
+
+# new_token_embeddings: [new_num_tokens, 768].
+def extend_nn_embedding(old_nn_embedding, new_token_embeddings, num_new_tokens):
+    emb_dim         = old_nn_embedding.embedding_dim
+    num_old_tokens  = old_nn_embedding.num_embeddings
+    num_tokens2     = num_old_tokens + num_new_tokens
     
+    new_nn_embedding = nn.Embedding(num_tokens2, emb_dim, 
+                                    device=old_nn_embedding.weight.device,
+                                    dtype=old_nn_embedding.weight.dtype)
+
+    old_num_tokens = old_nn_embedding.weight.shape[0]
+    # Copy the first old_num_tokens embeddings from old_nn_embedding to new_nn_embedding.
+    new_nn_embedding.weight.data[:old_num_tokens] = old_nn_embedding.weight.data
+    # Copy the new embeddings to new_nn_embedding.
+    new_nn_embedding.weight.data[old_num_tokens:] = new_token_embeddings
+
+    return new_nn_embedding
+
+def get_clip_tokens_for_string(tokenizer, string, force_single_token=False):
+    '''
+    # If string is a new token, add it to the tokenizer.
+    if string not in tokenizer.get_vocab():
+        tokenizer.add_tokens([string])
+        # tokenizer() returns [49406, 49408, 49407]. 
+        # 49406: start of text, 49407: end of text, 49408: new token.
+        new_token_id = tokenizer(string)["input_ids"][1]
+        print("Added new token to tokenizer: {} -> {}".format(string, new_token_id))
+    '''
+    batch_encoding = tokenizer(string, truncation=True, max_length=77, return_length=True,
+                               return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
+    tokens = batch_encoding["input_ids"]
+    # [49406, 11781,  4668, 49407, 49407...]. 49406: start of text, SOT, 49407: end of text, EOT
+    # 11781,  4668: tokens of "stuffed animal".
+    token_count = torch.count_nonzero(tokens - 49407) - 1
+    assert token_count >= 1, f"No token found in string '{string}'"
+    if force_single_token:
+        assert token_count == 1, f"String '{string}' maps to more than a single token. Please use another string"
+
+    # Remove start and end tokens.
+    return tokens[0, 1:1+token_count]
+
+def get_bert_tokens_for_string(tokenizer, string):
+    token = tokenizer(string)
+    assert torch.count_nonzero(token) == 3, f"String '{string}' maps to more than a single token. Please use another string"
+
+    token = token[0, 1]
+
+    return token
+
+def get_embeddings_for_clip_tokens(embedder, tokens):
+    # embedder(tokens): [1, N, 768]. N: number of tokens. 
+    # RETURN: [N, 768]
+    return embedder(tokens)[0]
+
+def extend_clip_text_embedder(text_embedder, string2embedding):
+    num_new_tokens = len(string2embedding)
+    if num_new_tokens == 0:
+        return
+
+    print(f"Extended CLIP text encoder with {num_new_tokens} new tokens:")
+    get_tokens_for_string = partial(get_clip_tokens_for_string, text_embedder.tokenizer)
+
+    # num_added_tokens should always be num_new_tokens.
+    num_added_tokens = text_embedder.tokenizer.add_tokens(list(string2embedding.keys()))
+    assert num_added_tokens == num_new_tokens, \
+        f"num_added_tokens {num_added_tokens} != num_new_tokens {num_new_tokens}"
+    # text_embedder.transformer.text_model.embeddings.token_embedding: 
+    # torch.nn.modules.sparse.Embedding, [49408, 768]
+    # cls_token: 49408, 49409...
+    # So token_embedding needs to be expanded.
+
+    token_embeddings = []
+    for string, embedding in string2embedding.items():
+        # sanity check.
+        token = get_tokens_for_string(string, force_single_token=True)[0]
+        print(f"Added string: {string} -> token: {token}")
+        token_embeddings.append(embedding)
+
+    # token_embeddings: list of tensors, each [1, 768] => [num_new_tokens, 768].
+    token_embeddings = torch.cat(token_embeddings, dim=0)
+
+    # Extend the token embeddings in CLIP text encoder for the new cls strings.
+    text_embedder.transformer.text_model.embeddings.token_embedding = \
+        extend_nn_embedding(text_embedder.transformer.text_model.embeddings.token_embedding, 
+                            token_embeddings, num_new_tokens)
+
 # samples:   a list of (B, C, H, W) tensors.
 # img_flags: a list of (B,) ints.
 # If not do_normalize, samples should be between [0, 1] (float types) or [0, 255] (uint8).

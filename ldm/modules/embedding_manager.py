@@ -7,7 +7,8 @@ import torch.nn.functional as F
 import numpy as np
 
 from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
-                     add_noise_to_embedding, calc_ref_cosine_loss, clamp_prompt_embedding
+                     add_noise_to_embedding, calc_ref_cosine_loss, clamp_prompt_embedding, \
+                     get_clip_tokens_for_string, get_embeddings_for_clip_tokens
 
 from functools import partial
 from collections import OrderedDict
@@ -18,42 +19,31 @@ import copy
 torch.set_printoptions(precision=4, sci_mode=False)
 np.set_printoptions(precision=4, suppress=True)
 
-def get_clip_tokens_for_string(tokenizer, string, force_single_token=False):
-    '''
-    # If string is a new token, add it to the tokenizer.
-    if string not in tokenizer.get_vocab():
-        tokenizer.add_tokens([string])
-        # tokenizer() returns [49406, 49408, 49407]. 
-        # 49406: start of text, 49407: end of text, 49408: new token.
-        new_token_id = tokenizer(string)["input_ids"][1]
-        print("Added new token to tokenizer: {} -> {}".format(string, new_token_id))
-    '''
-    batch_encoding = tokenizer(string, truncation=True, max_length=77, return_length=True,
-                               return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
-    tokens = batch_encoding["input_ids"]
-    # [49406, 11781,  4668, 49407, 49407...]. 49406: start of text, 49407: end of text
-    # 11781,  4668: tokens of "stuffed animal".
-    token_count = torch.count_nonzero(tokens - 49407) - 1
-    assert token_count >= 1, f"No token found in string '{string}'"
-    if force_single_token:
-        assert token_count == 1, f"String '{string}' maps to more than a single token. Please use another string"
 
-    # Remove start and end tokens.
-    return tokens[0, 1:1+token_count]
+def calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
+                              initializer_words, initializer_weights):
+    if initializer_words is None:  
+        # The background embedding is not initialized with any word embedding.
+        # In this case,
+        # init_word_embeddings = None,    init_word_weights    = None,
+        # avg_init_word_embedding = None, num_init_word_tokens = 0.      
+        return None, None, None, 0
+    else:
+        init_word_tokens = get_tokens_for_string(initializer_words)
+        N = len(init_word_tokens)
+        if initializer_weights is not None:
+            init_word_weights = torch.tensor(initializer_weights, dtype=torch.float32)
+            init_word_weights = init_word_weights / init_word_weights.sum()
+        else:
+            # Equal weights for all words.
+            init_word_weights = torch.ones(N, dtype=torch.float32) / N
+        
+        # init_word_embeddings: [2, 768]. avg_init_word_embedding: [1, 768].
+        init_word_embeddings = get_embeddings_for_tokens(init_word_tokens.cpu())
+        avg_init_word_embedding = (init_word_embeddings * init_word_weights.unsqueeze(1)).sum(dim=0, keepdim=True)
 
-def get_bert_tokens_for_string(tokenizer, string):
-    token = tokenizer(string)
-    assert torch.count_nonzero(token) == 3, f"String '{string}' maps to more than a single token. Please use another string"
-
-    token = token[0, 1]
-
-    return token
-
-def get_embeddings_for_clip_tokens(embedder, tokens):
-    # embedder(tokens): [1, N, 768]. N: number of tokens. 
-    # RETURN: [N, 768]
-    return embedder(tokens)[0]
-
+        return init_word_tokens, init_word_weights, init_word_embeddings, avg_init_word_embedding
+          
 def reg_loss(x, loss_type='l2', selector=None):
     if selector is not None:
         # If selector(x) is False, the gradient flow is cut off.
@@ -890,8 +880,8 @@ class EmbeddingManager(nn.Module):
             placeholder_strings=None,
             # If background_strings are specified, they are part of the list placeholder_strings.
             background_strings=None,
-            initializer_words=None,
-            initializer_weights=None,
+            list_initializer_words=None,
+            list_initializer_weights=None,
             # num_vectors_per_token: how many vectors in each layer are allocated to model 
             # the subject (represented as the subject token) and the background. 
             # num_vectors_per_token is an int or a dict.
@@ -925,7 +915,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
         self.string_to_emb_ema_dict         = nn.ModuleDict()
         self.initial_embeddings  = nn.ParameterDict() # These should not be optimized
-        self.token2emb_cache = nn.ParameterDict() # These should not be optimized
+        self.token2emb_cache     = nn.ParameterDict() # These should not be optimized
 
         self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
@@ -975,49 +965,48 @@ class EmbeddingManager(nn.Module):
             get_tokens_for_string       = partial(get_clip_tokens_for_string,       text_embedder.tokenizer)
             get_embeddings_for_tokens   = partial(get_embeddings_for_clip_tokens,   text_embedder.transformer.text_model.embeddings)
             self.token_dim = 768
-        else: # using LDM's BERT encoder
-            self.is_clip = False
-            get_tokens_for_string = partial(get_bert_tokens_for_string, text_embedder.tknz_fn)
-            get_embeddings_for_tokens = text_embedder.transformer.token_emb
-            self.token_dim = 1280
 
         # Save this function to be used in load() when doing placeholder substitution.
         self.get_tokens_for_string = get_tokens_for_string
         str2lora_rank = {}
 
-        for idx, placeholder_string in enumerate(placeholder_strings):
+        self.cls_string2embeddings = {}
+
+        assert list_initializer_words is not None, "list_initializer_words must be specified"
+
+        for placeholder_idx, placeholder_string in enumerate(placeholder_strings):
+            token_is_bg =  (placeholder_string in self.background_strings)
             # get_token_for_string <= get_clip_token_for_string.
             # force_single_token = True, as there should be only one token in placeholder_string.
             tokens = get_tokens_for_string(placeholder_string, force_single_token=True)
             token = tokens[0]
 
             num_vectors_per_token = self.token2num_vectors[placeholder_string]
+            initializer_words     = list_initializer_words[placeholder_idx]
+            initializer_weights   = list_initializer_weights[placeholder_idx]
 
-            if (initializer_words is not None) and idx < len(initializer_words):
-                init_words = initializer_words[idx]
-                init_word_tokens = get_tokens_for_string(init_words)
-                N = len(init_word_tokens)
-                if initializer_weights is not None and idx < len(initializer_weights):
-                    init_word_weights = initializer_weights[idx]
-                    init_word_weights = torch.tensor(init_word_weights, dtype=torch.float32)
-                    init_word_weights = init_word_weights / init_word_weights.sum()
-                else:
-                    # Equal weights for all words.
-                    init_word_weights = torch.ones(N, dtype=torch.float32) / N
+            # The background token may not have initializer words. So its corresponding
+            # init_word_embeddings, avg_init_word_embedding, init_word_weights are None, 
+            # and num_init_word_tokens = 0.
+            init_word_tokens, init_word_weights, init_word_embeddings, avg_init_word_embedding = \
+                calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
+                                          initializer_words, initializer_weights)
+            num_init_word_tokens = len(init_word_tokens)
 
+            if self.use_layerwise_embedding:
+                # If layerwise_lora_rank <= 0, then use num_init_word_tokens and rank/num_words ratio 
+                # to calculate layerwise_lora_rank.
+                # Otherwise, directly use pre-specified layerwise_lora_rank.
                 if layerwise_lora_rank <= 0:
-                    layerwise_lora_rank = round(layerwise_lora_rank_token_ratio * N + 1) if self.use_layerwise_embedding else -1
-                
-                with torch.no_grad():
-                    init_word_embeddings = get_embeddings_for_tokens(init_word_tokens.cpu())
-                    # init_word_embeddings: [2, 768]. avg_init_word_embedding: [1, 768].
-                    avg_init_word_embedding = (init_word_embeddings * init_word_weights.unsqueeze(1)).sum(dim=0, keepdim=True)
-
+                    if num_init_word_tokens > 0:
+                        layerwise_lora_rank = round(layerwise_lora_rank_token_ratio * num_init_word_tokens + 1)
+                    else:
+                        # If no initializer words are specified, use layerwise_lora_default_rank .
+                        layerwise_lora_rank = layerwise_lora_default_rank
+                # Otherwise, use pre-specified layerwise_lora_rank.
             else:
-                # The background embedding is not initialized with any word embedding.
-                layerwise_lora_rank  = layerwise_lora_default_rank
-                init_word_embeddings = None
-                init_word_weights    = None
+                # Disable layerwise embeddings.
+                layerwise_lora_rank = -1
 
             str2lora_rank[placeholder_string] = layerwise_lora_rank
             self.string_to_token_dict[placeholder_string] = token
@@ -1026,66 +1015,25 @@ class EmbeddingManager(nn.Module):
             # avg_init_word_embedding_3d: [1, 768] => [16, 9, 768]
             avg_init_word_embedding_3d = avg_init_word_embedding.unsqueeze(0).repeat(self.num_layers_per_embedder, num_vectors_per_token, 1)
 
-            # Initialize static/ada embedders.
-            # A static/ada embedder can generate K embeddings.
-            # layerwise_lora_rank > 0 implies use_layerwise_embedding.
-            if layerwise_lora_rank > 0:
-                # if self.emb_ema_as_pooling_probe_weight > 0, then calculate EMA of embeddings 
-                # to be used in Ada attn pooler.
-                # num_layers_per_embedder = num_unet_ca_layers
-                token_static_embedder   = StaticLayerwiseEmbedding(self.num_layers_per_embedder, 
-                                                                    num_vectors_per_token, 
-                                                                    self.token_dim, 
-                                                                    layerwise_lora_rank, 
-                                                                    (0.1, 0.02), 
-                                                                    init_words,
-                                                                    init_word_embeddings, init_word_weights, 
-                                                                    token_string=placeholder_string)
-                    
-                # avg_init_word_embedding_3d: [16, 9, 768]. 
-                # All layers of all 9 embeddings are initialized as avg_init_word_embedding.
-                if self.emb_ema_as_pooling_probe_weight > 0:
-                    # token_emb is the embedding in the prompt embeddings, not the token embeddings
-                    # generated by StaticLayerwiseEmbedding / AdaEmbedding.
-                    token_emb_cache = Embedding3d(self.num_layers_per_embedder, num_vectors_per_token, self.token_dim, 
-                                                  init_embedding=None)
-                    self.token2emb_cache[placeholder_string] = token_emb_cache
+            if avg_init_word_embedding is not None:
+                # If placeholder_string is 'z', then cls_placeholder_string is 'z0'.
+                cls_placeholder_string = placeholder_string + '0'
+                # Save the mapping first; extend the CLIP text encoder later.
+                self.cls_string2embeddings[cls_placeholder_string] = avg_init_word_embedding
 
-                token_is_bg =  (placeholder_string in self.background_strings)
-                # For subject embeddings:    2/3 of the embeddings are fg embeddings (focus on fg infeat), 
-                # and 1/3 are bg embeddings (focus on bg infeat).
-                # For background embeddings: 2/3 of the embeddings are bg embeddings (focus on bg infeat), 
-                # and 1/3 are fg embeddings (focus on fg infeat).
-                # Note fg embeddings still take 0.3 of bg infeat, and bg embeddings still take 0.3 of fg infeat.
-                # No embeddings are fg-bg embeddings, which take fg and bg infeat with equal weights.
-                # If num_vectors_per_token == 1, then fg_emb_count = 1, bg_emb_count = 0.
-                # If num_vectors_per_token == 9, then fg_emb_count = 6, bg_emb_count = 3.
-                if token_is_bg:
-                    bg_emb_count = max(1, num_vectors_per_token * 2 // 3)
-                    fg_emb_count = num_vectors_per_token - bg_emb_count
-                else:
-                    fg_emb_count = max(1, num_vectors_per_token * 2 // 3)
-                    bg_emb_count = num_vectors_per_token - fg_emb_count
+            token_static_embedder, token_ada_embedder = \
+                self.create_static_ada_embedders(num_vectors_per_token, layerwise_lora_rank, initializer_words,
+                                                 init_word_embeddings, init_word_weights, placeholder_string,
+                                                 avg_init_word_embedding_3d, token_is_bg, ada_use_attn_pooler)
 
-                use_cached_bg = token_is_bg
-
-                token_ada_embedder  = AdaEmbedding(self.num_layers_per_embedder, 
-                                                   num_vectors_per_token, 
-                                                   fg_emb_count, 
-                                                   bg_emb_count,
-                                                   use_cached_bg,
-                                                   self.token_dim,                                                    
-                                                   layerwise_lora_rank, 
-                                                   init_words,
-                                                   init_word_embeddings,
-                                                   use_attn_pooler=ada_use_attn_pooler,
-                                                   token_string=placeholder_string,
-                                                   token_is_bg=token_is_bg)
-            else:
-                # Degenerate to Textual Inversion. 
-                # ANCHOR[id=init_embed] : 16*K vectors are initialized with the same embedding.
-                token_static_embedder   = nn.Parameter(avg_init_word_embedding_3d, requires_grad=True)
-                token_ada_embedder      = None
+            # avg_init_word_embedding_3d: [16, 9, 768]. 
+            # All layers of all 9 embeddings are initialized as avg_init_word_embedding.            
+            if self.emb_ema_as_pooling_probe_weight > 0:
+                # token_emb is the embedding in the prompt embeddings, not the token embeddings
+                # generated by StaticLayerwiseEmbedding / AdaEmbedding.
+                token_emb_cache = Embedding3d(self.num_layers_per_embedder, num_vectors_per_token, self.token_dim, 
+                                              init_embedding=avg_init_word_embedding_3d)
+                self.token2emb_cache[placeholder_string] = token_emb_cache
 
             # token_static_embedder: a StaticLayerwiseEmbedding object (when use_layerwise_embedding) or an embedding vector.
             # Pytorch >= 1.12.0 allows to put an nn.Module object into an nn.ParameterDict.
@@ -1492,6 +1440,62 @@ class EmbeddingManager(nn.Module):
             ada_subj_embs_dict[placeholder_string] = subj_ada_embedding.mean(dim=0)
 
         return embedded_text, ada_subj_embs_dict, token2ada_attn
+
+    # Initialize static/ada embedders.
+    def create_static_ada_embedders(self, num_vectors_per_token, layerwise_lora_rank, initializer_words,
+                                    init_word_embeddings, init_word_weights, placeholder_string,
+                                    avg_init_word_embedding_3d, token_is_bg, ada_use_attn_pooler):
+        # A static/ada embedder can generate K embeddings.
+        # layerwise_lora_rank > 0 implies use_layerwise_embedding.
+        if layerwise_lora_rank > 0:
+            # if self.emb_ema_as_pooling_probe_weight > 0, then calculate EMA of embeddings 
+            # to be used in Ada attn pooler.
+            # num_layers_per_embedder = num_unet_ca_layers
+            token_static_embedder   = StaticLayerwiseEmbedding(self.num_layers_per_embedder, 
+                                                                num_vectors_per_token, 
+                                                                self.token_dim, 
+                                                                layerwise_lora_rank, 
+                                                                (0.1, 0.02), 
+                                                                initializer_words,
+                                                                init_word_embeddings, init_word_weights, 
+                                                                token_string=placeholder_string)
+                
+            # For subject embeddings:    2/3 of the embeddings are fg embeddings (focus on fg infeat), 
+            # and 1/3 are bg embeddings (focus on bg infeat).
+            # For background embeddings: 2/3 of the embeddings are bg embeddings (focus on bg infeat), 
+            # and 1/3 are fg embeddings (focus on fg infeat).
+            # Note fg embeddings still take 0.3 of bg infeat, and bg embeddings still take 0.3 of fg infeat.
+            # No embeddings are fg-bg embeddings, which take fg and bg infeat with equal weights.
+            # If num_vectors_per_token == 1, then fg_emb_count = 1, bg_emb_count = 0.
+            # If num_vectors_per_token == 9, then fg_emb_count = 6, bg_emb_count = 3.
+            if token_is_bg:
+                bg_emb_count = max(1, num_vectors_per_token * 2 // 3)
+                fg_emb_count = num_vectors_per_token - bg_emb_count
+            else:
+                fg_emb_count = max(1, num_vectors_per_token * 2 // 3)
+                bg_emb_count = num_vectors_per_token - fg_emb_count
+
+            use_cached_bg = token_is_bg
+
+            token_ada_embedder  = AdaEmbedding(self.num_layers_per_embedder, 
+                                                num_vectors_per_token, 
+                                                fg_emb_count, 
+                                                bg_emb_count,
+                                                use_cached_bg,
+                                                self.token_dim,                                                    
+                                                layerwise_lora_rank, 
+                                                initializer_words,
+                                                init_word_embeddings,
+                                                use_attn_pooler=ada_use_attn_pooler,
+                                                token_string=placeholder_string,
+                                                token_is_bg=token_is_bg)
+        else:
+            # Degenerate to Textual Inversion. 
+            # ANCHOR[id=init_embed] : 16*K vectors are initialized with the same embedding.
+            token_static_embedder   = nn.Parameter(avg_init_word_embedding_3d, requires_grad=True)
+            token_ada_embedder      = None
+
+        return token_static_embedder, token_ada_embedder
 
     # Update prompt_emb_mask and prompt_token_attn_mask.
     # tokenized_text: [B, N] = [2/4, 77].

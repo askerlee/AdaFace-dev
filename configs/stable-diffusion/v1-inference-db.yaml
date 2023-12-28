@@ -25,8 +25,8 @@ model:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
         placeholder_strings: ["*"]
-        initializer_words: ["sculpture"]
-        initializer_weights: [ None ]
+        list_initializer_words: ["sculpture"]
+        list_initializer_weights: [ None ]
         num_vectors_per_token: 1
         use_layerwise_embedding: False
 

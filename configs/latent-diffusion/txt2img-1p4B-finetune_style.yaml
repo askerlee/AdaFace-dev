@@ -22,7 +22,7 @@ model:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
         placeholder_strings: ["*"]
-        initializer_words: ["painting"]
+        list_initializer_words: ["painting"]
         per_image_tokens: false
         num_vectors_per_token: 1
 

@@ -19,7 +19,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
-from ldm.util import instantiate_from_config
+from ldm.util import instantiate_from_config, extend_clip_text_embedder
 import re
 from safetensors.torch import load_file as safetensors_load_file
 
@@ -778,9 +778,9 @@ if __name__ == "__main__":
         #    opt.wds_background_string = "w"
         # Currently, only supports one group of initial words and weights.
         if opt.init_words:
-            config.model.params.personalization_config.params.initializer_words[0] = opt.init_words
+            config.model.params.personalization_config.params.list_initializer_words[0] = opt.init_words
             if len(opt.init_word_weights) > 0:
-                config.model.params.personalization_config.params.initializer_weights[0] = opt.init_word_weights
+                config.model.params.personalization_config.params.list_initializer_weights[0] = opt.init_word_weights
 
         if opt.background_string:
             config.model.params.use_background_token = True
@@ -799,11 +799,16 @@ if __name__ == "__main__":
             config.data.params.validation.params.wds_background_string  = opt.wds_background_string
 
             if opt.bg_init_words:
-                config.model.params.personalization_config.params.initializer_words.append(opt.bg_init_words)
-                config.model.params.personalization_config.params.initializer_weights.append([1.0] * len(re.split("\s+", opt.bg_init_words)))
+                config.model.params.personalization_config.params.list_initializer_words.append(opt.bg_init_words)
+                config.model.params.personalization_config.params.list_initializer_weights.append([1.0] * len(re.split("\s+", opt.bg_init_words)))
                 config.data.params.train.params.cls_bg_delta_tokens      = re.split(r"\s+", opt.bg_init_words)
                 config.data.params.validation.params.cls_bg_delta_tokens = re.split(r"\s+", opt.bg_init_words)
-
+            else:
+                config.model.params.personalization_config.params.list_initializer_words.append(None)
+                config.model.params.personalization_config.params.list_initializer_weights.append(None)
+                config.data.params.train.params.cls_bg_delta_tokens      = None
+                config.data.params.validation.params.cls_bg_delta_tokens = None
+                
         if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
             K = opt.use_conv_attn_kernel_size
             assert opt.num_vectors_per_token >= K * K, \
@@ -858,6 +863,9 @@ if __name__ == "__main__":
         else:
             model = instantiate_from_config(config.model)
         # model: ldm.models.diffusion.ddpm.LatentDiffusion, inherits from LightningModule.
+
+        # Extend CLIP text embedder with a few cls tokens.
+        extend_clip_text_embedder(model.cond_stage_model, model.embedding_manager.cls_string2embeddings)
 
         # trainer and callbacks
         trainer_kwargs = dict()
