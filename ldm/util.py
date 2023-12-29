@@ -889,7 +889,7 @@ def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divi
     return patched_text_embedding
 
 def merge_cls_delta_string_embs(tokenized_text, embedded_text, placeholder_indices_1st,
-                                  init_word_tokens_and_weights, is_training, MAX_SEARCH_SPAN=10):
+                                init_word_tokens_and_weights, is_training, MAX_SEARCH_SPAN=10):
     init_word_tokens, init_word_weights = init_word_tokens_and_weights
     device = tokenized_text.device
     init_word_tokens  = init_word_tokens.to(device)

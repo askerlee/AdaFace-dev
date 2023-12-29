@@ -1212,9 +1212,7 @@ class EmbeddingManager(nn.Module):
             # distillation iteration, or an inference iteration. 
             # Anyway, we need to check whether the cls_delta_string
             # occurs in the prompts without the placeholder token. If so, we need to combine 
-            # their embeddings to the first embedding, and set the 2nd to the last embeddings to 0.
-            # This doesn't matter, since distribute_embedding_to_M_tokens() will 
-            # re-distribute the first embedding to the 2nd to the last embeddings.
+            # their embeddings to the first embedding, and overwrite (delete) the 2nd to the last embeddings.
             if REAL_OCCURS_IN_BATCH < B:
                 embedded_text = merge_cls_delta_string_embs(tokenized_text, embedded_text, placeholder_indices_1st,
                                                               self.placeholder_token_to_init_word_tokens[placeholder_token],
@@ -1308,6 +1306,19 @@ class EmbeddingManager(nn.Module):
 
             # extract_first_index_in_each_instance(): Get the index to the first token in each instance.
             placeholder_indices_1st = extract_first_index_in_each_instance(placeholder_indices)
+
+            # REAL_OCCURS_IN_BATCH: the real number of occurrences of the placeholder in the current batch.
+            # As ada embeddings are generated layer by layer, there is no repetition in the batch dimension.
+            REAL_OCCURS_IN_BATCH = placeholder_indices_1st[0].numel()
+            # Some prompts don't contain the placeholder token. This could happen in a compositional 
+            # distillation iteration, or an inference iteration. 
+            # Anyway, we need to check whether the cls_delta_string
+            # occurs in the prompts without the placeholder token. If so, we need to combine 
+            # their embeddings to the first embedding, and overwrite (delete) the 2nd to the last embeddings.
+            if REAL_OCCURS_IN_BATCH < BS:
+                embedded_text = merge_cls_delta_string_embs(tokenized_text, embedded_text, placeholder_indices_1st,
+                                                            self.placeholder_token_to_init_word_tokens[placeholder_token],
+                                                            self.training, self.CLS_DELTA_STRING_MAX_SEARCH_SPAN)
 
             # For fg (subject) tokens, exclude fg embeddings from computing layer_static_extra_emb_mean. 
             # For bg (junk) tokens,    exclude fg embeddings from computing layer_static_extra_emb_mean.
