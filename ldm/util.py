@@ -940,7 +940,7 @@ def merge_cls_delta_string_embs(tokenized_text, embedded_text, placeholder_indic
         # MAX_SEARCH_SPAN should be the sum of all extra tokens
         # (all excluding the first of the init word tokens; the first corresponds to the subject token).
         # The default value 10 should be sufficient larger than this sum.
-        for j in range(MAX_SEARCH_SPAN):
+        for j in range(MAX_SEARCH_SPAN+1):
             start = start_index_N + j
             if (tokenized_text_i[start:start+M] == init_word_tokens).all():
                 # init_word_tokens are found in the i-th prompt.
