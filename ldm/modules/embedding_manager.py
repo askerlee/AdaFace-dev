@@ -8,7 +8,8 @@ import numpy as np
 
 from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
                      add_noise_to_embedding, calc_ref_cosine_loss, clamp_prompt_embedding, \
-                     get_clip_tokens_for_string, get_embeddings_for_clip_tokens
+                     get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
+                     merge_cls_delta_string_embs
 
 from functools import partial
 from collections import OrderedDict
@@ -906,7 +907,8 @@ class EmbeddingManager(nn.Module):
             use_conv_attn_kernel_size=-1,
             conv_attn_layerwise_scale_learnable=False,
             prompt_embedding_clamp_value=-1,
-            **kwargs
+            # Used in ddpm.py, ignored here.
+            embedding_manager_ckpt=None
     ):
         super().__init__()
         self.string_to_token_dict = OrderedDict()
@@ -965,23 +967,27 @@ class EmbeddingManager(nn.Module):
             get_tokens_for_string       = partial(get_clip_tokens_for_string,       text_embedder.tokenizer)
             get_embeddings_for_tokens   = partial(get_embeddings_for_clip_tokens,   text_embedder.transformer.text_model.embeddings)
             self.token_dim = 768
+        else:
+            breakpoint()
 
         # Save this function to be used in load() when doing placeholder substitution.
         self.get_tokens_for_string = get_tokens_for_string
         str2lora_rank = {}
-
-        self.cls_string2embeddings = {}
+        # "," -> 267, "z": 345, "y": 344.
+        self.placeholder_token_to_init_word_tokens = {}
+        #self.cls_string2embeddings = {}
 
         assert list_initializer_words is not None, "list_initializer_words must be specified"
         if list_initializer_weights is None:
             list_initializer_weights = [ None ] * len(placeholder_strings)
-            
+        self.list_initializer_weights = list_initializer_weights
+        self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = 0
+
         for placeholder_idx, placeholder_string in enumerate(placeholder_strings):
             token_is_bg =  (placeholder_string in self.background_strings)
-            # get_token_for_string <= get_clip_token_for_string.
+            # get_tokens_for_string <= get_clip_tokens_for_string.
             # force_single_token = True, as there should be only one token in placeholder_string.
-            tokens = get_tokens_for_string(placeholder_string, force_single_token=True)
-            token = tokens[0]
+            placeholder_token = get_tokens_for_string(placeholder_string, force_single_token=True)[0]
 
             num_vectors_per_token = self.token2num_vectors[placeholder_string]
             initializer_words     = list_initializer_words[placeholder_idx]
@@ -993,7 +999,14 @@ class EmbeddingManager(nn.Module):
             init_word_tokens, init_word_weights, init_word_embeddings, avg_init_word_embedding = \
                 calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
                                           initializer_words, initializer_weights)
-            num_init_word_tokens = len(init_word_tokens)
+            num_init_word_tokens = len(init_word_tokens) if init_word_tokens is not None else 0
+            # placeholder_token_to_init_word_tokens is used to examine class prompts, 
+            # to see if there are subsequences of init_word_tokens.
+            # If there are, the embeddings of init_word_tokens should be combined through weighted sum.
+            self.placeholder_token_to_init_word_tokens[placeholder_token] = (init_word_tokens, init_word_weights)
+            # CLS_DELTA_STRING_MAX_SEARCH_SPAN should be the sum of all extra tokens
+            # (all excluding the first of the init word tokens; the first corresponds to the subject token).
+            self.CLS_DELTA_STRING_MAX_SEARCH_SPAN += num_init_word_tokens - 1
 
             if self.use_layerwise_embedding:
                 # If layerwise_lora_rank <= 0, then use num_init_word_tokens and rank/num_words ratio 
@@ -1011,17 +1024,19 @@ class EmbeddingManager(nn.Module):
                 layerwise_lora_rank = -1
 
             str2lora_rank[placeholder_string] = layerwise_lora_rank
-            self.string_to_token_dict[placeholder_string] = token
+            self.string_to_token_dict[placeholder_string] = placeholder_token
             # initial_embeddings are only used to compute the regularization loss.
             # Wrap with Parameter so that they will be saved to checkpoints.
             # avg_init_word_embedding_3d: [1, 768] => [16, 9, 768]
             avg_init_word_embedding_3d = avg_init_word_embedding.unsqueeze(0).repeat(self.num_layers_per_embedder, num_vectors_per_token, 1)
 
+            '''
             if avg_init_word_embedding is not None:
                 # If placeholder_string is 'z', then cls_placeholder_string is 'z0'.
                 cls_placeholder_string = placeholder_string + '0'
                 # Save the mapping first; extend the CLIP text encoder later.
                 self.cls_string2embeddings[cls_placeholder_string] = avg_init_word_embedding
+            '''
 
             token_static_embedder, token_ada_embedder = \
                 self.create_static_ada_embedders(num_vectors_per_token, layerwise_lora_rank, initializer_words,
@@ -1070,7 +1085,8 @@ class EmbeddingManager(nn.Module):
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
                ada_emb_weight))
-            
+        print(f"CLS_DELTA_STRING_MAX_SEARCH_SPAN={self.CLS_DELTA_STRING_MAX_SEARCH_SPAN}")
+
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
     # layerwise embeddings.
@@ -1176,7 +1192,7 @@ class EmbeddingManager(nn.Module):
             # If multiple occurrences are found in a prompt, only keep the first as the subject.
             # Other occurrences are treated as part of the background prompt (this may happen if
             # composition image overlay is used).
-            placeholder_indices = extract_first_index_in_each_instance(placeholder_indices)
+            placeholder_indices_1st = extract_first_index_in_each_instance(placeholder_indices)
             # embedded_text[placeholder_indices] indexes the embedding at each instance in the batch.
             # Non-layerwise: embedded_text[placeholder_indices]: [2, 768].  subj_static_embedding: [1, K, 768].
             # layerwise: placeholder_indices =  
@@ -1191,7 +1207,18 @@ class EmbeddingManager(nn.Module):
 
             # REAL_OCCURS_IN_BATCH: the real number of occurrences of the placeholder in the current batch,
             # not repetitively counting the occurrences in the embedded_text repeated for M layers.
-            REAL_OCCURS_IN_BATCH = placeholder_indices[0].numel() // self.num_layers_per_embedder
+            REAL_OCCURS_IN_BATCH = placeholder_indices_1st[0].numel() // self.num_layers_per_embedder
+            # Some prompts don't contain the placeholder token. This could happen in a compositional 
+            # distillation iteration, or an inference iteration. 
+            # Anyway, we need to check whether the cls_delta_string
+            # occurs in the prompts without the placeholder token. If so, we need to combine 
+            # their embeddings to the first embedding, and set the 2nd to the last embeddings to 0.
+            # This doesn't matter, since distribute_embedding_to_M_tokens() will 
+            # re-distribute the first embedding to the 2nd to the last embeddings.
+            if REAL_OCCURS_IN_BATCH < B:
+                embedded_text = merge_cls_delta_string_embs(tokenized_text, embedded_text, placeholder_indices_1st,
+                                                              self.placeholder_token_to_init_word_tokens[placeholder_token],
+                                                              self.training, self.CLS_DELTA_STRING_MAX_SEARCH_SPAN)
 
             static_embedder = embedder_dict[placeholder_string].to(device)
             if isinstance(static_embedder, StaticLayerwiseEmbedding):
@@ -1207,7 +1234,7 @@ class EmbeddingManager(nn.Module):
             static_subj_embs_dict[placeholder_string] = subj_static_embedding
 
             for k in range(self.token2num_vectors[placeholder_string]):
-                placeholder_indices_k = (placeholder_indices[0], placeholder_indices[1] + k)
+                placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k)
                 # embedded_text is repeated 16 times along the layer dimension, with size of dim 0 = 16 * BS.
                 # After repeat, the same instance is repeated 16 times, which are adjacent 
                 # to each other across the batch dim:

@@ -875,7 +875,9 @@ class UNetModel(nn.Module):
             emb_idx = layer_idx2ca_layer_idx[layer_idx]
             layer_static_context = context[emb_idx]
 
-            if iter_type.startswith("mix_"):
+            if iter_type == 'mix_hijk':
+                # cls embeddings have been distribute_embedding_to_M_tokens() in 
+                # LatentDiffusion.forward() in ddpm.py. So no need to call it again here.
                 # layer_static_context is v, k concatenated. Separate it into v and k.
                 layer_static_context_v, layer_static_context_k = \
                             layer_static_context.chunk(2, dim=1)

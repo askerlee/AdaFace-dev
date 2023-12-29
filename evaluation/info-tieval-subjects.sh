@@ -2,11 +2,8 @@
 #                     1               2                 3                  4                       5                   6                    7                  8                       9 
 set -g subjects       cat_statue      clock             colorful_teapot    elephant                mug_skulls          physics_mug          red_teapot         round_bird              thin_bird
 set -g db_prompts     "cat figurine"  "alarm clock"     "colorful teapot"  "elephant figurine"     "face skull mug"    "brown formula mug"  "painted teapot"   "rustic bird figurine"  "abstract bird figurine"       
-set -g cls_tokens     figurine        clock             teapot             figurine                mug                 mug                  teapot             figurine                figurine
-# ada_prompts only differ from db_prompts in "stuffed toy" vs "stuffed animal". 
-# Because individual words, rather than the whole phrase in ada_prompts impact the final embeddings. 
-# "stuffed animal" is not an animal, so "stuffed toy" better suites AdaPrompt.
-# But a prompt phrase like "stuffed animal" can be understood as a whole phrase by SD/DreamBooth.
+#set -g cls_strings     figurine        clock             teapot             figurine                mug                 mug                  teapot             figurine                figurine
+set -g cls_strings    $db_prompts
 set -g ada_prompts    $db_prompts
 set -g ada_weights    "1 2"           "1 2"             "1 2"               "1 2"                          "1 1 2"            "1 1 2"              "1 2"              "1 1 2"                 "1 1 2" 
 set -g broad_classes  0               0                 0                   0                                 0                  0                    0                 0                       0

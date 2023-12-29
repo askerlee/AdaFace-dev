@@ -19,7 +19,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
-from ldm.util import instantiate_from_config, extend_clip_text_embedder
+from ldm.util import instantiate_from_config #, extend_clip_text_embedder
 import re
 from safetensors.torch import load_file as safetensors_load_file
 
@@ -191,7 +191,7 @@ def get_parser(**parser_kwargs):
         type=str, default="z",
         help="Placeholder string which will be used in prompts to represent the concept.")
     parser.add_argument("--background_string", 
-        type=str, default=None,
+        type=str, default="y",
         help="Background string which will be used in prompts to represent the background in training images.")
     parser.add_argument("--common_placeholder_prefix",
         type=str, default=None,
@@ -212,9 +212,9 @@ def get_parser(**parser_kwargs):
         type=float, 
         help="Weights of each token in init_words")
 
-    parser.add_argument("--cls_delta_token",
-        type=str, default=None,
-        help="A single word to be used in class-level prompts for delta loss")
+    #parser.add_argument("--cls_delta_string",
+    #    type=str, default=None,
+    #    help="A single word to be used in class-level prompts for delta loss")
     
     parser.add_argument("--num_vectors_per_token",
         type=int, default=1,
@@ -762,9 +762,9 @@ if __name__ == "__main__":
         # broad_class
         config.data.params.train.params.broad_class             = opt.broad_class
         config.data.params.validation.params.broad_class        = opt.broad_class
-        # cls_delta_token
-        config.data.params.train.params.cls_delta_token         = opt.cls_delta_token
-        config.data.params.validation.params.cls_delta_token    = opt.cls_delta_token
+        # cls_delta_string
+        config.data.params.train.params.cls_delta_string         = opt.init_words #opt.cls_delta_string
+        config.data.params.validation.params.cls_delta_string    = opt.init_words #opt.cls_delta_string
         # num_vectors_per_token
         config.data.params.train.params.num_vectors_per_token           = opt.num_vectors_per_token
         config.data.params.validation.params.num_vectors_per_token      = opt.num_vectors_per_token
@@ -801,13 +801,13 @@ if __name__ == "__main__":
             if opt.bg_init_words:
                 config.model.params.personalization_config.params.list_initializer_words.append(opt.bg_init_words)
                 config.model.params.personalization_config.params.list_initializer_weights.append([1.0] * len(re.split("\s+", opt.bg_init_words)))
-                config.data.params.train.params.cls_bg_delta_tokens      = re.split(r"\s+", opt.bg_init_words)
-                config.data.params.validation.params.cls_bg_delta_tokens = re.split(r"\s+", opt.bg_init_words)
+                config.data.params.train.params.cls_bg_delta_string      = opt.bg_init_words
+                config.data.params.validation.params.cls_bg_delta_string = opt.bg_init_words
             else:
                 config.model.params.personalization_config.params.list_initializer_words.append(None)
                 config.model.params.personalization_config.params.list_initializer_weights.append(None)
-                config.data.params.train.params.cls_bg_delta_tokens      = None
-                config.data.params.validation.params.cls_bg_delta_tokens = None
+                config.data.params.train.params.cls_bg_delta_string      = None
+                config.data.params.validation.params.cls_bg_delta_string = None
                 
         if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
             K = opt.use_conv_attn_kernel_size
@@ -865,7 +865,7 @@ if __name__ == "__main__":
         # model: ldm.models.diffusion.ddpm.LatentDiffusion, inherits from LightningModule.
 
         # Extend CLIP text embedder with a few cls tokens.
-        extend_clip_text_embedder(model.cond_stage_model, model.embedding_manager.cls_string2embeddings)
+        # extend_clip_text_embedder(model.cond_stage_model, model.embedding_manager.cls_string2embeddings)
 
         # trainer and callbacks
         trainer_kwargs = dict()

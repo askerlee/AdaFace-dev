@@ -888,6 +888,79 @@ def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divi
     patched_text_embedding = text_embedding * (1 - repl_mask) + repl_text_embedding * repl_mask
     return patched_text_embedding
 
+def merge_cls_delta_string_embs(tokenized_text, embedded_text, placeholder_indices_1st,
+                                  init_word_tokens_and_weights, is_training, MAX_SEARCH_SPAN=10):
+    init_word_tokens, init_word_weights = init_word_tokens_and_weights
+    device = tokenized_text.device
+    init_word_tokens  = init_word_tokens.to(device)
+    # init_word_weights: [M] -> [M, 1].
+    init_word_weights = init_word_weights.to(device).unsqueeze(-1)
+
+    # If initializer_words are not specified for this subject token, then in the class prompts,
+    # the cls delta token is randomly drawn from a predefined set of single-word tokens. 
+    # In this case, no need to combine cls delta string embs.
+    if init_word_tokens is None:
+        return embedded_text
+    
+    placeholder_indices_B = placeholder_indices_1st[0]
+    # The batch indices of the first token of each instance should be unique.
+    if len(placeholder_indices_B.unique()) != len(placeholder_indices_B):
+        breakpoint()
+
+    # All instances contain the subject token. No need to check and combine cls delta string embs.
+    if len(placeholder_indices_B) == tokenized_text.shape[0]:
+        return embedded_text
+
+    HALF_BS = tokenized_text.shape[0] // 2
+    # It should be a compositional distillation iteration or an inference iteration.
+    # In both cases, the first half of the batch should contain subject embeddings, 
+    # and the second half not.
+    if len(placeholder_indices_B) != HALF_BS \
+      or (placeholder_indices_B != torch.arange(0, HALF_BS, device=device)).any():
+        breakpoint()
+    
+    embedded_text2 = embedded_text.clone()
+
+    M = len(init_word_tokens)
+    num_cls_strings = 0
+
+    # Enumerate the instances in the second half of the batch, and see if there are 
+    # init_word_token sequences.
+    for i in range(HALF_BS, HALF_BS*2, 1):
+        tokenized_text_i = tokenized_text[i]
+        # The prompt index of the first class   token of the i-th             instance
+        # should be aligned with 
+        # the prompt index of the first subject token of the (i - HALF_BS)-th instance.
+        start_index_N = placeholder_indices_1st[1][i - HALF_BS]
+        # tokenized_text: [B, N]. tokenized_text_i: [N].
+        # embedded_text: [B, N, 768]. 
+        # B is 16 * actual batch size (for layerwise embeddings).
+        # Search within a span of MAX_SEARCH_SPAN tokens from start_index_N, 
+        # where the subject token starts at.
+        # MAX_SEARCH_SPAN should be the sum of all extra tokens
+        # (all excluding the first of the init word tokens; the first corresponds to the subject token).
+        # The default value 10 should be sufficient larger than this sum.
+        for j in range(MAX_SEARCH_SPAN):
+            start = start_index_N + j
+            if (tokenized_text_i[start:start+M] == init_word_tokens).all():
+                # init_word_tokens are found in the i-th prompt.
+                # cls_delta_string_embs: [M, 768].
+                cls_delta_string_embs = embedded_text[i, start:start+M]
+                # init_word_weights: [M, 1].
+                # cls_delta_string_mean_emb: [768].
+                cls_delta_string_mean_emb = (cls_delta_string_embs * init_word_weights).sum(dim=0)
+                # Set the first embedding of the cls delta tokens to the weighted sum of the cls_delta_string_embs.
+                embedded_text2[i, start] = cls_delta_string_mean_emb
+                # Set the rest of the embeddings to 0.
+                embedded_text2[i, start+1:start+M] = 0
+                num_cls_strings += 1
+                break
+
+    if num_cls_strings == 0 and is_training:
+        breakpoint()
+
+    return embedded_text2
+
 # text_embedding: [B, N, D]
 # If text_embedding is static embedding, then num_layers=16, 
 # we need to reshape it to [B0, num_layers, N, D].
@@ -1005,7 +1078,7 @@ def get_clip_tokens_for_string(tokenizer, string, force_single_token=False):
     if force_single_token:
         assert token_count == 1, f"String '{string}' maps to more than a single token. Please use another string"
 
-    # Remove start and end tokens.
+    # Remove the SOT and EOT tokens.
     return tokens[0, 1:1+token_count]
 
 def get_bert_tokens_for_string(tokenizer, string):

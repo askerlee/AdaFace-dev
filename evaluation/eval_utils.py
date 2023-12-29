@@ -329,7 +329,7 @@ def parse_subject_file(subject_file_path, method):
                     vars[var_name] = values
                     if var_name == "db_prompts" and method == "db":
                         vars['class_tokens'] = substrings
-                    elif var_name == "cls_tokens" and method != "db":
+                    elif var_name == "cls_strings" and method != "db":
                         vars['class_tokens'] = substrings
                 else:
                     breakpoint()

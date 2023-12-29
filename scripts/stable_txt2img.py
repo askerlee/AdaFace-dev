@@ -299,8 +299,8 @@ def parse_args():
     # --eval_blip
     parser.add_argument("--eval_blip", action="store_true",
                         help="Evaluate BLIP-diffusion models")
-    # cls_token
-    parser.add_argument("--cls_token", type=str, default=None,
+    # cls_string
+    parser.add_argument("--cls_string", type=str, default=None,
                         help="Subject class name. Only requires for --eval_blip")
     
     args = parser.parse_args()
@@ -424,8 +424,8 @@ def main(opt):
         from lavis.models import load_model_and_preprocess
         blip_model, vis_preprocess, txt_preprocess = load_model_and_preprocess("blip_diffusion", "base", device=f"cuda:{opt.gpu}", is_eval=True)
         blip_model.load_checkpoint(opt.ckpt)
-        cond_subject = opt.cls_token
-        tgt_subject  = opt.cls_token
+        cond_subject = opt.cls_string
+        tgt_subject  = opt.cls_string
         cond_subjects = [txt_preprocess["eval"](cond_subject)]
         tgt_subjects  = [txt_preprocess["eval"](tgt_subject)]
         negative_prompt = predefined_negative_prompt

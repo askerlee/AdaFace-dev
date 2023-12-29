@@ -109,7 +109,7 @@ per_img_token_list = [
 # So it's a good template object for computing the delta loss.
 # "person" is also used for animals, as their dynamic compositions are highly similar.
 # "mickey", "snoopy", "pikachu" are common cartoon characters.
-default_cls_delta_tokens = [ [ "bike", "person", "ball" ], 
+default_cls_delta_strings = [ [ "bike", "person", "ball" ], 
                              [ "person", "dog" ],
                              [ "mickey", "snoopy", "pikachu" ] ]
 
@@ -137,11 +137,11 @@ class PersonalizedBase(Dataset):
                  common_placeholder_prefix=None,   
                  # placeholder_prefix for compositional prompts. Could be a list of strings, separated by ",".
                  compos_placeholder_prefix=None,   
-                 # cls token used to compute the delta loss.
-                 cls_delta_token=None,  
-                 cls_uses_subj_init_words=True,
-                 # background tokens used to compute the delta loss.
-                 cls_bg_delta_tokens=None,
+                 # cls string used to compute the delta loss.
+                 cls_delta_string=None,  
+                 #cls_uses_subj_init_words=False,
+                 # background strings used to compute the delta loss.
+                 cls_bg_delta_string=None,
                 # num_vectors_per_token: how many vectors in each layer are allocated to model 
                 # the subject. If num_vectors_per_token > 1, pad with "," in the prompts to leave
                 # room for those extra vectors.
@@ -213,19 +213,19 @@ class PersonalizedBase(Dataset):
         else:
             self.compos_placeholder_prefixes   = None
 
-        # z -> z0. 
-        # z0 will be mapped to the weighted average of the initializer word embeddings of z.
-        if cls_uses_subj_init_words:
-            cls_delta_token = self.placeholder_string + '0'
+        ## z -> z0. 
+        ## z0 will be mapped to the weighted average of the initializer word embeddings of z.
+        #if cls_uses_subj_init_words:
+        #    cls_delta_string = self.placeholder_string + '0'
 
-        if cls_delta_token is None:
+        if cls_delta_string is None:
             if verbose:
-                print("WARNING: default cls_delta_tokens are used!")
-            self.cls_delta_tokens = default_cls_delta_tokens[self.broad_class]
+                print("WARNING: default cls_delta_strings are used!")
+            self.cls_delta_strings = default_cls_delta_strings[self.broad_class]
         else:
-            self.cls_delta_tokens = [ cls_delta_token ]
+            self.cls_delta_strings = [ cls_delta_string ]
 
-        self.cls_bg_delta_tokens = cls_bg_delta_tokens
+        self.cls_bg_delta_string = cls_bg_delta_string
 
         self.num_vectors_per_token    = num_vectors_per_token
         self.num_vectors_per_bg_token = num_vectors_per_bg_token
@@ -233,10 +233,10 @@ class PersonalizedBase(Dataset):
 
         self.size = size
         interpolation_scheme = "nearest"
-        self.interpolation = {"nearest":  PIL.Image.NEAREST,
-                              "bilinear": PIL.Image.BILINEAR,
-                              "bicubic":  PIL.Image.BICUBIC,
-                              "lanczos":  PIL.Image.LANCZOS,
+        self.interpolation = { "nearest":  PIL.Image.NEAREST,
+                               "bilinear": PIL.Image.BILINEAR,
+                               "bicubic":  PIL.Image.BICUBIC,
+                               "lanczos":  PIL.Image.LANCZOS,
                               }[interpolation_scheme]
         
         if self.is_training:
@@ -529,7 +529,7 @@ class PersonalizedBase(Dataset):
             # cls_prompt_single, cls_prompt_comps, which we don't need to change, as they are 
             # for compositional distillation.
             wds_comp_extra      = ", in front of " + bg_prompt
-            wds_cls_comp_extra  = " " + self.cls_delta_token + wds_comp_extra
+            wds_cls_comp_extra  = " " + self.cls_delta_string + wds_comp_extra
             example["wds_comp_extra"]       = wds_comp_extra
             example["wds_cls_comp_extra"]   = wds_cls_comp_extra
             example["wds_caption"]          = example["caption"]    + wds_comp_extra
@@ -591,11 +591,10 @@ class PersonalizedBase(Dataset):
         placeholder_string = self.placeholder_string
 
         background_string  = self.background_string
-        self.cls_delta_token = random.choice(self.cls_delta_tokens)
-        # If background_string is None, then cls_bg_delta_tokens should be None as well, 
-        # and cls_bg_delta_token is None.
-        cls_bg_delta_token = random.choice(self.cls_bg_delta_tokens) if self.cls_bg_delta_tokens is not None \
-                               else self.background_string
+        self.cls_delta_string = random.choice(self.cls_delta_strings)
+        # Use cls_bg_delta_string as the cls bg string, unless it's None, 
+        # then use background_string (for the subject prompts) as the cls bg string.
+        cls_bg_delta_string = self.cls_bg_delta_string or self.background_string
 
         # If num_vectors_per_token == 3:
         # "z"    => "z, , "
@@ -603,15 +602,15 @@ class PersonalizedBase(Dataset):
         # Need to leave a space between multiple ",,", otherwise they are treated as one token.
         if self.num_vectors_per_token > 1:
             placeholder_string      += ", " * (self.num_vectors_per_token - 1)
-            self.cls_delta_token    += ", " * (self.num_vectors_per_token - 1)
+            self.cls_delta_string   += ", " * (self.num_vectors_per_token - 1)
         if self.num_vectors_per_bg_token > 1 and background_string is not None:
             background_string       += ", " * (self.num_vectors_per_bg_token - 1)
-            cls_bg_delta_token      += ", " * (self.num_vectors_per_bg_token - 1)
+            cls_bg_delta_string     += ", " * (self.num_vectors_per_bg_token - 1)
 
         if self.common_placeholder_prefixes is not None:
             common_placeholder_prefix = random.choice(self.common_placeholder_prefixes)
             placeholder_string      = common_placeholder_prefix + " " + placeholder_string
-            self.cls_delta_token    = common_placeholder_prefix + " " + self.cls_delta_token
+            self.cls_delta_string    = common_placeholder_prefix + " " + self.cls_delta_string
         # common_placeholder_prefixes are specified for red_cartoon.
         # compos_placeholder_prefixes are specified for fixhand.
         # They usually won't be used together. 
@@ -620,10 +619,10 @@ class PersonalizedBase(Dataset):
         if self.compos_placeholder_prefixes is not None:
             compos_placeholder_prefix = random.choice(self.compos_placeholder_prefixes)
             compos_placeholder_string = compos_placeholder_prefix + " " + placeholder_string
-            compos_cls_delta_token    = compos_placeholder_prefix + " " + self.cls_delta_token
+            compos_cls_delta_string    = compos_placeholder_prefix + " " + self.cls_delta_string
         else:
             compos_placeholder_string = placeholder_string
-            compos_cls_delta_token    = self.cls_delta_token
+            compos_cls_delta_string    = self.cls_delta_string
 
         template = random.choice(imagenet_templates_small)
 
@@ -631,13 +630,13 @@ class PersonalizedBase(Dataset):
         cls_prompt_single   = template
 
         bg_suffix = " with background {}".format(background_string) if background_string is not None else ""
-        # If background_string is None, then cls_bg_delta_token is None as well, thus cls_bg_suffix is "".
-        cls_bg_suffix = " with background {}".format(cls_bg_delta_token) if cls_bg_delta_token is not None else ""
+        # If background_string is None, then cls_bg_delta_string is None as well, thus cls_bg_suffix is "".
+        cls_bg_suffix = " with background {}".format(cls_bg_delta_string) if cls_bg_delta_string is not None else ""
         # bug_suffix: " with background y". cls_bg_suffix: " with background grass/rock".
         placeholder_string_with_bg          = placeholder_string        + bg_suffix
-        cls_delta_token_with_bg             = self.cls_delta_token      + cls_bg_suffix
+        cls_delta_string_with_bg             = self.cls_delta_string      + cls_bg_suffix
         compos_placeholder_string_with_bg   = compos_placeholder_string + bg_suffix
-        compos_cls_delta_token_with_bg      = compos_cls_delta_token    + cls_bg_suffix
+        compos_cls_delta_string_with_bg      = compos_cls_delta_string    + cls_bg_suffix
 
         # "face portrait" trick for humans/animals.
         if self.broad_class == 1:
@@ -673,39 +672,39 @@ class PersonalizedBase(Dataset):
         # But subj_prompt_single must align with cls_prompt_single, subj_prompt_comp, cls_prompt_comp.
         # So they are different when compos_placeholder_prefix is specified.
         # Only "caption" and "caption_bg" are formatted with placeholder_string and placeholder_string_with_bg.
-        # Other 4 types of prompts are formatted with compos_placeholder_string and compos_cls_delta_token.
+        # Other 4 types of prompts are formatted with compos_placeholder_string and compos_cls_delta_string.
         example["caption"]              = subj_prompt_single.format(placeholder_string)
         example["caption_bg"]           = subj_prompt_single.format(placeholder_string_with_bg)
 
         example["subj_prompt_single"]   = subj_prompt_single.format(compos_placeholder_string)
-        example["cls_prompt_single"]    = cls_prompt_single.format(compos_cls_delta_token)
+        example["cls_prompt_single"]    = cls_prompt_single.format(compos_cls_delta_string)
         # Will be split by "|" in the ddpm trainer.
         subj_prompt_comp = "|".join([ subj_prompt_comp.format(compos_placeholder_string) for subj_prompt_comp in subj_prompt_comps])
-        cls_prompt_comp  = "|".join([ cls_prompt_comp.format(compos_cls_delta_token)     for cls_prompt_comp  in cls_prompt_comps])
+        cls_prompt_comp  = "|".join([ cls_prompt_comp.format(compos_cls_delta_string)     for cls_prompt_comp  in cls_prompt_comps])
         example["subj_prompt_comp"]     = subj_prompt_comp
         example["cls_prompt_comp"]      = cls_prompt_comp
 
         if bg_suffix:
             example["subj_prompt_single_bg"] = subj_prompt_single.format(compos_placeholder_string_with_bg)
-            example["cls_prompt_single_bg"]  = cls_prompt_single.format(compos_cls_delta_token_with_bg)
+            example["cls_prompt_single_bg"]  = cls_prompt_single.format(compos_cls_delta_string_with_bg)
             # *_comp_bg prompts are for static delta loss on training images.
             example["subj_prompt_comp_bg"]   = "|".join([ subj_prompt_comp.format(compos_placeholder_string_with_bg) for subj_prompt_comp in subj_prompt_comps])
-            example["cls_prompt_comp_bg"]    = "|".join([ cls_prompt_comp.format(compos_cls_delta_token_with_bg)     for cls_prompt_comp  in cls_prompt_comps])
+            example["cls_prompt_comp_bg"]    = "|".join([ cls_prompt_comp.format(compos_cls_delta_string_with_bg)     for cls_prompt_comp  in cls_prompt_comps])
 
         if self.broad_class == 1:
             # Delta loss requires subj_prompt_single/cls_prompt_single to be token-wise aligned
             # with subj_prompt_comp/cls_prompt_comp, so we need to specify them in the dataloader as well.
             example["subj_prompt_single_fp"] = subj_prompt_single_fp.format(compos_placeholder_string)
-            example["cls_prompt_single_fp"]  = cls_prompt_single_fp.format(compos_cls_delta_token)
+            example["cls_prompt_single_fp"]  = cls_prompt_single_fp.format(compos_cls_delta_string)
             example["subj_prompt_comp_fp"]   = "|".join([ subj_prompt_comp_fp.format(compos_placeholder_string) for subj_prompt_comp_fp in subj_prompt_comps_fp]) 
-            example["cls_prompt_comp_fp"]    = "|".join([ cls_prompt_comp_fp.format(compos_cls_delta_token)     for cls_prompt_comp_fp  in cls_prompt_comps_fp])
+            example["cls_prompt_comp_fp"]    = "|".join([ cls_prompt_comp_fp.format(compos_cls_delta_string)     for cls_prompt_comp_fp  in cls_prompt_comps_fp])
 
             if bg_suffix:
                 example["subj_prompt_single_fp_bg"] = subj_prompt_single_fp.format(compos_placeholder_string_with_bg)
-                example["cls_prompt_single_fp_bg"]  = cls_prompt_single_fp.format(compos_cls_delta_token_with_bg)
+                example["cls_prompt_single_fp_bg"]  = cls_prompt_single_fp.format(compos_cls_delta_string_with_bg)
                 # *_comp_bg prompts are for static delta loss on training images.
                 example["subj_prompt_comp_fp_bg"]   = "|".join([ subj_prompt_comp_fp.format(compos_placeholder_string_with_bg) for subj_prompt_comp_fp in subj_prompt_comps_fp])
-                example["cls_prompt_comp_fp_bg"]    = "|".join([ cls_prompt_comp_fp.format(compos_cls_delta_token_with_bg)     for cls_prompt_comp_fp  in cls_prompt_comps_fp])
+                example["cls_prompt_comp_fp_bg"]    = "|".join([ cls_prompt_comp_fp.format(compos_cls_delta_string_with_bg)     for cls_prompt_comp_fp  in cls_prompt_comps_fp])
 
     def repl_bg_as_wbg(self, prompt):
         if self.wds_background_string is None:

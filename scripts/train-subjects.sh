@@ -26,18 +26,18 @@ end
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_token_as_delta' 'use_conv_attn_kernel_size=' 'eval' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_string_as_delta' 'use_conv_attn_kernel_size=' 'eval' -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] [--use_conv_attn_kernel_size K] (ada|ti|db) [low-high] [EXTRA_ARGS]"
-    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_string_as_delta] [--eval] [--use_conv_attn_kernel_size K] (ada|ti|db) [low-high] [EXTRA_ARGS]"
+    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_string_as_delta ada 1 25"
     exit 1
 end
 
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'static-layerwise' ]; or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_token_as_delta] [--eval] [--use_conv_attn_kernel_size K] (ada|ti|db) [|low-high] [EXTRA_ARGS]"
-    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_token_as_delta ada 1 25"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_string_as_delta] [--eval] [--use_conv_attn_kernel_size K] (ada|ti|db) [|low-high] [EXTRA_ARGS]"
+    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_string_as_delta ada 1 25"
     exit 1
 end
 
@@ -127,14 +127,14 @@ for i in $indices
     set subject     $subjects[$i]
     set ada_prompt  $ada_prompts[$i]
     set ada_weight  (string split " " $ada_weights[$i])
-    # If cls_tokens is specified in subjfile, cls_token = cls_tokens[$i]. 
-    # Otherwise, cls_token is the last word of ada_prompt. 
+    # If cls_strings is specified in subjfile, cls_string = cls_strings[$i]. 
+    # Otherwise, cls_string is the last word of ada_prompt. 
     # For non-human cases "stuffed animal", the last word of ada_prompt is "animal", which is incorrecct. 
-    # So we need an individual cls_tokens for non-human subjects. 
-    # For "stuffed animal", the corresponding cls_token is "toy".
-    # For humans, this is optional. If not specified, then cls_token = last word of ada_prompt.
-    # Only use cls_token as delta token when --cls_token_as_delta is specified.
-    set -q cls_tokens; and set cls_token $cls_tokens[$i]; or set cls_token (string split " " $ada_prompt)[-1]
+    # So we need an individual cls_strings for non-human subjects. 
+    # For "stuffed animal", the corresponding cls_string is "toy".
+    # For humans, this is optional. If not specified, then cls_string = last word of ada_prompt.
+    # Only use cls_string as delta token when --cls_string_as_delta is specified.
+    set -q cls_strings; and set cls_string $cls_strings[$i]; or set cls_string (string split " " $ada_prompt)[-1]
     set db_prompt0 "$db_prompts[$i]"
     set db_prompt  "$db_prompt0$db_suffix"
     set -q bg_init_words; and set bg_init_word $bg_init_words[$i]; or set bg_init_word ""
@@ -144,7 +144,7 @@ for i in $indices
             set init_words $ada_prompt
             set init_word_weights $ada_weight
         else
-            set init_words $cls_token
+            set init_words $cls_string
             set init_word_weights 1
         end
 
@@ -171,10 +171,10 @@ for i in $indices
             end
         end
 
-        # cls_token: the class token used in delta loss computation.
-        # If --cls_token_as_delta, and cls_tokens is provided in the subjfile, then use cls_token. 
-        # Otherwise use the default cls_token "person".
-        set -q _flag_cls_token_as_delta; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --cls_delta_token $cls_token
+        # cls_string: the class token used in delta loss computation.
+        # If --cls_string_as_delta, and cls_strings is provided in the subjfile, then use cls_string. 
+        # Otherwise use the default cls_string "person".
+        set -q _flag_cls_string_as_delta; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --cls_delta_string $cls_string
         # set -q use_fp_trick; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --use_fp_trick $use_fp_trick[$i]
         # If $prompt_mix_max[$i] is not -1 (default [0.1, 0.3]), then prompt_mix_range is 
         # ($prompt_mix_min = $prompt_mix_max / 3, $prompt_mix_max). Probably it will be [0.2, 0.6].
