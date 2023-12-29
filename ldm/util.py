@@ -951,10 +951,12 @@ def merge_cls_delta_string_embs(tokenized_text, embedded_text, placeholder_indic
                 cls_delta_string_mean_emb = (cls_delta_string_embs * init_word_weights).sum(dim=0)
                 # Set the first embedding of the cls delta tokens to the weighted sum of the cls_delta_string_embs.
                 embedded_text2[i, start] = cls_delta_string_mean_emb
+                # NOTE: We need align the cls delta tokens with the subject tokens in the first half of the batch.
                 # Move the embeddings (except the EOS) after the last cls delta token to the left,
                 # overwriting the rest M-1 cls delta embeddings.
                 # embedded_text2[i, -M:0] are kept unchanged.
-                # This is to align the cls delta tokens with the subject tokens in the first half of the batch.
+                # As a result, a few of the padding tokens at the end of the prompt will be duplicated.
+                # But this should have minimal influence on the model performance.
                 embedded_text2[i, start+1:-M] = embedded_text[i, start+M:-1]
                 num_cls_strings += 1
                 break
