@@ -1213,7 +1213,7 @@ class EmbeddingManager(nn.Module):
             # Anyway, we need to check whether the cls_delta_string
             # occurs in the prompts without the placeholder token. If so, we need to combine 
             # their embeddings to the first embedding, and overwrite (delete) the 2nd to the last embeddings.
-            if REAL_OCCURS_IN_BATCH < B:
+            if REAL_OCCURS_IN_BATCH < B and self.training:
                 embedded_text = merge_cls_delta_string_embs(tokenized_text, embedded_text, placeholder_indices_1st,
                                                               self.placeholder_token_to_init_word_tokens[placeholder_token],
                                                               self.training, self.CLS_DELTA_STRING_MAX_SEARCH_SPAN)
@@ -1315,7 +1315,7 @@ class EmbeddingManager(nn.Module):
             # Anyway, we need to check whether the cls_delta_string
             # occurs in the prompts without the placeholder token. If so, we need to combine 
             # their embeddings to the first embedding, and overwrite (delete) the 2nd to the last embeddings.
-            if REAL_OCCURS_IN_BATCH < BS:
+            if REAL_OCCURS_IN_BATCH < BS and self.training:
                 embedded_text = merge_cls_delta_string_embs(tokenized_text, embedded_text, placeholder_indices_1st,
                                                             self.placeholder_token_to_init_word_tokens[placeholder_token],
                                                             self.training, self.CLS_DELTA_STRING_MAX_SEARCH_SPAN)
