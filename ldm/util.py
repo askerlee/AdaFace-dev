@@ -944,24 +944,6 @@ def scan_cls_delta_strings(tokenized_text, embedded_text, placeholder_token, pla
                 cls_delta_string_indices.append((batch_i, start_N, M, placeholder_token))
                 break
 
-                # cls_delta_tokens are found in the i-th prompt.
-                # cls_delta_string_embs: [M, 768].
-                cls_delta_string_embs = embedded_text[batch_i, start_N:start_N+M]
-                # init_word_weights: [M, 1].
-                # cls_delta_string_mean_emb: [768].
-                cls_delta_string_mean_emb = (cls_delta_string_embs * init_word_weights).sum(dim=0)
-                # Set the first embedding of the cls delta tokens to the weighted sum of the cls_delta_string_embs.
-                embedded_text2[batch_i, start_N] = cls_delta_string_mean_emb
-                # NOTE: We need align the cls delta tokens with the subject tokens in the first half of the batch.
-                # Move the embeddings (except the EOS) after the last cls delta token to the left,
-                # overwriting the rest M-1 cls delta embeddings.
-                # embedded_text2[batch_i, -M:0] are kept unchanged.
-                # As a result, a few of the padding tokens at the end of the prompt will be duplicated.
-                # But this should have minimal influence on the model performance.
-                embedded_text2[batch_i, start_N+1:-M] = embedded_text[batch_i, start_N+M:-1]
-                num_cls_strings += 1
-                break
-
     return cls_delta_string_indices
 
 def merge_cls_token_embeddings(prompt_embedding, 
