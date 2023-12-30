@@ -592,9 +592,9 @@ class PersonalizedBase(Dataset):
 
         background_string  = self.background_string
         self.cls_delta_string = random.choice(self.cls_delta_strings)
-        # Use cls_bg_delta_string as the cls bg string, unless it's None, 
-        # then use background_string (for the subject prompts) as the cls bg string.
-        cls_bg_delta_string = self.cls_bg_delta_string or self.background_string
+        # If background_string is specified, self.cls_bg_delta_string should always be specified 
+        # in the commmand line (passed to main.py).
+        cls_bg_delta_string = self.cls_bg_delta_string
 
         # If num_vectors_per_token == 3:
         # "z"    => "z, , "
@@ -634,9 +634,8 @@ class PersonalizedBase(Dataset):
         cls_bg_suffix = " with background {}".format(cls_bg_delta_string) if cls_bg_delta_string is not None else ""
         # bug_suffix: " with background y". cls_bg_suffix: " with background grass/rock".
         placeholder_string_with_bg          = placeholder_string        + bg_suffix
-        cls_delta_string_with_bg             = self.cls_delta_string      + cls_bg_suffix
         compos_placeholder_string_with_bg   = compos_placeholder_string + bg_suffix
-        compos_cls_delta_string_with_bg      = compos_cls_delta_string    + cls_bg_suffix
+        compos_cls_delta_string_with_bg     = compos_cls_delta_string   + cls_bg_suffix
 
         # "face portrait" trick for humans/animals.
         if self.broad_class == 1:

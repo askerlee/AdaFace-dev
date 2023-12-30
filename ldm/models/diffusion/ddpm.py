@@ -37,7 +37,8 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
-                       gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, clamp_prompt_embedding
+                       gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, clamp_prompt_embedding, \
+                       merge_cls_token_embeddings
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -878,7 +879,10 @@ class LatentDiffusion(DDPM):
                 self.bg_emb_extra_scale = anneal_value(self.training_percent, 1, value_range=(1, 1.5))
                 static_prompt_embedding = fix_emb_scales(static_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
                                                          num_layers=self.N_LAYERS, extra_scale=self.bg_emb_extra_scale)
-
+                static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
+                                                                     self.embedding_manager.placeholders_cls_delta_string_indices,
+                                                                     self.embedding_manager.placeholder_to_cls_delta_weights)
+                
                 extra_info = { 
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
                                 'use_ada_context':               self.use_ada_embedding,
@@ -945,7 +949,10 @@ class LatentDiffusion(DDPM):
         # so that they will absorb more high-freq noisy features.
         ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
                                               extra_scale=self.bg_emb_extra_scale)
-
+        ada_prompt_embedding = merge_cls_token_embeddings(ada_prompt_embedding, 
+                                                          self.embedding_manager.placeholders_cls_delta_string_indices,
+                                                          self.embedding_manager.placeholder_to_cls_delta_weights)
+                
         ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
 
         # Cache the computed ada embedding of the current layer for delta loss computation.

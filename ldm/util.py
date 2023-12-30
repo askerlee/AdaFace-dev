@@ -888,20 +888,18 @@ def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divi
     patched_text_embedding = text_embedding * (1 - repl_mask) + repl_text_embedding * repl_mask
     return patched_text_embedding
 
-def merge_cls_delta_string_embs(tokenized_text, embedded_text, placeholder_indices_1st,
-                                init_word_tokens_and_weights, is_training, MAX_SEARCH_SPAN=10):
-    init_word_tokens, init_word_weights = init_word_tokens_and_weights
-    device = tokenized_text.device
-    init_word_tokens  = init_word_tokens.to(device)
-    # init_word_weights: [M] -> [M, 1].
-    init_word_weights = init_word_weights.to(device).unsqueeze(-1)
+def scan_cls_delta_strings(tokenized_text, embedded_text, placeholder_token, placeholder_indices_1st,
+                           cls_delta_tokens, MAX_SEARCH_SPAN=10):
 
     # If initializer_words are not specified for this subject token, then in the class prompts,
     # the cls delta token is randomly drawn from a predefined set of single-word tokens. 
     # In this case, no need to combine cls delta string embs.
-    if init_word_tokens is None:
-        return embedded_text
-    
+    if cls_delta_tokens is None:
+        return None
+
+    device = tokenized_text.device
+    cls_delta_tokens  = cls_delta_tokens.to(device)
+
     placeholder_indices_B = placeholder_indices_1st[0]
     # The batch indices of the first token of each instance should be unique.
     if len(placeholder_indices_B.unique()) != len(placeholder_indices_B):
@@ -909,31 +907,31 @@ def merge_cls_delta_string_embs(tokenized_text, embedded_text, placeholder_indic
 
     # All instances contain the subject token. No need to check and combine cls delta string embs.
     if len(placeholder_indices_B) == tokenized_text.shape[0]:
-        return embedded_text
+        return None
 
-    HALF_BS = tokenized_text.shape[0] // 2
+    BS      = tokenized_text.shape[0]
+    HALF_BS = BS // 2
     # It should be a compositional distillation iteration or an inference iteration.
     # In both cases, the first half of the batch should contain subject embeddings, 
     # and the second half not.
     if len(placeholder_indices_B) != HALF_BS \
       or (placeholder_indices_B != torch.arange(0, HALF_BS, device=device)).any():
         breakpoint()
-    
-    embedded_text2 = embedded_text.clone()
 
-    M = len(init_word_tokens)
-    num_cls_strings = 0
+    M = len(cls_delta_tokens)
+    num_cls_delta_strings = 0
+    cls_delta_string_indices = []
 
     # Enumerate the instances in the second half of the batch, and see if there are 
     # init_word_token sequences.
-    for i in range(HALF_BS, HALF_BS*2, 1):
-        tokenized_text_i = tokenized_text[i]
+    for batch_i in range(HALF_BS, BS):
+        tokenized_text_i = tokenized_text[batch_i]
         # The prompt index of the first class   token of the i-th             instance
         # should be aligned with 
         # the prompt index of the first subject token of the (i - HALF_BS)-th instance.
-        start_index_N = placeholder_indices_1st[1][i - HALF_BS]
+        start_index_N = placeholder_indices_1st[1][batch_i - HALF_BS]
         # tokenized_text: [B, N]. tokenized_text_i: [N].
-        # embedded_text: [B, N, 768]. 
+        # embedded_text:  [B, N, 768]. 
         # B is 16 * actual batch size (for layerwise embeddings).
         # Search within a span of MAX_SEARCH_SPAN tokens from start_index_N, 
         # where the subject token starts at.
@@ -941,30 +939,64 @@ def merge_cls_delta_string_embs(tokenized_text, embedded_text, placeholder_indic
         # (all excluding the first of the init word tokens; the first corresponds to the subject token).
         # The default value 10 should be sufficient larger than this sum.
         for j in range(MAX_SEARCH_SPAN+1):
-            start = start_index_N + j
-            if (tokenized_text_i[start:start+M] == init_word_tokens).all():
-                # init_word_tokens are found in the i-th prompt.
+            start_N = start_index_N + j
+            if (tokenized_text_i[start_N:start_N+M] == cls_delta_tokens).all():
+                cls_delta_string_indices.append((batch_i, start_N, M, placeholder_token))
+                break
+
+                # cls_delta_tokens are found in the i-th prompt.
                 # cls_delta_string_embs: [M, 768].
-                cls_delta_string_embs = embedded_text[i, start:start+M]
+                cls_delta_string_embs = embedded_text[batch_i, start_N:start_N+M]
                 # init_word_weights: [M, 1].
                 # cls_delta_string_mean_emb: [768].
                 cls_delta_string_mean_emb = (cls_delta_string_embs * init_word_weights).sum(dim=0)
                 # Set the first embedding of the cls delta tokens to the weighted sum of the cls_delta_string_embs.
-                embedded_text2[i, start] = cls_delta_string_mean_emb
+                embedded_text2[batch_i, start_N] = cls_delta_string_mean_emb
                 # NOTE: We need align the cls delta tokens with the subject tokens in the first half of the batch.
                 # Move the embeddings (except the EOS) after the last cls delta token to the left,
                 # overwriting the rest M-1 cls delta embeddings.
-                # embedded_text2[i, -M:0] are kept unchanged.
+                # embedded_text2[batch_i, -M:0] are kept unchanged.
                 # As a result, a few of the padding tokens at the end of the prompt will be duplicated.
                 # But this should have minimal influence on the model performance.
-                embedded_text2[i, start+1:-M] = embedded_text[i, start+M:-1]
+                embedded_text2[batch_i, start_N+1:-M] = embedded_text[batch_i, start_N+M:-1]
                 num_cls_strings += 1
                 break
 
-    if num_cls_strings == 0 and is_training:
-        breakpoint()
+    return cls_delta_string_indices
 
-    return embedded_text2
+def merge_cls_token_embeddings(prompt_embedding, 
+                               placeholders_cls_delta_string_indices,
+                               placeholder_to_cls_delta_weights):
+    if placeholders_cls_delta_string_indices is None or len(placeholders_cls_delta_string_indices) == 0:
+        return prompt_embedding
+
+    device = prompt_embedding.device
+    # placeholders_cls_delta_string_indices is a list of tuples, each tuple is
+    # (batch_i, start_N, num_cls_delta_tokens, placeholder_token).
+    # Sort first by batch index, then by start index. So that the index offsets within each instance will
+    # add up correctly as we process all cls_delta_string_indices tuples within the current instance.
+    placeholders_cls_delta_string_indices = sorted(placeholders_cls_delta_string_indices, key=lambda x: (x[0], x[1]))
+    batch_i2offset = {}
+
+    prompt_embedding2 = prompt_embedding.clone()
+
+    for batch_i, start_index_N, M, placeholder_token in placeholders_cls_delta_string_indices:
+        i_off = batch_i2offset.get(batch_i, 0)
+        # cls_delta_embeddings: [M, 768].
+        cls_delta_embeddings = prompt_embedding[batch_i, start_index_N:start_index_N+M]
+        # cls_delta_weights: [M] -> [M, 1].
+        cls_delta_weights    = placeholder_to_cls_delta_weights[placeholder_token].unsqueeze(1).to(device)
+        # avg_cls_delta_embedding: [768].
+        avg_cls_delta_embedding = (cls_delta_embeddings * cls_delta_weights).sum(dim=0)
+        prompt_embedding2[batch_i, start_index_N-i_off] = avg_cls_delta_embedding
+        # NOTE: Our purpose is to combine all the cls delta tokens to 1 token, so that
+        # it will align with the subject tokens in the first half of the batch.
+        # To do so, we move the embeddings (except the EOS) after the last cls delta token to the left,
+        # overwriting the rest M-1 cls delta embeddings.
+        prompt_embedding2[batch_i, start_index_N+1-i_off:-(M+i_off)] = prompt_embedding[batch_i, start_index_N+M:-1]
+        batch_i2offset[batch_i] = i_off + M - 1
+
+    return prompt_embedding2
 
 # text_embedding: [B, N, D]
 # If text_embedding is static embedding, then num_layers=16, 

@@ -205,16 +205,16 @@ def get_parser(**parser_kwargs):
         help="Words used to initialize placeholder embedding")
 
     parser.add_argument("--bg_init_words", 
-        type=str, default=None,
+        type=str, default="unknown",    # 'unknown' should be a wild-card word to match various actual background patterns.
         help="Words used to initialize background embedding")
 
     parser.add_argument("--init_word_weights", nargs="*", 
         type=float, 
         help="Weights of each token in init_words")
 
-    #parser.add_argument("--cls_delta_string",
-    #    type=str, default=None,
-    #    help="A single word to be used in class-level prompts for delta loss")
+    parser.add_argument("--cls_delta_string",
+        type=str, default=None,
+        help="One or more word tso be used in class-level prompts for delta loss")
     
     parser.add_argument("--num_vectors_per_token",
         type=int, default=1,
@@ -762,9 +762,12 @@ if __name__ == "__main__":
         # broad_class
         config.data.params.train.params.broad_class             = opt.broad_class
         config.data.params.validation.params.broad_class        = opt.broad_class
-        # cls_delta_string
-        config.data.params.train.params.cls_delta_string         = opt.init_words #opt.cls_delta_string
-        config.data.params.validation.params.cls_delta_string    = opt.init_words #opt.cls_delta_string
+        # If cls_delta_string is specified, use it for the cls_delta_string of the datasets. 
+        # Otherwise, use init_words as the cls_delta_string of the datasets.
+        config.data.params.train.params.cls_delta_string         = opt.cls_delta_string or opt.init_words
+        config.data.params.validation.params.cls_delta_string    = opt.cls_delta_string or opt.init_words
+        config.model.params.personalization_config.params.list_cls_delta_strings[0] = config.data.params.train.params.cls_delta_string
+
         # num_vectors_per_token
         config.data.params.train.params.num_vectors_per_token           = opt.num_vectors_per_token
         config.data.params.validation.params.num_vectors_per_token      = opt.num_vectors_per_token
@@ -798,17 +801,12 @@ if __name__ == "__main__":
             config.data.params.validation.params.background_string      = opt.background_string
             config.data.params.validation.params.wds_background_string  = opt.wds_background_string
 
-            if opt.bg_init_words:
-                config.model.params.personalization_config.params.list_initializer_words.append(opt.bg_init_words)
-                config.model.params.personalization_config.params.list_initializer_weights.append([1.0] * len(re.split("\s+", opt.bg_init_words)))
-                config.data.params.train.params.cls_bg_delta_string      = opt.bg_init_words
-                config.data.params.validation.params.cls_bg_delta_string = opt.bg_init_words
-            else:
-                config.model.params.personalization_config.params.list_initializer_words.append(None)
-                config.model.params.personalization_config.params.list_initializer_weights.append(None)
-                config.data.params.train.params.cls_bg_delta_string      = None
-                config.data.params.validation.params.cls_bg_delta_string = None
-                
+            config.model.params.personalization_config.params.list_initializer_words.append(opt.bg_init_words)
+            config.model.params.personalization_config.params.list_initializer_weights.append([1.0] * len(re.split("\s+", opt.bg_init_words)))            
+            config.data.params.train.params.cls_bg_delta_string      = opt.bg_init_words
+            config.data.params.validation.params.cls_bg_delta_string = opt.bg_init_words
+            config.model.params.personalization_config.params.list_cls_delta_strings.append(opt.bg_init_words)
+
         if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
             K = opt.use_conv_attn_kernel_size
             assert opt.num_vectors_per_token >= K * K, \
