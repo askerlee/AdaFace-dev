@@ -1004,9 +1004,10 @@ class EmbeddingManager(nn.Module):
                 calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
                                           initializer_words, initializer_weights)
 
+            cls_delta_string = self.list_cls_delta_strings[placeholder_idx] if self.list_cls_delta_strings is not None else None
             cls_delta_tokens, cls_delta_weights, _, _ = \
                 calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
-                                          self.list_cls_delta_strings[placeholder_idx], None)
+                                          cls_delta_string, None)
             
             # If initializer_words are used as cls_delta_tokens, then use the corresponding initializer_weights as cls_delta_weights.
             # Otherwise, cls_delta_weights are uniform, i.e., all are 1/M.
