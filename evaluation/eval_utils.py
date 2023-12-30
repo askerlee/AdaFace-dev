@@ -326,11 +326,16 @@ def parse_subject_file(subject_file_path, method):
                     else:
                         values = substrings
 
+                    if len(values) == 1 and values[0].startswith("$"):
+                        # e.g., set -g ada_prompts  $db_prompts
+                        values = vars[values[0][1:]]
+
                     vars[var_name] = values
+
                     if var_name == "db_prompts" and method == "db":
-                        vars['class_tokens'] = substrings
+                        vars['class_tokens'] = values
                     elif var_name == "cls_strings" and method != "db":
-                        vars['class_tokens'] = substrings
+                        vars['class_tokens'] = values
                 else:
                     breakpoint()
 
