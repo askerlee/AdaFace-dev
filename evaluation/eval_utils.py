@@ -304,7 +304,7 @@ def split_string(input_string):
     substrings = [ s.strip('"') for s in substrings ]
     return substrings
 
-# The most important variables: "subjects", "class_tokens", "broad_classes", "sel_set"
+# The most important variables: "subjects", "class_names", "broad_classes", "sel_set"
 def parse_subject_file(subject_file_path, method):
     vars = {}
 
@@ -332,14 +332,16 @@ def parse_subject_file(subject_file_path, method):
 
                     vars[var_name] = values
 
+                    '''
                     if var_name == "db_prompts" and method == "db":
                         vars['class_tokens'] = values
                     elif var_name == "cls_strings" and method != "db":
                         vars['class_tokens'] = values
+                    '''
                 else:
                     breakpoint()
 
-    assert "subjects" in vars and "class_tokens" in vars
+    assert "subjects" in vars and "class_names" in vars
     if 'broad_classes' not in vars:
         # By default, all subjects are humans/animals, unless specified in the subject file.
         vars['broad_classes'] = [ 1 for _ in vars['subjects'] ]
@@ -347,7 +349,7 @@ def parse_subject_file(subject_file_path, method):
     if 'sel_set' not in vars:
         vars['sel_set'] = list(range(len(vars['subjects'])))
 
-    # The most important variables: "subjects", "class_tokens", "broad_classes", "sel_set"
+    # The most important variables: "subjects", "class_names", "broad_classes", "sel_set"
     return vars
 
 # extra_sig could be a regular expression

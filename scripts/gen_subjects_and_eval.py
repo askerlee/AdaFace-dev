@@ -59,10 +59,10 @@ def parse_args():
         help="compel-style prompt cfg weighting level (weight=1.1**L). Set to 0 to disable compel cfg",
     )
 
-    # Possible z_suffix_type: '' (none), 'db_prompt', 'class_token', or any user-specified string.
+    # Possible z_suffix_type: '' (none), 'db_prompt', 'class_name', or any user-specified string.
     parser.add_argument("--z_suffix_type", default=argparse.SUPPRESS, 
                         help="Append this string to the subject placeholder token during inference "
-                             "(default: '' for humans/animals, 'class_token' for others)")
+                             "(default: '' for humans/animals, 'class_name' for others)")
     # extra_z_suffix: usually reduces the similarity of generated images to the real images.
     parser.add_argument("--extra_z_suffix", type=str, default="",
                         help="Extra suffix to append to the z suffix")
@@ -165,8 +165,8 @@ if __name__ == "__main__":
     
     args, argparser = parse_args()
     vars = parse_subject_file(args.subjfile, args.method)
-    subjects, class_tokens, broad_classes, sel_set, ckpt_iters = \
-            vars['subjects'], vars['class_tokens'], vars['broad_classes'], vars['sel_set'], vars['maxiters']
+    subjects, class_names, broad_classes, sel_set, ckpt_iters = \
+            vars['subjects'], vars['class_names'], vars['broad_classes'], vars['sel_set'], vars['maxiters']
 
     args.orig_placeholder = args.placeholder
     # If num_vectors_per_token == 3:
@@ -230,7 +230,7 @@ if __name__ == "__main__":
         if args.skipselset and subject_idx in sel_set:
             continue
         subject_name        = subjects[subject_idx]
-        class_token         = class_tokens[subject_idx]
+        class_name         = class_names[subject_idx]
         broad_class         = broad_classes[subject_idx]
         is_face             = are_faces[subject_idx]
         class_long_token    = class_long_tokens[subject_idx]
@@ -257,22 +257,22 @@ if __name__ == "__main__":
         if not hasattr(args, 'z_suffix_type'):
             if broad_class == 1:
                 # For ada/TI, if not human faces / animals, and z_suffix_type is not specified, 
-                # then use class_token as the z suffix, to make sure the subject is always expressed.
+                # then use class_name as the z suffix, to make sure the subject is always expressed.
                 z_suffix_type = '' 
             else:
-                z_suffix_type = 'class_token'
+                z_suffix_type = 'class_name'
         else:
             z_suffix_type = args.z_suffix_type
 
         if z_suffix_type == 'db_prompt':
             # DreamBooth always uses db_prompt as z_suffix.
             z_suffix = " " + class_long_token
-        elif z_suffix_type == 'class_token':
+        elif z_suffix_type == 'class_name':
             # For Ada/TI, if we append class token to "z" -> "z dog", 
             # the chance of occasional under-expression of the subject may be reduced.
             # (This trick is not needed for human faces)
-            # Prepend a space to class_token to avoid "a zcat" -> "a z cat"
-            z_suffix = " " + class_token
+            # Prepend a space to class_name to avoid "a zcat" -> "a z cat"
+            z_suffix = " " + class_name
         else:
             # z_suffix_type contains the actual z_suffix.
             if re.match(r"^[a-zA-Z0-9_]", z_suffix_type):
@@ -358,7 +358,7 @@ if __name__ == "__main__":
             # E.g., get_prompt_list(placeholder="z", z_suffix="cat", class_long_token="tabby cat", broad_class=1)
             prompt_list, class_short_prompt_list, class_long_prompt_list = \
                 get_prompt_list(args.placeholder, z_prefix, z_suffix, background_string, 
-                                class_token, class_long_token, 
+                                class_name, class_long_token, 
                                 broad_class, args.prompt_set)
             prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set}{bg_suffix}.txt"
             PROMPTS = open(prompt_filepath, "w")
@@ -371,13 +371,13 @@ if __name__ == "__main__":
             placeholder = args.placeholder
             if len(z_prefix) > 0:
                 placeholder      = z_prefix + " " + placeholder
-                class_token      = z_prefix + " " + class_token
+                class_name      = z_prefix + " " + class_name
                 class_long_token = z_prefix + " " + class_long_token
 
             prompt_tmpl = args.prompt if args.prompt != "" else "a {}"
             prompt = prompt_tmpl.format(placeholder + z_suffix)
             class_long_prompt = prompt_tmpl.format(class_long_token + z_suffix)
-            class_short_prompt = prompt_tmpl.format(class_token + z_suffix)
+            class_short_prompt = prompt_tmpl.format(class_name + z_suffix)
             # If --background_string is not specified, background_string is "".
             # Only add the background_string to prompt used for image generation,
             # not to class_long_prompt/class_short_prompt used for CLIP text/image similarity evaluation.
