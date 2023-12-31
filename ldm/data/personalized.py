@@ -225,7 +225,10 @@ class PersonalizedBase(Dataset):
         else:
             self.cls_delta_strings = [ cls_delta_string ]
 
-        self.cls_bg_delta_string = re.split(r"\s+", cls_bg_delta_string) 
+        if cls_bg_delta_string is not None:
+            self.cls_bg_delta_string = re.split(r"\s+", cls_bg_delta_string) 
+        else:
+            self.cls_bg_delta_string = [ 'unknown' ]
 
         self.num_vectors_per_token    = num_vectors_per_token
         self.num_vectors_per_bg_token = num_vectors_per_bg_token
