@@ -237,10 +237,13 @@ class CrossAttention(nn.Module):
             ada_subj_attn_normed = normalize_ada_subj_attn(ada_subj_attn_dict[subj_token]['attn_fg'],
                                                            subj_attn_lb=subj_attn_lb, num_heads=h,
                                                            dtype=sim.dtype)
+            # ada_bg_attn_normed is used somewhere else.
             ada_bg_attn_normed   = normalize_ada_subj_attn(ada_subj_attn_dict[subj_token]['attn_bg'],
                                                            subj_attn_lb=subj_attn_lb, num_heads=h,
                                                            dtype=sim.dtype)
             
+            # Apply the normalized attention scores to the rows of sim 
+            # corresponding to the subject tokens.
             # sim: [48, 4096, 77] (8 heads).
             sim = reweight_attn_rows(sim, ada_subj_attn_normed, subj_indices, h)
         else:

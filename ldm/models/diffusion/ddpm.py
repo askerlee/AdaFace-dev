@@ -876,8 +876,8 @@ class LatentDiffusion(DDPM):
                                                          num_layers=self.N_LAYERS)
                 # Gradually increase the scales of the background embeddings, 
                 # so that they will absorb more high-freq noisy features.
-                # self.bg_emb_extra_scale = anneal_value(self.training_percent, 1, value_range=(1, 1.5))
-                self.bg_emb_extra_scale = 1
+                self.bg_emb_extra_scale = anneal_value(self.training_percent, 1, value_range=(0.5, 1))
+                #self.bg_emb_extra_scale = 1
                 static_prompt_embedding = fix_emb_scales(static_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
                                                          num_layers=self.N_LAYERS, extra_scale=self.bg_emb_extra_scale)
                 static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
