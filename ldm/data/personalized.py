@@ -225,7 +225,7 @@ class PersonalizedBase(Dataset):
         else:
             self.cls_delta_strings = [ cls_delta_string ]
 
-        self.cls_bg_delta_string = cls_bg_delta_string
+        self.cls_bg_delta_string = re.split(r"\s+", cls_bg_delta_string) 
 
         self.num_vectors_per_token    = num_vectors_per_token
         self.num_vectors_per_bg_token = num_vectors_per_bg_token
@@ -594,7 +594,9 @@ class PersonalizedBase(Dataset):
         self.cls_delta_string = random.choice(self.cls_delta_strings)
         # If background_string is specified, self.cls_bg_delta_string should always be specified 
         # in the commmand line (passed to main.py).
-        cls_bg_delta_string = self.cls_bg_delta_string
+        # Don't use all words in cls_bg_delta_string in the same prompt. Otherwise after taking the average,
+        # the resulting embedding may have weird semantics and match too many areas.
+        cls_bg_delta_string = random.choice(self.cls_bg_delta_string)
 
         # If num_vectors_per_token == 3:
         # "z"    => "z, , "
