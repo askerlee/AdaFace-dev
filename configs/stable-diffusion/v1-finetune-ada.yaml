@@ -99,6 +99,8 @@ model:
         # By default, SOT embeddings have a max value around 33. We cut it to 10. 
         # Only used when computing losses, not used for CFG.        
         prompt_embedding_clamp_value:      10
+        # Scale down the background embeddings by this factor.
+        background_extra_global_scale:     0.5
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

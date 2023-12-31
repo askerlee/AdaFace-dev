@@ -910,6 +910,7 @@ class EmbeddingManager(nn.Module):
             use_conv_attn_kernel_size=-1,
             conv_attn_layerwise_scale_learnable=False,
             prompt_embedding_clamp_value=-1,
+            background_extra_global_scale=1.,
             # Used in ddpm.py, ignored here.
             embedding_manager_ckpt=None
     ):
@@ -1097,6 +1098,7 @@ class EmbeddingManager(nn.Module):
         self.emb_global_scales_dict = None
         self.iter_type = None       # 'recon_iter' or 'distill_iter'
         self.prompt_embedding_clamp_value = prompt_embedding_clamp_value
+        self.background_extra_global_scale = background_extra_global_scale
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
@@ -1147,6 +1149,8 @@ class EmbeddingManager(nn.Module):
             return ada_embedded_text
 
         else:
+            # placeholder_indices will be regenerated with update_placeholder_indices() 
+            # within get_static_embedding().
             self.clear_placeholder_indices()
             self.clear_prompt_masks()
             # We need to clone embedded_text, as sometimes (when it's not layerwise, such as TI) 

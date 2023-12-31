@@ -35,57 +35,6 @@ emb_path = os.path.join(emb_folder, iter2path[iterations[0]])
 emb_ckpt = torch.load(emb_path)
 tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
 
-'''
-
-for idx, iteration in enumerate(iterations):
-    print(iteration)
-    emb_path = os.path.join(emb_folder, iter2path[iteration])
-    emb_ckpt = torch.load(emb_path)
-    print('emb_global_scale_score: {:.4f}'.format(emb_ckpt['emb_global_scale_score'].sigmoid().item() + 0.5))
-    for weight_name in ('conv_attn_layerwise_scales', 'layerwise_point_conv_attn_mix_weights', 'layerwise_conv_attn_weights'):
-        if weight_name in emb_ckpt:
-            print(weight_name)
-            print(emb_ckpt[weight_name].data)
-
-for k in tokens:
-    print(f"Token: {k}")
-
-    for idx, iteration in enumerate(iterations):
-        emb_path = os.path.join(emb_folder, iter2path[iteration])
-        emb_ckpt = torch.load(emb_path)
-        if idx == 0:
-            prev_emb_ckpt = emb_ckpt
-            continue
-
-        prev_iteration = iterations[idx-1]
-
-        emb_ema = emb_ckpt['string_to_emb_ema_dict'][k]
-        prev_emb_ema = prev_emb_ckpt['string_to_emb_ema_dict'][k]
-        curr_mean = emb_ema.embedding.abs().mean()
-        prev_mean = prev_emb_ema.embedding.abs().mean()
-        delta = (emb_ema.embedding - prev_emb_ema.embedding).abs().mean()
-        print(f"{prev_iteration} -> {iteration}: {prev_mean:.4f}, {curr_mean:.4f}, {delta:.4f}")
-
-        prev_emb_ckpt = emb_ckpt
-
-        ada_embedder = emb_ckpt['string_to_ada_embedder'][k]
-        print("{iteration} Attn Poolers:")
-        attn_poolers = ada_embedder.poolers
-        for i, attn_pooler in enumerate(attn_poolers):
-            lora_to_fg_q_mean = attn_pooler.lora_to_fg_q.weight.abs().mean()
-            lora_to_bg_q_mean = attn_pooler.lora_to_bg_q.weight.abs().mean()
-            lora_to_k_mean = attn_pooler.lora_to_k.weight.abs().mean()
-
-            print(f"Layer {i}: lora_to_fg_q: {lora_to_fg_q_mean:.4f}, lora_to_bg_q: {lora_to_bg_q_mean:.4f}, lora_to_k: {lora_to_k_mean:.4f}")
-
-        print("")
-        print("{iteration} layer_coeff_maps:")
-
-        for i, layer_coeff_map in enumerate(ada_embedder.layer_coeff_maps):
-            layer_coeff_map_mean = layer_coeff_map.weight.abs().mean()
-            print(f"Layer {i}: {layer_coeff_map_mean:.4f}")
-'''
-
 
 print("emb_global_scale_scores:")
 for idx, iteration in enumerate(iterations):

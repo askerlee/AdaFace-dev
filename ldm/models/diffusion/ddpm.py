@@ -874,9 +874,13 @@ class LatentDiffusion(DDPM):
                 emb_global_scales_dict  = self.embedding_manager.get_emb_global_scales_dict(regen=True)
                 # Fix the scales of the static subject embeddings.
                 for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
+                    emb_extra_global_scale = emb_global_scales_dict[placeholder]
+                    if placeholder in self.embedding_manager.background_strings:
+                        emb_extra_global_scale *= self.embedding_manager.background_extra_global_scale
+
                     static_prompt_embedding = fix_emb_scales(static_prompt_embedding, placeholder_indices,
                                                              num_layers=self.N_LAYERS,
-                                                             extra_scale=emb_global_scales_dict[placeholder])
+                                                             extra_scale=emb_extra_global_scale)
 
                 static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
                                                                      self.embedding_manager.placeholders_cls_delta_string_indices,
@@ -941,8 +945,12 @@ class LatentDiffusion(DDPM):
         # The scales of ada embeddings are fixed here.
         # The scales of static subject embeddings are fixed in get_learned_conditioning().
         for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
+            emb_extra_global_scale = emb_global_scales_dict[placeholder]
+            if placeholder in self.embedding_manager.background_strings:
+                emb_extra_global_scale *= self.embedding_manager.background_extra_global_scale
+
             ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, placeholder_indices,
-                                                  extra_scale=emb_global_scales_dict[placeholder])
+                                                  extra_scale=emb_extra_global_scale)
             
         ada_prompt_embedding = merge_cls_token_embeddings(ada_prompt_embedding, 
                                                           self.embedding_manager.placeholders_cls_delta_string_indices,
