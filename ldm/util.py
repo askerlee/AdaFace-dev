@@ -919,7 +919,6 @@ def scan_cls_delta_strings(tokenized_text, embedded_text, placeholder_token, pla
         breakpoint()
 
     M = len(cls_delta_tokens)
-    num_cls_delta_strings = 0
     cls_delta_string_indices = []
 
     # Enumerate the instances in the second half of the batch, and see if there are 
@@ -941,7 +940,7 @@ def scan_cls_delta_strings(tokenized_text, embedded_text, placeholder_token, pla
         for j in range(MAX_SEARCH_SPAN+1):
             start_N = start_index_N + j
             if (tokenized_text_i[start_N:start_N+M] == cls_delta_tokens).all():
-                cls_delta_string_indices.append((batch_i, start_N, M, placeholder_token))
+                cls_delta_string_indices.append((batch_i, start_N.item(), M, placeholder_token))
                 break
 
     return cls_delta_string_indices
@@ -961,6 +960,7 @@ def merge_cls_token_embeddings(prompt_embedding,
     batch_i2offset = {}
 
     prompt_embedding2 = prompt_embedding.clone()
+    occurred_placeholder_tokens = {}
 
     for batch_i, start_index_N, M, placeholder_token in placeholders_cls_delta_string_indices:
         i_off = batch_i2offset.get(batch_i, 0)
@@ -972,12 +972,17 @@ def merge_cls_token_embeddings(prompt_embedding,
         avg_cls_delta_embedding = (cls_delta_embeddings * cls_delta_weights).sum(dim=0)
         prompt_embedding2[batch_i, start_index_N-i_off] = avg_cls_delta_embedding
         # NOTE: Our purpose is to combine all the cls delta tokens to 1 token, so that
-        # it will align with the subject tokens in the first half of the batch.
+        # their positions align with the subject tokens in the first half of the batch.
         # To do so, we move the embeddings (except the EOS) after the last cls delta token to the left,
         # overwriting the rest M-1 cls delta embeddings.
         prompt_embedding2[batch_i, start_index_N+1-i_off:-(M+i_off)] = prompt_embedding[batch_i, start_index_N+M:-1]
         batch_i2offset[batch_i] = i_off + M - 1
+        occurred_placeholder_tokens[placeholder_token] = \
+            occurred_placeholder_tokens.get(placeholder_token, 0) + 1
 
+    #if len(occurred_placeholder_tokens) > 1:
+    #    breakpoint()
+        
     return prompt_embedding2
 
 # text_embedding: [B, N, D]

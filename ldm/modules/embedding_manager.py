@@ -991,7 +991,7 @@ class EmbeddingManager(nn.Module):
             token_is_bg =  (placeholder_string in self.background_strings)
             # get_tokens_for_string <= get_clip_tokens_for_string.
             # force_single_token = True, as there should be only one token in placeholder_string.
-            placeholder_token = get_tokens_for_string(placeholder_string, force_single_token=True)[0]
+            placeholder_token = get_tokens_for_string(placeholder_string, force_single_token=True)[0].item()
 
             num_vectors_per_token = self.token2num_vectors[placeholder_string]
             initializer_words     = list_initializer_words[placeholder_idx]
@@ -1196,7 +1196,7 @@ class EmbeddingManager(nn.Module):
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
             # If there's only one vector per token, we can do a simple replacement
-            placeholder_indices = torch.where(tokenized_text == placeholder_token.to(device))
+            placeholder_indices = torch.where(tokenized_text == placeholder_token)
             # No placeholder token is found in the current batch.
             if placeholder_indices[0].numel() == 0:
                 continue
@@ -1285,6 +1285,8 @@ class EmbeddingManager(nn.Module):
                                             self.token2num_vectors[placeholder_string],
                                             token_is_bg=token_is_bg)
         
+        #print(self.placeholders_cls_delta_string_indices)
+
         return embedded_text, tokenized_text, static_subj_embs_dict
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
@@ -1319,7 +1321,7 @@ class EmbeddingManager(nn.Module):
             # There's only one vector per token, we can do a simple replacement
             # embedded_text: [B, N, 768].
             # tokenized_text: [B, N].
-            placeholder_indices = torch.where(tokenized_text == placeholder_token.to(device))
+            placeholder_indices = torch.where(tokenized_text == placeholder_token)
             # Skip generating the ada embedding if the corresponding placeholder token is not in the batch.
             if placeholder_indices[0].numel() == 0:
                 continue
@@ -1504,6 +1506,8 @@ class EmbeddingManager(nn.Module):
             # Remove the batch dim.
             ada_subj_embs_dict[placeholder_string] = subj_ada_embedding.mean(dim=0)
 
+        #print(self.placeholders_cls_delta_string_indices)
+
         return embedded_text, ada_subj_embs_dict, token2ada_attn
 
     # Initialize static/ada embedders.
@@ -1663,7 +1667,7 @@ class EmbeddingManager(nn.Module):
         self.prompt_token_attn_mask = None
 
     def update_placeholder_indices(self, tokenized_text, placeholder_string, placeholder_token, num_vectors_per_token, token_is_bg):
-        placeholder_indices = torch.where(tokenized_text == placeholder_token.to(tokenized_text.device))
+        placeholder_indices = torch.where(tokenized_text == placeholder_token)
         placeholder_indices_B, placeholder_indices_N = extract_first_index_in_each_instance(placeholder_indices)
 
         if len(placeholder_indices_B) == 0:
