@@ -870,16 +870,14 @@ class LatentDiffusion(DDPM):
                 # static_prompt_embedding is tensor. So the following statement is False.
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
                     static_prompt_embedding = static_prompt_embedding.mode()
-                
+
+                emb_global_scales_dict  = self.embedding_manager.get_emb_global_scales_dict(regen=True)
                 # Fix the scales of the static subject embeddings.
-                static_prompt_embedding = fix_emb_scales(static_prompt_embedding, self.embedding_manager.placeholder_indices_fg, 
-                                                         num_layers=self.N_LAYERS)
-                # Gradually increase the scales of the background embeddings, 
-                # so that they will absorb more high-freq noisy features.
-                self.bg_emb_extra_scale = anneal_value(self.training_percent, 1, value_range=(0.5, 1))
-                #self.bg_emb_extra_scale = 1
-                static_prompt_embedding = fix_emb_scales(static_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
-                                                         num_layers=self.N_LAYERS, extra_scale=self.bg_emb_extra_scale)
+                for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
+                    static_prompt_embedding = fix_emb_scales(static_prompt_embedding, placeholder_indices,
+                                                             num_layers=self.N_LAYERS,
+                                                             extra_scale=emb_global_scales_dict[placeholder])
+
                 static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
                                                                      self.embedding_manager.placeholders_cls_delta_string_indices,
                                                                      self.embedding_manager.placeholder_to_cls_delta_weights)
@@ -894,7 +892,7 @@ class LatentDiffusion(DDPM):
                                 # we also set it up here just in case.
                                 'subj_indices':                 copy.copy(self.embedding_manager.placeholder_indices_fg),
                                 'bg_indices':                   copy.copy(self.embedding_manager.placeholder_indices_bg),
-                                'token2indices':                copy.copy(self.embedding_manager.token2indices),
+                                'placeholder2indices':                copy.copy(self.embedding_manager.placeholder2indices),
                                 'prompt_emb_mask':              copy.copy(self.embedding_manager.prompt_emb_mask),
                                 # conv_attn_layerwise_scales: a list of 16 tensor scalars, 
                                 # used to scale conv attention at each CA layer.
@@ -939,17 +937,13 @@ class LatentDiffusion(DDPM):
         # CLIP skip weights consistent with the static embeddings.
         ada_prompt_embedding = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         #print('ada', ada_prompt_embedding.abs().max())
-        emb_global_scale     = self.embedding_manager.get_emb_global_scale()
+        emb_global_scales_dict     = self.embedding_manager.get_emb_global_scales_dict(regen=False)
         # The scales of ada embeddings are fixed here.
         # The scales of static subject embeddings are fixed in get_learned_conditioning().
-        ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, self.embedding_manager.placeholder_indices_fg, 
-                                              extra_scale=emb_global_scale)
-        # self.bg_emb_extra_scale is gradually increased from 1 (beginning of training) 
-        # to 2 (end of training) in get_learned_conditioning().
-        # Gradually increase the scales of the background embeddings, 
-        # so that they will absorb more high-freq noisy features.
-        ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, self.embedding_manager.placeholder_indices_bg, 
-                                              extra_scale=self.bg_emb_extra_scale)
+        for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
+            ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, placeholder_indices,
+                                                  extra_scale=emb_global_scales_dict[placeholder])
+            
         ada_prompt_embedding = merge_cls_token_embeddings(ada_prompt_embedding, 
                                                           self.embedding_manager.placeholders_cls_delta_string_indices,
                                                           self.embedding_manager.placeholder_to_cls_delta_weights)
@@ -1701,15 +1695,15 @@ class LatentDiffusion(DDPM):
                         extra_info['bg_indices_2b'] = None
                         extra_info['bg_indices_1b'] = None
 
-                    token2indices_2b = extra_info['token2indices']
+                    placeholder2indices_2b = extra_info['placeholder2indices']
                     if self.iter_flags['use_background_token']:
                         bg_string = self.embedding_manager.background_strings[0]
-                        token2indices_2b[bg_string] = extra_info['bg_indices_2b']
-                    token2indices_1b = {}
-                    for k in token2indices_2b:
-                        token2indices_1b[k] = halve_token_indices(token2indices_2b[k])
-                    extra_info['token2indices_1b'] = token2indices_1b
-                    extra_info['token2indices_2b'] = token2indices_2b
+                        placeholder2indices_2b[bg_string] = extra_info['bg_indices_2b']
+                    placeholder2indices_1b = {}
+                    for k in placeholder2indices_2b:
+                        placeholder2indices_1b[k] = halve_token_indices(placeholder2indices_2b[k])
+                    extra_info['placeholder2indices_1b'] = placeholder2indices_1b
+                    extra_info['placeholder2indices_2b'] = placeholder2indices_2b
 
                     # These embeddings are patched. So combine them back into c_static_emb.
                     c_static_emb = torch.cat([subj_single_emb, subj_comp_emb, 
@@ -1736,7 +1730,7 @@ class LatentDiffusion(DDPM):
                         # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
                         extra_info['subj_indices'] = extra_info['subj_indices_2b']
                         extra_info['bg_indices']   = extra_info['bg_indices_2b']       
-                        extra_info['token2indices'] = extra_info['token2indices_2b'] 
+                        extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b'] 
 
                     # This iter is a simple ada prompt delta loss iter, without prompt mixing loss. 
                     # This branch is reached only if prompt mixing is not enabled.
@@ -1753,7 +1747,7 @@ class LatentDiffusion(DDPM):
                         # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
                         extra_info['subj_indices']  = extra_info['subj_indices_2b']
                         extra_info['bg_indices']    = extra_info['bg_indices_2b']    
-                        extra_info['token2indices'] = extra_info['token2indices_2b']
+                        extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
                     else:
                         # do_normal_recon. The original scheme. 
                         extra_info['iter_type']      = 'normal_recon'
@@ -1771,7 +1765,7 @@ class LatentDiffusion(DDPM):
                             # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
                             extra_info['subj_indices'] = extra_info['subj_indices_1b']
                             extra_info['bg_indices']   = extra_info['bg_indices_1b']
-                            extra_info['token2indices'] = extra_info['token2indices_1b']
+                            extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
                         else:
                             # We are unable to reuse the static embeddings of the 4-type prompts, so 
                             # generate embeddings from the captions from scratch.
@@ -1781,7 +1775,7 @@ class LatentDiffusion(DDPM):
                             # print(captions)
                             extra_info['subj_indices'] = extra_info0['subj_indices']
                             extra_info['bg_indices']   = extra_info0['bg_indices']
-                            extra_info['token2indices'] = extra_info0['token2indices']
+                            extra_info['placeholder2indices'] = extra_info0['placeholder2indices']
 
                         extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_LAYERS, 
                                                                              *c_static_emb.shape[1:])
@@ -1814,7 +1808,7 @@ class LatentDiffusion(DDPM):
                     
                     extra_info['subj_indices']      = extra_info0['subj_indices']
                     extra_info['bg_indices']        = extra_info0['bg_indices']
-                    extra_info['token2indices']     = extra_info0['token2indices']
+                    extra_info['placeholder2indices']     = extra_info0['placeholder2indices']
                     extra_info['c_static_emb_1b']   = c_static_emb.reshape(ORIG_BS, self.N_LAYERS, 
                                                                            *c_static_emb.shape[1:])
                                         
@@ -2069,7 +2063,7 @@ class LatentDiffusion(DDPM):
 
         subj_indices2       = subj_indices    = extra_info['subj_indices']
         bg_indices2         = bg_indices      = extra_info['bg_indices']
-        token2indices2      = token2indices   = extra_info['token2indices']
+        placeholder2indices2      = placeholder2indices   = extra_info['placeholder2indices']
         prompt_emb_mask2    = prompt_emb_mask = extra_info['prompt_emb_mask']
         cfg_scales_for_clip_loss = None
         uncond_context      = self.empty_context_2b
@@ -2239,11 +2233,11 @@ class LatentDiffusion(DDPM):
                     bg_indices2,   _ = extend_indices_B_by_n_times(extra_info['bg_indices_1b'],
                                                                    self.num_candidate_teachers,
                                                                    block_offset=BLOCK_SIZE)
-                    # We have to reinitialize token2indices2. It originally points to token2indices. 
-                    # Without reinitialization, the following code will rewrite the contents of token2indices.
-                    token2indices2 = {}
-                    for k in token2indices:
-                        token2indices2[k], _ = extend_indices_B_by_n_times(extra_info['token2indices_1b'][k],
+                    # We have to reinitialize placeholder2indices2. It originally points to placeholder2indices. 
+                    # Without reinitialization, the following code will rewrite the contents of placeholder2indices.
+                    placeholder2indices2 = {}
+                    for k in placeholder2indices:
+                        placeholder2indices2[k], _ = extend_indices_B_by_n_times(extra_info['placeholder2indices_1b'][k],
                                                                            self.num_candidate_teachers,
                                                                            block_offset=BLOCK_SIZE)
                         
@@ -2294,7 +2288,7 @@ class LatentDiffusion(DDPM):
                     cfg_scales_for_clip_loss = \
                         gen_cfg_scales_for_stu_tea(6, 5, BLOCK_SIZE * 2, x_start.device)
 
-                    token2indices2 = token2indices
+                    placeholder2indices2 = placeholder2indices
                     # use cached x_start and cond. cond already has the 4-type structure. 
                     # No change to cond here.
                     # NOTE cond is mainly determined by the prompts c_in. Since c_in is inherited from
@@ -2366,7 +2360,7 @@ class LatentDiffusion(DDPM):
         # can freely compose any contents.
         emb_man_volatile_ds = { 'subj_indices':     subj_indices2,
                                 'bg_indices':       bg_indices2,
-                                'token2indices':    token2indices2,
+                                'placeholder2indices':    placeholder2indices2,
                                 # In compositional iterations, img_mask is always None.
                                 # No need to consider whether do_teacher_filter or not.
                                 'img_mask':         extra_info['img_mask'],
@@ -2472,7 +2466,7 @@ class LatentDiffusion(DDPM):
 
                     emb_man_volatile_ds = { 'subj_indices':     extra_info['subj_indices_2b'],
                                             'bg_indices':       extra_info['bg_indices'],
-                                            'token2indices':    extra_info['token2indices_2b'],
+                                            'placeholder2indices':    extra_info['placeholder2indices_2b'],
                                             'img_mask':         None,
                                             'prompt_emb_mask':  extra_info['prompt_emb_mask'] }
 

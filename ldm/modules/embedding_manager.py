@@ -9,7 +9,7 @@ import numpy as np
 from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
                      add_noise_to_embedding, calc_ref_cosine_loss, clamp_prompt_embedding, \
                      get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
-                     scan_cls_delta_strings
+                     scan_cls_delta_strings, torch_uniform
 
 from functools import partial
 from collections import OrderedDict
@@ -920,7 +920,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
         self.string_to_emb_ema_dict         = nn.ModuleDict()
         self.initial_embeddings  = nn.ParameterDict() # These should not be optimized
-        self.token2emb_cache     = nn.ParameterDict() # These should not be optimized
+        self.placeholder_to_emb_cache       = nn.ParameterDict() # These should not be optimized
 
         self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
@@ -938,7 +938,10 @@ class EmbeddingManager(nn.Module):
         else:
             self.num_layers_per_embedder = 1
 
-        self.emb_global_scale_score = nn.Parameter(torch.tensor(0.), requires_grad=True)
+        # Each placeholder string has a corresponding emb_global_scale_score, 
+        # converted to emb_global_scale.
+        self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(placeholder_strings)), 
+                                                    requires_grad=True)
         self.initialize_conv_attn_layerwise_scales(1, learnable=conv_attn_layerwise_scale_learnable)
         
         self.set_training_add_noise_specs(training_begin_add_noise_std_range, 
@@ -1062,7 +1065,7 @@ class EmbeddingManager(nn.Module):
                 # is the token embedding, not the prompt embedding.
                 token_emb_cache = Embedding3d(self.num_layers_per_embedder, num_vectors_per_token, self.token_dim, 
                                               init_embedding=None)
-                self.token2emb_cache[placeholder_string] = token_emb_cache
+                self.placeholder_to_emb_cache[placeholder_string] = token_emb_cache
 
             # token_static_embedder: a StaticLayerwiseEmbedding object (when use_layerwise_embedding) or an embedding vector.
             # Pytorch >= 1.12.0 allows to put an nn.Module object into an nn.ParameterDict.
@@ -1090,7 +1093,8 @@ class EmbeddingManager(nn.Module):
         # Store the text_embedder to compute the delta loss.
         self.text_embedder  = text_embedder
         self.ada_prompt_embeddings_cache    = {}
-        self.ada_prompt_token2indices_cache = {}
+        self.ada_prompt_placeholder2indices_cache = {}
+        self.emb_global_scales_dict = None
         self.iter_type = None       # 'recon_iter' or 'distill_iter'
         self.prompt_embedding_clamp_value = prompt_embedding_clamp_value
 
@@ -1660,7 +1664,7 @@ class EmbeddingManager(nn.Module):
     def clear_placeholder_indices(self):
         self.placeholder_indices_fg = None
         self.placeholder_indices_bg = None
-        self.token2indices = {}
+        self.placeholder2indices = {}
 
     def clear_prompt_masks(self):
         self.prompt_emb_mask = None
@@ -1673,7 +1677,7 @@ class EmbeddingManager(nn.Module):
         if len(placeholder_indices_B) == 0:
             if token_is_bg:
                 self.placeholder_indices_bg = None
-                self.token2indices[placeholder_string] = None
+                self.placeholder2indices[placeholder_string] = None
             return
 
         if num_vectors_per_token > 1:
@@ -1696,7 +1700,7 @@ class EmbeddingManager(nn.Module):
         else:
             self.placeholder_indices_fg = placeholder_indices
         
-        self.token2indices[placeholder_string] = placeholder_indices
+        self.placeholder2indices[placeholder_string] = placeholder_indices
 
     def get_ada_emb_weight(self):
         if self.training:
@@ -1742,17 +1746,32 @@ class EmbeddingManager(nn.Module):
         self.conv_attn_layerwise_scales.data.clamp_(min=0.1, max=3)
         return self.conv_attn_layerwise_scales
     
-    def get_emb_global_scale(self, do_perturb=True):
-        # emb_global_scale_score = 0  -> emb_global_scale = 1, 
-        # emb_global_scale_score = 1  -> emb_global_scale = 1.23
-        # emb_global_scale_score = -1 -> emb_global_scale = 0.77
-        emb_global_scale = self.emb_global_scale_score.sigmoid() + 0.5
-        if self.training and do_perturb:
-            # 1 -> uniform in [0.8, 1.4]. Inject randomness to reduce overfitting.
-            emb_global_scale = emb_global_scale * np.random.uniform(0.8, 1.4)
-        else:
-            emb_global_scale = emb_global_scale        
-        return emb_global_scale
+    def get_emb_global_scales_dict(self, regen, do_perturb=True):
+        if not regen:
+            if self.emb_global_scales_dict is None:
+                regen = True
+            else:
+                # Reuse the cached global scales.
+                emb_global_scales_dict = self.emb_global_scales_dict
+
+        if regen:
+            # emb_global_scale_score = 0  -> emb_global_scale = 1, 
+            # emb_global_scale_score = 1  -> emb_global_scale = 1.23
+            # emb_global_scale_score = -1 -> emb_global_scale = 0.77
+            emb_global_scales = self.emb_global_scale_scores.sigmoid() + 0.5
+            if self.training and do_perturb:
+                perturbation = torch_uniform(0.8, 1.4, (2,), device=emb_global_scales.device)
+                # 1 -> uniform in [0.8, 1.4]. Inject randomness to reduce overfitting.
+                emb_global_scales = emb_global_scales * perturbation
+
+            emb_global_scales_dict = {}
+            for i, placeholder in enumerate(self.string_to_token_dict.keys()):
+                emb_global_scales_dict[placeholder] = emb_global_scales[i]
+
+            # Cache the global scales to be reused by get_layer_ada_conditioning() for ada embeddings.
+            self.emb_global_scales_dict = emb_global_scales_dict
+
+        return emb_global_scales_dict
     
     def set_ada_emb_weight(self, ada_emb_weight, is_first_time_print=False):
         if is_first_time_print:
@@ -1792,7 +1811,7 @@ class EmbeddingManager(nn.Module):
     def set_volatile_ds(self, volatile_ds):
         self.placeholder_indices_fg = volatile_ds['subj_indices']
         self.placeholder_indices_bg = volatile_ds['bg_indices']
-        self.token2indices          = volatile_ds['token2indices']
+        self.placeholder2indices          = volatile_ds['placeholder2indices']
         # There are image margins after the original image is scaled down, or 
         # after using wds overlay images as input.
         # When doing attentional pooling / average pooling of image features, 
@@ -1807,7 +1826,7 @@ class EmbeddingManager(nn.Module):
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         self.ada_prompt_embeddings_cache[ca_layer_idx] = embedding
         # If there are multiple layers, only the last placeholder_indices are cached.
-        self.ada_prompt_token2indices_cache = copy.copy(self.token2indices)
+        self.ada_prompt_placeholder2indices_cache = copy.copy(self.placeholder2indices)
 
     def get_cached_ada_prompt_embeddings_as_tensor(self):
         # No tokens appear in the current prompt. So the ada prompt embedding cache is empty.
@@ -1833,23 +1852,23 @@ class EmbeddingManager(nn.Module):
     # not just the ada or static embeddings of the subject.
     def clear_ada_prompt_embeddings_cache(self):
         if len(self.ada_prompt_embeddings_cache) == self.num_layers_per_embedder:
-            self.update_emb_ema(self.ada_prompt_token2indices_cache)
+            self.update_emb_ema(self.ada_prompt_placeholder2indices_cache)
 
         self.ada_prompt_embeddings_cache = {}
 
-    def update_emb_ema(self, token2indices):
+    def update_emb_ema(self, placeholder2indices):
         if self.training and self.emb_ema_as_pooling_probe_weight > 0:
-            for k, token_emb_cache_obj in self.token2emb_cache.items():
+            for k, token_emb_cache_obj in self.placeholder_to_emb_cache.items():
                 # If all layers of ada embeddings have been cached in token_emb_cache_obj,
                 # then it's time to update EMA embeddings.
                 # This should happen after the previous training iteration finishes and 
                 # before the current training iteration begins.
-                # token2emb_cache is used to compute EMA of ada embeddings.
-                token_emb_cache_obj  = self.token2emb_cache[k]
+                # placeholder_to_emb_cache is used to compute EMA of ada embeddings.
+                token_emb_cache_obj  = self.placeholder_to_emb_cache[k]
 
-                if k not in token2indices:
+                if k not in placeholder2indices:
                     continue
-                token_indices = token2indices[k]
+                token_indices = placeholder2indices[k]
                 
                 # token k doesn't appear in this prompt (should be bg token).
                 if token_indices is None:
@@ -1911,7 +1930,7 @@ class EmbeddingManager(nn.Module):
                      "string_to_ada_embedder":          self.string_to_ada_embedder_dict,
                      "string_to_emb_ema_dict":          self.string_to_emb_ema_dict,
                      "token2num_vectors":               self.token2num_vectors,
-                     "emb_global_scale_score":          self.emb_global_scale_score,
+                     "emb_global_scale_scores":         self.emb_global_scale_scores,
                      "ada_emb_weight":                  self.ada_emb_weight,  
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
                      # Learnable weights for scaling conv attns.
@@ -1953,10 +1972,6 @@ class EmbeddingManager(nn.Module):
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
             if "ada_emb_weight" in ckpt:
                 self.set_ada_emb_weight(ckpt["ada_emb_weight"], is_first_time_print=False)
-
-            if "emb_global_scale_score" in ckpt:
-                self.emb_global_scale_score = ckpt["emb_global_scale_score"]
-                print(f"Set emb_global_scale = {self.get_emb_global_scale(do_perturb=False):.4f}")
 
             if "emb_ema_as_pooling_probe_weight" in ckpt:
                 self.set_emb_ema_as_pooling_probe_weight(ckpt["emb_ema_as_pooling_probe_weight"])
@@ -2002,6 +2017,13 @@ class EmbeddingManager(nn.Module):
                         ada = self.string_to_ada_embedder_dict[km2]
                         print(f"{km2}: {ada.fg_emb_count}/{ada.bg_emb_count}/{ada.K} fg/bg/total embeddings")
 
+
+            # get_emb_global_scales_dict() requires string_to_token_dict to be initialized. 
+            # So put it here.
+            if "emb_global_scale_scores" in ckpt:
+                self.emb_global_scale_scores = ckpt["emb_global_scale_scores"]
+                print(f"Set emb_global_scales = {self.get_emb_global_scales_dict(regen=True, do_perturb=False)}")
+
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
 
@@ -2011,7 +2033,7 @@ class EmbeddingManager(nn.Module):
         normal_params = list(self.string_to_static_embedder_dict.parameters()) \
                         + list(self.string_to_ada_embedder_dict.parameters()) \
                         + list(self.string_to_emb_ema_dict.parameters()) \
-                        + [ self.emb_global_scale_score ]
+                        + [ self.emb_global_scale_scores ]
 
         params_with_lr_ratios = [ { 'params': normal_params, 'lr_ratio': 1 } ]
 

@@ -1334,6 +1334,9 @@ def rand_annealed(training_percent, final_percent, mean_range,
     
     return np.random.uniform(rand_lb, rand_ub)
 
+def torch_uniform(low, high, size, device=None):
+    return torch.rand(size, device=device) * (high - low) + low
+
 # true_prob_range = (p_init, p_final). 
 # The prob of flipping true is gradually annealed from p_init to p_final.
 def draw_annealed_bool(training_percent, final_percent, true_prob_range):
