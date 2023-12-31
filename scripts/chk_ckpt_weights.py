@@ -87,6 +87,18 @@ for k in tokens:
 '''
 
 
+print("emb_global_scale_scores:")
+for idx, iteration in enumerate(iterations):
+    if iteration % 100 != 0:
+        continue
+            
+    emb_path = os.path.join(emb_folder, iter2path[iteration])
+    emb_ckpt = torch.load(emb_path)
+
+    print(f"{iteration}: {emb_ckpt['emb_global_scale_scores'].sigmoid() + 0.5}")
+
+print()
+    
 for k in tokens:
     print(f"Token: {k}")
 
@@ -141,16 +153,3 @@ for k in tokens:
         layer_coeff_map_means = np.array(layer_coeff_map_means)
 
         print(f"{iteration}: {layer_coeff_map_means}")
-
-    print("emb_global_scale_scores:")
-    for idx, iteration in enumerate(iterations):
-        if iteration % 100 != 0:
-            continue
-                
-        emb_path = os.path.join(emb_folder, iter2path[iteration])
-        emb_ckpt = torch.load(emb_path)
-
-        print(f"{iteration}: {emb_ckpt['emb_global_scale_scores'].sigmoid().item() + 0.5}")
-
-    print()
-    
