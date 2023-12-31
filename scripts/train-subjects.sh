@@ -190,7 +190,7 @@ for i in $indices
 
         echo $subject: --init_words $init_words $EXTRA_TRAIN_ARGS1
         set fish_trace 1
-        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --placeholder_string "z" --init_words $init_words --init_word_weights $init_word_weights --broad_class $broad_class --bg_init_words $bg_init_word $EXTRA_TRAIN_ARGS1
+        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --placeholder_string "z" --init_words $init_words --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_TRAIN_ARGS1
 
         if set -q _flag_eval
             if [ "$data_folder"  = 'dbeval-dataset' ]
