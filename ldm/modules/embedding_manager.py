@@ -1280,7 +1280,7 @@ class EmbeddingManager(nn.Module):
                                                                      self.training_begin_add_noise_std_range,
                                                                      self.training_end_add_noise_std_range,
                                                                      self.training_add_noise_prob[self.iter_type])
-                    
+                # subj_static_embedding_k: [16, 768] => [16*REAL_OCCURS_IN_BATCH, 768]
                 embedded_text[placeholder_indices_k] = subj_static_embedding_k.repeat(REAL_OCCURS_IN_BATCH, 1)
 
             # Cache the placeholder indices for mix prompt distillation.
@@ -2113,7 +2113,7 @@ class EmbeddingManager(nn.Module):
     def layerwise_embedding_norm_loss(self):
         loss_static = 0.
         loss_ada    = 0.
-        euc_loss_type     = 'l2'       # l1, l2. l2 is recommended.
+        euc_loss_type   = 'l2'       # l1, l2. l2 is recommended.
 
         # Update: revert the reduction of the reg weight of the global bias, although 
         # the common practice is no regularization on biases.
@@ -2122,7 +2122,7 @@ class EmbeddingManager(nn.Module):
         bias_reg_weight_base        = 0.1
         basis_reg_weight_base       = 0.1
         ada_maps_weight_reg_weight  = 0.1
-        ada_maps_bias_reg_weight    = 0 #0.001   # 0.001 -> 0
+        ada_maps_bias_reg_weight    = 0.001   # 0.001 -> 0
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
@@ -2248,47 +2248,61 @@ class EmbeddingManager(nn.Module):
         else:
             return self.embedding_attractor_loss()
 
-    def calc_fg_bg_token_embs_ortho_loss(self, fg_bg_string_lists=None, ada_grad_scale=0.1, fg_grad_scale=0.2):
+    def calc_fg_bg_token_embs_ortho_loss(self, fg_bg_string_lists=None, ada_grad_scale=0.1, fg_grad_scale=0.5):
         if fg_bg_string_lists is None:
             fg_bg_string_lists = [ self.subject_strings, self.background_strings ]
         
         loss_fg_bg_token_emb_ortho = 0.
         num_fg_bg_pairs = 0
+        # Smaller grad scale for ada embeddings, because they are volatile and the gradients are noisy.
         ada_grad_scaler = gen_gradient_scaler(ada_grad_scale)
 
+        # Sum of pairwise fg/bg token embedding ortho losses.
         for fg_string in fg_bg_string_lists[0]:
             for bg_string in fg_bg_string_lists[1]:
                 try:
+                    # fg_static_token_emb: [16, 9, 768]. 16: num layers. 9: num of vectors.
+                    # It's the static token embeddings (not static prompt embeddings) of fg_string.
                     fg_static_token_emb         = self.static_subj_embs_dict[fg_string]
+                    # fg_ada_token_emb_cache_obj: an Embedding3d object that's primarily used 
+                    # to compute EMA embeddings.
+                    # It stores the ada token embeddings (not ada prompt embeddings) of fg_string.
                     fg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[fg_string]
-                    # fg_ada_token_emb_ema_obj    = self.string_to_emb_ema_dict[fg_string]
                     bg_static_token_emb         = self.static_subj_embs_dict[bg_string]
                     bg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[bg_string]
                 except KeyError:
                     continue
 
                 if len(fg_ada_token_emb_cache_obj.cached_layers) == fg_ada_token_emb_cache_obj.num_layers:
+                    # fg_ada_token_emb: [16, 9, 768]. 16: num layers. 9: num vectors.
                     fg_ada_token_emb = fg_ada_token_emb_cache_obj.embedding
                 else:
+                    # Shouldn't reach here. 
+                    # ada_subj_embs_dict is only cleared and updated after the next call to gen_ada_embedding().
                     fg_ada_token_emb = 0
+                    breakpoint()
 
                 if len(bg_ada_token_emb_cache_obj.cached_layers) == bg_ada_token_emb_cache_obj.num_layers:
                     bg_ada_token_emb = bg_ada_token_emb_cache_obj.embedding
                 else:
+                    # Shouldn't reach here.
+                    # ada_subj_embs_dict is only cleared and updated after the next call to gen_ada_embedding().
                     bg_ada_token_emb = 0
+                    breakpoint()
 
-                ada_emb_ema_weight  = self.emb_ema_as_pooling_probe_weight
                 # fg_hybrid_token_emb: [16, 9, 768]. 16: num layers. 9: num vectors.
                 # bg_hybrid_token_emb: [16, 4, 768]. 16: num layers. 4: num vectors.
                 # fg_ada_token_emb/bg_ada_token_emb are volatile and the gradients are noisy. 
                 # So we scale down their gradients to 0.1.
-                fg_hybrid_token_emb = fg_static_token_emb * (1 - ada_emb_ema_weight) \
-                                        + ada_grad_scaler(fg_ada_token_emb) * ada_emb_ema_weight
-                bg_hybrid_token_emb = bg_static_token_emb * (1 - ada_emb_ema_weight) \
-                                        + ada_grad_scaler(bg_ada_token_emb)  * ada_emb_ema_weight
+                fg_hybrid_token_emb = fg_static_token_emb * (1 - self.ada_emb_weight) \
+                                        + ada_grad_scaler(fg_ada_token_emb) * self.ada_emb_weight
+                bg_hybrid_token_emb = bg_static_token_emb * (1 - self.ada_emb_weight) \
+                                        + ada_grad_scaler(bg_ada_token_emb)  * self.ada_emb_weight
                 
-                fg_hybrid_token_emb, bg_hybrid_token_emb = \
-                    clamp_prompt_embedding(self.prompt_embedding_clamp_value, fg_hybrid_token_emb, bg_hybrid_token_emb)
+                # The embeddings are token embeddings, not prompt embeddings. 
+                # So clamp_prompt_embedding() is not applicable.
+                #fg_hybrid_token_emb, bg_hybrid_token_emb = \
+                #    clamp_prompt_embedding(self.prompt_embedding_clamp_value, fg_hybrid_token_emb, bg_hybrid_token_emb)
                 
                 # fg_hybrid_token_emb, bg_hybrid_token_emb: [16, 768]. 16: num layers.
                 fg_hybrid_token_mean_emb = fg_hybrid_token_emb.mean(dim=1)
@@ -2299,7 +2313,7 @@ class EmbeddingManager(nn.Module):
                                          exponent=2, do_demean_first=False,
                                          first_n_dims_to_flatten=1, 
                                          ref_grad_scale=fg_grad_scale,
-                                         clamp_value=self.prompt_embedding_clamp_value)
+                                         aim_to_align=False)
                 
                 loss_fg_bg_token_emb_ortho += loss_fg_bg_pair_token_emb_ortho
                 num_fg_bg_pairs += 1
