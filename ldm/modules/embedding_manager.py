@@ -1155,6 +1155,7 @@ class EmbeddingManager(nn.Module):
             self.clear_prompt_masks()
             # We need to clone embedded_text, as sometimes (when it's not layerwise, such as TI) 
             # the modification in get_static_embedding() is in-place. 
+            # The keys of static_subj_embs_dict are the placeholder strings.
             static_embeded_text, tokenized_text_repeated, static_subj_embs_dict = \
                             self.get_static_embedding(tokenized_text, embedded_text.clone(), 
                                                       self.string_to_static_embedder_dict,
@@ -1168,6 +1169,7 @@ class EmbeddingManager(nn.Module):
             for k in static_subj_embs_dict:
                 self.static_subj_embs_dict[k] = static_subj_embs_dict[k]
                 # Initialize the ada token embedding cache for each token.
+                # k is the placeholder string.
                 self.ada_subj_embs_dict[k]    = Embedding3d(self.num_unet_ca_layers, 
                                                             self.token2num_vectors[k], 
                                                             self.token_dim)
@@ -2246,22 +2248,22 @@ class EmbeddingManager(nn.Module):
         else:
             return self.embedding_attractor_loss()
 
-    def calc_fg_bg_token_embs_ortho_loss(self, fg_bg_token_lists=None, ada_grad_scale=0.1, fg_grad_scale=0.4):
-        if fg_bg_token_lists is None:
-            fg_bg_token_lists = [ self.subject_strings, self.background_strings ]
+    def calc_fg_bg_token_embs_ortho_loss(self, fg_bg_string_lists=None, ada_grad_scale=0.1, fg_grad_scale=0.2):
+        if fg_bg_string_lists is None:
+            fg_bg_string_lists = [ self.subject_strings, self.background_strings ]
         
         loss_fg_bg_token_emb_ortho = 0.
         num_fg_bg_pairs = 0
         ada_grad_scaler = gen_gradient_scaler(ada_grad_scale)
 
-        for fg_token in fg_bg_token_lists[0]:
-            for bg_token in fg_bg_token_lists[1]:
+        for fg_string in fg_bg_string_lists[0]:
+            for bg_string in fg_bg_string_lists[1]:
                 try:
-                    fg_static_token_emb         = self.static_subj_embs_dict[fg_token]
-                    fg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[fg_token]
-                    # fg_ada_token_emb_ema_obj    = self.string_to_emb_ema_dict[fg_token]
-                    bg_static_token_emb         = self.static_subj_embs_dict[bg_token]
-                    bg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[bg_token]
+                    fg_static_token_emb         = self.static_subj_embs_dict[fg_string]
+                    fg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[fg_string]
+                    # fg_ada_token_emb_ema_obj    = self.string_to_emb_ema_dict[fg_string]
+                    bg_static_token_emb         = self.static_subj_embs_dict[bg_string]
+                    bg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[bg_string]
                 except KeyError:
                     continue
 
