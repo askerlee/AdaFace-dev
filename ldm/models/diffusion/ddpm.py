@@ -882,6 +882,11 @@ class LatentDiffusion(DDPM):
                                                              num_layers=self.N_LAYERS,
                                                              extra_scale=emb_extra_global_scale)
 
+                # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scales first().
+                # If placeholders_cls_delta_string_indices is not empty, then it must be a compositional 
+                # distillation iteration, and placeholder_indices only contains the indices of the subject 
+                # instances. Whereas placeholders_cls_delta_string_indices only contains the indices of the
+                # class (mix) instances. Switching their order doesn't affect the results.
                 static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
                                                                      self.embedding_manager.placeholders_cls_delta_string_indices,
                                                                      self.embedding_manager.placeholder_to_cls_delta_weights)
@@ -952,6 +957,11 @@ class LatentDiffusion(DDPM):
             ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, placeholder_indices,
                                                   extra_scale=emb_extra_global_scale)
             
+        # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scales first().
+        # If placeholders_cls_delta_string_indices is not empty, then it must be a compositional 
+        # distillation iteration, and placeholder_indices only contains the indices of the subject 
+        # instances. Whereas placeholders_cls_delta_string_indices only contains the indices of the
+        # class (mix) instances. Switching their order doesn't affect the results.
         ada_prompt_embedding = merge_cls_token_embeddings(ada_prompt_embedding, 
                                                           self.embedding_manager.placeholders_cls_delta_string_indices,
                                                           self.embedding_manager.placeholder_to_cls_delta_weights)
@@ -2702,7 +2712,7 @@ class LatentDiffusion(DDPM):
             if loss_bg_xlayer_consist > 0:
                 loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach().item() })
 
-            bg_xlayer_consist_loss_scale = 0.1
+            bg_xlayer_consist_loss_scale = 0.3
 
             loss += (loss_fg_xlayer_consist + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale) \
                     * self.fg_bg_xlayer_consist_loss_weight

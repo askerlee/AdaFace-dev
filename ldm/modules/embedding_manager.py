@@ -1097,7 +1097,7 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_placeholder2indices_cache = {}
         self.emb_global_scales_dict = None
         self.iter_type = None       # 'recon_iter' or 'distill_iter'
-        self.prompt_embedding_clamp_value = prompt_embedding_clamp_value
+        self.prompt_embedding_clamp_value  = prompt_embedding_clamp_value
         self.background_extra_global_scale = background_extra_global_scale
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
@@ -1234,7 +1234,7 @@ class EmbeddingManager(nn.Module):
             # Anyway, we need to check whether the cls_delta_string
             # occurs in the prompts without the placeholder token. If so, we need to combine 
             # their embeddings to the first embedding, and overwrite (delete) the 2nd to the last embeddings.
-            if REAL_OCCURS_IN_BATCH < BS and self.training:
+            if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0:
                 cls_delta_string_indices = scan_cls_delta_strings(tokenized_text, embedded_text, placeholder_token,
                                                                   placeholder_indices_1st,
                                                                   self.placeholder_to_cls_delta_tokens[placeholder_token],
@@ -1345,7 +1345,8 @@ class EmbeddingManager(nn.Module):
             # Anyway, we need to check whether the cls_delta_string
             # occurs in the prompts without the placeholder token. If so, we need to combine 
             # their embeddings to the first embedding, and overwrite (delete) the 2nd to the last embeddings.
-            if REAL_OCCURS_IN_BATCH < BS and self.training:
+            # During inference, cls delta strings are not used. So CLS_DELTA_STRING_MAX_SEARCH_SPAN = -1.
+            if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0:
                 cls_delta_string_indices = scan_cls_delta_strings(tokenized_text, embedded_text, placeholder_token,
                                                                   placeholder_indices_1st,
                                                                   self.placeholder_to_cls_delta_tokens[placeholder_token],

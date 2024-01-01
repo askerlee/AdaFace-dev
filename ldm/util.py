@@ -809,6 +809,8 @@ def normalize_ada_subj_attn(ada_subj_attn, subj_attn_lb, num_heads, dtype):
     ada_subj_attn_mean  = ada_subj_attn.mean(dim=(1,2), keepdim=True)
     
     # subj_attn_is_nonzero: bool of [48].
+    # Due to the competition between subj fg attn and bg attn, some rows in ada_subj_attn
+    # may receive all-0 attn. So we need to exclude them from the normalization.
     subj_attn_is_nonzero = ada_subj_attn_mean.squeeze() > 1e-4
     ada_subj_attn_normed = torch.ones_like(ada_subj_attn)
     if subj_attn_is_nonzero.sum() > 0:
@@ -996,8 +998,8 @@ def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1,
     placeholder_indices_B, placeholder_indices_N = placeholder_indices
     M = len(torch.unique(placeholder_indices_N))
     B = text_embedding.shape[0]
-    B0 = B // num_layers
-    B_IND = len(torch.unique(placeholder_indices_B))
+    B0      = B // num_layers
+    B_IND   = len(torch.unique(placeholder_indices_B))
     
     # The default scale is 1 / sqrt(M).
     if scale == -1:
@@ -1009,19 +1011,20 @@ def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1,
     if scale == 1:
         return text_embedding
     
-    if num_layers == 1:
-        if B_IND > B:
-            breakpoint()
-        scale_mask = torch.ones_like(text_embedding)
-        scale_mask[placeholder_indices_B, placeholder_indices_N] = scale
-        scaled_text_embedding = text_embedding * scale_mask
-    else:
-        text_embedding = text_embedding.reshape(B0, num_layers, *text_embedding.shape[1:])
-        scale_mask = torch.ones_like(text_embedding)
-        scale_mask[placeholder_indices_B, :, placeholder_indices_N] = scale
-        scaled_text_embedding = text_embedding * scale_mask
-        # Change back to the original shape.
-        scaled_text_embedding = scaled_text_embedding.reshape(B, *text_embedding.shape[2:])
+    if B_IND > B0:
+        breakpoint()
+    
+    text_embedding_shape = text_embedding.shape
+
+    # It's possible B_IND < B, i.e., the processed token only appears in some of the prompts.
+    # For example, the subject token only appears in the first half batch of a 
+    # compositional distillation iteration.
+    text_embedding = text_embedding.reshape(B0, num_layers, *text_embedding.shape[1:])
+    scale_mask = torch.ones_like(text_embedding)
+    scale_mask[placeholder_indices_B, :, placeholder_indices_N] = scale
+    scaled_text_embedding = text_embedding * scale_mask
+    # Change back to the original shape.
+    scaled_text_embedding = scaled_text_embedding.reshape(text_embedding_shape)
 
     return scaled_text_embedding
 

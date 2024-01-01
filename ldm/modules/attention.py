@@ -229,25 +229,26 @@ class CrossAttention(nn.Module):
             subj_token = list(ada_subj_attn_dict.keys())[0]
 
             # if training, subj_attn_lb = 0.4. If inference, subj_attn_lb = 0.1.
-            # subj_attn_lb=0.4: Don't scale down attn too much, in case the attn is inaccurate (esp. during training),
-            # and the model should have a chance to recover from the inaccurate attn.
+            # subj_attn_lb=0.4: Don't scale down attn too much. In case the attn is inaccurate (esp. during training),
+            # the model still has a chance to recover from the inaccurate attn.
+            # 0.1 or 0.01 makes no difference in terms of performance.
             subj_attn_lb = 0.4 if self.is_training else 0.1
             # ada_subj_attn: [48, 1, 4096]. Contains probabilities instead of attn scores.
-            # ada_subj_attn_normed: [6, 8, 4096, 1].
-            ada_subj_attn_normed = normalize_ada_subj_attn(ada_subj_attn_dict[subj_token]['attn_fg'],
-                                                           subj_attn_lb=subj_attn_lb, num_heads=h,
-                                                           dtype=sim.dtype)
-            # ada_bg_attn_normed is used somewhere else.
-            ada_bg_attn_normed   = normalize_ada_subj_attn(ada_subj_attn_dict[subj_token]['attn_bg'],
-                                                           subj_attn_lb=subj_attn_lb, num_heads=h,
-                                                           dtype=sim.dtype)
+            # ada_subj_fg_attn_normed: [6, 8, 4096, 1].
+            ada_subj_fg_attn_normed   = normalize_ada_subj_attn(ada_subj_attn_dict[subj_token]['attn_fg'],
+                                                                subj_attn_lb=subj_attn_lb, num_heads=h,
+                                                                dtype=sim.dtype)
+            # ada_subj_bg_attn_normed is used somewhere else.
+            ada_subj_bg_attn_normed   = normalize_ada_subj_attn(ada_subj_attn_dict[subj_token]['attn_bg'],
+                                                                subj_attn_lb=subj_attn_lb, num_heads=h,
+                                                                dtype=sim.dtype)
             
             # Apply the normalized attention scores to the rows of sim 
             # corresponding to the subject tokens.
             # sim: [48, 4096, 77] (8 heads).
-            sim = reweight_attn_rows(sim, ada_subj_attn_normed, subj_indices, h)
+            sim = reweight_attn_rows(sim, ada_subj_fg_attn_normed, subj_indices, h)
         else:
-            ada_subj_attn_normed = None
+            ada_subj_fg_attn_normed = None
 
         # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
         # Otherwise, it's self attention, sim: [16, 4096, 4096].
@@ -289,9 +290,9 @@ class CrossAttention(nn.Module):
             self.cached_activations['attn'] = rearrange(attn, '(b h) i j -> b h i j', h=h)
             self.cached_activations['attnscore'] = rearrange(sim,  '(b h) i j -> b h i j', h=h)
 
-            # ada_subj_attn_normed, ada_bg_attn_normed: [6, 8, 4096, 1].
-            self.cached_activations['ada_subj_attn_normed'] = ada_subj_attn_normed
-            self.cached_activations['ada_bg_attn_normed']   = ada_bg_attn_normed
+            # ada_subj_fg_attn_normed, ada_subj_bg_attn_normed: [6, 8, 4096, 1].
+            self.cached_activations['ada_subj_fg_attn_normed'] = ada_subj_fg_attn_normed
+            self.cached_activations['ada_subj_bg_attn_normed']   = ada_subj_bg_attn_normed
 
         return out
 

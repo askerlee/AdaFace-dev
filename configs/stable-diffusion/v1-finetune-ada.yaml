@@ -57,7 +57,7 @@ model:
     fg_bg_complementary_loss_weight:    2e-4
     # loss_fg_xlayer_consist ~ 0.2, loss_bg_xlayer_consist ~ 0.1. * weight -> 3e-4.
     fg_bg_xlayer_consist_loss_weight:   5e-5
-    fg_bg_token_emb_ortho_loss_weight:  0 #1e-4
+    fg_bg_token_emb_ortho_loss_weight:  1e-4
     compel_cfg_weight_level_range:      [2, 2]
     apply_compel_cfg_prob:              0.5
     # fg_wds_comple: used in wds recon iters.
