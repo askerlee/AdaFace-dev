@@ -4139,7 +4139,8 @@ class LatentDiffusion(DDPM):
         # Otherwise SOT embedding values are too large and dominate the mean embedding.
         cond_prompt_embeddings[:, :, 0] = 0
         #cond_prompt_embeddings[:, :, -1] = 0
-        cond_prompt_embeddings = demean(cond_prompt_embeddings)
+        # cond_prompt_embeddings: [3, 16, 77, 768]. demean_dims: all dims except the feature dim.
+        cond_prompt_embeddings = demean(cond_prompt_embeddings, demean_dims=[0, 1, 2])
 
         # padding_mask: [12, 77, 1] => [12, 77]
         padding_mask = 1 - prompt_emb_mask.squeeze(-1)
