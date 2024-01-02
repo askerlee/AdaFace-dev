@@ -1877,15 +1877,15 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
     static_embeddings, ada_embeddings = \
         clamp_prompt_embedding(prompt_embedding_clamp_value, static_embeddings, ada_embeddings)
 
-    # Remove SOT and EOT embeddings. Especially SOT, which consist of very large values.
-    # static_embeddings: [4, 16, 77, 768] => [4, 16, 75, 768].
-    static_embeddings = static_embeddings[:, :, 1:-1]
+    # Remove SOT embeddings. Especially SOT, which consist of very large values.
+    # static_embeddings: [4, 16, 77, 768] => [4, 16, 76, 768].
+    static_embeddings = static_embeddings[:, :, 1:]
 
     # static_embeddings / ada_embeddings contain 4 types of embeddings:
     # subj_single, subj_comp, cls_single, cls_comp.
-    # static_embeddings: [4, 16, 75, 768].
+    # static_embeddings: [4, 16, 76, 768].
     # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
-    # Each is [1, 16, 75, 768]
+    # Each is [1, 16, 76, 768]
     static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
             static_embeddings.chunk(4)
 
@@ -1893,10 +1893,10 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
         # Regularization on padding tokens.
         # prompt_emb_mask[prompt_emb_mask == 0] = 0.25
         # Exclude the SOT and EOT tokens.
-        # prompt_emb_mask: [4, 77, 1] => [4, 75, 1]
-        prompt_emb_mask = prompt_emb_mask[:, 1:-1]
+        # prompt_emb_mask: [4, 77, 1] => [4, 76, 1]
+        prompt_emb_mask = prompt_emb_mask[:, 1:]
         #prompt_emb_mask[:, 0] = 0
-        # Each mask is [1, 75, 1].
+        # Each mask is [1, 76, 1].
         subj_single_mask, subj_comp_mask, cls_single_mask, cls_comp_mask = \
             prompt_emb_mask.chunk(4)
         
@@ -1909,16 +1909,16 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
         # the aggregated mask value is 1. Convert to 0.25.
         # If a token is padding, the aggregated mask value is 0.5. Convert to 0.0625.
         prompt_emb_mask_weighted = prompt_emb_mask_agg.pow(2) / 4            
-        # prompt_emb_mask_weighted: [1, 75, 1] => [1, 1, 75, 1].
+        # prompt_emb_mask_weighted: [1, 76, 1] => [1, 1, 76, 1].
         prompt_emb_mask_weighted = prompt_emb_mask_weighted.unsqueeze(1)
     else:
         prompt_emb_mask_weighted = None
 
     use_ortho_subtract = True
-    # static_cls_delta: [1, 16, 75, 768]. Should be a repeat of a tensor of size [1, 1, 75, 768]. 
+    # static_cls_delta: [1, 16, 76, 768]. Should be a repeat of a tensor of size [1, 1, 76, 768]. 
     # Delta embedding between class single and comp embeddings.
     # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
-    # static_subj_delta: [1, 16, 75, 768]. Different values for each layer along dim=1.
+    # static_subj_delta: [1, 16, 76, 768]. Different values for each layer along dim=1.
     # Delta embedding between subject single and comp embeddings.
     # static_subj_delta / ada_subj_delta should be aligned with cls_delta.
     if use_ortho_subtract:
@@ -1936,8 +1936,8 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
                              aim_to_align=True)
 
     if do_ada_prompt_delta_reg and ada_embeddings is not None:
-        # ada_embeddings: [4, 16, 77, 768] => [4, 16, 75, 768].
-        ada_embeddings = ada_embeddings[:, :, 1:-1]
+        # ada_embeddings: [4, 16, 77, 768] => [4, 16, 76, 768].
+        ada_embeddings = ada_embeddings[:, :, 1:]
         # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
         # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
         # the subject token.
