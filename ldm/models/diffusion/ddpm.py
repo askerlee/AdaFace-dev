@@ -4139,10 +4139,10 @@ class LatentDiffusion(DDPM):
         
         # Do demean to all the embeddings here as a preprocessing,
         # so that we don't need to do demean in calc_ref_cosine_loss().
-        cond_prompt_embeddings = cond_prompt_embeddings.clone()
+        #cond_prompt_embeddings = cond_prompt_embeddings.clone()
         # Empty the SOT embeddings, so that they won't play a role in demean().
         # Otherwise SOT embedding values are too large and dominate the mean embedding.
-        cond_prompt_embeddings[:, :, 0] = 0
+        #cond_prompt_embeddings[:, :, 0] = 0
         #cond_prompt_embeddings[:, :, -1] = 0
         ## cond_prompt_embeddings: [3, 16, 77, 768]. demean_dims: all dims except the feature dim.
         # demean_dims: if on all dims except the feature dim, the performance is worse.
