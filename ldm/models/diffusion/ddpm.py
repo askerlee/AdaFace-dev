@@ -2770,7 +2770,7 @@ class LatentDiffusion(DDPM):
                 comp_single_map_align_loss_scale = 1
                 # mix single - mix comp matching loss is less important, so scale it down.
                 ms_mc_fg_match_loss_scale = 0.1
-                comp_subj_bg_attn_suppress_loss_scale = 0.02
+                subj_bg_attn_suppress_loss_scale = 0.03
                 sc_mc_bg_match_loss_scale_base = 2
                 # sc_mc_bg_match_loss_base: 0.2. 
                 sc_mc_bg_match_loss_scale = calc_dyn_loss_scale(loss_sc_mc_bg_match,
@@ -2779,13 +2779,18 @@ class LatentDiffusion(DDPM):
                                                                 min_scale_base_ratio=1,
                                                                 max_scale_base_ratio=3)
                 
+                # loss_comp_subj_bg_attn_suppress is expected to be at similar scales 
+                # as loss_comp_mix_bg_attn_suppress. So penalize more if it's larger.
+                comp_subj_bg_attn_suppress_scale = loss_comp_subj_bg_attn_suppress.item() \
+                                                    / (loss_comp_mix_bg_attn_suppress.item() + 1e-6)
                 # No need to scale down loss_comp_mix_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
                 loss_comp_fg_bg_preserve = loss_comp_single_map_align * comp_single_map_align_loss_scale \
                                            + (loss_sc_ss_fg_match + loss_mc_ms_fg_match * ms_mc_fg_match_loss_scale
                                                 + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
                                               * elastic_matching_loss_scale \
-                                           + (loss_comp_subj_bg_attn_suppress + loss_comp_mix_bg_attn_suppress) \
-                                              * comp_subj_bg_attn_suppress_loss_scale
+                                           + (loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_scale \
+                                               + loss_comp_mix_bg_attn_suppress) \
+                                              * subj_bg_attn_suppress_loss_scale
                 
                 loss_dict.update({f'{prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
                 # Keep track of the number of iterations that use comp_init_fg_from_training_image.
