@@ -2681,6 +2681,7 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach().item() })
                 
                 bg_subj_embs_align_loss_scale  = 0.1 # disabled. # 1
+                # NOTE: loss_padding_cls_embs_align is not included in loss_padding_embs_align.
                 loss_padding_embs_align = (loss_padding_subj_embs_align 
                                             + loss_bg_subj_embs_align * bg_subj_embs_align_loss_scale)
                 
