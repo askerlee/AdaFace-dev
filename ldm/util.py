@@ -357,8 +357,10 @@ def clamp_prompt_embedding(clamp_value, *embs):
     clamp = lambda e: torch.clamp(e, min=-clamp_value, max=clamp_value) if e is not None else None
     return clamp(embs[0]) if len(embs) == 1 else [clamp(e) for e in embs]
     
-def demean(x):
-    return x - x.mean(dim=-1, keepdim=True)
+def demean(x, feat_dim=-1):
+    dim_indices = list(range(x.ndim))
+    dim_indices.pop(feat_dim)
+    return x - x.mean(dim=dim_indices, keepdim=True)
 
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].

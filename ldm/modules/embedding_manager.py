@@ -1709,8 +1709,8 @@ class EmbeddingManager(nn.Module):
         
         self.placeholder2indices[placeholder_string] = placeholder_indices
 
-    def get_ada_emb_weight(self):
-        if self.training:
+    def get_ada_emb_weight(self, do_perturb=True):
+        if self.training and do_perturb:
             # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
             ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)
         else:

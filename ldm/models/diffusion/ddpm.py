@@ -38,7 +38,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
                        gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, clamp_prompt_embedding, \
-                       merge_cls_token_embeddings
+                       merge_cls_token_embeddings, demean
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -2666,6 +2666,7 @@ class LatentDiffusion(DDPM):
                     = self.calc_padding_embs_align_loss(static_embeddings, ada_embeddings,
                                                         extra_info['prompt_emb_mask'],
                                                         subj_indices, bg_indices, SSB_SIZE, 
+                                                        extra_info['iter_type'],
                                                         self.iter_flags['is_compos_iter'],
                                                         emb_clamp_value=self.prompt_embedding_clamp_value)
 
@@ -4104,16 +4105,16 @@ class LatentDiffusion(DDPM):
 
     # SSB_SIZE: subject sub-batch size.
     # If do_normal_recon, then both instances are subject instances. 
-    # The subject sub-batch size SSB_SIZE = 2 (1 * BLOCK_SIZE).
-    # If is_compos_iter, then subject sub-batch size SSB_SIZE = 2 * BLOCK_SIZE. 
-    # (subj-single and subj-comp instances).
+    # The subject sub-batch size SSB_SIZE = 3 (1 * BLOCK_SIZE, BLOCK_SIZE=3).
+    # If is_compos_iter, then subject sub-batch size SSB_SIZE = 2 (2 * BLOCK_SIZE, BLOCK_SIZE=1).
+    # (subj-single and subj-comp blocks).
     def calc_padding_embs_align_loss(self, static_prompt_embeddings, ada_prompt_embeddings, 
                                      prompt_emb_mask, subj_indices, bg_indices,
-                                     SSB_SIZE, is_compos_iter, emb_clamp_value=-1):
+                                     SSB_SIZE, iter_type, is_compos_iter, emb_clamp_value=-1):
         # If do_normal_recon:
-        # static_prompt_embeddings: [8, 16, 77, 768].
-        # ada_prompt_embeddings:    [2, 16, 77, 768].
-        # prompt_emb_mask:          [8, 77, 1].
+        # static_prompt_embeddings: [3, 16, 77, 768].
+        # ada_prompt_embeddings:    [3, 16, 77, 768].
+        # prompt_emb_mask:          [12, 77, 1] (correspoinding to the 4-type static prompts)
         # Otherwise, is_compos_iter:
         # static_prompt_embeddings: [4, 16, 77, 768].
         # ada_prompt_embeddings:    [4, 16, 77, 768].
@@ -4124,17 +4125,23 @@ class LatentDiffusion(DDPM):
 
         if ada_prompt_embeddings is not None:
             # During training, ada_emb_weight is randomly drawn from [0.4, 0.7].
-            ada_emb_weight = self.embedding_manager.get_ada_emb_weight() 
+            ada_emb_weight = self.embedding_manager.get_ada_emb_weight(do_perturb=False) 
             cond_prompt_embeddings = static_prompt_embeddings * (1 - ada_emb_weight) \
                                       + ada_prompt_embeddings * ada_emb_weight
         else:
             cond_prompt_embeddings = static_prompt_embeddings
         
-        # padding_mask: [2/4, 77, 1] => [2/4, 77]
+        # Do demean to all the embeddings here as a preprocessing,
+        # so that we don't need to do demean in calc_ref_cosine_loss().
+        cond_prompt_embeddings = demean(cond_prompt_embeddings)
+
+        # padding_mask: [12, 77, 1] => [12, 77]
         padding_mask = 1 - prompt_emb_mask.squeeze(-1)
-        # "start" token always receives the highest attention, which is the normal behavior.
-        # So we exclude the "start" token from the align padding loss.
+        # The SOT token always receives the highest attention, which is the normal behavior.
+        # So we exclude the SOT token from the align padding loss.
         padding_mask[:, 0] = 0
+        # In addition, we also exclude the EOT token from the align padding loss.
+        padding_mask[:, -1] = 0
         # padding embeddings cannot push the subject embeddings away.
         subj_embs_contrast_paddings_grad_scale  = 0.02
         subj_embs_contrast_paddings_grad_scaler = gen_gradient_scaler(subj_embs_contrast_paddings_grad_scale)
@@ -4146,9 +4153,10 @@ class LatentDiffusion(DDPM):
         subj_subj_indices_B, subj_subj_indices_N = subj_indices
 
         K_fg = len(subj_subj_indices_B) // len(torch.unique(subj_subj_indices_B))
-        # subj_embs: [2*9, 768].
+        # subj_subj_embs: [3*9, 16, 768]. The 3*9 sets of embeddings are ordered first along tokens, 
+        # then along instances. reshape(SSB_SIZE, K_fg) corresponds to this order.
         subj_subj_embs = cond_prompt_embeddings[subj_subj_indices_B, :, subj_subj_indices_N]
-        # subj_subj_embs: [18, 16, 768] => [2, 9, 16, 768] => [2, 1, 16, 768]. "1" is for broadcasting.
+        # subj_subj_embs: [27, 16, 768] => [3, 9, 16, 768] => [3, 1, 16, 768]. "1" is for broadcasting.
         subj_subj_embs = subj_subj_embs.reshape(SSB_SIZE, K_fg, self.N_LAYERS, -1).sum(dim=1, keepdim=True)
         subj_subj_embs_gs = subj_embs_contrast_paddings_grad_scaler(subj_subj_embs)
 
@@ -4159,22 +4167,26 @@ class LatentDiffusion(DDPM):
         # Subject tokens are always in instances 0 .. SSB_SIZE-1.
         for i in range(SSB_SIZE):
             #subj_padding_indices_i = subj_padding_indices_by_instance[i]
+            # If do_normal_recon, padding_mask is [12, 77] for all the 4 types of static prompts. 
+            # But SSB_SIZE = 3. It's fine, as we only look at the first SSB_SIZE instances.
             subj_padding_indices_i_N = padding_mask[i].nonzero().squeeze(-1)
-            # subj_padding_embs_i: [63, 16, 768].
+            # subj_padding_embs_i: [16, 56, 768] -> [56, 16, 768].
             subj_padding_embs_i = cond_prompt_embeddings[i, :, subj_padding_indices_i_N].permute(1, 0, 2)
-            # subj_subj_embs_gs_i: [1,  16, 768] => [63, 16, 768].
+            # subj_subj_embs_gs_i: [1,  16, 768] => [56, 16, 768]. 
+            # Same subject embedding paired for all the 56 padding tokens.
             subj_subj_embs_gs_i = subj_subj_embs_gs[i].expand_as(subj_padding_embs_i)
-            # Penalize any positive coeffs within padding_subj_embs_align_coeffs_i: [63, 16].
+            # Penalize any positive coeffs within padding_subj_embs_align_coeffs_i: [56, 16].
             loss_inst_padding_subj_embs_align \
                 = calc_ref_cosine_loss(subj_padding_embs_i, subj_subj_embs_gs_i,
-                                         exponent=2, do_demean_first=True, 
-                                         first_n_dims_to_flatten=2, 
-                                         ref_grad_scale=1, aim_to_align=False)
+                                       exponent=2, do_demean_first=False, 
+                                       first_n_dims_to_flatten=2, 
+                                       ref_grad_scale=1, aim_to_align=False)
             
             loss_padding_subj_embs_align += loss_inst_padding_subj_embs_align
         
         loss_padding_subj_embs_align /= SSB_SIZE
 
+        # If is_compos_iter, loss_padding_cls_embs_align is computed as a reference (but not optimized).
         if is_compos_iter:
             cls_subj_indices_B, cls_subj_indices_N = subj_subj_indices_B + SSB_SIZE, subj_subj_indices_N
             cls_subj_embs = cond_prompt_embeddings[cls_subj_indices_B, :, cls_subj_indices_N]
@@ -4183,23 +4195,27 @@ class LatentDiffusion(DDPM):
             cls_padding_indices_by_instance = split_indices_by_instance(cls_padding_indices)
 
             for i in range(len(cls_padding_indices_by_instance)):
-                cls_padding_indices_i = cls_padding_indices_by_instance[i]
-                # cls_padding_embs_i: [16, 63, 768] -> [63, 16, 768].
-                cls_padding_embs_i = cond_prompt_embeddings[cls_padding_indices_i[0], :, cls_padding_indices_i[1]]
-                # cls_subj_embs_i:    [1, 16, 768] -> [63, 16, 768].
+                cls_padding_indices_i_B, cls_padding_indices_i_N = cls_padding_indices_by_instance[i]
+                # cls_padding_indices_i_B contains the same batch index multiple times. So take the first one.
+                # cls_padding_indices corresponds to padding_mask[SSB_SIZE:], so adding SSB_SIZE to correct the offset.
+                i2 = cls_padding_indices_i_B[0] + SSB_SIZE
+                # cls_padding_embs_i: [16, 61, 768] -> [61, 16, 768].
+                cls_padding_embs_i = cond_prompt_embeddings[i2, :, cls_padding_indices_i_N].permute(1, 0, 2)
+                # cls_subj_embs_i:    [1, 16, 768]  -> [61, 16, 768].
                 cls_subj_embs_i = cls_subj_embs[i].expand_as(cls_padding_embs_i)
                 # we don't do gs on cls_subj_embs, since loss_padding_cls_embs_align is not optimized.
                 loss_inst_padding_cls_embs_align \
                     = calc_ref_cosine_loss(cls_padding_embs_i, cls_subj_embs_i,
-                                             exponent=2, do_demean_first=True, 
-                                             first_n_dims_to_flatten=2,                                              
-                                             ref_grad_scale=1, aim_to_align=False)
+                                           exponent=2, do_demean_first=False, 
+                                           first_n_dims_to_flatten=2,                                              
+                                           ref_grad_scale=1, aim_to_align=False)
                 
                 loss_padding_cls_embs_align += loss_inst_padding_cls_embs_align
 
             if len(cls_padding_indices_by_instance) > 0:
                 loss_padding_cls_embs_align /= len(cls_padding_indices_by_instance)
 
+        # Should be a do_normal_recon iter. Otherwise bg tokens are not in the prompts.
         if bg_indices is not None:
             bg_padding_mask = torch.zeros_like(padding_mask)
             bg_padding_mask[bg_indices] = 1
@@ -4224,9 +4240,9 @@ class LatentDiffusion(DDPM):
                     # Penalize any positive coeffs within bg_subj_embs_align_coeffs_i: [4, 16].
                     loss_inst_bg_subj_embs_align \
                         = calc_ref_cosine_loss(bg_embs_i, subj_subj_embs_gs2_i,
-                                                 exponent=2, do_demean_first=True, 
-                                                 first_n_dims_to_flatten=2, 
-                                                 ref_grad_scale=1, aim_to_align=False)
+                                               exponent=2, do_demean_first=False, 
+                                               first_n_dims_to_flatten=2, 
+                                               ref_grad_scale=1, aim_to_align=False)
                     
                     loss_bg_subj_embs_align += loss_inst_bg_subj_embs_align
 
