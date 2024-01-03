@@ -4135,10 +4135,10 @@ class LatentDiffusion(DDPM):
         # Do demean to all the embeddings here as a preprocessing,
         # so that we don't need to do demean in calc_ref_cosine_loss().
         cond_prompt_embeddings = cond_prompt_embeddings.clone()
-        # Empty the SOT embeddings, so that they won't play a role in demean().
+        # Empty the SOT and EOT embeddings, so that they won't play a role in demean().
         # Otherwise SOT embedding values are too large and dominate the mean embedding.
         cond_prompt_embeddings[:, :, 0] = 0
-        #cond_prompt_embeddings[:, :, -1] = 0
+        cond_prompt_embeddings[:, :, -1] = 0
         cond_prompt_embeddings = demean(cond_prompt_embeddings)
 
         # padding_mask: [12, 77, 1] => [12, 77]
@@ -4147,7 +4147,7 @@ class LatentDiffusion(DDPM):
         # So we exclude the SOT token from the align padding loss.
         padding_mask[:, 0] = 0
         # In addition, we also exclude the EOT token from the align padding loss.
-        # padding_mask[:, -1] = 0
+        padding_mask[:, -1] = 0
         # padding embeddings cannot push the subject embeddings away.
         subj_embs_contrast_paddings_grad_scale  = 0.02
         subj_embs_contrast_paddings_grad_scaler = gen_gradient_scaler(subj_embs_contrast_paddings_grad_scale)
