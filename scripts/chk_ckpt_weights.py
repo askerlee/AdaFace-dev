@@ -38,8 +38,8 @@ tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
 
 print("emb_global_scale_scores:")
 for idx, iteration in enumerate(iterations):
-    if iteration % 100 != 0:
-        continue
+    #if iteration % 100 != 0:
+    #    continue
             
     emb_path = os.path.join(emb_folder, iter2path[iteration])
     emb_ckpt = torch.load(emb_path)
