@@ -3858,7 +3858,7 @@ class LatentDiffusion(DDPM):
             #loss_layer_fg_xlayer_consist = ortho_l2loss(subj_attn, subj_attn_xlayer, mean=True)
             loss_layer_fg_xlayer_consist = calc_ref_cosine_loss(subj_attn, subj_attn_xlayer,
                                                                 exponent=2,    
-                                                                do_demean_first=False,
+                                                                do_demean_first=True,
                                                                 first_n_dims_to_flatten=1,
                                                                 ref_grad_scale=1,
                                                                 aim_to_align=True)
@@ -3869,7 +3869,7 @@ class LatentDiffusion(DDPM):
                 #loss_layer_bg_xlayer_consist = ortho_l2loss(bg_attn, bg_attn_xlayer, mean=True)
                 loss_layer_bg_xlayer_consist = calc_ref_cosine_loss(bg_attn, bg_attn_xlayer,
                                                                     exponent=2,    
-                                                                    do_demean_first=False,
+                                                                    do_demean_first=True,
                                                                     first_n_dims_to_flatten=1,
                                                                     ref_grad_scale=1,
                                                                     aim_to_align=True)
