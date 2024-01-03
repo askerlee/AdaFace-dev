@@ -3855,14 +3855,10 @@ class LatentDiffusion(DDPM):
             
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
 
-            # demean_dims=None: demean over all dimensions.
-            subj_attn        = demean(subj_attn, demean_dims=None)
-            subj_attn_xlayer = demean(subj_attn_xlayer, demean_dims=None)
-
             #loss_layer_fg_xlayer_consist = ortho_l2loss(subj_attn, subj_attn_xlayer, mean=True)
             loss_layer_fg_xlayer_consist = calc_ref_cosine_loss(subj_attn, subj_attn_xlayer,
                                                                 exponent=2,    
-                                                                do_demean_first=False,
+                                                                do_demean_first=True,
                                                                 first_n_dims_to_flatten=1,
                                                                 ref_grad_scale=1,
                                                                 aim_to_align=True)
@@ -3870,12 +3866,10 @@ class LatentDiffusion(DDPM):
             loss_layers_fg_xlayer_consist.append(loss_layer_fg_xlayer_consist * attn_align_layer_weight)
             
             if bg_indices is not None:
-                bg_attn         = demean(bg_attn, demean_dims=None)
-                bg_attn_xlayer  = demean(bg_attn_xlayer, demean_dims=None)
                 #loss_layer_bg_xlayer_consist = ortho_l2loss(bg_attn, bg_attn_xlayer, mean=True)
                 loss_layer_bg_xlayer_consist = calc_ref_cosine_loss(bg_attn, bg_attn_xlayer,
                                                                     exponent=2,    
-                                                                    do_demean_first=False,
+                                                                    do_demean_first=True,
                                                                     first_n_dims_to_flatten=1,
                                                                     ref_grad_scale=1,
                                                                     aim_to_align=True)
