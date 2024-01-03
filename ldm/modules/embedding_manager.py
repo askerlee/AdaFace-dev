@@ -2039,13 +2039,13 @@ class EmbeddingManager(nn.Module):
     def optimized_parameters(self):
         normal_params = list(self.string_to_static_embedder_dict.parameters()) \
                         + list(self.string_to_ada_embedder_dict.parameters()) \
-                        + list(self.string_to_emb_ema_dict.parameters()) \
-                        + [ self.emb_global_scale_scores ]
+                        + list(self.string_to_emb_ema_dict.parameters()) #\
+                        # + [ self.emb_global_scale_scores ]
 
         params_with_lr_ratios = [ { 'params': normal_params, 'lr_ratio': 1 } ]
 
         if self.conv_attn_layerwise_scale_learnable:
-            slow_params = [self.conv_attn_layerwise_scales]
+            slow_params = [ self.conv_attn_layerwise_scales, self.emb_global_scale_scores ]
             params_with_lr_ratios = params_with_lr_ratios + \
                                     [ { 'params': slow_params,   'lr_ratio': 0.1 } ]
 
