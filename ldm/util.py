@@ -358,10 +358,11 @@ def clamp_prompt_embedding(clamp_value, *embs):
     return clamp(embs[0]) if len(embs) == 1 else [clamp(e) for e in embs]
     
 def demean(x, demean_dims=[-1]):
-    assert len(demean_dims) <= x.ndim, "demean_dims must be a subset of x's dims."
-    # Usually len(demean_dims) < x.ndim.
-    if len(demean_dims) == x.ndim:
-        breakpoint()
+    if demean_dims is not None:
+        assert len(demean_dims) <= x.ndim, "demean_dims must be a subset of x's dims."
+        # Usually len(demean_dims) < x.ndim.
+        if len(demean_dims) == x.ndim:
+            breakpoint()
     return x - x.mean(dim=demean_dims, keepdim=True)
 
 # Eq.(2) in the StyleGAN-NADA paper.
