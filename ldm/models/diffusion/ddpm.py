@@ -3893,7 +3893,6 @@ class LatentDiffusion(DDPM):
 
         loss_subj_comp_key_ortho   = 0
         loss_subj_comp_value_ortho = 0
-        emb_kq_do_demean_first = False
 
         if not is_4type_batch:
             return 0, 0
@@ -3922,7 +3921,7 @@ class LatentDiffusion(DDPM):
                                                        cls_subj_indices, 
                                                        cls_comp_indices,
                                                        all_token_weights=avg_attn_scores,
-                                                       do_demean_first=emb_kq_do_demean_first, 
+                                                       do_demean_first=False, 
                                                        cls_grad_scale=cls_grad_scale,
                                                        margin=0.6)
             loss_layer_subj_comp_value_ortho = \
@@ -3932,7 +3931,7 @@ class LatentDiffusion(DDPM):
                                                        cls_subj_indices, 
                                                        cls_comp_indices,
                                                        all_token_weights=avg_attn_scores,
-                                                       do_demean_first=emb_kq_do_demean_first, 
+                                                       do_demean_first=False, 
                                                        cls_grad_scale=cls_grad_scale,
                                                        margin=0.7)
                     
@@ -4132,18 +4131,29 @@ class LatentDiffusion(DDPM):
         else:
             cond_prompt_embeddings = static_prompt_embeddings
         
-        # Do demean to all the embeddings here as a preprocessing,
-        # so that we don't need to do demean in calc_ref_cosine_loss().
-        cond_prompt_embeddings = demean(cond_prompt_embeddings)
-
+        if not is_compos_iter:
+            # Do demean to all the embeddings here as a preprocessing,
+            # so that we don't need to do demean in calc_ref_cosine_loss().
+            cond_prompt_embeddings = demean(cond_prompt_embeddings)
+            cond_prompt_embeddings_delta = cond_prompt_embeddings
+        else:
+            subj_prompt_embeddings, mix_prompt_embeddings = cond_prompt_embeddings.chunk(2)
+            # Calculate the delta between the subject embeddings and the mix embeddings.
+            # This should have similar effect as demeaning, and at the same time highlight
+            # the extra semantics of the subject.
+            cond_prompt_embeddings_delta = ortho_subtract(subj_prompt_embeddings, mix_prompt_embeddings)
+            
         # padding_mask: [12, 77, 1] => [12, 77]
         padding_mask = 1 - prompt_emb_mask.squeeze(-1)
         # The SOT token always receives the highest attention, which is the normal behavior.
         # So we exclude the SOT token from the align padding loss.
         padding_mask[:, 0] = 0
         # In addition, we also exclude the EOT token from the align padding loss.
-        padding_mask[:, -1] = 0
-        # padding embeddings cannot push the subject embeddings away.
+        # padding_mask[:, -1] = 0
+        # Both subj_embs_contrast_paddings_grad_scaler and subj_embs_contrast_bg_grad_scaler
+        # are applied on subj embeddings, but first is for contrasting with padding embeddings,
+        # and second is for contrasting with bg embeddings.
+        # padding embeddings cannot push the subject embeddings away. So gs is very small.
         subj_embs_contrast_paddings_grad_scale  = 0.02
         subj_embs_contrast_paddings_grad_scaler = gen_gradient_scaler(subj_embs_contrast_paddings_grad_scale)
         # bg embeddings can push the subject embeddings away, but less effectively than 
@@ -4172,7 +4182,9 @@ class LatentDiffusion(DDPM):
             # But SSB_SIZE = 3. It's fine, as we only look at the first SSB_SIZE instances.
             subj_padding_indices_i_N = padding_mask[i].nonzero().squeeze(-1)
             # subj_padding_embs_i: [16, 56, 768] -> [56, 16, 768].
-            subj_padding_embs_i = cond_prompt_embeddings[i, :, subj_padding_indices_i_N].permute(1, 0, 2)
+            # Note that subj_padding_embs_i is taken from cond_prompt_embeddings_delta,
+            # as i always points to a subject instance.
+            subj_padding_embs_i = cond_prompt_embeddings_delta[i, :, subj_padding_indices_i_N].permute(1, 0, 2)
             # subj_subj_embs_gs_i: [1,  16, 768] => [56, 16, 768]. 
             # Same subject embedding paired for all the 56 padding tokens.
             subj_subj_embs_gs_i = subj_subj_embs_gs[i].expand_as(subj_padding_embs_i)
@@ -4201,6 +4213,8 @@ class LatentDiffusion(DDPM):
                 # cls_padding_indices corresponds to padding_mask[SSB_SIZE:], so adding SSB_SIZE to correct the offset.
                 i2 = cls_padding_indices_i_B[0] + SSB_SIZE
                 # cls_padding_embs_i: [16, 61, 768] -> [61, 16, 768].
+                # Note that cls_padding_embs_i is taken from cond_prompt_embeddings,
+                # instead of cond_prompt_embeddings_delta, as i2 always points to a cls instance.
                 cls_padding_embs_i = cond_prompt_embeddings[i2, :, cls_padding_indices_i_N].permute(1, 0, 2)
                 # cls_subj_embs_i:    [1, 16, 768]  -> [61, 16, 768].
                 cls_subj_embs_i = cls_subj_embs[i].expand_as(cls_padding_embs_i)
@@ -4235,6 +4249,8 @@ class LatentDiffusion(DDPM):
                 bg_indices_i_N = bg_padding_mask[i].nonzero().squeeze(-1)
                 if len(bg_indices_i_N) > 0:
                     # bg_embs_i: [16, 4, 768] => [4, 16, 768].
+                    # Note that bg_embs_i is taken from cond_prompt_embeddings,
+                    # as we don't contrast the extra semantics, but the complete fg vs. bg semantics.
                     bg_embs_i = cond_prompt_embeddings[i, :, bg_indices_i_N].permute(1, 0, 2)
                     # subj_subj_embs_gs2_i: [1,  16, 768].
                     subj_subj_embs_gs2_i = subj_subj_embs_gs2[i].expand_as(bg_embs_i)

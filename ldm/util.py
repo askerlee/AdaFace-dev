@@ -357,10 +357,12 @@ def clamp_prompt_embedding(clamp_value, *embs):
     clamp = lambda e: torch.clamp(e, min=-clamp_value, max=clamp_value) if e is not None else None
     return clamp(embs[0]) if len(embs) == 1 else [clamp(e) for e in embs]
     
-def demean(x, feat_dim=-1):
-    dim_indices = list(range(x.ndim))
-    dim_indices.pop(feat_dim)
-    return x - x.mean(dim=dim_indices, keepdim=True)
+def demean(x, demean_dims=[-1]):
+    assert len(demean_dims) <= x.ndim, "demean_dims must be a subset of x's dims."
+    # Usually len(demean_dims) < x.ndim.
+    if len(demean_dims) == x.ndim:
+        breakpoint()
+    return x - x.mean(dim=demean_dims, keepdim=True)
 
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
@@ -1726,7 +1728,7 @@ def extract_first_index_in_each_instance(token_indices):
 def calc_layer_subj_comp_k_or_v_ortho_loss(seq_ks, subj_subj_indices, subj_comp_indices, 
                                            cls_subj_indices, cls_comp_indices,
                                            all_token_weights=None, 
-                                           do_demean_first=True, cls_grad_scale=0.05,
+                                           do_demean_first=False, cls_grad_scale=0.05,
                                            margin=0.6):
 
     # Put the 4 subject embeddings in the 2nd to last dimension for torch.mm().
@@ -1769,7 +1771,7 @@ def calc_layer_subj_comp_k_or_v_ortho_loss(seq_ks, subj_subj_indices, subj_comp_
     loss_layer_subj_comp_key_ortho = \
         calc_ref_cosine_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
                              batch_mask=None, exponent=2,
-                             do_demean_first=do_demean_first, 
+                             do_demean_first=do_demean_first,  # default: False
                              first_n_dims_to_flatten=2,
                              ref_grad_scale=cls_grad_scale,
                              aim_to_align=True,
@@ -1870,7 +1872,7 @@ def extract_last_chunk_of_indices(token_indices, total_num_chunks=3):
     return (token_indices_half_B2, token_indices_half_N2)
 
 # Textual inversion is supported, where static_embeddings is only one embedding.
-# static_embeddings: size: [8*16, 77, 768]. 8 = 4 * batch_size. 16: number of UNet layers.
+# static_embeddings: size: [4, 16, 77, 768]. 4: batch_size. 16: number of UNet layers.
 # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
 def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mask,
                                do_ada_prompt_delta_reg, prompt_embedding_clamp_value):

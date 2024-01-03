@@ -2122,7 +2122,7 @@ class EmbeddingManager(nn.Module):
         bias_reg_weight_base        = 0.1
         basis_reg_weight_base       = 0.1
         ada_maps_weight_reg_weight  = 0.1
-        ada_maps_bias_reg_weight    = 0.001   # 0.001 -> 0
+        ada_maps_bias_reg_weight    = 0 #0.001   # 0.001 -> 0
         pre_vecs_reg_weight         = 0.1
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
