@@ -512,11 +512,11 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
                 # ref_grad_scale=1: ref grad scaling is disabled within calc_ref_cosine_loss,
                 # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
                 loss_delta_align = calc_ref_cosine_loss(tgt_delta, src_delta, 
-                                                          exponent=cosine_exponent,
-                                                          do_demean_first=False,
-                                                          first_n_dims_to_flatten=(feat_base.ndim - 1), 
-                                                          ref_grad_scale=1,
-                                                          aim_to_align=True)
+                                                        exponent=cosine_exponent,
+                                                        do_demean_first=False,
+                                                        first_n_dims_to_flatten=(feat_base.ndim - 1), 
+                                                        ref_grad_scale=1,
+                                                        aim_to_align=True)
             else:
                 # ref_grad_scale=1: ref grad scaling is disabled within calc_ref_cosine_loss,
                 # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.

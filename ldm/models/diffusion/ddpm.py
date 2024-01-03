@@ -3855,11 +3855,25 @@ class LatentDiffusion(DDPM):
             
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
 
-            loss_layer_fg_xlayer_consist = ortho_l2loss(subj_attn, subj_attn_xlayer, mean=True)
+            #loss_layer_fg_xlayer_consist = ortho_l2loss(subj_attn, subj_attn_xlayer, mean=True)
+            loss_layer_fg_xlayer_consist = calc_ref_cosine_loss(subj_attn, subj_attn_xlayer,
+                                                                exponent=2,    
+                                                                do_demean_first=False,
+                                                                first_n_dims_to_flatten=1,
+                                                                ref_grad_scale=1,
+                                                                aim_to_align=True)
+            
             loss_layers_fg_xlayer_consist.append(loss_layer_fg_xlayer_consist * attn_align_layer_weight)
             
             if bg_indices is not None:
-                loss_layer_bg_xlayer_consist = ortho_l2loss(bg_attn, bg_attn_xlayer, mean=True)
+                #loss_layer_bg_xlayer_consist = ortho_l2loss(bg_attn, bg_attn_xlayer, mean=True)
+                loss_layer_bg_xlayer_consist = calc_ref_cosine_loss(bg_attn, bg_attn_xlayer,
+                                                                    exponent=2,    
+                                                                    do_demean_first=False,
+                                                                    first_n_dims_to_flatten=1,
+                                                                    ref_grad_scale=1,
+                                                                    aim_to_align=True)
+                
                 loss_layers_bg_xlayer_consist.append(loss_layer_bg_xlayer_consist * attn_align_layer_weight)
 
         loss_fg_xlayer_consist = normalized_sum(loss_layers_fg_xlayer_consist)
