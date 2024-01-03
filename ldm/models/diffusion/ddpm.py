@@ -4136,9 +4136,6 @@ class LatentDiffusion(DDPM):
             cond_prompt_embeddings = static_prompt_embeddings
         
         if not is_compos_iter:
-            # Do demean to all the embeddings here as a preprocessing,
-            # so that we don't need to do demean in calc_ref_cosine_loss().
-            cond_prompt_embeddings = demean(cond_prompt_embeddings)
             cond_prompt_embeddings_delta = cond_prompt_embeddings
         else:
             subj_prompt_embeddings, mix_prompt_embeddings = cond_prompt_embeddings.chunk(2)
@@ -4195,7 +4192,7 @@ class LatentDiffusion(DDPM):
             # Penalize any positive coeffs within padding_subj_embs_align_coeffs_i: [56, 16].
             loss_inst_padding_subj_embs_align \
                 = calc_ref_cosine_loss(subj_padding_embs_i, subj_subj_embs_gs_i,
-                                       exponent=2, do_demean_first=False, 
+                                       exponent=2, do_demean_first=True, 
                                        first_n_dims_to_flatten=2, 
                                        ref_grad_scale=1, aim_to_align=False)
             
@@ -4225,7 +4222,7 @@ class LatentDiffusion(DDPM):
                 # we don't do gs on cls_subj_embs, since loss_padding_cls_embs_align is not optimized.
                 loss_inst_padding_cls_embs_align \
                     = calc_ref_cosine_loss(cls_padding_embs_i, cls_subj_embs_i,
-                                           exponent=2, do_demean_first=False, 
+                                           exponent=2, do_demean_first=True, 
                                            first_n_dims_to_flatten=2,                                              
                                            ref_grad_scale=1, aim_to_align=False)
                 
@@ -4261,7 +4258,7 @@ class LatentDiffusion(DDPM):
                     # Penalize any positive coeffs within bg_subj_embs_align_coeffs_i: [4, 16].
                     loss_inst_bg_subj_embs_align \
                         = calc_ref_cosine_loss(bg_embs_i, subj_subj_embs_gs2_i,
-                                               exponent=2, do_demean_first=False, 
+                                               exponent=2, do_demean_first=True, 
                                                first_n_dims_to_flatten=2, 
                                                ref_grad_scale=1, aim_to_align=False)
                     
