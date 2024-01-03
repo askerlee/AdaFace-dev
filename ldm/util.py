@@ -357,12 +357,10 @@ def clamp_prompt_embedding(clamp_value, *embs):
     clamp = lambda e: torch.clamp(e, min=-clamp_value, max=clamp_value) if e is not None else None
     return clamp(embs[0]) if len(embs) == 1 else [clamp(e) for e in embs]
     
-def demean(x, demean_dims=[-1]):
-    assert len(demean_dims) <= x.ndim, "demean_dims must be a subset of x's dims."
-    # Usually len(demean_dims) < x.ndim.
-    if len(demean_dims) == x.ndim:
-        breakpoint()
-    return x - x.mean(dim=demean_dims, keepdim=True)
+def demean(x, feat_dim=-1):
+    dim_indices = list(range(x.ndim))
+    dim_indices.pop(feat_dim)
+    return x - x.mean(dim=dim_indices, keepdim=True)
 
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
@@ -433,8 +431,8 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
             breakpoint()
 
         if do_demean_first:
-            delta_i      = demean(delta_i,      demean_dims=[-1])
-            ref_delta_i2 = demean(ref_delta_i,  demean_dims=[-1])
+            delta_i      = demean(delta_i)
+            ref_delta_i2 = demean(ref_delta_i)
         else:
             ref_delta_i2 = ref_delta_i
 
