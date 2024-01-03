@@ -1881,7 +1881,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
 
     # Remove SOT embeddings. Especially SOT, which consist of very large values.
     # static_embeddings: [4, 16, 77, 768] => [4, 16, 76, 768].
-    #static_embeddings = static_embeddings[:, :, 1:]
+    static_embeddings = static_embeddings[:, :, 1:]
 
     # static_embeddings / ada_embeddings contain 4 types of embeddings:
     # subj_single, subj_comp, cls_single, cls_comp.
@@ -1896,7 +1896,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
         # prompt_emb_mask[prompt_emb_mask == 0] = 0.25
         # Exclude the SOT and EOT tokens.
         # prompt_emb_mask: [4, 77, 1] => [4, 76, 1]
-        #prompt_emb_mask = prompt_emb_mask[:, 1:]
+        prompt_emb_mask = prompt_emb_mask[:, 1:]
         #prompt_emb_mask[:, 0] = 0
         # Each mask is [1, 76, 1].
         subj_single_mask, subj_comp_mask, cls_single_mask, cls_comp_mask = \
@@ -1939,7 +1939,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
 
     if do_ada_prompt_delta_reg and ada_embeddings is not None:
         # ada_embeddings: [4, 16, 77, 768] => [4, 16, 76, 768].
-        #ada_embeddings = ada_embeddings[:, :, 1:]
+        ada_embeddings = ada_embeddings[:, :, 1:]
         # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
         # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
         # the subject token.
