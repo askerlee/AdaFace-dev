@@ -2607,8 +2607,8 @@ class LatentDiffusion(DDPM):
                             + loss_ada_emb_reg  * self.ada_embedding_reg_weight
             
             # The Prodigy optimizer seems to suppress the embeddings too much, 
-            # so we reduce the scale to 0.001.
-            emb_reg_loss_scale = 0.001 if self.optimizer_type == 'Prodigy' else 1
+            # so we reduce the scale to 0 to disable the embedding reg loss.
+            emb_reg_loss_scale = 0 if self.optimizer_type == 'Prodigy' else 1
             loss += loss_emb_reg * emb_reg_loss_scale
 
         if self.fg_bg_token_emb_ortho_loss_weight >= 0:
