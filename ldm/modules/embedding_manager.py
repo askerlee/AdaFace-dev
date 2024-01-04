@@ -2046,8 +2046,8 @@ class EmbeddingManager(nn.Module):
             slow_params += [ self.conv_attn_layerwise_scales ]
 
         # AdamW or NAdam.
-            normal_params_with_lr_ratios  = [ { 'params': normal_params, 'lr_ratio': 1 } ]
-            slow_params_with_lr_ratios    = [ { 'params': slow_params,   'lr_ratio': 0.1 } ]
+        normal_params_with_lr_ratios  = [ { 'params': normal_params, 'lr_ratio': 1 } ]
+        slow_params_with_lr_ratios    = [ { 'params': slow_params,   'lr_ratio': 0.1 } ]
 
         if optimizer_type != 'prodigy':
             return normal_params_with_lr_ratios + slow_params_with_lr_ratios
