@@ -215,9 +215,9 @@ class DDPM(pl.LightningModule):
         self.adam_betas     = adam_betas
         self.use_scheduler = scheduler_config is not None
 
-        if self.optimizer_type == 'Prodigy':
-            # Disable warmup for Prodigy optimizer.
-            scheduler_config.params.warm_up_steps = 0
+        #if self.optimizer_type == 'Prodigy':
+        #    # Disable warmup for Prodigy optimizer.
+        #    scheduler_config.params.warm_up_steps = 0
 
         if self.use_scheduler:
             self.scheduler_config = scheduler_config
@@ -2603,8 +2603,13 @@ class LatentDiffusion(DDPM):
             if loss_ada_emb_reg > 0:
                 loss_dict.update({f'{prefix}/loss_ada_emb_reg':    loss_ada_emb_reg.mean().detach().item() })
 
-            loss += loss_static_emb_reg * self.static_embedding_reg_weight \
-                    + loss_ada_emb_reg  * self.ada_embedding_reg_weight
+            loss_emb_reg = loss_static_emb_reg * self.static_embedding_reg_weight \
+                            + loss_ada_emb_reg  * self.ada_embedding_reg_weight
+            
+            # The Prodigy optimizer seems to suppress the embeddings too much, 
+            # so we reduce the scale to 0.001.
+            emb_reg_loss_scale = 0.001 if self.optimizer_type == 'Prodigy' else 1
+            loss += loss_emb_reg * emb_reg_loss_scale
 
         if self.fg_bg_token_emb_ortho_loss_weight >= 0:
             # If use_background_token, then loss_fg_bg_token_emb_ortho is nonzero.
