@@ -36,15 +36,18 @@ emb_ckpt = torch.load(emb_path)
 tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
 
 
-print("emb_global_scale_scores:")
 for idx, iteration in enumerate(iterations):
     #if iteration % 100 != 0:
     #    continue
             
     emb_path = os.path.join(emb_folder, iter2path[iteration])
     emb_ckpt = torch.load(emb_path)
+    emb_global_scale_scores = emb_ckpt['emb_global_scale_scores'].sigmoid() + 0.5
+    emb_global_scale_scores = emb_global_scale_scores.detach().cpu().numpy()
+    print(f"{iteration} emb_global_scale_scores: {emb_global_scale_scores}")
 
-    print(f"{iteration}: {emb_ckpt['emb_global_scale_scores'].sigmoid() + 0.5}")
+    conv_attn_layerwise_scales = emb_ckpt['conv_attn_layerwise_scales'].detach().cpu().numpy()
+    print(f"{iteration} conv_attn_layerwise_scales: {conv_attn_layerwise_scales}")
 
 print()
     

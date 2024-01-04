@@ -45,7 +45,8 @@ from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianD
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
-from evaluation.clip_eval import CLIPEvaluator, NoisedCLIPEvaluator
+from evaluation.clip_eval import CLIPEvaluator
+from prodigyopt import Prodigy
 import copy
 from functools import partial
 import random
@@ -4636,6 +4637,8 @@ class LatentDiffusion(DDPM):
             # In torch 1.13, decoupled_weight_decay is not supported. 
             # But since we disabled weight decay, it doesn't matter.
             OptimizerClass = torch.optim.NAdam
+        elif self.optimizer_type == 'Prodigy':
+            OptimizerClass = Prodigy
         else:
             raise NotImplementedError()
             
@@ -4646,7 +4649,7 @@ class LatentDiffusion(DDPM):
 
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 
-            embedding_params_with_lr_ratios = self.embedding_manager.optimized_parameters()
+            embedding_params_with_lr_ratios = self.embedding_manager.optimized_parameters(self.optimizer_type)
 
             embedding_params_with_lrs = []
             for param_with_lr_ratio in embedding_params_with_lr_ratios:
@@ -4662,12 +4665,20 @@ class LatentDiffusion(DDPM):
             # Are we allowing the base model to train? If so, set two different parameter groups.
             if self.unfreeze_model: 
                 model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
-                opt = OptimizerClass(embedding_params_with_lrs + [{"params": model_params, "lr": self.model_lr}],
-                                     betas=betas)
-            # Otherwise, train only embeddings
+                opt_params_with_lrs = embedding_params_with_lrs + [{"params": model_params, "lr": self.model_lr}]
             else:
-                opt = OptimizerClass(embedding_params_with_lrs, weight_decay=self.weight_decay,
+                # Otherwise, train only embeddings
+                opt_params_with_lrs = embedding_params_with_lrs
+            
+            if self.optimizer_type != 'Prodigy':
+                opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
                                      betas=betas)
+            else:
+                opt_params = [ param_group['params'] for param_group in opt_params_with_lrs ]
+                opt_params = sum(opt_params, [])
+                # Prodigy uses an LR = 1.
+                opt = OptimizerClass(opt_params, lr=1., weight_decay=self.weight_decay,
+                                     betas=betas, safeguard_warmup=True, use_bias_correction=True)
         else:
             params = list(self.model.parameters())
             if self.cond_stage_trainable:

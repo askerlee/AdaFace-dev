@@ -2036,21 +2036,24 @@ class EmbeddingManager(nn.Module):
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
-    def optimized_parameters(self):
+    def optimized_parameters(self, optimizer_type):
         normal_params = list(self.string_to_static_embedder_dict.parameters()) \
                         + list(self.string_to_ada_embedder_dict.parameters()) \
                         + list(self.string_to_emb_ema_dict.parameters()) #\
                         # + [ self.emb_global_scale_scores ]
-
-        params_with_lr_ratios = [ { 'params': normal_params, 'lr_ratio': 1 } ]
-
+        slow_params = [ self.emb_global_scale_scores ]
         if self.conv_attn_layerwise_scale_learnable:
-            slow_params = [ self.conv_attn_layerwise_scales, self.emb_global_scale_scores ]
-            params_with_lr_ratios = params_with_lr_ratios + \
-                                    [ { 'params': slow_params,   'lr_ratio': 0.1 } ]
+            slow_params += [ self.conv_attn_layerwise_scales ]
 
-        return params_with_lr_ratios
-        
+        # AdamW or NAdam.
+            normal_params_with_lr_ratios  = [ { 'params': normal_params, 'lr_ratio': 1 } ]
+            slow_params_with_lr_ratios    = [ { 'params': slow_params,   'lr_ratio': 0.1 } ]
+
+        if optimizer_type != 'prodigy':
+            return normal_params_with_lr_ratios + slow_params_with_lr_ratios
+        else:
+            return normal_params_with_lr_ratios + slow_params_with_lr_ratios
+            
     def embedding_attractor_loss(self):
         loss = 0.
         num_placeholders = len(self.initial_embeddings)
