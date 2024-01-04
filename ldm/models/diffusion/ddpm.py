@@ -4690,8 +4690,9 @@ class LatentDiffusion(DDPM):
                 opt_params = sum(opt_params, [])
                 prodigy_betas = (0.9, 0.99)
                 # Prodigy uses an LR = 1.
+                safeguard_warmup = self.warm_up_steps > 0
                 opt = OptimizerClass(opt_params, lr=1., weight_decay=self.weight_decay,
-                                     betas=prodigy_betas, safeguard_warmup=True) #, use_bias_correction=True)
+                                     betas=prodigy_betas, safeguard_warmup=safeguard_warmup, use_bias_correction=True)
         else:
             params = list(self.model.parameters())
             if self.cond_stage_trainable:
