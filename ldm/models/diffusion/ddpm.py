@@ -214,8 +214,15 @@ class DDPM(pl.LightningModule):
         self.optimizer_type = optimizer_type
         self.adam_betas     = adam_betas
         self.use_scheduler = scheduler_config is not None
+
+        if self.optimizer_type == 'Prodigy':
+            # Disable warmup for Prodigy optimizer.
+            scheduler_config.params.warm_up_steps = 0
+
         if self.use_scheduler:
             self.scheduler_config = scheduler_config
+            # warm_up_steps was used in loss computation. 
+            # If you want to change the scheduler setting, change scheduler_config.params.warm_up_steps.
             self.warm_up_steps = scheduler_config.params.warm_up_steps
         else:
             self.scheduler = None
