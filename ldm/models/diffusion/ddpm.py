@@ -4691,7 +4691,7 @@ class LatentDiffusion(DDPM):
             else:
                 opt_params = [ param_group['params'] for param_group in opt_params_with_lrs ]
                 opt_params = sum(opt_params, [])
-                prodigy_betas = (0.9, 0.99)
+                prodigy_betas = (0.985, 0.993)  # cf. adam_betas: [0.99, 0.993]
                 d_coef = 5.
                 # Prodigy uses an LR = 1.
                 safeguard_warmup = self.warm_up_steps > 0
