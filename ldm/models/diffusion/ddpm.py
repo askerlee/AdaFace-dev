@@ -2590,6 +2590,12 @@ class LatentDiffusion(DDPM):
             self.iter_flags['is_teachable'] = False
         ###### end of preparation for is_compos_iter ######
 
+            
+        # The Prodigy optimizer seems to suppress the embeddings too much, 
+        # so we reduce the scale to 0 to disable the embedding reg loss.
+        emb_reg_loss_scale = 0.01 if self.optimizer_type == 'Prodigy' else 1
+        prompt_emb_delta_loss_scale = 0.1 if self.optimizer_type == 'Prodigy' else 1
+
         if self.static_embedding_reg_weight + self.ada_embedding_reg_weight > 0:
             loss_emb_reg = self.embedding_manager.embedding_reg_loss()
             if self.use_layerwise_embedding:
@@ -2605,10 +2611,7 @@ class LatentDiffusion(DDPM):
 
             loss_emb_reg = loss_static_emb_reg * self.static_embedding_reg_weight \
                             + loss_ada_emb_reg  * self.ada_embedding_reg_weight
-            
-            # The Prodigy optimizer seems to suppress the embeddings too much, 
-            # so we reduce the scale to 0 to disable the embedding reg loss.
-            emb_reg_loss_scale = 1 if self.optimizer_type == 'Prodigy' else 1
+
             loss += loss_emb_reg * emb_reg_loss_scale
 
         if self.fg_bg_token_emb_ortho_loss_weight >= 0:
@@ -2649,7 +2652,7 @@ class LatentDiffusion(DDPM):
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
             
             loss += (loss_static_prompt_delta + loss_ada_prompt_delta * ada_comp_loss_boost_ratio) \
-                     * self.prompt_emb_delta_reg_weight
+                     * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
         
             # Even if padding_embs_align_loss_weight is disabled (=0), we still monitor loss_padding_subj_embs_align.
             if self.padding_embs_align_loss_weight >= 0:
