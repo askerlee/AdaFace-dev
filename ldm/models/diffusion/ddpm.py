@@ -2593,7 +2593,7 @@ class LatentDiffusion(DDPM):
             
         # The Prodigy optimizer seems to suppress the embeddings too much, 
         # so we reduce the scale to 0 to disable the embedding reg loss.
-        emb_reg_loss_scale = 0.01 if self.optimizer_type == 'Prodigy' else 1
+        emb_reg_loss_scale = 0.1 if self.optimizer_type == 'Prodigy' else 1
         prompt_emb_delta_loss_scale = 0.1 if self.optimizer_type == 'Prodigy' else 1
 
         if self.static_embedding_reg_weight + self.ada_embedding_reg_weight > 0:
@@ -4692,7 +4692,7 @@ class LatentDiffusion(DDPM):
                 opt_params = [ param_group['params'] for param_group in opt_params_with_lrs ]
                 opt_params = sum(opt_params, [])
                 prodigy_betas = (0.9, 0.99)
-                d_coef = 10.
+                d_coef = 5.
                 # Prodigy uses an LR = 1.
                 safeguard_warmup = self.warm_up_steps > 0
                 opt = OptimizerClass(opt_params, lr=1., weight_decay=self.weight_decay,
