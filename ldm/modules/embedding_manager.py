@@ -2042,7 +2042,7 @@ class EmbeddingManager(nn.Module):
                         + list(self.string_to_emb_ema_dict.parameters()) #\
                         # + [ self.emb_global_scale_scores ]
         slow_params = [ self.emb_global_scale_scores ]
-        if self.conv_attn_layerwise_scale_learnable:
+        if self.conv_attn_layerwise_scale_learnable and optimizer_type != 'Prodigy':
             slow_params += [ self.conv_attn_layerwise_scales ]
 
         # AdamW or NAdam.
