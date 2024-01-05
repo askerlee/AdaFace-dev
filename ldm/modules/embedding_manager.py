@@ -9,7 +9,7 @@ import numpy as np
 from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
                      add_noise_to_embedding, calc_ref_cosine_loss, clamp_prompt_embedding, \
                      get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
-                     scan_cls_delta_strings, torch_uniform
+                     scan_cls_delta_strings, torch_uniform, extend_indices_N_by_n_times
 
 from functools import partial
 from collections import OrderedDict
@@ -1338,6 +1338,9 @@ class EmbeddingManager(nn.Module):
 
             # extract_first_index_in_each_instance(): Get the index to the first token in each instance.
             placeholder_indices_1st = extract_first_index_in_each_instance(placeholder_indices)
+            # Expand placeholder_indices to include commas, if K > 1.
+            placeholder_indices_ext = extend_indices_N_by_n_times(placeholder_indices, 
+                                                                  self.token2num_vectors[placeholder_string])
 
             # REAL_OCCURS_IN_BATCH: the real number of occurrences of the placeholder in the current batch.
             # As ada embeddings are generated layer by layer, there is no repetition in the batch dimension.
@@ -1365,12 +1368,12 @@ class EmbeddingManager(nn.Module):
                 # then self-reinforce and contaminate the bg embeddings with fg features.
                 # However, if we mask out bg embeddings from computing layer_static_extra_emb_mean,
                 # the performance will drop a lot.
-                list_of_indices_to_mask = [self.placeholder_indices_fg] #, self.placeholder_indices_bg]  
+                list_of_indices_to_mask = [ self.placeholder2indices[k] for k in self.subject_strings ]
             else:
                 ## Why not mask bg indices for fg ada? bg embeddings are supposed to be of a similar nature 
                 ## as the extra compositional embeddings. Incorporating them in layer_static_extra_emb_mean
                 ## will make fg and bg embeddings more orthogonal (i.e., attend to different areas).
-                list_of_indices_to_mask = [self.placeholder_indices_fg]
+                list_of_indices_to_mask = [ self.placeholder2indices[k] for k in self.subject_strings ]
 
             # layer_static_prompt_embs: [4, 77, 768]. 
             # prompt_emb_mask: [4, 77, 1], which excludes SOT and padding tokens.
@@ -1395,13 +1398,6 @@ class EmbeddingManager(nn.Module):
               and ada_embedder.use_cached_bg and cached_infeat_pooled is None:
                 breakpoint()
 
-            # placeholder_indices_1st obtained above is different from self.placeholder_indices_fg.
-            # self.placeholder_indices_fg contains the indices for the succeeding commas.
-            # placeholder_indices_1st contains the indices for the first subject token ("z") only.
-            if not token_is_bg \
-                   and (self.placeholder_indices_fg[0].unique().shape != placeholder_indices_1st[0].shape):
-                breakpoint()
-
             # layer_static_prompt_embs[curr_subj_indices]: subj_static_embedding, [(BS/2)*K, 768].
             # BS/2: In distillation iterations, only half instances of the batch contain the subject token.
             # If (BS/2) > 1 or K > 1, then take the mean embedding of the K embeddings.
@@ -1409,7 +1405,7 @@ class EmbeddingManager(nn.Module):
             # So it's ok to take the mean of all of them.
             # layer_static_subj_emb, layer_subj_emb_probe: [768].
             # layer_subj_emb_probe will be repeated by BS times to match the batch size in attn pooler.
-            curr_subj_indices = self.placeholder_indices_fg if not token_is_bg else self.placeholder_indices_bg
+            curr_subj_indices = placeholder_indices_ext
             layer_static_subj_emb = layer_static_prompt_embs[curr_subj_indices].mean(dim=0)
 
             # Don't use emb_ema_as_pooling_probe for background Ada embedder.
@@ -1577,7 +1573,7 @@ class EmbeddingManager(nn.Module):
 
         return token_static_embedder, token_ada_embedder
 
-    # Update prompt_emb_mask and prompt_token_attn_mask.
+    # Update prompt_emb_mask.
     # tokenized_text: [B, N] = [2/4, 77].
     # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
     # -> .get_learned_conditioning() -> .cond_stage_model.encode()
@@ -1592,7 +1588,6 @@ class EmbeddingManager(nn.Module):
         prompt_emb_mask  = (tokenized_text != 49406 ) & (tokenized_text != 49407)
         # [B, N] => [B, N, 1]
         self.prompt_emb_mask  = prompt_emb_mask.float().unsqueeze(2)
-        # prompt_token_attn_mask: [B, N]
         padding_tokens_mask = (tokenized_text == 49407).float()
         B,  N  = tokenized_text.shape
         B2, N2 = tokenized_text_repeated.shape
@@ -1602,36 +1597,6 @@ class EmbeddingManager(nn.Module):
         # # Block the interaction between the subject and padding tokens with a probability of 0.5.
         p_block_subj_padding_interaction = 0 if self.training else 0
 
-        # prompt_token_attn_mask: [B, N, N]
-        if self.placeholder_indices_fg is not None and random.random() < p_block_subj_padding_interaction:
-            # subj_tokens_mask: [B, N].
-            # If zeros_like(tokenized_text, dtype=float), then subj_tokens_mask is of type float64, 
-            # inconsistent with padding_tokens_mask.
-            # If zeros_like(tokenized_text).float(), then subj_tokens_mask is of type float32.
-            subj_tokens_mask = torch.zeros_like(tokenized_text).float()
-            subj_tokens_mask[self.placeholder_indices_fg] = 1
-            # A batch with 4 types of sub-blocks. Only the subject half is the subject prompts. 
-            # The other half is the class prompts. But for better alignment, 
-            # we still mask the class tokens.
-            #if len(self.placeholder_indices_fg[0].unique()) == B // 2:
-            #    cls_indices = (self.placeholder_indices_fg[0] + B // 2, self.placeholder_indices_fg[1])
-            #    subj_tokens_mask[cls_indices] = 1
-
-            # subj_tokens_mask: [B, N] => [B, N, 1]. 
-            # padding_tokens_mask: [B, N] => [B, 1, N].
-            # subj_padding_interact_mask: [B, N, N].
-            subj_padding_interact_mask = torch.matmul(subj_tokens_mask.unsqueeze(2), padding_tokens_mask.unsqueeze(1))
-            # Repeat subj_padding_interact_mask 16 times along the batch dimension: 
-            # [B, N, N] => [B, 1, N, N] => [B, 16, N, N] => [16*B, N, N].
-            if B2 > B:
-                assert B2 % B == 0
-                REPEAT = B2 // B
-                subj_padding_interact_mask = subj_padding_interact_mask.unsqueeze(1).repeat(1, REPEAT, 1, 1).view(B2, N, N)
-
-            self.prompt_token_attn_mask = subj_padding_interact_mask
-        else:
-            self.prompt_token_attn_mask = None
-            
     # layer_static_prompt_embs: [4, 77, 768].
     # emb_mask:          [4, 77, 1]. Set to 1 to include / 0 to exclude from the mean.
     # (Note sometimes the batch size of emb_mask is different from layer_static_prompt_embs).
@@ -1675,7 +1640,6 @@ class EmbeddingManager(nn.Module):
 
     def clear_prompt_masks(self):
         self.prompt_emb_mask = None
-        self.prompt_token_attn_mask = None
 
     def update_placeholder_indices(self, tokenized_text, placeholder_string, placeholder_token, num_vectors_per_token, token_is_bg):
         placeholder_indices = torch.where(tokenized_text == placeholder_token)

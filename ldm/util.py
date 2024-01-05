@@ -1239,7 +1239,7 @@ def split_indices_by_block(indices, block_size):
         block_indices_N = indices_N[indices_B // block_size == block_idx]
         yield (block_indices_B, block_indices_N)
 
-def extend_indices_N_by_n(indices, n):
+def extend_indices_N_by_n_times(indices, n):
     if indices is None:
         return None
     
@@ -1876,7 +1876,8 @@ def extract_last_chunk_of_indices(token_indices, total_num_chunks=3):
 # static_embeddings: size: [4, 16, 77, 768]. 4: batch_size. 16: number of UNet layers.
 # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
 def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mask,
-                               do_ada_prompt_delta_reg, prompt_embedding_clamp_value):
+                               do_ada_prompt_delta_reg, prompt_embedding_clamp_value,
+                               cls_delta_grad_scale=0.05):
     static_embeddings, ada_embeddings = \
         clamp_prompt_embedding(prompt_embedding_clamp_value, static_embeddings, ada_embeddings)
 
@@ -1929,9 +1930,11 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
                              emb_mask=prompt_emb_mask_weighted,
                              do_demean_first=True,
                              first_n_dims_to_flatten=3,
+                             ref_grad_scale=cls_delta_grad_scale,   # 0.05
                              aim_to_align=True)
 
-    if do_ada_prompt_delta_reg and ada_embeddings is not None:
+    if do_ada_prompt_delta_reg:
+        assert ada_embeddings is not None
         # ada_embeddings: [4, 16, 77, 768]
         # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
         # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
@@ -1951,6 +1954,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
                                  emb_mask=prompt_emb_mask_weighted,
                                  do_demean_first=True,
                                  first_n_dims_to_flatten=3,
+                                 ref_grad_scale=cls_delta_grad_scale,   # 0.05
                                  aim_to_align=True)
 
     else:

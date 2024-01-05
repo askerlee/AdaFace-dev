@@ -30,7 +30,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        calc_prompt_emb_delta_loss, calc_dyn_loss_scale, \
                        save_grid, chunk_list, normalize_dict_values, \
                        distribute_embedding_to_M_tokens, fix_emb_scales, \
-                       halve_token_indices, double_token_indices, extend_indices_N_by_n, \
+                       halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
                        extend_indices_B_by_n_times, split_indices_by_instance, \
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
                        anneal_t_keep_prob, anneal_value, select_piecewise_value, \
@@ -109,13 +109,10 @@ class DDPM(pl.LightningModule):
                  ada_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
                  padding_embs_align_loss_weight=0.,
-                 padding_embs_align_loss_base=0.,
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_value_ortho_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
-                 subj_attn_norm_distill_loss_base=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
-                 sc_mc_bg_match_loss_base=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
@@ -165,13 +162,10 @@ class DDPM(pl.LightningModule):
 
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
         self.padding_embs_align_loss_weight     = padding_embs_align_loss_weight
-        self.padding_embs_align_loss_base       = padding_embs_align_loss_base
         self.subj_comp_key_ortho_loss_weight        = subj_comp_key_ortho_loss_weight
         self.subj_comp_value_ortho_loss_weight      = subj_comp_value_ortho_loss_weight
         self.mix_prompt_distill_weight              = mix_prompt_distill_weight
-        self.subj_attn_norm_distill_loss_base       = subj_attn_norm_distill_loss_base
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
-        self.sc_mc_bg_match_loss_base               = sc_mc_bg_match_loss_base
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
@@ -2703,10 +2697,11 @@ class LatentDiffusion(DDPM):
                 
                 '''
                 padding_embs_align_loss_scale_base = 1
-                # padding_embs_align_loss_base: 0.15. If loss_padding_embs_align >> 0.15, 
+                padding_embs_align_loss_base = 0.3
+                # padding_embs_align_loss_base: 0.3. If loss_padding_embs_align >> 0.3, 
                 # it will be penalized more heavily.
                 padding_embs_align_loss_scale = calc_dyn_loss_scale(loss_padding_embs_align,
-                                                                    self.padding_embs_align_loss_base,
+                                                                    padding_embs_align_loss_base,
                                                                     padding_embs_align_loss_scale_base)
                 '''
 
@@ -2791,9 +2786,9 @@ class LatentDiffusion(DDPM):
                 ms_mc_fg_match_loss_scale = 0.1
                 comp_subj_bg_attn_suppress_loss_scale = 0.02
                 sc_mc_bg_match_loss_scale_base = 2
-                # sc_mc_bg_match_loss_base: 0.2. 
+                sc_mc_bg_match_loss_base = 0.2 
                 sc_mc_bg_match_loss_scale = calc_dyn_loss_scale(loss_sc_mc_bg_match,
-                                                                self.sc_mc_bg_match_loss_base,
+                                                                sc_mc_bg_match_loss_base,
                                                                 sc_mc_bg_match_loss_scale_base,
                                                                 min_scale_base_ratio=1,
                                                                 max_scale_base_ratio=3)
@@ -2856,9 +2851,11 @@ class LatentDiffusion(DDPM):
             subj_attn_norm_distill_loss_scale_base  = 0.2
 
             # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
-            # subj_attn_norm_distill_loss_base: 5.
+            # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
+            # subj_attn_norm_distill_loss is DISABLED for faces, but enabled for objects.            
+            subj_attn_norm_distill_loss_base = 5.
             subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
-                                                                     self.subj_attn_norm_distill_loss_base,
+                                                                     subj_attn_norm_distill_loss_base,
                                                                      subj_attn_norm_distill_loss_scale_base)
 
             feat_delta_align_scale = 2
@@ -2919,7 +2916,7 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['use_wds_cls_captions']:
                     # cls token is in the captions. Extend subj_indices_1b to include it as part of 
                     # subj_indices (the attention of these subject embeddings will be more accurate).
-                    subj_indices_ext = extend_indices_N_by_n(subj_indices_ext, n=1)
+                    subj_indices_ext = extend_indices_N_by_n_times(subj_indices_ext, n=1)
                     
                 bg_indices   = extra_info['bg_indices_1b'] if self.iter_flags['use_background_token'] \
                                 else None
@@ -2951,11 +2948,15 @@ class LatentDiffusion(DDPM):
                 loss_subj_comp_value_ortho = 0
 
             # ortho losses are less effecive, so scale them down.
-            ortho_loss_scale = 1
-            # subj_comp_key_ortho_loss_weight:          5e-4, 
+            key_ortho_loss_scale_base = 1
+            key_ortho_loss_base       = 0.1
+            key_ortho_loss_scale = calc_dyn_loss_scale(loss_subj_comp_key_ortho, key_ortho_loss_base,
+                                                       key_ortho_loss_scale_base)
+            
+            # subj_comp_key_ortho_loss_weight:          2e-4, 
             # subj_comp_value_ortho_loss_weight:        0, disabled.
-            loss +=   (loss_subj_comp_key_ortho   * ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
-                    + (loss_subj_comp_value_ortho * ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight
+            loss +=   (loss_subj_comp_key_ortho   * key_ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
+                    + (loss_subj_comp_value_ortho * key_ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight
 
         self.release_plosses_intermediates(locals())
         loss_dict.update({f'{prefix}/loss': loss.mean().detach().item() })
@@ -3015,7 +3016,7 @@ class LatentDiffusion(DDPM):
             # the subject embeddings.
             subj_indices_ext = extra_info['subj_indices']
             if self.iter_flags['use_wds_cls_captions']:
-                subj_indices_ext = extend_indices_N_by_n(subj_indices_ext, n=1)
+                subj_indices_ext = extend_indices_N_by_n_times(subj_indices_ext, n=1)
             # Mask out subject embeddings.
             comp_extra_mask[subj_indices_ext] = 0
             # Mask out background embeddings as well, as we want to encourage the subject embeddings

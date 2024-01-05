@@ -334,13 +334,6 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 # [bsz, seq_len] -> [bsz, 1, seq_len, seq_len]
                 attention_mask = _expand_mask(attention_mask, hidden_states.dtype)
 
-            if embedding_manager.prompt_token_attn_mask is not None:
-                # prompt_token_attn_mask is already a pairwise mask. No need to _expand_mask().
-                # prompt_token_attn_mask: [bsz, seq_len, seq_len].
-                attention_mask = combine_inf_mask_with_binary_mask(attention_mask, 
-                                                                   embedding_manager.prompt_token_attn_mask.unsqueeze(1),
-                                                                   dtype=hidden_states.dtype)
-
             # self.encoder: transformers.models.clip.modeling_clip.CLIPEncoder, 
             # consisting of multiple CLIPEncoderLayer.
             # https://huggingface.co/transformers/v4.6.0/_modules/transformers/models/clip/modeling_clip.html
