@@ -38,7 +38,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
                        gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, clamp_prompt_embedding, \
-                       merge_cls_token_embeddings, demean
+                       merge_cls_token_embeddings, filter_dict_by_key
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -892,28 +892,31 @@ class LatentDiffusion(DDPM):
                 static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
                                                                      self.embedding_manager.placeholders_cls_delta_string_indices,
                                                                      self.embedding_manager.placeholder_to_cls_delta_weights)
-                
+
+                '''
+                'subj_indices':                  filter_dict_by_key(self.embedding_manager.placeholder2indices,
+                                                                    self.embedding_manager.subject_strings),
+                # copy.copy(self.embedding_manager.placeholder_indices_fg),
+                'bg_indices':                   filter_dict_by_key(self.embedding_manager.placeholder2indices,
+                                                                    self.embedding_manager.background_strings),
+                #copy.copy(self.embedding_manager.placeholder_indices_bg),
+                '''
+
                 extra_info = { 
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
                                 'use_ada_context':               self.use_ada_embedding,
                                 'use_conv_attn_kernel_size':     self.embedding_manager.use_conv_attn_kernel_size,
-                                # Setting up 'subj_indices' here is necessary for inference.
-                                # During training, 'subj_indices' will be overwritten in p_losses().
-                                # Although 'bg_indices' is usually not used during inference,
-                                # we also set it up here just in case.
-                                'subj_indices':                 copy.copy(self.embedding_manager.placeholder_indices_fg),
-                                'bg_indices':                   copy.copy(self.embedding_manager.placeholder_indices_bg),
-                                'placeholder2indices':                copy.copy(self.embedding_manager.placeholder2indices),
-                                'prompt_emb_mask':              copy.copy(self.embedding_manager.prompt_emb_mask),
+                                'placeholder2indices':           copy.copy(self.embedding_manager.placeholder2indices),
+                                'prompt_emb_mask':               copy.copy(self.embedding_manager.prompt_emb_mask),
                                 # conv_attn_layerwise_scales: a list of 16 tensor scalars, 
                                 # used to scale conv attention at each CA layer.
-                                'conv_attn_layerwise_scales':   self.embedding_manager.get_conv_attn_layerwise_scales(),
-                                'is_training':                  self.embedding_manager.training,
+                                'conv_attn_layerwise_scales':    self.embedding_manager.get_conv_attn_layerwise_scales(),
+                                'is_training':                   self.embedding_manager.training,
                                 'compel_cfg_weight_level_range': self.compel_cfg_weight_level_range,
-                                'apply_compel_cfg_prob':        self.apply_compel_cfg_prob,
-                                'empty_context':                self.empty_context,
+                                'apply_compel_cfg_prob':         self.apply_compel_cfg_prob,
+                                'empty_context':                 self.empty_context,
                                 # Will set to True in p_losses() if in compositional iterations.
-                                'capture_distill_attn':         False,
+                                'capture_distill_attn':          False,
                              }
 
                 if self.use_ada_embedding:
@@ -1667,7 +1670,6 @@ class LatentDiffusion(DDPM):
 
                     # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
                     # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
-                    extra_info['subj_indices_2b'] = extra_info['subj_indices']
                     # Only keep the first half (for single prompts), as the second half is the same 
                     # (for comp prompts, differs at the batch index, but the token index is identical).
                     # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
@@ -1676,52 +1678,24 @@ class LatentDiffusion(DDPM):
                     # they only account for the subject single prompt, but they are also 
                     # applicable to the other 3 types of prompts as they are all aligned 
                     # at the beginning part of the prompts.
-                    extra_info['subj_indices_1b'] = halve_token_indices(extra_info['subj_indices_2b'])
-                    subj_indices_1b_N  = extra_info['subj_indices_1b'][1]
-                    # The subject is represented with a multi-embedding token. The corresponding tokens
-                    # in the class prompts are "class , , ,", 
-                    # therefore the embeddings of "," need to be patched.
-                    # BUG: if the batch size of a mix batch > 4, then the subj_indices_1b_N
-                    # corresponds to the indices in more than one instance. But distribute_embedding_to_M_tokens()
-                    # treat the indices as if they are always in the same instance.
-                    # len(subj_indices_1b_N): embedding number of the subject token.
-                    if len(subj_indices_1b_N) > 1:
-                        cls_single_emb = distribute_embedding_to_M_tokens(cls_single_emb, subj_indices_1b_N)
-                        cls_comp_emb   = distribute_embedding_to_M_tokens(cls_comp_emb,   subj_indices_1b_N)
-
-                    # In mix reg iters, background tokens only appear 10% of the time 
-                    # to provide delta reg on ada embeddings of bg tokens.
-                    if self.iter_flags['use_background_token']:
-                        # Sometimes (when bg_init_words is not speicified, due to the logic in the dataloader), 
-                        # all 4 types of prompts have the same background token. 
-                        # Then placeholder_indices_bg == bg_indices_4b.
-                        # Otherwise, 'bg_indices_4b' is absent in extra_info.
-                        if extra_info['bg_indices'][0].unique().numel() == 4 * BLOCK_SIZE:
-                            extra_info['bg_indices_4b'] = extra_info['bg_indices']
-                            extra_info['bg_indices_2b'] = halve_token_indices(extra_info['bg_indices_4b'])
-                        else:
-                            extra_info['bg_indices_2b'] = extra_info['bg_indices']
-
-                        extra_info['bg_indices_1b'] = halve_token_indices(extra_info['bg_indices_2b'])
-
-                        # bg_indices_1b_N: the first half batch of background token indices (the token dim)
-                        bg_indices_1b_N = extra_info['bg_indices_1b'][1]
-                        # Patch background embeddings when the number of background embeddings > 1.
-                        if len(bg_indices_1b_N) > 1:
-                            cls_single_emb = distribute_embedding_to_M_tokens(cls_single_emb, bg_indices_1b_N)
-                            cls_comp_emb   = distribute_embedding_to_M_tokens(cls_comp_emb,   bg_indices_1b_N)
-                    else:
-                        extra_info['bg_indices_4b'] = None
-                        extra_info['bg_indices_2b'] = None
-                        extra_info['bg_indices_1b'] = None
+                    # halve_token_indices() can take either a tuple or a dict of tuples.
 
                     placeholder2indices_2b = extra_info['placeholder2indices']
-                    if self.iter_flags['use_background_token']:
-                        bg_string = self.embedding_manager.background_strings[0]
-                        placeholder2indices_2b[bg_string] = extra_info['bg_indices_2b']
                     placeholder2indices_1b = {}
                     for k in placeholder2indices_2b:
                         placeholder2indices_1b[k] = halve_token_indices(placeholder2indices_2b[k])
+                        subj_indices_1b_N  = placeholder2indices_1b[k][1]
+                        # The subject is represented with a multi-embedding token. The corresponding tokens
+                        # in the class prompts are "class , , ,", 
+                        # therefore the embeddings of "," need to be patched.
+                        # BUG: if the batch size of a mix batch > 4, then the subj_indices_1b_N
+                        # corresponds to the indices in more than one instance. But distribute_embedding_to_M_tokens()
+                        # treat the indices as if they are always in the same instance.
+                        # len(subj_indices_1b_N): embedding number of the subject token.
+                        if len(subj_indices_1b_N) > 1:
+                            cls_single_emb = distribute_embedding_to_M_tokens(cls_single_emb, subj_indices_1b_N)
+                            cls_comp_emb   = distribute_embedding_to_M_tokens(cls_comp_emb,   subj_indices_1b_N)
+
                     extra_info['placeholder2indices_1b'] = placeholder2indices_1b
                     extra_info['placeholder2indices_2b'] = placeholder2indices_2b
 
@@ -1747,9 +1721,7 @@ class LatentDiffusion(DDPM):
 
                         # The prompts are either (subj single, subj comp, cls single, cls comp) or
                         # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
-                        # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
-                        extra_info['subj_indices'] = extra_info['subj_indices_2b']
-                        extra_info['bg_indices']   = extra_info['bg_indices_2b']       
+                        # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.    
                         extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b'] 
 
                     # This iter is a simple ada prompt delta loss iter, without prompt mixing loss. 
@@ -1765,8 +1737,6 @@ class LatentDiffusion(DDPM):
                         # The prompts are either (subj single, subj comp, cls single, cls comp) or
                         # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
                         # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
-                        extra_info['subj_indices']  = extra_info['subj_indices_2b']
-                        extra_info['bg_indices']    = extra_info['bg_indices_2b']    
                         extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
                     else:
                         # do_normal_recon. The original scheme. 
@@ -1783,8 +1753,6 @@ class LatentDiffusion(DDPM):
                             c_static_emb = subj_single_emb
                             # The blocks as input to get_learned_conditioning() are not halved. 
                             # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
-                            extra_info['subj_indices'] = extra_info['subj_indices_1b']
-                            extra_info['bg_indices']   = extra_info['bg_indices_1b']
                             extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
                         else:
                             # We are unable to reuse the static embeddings of the 4-type prompts, so 
@@ -1793,8 +1761,6 @@ class LatentDiffusion(DDPM):
                             # Embeddings of subject prompts (including "captions") don't need patching.
                             c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions, randomize_clip_weights=True)
                             # print(captions)
-                            extra_info['subj_indices'] = extra_info0['subj_indices']
-                            extra_info['bg_indices']   = extra_info0['bg_indices']
                             extra_info['placeholder2indices'] = extra_info0['placeholder2indices']
 
                         extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_LAYERS, 
@@ -1826,9 +1792,7 @@ class LatentDiffusion(DDPM):
                     c_static_emb, c_in, extra_info0 = \
                         self.get_learned_conditioning(captions, randomize_clip_weights=True)
                     
-                    extra_info['subj_indices']      = extra_info0['subj_indices']
-                    extra_info['bg_indices']        = extra_info0['bg_indices']
-                    extra_info['placeholder2indices']     = extra_info0['placeholder2indices']
+                    extra_info['placeholder2indices']   = extra_info0['placeholder2indices']
                     extra_info['c_static_emb_1b']   = c_static_emb.reshape(ORIG_BS, self.N_LAYERS, 
                                                                            *c_static_emb.shape[1:])
                                         
@@ -2880,73 +2844,36 @@ class LatentDiffusion(DDPM):
             loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
                     * self.mix_prompt_distill_weight
 
+        # Only compute loss_subj_comp_key_ortho/loss_subj_comp_value_ortho on compositional iterations.
         # If subj_comp_key_ortho_loss_weight = 0, we still monitor loss_subj_comp_key_ortho 
         # and loss_subj_comp_value_ortho.
-        if self.subj_comp_key_ortho_loss_weight >= 0:
-            if self.iter_flags['is_teachable']:
-                subj_indices_1b = extra_info['subj_indices_1b']
-                bg_indices_1b   = extra_info['bg_indices_1b'] if self.iter_flags['use_background_token'] \
-                                    else None
-                # subj_indices_4b: Extend subj_indices_1b to subj_indices_4b, by adding offset to batch indices.
-                # bg_indices_4b:   Extend bg_indices_1b   to bg_indices_4b,   by adding offset to batch indices.
-                subj_indices_4b, subj_indices_4b_by_block = \
-                    extend_indices_B_by_n_times(subj_indices_1b, n=4, block_offset=BLOCK_SIZE)
-                bg_indices_4b,   bg_indices_4b_by_block   = \
-                    extend_indices_B_by_n_times(bg_indices_1b,   n=4, block_offset=BLOCK_SIZE)
-
-                comp_extra_indices_4b_by_block = \
-                    gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
-                                                    (subj_indices_4b, bg_indices_4b), block_size=BLOCK_SIZE)
-
-                loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho \
-                    = self.calc_subj_comp_ortho_loss(extra_info['ca_layers_activations']['k'], 
-                                                     extra_info['ca_layers_activations']['v'], 
-                                                     extra_info['ca_layers_activations']['attnscore'], 
-                                                     subj_indices_4b_by_block, comp_extra_indices_4b_by_block,
-                                                     cls_grad_scale=0.05,
-                                                     is_4type_batch=True)
-
-                if loss_subj_comp_key_ortho != 0:
-                    loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach().item() })
-                if loss_subj_comp_value_ortho != 0:
-                    loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach().item() })
-
-            elif self.iter_flags['do_normal_recon'] and self.iter_flags['use_wds_comp']:
-                subj_indices_ext = extra_info['subj_indices_1b']
-                if self.iter_flags['use_wds_cls_captions']:
-                    # cls token is in the captions. Extend subj_indices_1b to include it as part of 
-                    # subj_indices (the attention of these subject embeddings will be more accurate).
-                    subj_indices_ext = extend_indices_N_by_n_times(subj_indices_ext, n=1)
-                    
-                bg_indices   = extra_info['bg_indices_1b'] if self.iter_flags['use_background_token'] \
+        if self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable'] \
+          and self.subj_comp_key_ortho_loss_weight >= 0:
+            subj_indices_1b = extra_info['subj_indices_1b']
+            bg_indices_1b   = extra_info['bg_indices_1b'] if self.iter_flags['use_background_token'] \
                                 else None
+            # subj_indices_4b: Extend subj_indices_1b to subj_indices_4b, by adding offset to batch indices.
+            # bg_indices_4b:   Extend bg_indices_1b   to bg_indices_4b,   by adding offset to batch indices.
+            subj_indices_4b, subj_indices_4b_by_block = \
+                extend_indices_B_by_n_times(subj_indices_1b, n=4, block_offset=BLOCK_SIZE)
+            bg_indices_4b,   bg_indices_4b_by_block   = \
+                extend_indices_B_by_n_times(bg_indices_1b,   n=4, block_offset=BLOCK_SIZE)
 
-                # BLOCK_SIZE = 2, the whole batch size.
-                # comp_extra_indices_1b_by_block is a list that contains 1 block only.
-                comp_extra_indices_1b_by_block = \
-                    gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
-                                                    (subj_indices_ext, bg_indices), block_size=BLOCK_SIZE)
-                                
-                loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho \
-                    = self.calc_subj_comp_ortho_loss(extra_info['ca_layers_activations']['k'], 
-                                                     extra_info['ca_layers_activations']['v'], 
-                                                     extra_info['ca_layers_activations']['attnscore'], 
-                                                    # Param subj_indices_by_block is a list of blocks.
-                                                    # subj_indices_ext is only 1 block. So put it in a list.
-                                                    [subj_indices_ext], comp_extra_indices_1b_by_block,
-                                                    cls_grad_scale=0.05,
-                                                    # is_4type_batch=False: reference cls prompts are unavailable.
-                                                    is_4type_batch=False)
-                
-                if loss_subj_comp_key_ortho != 0:
-                    loss_dict.update({f'{prefix}/subj_wds_key_ortho':   loss_subj_comp_key_ortho.mean().detach().item() })
-                if loss_subj_comp_value_ortho != 0:
-                    loss_dict.update({f'{prefix}/subj_wds_value_ortho': loss_subj_comp_value_ortho.mean().detach().item() })
+            comp_extra_indices_4b_by_block = \
+                gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
+                                                (subj_indices_4b, bg_indices_4b), block_size=BLOCK_SIZE)
 
-            else:
-                loss_subj_comp_key_ortho   = 0
-                loss_subj_comp_value_ortho = 0
+            loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho \
+                = self.calc_subj_comp_ortho_loss(extra_info['ca_layers_activations']['k'], 
+                                                    extra_info['ca_layers_activations']['v'], 
+                                                    extra_info['ca_layers_activations']['attnscore'], 
+                                                    subj_indices_4b_by_block, comp_extra_indices_4b_by_block,
+                                                    cls_grad_scale=0.05)
 
+            if loss_subj_comp_key_ortho != 0:
+                loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach().item() })
+            if loss_subj_comp_value_ortho != 0:
+                loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach().item() })
             # ortho losses are less effecive, so scale them down.
             key_ortho_loss_scale_base = 1
             key_ortho_loss_base       = 0.1
@@ -3900,7 +3827,7 @@ class LatentDiffusion(DDPM):
     # DISABLED. No obvious improvement.
     def calc_subj_comp_ortho_loss(self, ca_ks, ca_vs, ca_attnscores,
                                   subj_indices_by_block, comp_extra_indices_by_block, 
-                                  cls_grad_scale=0.05, is_4type_batch=True):
+                                  cls_grad_scale=0.05):
 
         # Discard the first few bottom layers from the orthogonal loss.
         k_ortho_layer_weights = { #7:  1., 8: 1.,
@@ -3928,14 +3855,11 @@ class LatentDiffusion(DDPM):
         loss_subj_comp_key_ortho   = 0
         loss_subj_comp_value_ortho = 0
 
-        if not is_4type_batch:
-            return 0, 0
-        else:
-            subj_subj_indices = subj_indices_by_block[1]
-            subj_comp_indices = comp_extra_indices_by_block[1]
-            # cls blocks are available, so the ortho loss has to align the delta with the cls delta.
-            cls_subj_indices  = subj_indices_by_block[3]
-            cls_comp_indices  = comp_extra_indices_by_block[3]
+        subj_subj_indices = subj_indices_by_block[1]
+        subj_comp_indices = comp_extra_indices_by_block[1]
+        # cls blocks are available, so the ortho loss has to align the delta with the cls delta.
+        cls_subj_indices  = subj_indices_by_block[3]
+        cls_comp_indices  = comp_extra_indices_by_block[3]
 
         for unet_layer_idx, seq_k in ca_ks.items():
             if (unet_layer_idx not in k_ortho_layer_weights):
@@ -3944,10 +3868,12 @@ class LatentDiffusion(DDPM):
             # attn_score_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
             # We don't need BP through attention into UNet.
             attn_score_mat = ca_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
+            # avg_attn_scores: the average attention score of each prompt token to all image patches.
+            # The higher the average attention score, the more important role the token plays 
+            # in conditioning the image.
+            # Therefore, avg_attn_scores is used to weight the ks/vs of tokens when computing their mean k/v.
             avg_attn_scores = attn_score_mat.mean(dim=(2,3), keepdim=False).clamp(min=0)
 
-            # No need to pass is_4type_batch to calc_layer_subj_comp_k_or_v_ortho_loss().
-            # It can decide by checking whether cls_subj_indices/cls_comp_indices are None.
             loss_layer_subj_comp_key_ortho = \
                 calc_layer_subj_comp_k_or_v_ortho_loss(seq_k, 
                                                        subj_subj_indices, 

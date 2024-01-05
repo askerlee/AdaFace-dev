@@ -1218,9 +1218,15 @@ def join_list_of_indices(*indices_list):
     return (indices_B, indices_N)
 
 def halve_token_indices(token_indices):
-    token_indices_half_B  = token_indices[0].chunk(2)[0]
-    token_indices_half_N  = token_indices[1].chunk(2)[0]
-    return (token_indices_half_B, token_indices_half_N)
+    if isinstance(token_indices, dict):
+        token_indices2 = {}
+        for k, v in token_indices.items():
+            token_indices2[k] = halve_token_indices(v)
+        return token_indices2
+    else:
+        token_indices_half_B  = token_indices[0].chunk(2)[0]
+        token_indices_half_N  = token_indices[1].chunk(2)[0]
+        return (token_indices_half_B, token_indices_half_N)
 
 def split_indices_by_instance(indices, as_dict=False):
     indices_B, indices_N = indices
@@ -1300,6 +1306,10 @@ def normalize_dict_values(d):
         return d
     
     d2 = { k: v / value_sum for k, v in d.items() }
+    return d2
+
+def filter_dict_by_key(d, key_container):
+    d2 = { k: v for k, v in d.items() if k in key_container }
     return d2
 
 # mask could be binary or float.
@@ -1726,6 +1736,7 @@ def extract_first_index_in_each_instance(token_indices):
 
 # cls_subj_indices, cls_comp_indices could be None. 
 # In that case, subj_comp_emb_align is pushed towards 0.
+# margin: 
 def calc_layer_subj_comp_k_or_v_ortho_loss(seq_ks, subj_subj_indices, subj_comp_indices, 
                                            cls_subj_indices, cls_comp_indices,
                                            all_token_weights=None, 
