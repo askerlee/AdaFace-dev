@@ -381,7 +381,7 @@ def parse_range_str(range_str, fix_1_offset=True):
 
 # subset: 'all' or 'hard'. 
 # 'hard' means the subset of prompts based on which it's hard to generate images.
-def get_prompt_list(placeholder, z_prefix, z_suffix, background_string, 
+def get_prompt_list(subject_string, z_prefix, z_suffix, background_string, 
                     class_token, class_long_token, 
                     broad_class, subset='all'):
     object_prompt_list = [
@@ -457,7 +457,7 @@ def get_prompt_list(placeholder, z_prefix, z_suffix, background_string,
 
     z_suffix += background_string
     # z_prefix is usually "portrait of" or "face portrait of"
-    prompt_list            = [ prompt.format(z_prefix, placeholder, z_suffix)       for prompt in orig_prompt_list ]
-    orig_short_prompt_list = [ prompt.format(z_prefix, class_token, z_suffix)       for prompt in orig_prompt_list ]
+    prompt_list            = [ prompt.format(z_prefix, subject_string,  z_suffix)       for prompt in orig_prompt_list ]
+    orig_short_prompt_list = [ prompt.format(z_prefix, class_token,     z_suffix)       for prompt in orig_prompt_list ]
     orig_long_prompt_list  = [ prompt.format(z_prefix, class_long_token, z_suffix)  for prompt in orig_prompt_list ]
     return prompt_list, orig_short_prompt_list, orig_long_prompt_list

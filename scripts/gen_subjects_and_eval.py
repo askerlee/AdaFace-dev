@@ -21,8 +21,8 @@ def parse_args():
     parser.add_argument("--gpu", type=int, default=0, help="gpu id")
     parser.add_argument("--method", default='ada', choices=["ada", "static-layerwise", "ti", "db"], type=str, 
                         help="method to use for generating samples")
-    parser.add_argument("--placeholder", type=str, default="z", 
-                        help="placeholder token for the subject")
+    parser.add_argument("--subject_string", type=str, default="z", 
+                        help="Subject placeholder string that represents the subject in prompts")
     parser.add_argument("--num_vectors_per_token",
                         type=int, default=argparse.SUPPRESS,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
@@ -49,7 +49,7 @@ def parse_args():
                         help="Subset of prompts to evaluate if --prompt is not specified")
     
     parser.add_argument("--prompt", type=str, default=None,
-                        help="Prompt to use for generating samples, using {} for placeholder (default: None)")
+                        help="Prompt to use for generating samples, using {} for subject_string (default: None)")
     parser.add_argument("--neg_prompt", type=str, default=argparse.SUPPRESS,
                         help="Negative prompt to use for generating samples (default: None)")
     parser.add_argument("--use_pre_neg_prompt", action='store_true',
@@ -61,7 +61,7 @@ def parse_args():
 
     # Possible z_suffix_type: '' (none), 'db_prompt', 'class_name', or any user-specified string.
     parser.add_argument("--z_suffix_type", default=argparse.SUPPRESS, 
-                        help="Append this string to the subject placeholder token during inference "
+                        help="Append this string to the subject placeholder string during inference "
                              "(default: '' for humans/animals, 'class_name' for others)")
     # extra_z_suffix: usually reduces the similarity of generated images to the real images.
     parser.add_argument("--extra_z_suffix", type=str, default="",
@@ -168,12 +168,12 @@ if __name__ == "__main__":
     subjects, class_names, broad_classes, sel_set, ckpt_iters = \
             vars['subjects'], vars['class_names'], vars['broad_classes'], vars['sel_set'], vars['maxiters']
 
-    args.orig_placeholder = args.placeholder
+    args.orig_placeholder = args.subject_string
     # If num_vectors_per_token == 3:
     # "z"    => "z, , "
     # Need to leave a space between multiple ",,", otherwise they are treated as one token.
     if hasattr(args, 'num_vectors_per_token') and args.num_vectors_per_token > 1:
-        args.placeholder += ", " * (args.num_vectors_per_token - 1)
+        args.subject_string += ", " * (args.num_vectors_per_token - 1)
 
     z_prefixes_by_class     = [""] * 3
     z_prefixes_by_subject   = None
@@ -357,7 +357,7 @@ if __name__ == "__main__":
                 args.bs = 4
             # E.g., get_prompt_list(placeholder="z", z_suffix="cat", class_long_token="tabby cat", broad_class=1)
             prompt_list, class_short_prompt_list, class_long_prompt_list = \
-                get_prompt_list(args.placeholder, z_prefix, z_suffix, background_string, 
+                get_prompt_list(args.subject_string, z_prefix, z_suffix, background_string, 
                                 class_name, class_long_token, 
                                 broad_class, args.prompt_set)
             prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set}{bg_suffix}.txt"
@@ -368,14 +368,14 @@ if __name__ == "__main__":
             if args.bs == -1:
                 args.bs = 8
 
-            placeholder = args.placeholder
+            subject_string = args.subject_string
             if len(z_prefix) > 0:
-                placeholder      = z_prefix + " " + placeholder
+                subject_string  = z_prefix + " " + subject_string
                 class_name      = z_prefix + " " + class_name
                 class_long_token = z_prefix + " " + class_long_token
 
             prompt_tmpl = args.prompt if args.prompt != "" else "a {}"
-            prompt = prompt_tmpl.format(placeholder + z_suffix)
+            prompt = prompt_tmpl.format(subject_string + z_suffix)
             class_long_prompt = prompt_tmpl.format(class_long_token + z_suffix)
             class_short_prompt = prompt_tmpl.format(class_name + z_suffix)
             # If --background_string is not specified, background_string is "".
