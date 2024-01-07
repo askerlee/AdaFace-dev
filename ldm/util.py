@@ -1989,8 +1989,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
                              ref_grad_scale=cls_delta_grad_scale,   # 0.05
                              aim_to_align=True)
 
-    if do_ada_prompt_delta_reg:
-        assert ada_embeddings is not None
+    if do_ada_prompt_delta_reg and ada_embeddings is not None:
         # ada_embeddings: [4, 16, 77, 768]
         # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
         # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
