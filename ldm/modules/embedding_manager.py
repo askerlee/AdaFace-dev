@@ -1780,8 +1780,6 @@ class EmbeddingManager(nn.Module):
 
     # Set volatile data structures for computing ada embeddings.
     def set_volatile_ds(self, volatile_ds):
-        self.placeholder_indices_fg = volatile_ds['subj_indices']
-        self.placeholder_indices_bg = volatile_ds['bg_indices']
         self.placeholder2indices          = volatile_ds['placeholder2indices']
         # There are image margins after the original image is scaled down, or 
         # after using wds overlay images as input.

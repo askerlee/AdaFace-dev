@@ -1576,8 +1576,8 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_1b_N,
                              t_frac=1.0, 
                              use_layerwise_embedding=True,
                              N_LAYERS=16, 
-                             V_CLS_SCALE_LAYERWISE_RANGE=[1.0, 0.7],
                              K_CLS_SCALE_LAYERWISE_RANGE=[1.0, 1.0],
+                             V_CLS_SCALE_LAYERWISE_RANGE=[1.0, 0.7],
                              # 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24
                              sync_layer_indices=[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
                              ):

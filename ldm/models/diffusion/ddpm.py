@@ -38,7 +38,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
                        gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, clamp_prompt_embedding, \
-                       merge_cls_token_embeddings, filter_dict_by_key
+                       merge_cls_token_embeddings, join_list_of_indices
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -1684,17 +1684,19 @@ class LatentDiffusion(DDPM):
                     placeholder2indices_1b = {}
                     for k in placeholder2indices_2b:
                         placeholder2indices_1b[k] = halve_token_indices(placeholder2indices_2b[k])
-                        subj_indices_1b_N  = placeholder2indices_1b[k][1]
+                        if placeholder2indices_1b[k] is None:
+                            continue
+                        ph_indices_1b_N  = placeholder2indices_1b[k][1]
                         # The subject is represented with a multi-embedding token. The corresponding tokens
                         # in the class prompts are "class , , ,", 
                         # therefore the embeddings of "," need to be patched.
-                        # BUG: if the batch size of a mix batch > 4, then the subj_indices_1b_N
+                        # BUG: if the batch size of a mix batch > 4, then the ph_indices_1b_N
                         # corresponds to the indices in more than one instance. But distribute_embedding_to_M_tokens()
                         # treat the indices as if they are always in the same instance.
-                        # len(subj_indices_1b_N): embedding number of the subject token.
-                        if len(subj_indices_1b_N) > 1:
-                            cls_single_emb = distribute_embedding_to_M_tokens(cls_single_emb, subj_indices_1b_N)
-                            cls_comp_emb   = distribute_embedding_to_M_tokens(cls_comp_emb,   subj_indices_1b_N)
+                        # len(ph_indices_1b_N): embedding number of the subject token.
+                        if len(ph_indices_1b_N) > 1:
+                            cls_single_emb = distribute_embedding_to_M_tokens(cls_single_emb, ph_indices_1b_N)
+                            cls_comp_emb   = distribute_embedding_to_M_tokens(cls_comp_emb,   ph_indices_1b_N)
 
                     extra_info['placeholder2indices_1b'] = placeholder2indices_1b
                     extra_info['placeholder2indices_2b'] = placeholder2indices_2b
@@ -1718,7 +1720,6 @@ class LatentDiffusion(DDPM):
                         # are manually mixed into their embeddings.
                         c_in2 = delta_prompts
                         extra_info['iter_type']      = self.prompt_mix_scheme   # 'mix_hijk'
-
                         # The prompts are either (subj single, subj comp, cls single, cls comp) or
                         # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
                         # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.    
@@ -1755,10 +1756,12 @@ class LatentDiffusion(DDPM):
                             # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
                             extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
                         else:
-                            # We are unable to reuse the static embeddings of the 4-type prompts, so 
-                            # generate embeddings from the captions from scratch.
-                            # subj_indices and bg_indices in captions should be the same.
-                            # Embeddings of subject prompts (including "captions") don't need patching.
+                            # We are unable to reuse the static embeddings of subject single prompt within 
+                            # the 4-type prompts, as captions are different. 
+                            # So generate embeddings from the captions from scratch.
+                            # placeholder2indices in captions should be the same as in subj_single_prompts.
+                            # "captions" consist of subject single prompts only (no comp prompts).
+                            # Embeddings don't need patching as there are no class prompts.
                             c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions, randomize_clip_weights=True)
                             # print(captions)
                             extra_info['placeholder2indices'] = extra_info0['placeholder2indices']
@@ -2045,12 +2048,19 @@ class LatentDiffusion(DDPM):
 
         c_static_emb, c_in, extra_info = cond
 
-        subj_indices2       = subj_indices    = extra_info['subj_indices']
-        bg_indices2         = bg_indices      = extra_info['bg_indices']
         placeholder2indices2      = placeholder2indices   = extra_info['placeholder2indices']
         prompt_emb_mask2    = prompt_emb_mask = extra_info['prompt_emb_mask']
         cfg_scales_for_clip_loss = None
         uncond_context      = self.empty_context_2b
+
+        if self.iter_flags['comp_init_fg_from_training_image']:
+            k_cls_scale_layerwise_range = [1.0, 1.0]
+            # Less subject embeddings mixed into v.
+            v_cls_scale_layerwise_range = [1.0, 0.85]
+        else:
+            k_cls_scale_layerwise_range = [1.0, 1.0]
+            # More subject embeddings mixed into v.
+            v_cls_scale_layerwise_range = [1.0, 0.7]
 
         if self.iter_flags['is_compos_iter']:
             # Only reuse_init_conds if do_mix_prompt_distillation.
@@ -2073,9 +2083,10 @@ class LatentDiffusion(DDPM):
                 # a particular scale tend to make the cfg-denoised mixed images more dissimilar 
                 # to the subject images than in the first denoising step. 
 
-                # x_start is like (x1, x2, x1, x2) (x1, x2 repeated in the previous distillation iter).
-                # x1, x2 are different, but they are generated with the same initial noise in the 
+                # x_start is like (s1, s2, c1, c2) (s1, s2 repeated those in the previous distillation iter).
+                # s1 is different from s2, but they are generated from the same initial noise in the 
                 # previous reconstruction. This is desired as a simulation of a multi-step inference process.
+                # If batch_size <= 7 (default 3), BLOCK_SIZE = 1.
                 BLOCK_SIZE  = max(x_start.shape[0] // 4, 1)
                 # Randomly choose t from the middle 400-700 timesteps, 
                 # so as to match the once-denoised x_start.
@@ -2091,17 +2102,16 @@ class LatentDiffusion(DDPM):
             else:
                 # Fresh compositional iter. May do teacher filtering.
                 # In a fresh compositional iter, t is set to be at the last 20% of the timesteps.
+                # Randomly choose t from the largest 200 timesteps, to match the completely noisy x_start.
                 t_tail = torch.randint(int(self.num_timesteps * 0.8), int(self.num_timesteps * 1), 
                                        (x_start.shape[0],), device=x_start.device)
                 t = t_tail
-                # x_start is of ORIG_BS = 2. So BLOCK_SIZE=1. We can't afford BLOCK_SIZE=2,
+                # x_start is of ORIG_BS = 3. num_candidate_teachers = 3.
+                # So BLOCK_SIZE=1. We can't afford BLOCK_SIZE=2,
                 # which will bloat to batch size of 8 for the 4-type prompts.
-                # Randomly choose t from the largest 150 timesteps, so as to match the completely noisy x_start.
+                # Why BS // num_candidate_teachers? We want the input x to be as diverse as possible for
+                # different candidate teachers.
                 BLOCK_SIZE = max(x_start.shape[0] // self.num_candidate_teachers, 1)
-                # At 60% of the chance, randomly initialize x_start and t. Note the batch size is still 2 here.
-                # At 40% of the chance, use a noisy x_start based on the training images. 
-                # This may help the model ignore the background in the training images given prompts, 
-                # i.e., give prompts higher priority over the background.
 
                 if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
                     # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
@@ -2142,11 +2152,12 @@ class LatentDiffusion(DDPM):
 
             else:
                 # First iteration of a two-iteration do_mix_prompt_distillation.
-                # If num_candidate_teachers=6, generate a batch of 12 instances in *two* sets, 
+                # If num_candidate_teachers=4, generate a batch of 8 instances in *two* sets, 
                 # each set with *num_candidate_teachers* instances. 
+                # We want to select 1 block of BLOCK_SIZE(=1) instances.
                 # Within each set, we set static prompt embeddings to be the same,
                 # but initial x_start, noise and t are different (x_start and t may have repetitions
-                # if ORIG_BS < num_candidate_teachers).
+                # if ORIG_HALF_BS < num_candidate_teachers).
                 # The corresponding instances across the two sets have the same initial 
                 # x_start, noise and t, but different prompt embeddings (subj vs. mix).
                 # Then do a no_grad generation, find the best teachable set (if any) and pass to 
@@ -2159,25 +2170,29 @@ class LatentDiffusion(DDPM):
                 # If batch size = 3 and N = 6, then we quadruple the batch size to 12
                 # (6 subj comp, 6 mix comp).
                 if self.iter_flags['do_teacher_filter']:
-                    ORIG_BS = x_start.shape[0]
-                    NEW_BS  = self.num_candidate_teachers * BLOCK_SIZE
-                    # It's possible that num_candidate_teachers % ORIG_BS > 0.
+                    ORIG_HALF_BS = x_start.shape[0]
+                    NEW_HALF_BS  = self.num_candidate_teachers * BLOCK_SIZE
+                    # It's possible that num_candidate_teachers % ORIG_HALF_BS > 0.
                     # In this case, we repeat x_start and t by X_REPL times, then truncate them 
                     # to num_candidate_teachers instances.
-                    X_REPL = math.ceil(NEW_BS / ORIG_BS)
+                    X_REPL = math.ceil(NEW_HALF_BS / ORIG_HALF_BS)
                     if X_REPL > 1:
                         # First repeat x_start and t by X_REPL times.
                         x_start = x_start.repeat(X_REPL, 1, 1, 1)
                         t       = t.repeat(X_REPL)
                         # noise is NOT repeated by X_REPL times, to achieve diversity.
                         noise   = torch.randn_like(x_start)
-                    if self.num_candidate_teachers % ORIG_BS > 0:
+                    if NEW_HALF_BS % ORIG_HALF_BS > 0:
+                        # Too much hassle to deal with this case. So we just disable it.
+                        breakpoint()
+                        '''
                         # Then truncate them to num_candidate_teachers instances.
-                        x_start = x_start[:NEW_BS]
-                        t       = t[:NEW_BS]
-                        noise   = noise[:NEW_BS]
+                        x_start = x_start[:NEW_HALF_BS]
+                        t       = t[:NEW_HALF_BS]
+                        noise   = noise[:NEW_HALF_BS]
+                        '''
 
-                    # Then repeat twice to get two sets of instances.
+                    # Then repeat twice to get a FULL BATCH consisting of two sets of instances.
                     x_start = x_start.repeat(2, 1, 1, 1)
                     # noise and t are repeated in the same way as x_start for two sets. 
                     # Set 1 is for two subj comp instances, set 2 is for two mix comp instances.
@@ -2190,15 +2205,18 @@ class LatentDiffusion(DDPM):
                     subj_single_emb, subj_comp_emb, mix_single_emb, mix_comp_emb = \
                         c_static_emb.chunk(4)
                     # Only keep *_comp_emb, but repeat them to form 2x or 3x comp sets.
-                    # subj_comp_emb: [16, 77, 768].
+                    # subj_comp_emb, mix_comp_emb: each contains BLOCK_SIZE instances (truncated in forward()). 
+                    # So repeat them by num_candidate_teachers times to match the size of x_start.
+                    # subj_comp_emb, mix_comp_emb: [16*BLOCK_SIZE, 77, 768] => [16*BLOCK_SIZE*T, 77, 768].
+                    # c_static_emb2: [32*BLOCK_SIZE*T, 77, 768].
                     c_static_emb2 = torch.cat([ subj_comp_emb.repeat(self.num_candidate_teachers, 1, 1), 
-                                                mix_comp_emb.repeat(self.num_candidate_teachers, 1, 1) ], dim=0)
+                                                 mix_comp_emb.repeat(self.num_candidate_teachers, 1, 1) ], dim=0)
                     
                     subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                         chunk_list(c_in, 4)
                     # We change the prompts to be twin structure: (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
                     # Since subj comp and subj single have the same placeholder_indices_fg and placeholder_indices_bg,
-                    # We don't need to update subj_indices and bg_indices of emb_man_volatile_ds.
+                    # We don't need to update placeholder2indices of emb_man_volatile_ds.
                     c_in2 = subj_comp_prompts * self.num_candidate_teachers + cls_comp_prompts * self.num_candidate_teachers
                     # Back up cond as cond_orig. Replace cond with the cond for the twin comp sets.
                     cond_orig = cond
@@ -2206,24 +2224,14 @@ class LatentDiffusion(DDPM):
 
                     # Instances are arranged as: 
                     # (subj comp 1, ..., subj comp N, mix comp 1, ..., mix comp N).
-                    # So we need to repeat subj_indices_1b and bg_indices_1b by N times.
-                    # Actually in compositional iterations, use_background_token is always False. 
-                    # So extra_info['bg_indices_1b'] and bg_indices are always None.
-                    # But still keep the code here, in case we want to use_background_token 
-                    # in compositional iterations.
-                    subj_indices2, _ = extend_indices_B_by_n_times(extra_info['subj_indices_1b'], 
-                                                                   self.num_candidate_teachers,
-                                                                   block_offset=BLOCK_SIZE)
-                    bg_indices2,   _ = extend_indices_B_by_n_times(extra_info['bg_indices_1b'],
-                                                                   self.num_candidate_teachers,
-                                                                   block_offset=BLOCK_SIZE)
+                    # So we need to repeat all placeholder_indices_1b by N times.
                     # We have to reinitialize placeholder2indices2. It originally points to placeholder2indices. 
                     # Without reinitialization, the following code will rewrite the contents of placeholder2indices.
                     placeholder2indices2 = {}
                     for k in placeholder2indices:
                         placeholder2indices2[k], _ = extend_indices_B_by_n_times(extra_info['placeholder2indices_1b'][k],
-                                                                           self.num_candidate_teachers,
-                                                                           block_offset=BLOCK_SIZE)
+                                                                                 self.num_candidate_teachers,
+                                                                                 block_offset=BLOCK_SIZE)
                         
                     subj_single_emb_mask, subj_comp_emb_mask, cls_single_emb_mask, cls_comp_emb_mask = \
                         chunk_list(prompt_emb_mask, 4)
@@ -2238,13 +2246,13 @@ class LatentDiffusion(DDPM):
                     # have a batch size of 2*BLOCK_SIZE. So repeat_selected_instances() 
                     # won't discard part of them, but simply repeat them twice.
                     img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
-                        repeat_selected_instances(slice(0, NEW_BS), 2, img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
+                        repeat_selected_instances(slice(0, NEW_HALF_BS), 2, img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
                     self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
 
                     # do_mix_prompt_distillation. We need to compute CLIP scores for teacher filtering.
                     # Set up cfg configs for guidance to denoise images, which are input to CLIP.
                     # Teachers are slightly more aggressive, to increase the teachable fraction.   
-                    cfg_scales_for_clip_loss = gen_cfg_scales_for_stu_tea(6, 5, NEW_BS, x_start.device)
+                    cfg_scales_for_clip_loss = gen_cfg_scales_for_stu_tea(6, 5, NEW_HALF_BS, x_start.device)
 
                 # Not self.iter_flags['do_teacher_filter']. This branch is do_mix_prompt_distillation.
                 # So it's either reuse_init_conds, or not do_clip_teacher_filtering (globally).
@@ -2278,6 +2286,7 @@ class LatentDiffusion(DDPM):
                     # NOTE cond is mainly determined by the prompts c_in. Since c_in is inherited from
                     # the previous iteration, cond is also almost the same.
             
+            # This code block is within if self.iter_flags['is_compos_iter'].
             # The prompts are either 2-repeat-2 (do_teacher_filter) or 1-repeat-4 (distillation) structure.
             # Use cond[1] instead of c_static_emb as input, since cond[1] is updated as 2-repeat-2 
             # in the 'do_teacher_filter' branch. We need to do mixing on the c_static_emb 
@@ -2288,29 +2297,30 @@ class LatentDiffusion(DDPM):
             # t.chunk(2)[0] always corresponds to the first two blocks of instances.
             t_frac = t.chunk(2)[0] / self.num_timesteps
             # The subject indices are applied to every of the half-batch instances, 
-            # so extra_info['subj_indices_1b'] is enough.
-            # (extra_info['subj_indices_2b'][1] just repeats extra_info['subj_indices_1b'][1] twice.)
-            k_cls_scale_layerwise_range = [1.0, 1.0]  if self.iter_flags['comp_init_fg_from_training_image'] else [1.0, 1.0]
-            v_cls_scale_layerwise_range = [1.0, 0.85] if self.iter_flags['comp_init_fg_from_training_image'] else [1.0, 0.7]
+            # so subj_indices_1b_N is enough.
+            placeholder2indices_1b = extra_info['placeholder2indices_1b']
+            all_subj_indices_1b = [ placeholder2indices_1b[k] for k in self.embedding_manager.subject_strings ]
+            all_subj_indices_1b_B, all_subj_indices_1b_N = join_list_of_indices(all_subj_indices_1b)
             c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, \
                              emb_k_mixer, emb_k_layers_cls_mix_scales = \
-                mix_static_vk_embeddings(cond[0], extra_info['subj_indices_1b'][1], 
+                mix_static_vk_embeddings(cond[0], all_subj_indices_1b_N, 
                                          self.training_percent,
                                          t_frac = t_frac, 
                                          use_layerwise_embedding = self.use_layerwise_embedding,
                                          N_LAYERS = self.N_LAYERS,
-                                         V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range,
-                                         K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range)
+                                         K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range,
+                                         V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range)
           
             # Update cond[0] to c_static_emb_vk.
             # Use cond[1] instead of c_in as part of the tuple, since c_in is changed in the
             # 'do_teacher_filter' branch.
             cond = (c_static_emb_vk, cond[1], extra_info)
-            extra_info['emb_v_mixer']                   = emb_v_mixer
-            extra_info['emb_k_mixer']                   = emb_k_mixer
-            # emb_v_layers_cls_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
-            extra_info['emb_v_layers_cls_mix_scales']   = emb_v_layers_cls_mix_scales            
-            extra_info['emb_k_layers_cls_mix_scales']   = emb_k_layers_cls_mix_scales
+            # emb_k_layers_cls_mix_scales, emb_v_layers_cls_mix_scales: [4, 16]. 
+            # Each set of scales (for 16 layers) is for an instance.
+            extra_info['emb_k_mixer'], extra_info['emb_k_layers_cls_mix_scales'] = \
+                emb_k_mixer, emb_k_layers_cls_mix_scales
+            extra_info['emb_v_mixer'], extra_info['emb_v_layers_cls_mix_scales'] = \
+                emb_v_mixer, emb_v_layers_cls_mix_scales            
             
         # Otherwise, it's a recon iter (attentional or unweighted).
         else:
@@ -2342,9 +2352,7 @@ class LatentDiffusion(DDPM):
         # Do not consider mask on compositional distillation iterations, 
         # as in such iters, the original pixels (out of the fg_mask) do not matter and 
         # can freely compose any contents.
-        emb_man_volatile_ds = { 'subj_indices':     subj_indices2,
-                                'bg_indices':       bg_indices2,
-                                'placeholder2indices':    placeholder2indices2,
+        emb_man_volatile_ds = { 'placeholder2indices':    placeholder2indices2,
                                 # In compositional iterations, img_mask is always None.
                                 # No need to consider whether do_teacher_filter or not.
                                 'img_mask':         extra_info['img_mask'],
@@ -2416,31 +2424,28 @@ class LatentDiffusion(DDPM):
                     log_image_colors[best_cand_idx + self.num_candidate_teachers] = 3
 
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
-                    # If comp_init_fg_from_training_image, then in order to let mix prompts attend to fg areas, we let
-                    # the keys to be mostly subject embeddings, and the values are unchanged.
-                    k_cls_scale_layerwise_range = [1.0, 1.0]  if self.iter_flags['comp_init_fg_from_training_image'] else [1.0, 1.0]
-                    v_cls_scale_layerwise_range = [1.0, 0.85] if self.iter_flags['comp_init_fg_from_training_image'] else [1.0, 0.7]
                     # Mix embeddings to get c_static_emb_orig_vk for cond_orig.
                     # Do mixing on saved cond_orig instead of the updated "cond".
                     # cond_orig is the 4-type prompt embeddings (subj single, subj comp, mix single, mix comp).
                     # but cond  has been re-organized as (subj comp, subj comp, mix comp, mix comp). 
                     # So we use cond_orig.
                     c_static_emb_orig_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, \
-                                            emb_k_mixer, emb_k_layers_cls_mix_scales = \
+                                          emb_k_mixer, emb_k_layers_cls_mix_scales = \
                         mix_static_vk_embeddings(cond_orig[0], extra_info['subj_indices_1b'][1], 
-                                                    self.training_percent,
-                                                    t_frac = t_frac, 
-                                                    use_layerwise_embedding = self.use_layerwise_embedding,
-                                                    N_LAYERS = self.N_LAYERS,
-                                                    V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range,
-                                                    K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range)
-                    
-                    extra_info['emb_v_mixer']                   = emb_v_mixer
-                    extra_info['emb_k_mixer']                   = emb_k_mixer
-                    # emb_v_layers_cls_mix_scales: [2, 16]. Each set of scales (for 16 layers) is for an instance.
+                                                 self.training_percent,
+                                                 t_frac = t_frac, 
+                                                 use_layerwise_embedding = self.use_layerwise_embedding,
+                                                 N_LAYERS = self.N_LAYERS,
+                                                 K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range,
+                                                 V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range)
+
+                    # emb_k_layers_cls_mix_scales, emb_v_layers_cls_mix_scales: [2, 16]. 
+                    # Each set of scales (for 16 layers) is for an instance.
                     # Different from the emb_v_layers_cls_mix_scales above, which is for the twin comp instances.
-                    extra_info['emb_v_layers_cls_mix_scales']   = emb_v_layers_cls_mix_scales  
-                    extra_info['emb_k_layers_cls_mix_scales']   = emb_k_layers_cls_mix_scales
+                    extra_info['emb_k_mixer'], extra_info['emb_k_layers_cls_mix_scales'] = \
+                        emb_k_mixer, emb_k_layers_cls_mix_scales
+                    extra_info['emb_v_mixer'], extra_info['emb_v_layers_cls_mix_scales'] = \
+                        emb_v_mixer, emb_v_layers_cls_mix_scales
                     # Update c_static_emb.
                     cond_orig_qv = (c_static_emb_orig_vk, cond_orig[1], extra_info)
 
