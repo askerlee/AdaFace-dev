@@ -1918,13 +1918,8 @@ class EmbeddingManager(nn.Module):
         # So before loading, remove it from these dicts first.
         self.string_to_token_dict           = {}
         self.string_to_emb_ema_dict         = nn.ModuleDict()
-
-        old_static_pre_vecs = {}
-        old_ada_pre_vecs    = {}        
-
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
-        
         token2num_vectors                   = {}
 
         if isinstance(ckpt_paths, str):

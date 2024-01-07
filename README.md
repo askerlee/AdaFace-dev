@@ -41,7 +41,7 @@ python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml
          -t --actual_resume models/stable-diffusion-v-1-5/v1-5-pruned.ckpt
          -n <run_name> --gpus 0, --no-test
          --data_root data/subject_images/
-         --placeholder_string <placeholder_string>
+         --subject_string <subject_string>
          --init_word "word1 word2..." --init_word_weights w1 w2...
 ```
 
@@ -52,12 +52,12 @@ python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml
          -t --actual_resume models/stable-diffusion-v-1-5/v1-5-pruned.ckpt          
          -n alexachung-ada --gpus 0, --no-test 
          --data_root data/alexachung/  
-         --placeholder_string "z"  
+         --subject_string "z"  
          --init_word "young girl woman" 
          --init_word_weights 1 2 2
 ```
 
-where `placeholder_string` is a chosen uncommonly used single-token, such as ‘z’, ‘y’.
+where `subject_string` is a chosen uncommonly used single-token, such as ‘z’, ‘y’.
 
 `init_word` is a few words that roughly describe the subject (e.g., 'man', ‘girl’, ‘dog’). It is used to initialize the low-rank semantic space of the subject embeddings.
 

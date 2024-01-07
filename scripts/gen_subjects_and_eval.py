@@ -445,7 +445,7 @@ if __name__ == "__main__":
         command_line += f" --clip_last_layers_skip_weights {args.clip_last_layers_skip_weights}"
 
         if hasattr(args, 'num_vectors_per_token'):
-            command_line += f" --placeholder_string {args.orig_placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
+            command_line += f" --subject_string {args.orig_placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
         if hasattr(args, 'use_conv_attn_kernel_size'):
             command_line += f" --use_conv_attn_kernel_size {args.use_conv_attn_kernel_size}"
 

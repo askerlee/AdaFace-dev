@@ -78,7 +78,7 @@ class DictT(dict):
          self.data_root = ""
          self.actural_resume = ""
          self.embedding_manager_ckpt = ""
-         self.placeholder_string = ""
+         self.subject_string = ""
          self.init_word = ""
          self.init_word_weights = 0.5
          self.cls_delta_string = None

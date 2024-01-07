@@ -268,12 +268,12 @@ def parse_args():
                         help="Weight of the skip connections of the last few layers of CLIP text embedder. " 
                              "NOTE: the last element is the weight of the last layer.")
 
-    parser.add_argument("--placeholder_string", 
+    parser.add_argument("--subject_string", 
                         type=str, default="z",
-                        help="Placeholder string which will be used in prompts to denote the concept.")
+                        help="Subject placeholder string used in prompts to denote the concept.")
     parser.add_argument("--background_string", 
                         type=str, default=None,
-                        help="Background string which will be used in prompts to denote the background in training images.")
+                        help="Background placeholder string used in prompts to denote the background in training images.")
                     
     parser.add_argument("--num_vectors_per_token",
                         type=int, default=argparse.SUPPRESS,
@@ -387,7 +387,7 @@ def main(opt):
         model.cond_stage_model.set_last_layers_skip_weights(opt.clip_last_layers_skip_weights)
         
         if hasattr(opt, 'num_vectors_per_token'):
-            ckpt_num_vectors_per_token = model.embedding_manager.token2num_vectors[opt.placeholder_string]
+            ckpt_num_vectors_per_token = model.embedding_manager.token2num_vectors[opt.subject_string]
             assert ckpt_num_vectors_per_token == opt.num_vectors_per_token, \
                    f"Number of vectors per token mismatch: command line {opt.num_vectors_per_token} != ckpt {ckpt_num_vectors_per_token}."
 
@@ -403,6 +403,8 @@ def main(opt):
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
+            
+        model.embedding_manager.subject_strings = [opt.subject_string]
         if opt.background_string is not None:
             model.embedding_manager.background_strings = [opt.background_string]
 

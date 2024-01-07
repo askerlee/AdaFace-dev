@@ -187,12 +187,12 @@ def get_parser(**parser_kwargs):
         default="", 
         help="Initialize embedding manager from a checkpoint")
 
-    parser.add_argument("--placeholder_string", 
-        type=str, default="z",
-        help="Placeholder string which will be used in prompts to represent the concept.")
+    parser.add_argument("--subject_string", 
+                        type=str, default="z",
+                        help="Subject placeholder string used in prompts to denote the concept.")
     parser.add_argument("--background_string", 
         type=str, default="y",
-        help="Background string which will be used in prompts to represent the background in training images.")
+        help="Background placeholder string used in prompts to represent the background in training images.")
     parser.add_argument("--common_placeholder_prefix",
         type=str, default=None,
         help="Prefix of the placeholder string for all types of prompts. Default: None.")
@@ -745,12 +745,11 @@ if __name__ == "__main__":
             assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_words))
 
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
-        config.model.params.personalization_config.params.placeholder_strings = [opt.placeholder_string]
-        config.model.params.personalization_config.params.num_vectors_per_token = { opt.placeholder_string: opt.num_vectors_per_token}
+        config.model.params.personalization_config.params.placeholder_strings = [opt.subject_string]
+        config.model.params.personalization_config.params.num_vectors_per_token = { opt.subject_string: opt.num_vectors_per_token}
 
-        # placeholder_string
-        config.data.params.train.params.placeholder_string       = opt.placeholder_string
-        config.data.params.validation.params.placeholder_string  = opt.placeholder_string
+        config.data.params.train.params.subject_string       = opt.subject_string
+        config.data.params.validation.params.subject_string  = opt.subject_string
         # common_placeholder_prefix, compos_placeholder_prefix
         config.data.params.train.params.common_placeholder_prefix       = opt.common_placeholder_prefix
         config.data.params.validation.params.common_placeholder_prefix  = opt.common_placeholder_prefix
@@ -992,10 +991,10 @@ if __name__ == "__main__":
         # {'target': 'main.DataModuleFromConfig', 'params': {'batch_size': 2, 'num_workers': 2, 
         #  'wrap': False, 'train': {'target': 'ldm.data.personalized.PersonalizedBase', 
         #  'params': {'size': 512, 'set': 'train', 'repeats': 100, 
-        #  'placeholder_string': 'z', 'data_root': 'data/spikelee/'}}, 
+        #  'subject_string': 'z', 'data_root': 'data/spikelee/'}}, 
         #  'validation': {'target': 'ldm.data.personalized.PersonalizedBase', 
         #  'params': {'size': 512, 'set': 'val', 'repeats': 10, 
-        #  'placeholder_string': 'z', 'data_root': 'data/spikelee/'}}}}
+        #  'subject_string': 'z', 'data_root': 'data/spikelee/'}}}}
         config.data.params.train.params.data_root       = opt.data_root
         config.data.params.validation.params.data_root  = opt.data_root
         # data: DataModuleFromConfig
