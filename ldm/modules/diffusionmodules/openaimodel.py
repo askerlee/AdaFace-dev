@@ -2,7 +2,7 @@ from abc import abstractmethod
 from functools import partial
 import math
 from typing import Iterable
-from ldm.util import distribute_embedding_to_M_tokens, prob_apply_compel_cfg
+from ldm.util import distribute_embedding_to_M_tokens_by_dict, prob_apply_compel_cfg, extract_layerwise_value
 
 import numpy as np
 import torch
@@ -511,7 +511,7 @@ class UNetModel(nn.Module):
         self.backup_vars = { 
                             'use_conv_attn_kernel_size:layerwise':      [-1]   * 16,
                             'shift_attn_maps_for_diff_embs:layerwise':  [True] * 16,
-                            'conv_attn_layer_scale:layerwise':          None,
+                            'subj2conv_attn_layer_scale:layerwise-dict':  {},
                             'save_attn_vars':                           False,
                             'is_training':                              True,
                            }
@@ -745,28 +745,36 @@ class UNetModel(nn.Module):
 
                 if k.endswith(":layerwise"):
                     k = k[:-len(":layerwise")]
-                    v_is_layer_specific = (v is not None)
+                    # layerwise array: includes dict using layer indices as keys.
+                    v_is_layerwise_array = (v is not None)
                 else:
-                    v_is_layer_specific = False
+                    v_is_layerwise_array = False
+
+                if k.endswith(":layerwise-dict"):
+                    k = k[:-len(":layerwise-dict")]
+                    v_is_layerwise_dict = (v is not None)
+                else:
+                    v_is_layerwise_dict = False
 
                 layer_idx = 0
                 for module in self.input_blocks:
                     if layer_idx in ca_layer_indices:
                         # module: SpatialTransformer.
                         # module.transformer_blocks: contains only 1 BasicTransformerBlock 
-                        # that does cross-attention with layer_context in attn2 only.      
-                        v2 = v[l2ca[layer_idx]] if v_is_layer_specific else v               
+                        # that does cross-attention with layer_context in attn2 only.
+                        v2 = extract_layerwise_value(v, l2ca[layer_idx], v_is_layerwise_array, v_is_layerwise_dict)
                         module[1].transformer_blocks[0].attn2.__dict__[k] = v2
+
                     layer_idx += 1
 
                 if layer_idx in ca_layer_indices:
-                    v2 = v[l2ca[layer_idx]] if v_is_layer_specific else v
+                    v2 = extract_layerwise_value(v, l2ca[layer_idx], v_is_layerwise_array, v_is_layerwise_dict)
                     self.middle_block[1].transformer_blocks[0].attn2.__dict__[k] = v2
                 layer_idx += 1
 
                 for module in self.output_blocks:
                     if layer_idx in ca_layer_indices:
-                        v2 = v[l2ca[layer_idx]] if v_is_layer_specific else v
+                        v2 = extract_layerwise_value(v, l2ca[layer_idx], v_is_layerwise_array, v_is_layerwise_dict)
                         module[1].transformer_blocks[0].attn2.__dict__[k] = v2
                     layer_idx += 1
         else:
@@ -781,9 +789,16 @@ class UNetModel(nn.Module):
 
                 if k.endswith(":layerwise"):
                     k = k[:-len(":layerwise")]
-                    v_is_layer_specific = (v is not None)
+                    # layerwise array: includes dict using layer indices as keys.
+                    v_is_layerwise_array = (v is not None)
                 else:
-                    v_is_layer_specific = False
+                    v_is_layerwise_array = False
+
+                if k.endswith(":layerwise-dict"):
+                    k = k[:-len(":layerwise-dict")]
+                    v_is_layerwise_dict = (v is not None)
+                else:
+                    v_is_layerwise_dict = False
 
                 layer_idx = 0
                 for module in self.input_blocks:
@@ -791,18 +806,18 @@ class UNetModel(nn.Module):
                         # module: SpatialTransformer.
                         # module.transformer_blocks: contains only 1 BasicTransformerBlock 
                         # that does cross-attention with layer_context in attn2 only.   
-                        v2 = v[l2ca[layer_idx]] if v_is_layer_specific else v
+                        v2 = extract_layerwise_value(v, l2ca[layer_idx], v_is_layerwise_array, v_is_layerwise_dict)
                         module[1].transformer_blocks[0].__dict__[k] = v2
                     layer_idx += 1
 
                 if layer_idx in trans_layer_indices:
-                    v2 = v[l2ca[layer_idx]] if v_is_layer_specific else v
+                    v2 = extract_layerwise_value(v, l2ca[layer_idx], v_is_layerwise_array, v_is_layerwise_dict)
                     self.middle_block[1].transformer_blocks[0].__dict__[k] = v2
                 layer_idx += 1
 
                 for module in self.output_blocks:
                     if layer_idx in trans_layer_indices:
-                        v2 = v[l2ca[layer_idx]] if v_is_layer_specific else v
+                        v2 = extract_layerwise_value(v, l2ca[layer_idx], v_is_layerwise_array, v_is_layerwise_dict)
                         module[1].transformer_blocks[0].__dict__[k] = v2
                     layer_idx += 1
         else:
@@ -837,9 +852,9 @@ class UNetModel(nn.Module):
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
         is_training           = extra_info.get('is_training', True)            if extra_info is not None else True
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
-        use_conv_attn_kernel_size   = extra_info.get('use_conv_attn_kernel_size',  None)   if extra_info is not None else None
-        conv_attn_layerwise_scales   = extra_info.get('conv_attn_layerwise_scales', None) if extra_info is not None else None
-        subj_indices          = extra_info.get('subj_indices', None)           if extra_info is not None else None
+        use_conv_attn_kernel_size   = extra_info.get('use_conv_attn_kernel_size',  None) if extra_info is not None else None
+        subj2conv_attn_layer_scale  = extra_info.get('subj2conv_attn_layer_scale', {})   if extra_info is not None else {}
+        placeholder2indices         = extra_info.get('placeholder2indices', None)        if extra_info is not None else None
         img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
         emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
         emb_k_mixer           = extra_info.get('emb_k_mixer', None)            if extra_info is not None else None
@@ -850,8 +865,6 @@ class UNetModel(nn.Module):
         empty_context               = extra_info.get('empty_context', None) if extra_info is not None else None
         debug_attn            = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
 
-        # If uncond (null) condition is active, then subj_indices = None.
-        subj_indices_B, subj_indices_N = subj_indices if subj_indices is not None else (None, None)
         B = x.shape[0]
 
         if use_layerwise_context:
@@ -862,7 +875,7 @@ class UNetModel(nn.Module):
         def get_layer_context(layer_idx, layer_attn_components):
             # print(h.shape)
             if not use_layerwise_context:
-                return context, None
+                return context, None, None
 
             # skipped_layers: 0, 3, 6, 9, 10, 11, 13, 14, 15
             # 25 layers, among which 16 layers are conditioned.
@@ -876,7 +889,7 @@ class UNetModel(nn.Module):
             layer_static_context = context[emb_idx]
 
             if iter_type == 'mix_hijk':
-                # cls embeddings have been distribute_embedding_to_M_tokens() in 
+                # cls embeddings have been distribute_embedding_to_M_tokens_by_dict() in 
                 # LatentDiffusion.forward() in ddpm.py. So no need to call it again here.
                 # layer_static_context is v, k concatenated. Separate it into v and k.
                 layer_static_context_v, layer_static_context_k = \
@@ -910,21 +923,20 @@ class UNetModel(nn.Module):
                     # The second half of a mix_hijk batch is always the mix instances,
                     # even for twin comp sets.
                     subj_layer_ada_context, cls_layer_ada_context = layer_ada_context.chunk(2)
-                    # In ddpm, distribute_embedding_to_M_tokens() is applied on a text embedding whose 1st dim is the 16 layers.
+                    # In ddpm, distribute_embedding_to_M_tokens_by_dict() is applied on a text embedding whose 1st dim is the 16 layers.
                     # Here, the 1st dim of cls_layer_ada_context is the batch.
-                    # But we can still use distribute_embedding_to_M_tokens() without special processing, since
-                    # in both cases, the 2nd dim is the token dim, so distribute_embedding_to_M_tokens() works in both cases.
-                    # subj_indices_N:      subject token indices within the subject single prompt (BS=1).
-                    # len(subj_indices_N): embedding number of the subject token.
+                    # But we can still use distribute_embedding_to_M_tokens_by_dict() without special processing, since
+                    # in both cases, the 2nd dim is the token dim, so distribute_embedding_to_M_tokens_by_dict() works in both cases.
                     # cls_layer_ada_context: [2, 77, 768]. subj_indices_N: [6, 7, 8, 9, 6, 7, 8, 9]. 
                     # Four embeddings (6,7,8,9) for each token.
-                    cls_layer_ada_context = distribute_embedding_to_M_tokens(cls_layer_ada_context, subj_indices_N)
+                    # If uncond (null) condition is active, then placeholder2indices[k] = None.
+                    cls_layer_ada_context = distribute_embedding_to_M_tokens_by_dict(cls_layer_ada_context, placeholder2indices)
                     if emb_v_mixer is not None:
                         # Mix subj ada emb into mix ada emb, in the same way as to static embeddings.
                         # emb_v_cls_mix_scale: [2, 1]
                         emb_v_cls_mix_scale   = emb_v_layers_cls_mix_scales[:, [emb_idx]]
                         # subj_layer_ada_context, cls_layer_ada_context: [2, 77, 768]
-                        # emb_v_mixer is a partial function that implies mix_indices=subj_indices_1b.                            
+                        # emb_v_mixer is a partial function that implies mix_indices=all_subj_indices_1b.                            
                         mix_layer_ada_context_v = emb_v_mixer(cls_layer_ada_context, subj_layer_ada_context, 
                                                               c1_mix_scale=emb_v_cls_mix_scale)
                     else:
@@ -943,7 +955,7 @@ class UNetModel(nn.Module):
                         # emb_v_cls_mix_scale: [2, 1]
                         emb_k_cls_mix_scale   = emb_k_layers_cls_mix_scales[:, [emb_idx]]
                         # subj_layer_ada_context, cls_layer_ada_context: [2, 77, 768].
-                        # emb_v_mixer is a partial function that implies mix_indices=subj_indices_1b.
+                        # emb_v_mixer is a partial function that implies mix_indices=all_subj_indices_1b.
                         mix_layer_ada_context_k = emb_k_mixer(cls_layer_ada_context, subj_layer_ada_context, 
                                                               c1_mix_scale=emb_k_cls_mix_scale)
                     else:
@@ -987,22 +999,9 @@ class UNetModel(nn.Module):
                                                       skipped_token_indices=None,
                                                       batch_mask=compel_batch_mask)
                 
-            # subj_indices is passed from extra_info, which was obtained when generating static embeddings.
-            # Return subj_indices to cross attention layers for conv attn computation.
-            return layer_context, ada_subj_attn_dict, subj_indices
-
-        # conv_attn_layerwise_scales are not specified. So use the default value 0.5.
-        # Here conv_attn_layerwise_scales is a list of scalars, not a learnable tensor.
-        if conv_attn_layerwise_scales is None:
-            # 1, 2, 4, 5, 7, 8           feature maps: 64, 64, 32, 32, 16, 16.
-            # 0~5  (1, 2, 4, 5, 7, 8):                      weight 0.5.
-            # 12, 16, 17, 18, 19, 20, 21 feature maps: 8, 16, 16, 16, 32, 32, 32.
-            # 6~12 (12, 16, 17, 18, 19, 20, 21):            weight 0.5. #0.8.
-            # 22, 23, 24                 feature maps: 64, 64, 64.
-            # 13~15 (22, 23, 24):                           weight 0.5. #0.8.
-            # This setting is based on the empirical observations of 
-            # the learned conv_attn_layerwise_scales.      
-            conv_attn_layerwise_scales = [1] * 16
+            # placeholder2indices is passed from extra_info, which was obtained when generating static embeddings.
+            # Return placeholder2indices to cross attention layers for conv attn computation.
+            return layer_context, ada_subj_attn_dict, placeholder2indices
 
         use_conv_attn_kernel_sizes = np.ones(16, dtype=int) * use_conv_attn_kernel_size
         # Most layers use use_conv_attn_kernel_size as the conv attn kernel size.
@@ -1025,8 +1024,8 @@ class UNetModel(nn.Module):
         old_ca_flags, _ = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn_kernel_size:layerwise': use_conv_attn_kernel_sizes,
                                                           'shift_attn_maps_for_diff_embs:layerwise': shift_attn_maps_for_diff_embs,
-                                                          'conv_attn_layer_scale:layerwise':
-                                                             conv_attn_layerwise_scales,
+                                                          'subj2conv_attn_layer_scale:layerwise-dict':
+                                                             subj2conv_attn_layer_scale,
                                                           'is_training': is_training },
                                        ca_layer_indices = None )
             

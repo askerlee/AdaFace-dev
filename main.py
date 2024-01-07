@@ -256,9 +256,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--padding_embs_align_loss_weight",
         type=float, default=-1,
         help="Weight of the padding embeddings alignment loss")
-    parser.add_argument("--subj_attn_norm_distill_loss_base",
-        type=float, default=-1,
-        help="Base of the subject attention normalization distillation loss")
     parser.add_argument("--mix_prompt_distill_weight",
         type=float, default=-1,
         help="Weight of the mixed prompt distillation loss")
@@ -842,8 +839,6 @@ if __name__ == "__main__":
 
         if opt.padding_embs_align_loss_weight >= 0:
             config.model.params.padding_embs_align_loss_weight = opt.padding_embs_align_loss_weight
-        if opt.subj_attn_norm_distill_loss_base >= 0:
-            config.model.params.subj_attn_norm_distill_loss_base = opt.subj_attn_norm_distill_loss_base
         if opt.comp_fg_bg_preserve_loss_weight >= 0:
             config.model.params.comp_fg_bg_preserve_loss_weight     = opt.comp_fg_bg_preserve_loss_weight
         if opt.mix_prompt_distill_weight >= 0:

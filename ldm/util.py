@@ -895,6 +895,20 @@ def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divi
     patched_text_embedding = text_embedding * (1 - repl_mask) + repl_text_embedding * repl_mask
     return patched_text_embedding
 
+def distribute_embedding_to_M_tokens_by_dict(text_embedding, placeholder_indices_dict, divide_scheme='sqrt_M'):
+    if placeholder_indices_dict is None:
+        return text_embedding
+    
+    for k in placeholder_indices_dict:
+        if placeholder_indices_dict[k] is None:
+            continue
+
+        ph_indices_N  = placeholder_indices_dict[k][1]
+        if len(ph_indices_N) > 1:
+            text_embedding = distribute_embedding_to_M_tokens(text_embedding, ph_indices_N)
+
+    return text_embedding
+
 def scan_cls_delta_strings(tokenized_text, embedded_text, placeholder_token, placeholder_indices_1st,
                            cls_delta_tokens, MAX_SEARCH_SPAN=10):
 
@@ -1217,6 +1231,17 @@ def join_list_of_indices(*indices_list):
     indices_N = torch.cat(list_of_indices_N, dim=0)
     return (indices_B, indices_N)
 
+def join_dict_of_indices_with_key_filter(indices_dict, key_filter_list):
+    if indices_dict is None:
+        return None
+        
+    sel_indices = [ indices_dict[k] for k in key_filter_list if k in indices_dict ]
+    if len(sel_indices) == 0:
+        return None
+    
+    sel_indices = join_list_of_indices(*sel_indices)
+    return sel_indices
+
 def halve_token_indices(token_indices):
     if isinstance(token_indices, dict):
         token_indices2 = {}
@@ -1245,9 +1270,14 @@ def split_indices_by_block(indices, block_size):
         block_indices_N = indices_N[indices_B // block_size == block_idx]
         yield (block_indices_B, block_indices_N)
 
+# n: repeated times. If n = 0, no repeat. If n = 1, repeat once (double the length).
+# If n = 1, indices = ([0, 0], [1, 2]) => ([0, 0, 0, 0], [1, 2, 3, 4]).
 def extend_indices_N_by_n_times(indices, n):
     if indices is None:
         return None
+    
+    if n == 0:
+        return indices
     
     device = indices[0].device
     indices_by_instance = split_indices_by_instance(indices)
@@ -1261,6 +1291,7 @@ def extend_indices_N_by_n_times(indices, n):
 
     return (indices_B_ext, indices_N_ext)
 
+# n: repeated times.
 def extend_indices_B_by_n_times(indices, n, block_offset):
     if indices is None:
         return None, None
@@ -1269,6 +1300,7 @@ def extend_indices_B_by_n_times(indices, n, block_offset):
     # The original indices_B corresponds to block_offset instances -> the block 0.
     # Extending with n blocks, each block is offseted by (block_offset * i),
     # so that block 0 is adjacent to block 1.
+    # If block_offset = 2, n = 4, then indices_B_ext is like [0, 1] -> [0, 1, 2, 3, 4, 5, 6, 7].
     indices_B_ext = [ (indices_B + block_offset * i) for i in range(n) ]
     indices_N_ext = [ indices_N ] * n
     indices_ext_by_block = list(zip(indices_B_ext, indices_N_ext))
@@ -1312,6 +1344,19 @@ def filter_dict_by_key(d, key_container):
     d2 = { k: v for k, v in d.items() if k in key_container }
     return d2
 
+def extract_layerwise_value(v, layer_idx, v_is_layerwise_array, v_is_layerwise_dict):
+    if v_is_layerwise_array:
+        # Extract the layer-specific value from the layerwise array.
+        return v[layer_idx]
+    elif v_is_layerwise_dict:
+        v_layer_dict = {}
+        for k2, v2 in v.items():
+            # Extract the layer-specific value from the layerwise array for each dict key.
+            v_layer_dict[k2] = v2[layer_idx]
+        return v_layer_dict
+    else:
+        return v
+    
 # mask could be binary or float.
 def masked_mean(ts, mask, instance_weights=None, dim=None, keepdim=False):
     if instance_weights is None:

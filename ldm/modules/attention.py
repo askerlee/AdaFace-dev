@@ -168,7 +168,7 @@ class CrossAttention(nn.Module):
         self.use_conv_attn_kernel_size = -1
         self.shift_attn_maps_for_diff_embs = True
         self.infeat_size            = None
-        self.conv_attn_layer_scale  = 1.0
+        self.subj2conv_attn_layer_scale  = {}
         self.is_training            = True
         
     def forward(self, x, context=None, mask=None):
@@ -185,14 +185,14 @@ class CrossAttention(nn.Module):
 
         if callable(context):
             # Pass (x, ...) to context() to get the real context.
-            # If uncond (null condition) is active, then returned subj_indices = None.
+            # If uncond (null condition) is active, then returned placeholder2indices = None.
             # Don't do conv attn if uncond is active.
             layer_attn_components = { 'x': x, 'q': q, 'to_k': self.to_k, 
                                       'infeat_size': self.infeat_size, 'scale': self.scale }
-            context, ada_subj_attn_dict, subj_indices = context(layer_attn_components)
+            context, ada_subj_attn_dict, placeholder2indices = context(layer_attn_components)
         else:
             ada_subj_attn_dict = None
-            subj_indices = None
+            placeholder2indices = None
 
         if isinstance(context, (list, tuple)):
             v_context, k_context  = context
@@ -207,46 +207,53 @@ class CrossAttention(nn.Module):
                 
         # In-place replacement of the row(s) in the attention matrix sim corresponding to the subject tokens, 
         # by attention scores computed with a convolutional attention mechanism.
-        # If uncond (null condition) is active, then returned subj_indices = None.
+        # If uncond (null condition) is active, then returned placeholder2indices = None.
         # Don't do conv attn if uncond is active.
         # abs(self.conv_attn_layer_scale) >= 1e-6: 
         # Sometimes conv_attn_layer_scale is a tiny negative number, and checking for equality with 0.0
         # will fail.
-        if context_provided and subj_indices is not None:
-            if self.use_conv_attn_kernel_size > 0 and abs(self.conv_attn_layer_scale) >= 1e-6:
-                # infeat_size is set in SpatialTransformer.forward().
-                # conv_attn_mix_weight=1: weight to mix conv attn with point-wise attn. 
-                # Setting to 1 disables point-wise attn.
-                sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, 
-                                                self.use_conv_attn_kernel_size,
-                                                h, self.scale, self.conv_attn_layer_scale, 
-                                                conv_attn_mix_weight=1,
-                                                shift_attn_maps_for_diff_embs=self.shift_attn_maps_for_diff_embs)
+        if context_provided and placeholder2indices is not None:
+            for subj_string, subj_conv_attn_layer_scale in self.subj2conv_attn_layer_scale.items():
+                if subj_string not in placeholder2indices:
+                    continue
 
-        if (ada_subj_attn_dict is not None) and len(ada_subj_attn_dict) > 0 and subj_indices is not None:
-            # TODO: extend to multiple subjects.
-            # A quick and dirty hack. Only works when there's one subject only.
-            subj_token = list(ada_subj_attn_dict.keys())[0]
+                subj_indices = placeholder2indices[subj_string]
+                if self.use_conv_attn_kernel_size > 0 and abs(subj_conv_attn_layer_scale) >= 1e-6:
+                    # infeat_size is set in SpatialTransformer.forward().
+                    # conv_attn_mix_weight=1: weight to mix conv attn with point-wise attn. 
+                    # Setting to 1 disables point-wise attn.
+                    sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, 
+                                                    self.use_conv_attn_kernel_size,
+                                                    h, self.scale, subj_conv_attn_layer_scale, 
+                                                    conv_attn_mix_weight=1,
+                                                    shift_attn_maps_for_diff_embs=self.shift_attn_maps_for_diff_embs)
 
-            # if training, subj_attn_lb = 0.4. If inference, subj_attn_lb = 0.1.
-            # subj_attn_lb=0.4: Don't scale down attn too much. In case the attn is inaccurate (esp. during training),
-            # the model still has a chance to recover from the inaccurate attn.
-            # 0.1 or 0.01 makes no difference in terms of performance.
-            subj_attn_lb = 0.4 if self.is_training else 0.1
-            # ada_subj_attn: [48, 1, 4096]. Contains probabilities instead of attn scores.
-            # ada_subj_fg_attn_normed: [6, 8, 4096, 1].
-            ada_subj_fg_attn_normed   = normalize_ada_subj_attn(ada_subj_attn_dict[subj_token]['attn_fg'],
-                                                                subj_attn_lb=subj_attn_lb, num_heads=h,
-                                                                dtype=sim.dtype)
-            # ada_subj_bg_attn_normed is used somewhere else.
-            ada_subj_bg_attn_normed   = normalize_ada_subj_attn(ada_subj_attn_dict[subj_token]['attn_bg'],
-                                                                subj_attn_lb=subj_attn_lb, num_heads=h,
-                                                                dtype=sim.dtype)
-            
-            # Apply the normalized attention scores to the rows of sim 
-            # corresponding to the subject tokens.
-            # sim: [48, 4096, 77] (8 heads).
-            sim = reweight_attn_rows(sim, ada_subj_fg_attn_normed, subj_indices, h)
+        if (ada_subj_attn_dict is not None) and len(ada_subj_attn_dict) > 0 and placeholder2indices is not None:
+            for subj_string in self.subj2conv_attn_layer_scale.keys():
+                if subj_string not in ada_subj_attn_dict or subj_string not in placeholder2indices:
+                    continue
+
+                # if training, subj_attn_lb = 0.4. If inference, subj_attn_lb = 0.1.
+                # subj_attn_lb=0.4: Don't scale down attn too much. In case the attn is inaccurate (esp. during training),
+                # the model still has a chance to recover from the inaccurate attn.
+                # 0.1 or 0.01 makes no difference in terms of performance.
+                subj_attn_lb = 0.4 if self.is_training else 0.1
+                # ada_subj_attn: [48, 1, 4096]. Contains probabilities instead of attn scores.
+                # ada_subj_fg_attn_normed: [6, 8, 4096, 1].
+                ada_subj_fg_attn_normed   = normalize_ada_subj_attn(ada_subj_attn_dict[subj_string]['attn_fg'],
+                                                                    subj_attn_lb=subj_attn_lb, num_heads=h,
+                                                                    dtype=sim.dtype)
+                '''
+                # ada_subj_bg_attn_normed is used somewhere else.
+                ada_subj_bg_attn_normed   = normalize_ada_subj_attn(ada_subj_attn_dict[subj_token]['attn_bg'],
+                                                                    subj_attn_lb=subj_attn_lb, num_heads=h,
+                                                                    dtype=sim.dtype)
+                '''
+
+                # Apply the normalized attention scores to the rows of sim 
+                # corresponding to the subject tokens.
+                # sim: [48, 4096, 77] (8 heads).
+                sim = reweight_attn_rows(sim, ada_subj_fg_attn_normed, placeholder2indices[subj_string], h)
         else:
             ada_subj_fg_attn_normed = None
 
@@ -289,10 +296,6 @@ class CrossAttention(nn.Module):
             self.cached_activations['v'] = rearrange(v,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
             self.cached_activations['attn'] = rearrange(attn, '(b h) i j -> b h i j', h=h)
             self.cached_activations['attnscore'] = rearrange(sim,  '(b h) i j -> b h i j', h=h)
-
-            # ada_subj_fg_attn_normed, ada_subj_bg_attn_normed: [6, 8, 4096, 1].
-            self.cached_activations['ada_subj_fg_attn_normed'] = ada_subj_fg_attn_normed
-            self.cached_activations['ada_subj_bg_attn_normed']   = ada_subj_bg_attn_normed
 
         return out
 

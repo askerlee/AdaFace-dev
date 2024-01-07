@@ -939,11 +939,18 @@ class EmbeddingManager(nn.Module):
         else:
             self.num_layers_per_embedder = 1
 
+        if background_strings is not None:
+            self.background_strings = background_strings
+        else:
+            self.background_strings = []
+        self.subject_strings = [ s for s in placeholder_strings if s not in self.background_strings ]
+
         # Each placeholder string has a corresponding emb_global_scale_score, 
         # converted to emb_global_scale.
         self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(placeholder_strings)), 
                                                     requires_grad=True)
-        self.initialize_conv_attn_layerwise_scales(1, learnable=conv_attn_layerwise_scale_learnable)
+        self.subj2conv_attn_layerwise_scales = nn.ParameterDict()
+        self.initialize_subj2conv_attn_layerwise_scales(1, learnable=conv_attn_layerwise_scale_learnable)
         
         self.set_training_add_noise_specs(training_begin_add_noise_std_range, 
                                           training_end_add_noise_std_range,
@@ -962,11 +969,6 @@ class EmbeddingManager(nn.Module):
         # and AdaPrompt also supports it for more expressive modeling.
         self.token2num_vectors = {}
         self.set_num_vectors_per_token(num_vectors_per_token, placeholder_strings)
-        if background_strings is not None:
-            self.background_strings = background_strings
-        else:
-            self.background_strings = []
-        self.subject_strings = [ s for s in placeholder_strings if s not in self.background_strings ]
 
         # hasattr(text_embedder, 'tokenizer') -> True
         if hasattr(text_embedder, 'tokenizer'): # using Stable Diffusion's CLIP encoder
@@ -1634,8 +1636,6 @@ class EmbeddingManager(nn.Module):
         return layer_static_extra_emb_mean
     
     def clear_placeholder_indices(self):
-        self.placeholder_indices_fg = None
-        self.placeholder_indices_bg = None
         self.placeholder2indices = {}
 
     def clear_prompt_masks(self):
@@ -1646,9 +1646,7 @@ class EmbeddingManager(nn.Module):
         placeholder_indices_B, placeholder_indices_N = extract_first_index_in_each_instance(placeholder_indices)
 
         if len(placeholder_indices_B) == 0:
-            if token_is_bg:
-                self.placeholder_indices_bg = None
-                self.placeholder2indices[placeholder_string] = None
+            self.placeholder2indices[placeholder_string] = None
             return
 
         if num_vectors_per_token > 1:
@@ -1665,11 +1663,6 @@ class EmbeddingManager(nn.Module):
         else:
             # placeholder_indices contains the indices of all placeholder embeddings.
             placeholder_indices = (placeholder_indices_B, placeholder_indices_N)
-        
-        if token_is_bg:
-            self.placeholder_indices_bg = placeholder_indices
-        else:
-            self.placeholder_indices_fg = placeholder_indices
         
         self.placeholder2indices[placeholder_string] = placeholder_indices
 
@@ -1696,26 +1689,37 @@ class EmbeddingManager(nn.Module):
             print(f"training add_noise std range: {training_begin_add_noise_std_range}-{training_end_add_noise_std_range}"
                   ", with prob = {training_add_noise_prob}")
 
-    def initialize_conv_attn_layerwise_scales(self, default_conv_attn_scale=1, 
-                                              conv_attn_layerwise_scales=None,
-                                              learnable=False):
+    def initialize_subj2conv_attn_layerwise_scales(self, default_conv_attn_scale=1, 
+                                                   subj2conv_attn_layerwise_scales=None,
+                                                   learnable=False):
         self.conv_attn_layerwise_scale_learnable = learnable
         
-        if conv_attn_layerwise_scales is not None:
-            self.conv_attn_layerwise_scales = nn.Parameter(conv_attn_layerwise_scales,
-                                                           requires_grad=learnable)            
-            print(f"Change conv_attn_layerwise_scales = {self.conv_attn_layerwise_scales}")
-
+        if subj2conv_attn_layerwise_scales is not None:
+            for subj_string, conv_attn_layerwise_scales in subj2conv_attn_layerwise_scales.items():
+                conv_attn_layerwise_scales = nn.Parameter(conv_attn_layerwise_scales,
+                                                          requires_grad=learnable)            
+                print(f"Change {subj_string}: conv_attn_layerwise_scales = {conv_attn_layerwise_scales}")
+                self.subj2conv_attn_layerwise_scales[subj_string] = conv_attn_layerwise_scales
         else:
-            self.conv_attn_layerwise_scales = \
-                nn.Parameter(torch.ones(self.num_layers_per_embedder) * default_conv_attn_scale, 
-                                        requires_grad=learnable)
-            print(f"Initialize conv_attn_layerwise_scales = {self.conv_attn_layerwise_scales}")
+            if self.subj2conv_attn_layerwise_scales is None:
+                # If subj2conv_attn_layerwise_scales have already been initialized, don't reinitialize.
+                self.subj2conv_attn_layerwise_scales = nn.ParameterDict()
 
-    def get_conv_attn_layerwise_scales(self):
+            for subj_string in self.subject_strings:
+                # If subj2conv_attn_layerwise_scales[subj_string] have already been initialized, 
+                # don't overwrite them.
+                if subj_string not in self.subj2conv_attn_layerwise_scales:
+                    conv_attn_layerwise_scales = nn.Parameter(torch.ones(self.num_layers_per_embedder) * default_conv_attn_scale, 
+                                                              requires_grad=learnable)
+                    self.subj2conv_attn_layerwise_scales[subj_string] = conv_attn_layerwise_scales
+                print(f"Initialize {subj_string}: conv_attn_layerwise_scales = {conv_attn_layerwise_scales}")
+
+    def get_subj2conv_attn_layer_scale(self):
         # Clip the scales to [0.1, 3].
-        self.conv_attn_layerwise_scales.data.clamp_(min=0.1, max=3)
-        return self.conv_attn_layerwise_scales
+        for subj_string in self.subject_strings:
+            self.subj2conv_attn_layerwise_scales[subj_string].data.clamp_(min=0.1, max=3)
+
+        return self.subj2conv_attn_layerwise_scales
     
     def get_emb_global_scales_dict(self, regen, do_perturb=True):
         if not regen:
@@ -1903,7 +1907,7 @@ class EmbeddingManager(nn.Module):
                      "ada_emb_weight":                  self.ada_emb_weight,  
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
                      # Learnable weights for scaling conv attns.
-                     "conv_attn_layerwise_scales":      self.conv_attn_layerwise_scales,
+                     "subj2conv_attn_layerwise_scales":  self.subj2conv_attn_layerwise_scales,
                      "use_conv_attn_kernel_size":       self.use_conv_attn_kernel_size,
                    }, 
                     ckpt_path)
@@ -1947,8 +1951,8 @@ class EmbeddingManager(nn.Module):
             else:
                 self.emb_ema_as_pooling_probe_weight = 0
 
-            if "conv_attn_layerwise_scales" in ckpt:
-                self.initialize_conv_attn_layerwise_scales(1, ckpt["conv_attn_layerwise_scales"])
+            if "subj2conv_attn_layerwise_scales" in ckpt:
+                self.initialize_subj2conv_attn_layerwise_scales(1, ckpt["subj2conv_attn_layerwise_scales"])
 
             use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
             self.set_embs_attn_tricks(use_conv_attn_kernel_size)
@@ -2005,7 +2009,7 @@ class EmbeddingManager(nn.Module):
                         # + [ self.emb_global_scale_scores ]
         slow_params = [ self.emb_global_scale_scores ]
         if self.conv_attn_layerwise_scale_learnable and optimizer_type != 'Prodigy':
-            slow_params += [ self.conv_attn_layerwise_scales ]
+            slow_params += self.subj2conv_attn_layerwise_scales.parameters()
 
         # AdamW or NAdam.
         normal_params_with_lr_ratios  = [ { 'params': normal_params, 'lr_ratio': 1 } ]
