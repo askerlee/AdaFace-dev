@@ -46,8 +46,10 @@ for idx, iteration in enumerate(iterations):
     emb_global_scale_scores = emb_global_scale_scores.detach().cpu().numpy()
     print(f"{iteration} emb_global_scale_scores: {emb_global_scale_scores}")
 
-    conv_attn_layerwise_scales = emb_ckpt['conv_attn_layerwise_scales'].detach().cpu().numpy()
-    print(f"{iteration} conv_attn_layerwise_scales: {conv_attn_layerwise_scales}")
+    subj2conv_attn_layerwise_scales = emb_ckpt['subj2conv_attn_layerwise_scales']
+    for subj_string, conv_attn_layerwise_scales in subj2conv_attn_layerwise_scales.items():
+        conv_attn_layerwise_scales = conv_attn_layerwise_scales.detach().cpu().numpy()
+        print(f"{iteration} {subj_string}: conv_attn_layerwise_scales = {conv_attn_layerwise_scales}")
 
 print()
     
