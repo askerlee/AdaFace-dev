@@ -60,16 +60,16 @@ model:
     fg_wds_complementary_loss_weight:   0 #1e-4
     wds_bg_recon_discount:              0.05
     
-    optimizer_type: Prodigy      # NAdam     # AdamW, NAdam, Prodigy
+    optimizer_type: AdamW      # NAdam     # AdamW, NAdam, Prodigy
     adam_betas: [0.99, 0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:
         verbosity_interval: 0
         warm_up_steps: 500
-        # max_decay_steps = max_steps = 3500. The final LR is 0.2*base_lr.
+        # max_decay_steps = max_steps = 2000. The final LR is 0.2*base_lr.
         # max_decay_steps and max_steps will be customized in main.py accordingly.
-        max_decay_steps: 3500
+        max_decay_steps: 2000
         lr_start: 0.01
         lr_max:   1.0
         lr_min:   0.2
@@ -183,7 +183,7 @@ lightning:
   trainer:
     benchmark: True
     # max_decay_steps and max_steps will be customized in main.py accordingly.
-    max_steps: 3500
+    max_steps: 2000
     limit_val_batches: 0.0
     grad_clip: 0.5
     deterministic: False
