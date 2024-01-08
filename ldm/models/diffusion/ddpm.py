@@ -4665,7 +4665,7 @@ class LatentDiffusion(DDPM):
                 opt_params = [ param_group['params'] for param_group in opt_params_with_lrs ]
                 opt_params = sum(opt_params, [])
                 prodigy_betas = (0.985, 0.993)  # cf. adam_betas: [0.99, 0.993]
-                d_coef = 10.
+                d_coef = 5.
                 # Prodigy uses an LR = 1.
                 safeguard_warmup = self.warm_up_steps > 0
                 opt = OptimizerClass(opt_params, lr=1., weight_decay=self.weight_decay,
@@ -4686,9 +4686,9 @@ class LatentDiffusion(DDPM):
                     # initial LR = max_lr / div_factor = lr / 25.
                     # pct_start=0.3. If max_steps = 2000, then total_steps = 1000, 
                     # max_lr is achieved at relative step 300 (absolute step 1300).
-                    # final_div_factor = lr_min = 0.1.
+                    # final_div_factor = initial LR / 0.4 = 0.1.
                     onecycle_scheduler  = OneCycleLR(adam_opt, max_lr=lr, total_steps=self.trainer.max_steps - transition_iter,
-                                                     final_div_factor=self.scheduler_config.params.lr_min)
+                                                     final_div_factor=0.4)
                     self.prodigy_adam_scheduler = SequentialLR(adam_opt, schedulers=[zero_scheduler, onecycle_scheduler], 
                                                                milestones=[transition_iter])
 
