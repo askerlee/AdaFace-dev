@@ -4679,9 +4679,13 @@ class LatentDiffusion(DDPM):
                     adam_opt = torch.optim.AdamW(opt_params_with_lrs, weight_decay=self.weight_decay,
                                                  betas=betas)
                     opt.adamw_optimizer = adam_opt
-                    # Enable adamw optimizer from half of the total steps.
                     transition_iter = self.trainer.max_steps // 2
+                    # Disable AdamW in the beginning half of the total steps.
                     zero_scheduler      = ConstantLR(adam_opt, factor=0,  total_iters=transition_iter)
+                    # Enable adamw optimizer from half of the total steps.
+                    # initial LR = max_lr / div_factor = lr / 25.
+                    # pct_start=0.3. If max_steps = 2000, then total_steps = 1000, 
+                    # max_lr is achieved at relative step 300 (absolute step 1300).
                     # final_div_factor = lr_min = 0.1.
                     onecycle_scheduler  = OneCycleLR(adam_opt, max_lr=lr, total_steps=self.trainer.max_steps - transition_iter,
                                                      final_div_factor=self.scheduler_config.params.lr_min)

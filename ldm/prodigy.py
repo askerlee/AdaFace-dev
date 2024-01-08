@@ -323,6 +323,7 @@ class ProdigyAdamW(torch.optim.Optimizer):
                         fsdp_in_use=fsdp_in_use)
         
         self.d0 = d0
+        # AdamW optimizer can be assigned after initialization.
         self.adamw_optimizer = adamw_optimizer
         self.prodigy_weight  = prodigy_weight
         self.weight_decay    = weight_decay
