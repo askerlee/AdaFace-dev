@@ -212,6 +212,10 @@ class DDPM(pl.LightningModule):
         if self.optimizer_type == 'Prodigy':
             # Disable warmup for Prodigy optimizer.
             scheduler_config.params.warm_up_steps = 0
+        elif self.optimizer_type == 'ProdigyAdamW':
+            # Reduce warmup to 1/5 for ProdigyAdamW optimizer.
+            # Default warm_up_steps is 500 -> 100.
+            scheduler_config.params.warm_up_steps /= 5
 
         if self.use_scheduler:
             self.scheduler_config = scheduler_config
