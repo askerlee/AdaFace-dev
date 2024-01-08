@@ -4673,6 +4673,7 @@ class LatentDiffusion(DDPM):
                                      d_coef=d_coef,
                                      safeguard_warmup=safeguard_warmup, 
                                      use_bias_correction=True)
+                
                 if self.optimizer_type == 'ProdigyAdamW':
                     # If using ProdigyAdamW, the actual LR of Prodigy and AdamW are halved,
                     # to leave room for joint update.
@@ -4712,7 +4713,7 @@ class LatentDiffusion(DDPM):
             scheduler = [
                 {
                     'scheduler': LambdaLR(opt, lr_lambda=scheduler.schedule),
-                    'interval': 'step',
+                    'interval': 'step', # No need to specify in config yaml.
                     'frequency': 1
                 }]
             
