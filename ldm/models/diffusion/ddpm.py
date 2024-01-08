@@ -14,7 +14,7 @@ import os
 import numpy as np
 import math
 import pytorch_lightning as pl
-from torch.optim.lr_scheduler import LambdaLR
+from torch.optim.lr_scheduler import LambdaLR, ConstantLR, OneCycleLR, SequentialLR
 from einops import rearrange, repeat
 from contextlib import contextmanager
 from functools import partial
@@ -209,13 +209,9 @@ class DDPM(pl.LightningModule):
         self.adam_betas     = adam_betas
         self.use_scheduler = scheduler_config is not None
 
-        if self.optimizer_type == 'Prodigy':
-            # Disable warmup for Prodigy optimizer.
+        if 'Prodigy' in self.optimizer_type:
+            # Disable warmup for Prodigy and ProdigyAdamW optimizer.
             scheduler_config.params.warm_up_steps = 0
-        elif self.optimizer_type == 'ProdigyAdamW':
-            # Reduce warmup to 1/5 for ProdigyAdamW optimizer.
-            # Default warm_up_steps is 500 -> 100.
-            scheduler_config.params.warm_up_steps /= 5
 
         if self.use_scheduler:
             self.scheduler_config = scheduler_config
@@ -1342,8 +1338,10 @@ class LatentDiffusion(DDPM):
         x_start, _ = self.get_input(batch, self.first_stage_key)
         # Update the training_percent of embedding_manager.
         self.embedding_manager.training_percent = self.training_percent
+        if self.prodigy_adam_scheduler is not None:
+            self.prodigy_adam_scheduler.step()
 
-        batch_have_fg_mask                      = batch['has_fg_mask']
+        batch_have_fg_mask  = batch['has_fg_mask']
         # Temporarily disable fg_mask for debugging.
         disable_fg_mask = False #True
         if disable_fg_mask:
@@ -4635,10 +4633,7 @@ class LatentDiffusion(DDPM):
         # self.learning_rate and self.weight_decay are set in main.py.
         # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
         lr      = self.learning_rate
-        if self.optimizer_type == 'ProdigyAdamW':
-            # If using ProdigyAdamW, the actual LR of Prodigy and AdamW are halved,
-            # to leave room for joint update.
-            lr = lr / 2.
+        self.prodigy_adam_scheduler = None
 
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 
@@ -4684,6 +4679,15 @@ class LatentDiffusion(DDPM):
                     adam_opt = torch.optim.AdamW(opt_params_with_lrs, weight_decay=self.weight_decay,
                                                  betas=betas)
                     opt.adamw_optimizer = adam_opt
+                    # Enable adamw optimizer from half of the total steps.
+                    transition_iter = self.trainer.max_steps // 2
+                    zero_scheduler      = ConstantLR(adam_opt, factor=0,  total_iters=transition_iter)
+                    # final_div_factor = lr_min = 0.1.
+                    onecycle_scheduler  = OneCycleLR(adam_opt, max_lr=lr, total_steps=self.trainer.max_steps - transition_iter,
+                                                     final_div_factor=self.scheduler_config.params.lr_min)
+                    self.prodigy_adam_scheduler = SequentialLR(adam_opt, schedulers=[zero_scheduler, onecycle_scheduler], 
+                                                               milestones=[transition_iter])
+
         else:
             params = list(self.model.parameters())
             if self.cond_stage_trainable:

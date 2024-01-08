@@ -293,7 +293,7 @@ class ProdigyAdamW(torch.optim.Optimizer):
             will attempt to auto-detect this, but if you're using an implementation other
             than PyTorch's builtin version, the auto-detection won't work.
     """
-    def __init__(self, params, adamw_optimizer=None, prodigy_weight=0.5, lr=1.0,
+    def __init__(self, params, adamw_optimizer=None, prodigy_weight=1., lr=1.0,
                  betas=(0.9, 0.999), beta3=None,
                  eps=1e-8, weight_decay=0, decouple=True, 
                  use_bias_correction=False, safeguard_warmup=False,
@@ -313,8 +313,7 @@ class ProdigyAdamW(torch.optim.Optimizer):
         if decouple and weight_decay > 0:
             print(f"Using decoupled weight decay")
 
-        # Reduce the LR to allow joint update with AdamW.
-        defaults = dict(lr=lr * prodigy_weight, betas=betas, beta3=beta3,
+        defaults = dict(lr=lr, betas=betas, beta3=beta3,
                         eps=eps, weight_decay=weight_decay,
                         d=d0, d0=d0, d_max=d0,
                         d_numerator=0.0, d_coef=d_coef,
@@ -369,7 +368,7 @@ class ProdigyAdamW(torch.optim.Optimizer):
         else:
             bias_correction = 1
 
-        dlr = d*lr*bias_correction
+        dlr = d * lr * bias_correction * self.prodigy_weight
        
         growth_rate = group['growth_rate']
         decouple = group['decouple']
