@@ -60,7 +60,7 @@ model:
     fg_wds_complementary_loss_weight:   0 #1e-4
     wds_bg_recon_discount:              0.05
     
-    optimizer_type: AdamW      # NAdam     # AdamW, NAdam, Prodigy
+    optimizer_type: ProdigyAdamW      # NAdam     # AdamW, NAdam, Prodigy, ProdigyAdamW
     adam_betas: [0.99, 0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler

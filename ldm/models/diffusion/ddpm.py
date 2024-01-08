@@ -46,7 +46,7 @@ from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, Autoenc
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 from evaluation.clip_eval import CLIPEvaluator
-from prodigyopt import Prodigy
+from ldm.prodigy import Prodigy, ProdigyAdamW
 import copy
 from functools import partial
 import random
@@ -4622,13 +4622,19 @@ class LatentDiffusion(DDPM):
             OptimizerClass = torch.optim.NAdam
         elif self.optimizer_type == 'Prodigy':
             OptimizerClass = Prodigy
+        elif self.optimizer_type == 'ProdigyAdamW':
+            OptimizerClass = ProdigyAdamW
         else:
             raise NotImplementedError()
             
+        betas   = self.adam_betas
         # self.learning_rate and self.weight_decay are set in main.py.
         # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
         lr      = self.learning_rate
-        betas   = self.adam_betas
+        if self.optimizer_type == 'ProdigyAdamW':
+            # If using ProdigyAdamW, the actual LR of Prodigy and AdamW are halved,
+            # to leave room for joint update.
+            lr = lr / 2.
 
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 
@@ -4653,7 +4659,7 @@ class LatentDiffusion(DDPM):
                 # Otherwise, train only embeddings
                 opt_params_with_lrs = embedding_params_with_lrs
             
-            if self.optimizer_type != 'Prodigy':
+            if 'Prodigy' not in self.optimizer_type:
                 opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
                                      betas=betas)
             else:
@@ -4668,6 +4674,12 @@ class LatentDiffusion(DDPM):
                                      d_coef=d_coef,
                                      safeguard_warmup=safeguard_warmup, 
                                      use_bias_correction=True)
+                if self.optimizer_type == 'ProdigyAdamW':
+                    # If using ProdigyAdamW, the actual LR of Prodigy and AdamW are halved,
+                    # to leave room for joint update.
+                    adam_opt = torch.optim.AdamW(opt_params_with_lrs, weight_decay=self.weight_decay,
+                                                 betas=betas)
+                    opt.adamw_optimizer = adam_opt
         else:
             params = list(self.model.parameters())
             if self.cond_stage_trainable:
