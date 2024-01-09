@@ -4718,7 +4718,7 @@ class LatentDiffusion(DDPM):
                                 'frequency': 1
                            }} ]
 
-            if prodigy_adam_opt is not None:
+            if self.optimizer_type == 'ProdigyAdamW':
                 optimizers.append(
                     {
                         'optimizer': prodigy_adam_opt, 'frequency': 1, 
