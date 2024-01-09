@@ -2005,7 +2005,7 @@ class EmbeddingManager(nn.Module):
         normal_params  = [ { 'params': normal_params_list, 'lr_ratio': 1, 
                              'excluded_from_prodigy': False } ]
         # For unknown reason, emb_global_scale_scores are not aggressively optimized by Prodigy.
-        slow_params_incl_prodigy = [ { 'params': self.emb_global_scale_scores,   'lr_ratio': 0.1,
+        slow_params_incl_prodigy = [ { 'params': [ self.emb_global_scale_scores ],   'lr_ratio': 0.1,
                                        'excluded_from_prodigy': False } ]
         
         if self.conv_attn_layerwise_scale_learnable: 
