@@ -14,7 +14,7 @@ import os
 import numpy as np
 import math
 import pytorch_lightning as pl
-from torch.optim.lr_scheduler import LambdaLR, ConstantLR, OneCycleLR, SequentialLR
+from torch.optim.lr_scheduler import LambdaLR, ConstantLR, OneCycleLR, SequentialLR, PolynomialLR
 from einops import rearrange, repeat
 from contextlib import contextmanager
 from functools import partial
@@ -4621,12 +4621,13 @@ class LatentDiffusion(DDPM):
         else:
             raise NotImplementedError()
             
-        betas   = self.adam_betas
+        adam_betas  = self.adam_betas
         # self.learning_rate and self.weight_decay are set in main.py.
         # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
         lr      = self.learning_rate
+        scheduler = None
         prodigy_adam_opt = None
-        prodigy_adam_scheduler = None
+        prodigy_adamw_scheduler = None
 
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 
@@ -4653,7 +4654,16 @@ class LatentDiffusion(DDPM):
             
             if 'Prodigy' not in self.optimizer_type:
                 opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
-                                     betas=betas)
+                                     betas=adam_betas)
+                
+                if self.scheduler_config is not None:
+                    assert 'target' in self.scheduler_config
+
+                    lambda_scheduler = instantiate_from_config(self.scheduler_config)
+
+                    print("Setting up LambdaLR scheduler...")
+                    scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
+
             else:
                 opt_params = [ param_group['params'] for param_group in opt_params_with_lrs ]
                 opt_params = sum(opt_params, [])
@@ -4666,13 +4676,22 @@ class LatentDiffusion(DDPM):
                                      d_coef=d_coef,
                                      safeguard_warmup=safeguard_warmup, 
                                      use_bias_correction=True)
+
+                transition_iter = self.trainer.max_steps // 2
+                # Since factor=1, we don't need to make sure the last step of the scheduler is called,
+                # which restores the LR to the original value.
+                one_scheduler = ConstantLR(opt, factor=1., total_iters=transition_iter)
+                linear_scheduler = PolynomialLR(opt, power=1,
+                                                total_iters=self.trainer.max_steps - transition_iter)
+                scheduler = SequentialLR(opt, schedulers=[one_scheduler, linear_scheduler],
+                                         milestones=[transition_iter])
                 
                 if self.optimizer_type == 'ProdigyAdamW':
-                    # If using ProdigyAdamW, the actual LR of Prodigy and AdamW are halved,
-                    # to leave room for joint update.
+                    # If using ProdigyAdamW, AdamW is initialized with param group opt_params_with_lrs.
+                    # It's different from Prodigy, which is initialized with param group opt_params.
+                    # So the two data structures won't interfere with each other.
                     prodigy_adam_opt = torch.optim.AdamW(opt_params_with_lrs, weight_decay=self.weight_decay,
-                                                         betas=betas)
-                    transition_iter = self.trainer.max_steps // 2
+                                                         betas=adam_betas)
                     # Use AdamW with LR = self.learning_rate / 10000, in the beginning half of the total steps.
                     # This is to warm-up the AdamW optimizer, and delegate the optimization to Prodigy.
                     # total_iters=transition_iter - 2: at the last iteration, ConstantLR will revert the 
@@ -4681,16 +4700,16 @@ class LatentDiffusion(DDPM):
                     # is not intended. Therefore we set total_iters=transition_iter - 2.
                     zero_scheduler      = ConstantLR(prodigy_adam_opt, factor=1e-4,  total_iters=transition_iter - 2)
                     # Enable adamw optimizer from half of the total steps.
-                    # initial LR = max_lr / div_factor = 0.1 * lr. 
+                    # max_LR = lr / 4. Initial LR = max_lr / div_factor = lr / 40. 
                     # No need to use a smaller initial LR, as AdamW has been warmed-up 
                     # (operating with LR=0 for half of the total steps).
                     # pct_start=0.3 (default). If max_steps = 2000, then total_steps = 1000, 
                     # max_lr is achieved at relative step = 300 (absolute step = 1300).
-                    # final_div_factor = initial LR / 1 = 0.1.
-                    onecycle_scheduler  = OneCycleLR(prodigy_adam_opt, max_lr=lr, total_steps=self.trainer.max_steps - transition_iter,
+                    # final_div_factor = initial LR / 1 = lr / 40.
+                    onecycle_scheduler  = OneCycleLR(prodigy_adam_opt, max_lr=lr / 4, total_steps=self.trainer.max_steps - transition_iter,
                                                      div_factor=10, final_div_factor=1)
-                    prodigy_adam_scheduler = SequentialLR(prodigy_adam_opt, schedulers=[zero_scheduler, onecycle_scheduler], 
-                                                          milestones=[transition_iter])
+                    prodigy_adamw_scheduler = SequentialLR(prodigy_adam_opt, schedulers=[zero_scheduler, onecycle_scheduler], 
+                                                           milestones=[transition_iter])
 
         else:
             params = list(self.model.parameters())
@@ -4702,37 +4721,39 @@ class LatentDiffusion(DDPM):
                 params.append(self.logvar)
 
             opt = OptimizerClass(params, lr=lr, weight_decay=self.weight_decay,
-                                 betas=betas)
+                                 betas=adam_betas)
 
-        if self.scheduler_config is not None:
-            assert 'target' in self.scheduler_config
+            if self.scheduler_config is not None:
+                assert 'target' in self.scheduler_config
 
-            lambda_scheduler = instantiate_from_config(self.scheduler_config)
+                lambda_scheduler = instantiate_from_config(self.scheduler_config)
 
-            print("Setting up LambdaLR scheduler...")
+                print("Setting up LambdaLR scheduler...")
+                scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
 
-            optimizers = [ {'optimizer': opt, 'frequency': 1, 
-                            'lr_scheduler': {
-                                'scheduler': LambdaLR(opt, lr_lambda=lambda_scheduler.schedule),
-                                'interval': 'step', # No need to specify in config yaml.
-                                'frequency': 1
-                           }} ]
-
-            if self.optimizer_type == 'ProdigyAdamW':
-                optimizers.append(
-                    {
-                        'optimizer': prodigy_adam_opt, 'frequency': 1, 
-                        'lr_scheduler': {
-                            'scheduler': prodigy_adam_scheduler,
-                            'interval': 'step',
-                            'frequency': 1
-                        }
-                    })
-
-            # self.scheduler = schedulers[0]['scheduler']
-            return optimizers
+        if scheduler is None:
+            return opt
         
-        return opt
+        optimizers = [ {'optimizer': opt, 'frequency': 1, 
+                        'lr_scheduler': {
+                            'scheduler': scheduler,
+                            'interval': 'step', # No need to specify in config yaml.
+                            'frequency': 1
+                        }} ]
+
+        if self.optimizer_type == 'ProdigyAdamW':
+            optimizers.append(
+                {
+                    'optimizer': prodigy_adam_opt, 'frequency': 1, 
+                    'lr_scheduler': {
+                        'scheduler': prodigy_adamw_scheduler,
+                        'interval': 'step',
+                        'frequency': 1
+                    }
+                })
+
+        # self.scheduler = schedulers[0]['scheduler']
+        return optimizers
 
     # configure_opt_embedding() is never called.
     def configure_opt_embedding(self):
