@@ -4763,19 +4763,27 @@ class LatentDiffusion(DDPM):
         if scheduler is None:
             return opt
         
-        if self.optimizer_type == 'ProdigyAdamW':
-            # We'll use manual optimization to make sure the two optimizers are updating at the same time.
-            # So we return two lists, instead of a list of dicts.
-            return [opt, prodigy_adam_opt], [scheduler, prodigy_adamw_scheduler]
-        else:
-            optimizers = [ {'optimizer': opt, 'frequency': 1, 
-                            'lr_scheduler': {
-                                'scheduler': scheduler,
-                                'interval': 'step', # No need to specify in config yaml.
-                                'frequency': 1
-                            }} ]
+        optimizers = [ {'optimizer': opt, 'frequency': 1, 
+                        'lr_scheduler': {
+                            'scheduler': scheduler,
+                            'interval': 'step', # No need to specify in config yaml.
+                            'frequency': 1
+                        }} ]
 
-            return optimizers
+        if self.optimizer_type == 'ProdigyAdamW':
+            optimizers.append(
+                {
+                    'optimizer': prodigy_adam_opt, 'frequency': 1, 
+                    'lr_scheduler': {
+                        'scheduler': prodigy_adamw_scheduler,
+                        'interval': 'step',
+                        'frequency': 1
+                    }
+                })
+
+        # self.scheduler = schedulers[0]['scheduler']
+        return optimizers
+
 
     # configure_opt_embedding() is never called.
     def configure_opt_embedding(self):
