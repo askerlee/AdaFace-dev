@@ -4667,7 +4667,7 @@ class LatentDiffusion(DDPM):
 
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 
-            embedding_params_with_lr_ratios = self.embedding_manager.optimized_parameters(self.optimizer_type)
+            embedding_params_with_lr_ratios = self.embedding_manager.optimized_parameters()
 
             embedding_params_with_lrs = []
             for param_with_lr_ratio in embedding_params_with_lr_ratios:

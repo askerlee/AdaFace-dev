@@ -1997,11 +1997,10 @@ class EmbeddingManager(nn.Module):
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
-    def optimized_parameters(self, optimizer_type):
+    def optimized_parameters(self):
         normal_params_list = list(self.string_to_static_embedder_dict.parameters()) \
                              + list(self.string_to_ada_embedder_dict.parameters()) \
-                             + list(self.string_to_emb_ema_dict.parameters()) \
-                             + [ self.emb_global_scale_scores ]
+                             + list(self.string_to_emb_ema_dict.parameters())
 
         normal_params  = [ { 'params': normal_params_list, 'lr_ratio': 1, 
                              'excluded_from_prodigy': False } ]
