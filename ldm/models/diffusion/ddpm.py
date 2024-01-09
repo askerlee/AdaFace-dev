@@ -4706,29 +4706,31 @@ class LatentDiffusion(DDPM):
 
         if self.scheduler_config is not None:
             assert 'target' in self.scheduler_config
-            optimizers = [opt]
 
             lambda_scheduler = instantiate_from_config(self.scheduler_config)
 
             print("Setting up LambdaLR scheduler...")
-            schedulers = [
-                {
-                    'scheduler': LambdaLR(opt, lr_lambda=lambda_scheduler.schedule),
-                    'interval': 'step', # No need to specify in config yaml.
-                    'frequency': 1
-                }]
-            
-            
+
+            optimizers = [ {'optimizer': opt, 'frequency': 1, 
+                            'lr_scheduler': {
+                                'scheduler': LambdaLR(opt, lr_lambda=lambda_scheduler.schedule),
+                                'interval': 'step', # No need to specify in config yaml.
+                                'frequency': 1
+                           }} ]
+
             if prodigy_adam_opt is not None:
-                optimizers.append(prodigy_adam_opt)
-                schedulers.append({
-                    'scheduler': prodigy_adam_scheduler,
-                    'interval': 'step',
-                    'frequency': 1
-                })
+                optimizers.append(
+                    {
+                        'optimizer': prodigy_adam_opt, 'frequency': 1, 
+                        'lr_scheduler': {
+                            'scheduler': prodigy_adam_scheduler,
+                            'interval': 'step',
+                            'frequency': 1
+                        }
+                    })
 
             # self.scheduler = schedulers[0]['scheduler']
-            return optimizers, schedulers
+            return optimizers
         
         return opt
 
