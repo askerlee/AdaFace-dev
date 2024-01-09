@@ -62,6 +62,7 @@ model:
     
     optimizer_type: ProdigyAdamW      # NAdam     # AdamW, NAdam, Prodigy, ProdigyAdamW
     adam_betas: [0.99, 0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.
+    grad_clip: 0.5
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:
@@ -185,5 +186,4 @@ lightning:
     # max_decay_steps and max_steps will be customized in main.py accordingly.
     max_steps: 2000
     limit_val_batches: 0.0
-    grad_clip: 0.5
     deterministic: False

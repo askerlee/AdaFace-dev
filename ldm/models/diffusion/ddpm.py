@@ -98,6 +98,7 @@ class DDPM(pl.LightningModule):
                  parameterization="eps",  # all assuming fixed variance schedules
                  optimizer_type='AdamW',
                  adam_betas=(0.99, 0.995),
+                 grad_clip=0.5,
                  scheduler_config=None,
                  use_positional_encodings=False,
                  learn_logvar=False,
@@ -207,7 +208,9 @@ class DDPM(pl.LightningModule):
 
         self.optimizer_type = optimizer_type
         self.adam_betas     = adam_betas
+        self.grad_clip      = grad_clip
         self.scheduler_config = scheduler_config
+        self.automatic_optimization = False
 
         if 'Prodigy' in self.optimizer_type:
             # Disable warmup for Prodigy and ProdigyAdamW optimizer.
@@ -505,9 +508,9 @@ class DDPM(pl.LightningModule):
         loss, loss_dict = self(x)
         return loss, loss_dict
 
-    def training_step(self, batch, batch_idx, optimizer_idx):
+    def training_step(self, batch, batch_idx):
         self.init_iteration_flags()
-
+        
         self.training_percent = self.global_step / self.trainer.max_steps
 
         # How many regularizations are done intermittently during the training iterations?
@@ -576,11 +579,37 @@ class DDPM(pl.LightningModule):
         self.log("global_step", self.global_step,
                  prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
+        # Update LRs of optimizers first.
+        schedulers = self.lr_schedulers()
+        if isinstance(schedulers, list):
+            for scheduler in schedulers:
+                scheduler.step()
+        else:
+            # Single scheduler.
+            schedulers.step()
+
+        optimizers = self.optimizers()
+        if isinstance(optimizers, list):
+            main_optimizer   = optimizers[0]
+            extra_optimizers = optimizers[1:]
+        else:
+            # Single optimizer.
+            main_optimizer   = optimizers
+            extra_optimizers = None
+
+        main_optimizer.zero_grad()
+        self.manual_backward(loss)
+        self.clip_gradients(main_optimizer, gradient_clip_val=self.grad_clip, 
+                            gradient_clip_algorithm="norm")
+        
+        main_optimizer.step()
+        # Execute all optimizers.
+        if extra_optimizers is not None:
+            for optimizer in extra_optimizers:
+                optimizer.step()
+
         if self.scheduler_config is not None:
-            lambda_optimizer = self.optimizers()
-            if isinstance(lambda_optimizer, list):
-                lambda_optimizer = lambda_optimizer[0]
-            lr = lambda_optimizer.param_groups[0]['lr']
+            lr = main_optimizer.param_groups[0]['lr']
             self.log('lr_abs', lr, prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
         return loss
@@ -4734,26 +4763,19 @@ class LatentDiffusion(DDPM):
         if scheduler is None:
             return opt
         
-        optimizers = [ {'optimizer': opt, 'frequency': 1, 
-                        'lr_scheduler': {
-                            'scheduler': scheduler,
-                            'interval': 'step', # No need to specify in config yaml.
-                            'frequency': 1
-                        }} ]
-
         if self.optimizer_type == 'ProdigyAdamW':
-            optimizers.append(
-                {
-                    'optimizer': prodigy_adam_opt, 'frequency': 1, 
-                    'lr_scheduler': {
-                        'scheduler': prodigy_adamw_scheduler,
-                        'interval': 'step',
-                        'frequency': 1
-                    }
-                })
+            # We'll use manual optimization to make sure the two optimizers are updating at the same time.
+            # So we return two lists, instead of a list of dicts.
+            return [opt, prodigy_adam_opt], [scheduler, prodigy_adamw_scheduler]
+        else:
+            optimizers = [ {'optimizer': opt, 'frequency': 1, 
+                            'lr_scheduler': {
+                                'scheduler': scheduler,
+                                'interval': 'step', # No need to specify in config yaml.
+                                'frequency': 1
+                            }} ]
 
-        # self.scheduler = schedulers[0]['scheduler']
-        return optimizers
+            return optimizers
 
     # configure_opt_embedding() is never called.
     def configure_opt_embedding(self):
