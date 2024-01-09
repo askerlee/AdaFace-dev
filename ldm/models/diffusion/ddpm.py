@@ -4683,7 +4683,8 @@ class LatentDiffusion(DDPM):
             # Are we allowing the base model to train? If so, set two different parameter groups.
             if self.unfreeze_model: 
                 model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
-                opt_params_with_lrs = embedding_params_with_lrs + [{"params": model_params, "lr": self.model_lr}]
+                opt_params_with_lrs = embedding_params_with_lrs + [ {"params": model_params, "lr": self.model_lr,
+                                                                    "excluded_from_prodigy": False} ]
             else:
                 # Otherwise, train only embeddings
                 opt_params_with_lrs = embedding_params_with_lrs
@@ -4701,13 +4702,14 @@ class LatentDiffusion(DDPM):
                     scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
 
             else:
-                opt_params = [ param_group['params'] for param_group in opt_params_with_lrs ]
-                opt_params = sum(opt_params, [])
+                prodigy_params = [ param_group['params'] for param_group in opt_params_with_lrs \
+                                 if not param_group['excluded_from_prodigy'] ]
+                prodigy_params = sum(prodigy_params, [])
                 prodigy_betas = (0.985, 0.993)  # cf. adam_betas: [0.99, 0.993]
                 d_coef = 5.
                 # Prodigy uses an LR = 1.
                 safeguard_warmup = self.scheduler_config.params.warm_up_steps > 0
-                opt = OptimizerClass(opt_params, lr=1., weight_decay=self.weight_decay,
+                opt = OptimizerClass(prodigy_params, lr=1., weight_decay=self.weight_decay,
                                      betas=prodigy_betas, 
                                      d_coef=d_coef,
                                      safeguard_warmup=safeguard_warmup, 

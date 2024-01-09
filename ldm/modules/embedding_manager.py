@@ -1998,20 +1998,26 @@ class EmbeddingManager(nn.Module):
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def optimized_parameters(self, optimizer_type):
-        normal_params = list(self.string_to_static_embedder_dict.parameters()) \
-                        + list(self.string_to_ada_embedder_dict.parameters()) \
-                        + list(self.string_to_emb_ema_dict.parameters()) #\
-                        # + [ self.emb_global_scale_scores ]
-        slow_params = [ self.emb_global_scale_scores ]
-        ## Prodigy is too aggressive on the conv attn layerwise scales. 
-        ## So don't train them if using Prodigy.
-        if self.conv_attn_layerwise_scale_learnable: # and optimizer_type != 'Prodigy':
-            slow_params += self.subj2conv_attn_layerwise_scales.parameters()
+        normal_params_list = list(self.string_to_static_embedder_dict.parameters()) \
+                             + list(self.string_to_ada_embedder_dict.parameters()) \
+                             + list(self.string_to_emb_ema_dict.parameters()) \
+                             + [ self.emb_global_scale_scores ]
 
-        normal_params_with_lr_ratios  = [ { 'params': normal_params, 'lr_ratio': 1 } ]
-        slow_params_with_lr_ratios    = [ { 'params': slow_params,   'lr_ratio': 0.1 } ]
+        normal_params  = [ { 'params': normal_params_list, 'lr_ratio': 1, 
+                             'excluded_from_prodigy': False } ]
+        # For unknown reason, emb_global_scale_scores are not aggressively optimized by Prodigy.
+        slow_params_incl_prodigy = [ { 'params': self.emb_global_scale_scores,   'lr_ratio': 0.1,
+                                       'excluded_from_prodigy': False } ]
+        
+        if self.conv_attn_layerwise_scale_learnable: 
+            ## Prodigy is too aggressive on the conv attn layerwise scales. 
+            ## So don't train them if using Prodigy.
+            slow_params_excl_prodigy = [ { 'params': self.subj2conv_attn_layerwise_scales.parameters(),
+                                            'lr_ratio': 0.1, 'excluded_from_prodigy': True } ]
+        else:
+            slow_params_excl_prodigy = []
 
-        return normal_params_with_lr_ratios + slow_params_with_lr_ratios
+        return normal_params + slow_params_incl_prodigy + slow_params_excl_prodigy
 
     def embedding_attractor_loss(self):
         loss = 0.
