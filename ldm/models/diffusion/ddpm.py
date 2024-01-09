@@ -4670,14 +4670,15 @@ class LatentDiffusion(DDPM):
             embedding_params_with_lr_ratios = self.embedding_manager.optimized_parameters()
 
             embedding_params_with_lrs = []
-            for param_with_lr_ratio in embedding_params_with_lr_ratios:
-                params = param_with_lr_ratio['params']
-                param_lr = lr * param_with_lr_ratio['lr_ratio']
+            for param_group in embedding_params_with_lr_ratios:
+                params = param_group['params']
+                param_lr = lr * param_group['lr_ratio']
                 # Not sure if it's necessary to set requires_grad=True here.
                 for param in params:
                     param.requires_grad = True
                     
-                embedding_params_with_lrs.append({'params': params, 'lr': param_lr})
+                embedding_params_with_lrs.append( {'params': params, 'lr': param_lr, 
+                                                   'excluded_from_prodigy': param_group['excluded_from_prodigy']} )
 
             # unfreeze_model:
             # Are we allowing the base model to train? If so, set two different parameter groups.
