@@ -606,6 +606,13 @@ class DDPM(pl.LightningModule):
         # Execute all optimizers.
         if extra_optimizers is not None:
             for optimizer in extra_optimizers:
+                # Fix double counted global step counter which causes premature end of training.
+                # https://github.com/Lightning-AI/pytorch-lightning/issues/17958
+                # The default two functions do self.optim_step_progress.increment_ready()
+                # and self.optim_step_progress.increment_completed(), respectively.
+                # Removing them will prevent optimizer from updating the global step counter.
+                optimizer._on_before_step = lambda : self.trainer.profiler.start("optimizer_step")
+                optimizer._on_after_step  = lambda : self.trainer.profiler.stop("optimizer_step")                
                 optimizer.step()
 
         if self.scheduler_config is not None:
