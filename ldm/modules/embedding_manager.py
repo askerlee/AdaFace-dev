@@ -1968,6 +1968,10 @@ class EmbeddingManager(nn.Module):
                     k2_token = ckpt["string_to_token"][k]
 
                 if k2 in self.string_to_token_dict:
+                    if k2 in self.background_strings:
+                        print(f"Duplicate key {k}->{k2} in {ckpt_path}. Ignored.")
+                        continue
+                    
                     raise ValueError(f"Duplicate key {k}->{k2} in {ckpt_path}")
 
                 # Merge the (possibly substituted) subject strings from the ckpt with 
