@@ -1370,12 +1370,12 @@ class EmbeddingManager(nn.Module):
                 # then self-reinforce and contaminate the bg embeddings with fg features.
                 # However, if we mask out bg embeddings from computing layer_static_extra_emb_mean,
                 # the performance will drop a lot.
-                list_of_indices_to_mask = [ self.placeholder2indices[k] for k in self.subject_strings ]
+                list_of_indices_to_mask = [ self.placeholder2indices[k] for k in self.subject_strings if k in self.placeholder2indices ]
             else:
                 ## Why not mask bg indices for fg ada? bg embeddings are supposed to be of a similar nature 
                 ## as the extra compositional embeddings. Incorporating them in layer_static_extra_emb_mean
                 ## will make fg and bg embeddings more orthogonal (i.e., attend to different areas).
-                list_of_indices_to_mask = [ self.placeholder2indices[k] for k in self.subject_strings ]
+                list_of_indices_to_mask = [ self.placeholder2indices[k] for k in self.subject_strings if k in self.placeholder2indices ]
 
             # layer_static_prompt_embs: [4, 77, 768]. 
             # prompt_emb_mask: [4, 77, 1], which excludes SOT and padding tokens.
