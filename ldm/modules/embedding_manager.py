@@ -1908,7 +1908,9 @@ class EmbeddingManager(nn.Module):
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
                      # Learnable weights for scaling conv attns.
                      "subj2conv_attn_layerwise_scales":  self.subj2conv_attn_layerwise_scales,
-                     "use_conv_attn_kernel_size":       self.use_conv_attn_kernel_size,
+                     "use_conv_attn_kernel_size":        self.use_conv_attn_kernel_size,
+                     "subject_strings":                  self.subject_strings,
+                     "background_strings":               self.background_strings,
                    }, 
                     ckpt_path)
 
@@ -1949,6 +1951,11 @@ class EmbeddingManager(nn.Module):
             if "subj2conv_attn_layerwise_scales" in ckpt:
                 self.initialize_subj2conv_attn_layerwise_scales(1, ckpt["subj2conv_attn_layerwise_scales"])
 
+            if "subject_strings" in ckpt:
+                ckpt_background_strings = ckpt["background_strings"]
+            else:
+                ckpt_background_strings = []
+
             use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
             self.set_embs_attn_tricks(use_conv_attn_kernel_size)
 
@@ -1962,6 +1969,17 @@ class EmbeddingManager(nn.Module):
 
                 if k2 in self.string_to_token_dict:
                     raise ValueError(f"Duplicate key {k}->{k2} in {ckpt_path}")
+
+                # Merge the (possibly substituted) subject strings from the ckpt with 
+                # self.subject_strings and self.background_strings.
+                if k in ckpt_background_strings:
+                    self.background_strings = list(set(self.background_strings + [k2]))
+                    print("Add background string", k2)
+                else:
+                    # Add k2 to self.subject_strings, even if it's not in ckpt["subject_strings"].
+                    # This is to be compatible with older ckpts which don't save ckpt["subject_strings"].
+                    self.subject_strings = list(set(self.subject_strings + [k2]))
+                    print("Add subject string", k2)
 
                 # The mapping in string_to_token_dict is determined by the tokenizer. 
                 # Shouldn't do the k->k2 mapping on string_to_token_dict.
