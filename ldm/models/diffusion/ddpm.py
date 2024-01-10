@@ -4704,7 +4704,7 @@ class LatentDiffusion(DDPM):
 
             else:
                 prodigy_params = [ param_group['params'] for param_group in opt_params_with_lrs \
-                                 if not param_group['excluded_from_prodigy'] ]
+                                   if not param_group['excluded_from_prodigy'] ]
                 prodigy_params = sum(prodigy_params, [])
                 prodigy_betas = (0.985, 0.993)  # cf. adam_betas: [0.99, 0.993]
                 d_coef = 5.
@@ -4717,11 +4717,14 @@ class LatentDiffusion(DDPM):
                                      use_bias_correction=True)
 
                 transition_iter = self.trainer.max_steps // 2
+                second_phase_steps = self.trainer.max_steps - transition_iter
                 # Since factor=1, we don't need to make sure the last step of the scheduler is called,
                 # which restores the LR to the original value.
-                one_scheduler = ConstantLR(opt, factor=1., total_iters=transition_iter)
+                one_scheduler    = ConstantLR(opt, factor=1., total_iters=transition_iter)
+                # total_iters = second_phase_steps * 1.1, so that the LR is reduced to 0.1/1.1 = 0.09
+                # of the initial LR at the end.
                 linear_scheduler = PolynomialLR(opt, power=1,
-                                                total_iters=self.trainer.max_steps - transition_iter)
+                                                total_iters=second_phase_steps * 1.1)
                 scheduler = SequentialLR(opt, schedulers=[one_scheduler, linear_scheduler],
                                          milestones=[transition_iter])
                 
@@ -4737,7 +4740,8 @@ class LatentDiffusion(DDPM):
                     # LR to the original values. If total_iters > milestones of SequentialLR, this step
                     # will not be called, and the LR of AdamW will be kept at very small values, which 
                     # is not intended. Therefore we set total_iters=transition_iter - 2.
-                    zero_scheduler      = ConstantLR(prodigy_adam_opt, factor=1e-4,  total_iters=transition_iter - 2)
+                    zero_scheduler      = ConstantLR(prodigy_adam_opt, factor=1e-4,  
+                                                     total_iters=transition_iter - 2)
                     # Enable adamw optimizer from half of the total steps.
                     # max_LR = lr / 4. Initial LR = max_lr / div_factor = lr / 40. 
                     # No need to use a smaller initial LR, as AdamW has been warmed-up 
@@ -4745,7 +4749,8 @@ class LatentDiffusion(DDPM):
                     # pct_start=0.3 (default). If max_steps = 2000, then total_steps = 1000, 
                     # max_lr is achieved at relative step = 300 (absolute step = 1300).
                     # final_div_factor = initial LR / 1 = lr / 40.
-                    onecycle_scheduler  = OneCycleLR(prodigy_adam_opt, max_lr=lr / 4, total_steps=self.trainer.max_steps - transition_iter,
+                    onecycle_scheduler  = OneCycleLR(prodigy_adam_opt, max_lr=lr / 4, 
+                                                     total_steps=second_phase_steps,
                                                      div_factor=10, final_div_factor=1)
                     prodigy_adamw_scheduler = SequentialLR(prodigy_adam_opt, schedulers=[zero_scheduler, onecycle_scheduler], 
                                                            milestones=[transition_iter])
