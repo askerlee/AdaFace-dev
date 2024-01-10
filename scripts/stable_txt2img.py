@@ -404,9 +404,9 @@ def main(opt):
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
             
-        model.embedding_manager.subject_strings = [opt.subject_string]
+        model.embedding_manager.subject_strings = list(model.embedding_manager.subject_strings + [opt.subject_string])
         if opt.background_string is not None:
-            model.embedding_manager.background_strings = [opt.background_string]
+            model.embedding_manager.background_strings = list(model.embedding_manager.background_strings + [opt.background_string])
 
         device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
         model  = model.to(device)
