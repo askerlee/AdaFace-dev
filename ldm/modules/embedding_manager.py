@@ -1923,7 +1923,9 @@ class EmbeddingManager(nn.Module):
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
         token2num_vectors                   = {}
-
+        emb_global_scale_scores_dict        = {}
+        subj2conv_attn_layerwise_scales     = {}
+        
         if isinstance(ckpt_paths, str):
             ckpt_paths = [ckpt_paths]
 
@@ -1948,9 +1950,6 @@ class EmbeddingManager(nn.Module):
             else:
                 self.emb_ema_as_pooling_probe_weight = 0
 
-            if "subj2conv_attn_layerwise_scales" in ckpt:
-                self.initialize_subj2conv_attn_layerwise_scales(1, ckpt["subj2conv_attn_layerwise_scales"])
-
             if "subject_strings" in ckpt:
                 ckpt_background_strings = ckpt["background_strings"]
             else:
@@ -1959,7 +1958,7 @@ class EmbeddingManager(nn.Module):
             use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
             self.set_embs_attn_tricks(use_conv_attn_kernel_size)
 
-            for k in ckpt["string_to_token"]:
+            for token_idx, k in enumerate(ckpt["string_to_token"]):
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
                     k2 = placeholder_mapper[k]
                     k2_token = self.get_tokens_for_string(k2)[0]
@@ -1971,15 +1970,20 @@ class EmbeddingManager(nn.Module):
                     if k2 in self.background_strings:
                         print(f"Duplicate key {k}->{k2} in {ckpt_path}. Ignored.")
                         continue
-                    
+
                     raise ValueError(f"Duplicate key {k}->{k2} in {ckpt_path}")
+
+                if "emb_global_scale_scores" in ckpt:
+                    emb_global_scale_scores_dict[k2] = ckpt["emb_global_scale_scores"][token_idx]
+                if "subj2conv_attn_layerwise_scales" in ckpt and k in ckpt["subj2conv_attn_layerwise_scales"]:
+                    subj2conv_attn_layerwise_scales[k2] = ckpt["subj2conv_attn_layerwise_scales"][k]
 
                 # Merge the (possibly substituted) subject strings from the ckpt with 
                 # self.subject_strings and self.background_strings.
                 if k in ckpt_background_strings:
                     self.background_strings = list(set(self.background_strings + [k2]))
                     print("Add background string", k2)
-                else:
+                elif k not in self.background_strings:
                     # Add k2 to self.subject_strings, even if it's not in ckpt["subject_strings"].
                     # This is to be compatible with older ckpts which don't save ckpt["subject_strings"].
                     self.subject_strings = list(set(self.subject_strings + [k2]))
@@ -2007,15 +2011,19 @@ class EmbeddingManager(nn.Module):
                         ada = self.string_to_ada_embedder_dict[km2]
                         print(f"{km2}: {ada.fg_emb_count}/{ada.bg_emb_count}/{ada.K} fg/bg/total embeddings")
 
-
-            # get_emb_global_scales_dict() requires string_to_token_dict to be initialized. 
-            # So put it here.
-            if "emb_global_scale_scores" in ckpt:
-                self.emb_global_scale_scores = ckpt["emb_global_scale_scores"]
-                print(f"Set emb_global_scales = {self.get_emb_global_scales_dict(regen=True, do_perturb=False)}")
-
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
+
+        self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(self.string_to_token_dict)), 
+                                                    requires_grad=True)
+        for token_idx, k in enumerate(self.string_to_token_dict):
+            if k in emb_global_scale_scores_dict:
+                self.emb_global_scale_scores.data[token_idx] = emb_global_scale_scores_dict[k]
+
+        print(f"Set emb_global_scales = {self.get_emb_global_scales_dict(regen=True, do_perturb=False)}")
+
+        if len(subj2conv_attn_layerwise_scales) > 0:
+            self.initialize_subj2conv_attn_layerwise_scales(1, subj2conv_attn_layerwise_scales)
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
