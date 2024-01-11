@@ -685,7 +685,6 @@ if __name__ == "__main__":
 
         if opt.max_steps > 0:
             trainer_opt.max_steps = opt.max_steps
-            config.model.params.scheduler_config.params.max_decay_steps = opt.max_steps
 
         if opt.actual_resume:
             model = load_model_from_config(config, opt.actual_resume)

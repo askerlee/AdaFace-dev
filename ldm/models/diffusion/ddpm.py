@@ -97,9 +97,9 @@ class DDPM(pl.LightningModule):
                  conditioning_key=None,
                  parameterization="eps",  # all assuming fixed variance schedules
                  optimizer_type='AdamW',
-                 adam_betas=(0.99, 0.995),
-                 grad_clip=0.5,
-                 scheduler_config=None,
+                 grad_clip=1.,
+                 adam_config=None,
+                 prodigy_config=None,
                  use_positional_encodings=False,
                  learn_logvar=False,
                  logvar_init=0.,
@@ -207,14 +207,13 @@ class DDPM(pl.LightningModule):
             print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
 
         self.optimizer_type = optimizer_type
-        self.adam_betas     = adam_betas
-        self.grad_clip      = grad_clip
-        self.scheduler_config = scheduler_config
+        self.adam_config = adam_config
+        self.grad_clip = grad_clip
         self.automatic_optimization = False
-
+    
         if 'Prodigy' in self.optimizer_type:
-            # Disable warmup for Prodigy and ProdigyAdamW optimizer.
-            self.scheduler_config.params.warm_up_steps = 0
+            assert prodigy_config is not None, "prodigy_config must be specified for Prodigy optimizer."
+            self.prodigy_config = prodigy_config
 
         self.training_percent = 0.
         
@@ -615,9 +614,8 @@ class DDPM(pl.LightningModule):
                 optimizer._on_after_step  = lambda : self.trainer.profiler.stop("optimizer_step")                
                 optimizer.step()
 
-        if self.scheduler_config is not None:
-            lr = main_optimizer.param_groups[0]['lr']
-            self.log('lr_abs', lr, prog_bar=True, logger=True, on_step=True, on_epoch=False)
+        lr = main_optimizer.param_groups[0]['lr']
+        self.log('lr_abs', lr, prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
         return loss
 
@@ -4657,7 +4655,6 @@ class LatentDiffusion(DDPM):
         else:
             raise NotImplementedError()
             
-        adam_betas  = self.adam_betas
         # self.learning_rate and self.weight_decay are set in main.py.
         # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
         lr      = self.learning_rate
@@ -4692,57 +4689,71 @@ class LatentDiffusion(DDPM):
             
             if 'Prodigy' not in self.optimizer_type:
                 opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
-                                     betas=adam_betas)
+                                     betas=self.adam_config.betas)
                 
-                if self.scheduler_config is not None:
-                    assert 'target' in self.scheduler_config
+                assert 'target' in self.adam_config.scheduler_config
+                self.adam_config.scheduler_config.max_decay_steps = self.trainer.max_steps
 
-                    lambda_scheduler = instantiate_from_config(self.scheduler_config)
-
-                    print("Setting up LambdaLR scheduler...")
-                    scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
+                lambda_scheduler = instantiate_from_config(self.adam_config.scheduler_config)
+                print("Setting up LambdaLR scheduler...")
+                scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
 
             else:
                 prodigy_params = [ param_group['params'] for param_group in opt_params_with_lrs \
                                    if not param_group['excluded_from_prodigy'] ]
                 prodigy_params = sum(prodigy_params, [])
-                prodigy_betas = (0.985, 0.993)  # cf. adam_betas: [0.99, 0.993]
-                d_coef = 5.
+
                 # Prodigy uses an LR = 1.
-                safeguard_warmup = self.scheduler_config.params.warm_up_steps > 0
                 opt = OptimizerClass(prodigy_params, lr=1., weight_decay=self.weight_decay,
-                                     betas=prodigy_betas, 
-                                     d_coef=d_coef,
-                                     safeguard_warmup=safeguard_warmup, 
+                                     betas=self.prodigy_config.betas,   # default: [0.985, 0.993]
+                                     d_coef=self.prodigy_config.d_coef, # default: 5
+                                     safeguard_warmup=False, 
                                      use_bias_correction=True)
 
-                transition_iter = self.trainer.max_steps // 2
-                second_phase_steps = self.trainer.max_steps - transition_iter
+                total_cycle_steps  = self.trainer.max_steps - self.prodigy_config.warm_up_steps
+                transition_milestones = [self.prodigy_config.warm_up_steps]
                 # Since factor=1, we don't need to make sure the last step of the scheduler is called,
                 # which restores the LR to the original value.
-                one_scheduler    = ConstantLR(opt, factor=1., total_iters=transition_iter)
-                # total_iters = second_phase_steps * 1.1, so that the LR is reduced to 0.1/1.1 = 0.09
-                # of the initial LR at the end.
-                linear_scheduler = PolynomialLR(opt, power=1,
-                                                total_iters=second_phase_steps * 1.1)
-                scheduler = SequentialLR(opt, schedulers=[one_scheduler, linear_scheduler],
-                                         milestones=[transition_iter])
+                warmup_scheduler    = ConstantLR(opt, factor=1., total_iters=self.prodigy_config.warm_up_steps)
+                single_cycle_steps  = total_cycle_steps // self.prodigy_config.scheduler_cycles
+                last_cycle_steps    = total_cycle_steps - single_cycle_steps * (self.prodigy_config.scheduler_cycles - 1)
+                schedulers = [warmup_scheduler]
+
+                for c in range(self.prodigy_config.scheduler_cycles):
+                    if c == self.prodigy_config.scheduler_cycles - 1:
+                        # The last cycle.
+                        cycle_steps = last_cycle_steps
+                    else:
+                        cycle_steps = single_cycle_steps
+                        transition_milestones.append(transition_milestones[-1] + cycle_steps)
+
+                    # total_iters = second_phase_steps * 1.1, so that the LR is reduced to 0.1/1.1 = 0.09
+                    # of the initial LR at the end.
+                    linear_cycle_scheduler = PolynomialLR(opt, power=1,
+                                                          total_iters=cycle_steps * 1.1)
+                    schedulers.append(linear_cycle_scheduler)
+
+                scheduler = SequentialLR(opt, schedulers=schedulers,
+                                         milestones=transition_milestones)
                 
                 if self.optimizer_type == 'ProdigyAdamW':
                     # If using ProdigyAdamW, AdamW is initialized with param group opt_params_with_lrs.
                     # It's different from Prodigy, which is initialized with param group opt_params.
                     # So the two data structures won't interfere with each other.
                     prodigy_adam_opt = torch.optim.AdamW(opt_params_with_lrs, weight_decay=self.weight_decay,
-                                                         betas=adam_betas)
+                                                         betas=self.adam_config.betas)
                     # Use AdamW with LR = self.learning_rate / 10000, in the beginning half of the total steps.
                     # This is to warm-up the AdamW optimizer, and delegate the optimization to Prodigy.
-                    # total_iters=transition_iter - 2: at the last iteration, ConstantLR will revert the 
+                    # total_iters = adamw_kickin_iter - 2: 
+                    # at the last iteration, ConstantLR will revert the 
                     # LR to the original values. If total_iters > milestones of SequentialLR, this step
                     # will not be called, and the LR of AdamW will be kept at very small values, which 
-                    # is not intended. Therefore we set total_iters=transition_iter - 2.
+                    # is not intended. Therefore we set total_iters=adamw_kickin_iter - 2.
+                    # It will revert the LRs to initial LRs before the last cycle of Prodigy.
+                    adamw_kickin_iter   = self.trainer.max_steps - last_cycle_steps
                     zero_scheduler      = ConstantLR(prodigy_adam_opt, factor=1e-4,  
-                                                     total_iters=transition_iter - 2)
-                    # Enable adamw optimizer from half of the total steps.
+                                                     total_iters=adamw_kickin_iter - 2)
+                    # Enable adamw optimizer in the last cycle of Prodigy.
                     # max_LR = lr / 4. Initial LR = max_lr / div_factor = lr / 40. 
                     # No need to use a smaller initial LR, as AdamW has been warmed-up 
                     # (operating with LR=0 for half of the total steps).
@@ -4750,10 +4761,10 @@ class LatentDiffusion(DDPM):
                     # max_lr is achieved at relative step = 300 (absolute step = 1300).
                     # final_div_factor = initial LR / 1 = lr / 40.
                     onecycle_scheduler  = OneCycleLR(prodigy_adam_opt, max_lr=lr / 4, 
-                                                     total_steps=second_phase_steps,
+                                                     total_steps=last_cycle_steps,
                                                      div_factor=10, final_div_factor=1)
                     prodigy_adamw_scheduler = SequentialLR(prodigy_adam_opt, schedulers=[zero_scheduler, onecycle_scheduler], 
-                                                           milestones=[transition_iter])
+                                                           milestones=[adamw_kickin_iter])
 
         else:
             params = list(self.model.parameters())
@@ -4765,15 +4776,14 @@ class LatentDiffusion(DDPM):
                 params.append(self.logvar)
 
             opt = OptimizerClass(params, lr=lr, weight_decay=self.weight_decay,
-                                 betas=adam_betas)
+                                 betas=self.adam_config.betas)
 
-            if self.scheduler_config is not None:
-                assert 'target' in self.scheduler_config
+            assert 'target' in self.adam_config.scheduler_config
+            self.adam_config.scheduler_config.max_decay_steps = self.trainer.max_steps
 
-                lambda_scheduler = instantiate_from_config(self.scheduler_config)
-
-                print("Setting up LambdaLR scheduler...")
-                scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
+            lambda_scheduler = instantiate_from_config(self.adam_config.scheduler_config)
+            print("Setting up LambdaLR scheduler...")
+            scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
 
         if scheduler is None:
             return opt

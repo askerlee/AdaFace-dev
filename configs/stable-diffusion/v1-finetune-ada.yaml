@@ -61,19 +61,25 @@ model:
     wds_bg_recon_discount:              0.05
     
     optimizer_type: Prodigy      # NAdam     # AdamW, NAdam, Prodigy, ProdigyAdamW
-    adam_betas: [0.99, 0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.
-    grad_clip: 0.5
-    scheduler_config:
-      target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
-      params:
-        verbosity_interval: 0
-        warm_up_steps: 500
-        # max_decay_steps = max_steps = 2000. The final LR is 0.2*base_lr.
-        # max_decay_steps and max_steps will be customized in main.py accordingly.
-        max_decay_steps: 2000
-        lr_start: 0.01
-        lr_max:   1.0
-        lr_min:   0.1
+    grad_clip:  0.5
+    adam_config:
+      betas:    [0.99,  0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.        
+      scheduler_config:
+        target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
+        params:
+          verbosity_interval: 0
+          warm_up_steps: 500
+          lr_start:   0.01
+          lr_max:     1.0
+          lr_min:     0.1
+
+    prodigy_config:
+      betas: [0.985, 0.993]  # Faster to converge than adam_betas.
+      d_coef: 5.
+      warm_up_steps: 500
+      # 2 cycles after the warm_up_steps.
+      # Each cycle is linearly decreasing the LR from base_lr to 0.09*base.
+      scheduler_cycles: 2
 
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
@@ -183,7 +189,6 @@ lightning:
 
   trainer:
     benchmark: True
-    # max_decay_steps and max_steps will be customized in main.py accordingly.
     max_steps: 2000
     limit_val_batches: 0.0
     deterministic: False
