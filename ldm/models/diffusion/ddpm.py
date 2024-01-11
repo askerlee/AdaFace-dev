@@ -14,7 +14,8 @@ import os
 import numpy as np
 import math
 import pytorch_lightning as pl
-from torch.optim.lr_scheduler import LambdaLR, ConstantLR, OneCycleLR, SequentialLR, PolynomialLR
+from torch.optim.lr_scheduler import LambdaLR, ConstantLR, OneCycleLR, SequentialLR, \
+                                     PolynomialLR, CosineAnnealingWarmRestarts
 from einops import rearrange, repeat
 from contextlib import contextmanager
 from functools import partial
@@ -4719,20 +4720,25 @@ class LatentDiffusion(DDPM):
                 last_cycle_steps    = total_cycle_steps - single_cycle_steps * (self.prodigy_config.scheduler_cycles - 1)
                 schedulers = [warmup_scheduler]
 
-                for c in range(self.prodigy_config.scheduler_cycles):
-                    if c == self.prodigy_config.scheduler_cycles - 1:
-                        # The last cycle.
-                        cycle_steps = last_cycle_steps
-                    else:
-                        cycle_steps = single_cycle_steps
-                        transition_milestones.append(transition_milestones[-1] + cycle_steps)
+                if self.prodigy_config.scheduler_type == 'Linear':
+                    for c in range(self.prodigy_config.scheduler_cycles):
+                        if c == self.prodigy_config.scheduler_cycles - 1:
+                            # The last cycle.
+                            cycle_steps = last_cycle_steps
+                        else:
+                            cycle_steps = single_cycle_steps
+                            transition_milestones.append(transition_milestones[-1] + cycle_steps)
 
-                    # total_iters = second_phase_steps * 1.1, so that the LR is reduced to 0.1/1.1 = 0.09
-                    # of the initial LR at the end.
-                    linear_cycle_scheduler = PolynomialLR(opt, power=1,
-                                                          total_iters=cycle_steps * 1.1)
-                    schedulers.append(linear_cycle_scheduler)
-
+                        # total_iters = second_phase_steps * 1.1, so that the LR is reduced to 0.1/1.1 = 0.09
+                        # of the initial LR at the end.
+                        linear_cycle_scheduler = PolynomialLR(opt, power=1,
+                                                              total_iters=cycle_steps * 1.1)
+                        schedulers.append(linear_cycle_scheduler)
+                else:
+                    schedulers.append(CosineAnnealingWarmRestarts(opt, T_0=single_cycle_steps, T_mult=1, 
+                                                                  eta_min=0.1 * lr,
+                                                                  last_epoch=-1))
+                    
                 scheduler = SequentialLR(opt, schedulers=schedulers,
                                          milestones=transition_milestones)
                 

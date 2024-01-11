@@ -80,6 +80,7 @@ model:
       # 2 cycles after the warm_up_steps.
       # Each cycle is linearly decreasing the LR from base_lr to 0.09*base.
       scheduler_cycles: 2
+      scheduler_type: 'CosineAnnealingWarmRestarts'   # or 'Linear'. Linear doesn't work well.
 
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
