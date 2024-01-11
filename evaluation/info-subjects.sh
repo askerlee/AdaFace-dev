@@ -28,4 +28,4 @@ set -g sel_set              4 8 9 11 12 14 18 19 22 25
 set -g db_suffix           ", instagram"
 set -g data_folder         data
 set -g misc_train_opts     
-set -g misc_infer_opts     --use_pre_neg_prompt --clip_last_layers_skip_weights 1
+set -g misc_infer_opts     --use_pre_neg_prompt --clip_last_layers_skip_weights 1 1
