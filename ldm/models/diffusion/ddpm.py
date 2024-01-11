@@ -4707,7 +4707,7 @@ class LatentDiffusion(DDPM):
                 opt = OptimizerClass(prodigy_params, lr=1., weight_decay=self.weight_decay,
                                      betas=self.prodigy_config.betas,   # default: [0.985, 0.993]
                                      d_coef=self.prodigy_config.d_coef, # default: 5
-                                     safeguard_warmup=False, 
+                                     safeguard_warmup= self.prodigy_config.scheduler_cycles > 1, 
                                      use_bias_correction=True)
 
                 total_cycle_steps  = self.trainer.max_steps - self.prodigy_config.warm_up_steps
