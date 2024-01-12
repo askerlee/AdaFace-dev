@@ -4717,16 +4717,23 @@ class LatentDiffusion(DDPM):
                 # Since factor=1, we don't need to make sure the last step of the scheduler is called,
                 # which restores the LR to the original value.
                 warmup_scheduler    = ConstantLR(opt, factor=1., total_iters=self.prodigy_config.warm_up_steps)
+                num_scheduler_cycles = self.prodigy_config.scheduler_cycles
+                if self.prodigy_config.scheduler_type == 'CyclicLR':
+                    # CyclicLR will do a downward half-cycle first. So we subtract 0.5
+                    # from num_scheduler_cycles. If self.prodigy_config.scheduler_cycles = 2,
+                    # then num_scheduler_cycles = 1.5, which means there'll be an extra up-down cycle.
+                    num_scheduler_cycles -= 0.5
+
                 # single_cycle_steps = 750, if max_steps = 2000, warm_up_steps = 500 and scheduler_cycles = 2.
-                single_cycle_steps  = total_cycle_steps // self.prodigy_config.scheduler_cycles
-                self.single_cycle_steps = single_cycle_steps
-                last_cycle_steps    = total_cycle_steps - single_cycle_steps * (self.prodigy_config.scheduler_cycles - 1)
+                single_cycle_steps  = total_cycle_steps / num_scheduler_cycles
+                last_cycle_steps    = total_cycle_steps - single_cycle_steps * (num_scheduler_cycles - 1)
                 schedulers = [warmup_scheduler]
-                print(f"Setting up {self.prodigy_config.scheduler_cycles} cycles of {single_cycle_steps} steps each.")
+                print(f"Setting up {num_scheduler_cycles} cycles of {single_cycle_steps} steps each.")
 
                 if self.prodigy_config.scheduler_type == 'Linear':
-                    for c in range(self.prodigy_config.scheduler_cycles):
-                        if c == self.prodigy_config.scheduler_cycles - 1:
+                    num_scheduler_cycles = int(num_scheduler_cycles)
+                    for c in range(num_scheduler_cycles):
+                        if c == num_scheduler_cycles - 1:
                             # The last cycle.
                             cycle_steps = last_cycle_steps
                         else:
@@ -4740,7 +4747,7 @@ class LatentDiffusion(DDPM):
                         schedulers.append(linear_cycle_scheduler)
                 elif self.prodigy_config.scheduler_type == 'CosineAnnealingWarmRestarts':
                     # eta_min should be 0.1 instead of 0.1 * LR, since the full LR is 1 for Prodigy.
-                    schedulers.append(CosineAnnealingWarmRestarts(opt, T_0=single_cycle_steps, T_mult=1, 
+                    schedulers.append(CosineAnnealingWarmRestarts(opt, T_0=int(single_cycle_steps), T_mult=1, 
                                                                   eta_min=0.1,
                                                                   last_epoch=-1))
                 elif self.prodigy_config.scheduler_type == 'CyclicLR':
@@ -4752,7 +4759,7 @@ class LatentDiffusion(DDPM):
                     # Therefore, after the first scheduler.step(), we set the last_epoch of CyclicLR 
                     # to single_cycle_steps / 2.
                     schedulers.append(CyclicLR(opt, base_lr=0.1, max_lr=1, step_size_up=single_cycle_steps / 2,
-                                               last_epoch=self.single_cycle_steps / 2 - 1, cycle_momentum=False))
+                                               last_epoch=single_cycle_steps / 2 - 1, cycle_momentum=False))
                     # Disable SequentialLR2 from calling scheduler.step(0) at the first iteration, which will 
                     # set the last_epoch of CyclicLR to 0.
                     schedulers[-1].start_from_epoch_0 = False
