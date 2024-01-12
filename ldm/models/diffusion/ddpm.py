@@ -4743,7 +4743,7 @@ class LatentDiffusion(DDPM):
                     # step_size_up = step_size_down = single_cycle_steps // 2.
                     # last_epoch = single_cycle_steps // 2, so that the LR begins with max_lr.
                     schedulers.append(CyclicLR(opt, base_lr=0.1, max_lr=1, step_size_up=single_cycle_steps // 2,
-                                               last_epoch=single_cycle_steps // 2))
+                                               last_epoch=single_cycle_steps // 2, cycle_momentum=False))
                 else:
                     raise NotImplementedError()
                 
