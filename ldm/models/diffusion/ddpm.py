@@ -39,7 +39,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
                        gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, clamp_prompt_embedding, \
-                       merge_cls_token_embeddings, join_dict_of_indices_with_key_filter
+                       merge_cls_token_embeddings, join_dict_of_indices_with_key_filter, SequentialLR2
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -584,22 +584,10 @@ class DDPM(pl.LightningModule):
         if isinstance(schedulers, list):
             for scheduler in schedulers:
                 scheduler.step()
-                if isinstance(scheduler, SequentialLR) and self.prodigy_config.scheduler_type == 'CyclicLR' \
-                  and scheduler._schedulers[-1].last_epoch == 0:
-                    # SequentialLR will change the last_epoch of all schedulers to -1.
-                    # So we need to manually set the last_epoch of CyclicLR to single_cycle_steps / 2 - 2.
-                    scheduler._schedulers[-1].last_epoch = self.single_cycle_steps / 2
-                #print(scheduler._schedulers[-1].get_lr())
         else:
             scheduler = schedulers
             # Single scheduler.
             scheduler.step()
-            if isinstance(scheduler, SequentialLR) and self.prodigy_config.scheduler_type == 'CyclicLR' \
-              and scheduler._schedulers[-1].last_epoch == 0:
-                # SequentialLR will change the last_epoch of all schedulers to -1.
-                # So we need to manually set the last_epoch of CyclicLR to single_cycle_steps / 2 - 2.
-                scheduler._schedulers[-1].last_epoch = self.single_cycle_steps / 2
-            #print(scheduler._schedulers[-1].get_lr())
 
         optimizers = self.optimizers()
         if isinstance(optimizers, list):
@@ -4764,12 +4752,17 @@ class LatentDiffusion(DDPM):
                     # Therefore, after the first scheduler.step(), we set the last_epoch of CyclicLR 
                     # to single_cycle_steps / 2.
                     schedulers.append(CyclicLR(opt, base_lr=0.1, max_lr=1, step_size_up=single_cycle_steps / 2,
-                                               last_epoch=-1, cycle_momentum=False))
+                                               last_epoch=self.single_cycle_steps / 2 - 1, cycle_momentum=False))
+                    # Disable SequentialLR2 from calling scheduler.step(0) at the first iteration, which will 
+                    # set the last_epoch of CyclicLR to 0.
+                    schedulers[-1].start_from_epoch_0 = False
+
+                #print(scheduler._schedulers[-1].get_lr())
                 else:
                     raise NotImplementedError()
                 
-                scheduler = SequentialLR(opt, schedulers=schedulers,
-                                         milestones=transition_milestones)
+                scheduler = SequentialLR2(opt, schedulers=schedulers,
+                                          milestones=transition_milestones)
 
                 if self.optimizer_type == 'ProdigyAdamW':
                     # If using ProdigyAdamW, AdamW is initialized with param group opt_params_with_lrs.

@@ -18,6 +18,26 @@ from PIL import Image, ImageDraw, ImageFont
 from torchvision.utils import make_grid, draw_bounding_boxes
 import random, math
 
+from torch.optim.lr_scheduler import SequentialLR
+from bisect import bisect_right
+
+class SequentialLR2(SequentialLR):
+    def step(self):
+        self.last_epoch += 1
+        idx = bisect_right(self._milestones, self.last_epoch)
+        scheduler = self._schedulers[idx]
+        if idx > 0 and self._milestones[idx - 1] == self.last_epoch:
+            if scheduler.__dict__.get('start_from_epoch_0', True):
+                scheduler.step(0)
+            else:
+                print(f"Skip setting epoch to 0 for the scheduler {type(scheduler)}.")
+                scheduler.step()
+                print(f"last_epoch = {self.last_epoch}, LR = {scheduler.get_last_lr()}")
+        else:
+            scheduler.step()
+
+        self._last_lr = scheduler.get_last_lr()
+
 def log_txt_as_img(wh, xc, size=10):
     # wh a tuple of (width, height)
     # xc a list of captions to plot
