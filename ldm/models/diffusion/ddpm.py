@@ -584,9 +584,22 @@ class DDPM(pl.LightningModule):
         if isinstance(schedulers, list):
             for scheduler in schedulers:
                 scheduler.step()
+                if isinstance(scheduler, SequentialLR) and self.prodigy_config.scheduler_type == 'CyclicLR' \
+                  and scheduler._schedulers[-1].last_epoch == 0:
+                    # SequentialLR will change the last_epoch of all schedulers to -1.
+                    # So we need to manually set the last_epoch of CyclicLR to single_cycle_steps / 2 - 2.
+                    scheduler._schedulers[-1].last_epoch = self.single_cycle_steps / 2
+                #print(scheduler._schedulers[-1].get_lr())
         else:
+            scheduler = schedulers
             # Single scheduler.
-            schedulers.step()
+            scheduler.step()
+            if isinstance(scheduler, SequentialLR) and self.prodigy_config.scheduler_type == 'CyclicLR' \
+              and scheduler._schedulers[-1].last_epoch == 0:
+                # SequentialLR will change the last_epoch of all schedulers to -1.
+                # So we need to manually set the last_epoch of CyclicLR to single_cycle_steps / 2 - 2.
+                scheduler._schedulers[-1].last_epoch = self.single_cycle_steps / 2
+            #print(scheduler._schedulers[-1].get_lr())
 
         optimizers = self.optimizers()
         if isinstance(optimizers, list):
@@ -4718,6 +4731,7 @@ class LatentDiffusion(DDPM):
                 warmup_scheduler    = ConstantLR(opt, factor=1., total_iters=self.prodigy_config.warm_up_steps)
                 # single_cycle_steps = 750, if max_steps = 2000, warm_up_steps = 500 and scheduler_cycles = 2.
                 single_cycle_steps  = total_cycle_steps // self.prodigy_config.scheduler_cycles
+                self.single_cycle_steps = single_cycle_steps
                 last_cycle_steps    = total_cycle_steps - single_cycle_steps * (self.prodigy_config.scheduler_cycles - 1)
                 schedulers = [warmup_scheduler]
                 print(f"Setting up {self.prodigy_config.scheduler_cycles} cycles of {single_cycle_steps} steps each.")
@@ -4743,15 +4757,20 @@ class LatentDiffusion(DDPM):
                                                                   last_epoch=-1))
                 elif self.prodigy_config.scheduler_type == 'CyclicLR':
                     # step_size_up = step_size_down = single_cycle_steps / 2 (float).
-                    # last_epoch = single_cycle_steps / 2 - 2, so that the LR begins with max_lr.
+                    # last_epoch will be updated to single_cycle_steps / 2 in training_step(), 
+                    # so that the LR begins with max_lr.
+                    # We can't initialize it here, since SequentialLR will manually call 
+                    # scheduler.step(0) at the first iteration, which will set the last_epoch to 0.
+                    # Therefore, after the first scheduler.step(), we set the last_epoch of CyclicLR 
+                    # to single_cycle_steps / 2.
                     schedulers.append(CyclicLR(opt, base_lr=0.1, max_lr=1, step_size_up=single_cycle_steps / 2,
-                                               last_epoch=single_cycle_steps / 2 - 2, cycle_momentum=False))
+                                               last_epoch=-1, cycle_momentum=False))
                 else:
                     raise NotImplementedError()
                 
                 scheduler = SequentialLR(opt, schedulers=schedulers,
                                          milestones=transition_milestones)
-                
+
                 if self.optimizer_type == 'ProdigyAdamW':
                     # If using ProdigyAdamW, AdamW is initialized with param group opt_params_with_lrs.
                     # It's different from Prodigy, which is initialized with param group opt_params.
