@@ -4716,9 +4716,11 @@ class LatentDiffusion(DDPM):
                 # Since factor=1, we don't need to make sure the last step of the scheduler is called,
                 # which restores the LR to the original value.
                 warmup_scheduler    = ConstantLR(opt, factor=1., total_iters=self.prodigy_config.warm_up_steps)
+                # single_cycle_steps = 750, if max_steps = 2000, warm_up_steps = 500 and scheduler_cycles = 2.
                 single_cycle_steps  = total_cycle_steps // self.prodigy_config.scheduler_cycles
                 last_cycle_steps    = total_cycle_steps - single_cycle_steps * (self.prodigy_config.scheduler_cycles - 1)
                 schedulers = [warmup_scheduler]
+                print(f"Setting up {self.prodigy_config.scheduler_cycles} cycles of {single_cycle_steps} steps each.")
 
                 if self.prodigy_config.scheduler_type == 'Linear':
                     for c in range(self.prodigy_config.scheduler_cycles):
@@ -4740,10 +4742,10 @@ class LatentDiffusion(DDPM):
                                                                   eta_min=0.1,
                                                                   last_epoch=-1))
                 elif self.prodigy_config.scheduler_type == 'CyclicLR':
-                    # step_size_up = step_size_down = single_cycle_steps // 2.
-                    # last_epoch = single_cycle_steps // 2, so that the LR begins with max_lr.
-                    schedulers.append(CyclicLR(opt, base_lr=0.1, max_lr=1, step_size_up=single_cycle_steps // 2,
-                                               last_epoch=single_cycle_steps // 2, cycle_momentum=False))
+                    # step_size_up = step_size_down = single_cycle_steps / 2 (float).
+                    # last_epoch = single_cycle_steps / 2 - 2, so that the LR begins with max_lr.
+                    schedulers.append(CyclicLR(opt, base_lr=0.1, max_lr=1, step_size_up=single_cycle_steps / 2,
+                                               last_epoch=single_cycle_steps / 2 - 2, cycle_momentum=False))
                 else:
                     raise NotImplementedError()
                 
