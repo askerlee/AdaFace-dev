@@ -15,7 +15,7 @@ import numpy as np
 import math
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR, ConstantLR, OneCycleLR, SequentialLR, \
-                                     PolynomialLR, CosineAnnealingWarmRestarts
+                                     PolynomialLR, CosineAnnealingWarmRestarts, CyclicLR
 from einops import rearrange, repeat
 from contextlib import contextmanager
 from functools import partial
@@ -4730,15 +4730,23 @@ class LatentDiffusion(DDPM):
                             transition_milestones.append(transition_milestones[-1] + cycle_steps)
 
                         # total_iters = second_phase_steps * 1.1, so that the LR is reduced to 0.1/1.1 = 0.09
-                        # of the initial LR at the end.
+                        # of the full LR at the end.
                         linear_cycle_scheduler = PolynomialLR(opt, power=1,
                                                               total_iters=cycle_steps * 1.1)
                         schedulers.append(linear_cycle_scheduler)
-                else:
+                elif self.prodigy_config.scheduler_type == 'CosineAnnealingWarmRestarts':
+                    # eta_min should be 0.1 instead of 0.1 * LR, since the full LR is 1 for Prodigy.
                     schedulers.append(CosineAnnealingWarmRestarts(opt, T_0=single_cycle_steps, T_mult=1, 
-                                                                  eta_min=0.1 * lr,
+                                                                  eta_min=0.1,
                                                                   last_epoch=-1))
-                    
+                elif self.prodigy_config.scheduler_type == 'CyclicLR':
+                    # step_size_up = step_size_down = single_cycle_steps // 2.
+                    # last_epoch = single_cycle_steps // 2, so that the LR begins with max_lr.
+                    schedulers.append(CyclicLR(opt, base_lr=0.1, max_lr=1, step_size_up=single_cycle_steps // 2,
+                                               last_epoch=single_cycle_steps // 2))
+                else:
+                    raise NotImplementedError()
+                
                 scheduler = SequentialLR(opt, schedulers=schedulers,
                                          milestones=transition_milestones)
                 
