@@ -138,6 +138,7 @@ for i in $indices
     set db_prompt0 "$db_prompts[$i]"
     set db_prompt  "$db_prompt0$db_suffix"
     set -q bg_init_words; and set bg_init_word $bg_init_words[$i]; or set bg_init_word ""
+    set class_name $class_names[$i]
 
     if [ $method = 'ti' ]; or [ $method = 'ada' ]; or [ $method = 'static-layerwise' ]
         if [ $method = 'ada' ]; or [ $method = 'static-layerwise' ]
@@ -187,6 +188,12 @@ for i in $indices
         end
         set -q lr; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --lr $lr
         set -q min_rand_scaling; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --min_rand_scaling $min_rand_scaling
+
+        if set -q resume_from_ckpt; and test $resume_from_ckpt -eq 1
+            set resumed_ckpt_idx (contains -i -- $class_name $resumed_ckpt_keys)
+            set emb_man_ckpt $resumed_ckpt_values[$resumed_ckpt_idx]
+            set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --embedding_manager_ckpt $emb_man_ckpt
+        end
 
         echo $subject: --init_words $init_words $EXTRA_TRAIN_ARGS1
         set fish_trace 1
