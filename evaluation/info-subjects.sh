@@ -17,7 +17,7 @@ set -g are_faces     1                  1                     1                1
 #                     objects    humans/animals    cartoon characters
 set -g lrs            7e-4       1e-3              7e-4
 set -g inf_z_prefixes     ""         "face portrait of"     ""
-set -g maxiters       1500       2000              1500
+set -g maxiters       1500       1000              1500
 # All subjects are humans/animals. The other two classes are listed for completeness.
 # Individual LR for each class in the broad classes, according to their difficulties / inherent complexity.
 # A prefix of "portrait of" for animals/humans suggests SD to focus on the face area of the subject.
