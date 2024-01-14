@@ -52,8 +52,8 @@ def parse_args():
                         help="Prompt to use for generating samples, using {} for subject_string (default: None)")
     parser.add_argument("--neg_prompt", type=str, default=argparse.SUPPRESS,
                         help="Negative prompt to use for generating samples (default: None)")
-    parser.add_argument("--use_pre_neg_prompt", action='store_true',
-                        help="use predefined negative prompts")
+    parser.add_argument("--use_pre_neg_prompt", type=str2bool, const=True, default=argparse.SUPPRESS, 
+                        nargs="?", help="use predefined negative prompts")
     parser.add_argument(
         "--compel_cfg_weight_level", type=float, default=2, #argparse.SUPPRESS,
         help="compel-style prompt cfg weighting level (weight=1.1**L). Set to 0 to disable compel cfg",
@@ -132,8 +132,8 @@ def parse_args():
                         choices=["v14", "v15", "v15-ema", "v15-dste", "v15-dste8", "v15-arte", "v15-rvte",
                                  "dreamshaper-v5", "dreamshaper-v6", "dreamshaper-v8", "ar-v16", "rv-v4"],
                         help="Type of checkpoints to use (default: v15-dste8)")
-
-    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5, 0.5],
+    # [1, 1] will be normalized to [0.5, 0.5] internally.
+    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
                         help="Weight of the skip connections of the last few layers of CLIP text embedder. " 
                              "NOTE: the last element is the weight of the last layer.")
     
@@ -457,8 +457,8 @@ if __name__ == "__main__":
 
         if hasattr(args, 'neg_prompt'):
             command_line += f" --neg_prompt \"{args.neg_prompt}\""
-        elif args.use_pre_neg_prompt:
-            command_line += f" --use_pre_neg_prompt"
+        elif hasattr(args, 'use_pre_neg_prompt'):
+            command_line += f" --use_pre_neg_prompt 1"
 
         if hasattr(args, 'compel_cfg_weight_level'):
             command_line += f" --compel_cfg_weight_level {args.compel_cfg_weight_level}"

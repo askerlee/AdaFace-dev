@@ -4,7 +4,7 @@ set -g subjects       backpack          backpack_dog         bear_plushie      b
 set -g db_prompts    "red backpack"    "cute backpack"      "stuffed toy"     "berry bowl"    can           "glass candle"  cat             cat             "yellow clock"   sneaker           dog          dog             dog              dog          dog               dog             dog             toy             boot            "stuffed toy"           "monster toy"   glasses         toy             "toy car"       "cartoon sprite"  toy              sneaker         "chinese teapot"  "stylish vase"        "stuffed toy"
 set -g cls_strings    $db_prompts
 set -g ada_prompts    $db_prompts
-set -g class_names     backpack          backpack             toy               bowl            can           candle          cat             cat             clock            sneaker           dog          dog             dog              dog          dog               dog             dog             toy             boot            toy                     toy             glasses         toy             toy             sprite             toy             sneaker         teapot            vase                  toy             
+set -g class_names    backpack          backpack             toy               bowl            can           candle          cat             cat             clock            sneaker           dog          dog             dog              dog          dog               dog             dog             toy             boot            toy                     toy             glasses         toy             toy             sprite             toy             sneaker         teapot            vase                  toy             
 
 set -g ada_weights    "1 2"             "1 2"                "1 2"             "1 2"           1             "1 2"           1               1               "1 2"            1                 1            1               1                1            1                 1               1               1               1               "1 2"                   "1 2"           1               1               "2 1"           "2 1"             1                1               "1 2"             "1 2"                 "1 2"
 set -g bg_init_words  "rock tree woman" "window grass table" "ground grass"    "cloth"         "rock ground"  "ground grass" "shade grass"   "floor blanket" "hand cloth"     "ground grass"    "sky tree"   "ground grass"  "beach mountain" "sofa couch"  "orange yellow"  "beach flower"  "grass blanket" "ground beach"  "ground grass"  "ground grass"          "window ground" "cloth"         "ground grass"  "ground floor"  "white"           "ground rock"    "ground grass"  "table plate"     "table window white"  "ground grass"  
@@ -12,11 +12,6 @@ set -g broad_classes  0                 0                   0                   
 # No subjects are human faces. $are_faces instructs the generation script 
 # whether to compute face similarity.
 set -g are_faces      0                 0                   0                   0               0               0               0               0               0                0                 0            0               0               0           0                   0               0               0               0               0                       0               0               0               0               0                  0               0               0                 0                      0
-
-# z_prefix_keys and z_prefix_values constitute a key:value map. 
-# This means red_cartoon uses "cartoon' as the prefix.
-set -g z_prefix_keys    red_cartoon
-set -g z_prefix_values  cartoon
 
 # sel_set contains a few selected challenging test subjects.
 #                     backpack_dog  berry_bowl  can  candle  rc_car robot_toy
@@ -33,4 +28,14 @@ set -g maxiters         1500       2000              1500
 set -g db_suffix           ""
 set -g data_folder         dbeval-dataset
 set -g misc_train_opts     --use_fp_trick 0
-set -g misc_infer_opts     --use_pre_neg_prompt
+set -g misc_infer_opts
+set -g resumed_ckpt_keys    backpack  bowl,can,candle  clock,glasses,teapot,vase  boot,sneaker  sprite  toy  cat  dog
+set -g resumed_ckpt_values  resumed_ckpts/backpack2024-01-12T16-08-25_backpack-ada/checkpoints/embeddings_gs-1500.pt \
+                            resumed_ckpts/candle2024-01-12T23-10-13_candle-ada/checkpoints/embeddings_gs-1500.pt \
+                            resumed_ckpts/clock2024-01-13T03-55-55_clock-ada/checkpoints/embeddings_gs-1500.pt \
+                            resumed_ckpts/colorful_sneaker2024-01-13T05-17-19_colorful_sneaker-ada/checkpoints/embeddings_gs-1500.pt \
+                            resumed_ckpts/red_cartoon2024-01-12T22-15-19_red_cartoon-ada/checkpoints/embeddings_gs-1500.pt \
+                            resumed_ckpts/bear_plushie2024-01-12T18-59-01_bear_plushie-ada/checkpoints/embeddings_gs-1500.pt \
+                            resumed_ckpts/lilbub2024-01-12T16-08-19_lilbub-ada/checkpoints/embeddings_gs-2000.pt \
+                            resumed_ckpts/jiffpom2024-01-12T21-30-12_jiffpom-ada/checkpoints/embeddings_gs-2000.pt
+                            

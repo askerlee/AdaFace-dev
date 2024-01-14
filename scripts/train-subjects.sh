@@ -23,6 +23,22 @@ function parse_range_str
     end
 end
 
+function contains_substring
+    set -l needle $argv[1]
+    set -l haystack $argv[2..-1]
+    set index 1
+
+    for chunk in $haystack
+        set sublist (string split ',' -- $chunk)
+        if contains $needle $sublist
+            echo $index
+            return 0
+        end
+        set -l index (math $index+1)
+    end
+    echo -1
+end
+
 set self (status basename)
 echo $self $argv
 
@@ -163,15 +179,6 @@ for i in $indices
         # Reset EXTRA_TRAIN_ARGS1 to EXTRA_TRAIN_ARGS0 each time. 
         set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS0
 
-        if set -q z_prefix_keys
-            # Look up the map z_prefix_keys:z_prefix_values, and find the corresponding 
-            # z_prefix for the current subject.
-            if set -l z_prefix_index (contains -i -- $subject $z_prefix_keys)
-                set z_prefix $z_prefix_values[$z_prefix_index]
-                set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --common_placeholder_prefix $z_prefix
-            end
-        end
-
         # cls_string: the class token used in delta loss computation.
         # If --cls_string_as_delta, and cls_strings is provided in the subjfile, then use cls_string. 
         # Otherwise use the default cls_string "person".
@@ -190,7 +197,11 @@ for i in $indices
         set -q min_rand_scaling; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --min_rand_scaling $min_rand_scaling
 
         if set -q resume_from_ckpt; and test $resume_from_ckpt -eq 1
-            set resumed_ckpt_idx (contains -i -- $class_name $resumed_ckpt_keys)
+            set resumed_ckpt_idx (contains_substring $class_name $resumed_ckpt_keys)
+            if test $resumed_ckpt_idx -eq -1
+                echo "Error: No ckpt found for class $class_name in $resumed_ckpt_keys"
+                exit 1
+            end
             set emb_man_ckpt $resumed_ckpt_values[$resumed_ckpt_idx]
             set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --embedding_manager_ckpt $emb_man_ckpt --ckpt_params_perturb_ratio 0.2 --emb_reg_loss_scale 0.1
         end

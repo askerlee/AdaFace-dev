@@ -26,4 +26,4 @@ set -g maxiters       1500       2000              1500
 set -g db_suffix           ""
 set -g data_folder         ti-dataset
 set -g misc_train_opts     --use_fp_trick 0
-set -g misc_infer_opts     --use_pre_neg_prompt
+set -g misc_infer_opts

@@ -54,12 +54,8 @@ def parse_args():
         default="",
         help="the prompt to render"
     )    
-    # --use_pre_neg_prompt, use predefined negative prompts
-    parser.add_argument(
-        "--use_pre_neg_prompt",
-        action='store_true',
-        help="use predefined negative prompts",
-    )
+    parser.add_argument("--use_pre_neg_prompt", type=str2bool, const=True, default=True, nargs="?",
+                        help="use predefined negative prompts")
     parser.add_argument(
         "--compel_cfg_weight_level",
         type=float,
