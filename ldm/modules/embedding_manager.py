@@ -914,6 +914,7 @@ class EmbeddingManager(nn.Module):
             # Used in ddpm.py, ignored here.
             embedding_manager_ckpt=None,
             ckpt_params_perturb_ratio=0,
+            emb_pre_vecs_reg_loss_scale=1,
     ):
         super().__init__()
         self.string_to_token_dict = OrderedDict()
@@ -1102,6 +1103,7 @@ class EmbeddingManager(nn.Module):
         self.iter_type = None       # 'recon_iter' or 'distill_iter'
         self.prompt_embedding_clamp_value  = prompt_embedding_clamp_value
         self.background_extra_global_scale = background_extra_global_scale
+        self.emb_pre_vecs_reg_loss_scale = emb_pre_vecs_reg_loss_scale
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
@@ -2140,7 +2142,10 @@ class EmbeddingManager(nn.Module):
         basis_reg_weight_base       = 0.1
         ada_maps_weight_reg_weight  = 0.1
         ada_maps_bias_reg_weight    = 0 #0.001   # 0.001 -> 0
-        pre_vecs_reg_weight         = 0.1
+        # emb_pre_vecs_reg_loss_scale is set to 1 by default.
+        # If loading a ckpt trained on a different subject, emb_pre_vecs_reg_loss_scale is set to 0.1,
+        # to avoid loss_pre_vecs becoming too large.
+        pre_vecs_reg_weight         = 0.1 * self.emb_pre_vecs_reg_loss_scale
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
         ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
