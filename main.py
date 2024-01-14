@@ -186,7 +186,10 @@ def get_parser(**parser_kwargs):
         type=str, 
         default="", 
         help="Initialize embedding manager from a checkpoint")
-
+    parser.add_argument("--ckpt_params_perturb_ratio",
+        type=float, default=-1,
+        help="Ratio of parameters in the loaded ckpt to be perturbed")
+    
     parser.add_argument("--subject_string", 
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
@@ -745,6 +748,7 @@ if __name__ == "__main__":
             assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_words))
 
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
+        config.model.params.personalization_config.params.ckpt_params_perturb_ratio = opt.ckpt_params_perturb_ratio
         config.model.params.personalization_config.params.placeholder_strings = [opt.subject_string]
         config.model.params.personalization_config.params.num_vectors_per_token = { opt.subject_string: opt.num_vectors_per_token}
 

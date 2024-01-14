@@ -912,7 +912,8 @@ class EmbeddingManager(nn.Module):
             prompt_embedding_clamp_value=-1,
             background_extra_global_scale=1.,
             # Used in ddpm.py, ignored here.
-            embedding_manager_ckpt=None
+            embedding_manager_ckpt=None,
+            ckpt_params_perturb_ratio=0,
     ):
         super().__init__()
         self.string_to_token_dict = OrderedDict()
@@ -1915,7 +1916,7 @@ class EmbeddingManager(nn.Module):
                     ckpt_path)
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
-    def load(self, ckpt_paths):
+    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         self.string_to_token_dict           = {}
@@ -2024,6 +2025,25 @@ class EmbeddingManager(nn.Module):
 
         if len(subj2conv_attn_layerwise_scales) > 0:
             self.initialize_subj2conv_attn_layerwise_scales(1, subj2conv_attn_layerwise_scales)
+
+        # When we resume training from a ckpt, sometimes we want to perturb the parameters
+        # to reduce overfitting.
+        if ckpt_params_perturb_ratio > 0:
+            self.perturb_model_parameters(ckpt_params_perturb_ratio)
+
+    def perturb_model_parameters(self, perturb_ratio=0.2):
+        param_group_list = self.optimized_parameters()
+        num_perturbed_params = 0
+        for param_group in param_group_list:
+            for param in param_group['params']:
+                if param.requires_grad:
+                    # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
+                    perturbation = torch_uniform(1 - perturb_ratio, 1 + perturb_ratio, 
+                                                 param.shape, device=param.device)
+                    param.data = param.data * perturbation
+                    num_perturbed_params += 1
+        
+        print(f"Perturbed {num_perturbed_params} parameters with range = ({1 - perturb_ratio}, {1 + perturb_ratio})")
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
