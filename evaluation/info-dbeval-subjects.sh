@@ -30,6 +30,8 @@ set -g data_folder         dbeval-dataset
 set -g misc_train_opts     --use_fp_trick 0
 set -g misc_infer_opts
 set -g resume_from_ckpt     1
+# Objects in the same group share the same resumed_ckpt. Number of subjects in each group:
+#                           2         3                4                          3             1       8    2    7
 set -g resumed_ckpt_keys    backpack  bowl,can,candle  clock,glasses,teapot,vase  boot,sneaker  sprite  toy  cat  dog
 set -g resumed_ckpt_values  resumed_ckpts/backpack_dog2024-01-12T17-34-49_backpack_dog-ada/checkpoints/embeddings_gs-1500.pt \
                             resumed_ckpts/candle2024-01-12T23-10-13_candle-ada/checkpoints/embeddings_gs-1500.pt \
