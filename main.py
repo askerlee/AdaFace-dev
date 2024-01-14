@@ -189,7 +189,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--ckpt_params_perturb_ratio",
         type=float, default=-1,
         help="Ratio of parameters in the loaded ckpt to be perturbed")
-    parser.add_argument("--emb_pre_vecs_reg_loss_scale",
+    parser.add_argument("--emb_reg_loss_scale",
         type=float, default=1,
         help="Scale of the pre-specified embedding regularization loss")
     
@@ -752,7 +752,7 @@ if __name__ == "__main__":
 
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
         config.model.params.personalization_config.params.ckpt_params_perturb_ratio = opt.ckpt_params_perturb_ratio
-        config.model.params.personalization_config.params.emb_pre_vecs_reg_loss_scale = opt.emb_pre_vecs_reg_loss_scale
+        config.model.params.personalization_config.params.emb_reg_loss_scale = opt.emb_reg_loss_scale
         config.model.params.personalization_config.params.placeholder_strings = [opt.subject_string]
         config.model.params.personalization_config.params.num_vectors_per_token = { opt.subject_string: opt.num_vectors_per_token}
 
