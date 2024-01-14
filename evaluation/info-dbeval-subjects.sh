@@ -29,6 +29,7 @@ set -g db_suffix           ""
 set -g data_folder         dbeval-dataset
 set -g misc_train_opts     --use_fp_trick 0
 set -g misc_infer_opts
+set -g resume_from_ckpt     1
 set -g resumed_ckpt_keys    backpack  bowl,can,candle  clock,glasses,teapot,vase  boot,sneaker  sprite  toy  cat  dog
 set -g resumed_ckpt_values  resumed_ckpts/backpack2024-01-12T16-08-25_backpack-ada/checkpoints/embeddings_gs-1500.pt \
                             resumed_ckpts/candle2024-01-12T23-10-13_candle-ada/checkpoints/embeddings_gs-1500.pt \
@@ -38,4 +39,3 @@ set -g resumed_ckpt_values  resumed_ckpts/backpack2024-01-12T16-08-25_backpack-a
                             resumed_ckpts/bear_plushie2024-01-12T18-59-01_bear_plushie-ada/checkpoints/embeddings_gs-1500.pt \
                             resumed_ckpts/lilbub2024-01-12T16-08-19_lilbub-ada/checkpoints/embeddings_gs-2000.pt \
                             resumed_ckpts/jiffpom2024-01-12T21-30-12_jiffpom-ada/checkpoints/embeddings_gs-2000.pt
-                            

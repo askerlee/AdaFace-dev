@@ -203,7 +203,7 @@ for i in $indices
                 exit 1
             end
             set emb_man_ckpt $resumed_ckpt_values[$resumed_ckpt_idx]
-            set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --embedding_manager_ckpt $emb_man_ckpt --ckpt_params_perturb_ratio 0.2 --emb_reg_loss_scale 0.1
+            set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --embedding_manager_ckpt $emb_man_ckpt --ckpt_params_perturb_ratio 0.2 --emb_reg_loss_scale 0.2
         end
 
         echo $subject: --init_words $init_words $EXTRA_TRAIN_ARGS1

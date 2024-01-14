@@ -29,6 +29,7 @@ set -g db_suffix           ", instagram"
 set -g data_folder         data
 set -g misc_train_opts     
 set -g misc_infer_opts      
+set -g resume_from_ckpt     1
 set -g resumed_ckpt_keys    boy cat dog girl man woman
 set -g resumed_ckpt_values  resumed_ckpts/iainarmitage2024-01-12T16-08-12_iainarmitage-ada/checkpoints/embeddings_gs-2000.pt \
                             resumed_ckpts/lilbub2024-01-12T16-08-19_lilbub-ada/checkpoints/embeddings_gs-2000.pt \
@@ -36,4 +37,3 @@ set -g resumed_ckpt_values  resumed_ckpts/iainarmitage2024-01-12T16-08-12_iainar
                             resumed_ckpts/lisa2024-01-12T17-53-24_lisa-ada/checkpoints/embeddings_gs-2000.pt \
                             resumed_ckpts/donnieyen2024-01-12T21-29-01_donnieyen-ada/checkpoints/embeddings_gs-2000.pt \
                             resumed_ckpts/lisa2024-01-12T17-53-24_lisa-ada/checkpoints/embeddings_gs-2000.pt
-set -g resume_from_ckpt     1
