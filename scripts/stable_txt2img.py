@@ -821,7 +821,12 @@ def main(opt):
                         date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
                         iter_sig = "unknown"
 
-                    experiment_sig = "-".join([date_sig, iter_sig, f"scale{opt.scale:.1f}"])
+                    if isinstance(opt.scale, (list, tuple)):
+                        scale_sig = "scale" + "-".join([f"{scale:.1f}" for scale in opt.scale])
+                    else:
+                        scale_sig = f"scale{opt.scale:.1f}"
+                    experiment_sig = "-".join([date_sig, iter_sig, scale_sig])
+
                     if opt.bb_type:
                         experiment_sig += "-" + opt.bb_type
                     if opt.neg_prompt != "":
