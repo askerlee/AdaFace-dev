@@ -76,7 +76,7 @@ class DDIMSampler(object):
                verbose=True,
                x_T=None,
                log_every_t=100,
-               unconditional_guidance_scale=1.,
+               guidance_scale=1.,
                unconditional_conditioning=None,
                # this has to come in the same format as the conditioning, # e.g. as encoded tokens, ...
                **kwargs
@@ -114,7 +114,7 @@ class DDIMSampler(object):
                                                     corrector_kwargs=corrector_kwargs,
                                                     x_T=x_T,
                                                     log_every_t=log_every_t,
-                                                    unconditional_guidance_scale=unconditional_guidance_scale,
+                                                    guidance_scale=guidance_scale,
                                                     unconditional_conditioning=unconditional_conditioning,
                                                     **kwargs
                                                     )
@@ -126,7 +126,7 @@ class DDIMSampler(object):
                       callback=None, timesteps=None, quantize_denoised=False,
                       mask=None, x0=None, img_callback=None, log_every_t=100,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
-                      unconditional_guidance_scale=1., unconditional_conditioning=None,
+                      guidance_scale=1., unconditional_conditioning=None,
                       **kwargs):
         device = self.model.betas.device
         b = shape[0]
@@ -155,9 +155,12 @@ class DDIMSampler(object):
         iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
 
         # Guidance annealing. First proposed in CLIP-Sculptor, CVPR 2023. Independently discovered here.
-        max_guide_scale = unconditional_guidance_scale
-        # If max_guide_scale < 2, then guide_scale_step_delta = 0 and no annealing.
-        min_guide_scale = min(2.0, max_guide_scale)
+        if isinstance(guidance_scale, (list, tuple)):        
+            max_guide_scale, min_guide_scale = guidance_scale
+        else:
+            # If max_guide_scale < 2, then guide_scale_step_delta = 0 and no annealing.
+            min_guide_scale = min(2.0, max_guide_scale)
+
         # At least one guidance annealing step (i.e., two uncond guidance steps)
         max_guide_anneal_steps = total_steps - 1
         # guide_scale_step_delta: set to 0 to disable the guidance annealing.
@@ -179,12 +182,12 @@ class DDIMSampler(object):
 
             # use_original_steps=False, quantize_denoised=False, temperature=1.0,
             # noise_dropout=0.0, score_corrector=None, corrector_kwargs=None,
-            # unconditional_guidance_scale=10.0, 
+            # guidance_scale=10.0, 
             outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
                                       quantize_denoised=quantize_denoised, temperature=temperature,
                                       noise_dropout=noise_dropout, score_corrector=score_corrector,
                                       corrector_kwargs=corrector_kwargs,
-                                      unconditional_guidance_scale=guide_scale,
+                                      guidance_scale=guide_scale,
                                       unconditional_conditioning=unconditional_conditioning,
                                       **kwargs)
             img, pred_x0 = outs
@@ -204,10 +207,10 @@ class DDIMSampler(object):
 
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
-                      unconditional_guidance_scale=1., unconditional_conditioning=None):
+                      guidance_scale=1., unconditional_conditioning=None):
         b, *_, device = *x.shape, x.device
 
-        if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
+        if unconditional_conditioning is None or guidance_scale == 1.:
             e_t = self.model.apply_model(x, t, c)
         else:
             # Double the batch size for unconditional and conditional conditioning.
@@ -238,9 +241,9 @@ class DDIMSampler(object):
             cfg_use_ortho_subtract = False
             if cfg_use_ortho_subtract:
                 # e_t, e_t_uncond: [4, 4, 64, 64]
-                e_t = e_t_uncond + unconditional_guidance_scale * ortho_subtract(e_t, e_t_uncond, on_last_n_dims=2)
+                e_t = e_t_uncond + guidance_scale * ortho_subtract(e_t, e_t_uncond, on_last_n_dims=2)
             else:
-                e_t = e_t_uncond + unconditional_guidance_scale * (e_t - e_t_uncond)
+                e_t = e_t_uncond + guidance_scale * (e_t - e_t_uncond)
 
         # score_corrector is None.
         if score_corrector is not None:
@@ -286,7 +289,7 @@ class DDIMSampler(object):
                 extract_into_tensor(sqrt_one_minus_alphas_cumprod, t, x0.shape) * noise)
 
     @torch.no_grad()
-    def decode(self, x_latent, cond, t_start, unconditional_guidance_scale=1.0, unconditional_conditioning=None,
+    def decode(self, x_latent, cond, t_start, guidance_scale=1.0, unconditional_conditioning=None,
                use_original_steps=False):
 
         timesteps = np.arange(self.ddpm_num_timesteps) if use_original_steps else self.ddim_timesteps
@@ -299,7 +302,7 @@ class DDIMSampler(object):
         iterator = tqdm(time_range, desc='Decoding image', total=total_steps)
 
         # Guidance annealing. First proposed in CLIP-Sculptor, CVPR 2023. Independently discovered here.
-        max_guide_scale = unconditional_guidance_scale
+        max_guide_scale = guidance_scale
         # If max_guide_scale < 2, then guide_scale_step_delta = 0 and no annealing.
         min_guide_scale = min(2.0, max_guide_scale)
         # At least one guidance annealing step (i.e., two uncond guidance steps)
@@ -314,7 +317,7 @@ class DDIMSampler(object):
             index = total_steps - i - 1
             ts = torch.full((x_latent.shape[0],), step, device=x_latent.device, dtype=torch.long)
             x_dec, _ = self.p_sample_ddim(x_dec, cond, ts, index=index, use_original_steps=use_original_steps,
-                                          unconditional_guidance_scale=guide_scale,
+                                          guidance_scale=guide_scale,
                                           unconditional_conditioning=unconditional_conditioning)
             if i <= max_guide_anneal_steps:
                 guide_scale = guide_scale - guide_scale_step_delta

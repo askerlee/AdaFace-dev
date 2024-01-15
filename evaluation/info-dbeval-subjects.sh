@@ -29,7 +29,7 @@ set -g db_suffix           ""
 set -g data_folder         dbeval-dataset
 set -g misc_train_opts     --use_fp_trick 0
 set -g misc_infer_opts
-set -g resume_from_ckpt     1
+set -g resume_from_ckpt     0
 # Objects in the same group share the same resumed_ckpt. Number of subjects in each group:
 #                           2         3                4                          3             1       8    2    7
 set -g resumed_ckpt_keys    backpack  bowl,can,candle  clock,glasses,teapot,vase  boot,sneaker  sprite  toy  cat  dog

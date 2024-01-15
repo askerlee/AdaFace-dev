@@ -161,7 +161,8 @@ def parse_args():
     parser.add_argument(
         "--scale",
         type=float,
-        default=5,
+        nargs='+',
+        default=[10, 4],
         help="unconditional guidance scale: eps = eps(x, empty) + scale * (eps(x, cond) - eps(x, empty))",
     )
     parser.add_argument(
@@ -700,7 +701,7 @@ def main(opt):
                                                             batch_size=batch_size,
                                                             shape=shape,
                                                             verbose=False,
-                                                            unconditional_guidance_scale=opt.scale,
+                                                            guidance_scale=opt.scale,
                                                             unconditional_conditioning=uc,
                                                             eta=opt.ddim_eta,
                                                             x0=None,

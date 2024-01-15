@@ -73,7 +73,7 @@ def parse_args():
     # prompt_suffix: usually reduces the similarity.
     parser.add_argument("--prompt_suffix", type=str, default="",
                         help="suffix to append to the end of each prompt")
-    parser.add_argument("--scale", type=float, default=5, 
+    parser.add_argument("--scale", type=float, nargs='+', default=[10, 4],
                         help="the guidance scale")
     parser.add_argument(
         "--use_first_gt_img_as_init",
@@ -410,6 +410,9 @@ if __name__ == "__main__":
                 PROMPTS.write( "\t".join([str(args.n_samples), indiv_subdir, prompt, class_long_prompt, class_short_prompt ]) + "\n" )
             else:
                 indiv_subdir = subject_name
+
+        if isinstance(args.scale, (list, tuple)):
+            args.scale = " ".join([ str(s) for s in args.scale ])
 
         command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --bb_type '{bb_type}' --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --scale {args.scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
 

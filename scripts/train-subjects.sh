@@ -220,7 +220,7 @@ for i in $indices
             end
             # if $max_iters == -1, then gen_subjects_and_eval.py will use the default max_iters of the broad_class.
             set EXTRA_EVAL_ARGS $EXTRA_EVAL_ARGS0 --ckpt_iter $max_iters
-            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i $EXTRA_EVAL_ARGS
+            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 4 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i $EXTRA_EVAL_ARGS
         end
 
     else
@@ -241,7 +241,7 @@ for i in $indices
             else
                 set out_dir_tmpl 'samples'
             end
-            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i $EXTRA_EVAL_ARGS
+            python3 scripts/gen_subjects_and_eval.py --method $method --scale 10 4 --gpu $GPU --subjfile $subj_file --out_dir_tmpl $out_dir_tmpl  --compare_with_pardir $data_folder --range $i $EXTRA_EVAL_ARGS
         end
     end
 
