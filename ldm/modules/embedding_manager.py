@@ -719,9 +719,14 @@ class AdaEmbedding(nn.Module):
             SINGLE_D = self.ca_infeat_dims[layer_idx]
             TD       = self.TDs[layer_idx]
             assert self.layer_coeff_maps[layer_idx].in_features == SINGLE_D * 2 + TD
-            # layer_coeff_map_weight: [r*K+1, SINGLE_D*2+TD].
             # The last row of the weight matrix is the ada emb weight. So we remove it.
+            # layer_coeff_map_weight: [r*K, SINGLE_D*2+TD].
             layer_coeff_map_weight = self.layer_coeff_maps[layer_idx].weight.data[:-1]
+            # ada_emb_map_weight: [SINGLE_D*2+TD]
+            ada_emb_map_weight     = self.layer_coeff_maps[layer_idx].weight.data[-1]
+            # ada_emb_weight is only a function of the time embedding, so the weights correspoinding 
+            # to the fg and bg infeats are set to 0.
+            ada_emb_map_weight[:-TD] = 0
             # The weight of Linear has shape [out_features, in_features]. 
             # Split the first dim, out_features => [K, r].
             # layer_coeff_map_weight_embs: [K, r, in_features].
