@@ -838,7 +838,8 @@ class AdaEmbedding(nn.Module):
             basis_dyn_coeffs_ = self.layer_coeff_maps[ca_layer_idx](infeat_time_emb)
             # basis_dyn_coeffs: [BS, r*K]. ada_emb_weight_score: [BS].
             basis_dyn_coeffs, ada_emb_weight_score = basis_dyn_coeffs_[:, :-1], basis_dyn_coeffs_[:, -1]
-            ada_emb_weight = torch.sigmoid(ada_emb_weight_score)
+            # ada_emb_weight: [0, 1] -> [0, 0.4] + 0.3 -> [0.3, 0.7].
+            ada_emb_weight = 0.3 + 0.4 * torch.sigmoid(ada_emb_weight_score)
             # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
             basis_dyn_coeffs = basis_dyn_coeffs.reshape(-1, self.K, self.r)
 
@@ -1685,6 +1686,7 @@ class EmbeddingManager(nn.Module):
         ada_emb_weights = torch.stack(ada_emb_weights, dim=1)
         # If there are multiple subject tokens in one prompt, we take the mean of their ada_emb_weights.
         ada_emb_weight  = ada_emb_weights.mean(dim=1)
+        # print(layer_idx, ada_emb_weight)
         return ada_emb_weight
      
     def set_ada_emb_weight(self, layer_idx, ada_emb_weight):
