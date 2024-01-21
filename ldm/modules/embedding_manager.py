@@ -1687,7 +1687,7 @@ class EmbeddingManager(nn.Module):
         if layer_idx == -1:
             return self.ada_emb_weight
         
-        ada_emb_weights = self.ada_emb_weights[0] #[layer_idx]
+        ada_emb_weights = self.ada_emb_weights[1] #[layer_idx]
         ada_emb_weights = torch.stack(ada_emb_weights, dim=1)
         # If there are multiple subject tokens in one prompt, we take the mean of their ada_emb_weights.
         ada_emb_weight  = ada_emb_weights.mean(dim=1)
