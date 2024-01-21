@@ -865,12 +865,12 @@ class UNetModel(nn.Module):
         empty_context               = extra_info.get('empty_context', None) if extra_info is not None else None
         debug_attn            = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
 
-        B = x.shape[0]
+        BS = x.shape[0]
 
         if use_layerwise_context:
             # If use_layerwise_context, then context is static layerwise embeddings.
-            # context: [16*B, N, 768] reshape => [B, 16, N, 768] permute => [16, B, N, 768]
-            context = context.reshape(B, 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
+            # context: [16*BS, N, 768] reshape => [BS, 16, N, 768] permute => [16, BS, N, 768]
+            context = context.reshape(BS, 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
 
         def get_layer_context(layer_idx, layer_attn_components):
             # print(h.shape)
@@ -910,6 +910,11 @@ class UNetModel(nn.Module):
                 # The 1st and 2nd, and 3rd and 4th prompts are the same, if it's a do_teacher_filter iteration.
                 layer_ada_context, ada_emb_weight, ada_subj_attn_dict \
                     = ada_embedder(context_in, layer_idx, layer_attn_components, emb)
+                # When computing uncond output, we only use half of the batch to improve efficiency.
+                if ada_emb_weight.shape[0] > BS:
+                    assert ada_emb_weight.shape[0] == 2 * BS
+                    ada_emb_weight = ada_emb_weight.chunk(2)[0]
+                ada_emb_weight = ada_emb_weight.reshape(-1, 1, 1)
                 static_emb_weight = 1 - ada_emb_weight
 
                 # If static context is expanded by doing prompt mixing,
@@ -984,15 +989,15 @@ class UNetModel(nn.Module):
             # Only apply compel cfg in mix_hijk iterations.
             if apply_compel_cfg_prob > 0:
                 # layer_context could be a tensor or a tuple of tensors.
-                compel_batch_mask = torch.ones(B, dtype=torch.float, device=x.device)
+                compel_batch_mask = torch.ones(BS, dtype=torch.float, device=x.device)
                 # If is_training, at 50% chance, only apply compel cfg to the mix instances, 
                 # not to the subject instances. At 50% chance, apply compel cfg to all instances.
                 # If not is_training, the second half of the batch is always the empty prompt instances.
                 # So only apply compel cfg to the first half of the batch.
                 if is_training and random.random() < 0.5:
-                    compel_batch_mask[:B // 2] = 0
+                    compel_batch_mask[:BS // 2] = 0
                 else:
-                    compel_batch_mask[B // 2:] = 0
+                    compel_batch_mask[BS // 2:] = 0
 
                 layer_context = prob_apply_compel_cfg(layer_context, empty_context, 
                                                       apply_compel_cfg_prob, compel_cfg_weight_level_range,
