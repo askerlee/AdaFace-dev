@@ -934,13 +934,13 @@ class EmbeddingManager(nn.Module):
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
         self.string_to_emb_ema_dict         = nn.ModuleDict()
-        self.initial_embeddings  = nn.ParameterDict() # These should not be optimized
+        self.initial_embeddings             = nn.ParameterDict() # These should not be optimized
         self.placeholder_to_emb_cache       = nn.ParameterDict() # These should not be optimized
         # set_ada_emb_weight(-1, ...) sets the fixed ada_emb_weight for loss computation.
         self.set_ada_emb_weight(-1, ada_emb_weight)
         self.ada_use_attn_pooler = ada_use_attn_pooler
         self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight
-        self.emb_ema_grad_scale = 0.05
+        self.emb_ema_grad_scale  = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
 
         self.use_layerwise_embedding = use_layerwise_embedding
@@ -1687,7 +1687,7 @@ class EmbeddingManager(nn.Module):
         if layer_idx == -1:
             return self.ada_emb_weight
         
-        ada_emb_weights = self.ada_emb_weights[layer_idx]
+        ada_emb_weights = self.ada_emb_weights[0] #[layer_idx]
         ada_emb_weights = torch.stack(ada_emb_weights, dim=1)
         # If there are multiple subject tokens in one prompt, we take the mean of their ada_emb_weights.
         ada_emb_weight  = ada_emb_weights.mean(dim=1)
