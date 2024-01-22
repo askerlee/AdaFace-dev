@@ -2076,7 +2076,8 @@ class EmbeddingManager(nn.Module):
     def optimized_parameters(self):
         normal_params_list = list(self.string_to_static_embedder_dict.parameters()) \
                              + list(self.string_to_ada_embedder_dict.parameters()) \
-                             + list(self.string_to_emb_ema_dict.parameters())
+                             + list(self.string_to_emb_ema_dict.parameters()) \
+                             + list(self.time_to_ada_emb_weight.parameters())
 
         normal_params  = [ { 'params': normal_params_list, 'lr_ratio': 1, 
                              'excluded_from_prodigy': False } ]
