@@ -94,8 +94,7 @@ model:
         num_vectors_per_token: 1
         use_layerwise_embedding: True
         layerwise_lora_rank_token_ratio: 2
-        ada_emb_weight: 0.5
-        emb_ema_as_pooling_probe_weight: 0.5  # Should be the same as ada_emb_weight.
+        emb_ema_as_pooling_probe_weight: 0.5
         ada_use_attn_pooler: True
         conv_attn_layerwise_scale_learnable: True
         training_begin_add_noise_std_range:  [ 0.1, 0.2 ]
