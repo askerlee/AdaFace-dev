@@ -671,7 +671,7 @@ class AdaEmbedding(nn.Module):
             # This Linear outputs K sets of r-dim vectors, 
             # each set being the coefficients of the r basis vectors. 
             layer_coeff_maps.append( nn.Linear(self.ca_infeat_dims[i] * H + TD, 
-                                                r * self.K + 1, bias=True) )
+                                                r * self.K, bias=True) )
             layer_lncat3s.append(LNCat3(self.ca_infeat_dims[i] * H, TD))
             # A specific LayerNorm is applied on each of the K embeddings in each layer.
             layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
@@ -719,14 +719,7 @@ class AdaEmbedding(nn.Module):
             SINGLE_D = self.ca_infeat_dims[layer_idx]
             TD       = self.TDs[layer_idx]
             assert self.layer_coeff_maps[layer_idx].in_features == SINGLE_D * 2 + TD
-            # The last row of the weight matrix is the ada emb weight. So we remove it.
-            # layer_coeff_map_weight: [r*K, SINGLE_D*2+TD].
-            layer_coeff_map_weight = self.layer_coeff_maps[layer_idx].weight.data[:-1]
-            # ada_emb_map_weight: [SINGLE_D*2+TD]
-            ada_emb_map_weight     = self.layer_coeff_maps[layer_idx].weight.data[-1]
-            # ada_emb_weight is only a function of the time embedding, so the weights correspoinding 
-            # to the fg and bg infeats are set to 0.
-            ada_emb_map_weight[:-TD] = 0
+            layer_coeff_map_weight = self.layer_coeff_maps[layer_idx].weight.data
             # The weight of Linear has shape [out_features, in_features]. 
             # Split the first dim, out_features => [K, r].
             # layer_coeff_map_weight_embs: [K, r, in_features].
@@ -839,14 +832,9 @@ class AdaEmbedding(nn.Module):
             # infeat_time_emb: cat(ln(infeat_fg_bg), ln(time_emb)) as the input features.
             infeat_time_emb    = self.layer_lncat3s[ca_layer_idx](infeat_fg_bg, time_feat)
 
-            # basis_dyn_coeffs: [BS, r*K+1].
-            basis_dyn_coeffs_ = self.layer_coeff_maps[ca_layer_idx](infeat_time_emb)
-            # basis_dyn_coeffs: [BS, r*K]. ada_emb_scale_score: [BS].
-            basis_dyn_coeffs, ada_emb_scale_score = basis_dyn_coeffs_[:, :-1], basis_dyn_coeffs_[:, -1]
-            # ada_emb_scale: [0, 1] -> [0, 0.8] + 0.6 -> [0.6, 1.4].
-            ada_emb_scale = 0.6 + 0.8 * torch.sigmoid(ada_emb_scale_score)
             # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
-            basis_dyn_coeffs = basis_dyn_coeffs.reshape(-1, self.K, self.r)
+            # Consider the last dim. 
+            basis_dyn_coeffs = self.layer_coeff_maps[ca_layer_idx](infeat_time_emb).reshape(-1, self.K, self.r)
 
             # self.N: number of pre_vecs.
             if self.N > 0:
@@ -868,7 +856,6 @@ class AdaEmbedding(nn.Module):
             bias = self.bias[ca_layer_idx].unsqueeze(0)
             # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
             out_vecs  = out_vecs0 + bias
-            out_vecs = out_vecs * ada_emb_scale.unsqueeze(-1).unsqueeze(-1)
 
             if 'call_count' not in self.__dict__:
                 self.call_count = 0
@@ -885,7 +872,7 @@ class AdaEmbedding(nn.Module):
                 self.call_count += 1
 
         # Return infeat_pooled_dict to be used by another ada_embedder that specializes on the background.
-        return out_vecs, infeat_pooled_dict #, ada_emb_scale
+        return out_vecs, infeat_pooled_dict
 
 # text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -935,13 +922,13 @@ class EmbeddingManager(nn.Module):
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
         self.string_to_emb_ema_dict         = nn.ModuleDict()
-        self.initial_embeddings             = nn.ParameterDict() # These should not be optimized
+        self.initial_embeddings  = nn.ParameterDict() # These should not be optimized
         self.placeholder_to_emb_cache       = nn.ParameterDict() # These should not be optimized
-        # set_ada_emb_weight(-1, ...) sets the fixed ada_emb_weight for loss computation.
-        self.set_ada_emb_weight(ada_emb_weight)
+
+        self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
         self.ada_use_attn_pooler = ada_use_attn_pooler
         self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight
-        self.emb_ema_grad_scale  = 0.05
+        self.emb_ema_grad_scale = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
 
         self.use_layerwise_embedding = use_layerwise_embedding
@@ -1479,7 +1466,7 @@ class EmbeddingManager(nn.Module):
 
             if self.img_mask is not None and self.img_mask.max() > 1:
                 breakpoint()
-            
+
             if not token_is_bg:
                 # Cache the bg infeat computed by the first (fg) ada embedder, 
                 # to be used by the second Ada embedder and the background Ada embedder.
@@ -1530,7 +1517,6 @@ class EmbeddingManager(nn.Module):
 
             # Remove the batch dim.
             ada_subj_embs_dict[placeholder_string] = subj_ada_embedding.mean(dim=0)
-            #self.set_ada_emb_weight(layer_idx, ada_emb_weight)
 
         #print(self.placeholders_cls_delta_string_indices)
 
@@ -1683,12 +1669,14 @@ class EmbeddingManager(nn.Module):
         
         self.placeholder2indices[placeholder_string] = placeholder_indices
 
-    def get_ada_emb_weight(self):
-        return self.ada_emb_weight
-     
-    def set_ada_emb_weight(self, ada_emb_weight):
-        self.ada_emb_weight = ada_emb_weight
-
+    def get_ada_emb_weight(self, do_perturb=True):
+        if self.training and do_perturb:
+            # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
+            ada_emb_weight = self.ada_emb_weight * np.random.uniform(0.8, 1.4)
+        else:
+            ada_emb_weight = self.ada_emb_weight        
+        return ada_emb_weight
+ 
     def get_ada_subj_attn_dict(self):
         return self.ada_subj_attn_dict
     
@@ -1762,6 +1750,15 @@ class EmbeddingManager(nn.Module):
             self.emb_global_scales_dict = emb_global_scales_dict
 
         return emb_global_scales_dict
+    
+    def set_ada_emb_weight(self, ada_emb_weight, is_first_time_print=False):
+        if is_first_time_print:
+            print(f"Setting ada_emb_weight = {ada_emb_weight}")
+        else:
+            if self.ada_emb_weight != ada_emb_weight:
+                print(f"ada_emb_weight: {self.ada_emb_weight} => {ada_emb_weight}")
+
+        self.ada_emb_weight = ada_emb_weight
 
     def set_embs_attn_tricks(self, use_conv_attn_kernel_size=None):
         if use_conv_attn_kernel_size is not None:
@@ -1949,7 +1946,7 @@ class EmbeddingManager(nn.Module):
             ckpt = torch.load(ckpt_path, map_location='cpu')
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
             if "ada_emb_weight" in ckpt:
-                self.set_ada_emb_weight(ckpt["ada_emb_weight"])
+                self.set_ada_emb_weight(ckpt["ada_emb_weight"], is_first_time_print=False)
 
             if "emb_ema_as_pooling_probe_weight" in ckpt:
                 self.set_emb_ema_as_pooling_probe_weight(ckpt["emb_ema_as_pooling_probe_weight"])
@@ -2316,15 +2313,14 @@ class EmbeddingManager(nn.Module):
                     bg_ada_token_emb = 0
                     breakpoint()
 
-                ada_emb_weight = self.get_ada_emb_weight()
                 # fg_hybrid_token_emb: [16, 9, 768]. 16: num layers. 9: num vectors.
                 # bg_hybrid_token_emb: [16, 4, 768]. 16: num layers. 4: num vectors.
                 # fg_ada_token_emb/bg_ada_token_emb are volatile and the gradients are noisy. 
                 # So we scale down their gradients to 0.1.
-                fg_hybrid_token_emb = fg_static_token_emb * (1 - ada_emb_weight) \
-                                        + ada_grad_scaler(fg_ada_token_emb) * ada_emb_weight
-                bg_hybrid_token_emb = bg_static_token_emb * (1 - ada_emb_weight) \
-                                        + ada_grad_scaler(bg_ada_token_emb)  * ada_emb_weight
+                fg_hybrid_token_emb = fg_static_token_emb * (1 - self.ada_emb_weight) \
+                                        + ada_grad_scaler(fg_ada_token_emb) * self.ada_emb_weight
+                bg_hybrid_token_emb = bg_static_token_emb * (1 - self.ada_emb_weight) \
+                                        + ada_grad_scaler(bg_ada_token_emb)  * self.ada_emb_weight
                 
                 # The embeddings are token embeddings, not prompt embeddings. 
                 # So clamp_prompt_embedding() is not applicable.

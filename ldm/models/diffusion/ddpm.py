@@ -1005,6 +1005,7 @@ class LatentDiffusion(DDPM):
                                                           self.embedding_manager.placeholder_to_cls_delta_weights)
                 
         ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
+
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, clear_ada_prompt_embeddings_cache() should have been called somewhere.
         self.embedding_manager.cache_ada_prompt_embedding(layer_idx, ada_prompt_embedding)
@@ -4156,7 +4157,8 @@ class LatentDiffusion(DDPM):
             clamp_prompt_embedding(emb_clamp_value, static_prompt_embeddings, ada_prompt_embeddings)
 
         if ada_prompt_embeddings is not None:
-            ada_emb_weight = self.embedding_manager.get_ada_emb_weight() 
+            # During training, ada_emb_weight is randomly drawn from [0.4, 0.7].
+            ada_emb_weight = self.embedding_manager.get_ada_emb_weight(do_perturb=False) 
             cond_prompt_embeddings = static_prompt_embeddings * (1 - ada_emb_weight) \
                                       + ada_prompt_embeddings * ada_emb_weight
         else:
