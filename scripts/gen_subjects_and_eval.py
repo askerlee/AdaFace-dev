@@ -148,6 +148,9 @@ def parse_args():
     parser.add_argument("--prompt_mix_weight", type=float, default=0,
                         help="Weight of the reference prompt to be mixed with the subject prompt")  
 
+    parser.add_argument("--ada_emb_weight",
+                        type=float, default=-1,
+                        help="Weight of ada embeddings (in contrast to static embeddings)")
     # --dryrun
     parser.add_argument("--dryrun", action="store_true",
                         help="Dry run: only print the commands without actual execution")
@@ -435,7 +438,10 @@ if __name__ == "__main__":
         if hasattr(args, 'prompt_mix_scheme'):
             # Only specify the flags here. The actual reference prompt will be read from the prompt file.
             command_line += f" --prompt_mix_scheme {args.prompt_mix_scheme} --prompt_mix_weight {args.prompt_mix_weight}"
-
+        
+        if args.ada_emb_weight != -1:
+            command_line += f" --ada_emb_weight {args.ada_emb_weight}"
+            
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 

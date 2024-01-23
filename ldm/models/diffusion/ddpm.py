@@ -961,6 +961,7 @@ class LatentDiffusion(DDPM):
                     # Since get_learned_conditioning() is always called before the loss computations,
                     # it won't cause computation graph errors.
                     self.embedding_manager.clear_ada_prompt_embeddings_cache()
+                    self.embedding_manager.clear_ada_emb_weights()
                     extra_info['ada_embedder'] = ada_embedder
 
                 c = (static_prompt_embedding, cond_in, extra_info)
@@ -1008,7 +1009,7 @@ class LatentDiffusion(DDPM):
         # Cache the computed ada embedding of the current layer for delta loss computation.
         # Before this call, clear_ada_prompt_embeddings_cache() should have been called somewhere.
         self.embedding_manager.cache_ada_prompt_embedding(layer_idx, ada_prompt_embedding)
-        return ada_prompt_embedding, self.embedding_manager.get_ada_emb_weight(), ada_subj_attn_dict
+        return ada_prompt_embedding, self.embedding_manager.get_ada_emb_weight(layer_idx), ada_subj_attn_dict
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)
@@ -2033,12 +2034,10 @@ class LatentDiffusion(DDPM):
                 # Now we generate model_output_uncond under unconditional (negative) prompts,
                 # which don't contain placeholder tokens.
                 self.embedding_manager.clear_placeholder_indices()
-                self.embedding_manager.is_uncond_batch = True
                 # self.uncond_context: precomputed unconditional embedding and other info.
                 # This statement (executed above) disables deep neg prompts on unconditional embeddings. 
                 # Otherwise, it will cancel out the effect of unconditional embeddings.
                 model_output_uncond = self.apply_model(x_noisy_, t_, cfg_info['uncond_context'])
-                self.embedding_manager.is_uncond_batch = False
                 # model_output_uncond: [2, 4, 64, 64] -> [4, 4, 64, 64]
                 model_output_uncond = model_output_uncond.repeat(2, 1, 1, 1)
             # Classifier-free guidance to make the contents in the 
@@ -2470,6 +2469,7 @@ class LatentDiffusion(DDPM):
                     self.release_plosses_intermediates(locals())
                     # clear_ada_prompt_embeddings_cache() will implicitly clear the cache.
                     self.embedding_manager.clear_ada_prompt_embeddings_cache()
+                    self.embedding_manager.clear_ada_emb_weights()
 
                     # Choose the x_start, noise, and t of the better candidate. 
                     # Repeat 4 times and use them as the condition to do denoising again.
@@ -4158,7 +4158,8 @@ class LatentDiffusion(DDPM):
             clamp_prompt_embedding(emb_clamp_value, static_prompt_embeddings, ada_prompt_embeddings)
 
         if ada_prompt_embeddings is not None:
-            ada_emb_weight = self.embedding_manager.get_ada_emb_weight(num_extra_dims=3) 
+            # During training, get_ada_emb_weight(-1) returns the fixed ada_emb_weight for loss computation.
+            ada_emb_weight = self.embedding_manager.get_ada_emb_weight(layer_idx=-1) 
             cond_prompt_embeddings = static_prompt_embeddings * (1 - ada_emb_weight) \
                                       + ada_prompt_embeddings * ada_emb_weight
         else:

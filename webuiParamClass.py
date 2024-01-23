@@ -29,6 +29,7 @@ class DictI(dict):
         self.precision='autocast'
         self.embedding_paths=None
         self.subj_scale=1.0
+        self.ada_emb_weight=-1
         self.init_img=None
         self.mask_weight=0.0
         self.no_preview=False
@@ -83,6 +84,7 @@ class DictT(dict):
          self.cls_delta_string = None
          self.layerwise_lora_rank_token_ratio = -1
          self.embedding_reg_weight = -1
+         self.ada_emb_weight = -1
          self.composition_delta_reg_weight = -1
          self.min_rand_scaling = 0.8
          self.max_rand_scaling = 1.05

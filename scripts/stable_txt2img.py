@@ -201,7 +201,11 @@ def parse_args():
         nargs="*", 
         type=str, default=None,
         help="One or more paths to pre-trained embedding manager checkpoints")
-    
+
+    parser.add_argument("--ada_emb_weight",
+        type=float, default=-1,
+        help="Weight of adaptive embeddings (in contrast to static embeddings)")
+
     parser.add_argument(
         "--init_img_paths",
         type=str,
@@ -394,6 +398,9 @@ def main(opt):
         
         model.embedding_manager.set_embs_attn_tricks(opt.use_conv_attn_kernel_size)
 
+        if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
+            model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
+            
         model.embedding_manager.subject_strings = list(model.embedding_manager.subject_strings + [opt.subject_string])
         if opt.background_string is not None:
             model.embedding_manager.background_strings = list(model.embedding_manager.background_strings + [opt.background_string])
