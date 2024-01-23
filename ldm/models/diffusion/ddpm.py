@@ -4158,8 +4158,7 @@ class LatentDiffusion(DDPM):
             clamp_prompt_embedding(emb_clamp_value, static_prompt_embeddings, ada_prompt_embeddings)
 
         if ada_prompt_embeddings is not None:
-            # Don't use learned ada_emb_weight. Use fixed 0.5 instead.
-            ada_emb_weight = 0.5 #self.embedding_manager.get_ada_emb_weight(num_extra_dims=3) 
+            ada_emb_weight = self.embedding_manager.get_ada_emb_weight(num_extra_dims=3) 
             cond_prompt_embeddings = static_prompt_embeddings * (1 - ada_emb_weight) \
                                       + ada_prompt_embeddings * ada_emb_weight
         else:

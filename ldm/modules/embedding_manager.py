@@ -2338,8 +2338,7 @@ class EmbeddingManager(nn.Module):
                     bg_ada_token_emb = 0
                     breakpoint()
 
-                # Don't use learned ada_emb_weight. Use fixed 0.5 instead.
-                ada_emb_weight = 0.5 #self.get_ada_emb_weight(num_extra_dims=3).mean(dim=0)
+                ada_emb_weight = self.get_ada_emb_weight(num_extra_dims=3).mean(dim=0)
                 # fg_hybrid_token_emb: [16, 9, 768]. 16: num layers. 9: num vectors.
                 # bg_hybrid_token_emb: [16, 4, 768]. 16: num layers. 4: num vectors.
                 # fg_ada_token_emb/bg_ada_token_emb are volatile and the gradients are noisy. 
