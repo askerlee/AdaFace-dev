@@ -386,24 +386,21 @@ class Embedding3d(nn.Module):
         self.cached_layers = {}
 
 class Time_to_Ada_Emb_Weight(nn.Module):
-    def __init__(self, time_emb_dim=80, ada_emb_weight_range=(0.3, 0.7), temperature=5.0):
+    def __init__(self, time_emb_dim=80, ada_emb_weight_range=(0.3, 0.7)):
         super().__init__()
         # time_emb_dim: 80
         self.time_emb_dim = time_emb_dim
-        self.time_to_ada_emb_weight = nn.Linear(time_emb_dim, 1, bias=False)
+        self.time_to_ada_emb_weight = nn.Linear(time_emb_dim, 1, bias=True)
         self.ada_emb_weight_range = ada_emb_weight_range
-        self.temperature = temperature
 
     def forward(self, time_emb):
         # time_emb: [B, 80] -> [B, 1].
-        ada_emb_weight_score = self.time_to_ada_emb_weight(time_emb[:, :self.time_emb_dim]) * self.temperature
-        #print(ada_emb_weight_score)
+        ada_emb_weight_score = self.time_to_ada_emb_weight(time_emb[:, :self.time_emb_dim])
         # ada_emb_weight: [B, 1] -> [B].
         ada_emb_weight = ada_emb_weight_score.sigmoid().squeeze(1)
         # ada_emb_weight: [0 ~ 1] -> [0 ~ 0.4] + 0.3 -> [0.3 ~ 0.7].
         ada_emb_weight = ada_emb_weight * (self.ada_emb_weight_range[1] - self.ada_emb_weight_range[0]) \
                          + self.ada_emb_weight_range[0]
-        #print(ada_emb_weight)
         return ada_emb_weight
 
 class StaticLayerwiseEmbedding(nn.Module):
