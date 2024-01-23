@@ -911,10 +911,6 @@ class UNetModel(nn.Module):
                 layer_ada_context, ada_emb_weight, ada_subj_attn_dict \
                     = ada_embedder(context_in, layer_idx, layer_attn_components, emb)
                 # When computing uncond output, we only use half of the batch to improve efficiency.
-                if ada_emb_weight.shape[0] > BS:
-                    assert ada_emb_weight.shape[0] == 2 * BS
-                    ada_emb_weight = ada_emb_weight.chunk(2)[0]
-                ada_emb_weight = ada_emb_weight.reshape(-1, 1, 1)
                 static_emb_weight = 1 - ada_emb_weight
 
                 # If static context is expanded by doing prompt mixing,

@@ -868,6 +868,7 @@ class AdaEmbedding(nn.Module):
             bias = self.bias[ca_layer_idx].unsqueeze(0)
             # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
             out_vecs  = out_vecs0 + bias
+            out_vecs = out_vecs * ada_emb_weight.unsqueeze(-1).unsqueeze(-1)
 
             if 'call_count' not in self.__dict__:
                 self.call_count = 0
@@ -884,7 +885,7 @@ class AdaEmbedding(nn.Module):
                 self.call_count += 1
 
         # Return infeat_pooled_dict to be used by another ada_embedder that specializes on the background.
-        return out_vecs, infeat_pooled_dict, ada_emb_weight
+        return out_vecs, infeat_pooled_dict #, ada_emb_weight
 
 # text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
@@ -937,7 +938,7 @@ class EmbeddingManager(nn.Module):
         self.initial_embeddings             = nn.ParameterDict() # These should not be optimized
         self.placeholder_to_emb_cache       = nn.ParameterDict() # These should not be optimized
         # set_ada_emb_weight(-1, ...) sets the fixed ada_emb_weight for loss computation.
-        self.set_ada_emb_weight(-1, ada_emb_weight)
+        self.set_ada_emb_weight(ada_emb_weight)
         self.ada_use_attn_pooler = ada_use_attn_pooler
         self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight
         self.emb_ema_grad_scale  = 0.05
@@ -1109,7 +1110,6 @@ class EmbeddingManager(nn.Module):
         self.training_percent = 0
         # Store the text_embedder to compute the delta loss.
         self.text_embedder  = text_embedder
-        self.ada_emb_weights = {}
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_placeholder2indices_cache = {}
         self.emb_global_scales_dict = None
@@ -1471,7 +1471,7 @@ class EmbeddingManager(nn.Module):
             # So this assumption should always hold.
             # For background Ada embedder, cached_infeat_pooled is only used when
             # use_cached_bg. Otherwise, it's ignored.
-            subj_ada_embedding, infeat_pooled_dict, ada_emb_weight = \
+            subj_ada_embedding, infeat_pooled_dict = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
                                      layer_subj_emb_probe,
                                      layer_static_extra_emb_mean, 
@@ -1530,7 +1530,7 @@ class EmbeddingManager(nn.Module):
 
             # Remove the batch dim.
             ada_subj_embs_dict[placeholder_string] = subj_ada_embedding.mean(dim=0)
-            self.set_ada_emb_weight(layer_idx, ada_emb_weight)
+            #self.set_ada_emb_weight(layer_idx, ada_emb_weight)
 
         #print(self.placeholders_cls_delta_string_indices)
 
@@ -1683,29 +1683,11 @@ class EmbeddingManager(nn.Module):
         
         self.placeholder2indices[placeholder_string] = placeholder_indices
 
-    def get_ada_emb_weight(self, layer_idx):
-        if layer_idx == -1:
-            return self.ada_emb_weight
-        
-        ada_emb_weights = self.ada_emb_weights[1] #[layer_idx]
-        ada_emb_weights = torch.stack(ada_emb_weights, dim=1)
-        # If there are multiple subject tokens in one prompt, we take the mean of their ada_emb_weights.
-        ada_emb_weight  = ada_emb_weights.mean(dim=1)
-        # print(layer_idx, ada_emb_weight)
-        return ada_emb_weight
+    def get_ada_emb_weight(self):
+        return self.ada_emb_weight
      
-    def set_ada_emb_weight(self, layer_idx, ada_emb_weight):
-        if layer_idx == -1:
-            self.ada_emb_weight = ada_emb_weight
-            return
-        
-        self.ada_emb_weights.setdefault(layer_idx, [])
-        # If there are multiple subject tokens in one prompt, we take the mean of their ada_emb_weights.
-        # So we store all of them as in a list.
-        self.ada_emb_weights[layer_idx].append(ada_emb_weight)
-
-    def clear_ada_emb_weights(self):
-        self.ada_emb_weights = {}
+    def set_ada_emb_weight(self, ada_emb_weight):
+        self.ada_emb_weight = ada_emb_weight
 
     def get_ada_subj_attn_dict(self):
         return self.ada_subj_attn_dict
@@ -1967,7 +1949,7 @@ class EmbeddingManager(nn.Module):
             ckpt = torch.load(ckpt_path, map_location='cpu')
             # If multiple checkpoints have different ada_emb_weight, the last one will be used.
             if "ada_emb_weight" in ckpt:
-                self.set_ada_emb_weight(-1, ckpt["ada_emb_weight"])
+                self.set_ada_emb_weight(ckpt["ada_emb_weight"])
 
             if "emb_ema_as_pooling_probe_weight" in ckpt:
                 self.set_emb_ema_as_pooling_probe_weight(ckpt["emb_ema_as_pooling_probe_weight"])
@@ -2334,7 +2316,7 @@ class EmbeddingManager(nn.Module):
                     bg_ada_token_emb = 0
                     breakpoint()
 
-                ada_emb_weight = self.get_ada_emb_weight(-1)
+                ada_emb_weight = self.get_ada_emb_weight()
                 # fg_hybrid_token_emb: [16, 9, 768]. 16: num layers. 9: num vectors.
                 # bg_hybrid_token_emb: [16, 4, 768]. 16: num layers. 4: num vectors.
                 # fg_ada_token_emb/bg_ada_token_emb are volatile and the gradients are noisy. 
