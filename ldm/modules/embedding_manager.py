@@ -841,10 +841,10 @@ class AdaEmbedding(nn.Module):
 
             # basis_dyn_coeffs: [BS, r*K+1].
             basis_dyn_coeffs_ = self.layer_coeff_maps[ca_layer_idx](infeat_time_emb)
-            # basis_dyn_coeffs: [BS, r*K]. ada_emb_weight_score: [BS].
-            basis_dyn_coeffs, ada_emb_weight_score = basis_dyn_coeffs_[:, :-1], basis_dyn_coeffs_[:, -1]
-            # ada_emb_weight: [0, 1] -> [0, 0.4] + 0.3 -> [0.3, 0.7].
-            ada_emb_weight = 0.3 + 0.4 * torch.sigmoid(ada_emb_weight_score)
+            # basis_dyn_coeffs: [BS, r*K]. ada_emb_scale_score: [BS].
+            basis_dyn_coeffs, ada_emb_scale_score = basis_dyn_coeffs_[:, :-1], basis_dyn_coeffs_[:, -1]
+            # ada_emb_scale: [0, 1] -> [0, 0.8] + 0.6 -> [0.6, 1.4].
+            ada_emb_scale = 0.6 + 0.8 * torch.sigmoid(ada_emb_scale_score)
             # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
             basis_dyn_coeffs = basis_dyn_coeffs.reshape(-1, self.K, self.r)
 
@@ -868,7 +868,7 @@ class AdaEmbedding(nn.Module):
             bias = self.bias[ca_layer_idx].unsqueeze(0)
             # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
             out_vecs  = out_vecs0 + bias
-            out_vecs = out_vecs * ada_emb_weight.unsqueeze(-1).unsqueeze(-1)
+            out_vecs = out_vecs * ada_emb_scale.unsqueeze(-1).unsqueeze(-1)
 
             if 'call_count' not in self.__dict__:
                 self.call_count = 0
@@ -885,7 +885,7 @@ class AdaEmbedding(nn.Module):
                 self.call_count += 1
 
         # Return infeat_pooled_dict to be used by another ada_embedder that specializes on the background.
-        return out_vecs, infeat_pooled_dict #, ada_emb_weight
+        return out_vecs, infeat_pooled_dict #, ada_emb_scale
 
 # text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 # = LatentDiffusion.cond_stage_model
