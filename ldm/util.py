@@ -2182,9 +2182,10 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     ss_q_gs = single_q_grad_scaler(ss_q)
     ms_q_gs = single_q_grad_scaler(ms_q)
 
-    num_heads = 8
+    #num_heads = 8
     # Similar to the scale of the attention scores.
-    matching_score_scale = (ca_q.shape[1] / num_heads) ** -0.5
+    matching_score_scale = 1 #(ca_q.shape[1] / num_heads) ** -0.5
+    #print('matching_score_scale:', matching_score_scale)
     # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (9 subj comp image tokens) -> (9 subj single image tokens).
     sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2), ss_q_gs) * matching_score_scale
@@ -2196,17 +2197,18 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     # but becomes smaller in comp instances). If they are normalized among the single instance dim,
     # then each image token in the comp instance has a fixed total contribution to the reconstruction
     # of the single instance, which can hardly handle scale changes.
-    sc_map_ss_prob0  = F.softmax(sc_map_ss_score, dim=1)
+    sc_map_ss_prob  = F.softmax(sc_map_ss_score, dim=1)
     # Add a small value to the diagonal of sc_map_ss_prob to encourage the contributions 
     # from the tokens at the same locations.
-    sc_map_ss_prob  = add_to_prob_mat_diagonal(sc_map_ss_prob0, 0.1, renormalize_dim=1)
+    #sc_map_ss_prob  = add_to_prob_mat_diagonal(sc_map_ss_prob0, 0.1, renormalize_dim=1)
 
     mc_map_ms_score = torch.matmul(mc_q.transpose(1, 2), ms_q_gs) * matching_score_scale
     # Normalize among mix comp tokens (mc dim).
-    mc_map_ms_prob0  = F.softmax(mc_map_ms_score, dim=1)
+    mc_map_ms_prob  = F.softmax(mc_map_ms_score, dim=1)
+    # breakpoint()
     # Add a small value to the diagonal of mc_map_ms_prob to encourage the contributions
     # from the tokens at the same locations.
-    mc_map_ms_prob  = add_to_prob_mat_diagonal(mc_map_ms_prob0, 0.1, renormalize_dim=1)
+    #mc_map_ms_prob  = add_to_prob_mat_diagonal(mc_map_ms_prob0, 0.1, renormalize_dim=1)
 
     # breakpoint()
 
