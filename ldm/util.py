@@ -2182,7 +2182,9 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     ss_q_gs = single_q_grad_scaler(ss_q)
     ms_q_gs = single_q_grad_scaler(ms_q)
 
-    matching_score_scale = ca_q.shape[1] ** -0.5
+    num_heads = 8
+    # Similar to the scale of the attention scores.
+    matching_score_scale = (ca_q.shape[1] / num_heads) ** -0.5
     # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (9 subj comp image tokens) -> (9 subj single image tokens).
     sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2), ss_q_gs) * matching_score_scale
