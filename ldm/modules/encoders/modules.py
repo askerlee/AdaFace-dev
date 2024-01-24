@@ -477,7 +477,7 @@ class FrozenCLIPTextEmbedder(nn.Module):
             param.requires_grad = False
 
     def forward(self, text):
-        tokens = clip.tokenize(text).to(self.device)
+        tokens = clip.tokenize(text, truncate=True).to(self.device)
         z = self.model.encode_text(tokens)
         if self.normalize:
             z = z / torch.linalg.norm(z, dim=1, keepdim=True)

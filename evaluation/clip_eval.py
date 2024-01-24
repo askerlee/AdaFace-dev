@@ -36,7 +36,7 @@ class CLIPEvaluator(object):
         '''
 
     def tokenize(self, strings: list):
-        return clip.tokenize(strings).to('cpu')
+        return clip.tokenize(strings, truncate=True).to('cpu')
         
     @torch.no_grad()
     def encode_text(self, tokens: list) -> torch.Tensor:
@@ -48,7 +48,7 @@ class CLIPEvaluator(object):
 
     def get_text_features(self, text: str, norm: bool = True, get_token_emb: bool = False) -> torch.Tensor:
 
-        tokens = clip.tokenize(text).to('cpu')
+        tokens = clip.tokenize(text, truncate=True).to('cpu')
 
         if get_token_emb:
             text_features = self.model.token_embedding(tokens).detach()
