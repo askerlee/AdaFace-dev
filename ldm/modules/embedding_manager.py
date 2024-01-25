@@ -1112,15 +1112,15 @@ class EmbeddingManager(nn.Module):
         self.background_extra_global_scale = background_extra_global_scale
         self.emb_reg_loss_scale = emb_reg_loss_scale
         ca_q_bns = {}
-        ca_outfeat_bns = {}
+        ca_outfeat_lns = {}
         for ca_layer_idx in range(self.num_unet_ca_layers):
             layer_idx = self.ca_layer_idx2layer_idx[ca_layer_idx]
             ca_q_bns[str(layer_idx)]       = nn.BatchNorm2d(self.ca_infeat_dims[ca_layer_idx], affine=True)
-            ca_outfeat_bns[str(layer_idx)] = nn.BatchNorm2d(self.ca_infeat_dims[ca_layer_idx], affine=True)
+            ca_outfeat_lns[str(layer_idx)] = nn.LayerNorm(self.ca_infeat_dims[ca_layer_idx], elementwise_affine=True)
             #print(layer_idx, self.ca_infeat_dims[ca_layer_idx])
 
         self.ca_q_bns       = nn.ModuleDict(ca_q_bns)
-        self.ca_outfeat_bns = nn.ModuleDict(ca_outfeat_bns)
+        self.ca_outfeat_lns = nn.ModuleDict(ca_outfeat_lns)
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
@@ -1932,7 +1932,7 @@ class EmbeddingManager(nn.Module):
                      "subject_strings":                  self.subject_strings,
                      "background_strings":               self.background_strings,
                      "ca_q_bns":                         self.ca_q_bns,
-                     "ca_outfeat_bns":                   self.ca_outfeat_bns,
+                     "ca_outfeat_lns":                   self.ca_outfeat_lns,
                    }, 
                     ckpt_path)
 
@@ -1982,8 +1982,8 @@ class EmbeddingManager(nn.Module):
 
             if "ca_q_bns" in ckpt:
                 self.ca_q_bns = ckpt["ca_q_bns"]
-            if "ca_outfeat_bns" in ckpt:
-                self.ca_outfeat_bns = ckpt["ca_outfeat_bns"]
+            if "ca_outfeat_lns" in ckpt:
+                self.ca_outfeat_lns = ckpt["ca_outfeat_lns"]
 
             for token_idx, k in enumerate(ckpt["string_to_token"]):
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
@@ -2078,7 +2078,7 @@ class EmbeddingManager(nn.Module):
                              + list(self.string_to_ada_embedder_dict.parameters()) \
                              + list(self.string_to_emb_ema_dict.parameters()) \
                              + list(self.ca_q_bns.parameters()) \
-                             + list(self.ca_outfeat_bns.parameters()) \
+                             + list(self.ca_outfeat_lns.parameters())
 
         normal_params  = [ { 'params': normal_params_list, 'lr_ratio': 1, 
                              'excluded_from_prodigy': False } ]
