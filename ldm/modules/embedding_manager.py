@@ -1110,13 +1110,13 @@ class EmbeddingManager(nn.Module):
         self.prompt_embedding_clamp_value  = prompt_embedding_clamp_value
         self.background_extra_global_scale = background_extra_global_scale
         self.emb_reg_loss_scale = emb_reg_loss_scale
-        ca_q_lns = {}
+        ca_q_bns = {}
         for ca_layer_idx in range(self.num_unet_ca_layers):
             layer_idx = self.ca_layer_idx2layer_idx[ca_layer_idx]
-            ca_q_lns[str(layer_idx)] = nn.LayerNorm(self.ca_infeat_dims[ca_layer_idx], elementwise_affine=True)
+            ca_q_bns[str(layer_idx)] = nn.BatchNorm2d(self.ca_infeat_dims[ca_layer_idx], affine=True)
             #print(layer_idx, self.ca_infeat_dims[ca_layer_idx])
 
-        self.ca_q_lns = nn.ModuleDict(ca_q_lns)
+        self.ca_q_bns = nn.ModuleDict(ca_q_bns)
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
@@ -1927,7 +1927,7 @@ class EmbeddingManager(nn.Module):
                      "use_conv_attn_kernel_size":        self.use_conv_attn_kernel_size,
                      "subject_strings":                  self.subject_strings,
                      "background_strings":               self.background_strings,
-                     "ca_q_lns":                         self.ca_q_lns,
+                     "ca_q_bns":                         self.ca_q_bns,
                    }, 
                     ckpt_path)
 
@@ -1975,8 +1975,8 @@ class EmbeddingManager(nn.Module):
             use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
             self.set_embs_attn_tricks(use_conv_attn_kernel_size)
 
-            if "ca_q_lns" in ckpt:
-                self.ca_q_lns = ckpt["ca_q_lns"]
+            if "ca_q_bns" in ckpt:
+                self.ca_q_bns = ckpt["ca_q_bns"]
 
             for token_idx, k in enumerate(ckpt["string_to_token"]):
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
@@ -2070,7 +2070,7 @@ class EmbeddingManager(nn.Module):
         normal_params_list = list(self.string_to_static_embedder_dict.parameters()) \
                              + list(self.string_to_ada_embedder_dict.parameters()) \
                              + list(self.string_to_emb_ema_dict.parameters()) \
-                             + list(self.ca_q_lns.parameters())
+                             + list(self.ca_q_bns.parameters())
 
         normal_params  = [ { 'params': normal_params_list, 'lr_ratio': 1, 
                              'excluded_from_prodigy': False } ]

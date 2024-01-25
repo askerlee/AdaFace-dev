@@ -2795,14 +2795,14 @@ class LatentDiffusion(DDPM):
                 # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
                 # excluding the instance from the fg_bg_preserve_loss.
                 use_ln_on_ca_qs = True
-                ca_q_lns = self.embedding_manager.ca_q_lns if use_ln_on_ca_qs else None
+                ca_q_bns = self.embedding_manager.ca_q_bns if use_ln_on_ca_qs else None
 
                 loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
                 loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress \
                  = self.calc_comp_fg_bg_preserve_loss(ca_outfeats, 
                                                        extra_info['ca_layers_activations']['attnscore'], 
                                                        extra_info['ca_layers_activations']['q'],
-                                                       ca_q_lns,
+                                                       ca_q_bns,
                                                        filtered_fg_mask, batch_have_fg_mask,
                                                        all_subj_indices_1b, BLOCK_SIZE)
                 
@@ -3986,7 +3986,7 @@ class LatentDiffusion(DDPM):
     # So features under comp prompts should be close to features under single prompts, at fg_mask areas.
     # (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_mix_bg_attn_suppress.
-    def calc_comp_fg_bg_preserve_loss(self, ca_outfeats, ca_attnscores, ca_qs, ca_q_lns,
+    def calc_comp_fg_bg_preserve_loss(self, ca_outfeats, ca_attnscores, ca_qs, ca_q_bns,
                                       fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
@@ -4039,8 +4039,8 @@ class LatentDiffusion(DDPM):
             ca_q_h = int(np.sqrt(ca_layer_q.shape[2] * ca_outfeat.shape[2] // ca_outfeat.shape[3]))
             ca_q_w = ca_layer_q.shape[2] // ca_q_h
             ca_layer_q = ca_layer_q.permute(0, 1, 3, 2).reshape(ca_layer_q.shape[0], -1, ca_q_h, ca_q_w)
-            if ca_q_lns is not None:
-                ca_layer_q = ca_q_lns[str(unet_layer_idx)](ca_layer_q.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+            if ca_q_bns is not None:
+                ca_layer_q = ca_q_bns[str(unet_layer_idx)](ca_layer_q)
 
             # Some layers resize the input feature maps. So we need to resize ca_outfeat to match ca_layer_q.
             if ca_outfeat.shape[2:] != ca_layer_q.shape[2:]:
