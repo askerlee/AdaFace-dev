@@ -2870,10 +2870,15 @@ class LatentDiffusion(DDPM):
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     * comp_fg_bg_preserve_loss_scale
 
-            if self.normalize_ca_q_and_outfeat:
+            feat_delta_align_scale = 2
+            if self.normalize_ca_q_and_outfeat and random.random() < 0.5:
                 ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
+                # If using LN, feat delta is around 5x much smaller. So we scale it up to 
+                # match the scale of not using LN.
+                feat_delta_align_scale *= 5
             else:
                 ca_outfeat_lns = None
+                
             # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill, 
             # as it should be more accurate (?).
             # So if loss_comp_fg_bg_preserve is active, then loss_mix_prompt_distill is halved.
@@ -2908,8 +2913,6 @@ class LatentDiffusion(DDPM):
             subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
                                                                      subj_attn_norm_distill_loss_base,
                                                                      subj_attn_norm_distill_loss_scale_base)
-
-            feat_delta_align_scale = 2
 
             loss_mix_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_distill_loss_scale \
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \

@@ -47,7 +47,7 @@ model:
     subj_comp_key_ortho_loss_weight:    2e-4 # disabled. # 1e-4 
     subj_comp_value_ortho_loss_weight:  0 # disabled. # 1e-5
     # typical loss_mix_prompt_distill: 0.06, * weight -> 6e-5.
-    mix_prompt_distill_weight:          1e-3
+    mix_prompt_distill_weight:          1e-4
     comp_fg_bg_preserve_loss_weight:    1e-3
     # fg_bg_comple: used in non-wds recon iters.
     # loss_fg_bg_complementary: 1.5,      * weight -> 7.5e-4
