@@ -1116,7 +1116,7 @@ class EmbeddingManager(nn.Module):
         for ca_layer_idx in range(self.num_unet_ca_layers):
             layer_idx = self.ca_layer_idx2layer_idx[ca_layer_idx]
             ca_q_bns[str(layer_idx)]       = nn.BatchNorm2d(self.ca_infeat_dims[ca_layer_idx], affine=True)
-            ca_outfeat_lns[str(layer_idx)] = nn.LayerNorm(self.ca_infeat_dims[ca_layer_idx], elementwise_affine=True)
+            ca_outfeat_lns[str(layer_idx)] = nn.LayerNorm(self.ca_infeat_dims[ca_layer_idx], elementwise_affine=False)
             #print(layer_idx, self.ca_infeat_dims[ca_layer_idx])
 
         self.ca_q_bns       = nn.ModuleDict(ca_q_bns)
