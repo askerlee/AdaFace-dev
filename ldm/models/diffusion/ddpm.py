@@ -128,6 +128,7 @@ class DDPM(pl.LightningModule):
                  # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
                  use_fp_trick=True,
                  prompt_embedding_clamp_value=-1,
+                 normalize_ca_q_and_outfeat=False,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -183,6 +184,7 @@ class DDPM(pl.LightningModule):
         
         self.use_background_token                   = use_background_token
         self.use_fp_trick                           = use_fp_trick
+        self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
@@ -2794,8 +2796,7 @@ class LatentDiffusion(DDPM):
                 # the background in the training images, which is not desirable.
                 # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
                 # excluding the instance from the fg_bg_preserve_loss.
-                use_bn_on_ca_q_and_outfeat = True
-                if use_bn_on_ca_q_and_outfeat:
+                if self.normalize_ca_q_and_outfeat:
                     ca_q_bns = self.embedding_manager.ca_q_bns
                     ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
                 else:
@@ -2804,10 +2805,10 @@ class LatentDiffusion(DDPM):
 
                 loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
                 loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress \
-                 = self.calc_comp_fg_bg_preserve_loss(ca_outfeats, 
-                                                      extra_info['ca_layers_activations']['attnscore'], 
+                 = self.calc_comp_fg_bg_preserve_loss(ca_outfeats, ca_outfeat_lns, 
                                                       extra_info['ca_layers_activations']['q'],
-                                                      ca_outfeat_lns, ca_q_bns,
+                                                      ca_q_bns,
+                                                      extra_info['ca_layers_activations']['attnscore'], 
                                                       filtered_fg_mask, batch_have_fg_mask,
                                                       all_subj_indices_1b, BLOCK_SIZE)
                 
@@ -2869,6 +2870,10 @@ class LatentDiffusion(DDPM):
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     * comp_fg_bg_preserve_loss_scale
 
+            if self.normalize_ca_q_and_outfeat:
+                ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
+            else:
+                ca_outfeat_lns = None
             # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill, 
             # as it should be more accurate (?).
             # So if loss_comp_fg_bg_preserve is active, then loss_mix_prompt_distill is halved.
@@ -2877,7 +2882,7 @@ class LatentDiffusion(DDPM):
             # The indices will be shifted along the batch dimension (size doubled) 
             # within calc_prompt_mix_loss() to index all the 4 blocks.
             loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill \
-                = self.calc_prompt_mix_loss(ca_outfeats, 
+                = self.calc_prompt_mix_loss(ca_outfeats, ca_outfeat_lns,
                                             extra_info['ca_layers_activations']['attnscore'], 
                                             all_subj_indices_2b, BLOCK_SIZE)
 
@@ -3242,7 +3247,7 @@ class LatentDiffusion(DDPM):
 
         return loss_recon, loss_recon_pixels
     
-    def calc_prompt_mix_loss(self, ca_outfeats, ca_attnscores, fg_indices_2b, BLOCK_SIZE):
+    def calc_prompt_mix_loss(self, ca_outfeats, ca_outfeat_lns, ca_attnscores, fg_indices_2b, BLOCK_SIZE):
         # do_mix_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -3314,6 +3319,9 @@ class LatentDiffusion(DDPM):
         for unet_layer_idx, ca_outfeat in ca_outfeats.items():
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_norm_distill_layer_weights):
                 continue
+
+            if ca_outfeat_lns is not None:
+                ca_outfeat = ca_outfeat_lns[str(unet_layer_idx)](ca_outfeat.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
             # each is [1, 1280, 16, 16]
             subj_single_feat, subj_comp_feat, mix_single_feat, mix_comp_feat \
@@ -3991,7 +3999,7 @@ class LatentDiffusion(DDPM):
     # So features under comp prompts should be close to features under single prompts, at fg_mask areas.
     # (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_mix_bg_attn_suppress.
-    def calc_comp_fg_bg_preserve_loss(self, ca_outfeats, ca_attnscores, ca_qs, ca_outfeat_lns, ca_q_bns,
+    def calc_comp_fg_bg_preserve_loss(self, ca_outfeats, ca_outfeat_lns, ca_qs, ca_q_bns, ca_attnscores, 
                                       fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
