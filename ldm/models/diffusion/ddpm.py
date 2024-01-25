@@ -2794,17 +2794,22 @@ class LatentDiffusion(DDPM):
                 # the background in the training images, which is not desirable.
                 # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
                 # excluding the instance from the fg_bg_preserve_loss.
-                use_ln_on_ca_qs = True
-                ca_q_bns = self.embedding_manager.ca_q_bns if use_ln_on_ca_qs else None
+                use_bn_on_ca_q_and_outfeat = True
+                if use_bn_on_ca_q_and_outfeat:
+                    ca_q_bns = self.embedding_manager.ca_q_bns
+                    ca_outfeat_bns = self.embedding_manager.ca_outfeat_bns
+                else:
+                    ca_q_bns = None
+                    ca_outfeat_bns = None
 
                 loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
                 loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress \
                  = self.calc_comp_fg_bg_preserve_loss(ca_outfeats, 
-                                                       extra_info['ca_layers_activations']['attnscore'], 
-                                                       extra_info['ca_layers_activations']['q'],
-                                                       ca_q_bns,
-                                                       filtered_fg_mask, batch_have_fg_mask,
-                                                       all_subj_indices_1b, BLOCK_SIZE)
+                                                      extra_info['ca_layers_activations']['attnscore'], 
+                                                      extra_info['ca_layers_activations']['q'],
+                                                      ca_outfeat_bns, ca_q_bns,
+                                                      filtered_fg_mask, batch_have_fg_mask,
+                                                      all_subj_indices_1b, BLOCK_SIZE)
                 
                 if loss_comp_subj_bg_attn_suppress > 0:
                     loss_dict.update({f'{prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach().item() })
@@ -3986,7 +3991,7 @@ class LatentDiffusion(DDPM):
     # So features under comp prompts should be close to features under single prompts, at fg_mask areas.
     # (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_mix_bg_attn_suppress.
-    def calc_comp_fg_bg_preserve_loss(self, ca_outfeats, ca_attnscores, ca_qs, ca_q_bns,
+    def calc_comp_fg_bg_preserve_loss(self, ca_outfeats, ca_attnscores, ca_qs, ca_outfeat_bns, ca_q_bns,
                                       fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
@@ -4045,6 +4050,9 @@ class LatentDiffusion(DDPM):
             # Some layers resize the input feature maps. So we need to resize ca_outfeat to match ca_layer_q.
             if ca_outfeat.shape[2:] != ca_layer_q.shape[2:]:
                 ca_outfeat = F.interpolate(ca_outfeat, size=ca_layer_q.shape[2:], mode="bilinear", align_corners=False)
+
+            if ca_outfeat_bns is not None:
+                ca_outfeat = ca_outfeat_bns[str(unet_layer_idx)](ca_outfeat)
 
             do_feat_pooling = True
             feat_pool_kernel_size = 4

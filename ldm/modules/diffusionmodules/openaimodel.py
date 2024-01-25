@@ -1048,7 +1048,6 @@ class UNetModel(nn.Module):
 
         h = x.type(self.dtype)
 
-        
         # 0  input h:   [2, 4,    64, 64]
         # 1             [2, 320,  64, 64]
         # 2             [2, 320,  64, 64]
