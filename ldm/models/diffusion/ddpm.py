@@ -3270,7 +3270,7 @@ class LatentDiffusion(DDPM):
 
         # feature map distillation only uses delta loss on the features to reduce the 
         # class polluting the subject features.
-        feat_distill_layer_weights = {  7:  1., 8: 1.,   
+        feat_distill_layer_weights = {  7:  0.5, 8: 0.5,   
                                         12: 1.,
                                         16: 1., 17: 1.,
                                         18: 1.,
@@ -3281,7 +3281,7 @@ class LatentDiffusion(DDPM):
 
         # attn delta loss is more strict and could cause pollution of subject features with class features.
         # so top layers layers 21, 22, 23, 24 are excluded by setting their weights to 0.
-        attn_delta_distill_layer_weights = { 7:  1., 8: 1.,
+        attn_delta_distill_layer_weights = { 7: 0.5, 8: 0.5,
                                              12: 1.,
                                              16: 1., 17: 1.,
                                              18: 1.,
@@ -3293,7 +3293,7 @@ class LatentDiffusion(DDPM):
         # attn_delta_distill_layer_weights = {}
 
         # attn norm distillation is applied to almost all conditioning layers.
-        attn_norm_distill_layer_weights = { # 7:  1., 8: 1.,
+        attn_norm_distill_layer_weights = { 7: 0.5, 8: 0.5,
                                             12: 1.,
                                             16: 1., 17: 1.,
                                             18: 1.,
@@ -3481,7 +3481,7 @@ class LatentDiffusion(DDPM):
 
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
-        attn_align_layer_weights = { 7:  1., 8: 1.,
+        attn_align_layer_weights = { 7: 0.5, 8: 0.5,
                                      12: 1.,
                                      16: 1., 17: 1.,
                                      18: 1.,
@@ -3603,7 +3603,7 @@ class LatentDiffusion(DDPM):
 
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
-        attn_align_layer_weights = { 7:  1., 8: 1.,
+        attn_align_layer_weights = { 7: 0.5, 8: 0.5,
                                      12: 1.,
                                      16: 1., 17: 1.,
                                      18: 1.,
@@ -3804,7 +3804,7 @@ class LatentDiffusion(DDPM):
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
         # layer 7 is absent, since layer 8 aligns with layer 7.
-        attn_align_layer_weights = { 8: 1.,
+        attn_align_layer_weights = { 8: 0.5,
                                      12: 1.,
                                      16: 1., 17: 1.,
                                      18: 1.,
@@ -3927,22 +3927,22 @@ class LatentDiffusion(DDPM):
                                   cls_grad_scale=0.05):
 
         # Discard the first few bottom layers from the orthogonal loss.
-        k_ortho_layer_weights = { 7:  1., 8: 1.,
-                                12: 1.,
-                                16: 1., 17: 1.,
-                                18: 1.,
-                                19: 1., 20: 1., 
-                                21: 1., 22: 1., 
-                                23: 1., 24: 1.,     
+        k_ortho_layer_weights = { 7: 0.5, 8: 0.5,
+                                  12: 1.,
+                                  16: 1., 17: 1.,
+                                  18: 1.,
+                                  19: 1., 20: 1., 
+                                  21: 1., 22: 1., 
+                                  23: 1., 24: 1.,     
                                 }
         
-        v_ortho_layer_weights = { 7:  1., 8: 1.,
-                                12: 1.,
-                                16: 1., 17: 1.,
-                                18: 0.5,
-                                19: 0.5, 20: 0.5, 
-                                21: 0.25, 22: 0.25, 
-                                23: 0.25, 24: 0.25,                                
+        v_ortho_layer_weights = { 7: 0.5, 8: 0.5,
+                                  12: 1.,
+                                  16: 1., 17: 1.,
+                                  18: 0.5,
+                                  19: 0.5, 20: 0.5, 
+                                  21: 0.25, 22: 0.25, 
+                                  23: 0.25, 24: 0.25,                                
                                 }
         
         # Normalize the weights above so that each set sum to 1.
@@ -4014,7 +4014,7 @@ class LatentDiffusion(DDPM):
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0, 0, 0, 0, 0
 
-        feat_distill_layer_weights = {  7:  1., 8: 1.,   
+        feat_distill_layer_weights = {  7: 0.5, 8: 0.5,   
                                         12: 1.,
                                         16: 1., 17: 1.,
                                         18: 1.,
