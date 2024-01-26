@@ -59,8 +59,8 @@ for k in tokens:
     print("Attn Poolers:")
 
     for idx, iteration in enumerate(iterations):
-        if iteration % 100 != 0:
-            continue
+        #if iteration % 100 != 0:
+        #    continue
 
         emb_path = os.path.join(emb_folder, iter2path[iteration])
         emb_ckpt = torch.load(emb_path)
@@ -78,8 +78,8 @@ for k in tokens:
     prev_ada_embedder = None
 
     for idx, iteration in enumerate(iterations):
-        if iteration % 100 != 0:
-            continue
+        #if iteration % 100 != 0:
+        #    continue
                 
         emb_path = os.path.join(emb_folder, iter2path[iteration])
         emb_ckpt = torch.load(emb_path)
