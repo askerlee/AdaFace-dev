@@ -75,6 +75,7 @@ for k in tokens:
             print(f"{iteration}-{i}: lora_to_fg_q: {lora_to_fg_q_mean:.4f}, lora_to_bg_q: {lora_to_bg_q_mean:.4f}, lora_to_k: {lora_to_k_mean:.4f}")
 
     print("layer_coeff_maps weight:")
+    prev_ada_embedder = None
 
     for idx, iteration in enumerate(iterations):
         if iteration % 100 != 0:
@@ -90,6 +91,18 @@ for k in tokens:
         layer_coeff_map_means = np.array(layer_coeff_map_means)
 
         print(f"{iteration}: {layer_coeff_map_means}")
+
+        if prev_ada_embedder is not None:
+            for layer_idx, pooler in enumerate(attn_poolers):
+                prev_pooler = prev_ada_embedder.poolers[layer_idx]
+                layer_param_total_delta = 0
+                for param_name, param in pooler.named_parameters():
+                    prev_param = prev_pooler.state_dict()[param_name]
+                    param_delta = torch.norm(param - prev_param).item()
+                    layer_param_total_delta += param_delta
+
+                print(f"{iteration}-{k}-{layer_idx}: pooler diff: {layer_param_total_delta:.4f}")
+        prev_ada_embedder = ada_embedder
 
     print("layer_coeff_maps bias:")
 

@@ -2173,7 +2173,7 @@ class EmbeddingManager(nn.Module):
         ada_static_loss_boost_ratio = 2
         ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
 
-        ada_attn_poolers_reg_weight = 0.001
+        ada_attn_poolers_reg_weight = 0.01
 
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.
