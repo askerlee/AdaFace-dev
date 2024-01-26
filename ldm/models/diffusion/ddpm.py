@@ -34,7 +34,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
                        extend_indices_B_by_n_times, split_indices_by_instance, \
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
-                       anneal_t_keep_prob, anneal_value, select_piecewise_value, \
+                       anneal_t_keep_prob, anneal_value, draw_annealed_bool, select_piecewise_value, \
                        calc_layer_subj_comp_k_or_v_ortho_loss, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
@@ -2871,7 +2871,12 @@ class LatentDiffusion(DDPM):
                     * comp_fg_bg_preserve_loss_scale
 
             feat_delta_align_scale = 2
-            if self.normalize_ca_q_and_outfeat and random.random() < 0.5:
+            if self.normalize_ca_q_and_outfeat:
+                normalize_ca_outfeat = draw_annealed_bool(self.training_percent, 0.5, (0.6, 0.3))
+            else:
+                normalize_ca_outfeat = False
+                
+            if normalize_ca_outfeat:
                 ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
                 # If using LN, feat delta is around 5x much smaller. So we scale it up to 
                 # match the scale of not using LN.
@@ -3265,7 +3270,7 @@ class LatentDiffusion(DDPM):
 
         # feature map distillation only uses delta loss on the features to reduce the 
         # class polluting the subject features.
-        feat_distill_layer_weights = { # 7:  1., 8: 1.,   
+        feat_distill_layer_weights = {  7:  1., 8: 1.,   
                                         12: 1.,
                                         16: 1., 17: 1.,
                                         18: 1.,
@@ -3276,13 +3281,13 @@ class LatentDiffusion(DDPM):
 
         # attn delta loss is more strict and could cause pollution of subject features with class features.
         # so top layers layers 21, 22, 23, 24 are excluded by setting their weights to 0.
-        attn_delta_distill_layer_weights = { # 7:  1., 8: 1.,
-                                            12: 1.,
-                                            16: 1., 17: 1.,
-                                            18: 1.,
-                                            19: 1., 20: 1., 
-                                            21: 1., 22: 1., 
-                                            23: 1., 24: 1.,                            
+        attn_delta_distill_layer_weights = { 7:  1., 8: 1.,
+                                             12: 1.,
+                                             16: 1., 17: 1.,
+                                             18: 1.,
+                                             19: 1., 20: 1., 
+                                             21: 1., 22: 1., 
+                                             23: 1., 24: 1.,                            
                                             }
         # DISABLE attn delta loss.
         # attn_delta_distill_layer_weights = {}
@@ -3476,13 +3481,13 @@ class LatentDiffusion(DDPM):
 
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
-        attn_align_layer_weights = { #7:  1., 8: 1.,
-                                    12: 1.,
-                                    16: 1., 17: 1.,
-                                    18: 1.,
-                                    19: 1., 20: 1., 
-                                    21: 1., 22: 1., 
-                                    23: 1., 24: 1., 
+        attn_align_layer_weights = { 7:  1., 8: 1.,
+                                     12: 1.,
+                                     16: 1., 17: 1.,
+                                     18: 1.,
+                                     19: 1., 20: 1., 
+                                     21: 1., 22: 1., 
+                                     23: 1., 24: 1., 
                                    }
                 
         # Normalize the weights above so that each set sum to 1.
@@ -3598,13 +3603,13 @@ class LatentDiffusion(DDPM):
 
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
-        attn_align_layer_weights = { #7:  1., 8: 1.,
-                                    12: 1.,
-                                    16: 1., 17: 1.,
-                                    18: 1.,
-                                    19: 1., 20: 1., 
-                                    21: 1., 22: 1., 
-                                    23: 1., 24: 1., 
+        attn_align_layer_weights = { 7:  1., 8: 1.,
+                                     12: 1.,
+                                     16: 1., 17: 1.,
+                                     18: 1.,
+                                     19: 1., 20: 1., 
+                                     21: 1., 22: 1., 
+                                     23: 1., 24: 1., 
                                    }
         # 16-18: feature maps 16x16.
         # 19-21: feature maps 32x32.
@@ -3798,13 +3803,13 @@ class LatentDiffusion(DDPM):
     def calc_fg_bg_xlayer_consist_loss(self, ca_attnscores, subj_indices, bg_indices, SSB_SIZE):
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
-        attn_align_layer_weights = { #7:  1., 8: 1.,
-                                    #12: 1.,
-                                    16: 1., 17: 1.,
-                                    18: 1.,
-                                    19: 0.5, 20: 0.5, 
-                                    21: 0.5,  22: 0.25, 
-                                    23: 0.25, 24: 0.25, 
+        attn_align_layer_weights = { 7:  1., 8: 1.,
+                                     12: 1.,
+                                     16: 1., 17: 1.,
+                                     18: 1.,
+                                     19: 0.5, 20: 0.5, 
+                                     21: 0.5,  22: 0.25, 
+                                     23: 0.25, 24: 0.25, 
                                    }
         # 16-18: feature maps 16x16.
         # 19-21: feature maps 32x32.
@@ -3921,7 +3926,7 @@ class LatentDiffusion(DDPM):
                                   cls_grad_scale=0.05):
 
         # Discard the first few bottom layers from the orthogonal loss.
-        k_ortho_layer_weights = { #7:  1., 8: 1.,
+        k_ortho_layer_weights = { 7:  1., 8: 1.,
                                 12: 1.,
                                 16: 1., 17: 1.,
                                 18: 1.,
@@ -3930,7 +3935,7 @@ class LatentDiffusion(DDPM):
                                 23: 1., 24: 1.,     
                                 }
         
-        v_ortho_layer_weights = { #7:  1., 8: 1.,
+        v_ortho_layer_weights = { 7:  1., 8: 1.,
                                 12: 1.,
                                 16: 1., 17: 1.,
                                 18: 0.5,
@@ -4008,12 +4013,12 @@ class LatentDiffusion(DDPM):
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0, 0, 0, 0, 0
 
-        feat_distill_layer_weights = { # 7:  1., 8: 1.,   
+        feat_distill_layer_weights = {  7:  1., 8: 1.,   
                                         12: 1.,
                                         16: 1., 17: 1.,
                                         18: 1.,
                                         19: 1, 20: 1, 
-                                        21: 1,  22: 1, 
+                                        21: 1, 22: 1, 
                                         23: 1, 24: 1, 
                                      }
 
