@@ -3820,7 +3820,7 @@ class LatentDiffusion(DDPM):
         # fg/bg loss hurts more high-frequency details, therefore it has a smalll weight.
                 
         # Align a layer with the layer below it.
-        attn_align_xlayer_maps = { 8: 7, 16: 12, 17: 16, 18: 17, 19: 18, 
+        attn_align_xlayer_maps = { 8: 7, 12: 8, 16: 12, 17: 16, 18: 17, 19: 18, 
                                    20: 19, 21: 20, 22: 21, 23: 22, 24: 23 }
 
         # Normalize the weights above so that each set sum to 1.
