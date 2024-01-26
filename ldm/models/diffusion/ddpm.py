@@ -2875,7 +2875,7 @@ class LatentDiffusion(DDPM):
                 normalize_ca_outfeat = draw_annealed_bool(self.training_percent, 0.5, (0.6, 0.3))
             else:
                 normalize_ca_outfeat = False
-                
+
             if normalize_ca_outfeat:
                 ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
                 # If using LN, feat delta is around 5x much smaller. So we scale it up to 
@@ -3803,7 +3803,8 @@ class LatentDiffusion(DDPM):
     def calc_fg_bg_xlayer_consist_loss(self, ca_attnscores, subj_indices, bg_indices, SSB_SIZE):
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
-        attn_align_layer_weights = { 7:  1., 8: 1.,
+        # layer 7 is absent, since layer 8 aligns with layer 7.
+        attn_align_layer_weights = { 8: 1.,
                                      12: 1.,
                                      16: 1., 17: 1.,
                                      18: 1.,
@@ -3819,7 +3820,7 @@ class LatentDiffusion(DDPM):
         # fg/bg loss hurts more high-frequency details, therefore it has a smalll weight.
                 
         # Align a layer with the layer below it.
-        attn_align_xlayer_maps = { 16: 12, 17: 16, 18: 17, 19: 18, 
+        attn_align_xlayer_maps = { 8: 7, 16: 12, 17: 16, 18: 17, 19: 18, 
                                    20: 19, 21: 20, 22: 21, 23: 22, 24: 23 }
 
         # Normalize the weights above so that each set sum to 1.
