@@ -4,19 +4,20 @@ import sys
 import os
 import re
 import numpy as np
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--sig", dest='ckpt_sig', type=str, required=True)
+parser.add_argument("--extra_sig", type=str, default="")
+parser.add_argument("--only100", action="store_true")
+args = parser.parse_args()
 
 np.set_printoptions(precision=4, suppress=True)
-
-ckpt_sig = sys.argv[1]
-if len(sys.argv) > 2:
-    extra_sig = sys.argv[2]
-else:
-    extra_sig = ""
 
 all_ckpt_names = os.listdir("logs")
 # Sort all_ckpt_names by name (actually by timestamp in the name), so that most recent first.
 all_ckpt_names.sort(reverse=True)
-ckpt_name  = find_first_match(all_ckpt_names, ckpt_sig, extra_sig=extra_sig)
+ckpt_name  = find_first_match(all_ckpt_names, args.ckpt_sig, extra_sig=args.extra_sig)
 # embeddings_gs-{ckpt_iter}.pt
 emb_folder    = f"logs/{ckpt_name}/checkpoints/"
 iter2path = {}
@@ -37,8 +38,8 @@ tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
 
 
 for idx, iteration in enumerate(iterations):
-    #if iteration % 100 != 0:
-    #    continue
+    if args.only100 and iteration % 100 != 0:
+        continue
             
     emb_path = os.path.join(emb_folder, iter2path[iteration])
     emb_ckpt = torch.load(emb_path)
@@ -59,8 +60,8 @@ for k in tokens:
     print("Attn Poolers:")
 
     for idx, iteration in enumerate(iterations):
-        #if iteration % 100 != 0:
-        #    continue
+        if args.only100 and iteration % 100 != 0:
+            continue
 
         emb_path = os.path.join(emb_folder, iter2path[iteration])
         emb_ckpt = torch.load(emb_path)
@@ -78,8 +79,8 @@ for k in tokens:
     prev_ada_embedder = None
 
     for idx, iteration in enumerate(iterations):
-        #if iteration % 100 != 0:
-        #    continue
+        if args.only100 and iteration % 100 != 0:
+            continue
                 
         emb_path = os.path.join(emb_folder, iter2path[iteration])
         emb_ckpt = torch.load(emb_path)
@@ -107,7 +108,7 @@ for k in tokens:
     print("layer_coeff_maps bias:")
 
     for idx, iteration in enumerate(iterations):
-        if iteration % 100 != 0:
+        if args.only100 and iteration % 100 != 0:
             continue
                 
         emb_path = os.path.join(emb_folder, iter2path[iteration])
