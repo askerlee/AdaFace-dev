@@ -864,7 +864,10 @@ class LatentDiffusion(DDPM):
 
         if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
             ckpt_params_perturb_ratio = config.params.get("ckpt_params_perturb_ratio", 0)
-            model.load(config.params.embedding_manager_ckpt, ckpt_params_perturb_ratio)
+            load_poolers_only = config.params.get("load_poolers_only", False)
+            freeze_poolers = config.params.get("freeze_poolers", False)
+            model.load(config.params.embedding_manager_ckpt, ckpt_params_perturb_ratio,
+                       load_poolers_only, freeze_poolers)
         
         return model
 
@@ -2872,7 +2875,8 @@ class LatentDiffusion(DDPM):
 
             feat_delta_align_scale = 2
             if self.normalize_ca_q_and_outfeat:
-                normalize_ca_outfeat = draw_annealed_bool(self.training_percent, 0.5, (0.6, 0.3))
+                # Normalize ca_outfeat at 50% chance.
+                normalize_ca_outfeat = random.random() < 0.5 #draw_annealed_bool(self.training_percent, 0.5, (0.5, 0.5))
             else:
                 normalize_ca_outfeat = False
 
@@ -4710,8 +4714,8 @@ class LatentDiffusion(DDPM):
                 params = param_group['params']
                 param_lr = lr * param_group['lr_ratio']
                 # Not sure if it's necessary to set requires_grad=True here.
-                for param in params:
-                    param.requires_grad = True
+                #for param in params:
+                #    param.requires_grad = True
                     
                 embedding_params_with_lrs.append( {'params': params, 'lr': param_lr, 
                                                    'excluded_from_prodigy': param_group['excluded_from_prodigy']} )

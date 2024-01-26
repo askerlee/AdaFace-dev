@@ -186,6 +186,13 @@ def get_parser(**parser_kwargs):
         type=str, 
         default="", 
         help="Initialize embedding manager from a checkpoint")
+    parser.add_argument("--load_poolers_only",
+        type=str2bool, nargs="?", const=True, default=False,
+        help="Load only the attn poolers from the checkpoint")
+    parser.add_argument("--freeze_poolers",
+        type=str2bool, nargs="?", const=True, default=False,
+        help="Freeze the attn poolers")
+    
     parser.add_argument("--ckpt_params_perturb_ratio",
         type=float, default=-1,
         help="Ratio of parameters in the loaded ckpt to be perturbed")
@@ -751,6 +758,8 @@ if __name__ == "__main__":
             assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_words))
 
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
+        config.model.params.personalization_config.params.load_poolers_only = opt.load_poolers_only
+        config.model.params.personalization_config.params.freeze_poolers = opt.freeze_poolers
         config.model.params.personalization_config.params.ckpt_params_perturb_ratio = opt.ckpt_params_perturb_ratio
         config.model.params.personalization_config.params.emb_reg_loss_scale = opt.emb_reg_loss_scale
         config.model.params.personalization_config.params.placeholder_strings = [opt.subject_string]

@@ -915,6 +915,7 @@ class EmbeddingManager(nn.Module):
             embedding_manager_ckpt=None,
             ckpt_params_perturb_ratio=0,
             emb_reg_loss_scale=1,
+            **kwargs
     ):
         super().__init__()
         self.string_to_token_dict = OrderedDict()
@@ -1937,17 +1938,19 @@ class EmbeddingManager(nn.Module):
                     ckpt_path)
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
-    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0):
+    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, load_poolers_only=False, freeze_poolers=False):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
-        self.string_to_token_dict           = {}
-        self.string_to_emb_ema_dict         = nn.ModuleDict()
-        self.string_to_static_embedder_dict = nn.ParameterDict()
-        self.string_to_ada_embedder_dict    = nn.ModuleDict()
         token2num_vectors                   = {}
         emb_global_scale_scores_dict        = {}
         subj2conv_attn_layerwise_scales     = {}
-        
+
+        if not load_poolers_only:
+            self.string_to_token_dict           = {}
+            self.string_to_emb_ema_dict         = nn.ModuleDict()
+            self.string_to_static_embedder_dict = nn.ParameterDict()
+            self.string_to_ada_embedder_dict    = nn.ModuleDict()
+
         if isinstance(ckpt_paths, str):
             ckpt_paths = [ckpt_paths]
 
@@ -1993,7 +1996,7 @@ class EmbeddingManager(nn.Module):
                     k2 = k
                     k2_token = ckpt["string_to_token"][k]
 
-                if k2 in self.string_to_token_dict:
+                if k2 in self.string_to_token_dict and not load_poolers_only:
                     if k2 in self.background_strings:
                         print(f"Duplicate key {k}->{k2} in {ckpt_path}. Ignored.")
                         continue
@@ -2026,10 +2029,13 @@ class EmbeddingManager(nn.Module):
                     if km.startswith(k):
                         km2 = km.replace(k, k2)
 
-                        self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
-                        self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
-                        if self.emb_ema_as_pooling_probe_weight > 0:
-                            self.string_to_emb_ema_dict[km2]     = ckpt["string_to_emb_ema_dict"][km]
+                        if load_poolers_only:
+                            self.string_to_ada_embedder_dict[km2].poolers = ckpt["string_to_ada_embedder"][km].poolers
+                        else:
+                            self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
+                            self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
+                            if self.emb_ema_as_pooling_probe_weight > 0:
+                                self.string_to_emb_ema_dict[km2]     = ckpt["string_to_emb_ema_dict"][km]
                         
                         if km in ckpt["token2num_vectors"]:
                             token2num_vectors[km2] = ckpt["token2num_vectors"][km]
@@ -2038,19 +2044,25 @@ class EmbeddingManager(nn.Module):
                         ada = self.string_to_ada_embedder_dict[km2]
                         print(f"{km2}: {ada.fg_emb_count}/{ada.bg_emb_count}/{ada.K} fg/bg/total embeddings")
 
+                        if freeze_poolers:
+                            for pooler in ada.poolers:
+                                for param in pooler.parameters():
+                                    param.requires_grad = False
+
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
 
-        self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(self.string_to_token_dict)), 
-                                                    requires_grad=True)
-        for token_idx, k in enumerate(self.string_to_token_dict):
-            if k in emb_global_scale_scores_dict:
-                self.emb_global_scale_scores.data[token_idx] = emb_global_scale_scores_dict[k]
+        if not load_poolers_only:
+            self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(self.string_to_token_dict)), 
+                                                        requires_grad=True)
+            for token_idx, k in enumerate(self.string_to_token_dict):
+                if k in emb_global_scale_scores_dict:
+                    self.emb_global_scale_scores.data[token_idx] = emb_global_scale_scores_dict[k]
 
-        print(f"Set emb_global_scales = {self.get_emb_global_scales_dict(regen=True, do_perturb=False)}")
+            print(f"Set emb_global_scales = {self.get_emb_global_scales_dict(regen=True, do_perturb=False)}")
 
-        if len(subj2conv_attn_layerwise_scales) > 0:
-            self.initialize_subj2conv_attn_layerwise_scales(1, subj2conv_attn_layerwise_scales)
+            if len(subj2conv_attn_layerwise_scales) > 0:
+                self.initialize_subj2conv_attn_layerwise_scales(1, subj2conv_attn_layerwise_scales)
 
         # When we resume training from a ckpt, sometimes we want to perturb the parameters
         # to reduce overfitting.
