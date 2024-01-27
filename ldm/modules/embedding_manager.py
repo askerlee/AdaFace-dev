@@ -2045,9 +2045,12 @@ class EmbeddingManager(nn.Module):
                         print(f"{km2}: {ada.fg_emb_count}/{ada.bg_emb_count}/{ada.K} fg/bg/total embeddings")
 
                         if freeze_poolers:
+                            num_poolers_frozen = 0
                             for pooler in ada.poolers:
                                 for param in pooler.parameters():
                                     param.requires_grad = False
+                                num_poolers_frozen += 1
+                            print(f"Froze {num_poolers_frozen} {km2} poolers")
 
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
