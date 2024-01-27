@@ -246,6 +246,8 @@ def parse_args():
                              "and compute face similarities with the groundtruth")
         
     parser.add_argument('--gpu', type=int,  default=0, help='ID of GPU to use. Set to -1 to use CPU (slow).')
+    parser.add_argument("--tfgpu", type=int, default=argparse.SUPPRESS, help="ID of GPU to use for TensorFlow. Set to -1 to use CPU (slow).")
+
     parser.add_argument("--compare_with", type=str, default=None,
                         help="Evaluate the similarity of generated samples with reference images in this folder")
     parser.add_argument("--class_prompt", type=str, default=None,
@@ -522,7 +524,10 @@ def main(opt):
             all_sims_face = []
             all_normal_img_counts = []
             all_except_img_counts = []
-            set_tf_gpu(opt.gpu)
+            if hasattr(opt, 'tfgpu'):
+                set_tf_gpu(opt.tfgpu)
+            else:
+                set_tf_gpu(opt.gpu)
     else:
         clip_evator, dino_evator = None, None
 

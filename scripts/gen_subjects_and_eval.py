@@ -19,6 +19,9 @@ def str2bool(v):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu", type=int, default=0, help="gpu id")
+    parser.add_argument("--tfgpu", type=int, default=argparse.SUPPRESS, 
+                        help="ID of GPU to use for TensorFlow. Set to -1 to use CPU (slow).")
+
     parser.add_argument("--method", default='ada', choices=["ada", "static-layerwise", "ti", "db"], type=str, 
                         help="method to use for generating samples")
     parser.add_argument("--subject_string", type=str, default="z", 
@@ -417,7 +420,9 @@ if __name__ == "__main__":
             args.scale = " ".join([ str(s) for s in args.scale ])
 
         command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --bb_type '{bb_type}' --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --scale {args.scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
-
+        if hasattr(args, 'tfgpu'):
+            command_line += f" --tfgpu {args.tfgpu}"
+            
         if args.prompt is None:
             PROMPTS.close()
             # Since we use a prompt file, we don't need to specify --n_samples.
