@@ -2183,14 +2183,14 @@ class EmbeddingManager(nn.Module):
         # becomes too large (1~2), and may overpower the dynamic part.
         bias_reg_weight_base        = 0.1
         basis_reg_weight_base       = 0.1
-        ada_maps_weight_reg_weight  = 0.1
+        ada_maps_weight_reg_weight  = 0.05
         ada_maps_bias_reg_weight    = 0 #0.001   # 0.001 -> 0
-        pre_vecs_reg_weight         = 0.1
+        pre_vecs_reg_weight         = 0.05
         static_l2_loss_boost        = 5
         ada_static_loss_boost_ratio = 2
         ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
 
-        ada_attn_poolers_reg_weight = 0.1
+        ada_attn_poolers_reg_weight = 0.02
 
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.
