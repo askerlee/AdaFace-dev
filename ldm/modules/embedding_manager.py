@@ -923,7 +923,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
         self.string_to_emb_ema_dict         = nn.ModuleDict()
-        self.initial_embeddings  = nn.ParameterDict() # These should not be optimized
+        self.initial_embeddings             = nn.ParameterDict() # These should not be optimized
         self.placeholder_to_emb_cache       = nn.ParameterDict() # These should not be optimized
 
         self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
@@ -2086,6 +2086,8 @@ class EmbeddingManager(nn.Module):
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def optimized_parameters(self):
+        # self.initial_embeddings and self.placeholder_to_emb_cache are not included 
+        # in the optimized parameters.
         normal_params_list = list(self.string_to_static_embedder_dict.parameters()) \
                              + list(self.string_to_ada_embedder_dict.parameters()) \
                              + list(self.string_to_emb_ema_dict.parameters()) \
@@ -2185,7 +2187,7 @@ class EmbeddingManager(nn.Module):
         ada_static_loss_boost_ratio = 2
         ada_l2_loss_boost           = static_l2_loss_boost * ada_static_loss_boost_ratio
 
-        ada_attn_poolers_reg_weight = 0.01
+        ada_attn_poolers_reg_weight = 0.1
 
         # Dynamically adjust the regularization weights. The larger the norm, the larger the weight.
         # T: temperature. Larger T => when norm grows, the penalty is more severe.
