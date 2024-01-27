@@ -25,6 +25,7 @@ def set_tf_gpu(gpu_id):
     else:
         cpus = tf.config.experimental.list_physical_devices(device_type='CPU')
         tf.config.experimental.set_visible_devices(devices=cpus, device_type='CPU')
+        tf.config.experimental.set_visible_devices([], 'GPU')
 
 def init_evaluators(gpu_id):
     if gpu_id == -1:
