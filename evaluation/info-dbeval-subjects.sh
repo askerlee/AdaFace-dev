@@ -26,18 +26,11 @@ set -g maxiters         1500       2000              1500
 
 # No suffix for the DreamBooth eval set, as they are objects/animals, as opposed to faces.
 set -g db_suffix           ""
-set -g data_folder         dbeval-dataset
+set -g data_folder         subjects-dreambench
 set -g misc_train_opts     --use_fp_trick 0
 set -g misc_infer_opts
 set -g resume_from_ckpt     0
 # Objects in the same group share the same resumed_ckpt. Number of subjects in each group:
 #                           2         3                4                          3             1       8    2    7
 set -g resumed_ckpt_keys    backpack  bowl,can,candle  clock,glasses,teapot,vase  boot,sneaker  sprite  toy  cat  dog
-set -g resumed_ckpt_values  resumed_ckpts/backpack_dog2024-01-12T17-34-49_backpack_dog-ada/checkpoints/embeddings_gs-1500.pt \
-                            resumed_ckpts/candle2024-01-12T23-10-13_candle-ada/checkpoints/embeddings_gs-1500.pt \
-                            resumed_ckpts/clock2024-01-13T03-55-55_clock-ada/checkpoints/embeddings_gs-1500.pt \
-                            resumed_ckpts/colorful_sneaker2024-01-13T05-17-19_colorful_sneaker-ada/checkpoints/embeddings_gs-1500.pt \
-                            resumed_ckpts/red_cartoon2024-01-12T22-15-19_red_cartoon-ada/checkpoints/embeddings_gs-1500.pt \
-                            resumed_ckpts/bear_plushie2024-01-12T18-59-01_bear_plushie-ada/checkpoints/embeddings_gs-1500.pt \
-                            resumed_ckpts/lilbub2024-01-12T16-08-19_lilbub-ada/checkpoints/embeddings_gs-2000.pt \
-                            resumed_ckpts/jiffpom2024-01-12T21-30-12_jiffpom-ada/checkpoints/embeddings_gs-2000.pt
+#set -g resumed_ckpt_values  resumed_ckpts/backpack_dog2024-01-12T17-34-49_backpack_dog-ada/checkpoints/embeddings_gs-1500.pt

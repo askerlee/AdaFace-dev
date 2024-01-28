@@ -12,7 +12,7 @@ def parse_args():
     parser.add_argument(
         "--gt_dir",
         type=str,
-        default="dbeval-dataset",
+        default="subjects-dreambench",
         help="Directory with images of subjects used to train the model"
     )
 

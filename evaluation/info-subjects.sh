@@ -26,14 +26,9 @@ set -g maxiters       1500       2000              1500
 set -g sel_set              4 8 9 11 12 14 18 19 22 25
 # "instagram" for the main dataset, to focus on faces.
 set -g db_suffix           ", instagram"
-set -g data_folder         data
+set -g data_folder         subjects-celebrity
 set -g misc_train_opts     
 set -g misc_infer_opts      
 set -g resume_from_ckpt     0
 set -g resumed_ckpt_keys    boy cat dog girl man woman
-set -g resumed_ckpt_values  resumed_ckpts/iainarmitage2024-01-12T16-08-12_iainarmitage-ada/checkpoints/embeddings_gs-2000.pt \
-                            resumed_ckpts/lilbub2024-01-12T16-08-19_lilbub-ada/checkpoints/embeddings_gs-2000.pt \
-                            resumed_ckpts/jiffpom2024-01-12T21-30-12_jiffpom-ada/checkpoints/embeddings_gs-2000.pt \
-                            resumed_ckpts/lisa2024-01-12T17-53-24_lisa-ada/checkpoints/embeddings_gs-2000.pt \
-                            resumed_ckpts/donnieyen2024-01-12T21-29-01_donnieyen-ada/checkpoints/embeddings_gs-2000.pt \
-                            resumed_ckpts/lisa2024-01-12T17-53-24_lisa-ada/checkpoints/embeddings_gs-2000.pt
+#set -g resumed_ckpt_values  resumed_ckpts/iainarmitage2024-01-12T16-08-12_iainarmitage-ada/checkpoints/embeddings_gs-2000.pt

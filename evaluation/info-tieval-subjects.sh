@@ -24,6 +24,6 @@ set -g maxiters       1500       2000              1500
 
 # No suffix for the DreamBooth eval set, as they are objects/animals, as opposed to faces.
 set -g db_suffix           ""
-set -g data_folder         ti-dataset
+set -g data_folder         subjects-ti
 set -g misc_train_opts     --use_fp_trick 0
 set -g misc_infer_opts

@@ -40,8 +40,8 @@ scripts/stable_txt2img_db.py
 /releases
 *.DS_Store*
 *subject-models*
-private-data/*
-private-data
+subjects-private/*
+subjects-private
 wds-samples/*
 wds-samples
 /*.png

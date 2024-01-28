@@ -213,9 +213,9 @@ for i in $indices
         python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --subject_string "z" --init_words $init_words --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_TRAIN_ARGS1
 
         if set -q _flag_eval
-            if [ "$data_folder"  = 'dbeval-dataset' ]
+            if [ "$data_folder"  = 'subjects-dreambench' ]
                 set out_dir_tmpl 'samples-dbeval'
-            else if [ "$data_folder" = 'ti-dataset' ]
+            else if [ "$data_folder" = 'subjects-ti' ]
                 set out_dir_tmpl 'samples-tieval'
             else
                 set out_dir_tmpl 'samples'
@@ -236,9 +236,9 @@ for i in $indices
         python3 main_db.py --base configs/stable-diffusion/v1-finetune-db.yaml -t --actual_resume $sd_ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-db --no-test --token "z" --class_word $db_prompt
         
         if set -q _flag_eval
-            if [ "$data_folder"  = 'dbeval-dataset' ]
+            if [ "$data_folder"  = 'subjects-dreambench' ]
                 set out_dir_tmpl 'samples-dbeval'
-            else if [ "$data_folder" = 'ti-dataset' ]
+            else if [ "$data_folder" = 'subjects-ti' ]
                 set out_dir_tmpl 'samples-tieval'
             else
                 set out_dir_tmpl 'samples'
