@@ -519,10 +519,10 @@ class DataModuleFromConfig(pl.LightningDataModule):
 
 
 class SetupCallback(Callback):
-    def __init__(self, resume, now, logdir, ckptdir, cfgdir, config, lightning_config):
+    def __init__(self, resume, timesig, logdir, ckptdir, cfgdir, config, lightning_config):
         super().__init__()
         self.resume = resume
-        self.now = now
+        self.timesig = timesig
         self.logdir = logdir
         self.ckptdir = ckptdir
         self.cfgdir = cfgdir
@@ -548,12 +548,12 @@ class SetupCallback(Callback):
             print("Project config")
             print(OmegaConf.to_yaml(self.config))
             OmegaConf.save(self.config,
-                           os.path.join(self.cfgdir, "{}-project.yaml".format(self.now)))
+                           os.path.join(self.cfgdir, "{}-project.yaml".format(self.timesig)))
 
             print("Lightning config")
             print(OmegaConf.to_yaml(self.lightning_config))
             OmegaConf.save(OmegaConf.create({"lightning": self.lightning_config}),
-                           os.path.join(self.cfgdir, "{}-lightning.yaml".format(self.now)))
+                           os.path.join(self.cfgdir, "{}-lightning.yaml".format(self.timesig)))
 
         else:
             # ModelCheckpoint callback created log directory --- remove it
@@ -753,7 +753,7 @@ if __name__ == "__main__":
     #           params:
     #               key: value
 
-    now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    timesig = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 
     # add cwd for convenience and to make classes in this file available when
     # running as `python main.py`
@@ -801,9 +801,12 @@ if __name__ == "__main__":
 
         datadir_in_name = True
         if datadir_in_name:
-            now = os.path.basename(os.path.normpath(opt.data_roots[0])) + now
+            basename = os.path.basename(os.path.normpath(opt.data_roots[0]))
+            # If we do multi-subject training, we need to replace the * with "all".
+            basename = basename.replace("*", "all")
+            timesig  = basename + timesig
             
-        nowname = now + name + opt.postfix
+        nowname = timesig + name + opt.postfix
         logdir = os.path.join(opt.logdir, nowname)
 
     ckptdir = os.path.join(logdir, "checkpoints")
@@ -1034,7 +1037,7 @@ if __name__ == "__main__":
                 "target": "main.SetupCallback",
                 "params": {
                     "resume": opt.resume,
-                    "now": now,
+                    "timesig": timesig,
                     "logdir": logdir,
                     "ckptdir": ckptdir,
                     "cfgdir": cfgdir,
