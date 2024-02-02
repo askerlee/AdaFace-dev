@@ -70,9 +70,9 @@ if __name__ == "__main__":
     # Always pass "db", no matter what the actual method is. 
     # So that class_names are the long class name, instead of the one-token short class name.
     # This helps better match the prompt with the image.
-    vars = parse_subject_file(args.subject_file, "db")
-    subjects, class_names, broad_classes, sel_set = vars['subjects'], vars['class_names'], \
-                                                     vars['broad_classes'], vars['sel_set']
+    subj_info, subj2attr = parse_subject_file(args.subject_file)
+    subjects, class_names, broad_classes, sel_set = subj_info['subjects'], subj_info['class_names'], \
+                                                     subj_info['broad_classes'], subj_info['sel_set']
 
     subject_indices = list(range(len(subjects)))
     if args.selset:
@@ -110,7 +110,7 @@ if __name__ == "__main__":
             prompt_idx = 0
 
             # orig_prompt replaces "z short_class_name" in prompt with the 
-            # long_class_name (actually db_prompt).
+            # long_class_name (actually init_string).
             # E.g., prompt: "a z toy" <=> orig_prompt: "a stuffed animal".
             for _, indiv_subdir, prompt, orig_prompt in indiv_subdirs_prompts:
                 prompt_idx += 1

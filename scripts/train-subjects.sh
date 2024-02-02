@@ -42,18 +42,18 @@ end
 set self (status basename)
 echo $self $argv
 
-argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'cls_string_as_delta' 'use_conv_attn_kernel_size=' 'eval' -- $argv
+argparse --ignore-unknown --min-args 1 --max-args 20 'gpu=' 'maxiter=' 'lr=' 'subjfile=' 'bb_type=' 'num_vectors_per_token=' 'clip_last_layers_skip_weights=' 'use_conv_attn_kernel_size=' 'eval' -- $argv
 or begin
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_string_as_delta] [--eval] [--use_conv_attn_kernel_size K] (ada|ti|db) [low-high] [EXTRA_ARGS]"
-    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_string_as_delta ada 1 25"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--eval] [--use_conv_attn_kernel_size K] (ada|ti|db) [low-high] [EXTRA_ARGS]"
+    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh ada 1 25"
     exit 1
 end
 
 if [ "$argv[1]" = 'ada' ];  or [ "$argv[1]" = 'static-layerwise' ]; or [ "$argv[1]" = 'ti' ]; or [ "$argv[1]" = 'db' ]
     set method $argv[1]
 else
-    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--cls_string_as_delta] [--eval] [--use_conv_attn_kernel_size K] (ada|ti|db) [|low-high] [EXTRA_ARGS]"
-    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh --cls_string_as_delta ada 1 25"
+    echo "Usage: $self [--gpu ID] [--maxiter M] [--lr LR] [--subjfile SUBJ] [--bb_type bb_type] [--num_vectors_per_token K] [--clip_last_layers_skip_weights w1,w2,...] [--eval] [--use_conv_attn_kernel_size K] (ada|ti|db) [|low-high] [EXTRA_ARGS]"
+    echo "E.g.:  $self --gpu 0 --maxiter 4000 --subjfile evaluation/info-dbeval-subjects.sh ada 1 25"
     exit 1
 end
 
@@ -139,34 +139,15 @@ end
 
 echo Training on $subjects[$indices]
 
-# $0 0 1 13: alexachung .. masatosakai, on GPU0
-# $0 1 14 25: michelleyeoh .. zendaya,  on GPU1
 for i in $indices
     set subject     $subjects[$i]
-    set ada_prompt  $ada_prompts[$i]
-    set ada_weight  (string split " " $ada_weights[$i])
-    # If cls_strings is specified in subjfile, cls_string = cls_strings[$i]. 
-    # Otherwise, cls_string is the last word of ada_prompt. 
-    # For non-human cases "stuffed animal", the last word of ada_prompt is "animal", which is incorrecct. 
-    # So we need an individual cls_strings for non-human subjects. 
-    # For "stuffed animal", the corresponding cls_string is "toy".
-    # For humans, this is optional. If not specified, then cls_string = last word of ada_prompt.
-    # Only use cls_string as delta token when --cls_string_as_delta is specified.
-    set -q cls_strings; and set cls_string $cls_strings[$i]; or set cls_string (string split " " $ada_prompt)[-1]
-    set db_prompt0 "$db_prompts[$i]"
-    set db_prompt  "$db_prompt0$db_suffix"
-    set -q bg_init_words; and set bg_init_word $bg_init_words[$i]; or set bg_init_word ""
+    set init_string  $init_strings[$i]
+    set init_word_weights  (string split " " $all_init_word_weights[$i])
+    set cls_string $init_string
+    #set -q all_bg_init_words; and set bg_init_words $all_bg_init_words[$i]; or set bg_init_words ""
     set class_name $class_names[$i]
 
     if [ $method = 'ti' ]; or [ $method = 'ada' ]; or [ $method = 'static-layerwise' ]
-        if [ $method = 'ada' ]; or [ $method = 'static-layerwise' ]
-            set init_words $ada_prompt
-            set init_word_weights $ada_weight
-        else
-            set init_words $cls_string
-            set init_word_weights 1
-        end
-
         # If $broad_classes are specified in subjfile, then use it. Otherwise, use the default value 1.
         set -q broad_classes; and set broad_class $broad_classes[$i]; or set broad_class 1
         
@@ -178,13 +159,9 @@ for i in $indices
             set max_iters $_flag_maxiter
         end
 
-        # Reset EXTRA_TRAIN_ARGS1 to EXTRA_TRAIN_ARGS0 each time. 
-        set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS0
-
+        # Initialize EXTRA_TRAIN_ARGS1 to EXTRA_TRAIN_ARGS0 each time. 
         # cls_string: the class token used in delta loss computation.
-        # If --cls_string_as_delta, and cls_strings is provided in the subjfile, then use cls_string. 
-        # Otherwise use the default cls_string "person".
-        set -q _flag_cls_string_as_delta; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --cls_delta_string $cls_string
+        set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS0 --cls_delta_string $cls_string
         # set -q use_fp_trick; and set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --use_fp_trick $use_fp_trick[$i]
         # If $prompt_mix_max[$i] is not -1 (default [0.1, 0.3]), then prompt_mix_range is 
         # ($prompt_mix_min = $prompt_mix_max / 3, $prompt_mix_max). Probably it will be [0.2, 0.6].
@@ -208,9 +185,9 @@ for i in $indices
             set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --embedding_manager_ckpt $emb_man_ckpt --ckpt_params_perturb_ratio 0.2 --emb_reg_loss_scale 0.2
         end
 
-        echo $subject: --init_words $init_words $EXTRA_TRAIN_ARGS1
+        echo $subject: --init_string $init_string $EXTRA_TRAIN_ARGS1
         set fish_trace 1
-        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_root $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --subject_string "z" --init_words $init_words --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_TRAIN_ARGS1
+        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_roots $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --subject_string "z" --init_string $init_string --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_TRAIN_ARGS1
 
         if set -q _flag_eval
             if [ "$data_folder"  = 'subjects-dreambench' ]
@@ -226,14 +203,14 @@ for i in $indices
         end
 
     else
-        echo $subject: $db_prompt
+        echo $subject: $init_string
 
         # -1: use the default max_iters.
         set fish_trace 1
         # $EXTRA_TRAIN_ARGS is not for DreamBooth. It is for AdaPrompt/TI only.
         # --lr and --max_steps are absent in DreamBooth. 
         # It always uses the default lr and max_steps specified in the config file.
-        python3 main_db.py --base configs/stable-diffusion/v1-finetune-db.yaml -t --actual_resume $sd_ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $db_prompt0) --data_root $data_folder/$subject -n $subject-db --no-test --token "z" --class_word $db_prompt
+        python3 main_db.py --base configs/stable-diffusion/v1-finetune-db.yaml -t --actual_resume $sd_ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $init_string) --data_roots $data_folder/$subject -n $subject-db --no-test --token "z" --class_word $init_string
         
         if set -q _flag_eval
             if [ "$data_folder"  = 'subjects-dreambench' ]

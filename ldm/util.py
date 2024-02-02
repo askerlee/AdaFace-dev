@@ -1107,9 +1107,10 @@ def gen_gradient_scaler(alpha):
         return lambda x: x.detach()
 
 # new_token_embeddings: [new_num_tokens, 768].
-def extend_nn_embedding(old_nn_embedding, new_token_embeddings, num_new_tokens):
+def extend_nn_embedding(old_nn_embedding, new_token_embeddings):
     emb_dim         = old_nn_embedding.embedding_dim
     num_old_tokens  = old_nn_embedding.num_embeddings
+    num_new_tokens  = new_token_embeddings.shape[0]
     num_tokens2     = num_old_tokens + num_new_tokens
     
     new_nn_embedding = nn.Embedding(num_tokens2, emb_dim, 
@@ -1122,6 +1123,7 @@ def extend_nn_embedding(old_nn_embedding, new_token_embeddings, num_new_tokens):
     # Copy the new embeddings to new_nn_embedding.
     new_nn_embedding.weight.data[old_num_tokens:] = new_token_embeddings
 
+    print(f"Extended nn.Embedding from {num_old_tokens} to {num_tokens2} tokens.")
     return new_nn_embedding
 
 def get_clip_tokens_for_string(tokenizer, string, force_single_token=False):
@@ -1160,37 +1162,49 @@ def get_embeddings_for_clip_tokens(embedder, tokens):
     # RETURN: [N, 768]
     return embedder(tokens)[0]
 
-def extend_clip_text_embedder(text_embedder, string2embedding):
-    num_new_tokens = len(string2embedding)
-    if num_new_tokens == 0:
+# string2embedding: a dict of {string: embedding} to be added to the text encoder. 
+# Each embedding: [1, 768].
+# string_list: a list of strings to be added to the text encoder. 
+# The corresponding embeddings are initialized to 0.
+def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
+    if string_list is not None:
+        for string in string_list:
+            if string not in string2embedding:
+                string2embedding[string] = torch.zeros(1, 768)
+
+    if len(string2embedding) == 0:
         return
 
-    print(f"Extended CLIP text encoder with {num_new_tokens} new tokens:")
+    print(f"Extended CLIP text encoder with tokens: {string2embedding.keys()}")
     get_tokens_for_string = partial(get_clip_tokens_for_string, text_embedder.tokenizer)
 
-    # num_added_tokens should always be num_new_tokens.
-    num_added_tokens = text_embedder.tokenizer.add_tokens(list(string2embedding.keys()))
-    assert num_added_tokens == num_new_tokens, \
-        f"num_added_tokens {num_added_tokens} != num_new_tokens {num_new_tokens}"
-    # text_embedder.transformer.text_model.embeddings.token_embedding: 
-    # torch.nn.modules.sparse.Embedding, [49408, 768]
-    # cls_token: 49408, 49409...
-    # So token_embedding needs to be expanded.
+    ext_token_embeddings = []
+    num_new_tokens = 0
 
-    token_embeddings = []
     for string, embedding in string2embedding.items():
+        # num_added_tokens should always be num_new_tokens.
+        num_added_tokens = text_embedder.tokenizer.add_tokens([string])
+        if num_added_tokens == 0:
+            print(f"Token '{string}' already exists in the tokenizer.")
+            continue
+
+        # text_embedder.transformer.text_model.embeddings.token_embedding: 
+        # torch.nn.modules.sparse.Embedding, [49408, 768]
+        # cls_token: 49408, 49409...
+        # So token_embedding needs to be expanded.
         # sanity check.
         token = get_tokens_for_string(string, force_single_token=True)[0]
         print(f"Added string: {string} -> token: {token}")
-        token_embeddings.append(embedding)
+        ext_token_embeddings.append(embedding)
+        num_new_tokens += 1
 
-    # token_embeddings: list of tensors, each [1, 768] => [num_new_tokens, 768].
-    token_embeddings = torch.cat(token_embeddings, dim=0)
+    if num_new_tokens == 0:
+        return None
+    
+    # ext_token_embeddings: list of tensors, each [1, 768] => [num_new_tokens, 768].
+    ext_token_embeddings = torch.cat(ext_token_embeddings, dim=0)
 
-    # Extend the token embeddings in CLIP text encoder for the new cls strings.
-    text_embedder.transformer.text_model.embeddings.token_embedding = \
-        extend_nn_embedding(text_embedder.transformer.text_model.embeddings.token_embedding, 
-                            token_embeddings, num_new_tokens)
+    return ext_token_embeddings
 
 # samples:   a list of (B, C, H, W) tensors.
 # img_flags: a list of (B,) ints.

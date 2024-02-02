@@ -75,7 +75,7 @@ class DictT(dict):
          self.lr = "-1"
          self.scale_lr = True
          self.datadir_in_name = False
-         self.data_root = ""
+         self.data_roots = ""
          self.actural_resume = ""
          self.embedding_manager_ckpt = ""
          self.subject_string = ""

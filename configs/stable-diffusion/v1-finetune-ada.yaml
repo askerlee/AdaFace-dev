@@ -168,6 +168,8 @@ data:
     batch_size:  3
     num_workers: 1
     wrap: false
+    training_uses_subject_sampler: true
+    max_steps: 2000
     train:
       target: ldm.data.personalized.PersonalizedBase
       params:
@@ -202,3 +204,4 @@ lightning:
     max_steps: 2000
     limit_val_batches: 0.0
     deterministic: False
+    replace_sampler_ddp: False

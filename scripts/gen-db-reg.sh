@@ -21,7 +21,7 @@ set indices $indices0[(seq $L $H)]
 echo Generating reg images for $subjects[$indices]
 
 for i in $indices
-    set db_prompt0 "$db_prompts[$i]"
+    set db_prompt0 "$init_strings[$i]"
     set db_prompt  "$db_prompt0$db_suffix"
     set db_prompt0_nospace (string replace -a " " "" $db_prompt0)
 

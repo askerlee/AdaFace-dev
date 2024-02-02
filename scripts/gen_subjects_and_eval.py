@@ -48,7 +48,7 @@ def parse_args():
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
 
-    parser.add_argument("--prompt_set", type=str, default='all', choices=['all', 'hard'],
+    parser.add_argument("--prompt_set", type=str, default='all', choices=['dreambench', 'community'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
     
     parser.add_argument("--prompt", type=str, default=None,
@@ -62,7 +62,7 @@ def parse_args():
         help="compel-style prompt cfg weighting level (weight=1.1**L). Set to 0 to disable compel cfg",
     )
 
-    # Possible z_suffix_type: '' (none), 'db_prompt', 'class_name', or any user-specified string.
+    # Possible z_suffix_type: '' (none), 'class_name', or any user-specified string.
     parser.add_argument("--z_suffix_type", default=argparse.SUPPRESS, 
                         help="Append this string to the subject placeholder string during inference "
                              "(default: '' for humans/animals, 'class_name' for others)")
@@ -128,7 +128,7 @@ def parse_args():
     parser.add_argument("--skipselset", action="store_true",
                         help="Whether to generate all subjects except the selected subset")
     
-    parser.add_argument("--compare_with_pardir", type=str, default=None,
+    parser.add_argument("--compare_with_pardir", type=str, default=argparse.SUPPRESS,
                         help="Parent folder of subject images used for computing similarity with generated samples")
 
     parser.add_argument("--bb_type", type=str, default="v15-dste8-vae", 
@@ -167,9 +167,9 @@ def parse_args():
 if __name__ == "__main__":
     
     args, argparser = parse_args()
-    vars = parse_subject_file(args.subjfile, args.method)
+    subj_info, subj2attr = parse_subject_file(args.subjfile)
     subjects, class_names, broad_classes, sel_set, ckpt_iters = \
-            vars['subjects'], vars['class_names'], vars['broad_classes'], vars['sel_set'], vars['maxiters']
+            subj_info['subjects'], subj_info['class_names'], subj_info['broad_classes'], subj_info['sel_set'], subj_info['maxiters']
 
     args.orig_placeholder = args.subject_string
     # If num_vectors_per_token == 3:
@@ -184,24 +184,22 @@ if __name__ == "__main__":
         # * 3 for 3 broad classes, i.e., all classes use the same args.z_prefix.
         z_prefixes_by_class = [args.z_prefix] * 3    
     else:
-        if 'z_prefix_keys' in vars and args.prompt is None:
-            z_prefixes_by_subject = { k: vars['z_prefix_values'][i] for i, k in enumerate(vars['z_prefix_keys']) }
-        if 'inf_z_prefixes' in vars and args.prompt is None:
+        if 'z_prefix_keys' in subj_info and args.prompt is None:
+            z_prefixes_by_subject = { k: subj_info['z_prefix_values'][i] for i, k in enumerate(subj_info['z_prefix_keys']) }
+        if 'inf_z_prefixes' in subj_info and args.prompt is None:
             # Use inf_z_prefixes from the subject info file if it exists, 
             # but only if it's not manual prompt generation
-            z_prefixes_by_class = vars['inf_z_prefixes']
+            z_prefixes_by_class = subj_info['inf_z_prefixes']
             assert len(z_prefixes_by_class) == 3
 
     if hasattr(args, 'is_face'):
         are_faces = [args.is_face] * len(subjects)
-    elif 'are_faces' in vars:
-        are_faces = vars['are_faces']
+    elif 'are_faces' in subj_info:
+        are_faces = subj_info['are_faces']
     else:
         are_faces = [False] * len(subjects)
 
-    # db_prompts are phrases, and ada_prompts are multiple individual words.
-    # So db_prompts better suit the CLIP text/image matching.
-    class_long_tokens = vars['db_prompts']
+    init_strings = subj_info['init_strings']
 
     subject_indices = list(range(len(subjects)))
     if args.selset:
@@ -216,7 +214,7 @@ if __name__ == "__main__":
 
     if args.method == 'db':
         # For DreamBooth, use_z_suffix is the default.
-        args.z_suffix_type = 'db_prompt'
+        args.z_suffix_type = 'init_string'
 
     all_ckpts = os.listdir(args.ckpt_dir)
     # Sort all_ckpts by name (actually by timestamp in the name), so that most recent first.
@@ -232,11 +230,11 @@ if __name__ == "__main__":
     for subject_idx in subject_indices:
         if args.skipselset and subject_idx in sel_set:
             continue
-        subject_name        = subjects[subject_idx]
-        class_name         = class_names[subject_idx]
-        broad_class         = broad_classes[subject_idx]
-        is_face             = are_faces[subject_idx]
-        class_long_token    = class_long_tokens[subject_idx]
+        subject_name    = subjects[subject_idx]
+        class_name      = class_names[subject_idx]
+        broad_class     = broad_classes[subject_idx]
+        is_face         = are_faces[subject_idx]
+        init_string      = init_strings[subject_idx]
 
         # z_prefixes_by_subject is only for selected subjects. So in most cases,
         # subject_name is not in z_prefixes_by_subject. 
@@ -267,9 +265,9 @@ if __name__ == "__main__":
         else:
             z_suffix_type = args.z_suffix_type
 
-        if z_suffix_type == 'db_prompt':
-            # DreamBooth always uses db_prompt as z_suffix.
-            z_suffix = " " + class_long_token
+        if z_suffix_type == 'init_string':
+            # DreamBooth always uses init_string as z_suffix.
+            z_suffix = " " + init_string
         elif z_suffix_type == 'class_name':
             # For Ada/TI, if we append class token to "z" -> "z dog", 
             # the chance of occasional under-expression of the subject may be reduced.
@@ -360,10 +358,10 @@ if __name__ == "__main__":
                 args.n_samples = 4
             if args.bs == -1:
                 args.bs = 4
-            # E.g., get_prompt_list(placeholder="z", z_suffix="cat", class_long_token="tabby cat", broad_class=1)
+            # E.g., get_prompt_list(placeholder="z", z_suffix="cat", init_string="tabby cat", broad_class=1)
             prompt_list, class_short_prompt_list, class_long_prompt_list = \
                 get_prompt_list(args.subject_string, z_prefix, z_suffix, background_string, 
-                                class_name, class_long_token, 
+                                class_name, init_string, 
                                 broad_class, args.prompt_set)
             prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set}{bg_suffix}.txt"
             PROMPTS = open(prompt_filepath, "w")
@@ -377,11 +375,11 @@ if __name__ == "__main__":
             if len(z_prefix) > 0:
                 subject_string  = z_prefix + " " + subject_string
                 class_name      = z_prefix + " " + class_name
-                class_long_token = z_prefix + " " + class_long_token
+                init_string      = z_prefix + " " + init_string
 
             prompt_tmpl = args.prompt if args.prompt != "" else "a {}"
             prompt = prompt_tmpl.format(subject_string + z_suffix)
-            class_long_prompt = prompt_tmpl.format(class_long_token + z_suffix)
+            class_long_prompt  = prompt_tmpl.format(init_string + z_suffix)
             class_short_prompt = prompt_tmpl.format(class_name + z_suffix)
             # If --background_string is not specified, background_string is "".
             # Only add the background_string to prompt used for image generation,
@@ -475,6 +473,9 @@ if __name__ == "__main__":
 
         if args.use_first_gt_img_as_init:
             command_line += f" --use_first_gt_img_as_init --init_img_weight {args.init_img_weight}"
+
+        if not hasattr(args, 'compare_with_pardir') and 'data_folder' in subj_info:
+            args.compare_with_pardir = subj_info['data_folder'][0]
 
         if args.compare_with_pardir:
             # Do evaluation on authenticity/composition.

@@ -2,7 +2,7 @@ import os
 import numpy as np
 import PIL
 from PIL import Image
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 from torchvision import transforms
 from transformers import CLIPTokenizer
 from torchvision.transforms import InterpolationMode
@@ -11,7 +11,8 @@ import random
 import torch
 import regex as re
 import webdataset as wds
-
+import glob
+from evaluation.eval_utils import parse_subject_file
 
 imagenet_templates_smallest = [
     'a photo of a {}',
@@ -109,9 +110,8 @@ per_img_token_list = [
 # So it's a good template object for computing the delta loss.
 # "person" is also used for animals, as their dynamic compositions are highly similar.
 # "mickey", "snoopy", "pikachu" are common cartoon characters.
-default_cls_delta_strings = [ [ "bike", "person", "ball" ], 
-                             [ "person", "dog" ],
-                             [ "mickey", "snoopy", "pikachu" ] ]
+# These three words are for 3 broad_classes: 0, 1, 2.
+default_cls_delta_strings = [ "ball", "person", "mickey" ]
 
 single_human_pat = "man|woman|person|boy|girl|child|kid|baby|adult|guy|lady|gentleman|lady|male|female|human"
 single_role_pat  = "cook|chef|waiter|waitress|doctor|nurse|policeman|policewoman|fireman|firewoman|firefighter|teacher|student|professor|driver|pilot|farmer|worker|artist|painter|photographer|dancer|singer|musician|player|athlete|player|biker|cyclist|bicyclist"
@@ -122,7 +122,7 @@ human_animal_pat = "|".join([single_human_pat, single_role_pat, plural_human_pat
 
 class PersonalizedBase(Dataset):
     def __init__(self,
-                 data_root,
+                 data_roots,    # a list of strings, each string is a path to a folder containing images.
                  size=None,
                  repeats=100,
                  flip_p=0.5,
@@ -131,8 +131,8 @@ class PersonalizedBase(Dataset):
                  rand_scale_range=None,
                  set="train",
                  subject_string="z",
-                 background_string=None,
-                 wds_background_string=None,
+                 background_string="y",
+                 wds_background_string="w",
                  # placeholder_prefix for all types of prompts. Could be a list of strings, separated by ",".
                  common_placeholder_prefix=None,   
                  # placeholder_prefix for compositional prompts. Could be a list of strings, separated by ",".
@@ -150,30 +150,58 @@ class PersonalizedBase(Dataset):
                  center_crop=False,
                  num_compositions_per_image=1,
                  broad_class=1,
+                 # If data_roots contain multiple folders, a subject each folder, 
+                 # then subj_info_filepath should point to the subject info file 
+                 # containing the cls_delta_string of all subjects, in "init_strings".
+                 # cls_bg_delta_string is optional, and can be specified in "all_bg_init_words".
+                 subj_info_filepath=None,
                  wds_comp_db_path=None,    # Path to the composition webdatabase .tar file
                  verbose=False,
                  ):
 
-        self.data_root = data_root
-        
-        # image_paths and mask_paths are full paths.
-        image_paths         = [os.path.join(self.data_root, file_path) for file_path in sorted(os.listdir(self.data_root))]
-        self.image_paths    = list(filter(lambda x: "_mask" not in x and os.path.splitext(x)[1].lower() != '.txt', image_paths))
-        fg_mask_paths       = [ os.path.splitext(x)[0] + "_mask.png" for x in self.image_paths ]
-        self.fg_mask_paths  = list(map(lambda x: x if x in image_paths else None, fg_mask_paths))
-        num_valid_fg_masks  = sum([ 1 if x is not None else 0 for x in self.fg_mask_paths ])
-        caption_paths       = [ os.path.splitext(x)[0] + ".txt" for x in self.image_paths ]
-        self.caption_paths  = list(map(lambda x: x if x in image_paths else None, caption_paths))
-        num_valid_captions  = sum([ 1 if x is not None else 0 for x in self.caption_paths ])
+        # Expand wildcards in data_roots.
+        if isinstance(data_roots, str):
+            data_roots = [ data_roots ]
+        data_roots_expanded = [ glob.glob(data_root) for data_root in data_roots ]
+        self.data_roots = sum(data_roots_expanded, [])
+        self.subject_names = [ os.path.basename(data_root) for data_root in self.data_roots ]
 
-        if verbose:
-            print("{} images, {} fg masks, {} captions found in '{}'".format( \
-                  len(self.image_paths), num_valid_fg_masks, num_valid_captions, self.data_root))
-            if num_valid_fg_masks > 0 and num_valid_fg_masks < len(self.image_paths):
-                print("WARNING: {} fg masks are missing!".format(len(self.image_paths) - num_valid_fg_masks))
-            if num_valid_captions > 0 and num_valid_captions < len(self.image_paths):
-                print("WARNING: {} captions are missing!".format(len(self.image_paths) - num_valid_captions))
+        assert len(self.data_roots) > 0, f"No data found in data_roots={data_roots}!"
 
+        self.image_paths_by_subj    = []
+        self.fg_mask_paths_by_subj  = []
+        self.caption_paths_by_subj  = []
+
+        for data_root in self.data_roots:
+            # image_paths and mask_paths are full paths.
+            all_file_paths      = [os.path.join(data_root, file_path) for file_path in sorted(os.listdir(data_root))]
+            image_paths         = list(filter(lambda x: "_mask" not in x and os.path.splitext(x)[1].lower() != '.txt', all_file_paths))
+            fg_mask_paths       = [ os.path.splitext(x)[0] + "_mask.png" for x in image_paths ]
+            fg_mask_paths       = list(map(lambda x: x if x in all_file_paths else None, fg_mask_paths))
+            num_valid_fg_masks  = sum([ 1 if x is not None else 0 for x in fg_mask_paths ])
+            caption_paths       = [ os.path.splitext(x)[0] + ".txt" for x in image_paths ]
+            caption_paths       = list(map(lambda x: x if x in all_file_paths else None, caption_paths))
+            num_valid_captions  = sum([ 1 if x is not None else 0 for x in caption_paths ])
+
+            self.image_paths_by_subj.append(image_paths)
+            self.fg_mask_paths_by_subj.append(fg_mask_paths)
+            self.caption_paths_by_subj.append(caption_paths)
+
+            if verbose:
+                print("{} images, {} fg masks, {} captions found in '{}'".format( \
+                    len(image_paths), num_valid_fg_masks, num_valid_captions, data_root))
+                if num_valid_fg_masks > 0 and num_valid_fg_masks < len(image_paths):
+                    print("WARNING: {} fg masks are missing!".format(len(image_paths) - num_valid_fg_masks))
+                if num_valid_captions > 0 and num_valid_captions < len(image_paths):
+                    print("WARNING: {} captions are missing!".format(len(image_paths) - num_valid_captions))
+
+        self.num_subjects = len(self.subject_names)
+        # self.image_paths, ...         are for the one-level indexing, i.e., directly indexing into a particular image.
+        # self.image_paths_by_subj, ... are for the two-level indexing, i.e., first indexing into a subject, then
+        # indexing into an image within that subject.
+        self.image_paths   = sum(self.image_paths_by_subj, [])
+        self.fg_mask_paths = sum(self.fg_mask_paths_by_subj, [])
+        self.caption_paths = sum(self.caption_paths_by_subj, [])
         self.num_images = len(self.image_paths)
         if set == "train":
             self.is_training = True
@@ -194,14 +222,43 @@ class PersonalizedBase(Dataset):
             self.comp_wds_iter = None
             self.do_wds_comp = False
 
-        self.subject_string  = subject_string
-        self.background_string   = background_string
-        self.wds_background_string = wds_background_string
-        self.broad_class = broad_class
+        if subj_info_filepath is not None:
+            subj_info, subj2attr = parse_subject_file(subj_info_filepath)
+        else:
+            subj2attr = {}
 
+        if 'broad_classes' not in subj2attr:
+            self.broad_classes          = [ broad_class ] * self.num_subjects
+        else:
+            self.broad_classes          = [ subj2attr['broad_classes'][subject_name] \
+                                            for subject_name in self.subject_names ]
+        # cartoon characters are usually depicted as human-like, so is_animal is True.
+        self.are_animals = [ (broad_class == 1 or broad_class == 2) \
+                              for broad_class in self.broad_classes ]
+
+        if self.num_subjects == 1:
+            self.subject_strings        = [ subject_string ]
+            self.background_strings     = [ background_string ]
+            self.wds_background_strings = [ wds_background_string ]
+        else:
+            # For multiple subjects, the subject_string is like: 'z0', 'z1', ....
+            self.subject_strings        = [ subject_string + str(i) for i in range(self.num_subjects) ]
+            # For multiple subjects, the background_string is like: 'y0', 'y1', ....
+            # Don't share the background_string, since the background of different subject images
+            # has different distributions.
+            self.background_strings     = [ background_string + str(i) for i in range(self.num_subjects) ]
+            # For multiple subjects, the wds_background_string is like: 'w0', 'w1', ....
+            # Don't share the wds_background_string, since the background of different subject images
+            # has different distributions.
+            self.wds_background_strings = [ wds_background_string + str(i) for i in range(self.num_subjects) ]
+            
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-        self.subject_token = None
-        self.background_token  = None
+        # subject_token, background_token: subject_string and background_string converted to 
+        # token numbers.
+        self.subject_tokens     = [ self.tokenizer(subject_string)['input_ids'][1] \
+                                    for subject_string in self.subject_strings ]
+        self.background_tokens  = [ self.tokenizer(background_string)['input_ids'][1] \
+                                    for background_string in self.background_strings ]
 
         # placeholder_prefix could be a list of strings, separated by ",".
         if common_placeholder_prefix is not None:
@@ -213,17 +270,36 @@ class PersonalizedBase(Dataset):
         else:
             self.compos_placeholder_prefixes   = None
 
-        if cls_delta_string is None:
-            if verbose:
-                print("WARNING: default cls_delta_strings are used!")
-            self.cls_delta_strings = default_cls_delta_strings[self.broad_class]
+        if 'init_strings' in subj2attr:
+            self.cls_delta_strings = [ subj2attr['init_strings'][subject_name] \
+                                            for subject_name in self.subject_names ]
         else:
-            self.cls_delta_strings = [ cls_delta_string ]
+            if cls_delta_string is not None:
+                self.cls_delta_strings = [ cls_delta_string ] * self.num_subjects
+            else:
+                self.cls_delta_strings = [ default_cls_delta_strings[broad_class] \
+                                            for broad_class in self.broad_classes ]
 
-        if cls_bg_delta_string is not None:
-            self.cls_bg_delta_strings = re.split(r"\s+", cls_bg_delta_string) 
+        if 'all_bg_init_words' in subj2attr:
+            self.cls_bg_delta_strings = [ subj2attr['all_bg_init_words'][subject_name] \
+                                            for subject_name in self.subject_names ]
+        else:                
+            if cls_bg_delta_string is not None:
+                cls_bg_delta_string = re.split(r"\s+", cls_bg_delta_string) 
+            else:
+                cls_bg_delta_string = [ 'unknown' ]
+            # All subjects use the same cls_bg_delta_string.
+            self.cls_bg_delta_strings = cls_bg_delta_string * self.num_subjects
+
+        # list_initializer_weights are not used in the data loader, but are used to initialize
+        # the embedding manager.
+        if 'all_init_word_weights' in subj2attr:
+            self.list_initializer_weights = [ subj2attr['all_init_word_weights'][subject_name] \
+                                              for subject_name in self.subject_names ]
         else:
-            self.cls_bg_delta_strings = [ 'unknown' ]
+            self.list_initializer_weights = [ None ] * self.num_subjects
+        # bg_initializer_weights are always None (uniform over bg initializer words).
+        self.list_bg_initializer_weights = [ None ] * self.num_subjects
 
         self.num_vectors_per_token    = num_vectors_per_token
         self.num_vectors_per_bg_token = num_vectors_per_bg_token
@@ -267,17 +343,36 @@ class PersonalizedBase(Dataset):
             self.flip = None
 
         self.num_compositions_per_image = num_compositions_per_image
-        # cartoon characters are usually depicted as human-like, so is_animal is True.
-        self.is_animal = (broad_class == 1 or broad_class == 2)
    
     def __len__(self):
         return self._length
 
-    def __getitem__(self, index):        
+    def __getitem__(self, index):
+        is_subject_idx = False
+        if isinstance(index, tuple):
+            index, is_subject_idx = index
+
         example = {}
-        image_path = self.image_paths[index % self.num_images]
-        fg_mask_path  = self.fg_mask_paths[index % self.num_images] 
-        caption_path  = self.caption_paths[index % self.num_images]
+        if is_subject_idx:
+            image_paths     = self.image_paths_by_subj[index]
+            fg_mask_paths   = self.fg_mask_paths_by_subj[index]
+            caption_paths   = self.caption_paths_by_subj[index]
+            # Draw a random image from the subject dataset indexed by index.
+            image_idx = random.randint(0, len(image_paths) - 1)
+            image_path      = image_paths[image_idx]
+            fg_mask_path    = fg_mask_paths[image_idx]
+            caption_path    = caption_paths[image_idx]
+            subject_idx     = index
+        else:
+            image_path    = self.image_paths[index % self.num_images]
+            fg_mask_path  = self.fg_mask_paths[index % self.num_images] 
+            caption_path  = self.caption_paths[index % self.num_images]
+            subject_idx   = 0
+
+        cls_delta_string      = self.cls_delta_strings[subject_idx]
+        wds_background_string = self.wds_background_strings[subject_idx]
+        subject_token         = self.subject_tokens[subject_idx]
+        background_token      = self.background_tokens[subject_idx]
 
         image_obj = Image.open(image_path)
         if not image_obj.mode == "RGB":
@@ -305,13 +400,13 @@ class PersonalizedBase(Dataset):
             has_fg_mask = False
 
         # image is made sure to be uint8. So fg_mask is also uint8.
-        fg_mask     = np.array(fg_mask_obj).astype(np.uint8)
+        fg_mask         = np.array(fg_mask_obj).astype(np.uint8)
         # Concatenate fg_mask to the last channel of image, so that we don't need to transform fg_mask separately.
         # image_mask: (1282, 1282, 4)
-        image_mask  = np.concatenate([image, fg_mask[:, :, np.newaxis]], axis=2)
+        image_mask      = np.concatenate([image, fg_mask[:, :, np.newaxis]], axis=2)
         image_mask_obj  = Image.fromarray(image_mask)
 
-        mask_fg_percent = fg_mask.astype(float).sum() / (255 * fg_mask.size)
+        #mask_fg_percent = fg_mask.astype(float).sum() / (255 * fg_mask.size)
         # print(f"mask_fg_percent: {mask_fg_percent}")
 
         #print(f"subj_prompt_comp: {subj_prompt_comp}")
@@ -456,16 +551,11 @@ class PersonalizedBase(Dataset):
                 if len(bg_prompt.strip()) < 5:
                     continue
                 bg_prompt_tokens = self.tokenizer(bg_prompt)['input_ids']
-                if self.subject_token is None:
-                    self.subject_token = self.tokenizer(self.subject_string)['input_ids'][1]
-                if self.background_token is None:
-                    self.background_token  = self.tokenizer(self.background_string)['input_ids'][1]
-
                 # Skip those image/prompt pairs that will cause parsing errors.
-                contains_special_token = self.subject_token       in bg_prompt_tokens \
-                                         or self.background_token in bg_prompt_tokens \
-                                         or (self.wds_background_string is not None \
-                                             and self.wds_background_string in bg_prompt_tokens)
+                contains_special_token = subject_token       in bg_prompt_tokens \
+                                         or background_token in bg_prompt_tokens \
+                                         or (wds_background_string is not None \
+                                             and wds_background_string in bg_prompt_tokens)
                 
                 if re.search(human_animal_pat, bg_prompt):
                     contains_human = True
@@ -520,20 +610,21 @@ class PersonalizedBase(Dataset):
             # Blend fg area with bg_img. fg_mask is 2D, so add 1D channel.
             wds_image    = np.where(fg_mask[:, :, None] > 0, image, bg_image_512)
 
-        self.generate_prompts(example)
+        self.generate_prompts(example, subject_idx)
+
         if gen_wds_comp:
             # common_placeholder_prefix is prepended to caption and caption_bg.
             # compos_placeholder_prefix is prepended to subj_prompt_single, subj_prompt_comps,
             # cls_prompt_single, cls_prompt_comps, which we don't need to change, as they are 
             # for compositional distillation.
             wds_comp_extra      = ", in front of " + bg_prompt
-            wds_cls_comp_extra  = " " + self.cls_delta_string + wds_comp_extra
+            wds_cls_comp_extra  = " " + cls_delta_string + wds_comp_extra
             example["wds_comp_extra"]       = wds_comp_extra
             example["wds_cls_comp_extra"]   = wds_cls_comp_extra
             example["wds_caption"]          = example["caption"]    + wds_comp_extra
             example["wds_cls_caption"]      = example["caption"]    + wds_cls_comp_extra
-            example["wds_caption_bg"]       = self.repl_bg_as_wbg(example["caption_bg"]) + wds_comp_extra
-            example["wds_cls_caption_bg"]   = self.repl_bg_as_wbg(example["caption_bg"]) + wds_cls_comp_extra
+            example["wds_caption_bg"]       = self.repl_bg_as_wbg(example["caption_bg"], subject_idx) + wds_comp_extra
+            example["wds_cls_caption_bg"]   = self.repl_bg_as_wbg(example["caption_bg"], subject_idx) + wds_cls_comp_extra
             example["wds_image"]            = (wds_image    / 127.5 - 1.0).astype(np.float32)
             example["wds_image_bgonly"]     = (bg_image_512 / 127.5 - 1.0).astype(np.float32)
             # fg_mask of wds_image is the same as non-wds instances. So no need to assign.
@@ -585,15 +676,22 @@ class PersonalizedBase(Dataset):
 
         return example
 
-    def generate_prompts(self, example):
-        subject_string = self.subject_string
-        background_string  = self.background_string
-        self.cls_delta_string = random.choice(self.cls_delta_strings)
+    def generate_prompts(self, example, subject_idx):
+        # If there are multiple subjects, then subject_string is like: 'z0', 'z1', ....
+        # the background_string is like: 'y0', 'y1', ....
+        # Otherwise, subject_string is simply 'z', and background_string is simply 'y'.
+        subject_string      = self.subject_strings[subject_idx]
+        background_string   = self.background_strings[subject_idx]        
+        subject_string      = self.subject_strings[subject_idx]
+        background_string   = self.background_strings[subject_idx]
+        cls_delta_string    = self.cls_delta_strings[subject_idx]
+        broad_class         = self.broad_classes[subject_idx]
+        is_animal           = self.are_animals[subject_idx]
         # If background_string is specified, cls_bg_delta_string should always be specified 
         # in the commmand line (passed to main.py).
         # Don't use all words in self.cls_bg_delta_strings in the same prompt. Otherwise after taking the average,
         # the resulting embedding may have weird semantics and match too many areas.
-        cls_bg_delta_string = random.choice(self.cls_bg_delta_strings)
+        cls_bg_delta_string = self.cls_bg_delta_strings[subject_idx]
 
         # If num_vectors_per_token == 3:
         # "z"    => "z, , "
@@ -601,7 +699,7 @@ class PersonalizedBase(Dataset):
         # Need to leave a space between multiple ",,", otherwise they are treated as one token.
         if self.num_vectors_per_token > 1:
             subject_string          += ", " * (self.num_vectors_per_token - 1)
-            self.cls_delta_string   += ", " * (self.num_vectors_per_token - 1)
+            cls_delta_string   += ", " * (self.num_vectors_per_token - 1)
         if self.num_vectors_per_bg_token > 1 and background_string is not None:
             background_string       += ", " * (self.num_vectors_per_bg_token - 1)
             cls_bg_delta_string     += ", " * (self.num_vectors_per_bg_token - 1)
@@ -609,7 +707,7 @@ class PersonalizedBase(Dataset):
         if self.common_placeholder_prefixes is not None:
             common_placeholder_prefix = random.choice(self.common_placeholder_prefixes)
             subject_string          = common_placeholder_prefix + " " + subject_string
-            self.cls_delta_string   = common_placeholder_prefix + " " + self.cls_delta_string
+            cls_delta_string   = common_placeholder_prefix + " " + cls_delta_string
         # common_placeholder_prefixes are specified for red_cartoon.
         # compos_placeholder_prefixes are specified for fixhand.
         # They usually won't be used together. 
@@ -618,10 +716,10 @@ class PersonalizedBase(Dataset):
         if self.compos_placeholder_prefixes is not None:
             compos_placeholder_prefix = random.choice(self.compos_placeholder_prefixes)
             compos_subject_string   = compos_placeholder_prefix + " " + subject_string
-            compos_cls_delta_string = compos_placeholder_prefix + " " + self.cls_delta_string
+            compos_cls_delta_string = compos_placeholder_prefix + " " + cls_delta_string
         else:
             compos_subject_string   = subject_string
-            compos_cls_delta_string = self.cls_delta_string
+            compos_cls_delta_string = cls_delta_string
 
         template = random.choice(imagenet_templates_small)
 
@@ -637,7 +735,7 @@ class PersonalizedBase(Dataset):
         compos_cls_delta_string_with_bg = compos_cls_delta_string   + cls_bg_suffix
 
         # "face portrait" trick for humans/animals.
-        if self.broad_class == 1:
+        if broad_class == 1:
             fp_prompt_template = "a face portrait of a {}"
             subj_prompt_single_fp = fp_prompt_template
             cls_prompt_single_fp  = fp_prompt_template
@@ -647,7 +745,7 @@ class PersonalizedBase(Dataset):
         subj_prompt_comps = []
         cls_prompt_comps  = []
 
-        if self.is_animal:
+        if is_animal:
             subj_type = "animal" 
         else:
             subj_type = "object"
@@ -660,7 +758,7 @@ class PersonalizedBase(Dataset):
             subj_prompt_comps.append(subj_prompt_comp)
             cls_prompt_comps.append(cls_prompt_comp)
 
-            if self.broad_class == 1:
+            if broad_class == 1:
                 subj_prompt_comp_fp = subj_prompt_single_fp + " " + composition_partial
                 cls_prompt_comp_fp  = cls_prompt_single_fp  + " " + composition_partial
                 subj_prompt_comps_fp.append(subj_prompt_comp_fp)
@@ -689,7 +787,7 @@ class PersonalizedBase(Dataset):
             example["subj_prompt_comp_bg"]   = "|".join([ subj_prompt_comp.format(compos_subject_string_with_bg) for subj_prompt_comp in subj_prompt_comps])
             example["cls_prompt_comp_bg"]    = "|".join([ cls_prompt_comp.format(compos_cls_delta_string_with_bg)     for cls_prompt_comp  in cls_prompt_comps])
 
-        if self.broad_class == 1:
+        if broad_class == 1:
             # Delta loss requires subj_prompt_single/cls_prompt_single to be token-wise aligned
             # with subj_prompt_comp/cls_prompt_comp, so we need to specify them in the dataloader as well.
             example["subj_prompt_single_fp"] = subj_prompt_single_fp.format(compos_subject_string)
@@ -704,11 +802,50 @@ class PersonalizedBase(Dataset):
                 example["subj_prompt_comp_fp_bg"]   = "|".join([ subj_prompt_comp_fp.format(compos_subject_string_with_bg) for subj_prompt_comp_fp in subj_prompt_comps_fp])
                 example["cls_prompt_comp_fp_bg"]    = "|".join([ cls_prompt_comp_fp.format(compos_cls_delta_string_with_bg)     for cls_prompt_comp_fp  in cls_prompt_comps_fp])
 
-    def repl_bg_as_wbg(self, prompt):
-        if self.wds_background_string is None:
+    def repl_bg_as_wbg(self, prompt, subject_idx):
+        background_string = self.background_strings[subject_idx]
+        wds_background_string = self.wds_background_strings[subject_idx]
+        if wds_background_string is None:
             return prompt
         # Replace singleton 'y' with 'w'.
-        prompt2 = re.sub(rf"(?<=(\W|^)){self.background_string}(?=(\W|$))", 
-                         self.wds_background_string, prompt)
+        prompt2 = re.sub(rf"(?<=(\W|^)){background_string}(?=(\W|$))", 
+                         wds_background_string, prompt)
         return prompt2
     
+# Randomly sample a subject number.
+# This subject number will be used by an PersonalizedBase instance to draw random images.
+# epoch_len: number of batches in one epoch. Usually initialized to be the same 
+# as the number of batches of the training data 
+class SubjectSampler(Sampler):
+    def __init__(self, dataset, num_batches, batch_size, debug=False):
+        self.batch_size = batch_size
+        # num_batches: Just a large number. We can loop on the dataset forever.
+        self.num_batches  = num_batches
+        self.num_subjects = dataset.num_subjects
+        assert self.num_subjects > 0, "FATAL: no subjects found in the dataset!"
+        print("Found {} subjects in the dataset".format(self.num_subjects))
+
+        self.curr_subj_idx = 0
+        self.curr_subj_count = 0
+        self.debug = debug
+
+    def __len__(self):
+        return self.num_batches * self.batch_size
+    
+    def next_subject(self):
+        new_subj_idx = (self.curr_subj_idx + 1) % self.num_subjects
+        return new_subj_idx
+
+    def __iter__(self):
+        # Output will be like:
+        # 0, 0, ..., 0 (repeat batch_size times), 1, 1, ..., 1 (repeat batch_size times) ...
+        # So that samples in each batch have the same chapter number.
+        for i in range(self.num_batches * self.batch_size):
+            # If the current subject index has been repeated batch_size times, 
+            # we find the next subject index.
+            if self.curr_subj_count >= self.batch_size:
+                self.curr_subj_count = 0        
+                self.curr_subj_idx = self.next_subject()
+
+            self.curr_subj_count += 1
+            yield self.curr_subj_idx, True

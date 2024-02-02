@@ -5,10 +5,9 @@ import glob
 import time
 import numpy as np
 
-from ldm.data.personalized import PersonalizedBase
 from evaluation.clip_eval import ImageDirEvaluator
 from evaluation.vit_eval import ViTEvaluator
-from evaluation.community_prompts import hard_prompt_list
+from evaluation.community_prompts import community_prompt_list
 from deepface import DeepFace
 from deepface.commons import functions as deepface_functions
 
@@ -39,7 +38,8 @@ def init_evaluators(gpu_id):
 # num_samples: only evaluate the last (latest) num_samples images. 
 # If -1, then evaluate all images
 def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_samples=-1, gt_self_compare=False):
-    gt_data_loader     = PersonalizedBase(gt_dir,      set='evaluation', size=256, flip_p=0.0)
+    from ldm.data.personalized import PersonalizedBase
+    gt_data_loader  = PersonalizedBase(gt_dir,      set='evaluation', size=256, flip_p=0.0)
     if gt_self_compare:
         sample_data_loader = gt_data_loader
         # Always compare all images in the subject gt image folder.
@@ -306,9 +306,10 @@ def split_string(input_string):
     return substrings
 
 # The most important variables: "subjects", "class_names", "broad_classes", "sel_set"
-def parse_subject_file(subject_file_path, method):
-    vars = {}
-
+def parse_subject_file(subject_file_path):
+    subj_info = {}
+    subj2attr = {}
+    
     with open(subject_file_path, "r") as f:
         lines = f.readlines()
         lines = [line.strip() for line in lines]
@@ -322,36 +323,47 @@ def parse_subject_file(subject_file_path, method):
                     substrings = split_string(mat.group(2))
                     if re.match("broad_classes|are_faces|maxiters", var_name):
                         values = [ int(s) for s in substrings ]
+                    elif var_name == 'all_init_word_weights':
+                        values = [ [ float(s) for s in split_string(weight_str) ] for weight_str in substrings ]
                     elif var_name == 'sel_set':
                         values = [ int(s) - 1 for s in substrings ]
                     else:
                         values = substrings
 
                     if len(values) == 1 and values[0].startswith("$"):
-                        # e.g., set -g ada_prompts  $db_prompts
-                        values = vars[values[0][1:]]
+                        # e.g., set -g cls_strings    $init_strings
+                        values = subj_info[values[0][1:]]
 
-                    vars[var_name] = values
-
-                    '''
-                    if var_name == "db_prompts" and method == "db":
-                        vars['class_tokens'] = values
-                    elif var_name == "cls_strings" and method != "db":
-                        vars['class_tokens'] = values
-                    '''
+                    subj_info[var_name] = values
                 else:
                     breakpoint()
 
-    assert "subjects" in vars and "class_names" in vars
-    if 'broad_classes' not in vars:
+    for var_name in [ "subjects", "class_names", "init_strings", "data_folder" ]:
+        if var_name not in subj_info:
+            print("Variable %s is not defined in %s" %(var_name, subject_file_path))
+            breakpoint()
+
+    if 'broad_classes' not in subj_info:
         # By default, all subjects are humans/animals, unless specified in the subject file.
-        vars['broad_classes'] = [ 1 for _ in vars['subjects'] ]
+        subj_info['broad_classes'] = [ 1 for _ in subj_info['subjects'] ]
 
-    if 'sel_set' not in vars:
-        vars['sel_set'] = list(range(len(vars['subjects'])))
+    for var_name in [ "class_names", "init_strings", "all_init_word_weights", 
+                      "all_bg_init_words", "broad_classes", "are_faces" ]:
+        if var_name in subj_info:
+            subj2attr[var_name] = {}
+            if len(subj_info[var_name]) != len(subj_info['subjects']):
+                print("Variable %s has %d elements, while there are %d subjects." 
+                      %(var_name, len(subj_info[var_name]), len(subj_info['subjects'])))
+                breakpoint()
+            for i in range(len(subj_info['subjects'])):
+                subj_name = subj_info['subjects'][i]
+                subj2attr[var_name][subj_name] = subj_info[var_name][i]
+            
+    if 'sel_set' not in subj_info:
+        subj_info['sel_set'] = list(range(len(subj_info['subjects'])))
 
-    # The most important variables: "subjects", "class_names", "broad_classes", "sel_set"
-    return vars
+    # The most important variables: "subjects", "init_strings", "data_folder", "class_names"
+    return subj_info, subj2attr
 
 # extra_sig could be a regular expression
 def find_first_match(lst, search_term, extra_sig=""):
@@ -380,11 +392,11 @@ def parse_range_str(range_str, fix_1_offset=True):
             result.append(a)
     return result
 
-# subset: 'all' or 'hard'. 
-# 'hard' means the subset of prompts based on which it's hard to generate images.
+# set_name: 'dreambench' or 'community'. 
+# 'hard' means the set_name of prompts based on which it's hard to generate images.
 def get_prompt_list(subject_string, z_prefix, z_suffix, background_string, 
                     class_token, class_long_token, 
-                    broad_class, subset='all'):
+                    broad_class, set_name='all'):
     object_prompt_list = [
     # The space between "{0} {1}" is removed, so that prompts 
     # for ada/static-layerwise/ti could be generated by
@@ -417,10 +429,6 @@ def get_prompt_list(subject_string, z_prefix, z_suffix, background_string,
     'a {0} cube shaped {1}{2}'
     ]
 
-    object_hard_prompt_indices = [ 1, 3, 4, 8, 9, 13, 19, 23, 24 ]
-    if subset == 'hard':
-        object_prompt_list = [ object_prompt_list[i] for i in object_hard_prompt_indices ]
-
     animal_prompt_list = [
     'a {0} {1}{2} in the jungle',                                       # 0
     'a {0} {1}{2} in the snow',
@@ -451,14 +459,17 @@ def get_prompt_list(subject_string, z_prefix, z_suffix, background_string,
 
     # humans/animals and cartoon characters.
     if broad_class == 1 or broad_class == 2:
-        orig_prompt_list = animal_prompt_list
+        if set_name == 'community':
+            orig_prompt_list = community_prompt_list
+        else:
+            orig_prompt_list = animal_prompt_list
     else:
         # object.
         orig_prompt_list = object_prompt_list
 
     z_suffix += background_string
     # z_prefix is usually "portrait of" or "face portrait of"
-    prompt_list            = [ prompt.format(z_prefix, subject_string,  z_suffix)       for prompt in orig_prompt_list ]
-    orig_short_prompt_list = [ prompt.format(z_prefix, class_token,     z_suffix)       for prompt in orig_prompt_list ]
+    prompt_list            = [ prompt.format(z_prefix, subject_string,   z_suffix)  for prompt in orig_prompt_list ]
+    orig_short_prompt_list = [ prompt.format(z_prefix, class_token,      z_suffix)  for prompt in orig_prompt_list ]
     orig_long_prompt_list  = [ prompt.format(z_prefix, class_long_token, z_suffix)  for prompt in orig_prompt_list ]
     return prompt_list, orig_short_prompt_list, orig_long_prompt_list

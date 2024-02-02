@@ -9,7 +9,8 @@ import numpy as np
 from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
                      add_noise_to_embedding, calc_ref_cosine_loss, clamp_prompt_embedding, \
                      get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
-                     scan_cls_delta_strings, torch_uniform, extend_indices_N_by_n_times
+                     scan_cls_delta_strings, torch_uniform, extend_indices_N_by_n_times, \
+                     extend_clip_text_embedder
 
 from functools import partial
 from collections import OrderedDict
@@ -401,7 +402,7 @@ class StaticLayerwiseEmbedding(nn.Module):
     # has_bias: if enabled, the output vectors will be dominated by self.bias.
     def __init__(self, num_layers=16, num_vectors_per_token=1, 
                  out_emb_dim=768, r=6, init_noise_stds=(0.1, 0.04), 
-                 init_words=None, init_vecs=None, init_vec_weights=None, 
+                 init_string=None, init_vecs=None, init_vec_weights=None, 
                  has_bias=True, device_type="cuda",
                  token_string=""):
         super().__init__()
@@ -507,7 +508,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             layers_out_lns.append(layer_out_lns)
         self.layers_out_lns = nn.ModuleList(layers_out_lns)
 
-        print(f"StaticLayerwiseEmbedding {token_string} initialized with {self.K} total embs, {self.N} init vectors ({init_words}), {self.r} basis vectors")
+        print(f"StaticLayerwiseEmbedding {token_string} initialized with {self.K} total embs, {self.N} init vectors ({init_string}), {self.r} basis vectors")
 
     # Return static embeddings of all layers together.
     def forward(self):
@@ -550,7 +551,7 @@ class AdaEmbedding(nn.Module):
     def __init__(self, num_layers=16, num_vectors_per_token=1, 
                  fg_emb_count=1, bg_emb_count=0, use_cached_bg=False,
                  out_emb_dim=768, r=12, 
-                 init_words=None, init_vecs=None, 
+                 init_string=None, init_vecs=None, 
                  # 16 cross-attention layers.
                  ca_infeat_dims = [ 320,  320,  640, 640, 1280, 1280, 1280, 1280, 
                                     1280, 1280, 640, 640, 640,  320,  320,  320 ],
@@ -690,7 +691,7 @@ class AdaEmbedding(nn.Module):
         else:
             self.bias = 0
 
-        print(f"AdaEmbedding {token_string} initialized with {fg_emb_count}/{bg_emb_count}/{self.K} fg/bg/total embs, {self.N} init vectors ({init_words}), {self.r} basis vectors")
+        print(f"AdaEmbedding {token_string} initialized with {fg_emb_count}/{bg_emb_count}/{self.K} fg/bg/total embs, {self.N} init vectors ({init_string}), {self.r} basis vectors")
         self.call_count = 0
         self.debug = False
 
@@ -911,10 +912,9 @@ class EmbeddingManager(nn.Module):
             conv_attn_layerwise_scale_learnable=False,
             prompt_embedding_clamp_value=-1,
             background_extra_global_scale=1.,
-            # Used in ddpm.py, ignored here.
-            embedding_manager_ckpt=None,
-            ckpt_params_perturb_ratio=0,
             emb_reg_loss_scale=1,
+            # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
+            # are used in ddpm.py, but ignored here.
             **kwargs
     ):
         super().__init__()
@@ -941,6 +941,14 @@ class EmbeddingManager(nn.Module):
             self.num_layers_per_embedder = num_unet_ca_layers
         else:
             self.num_layers_per_embedder = 1
+
+        self.placeholder_strings = placeholder_strings
+        # Model should be still on CPU. So no need to consider the device when extending the text embedder.
+        # Extend CLIP text embedder with the subject strings / background strings / wds background strings.
+        # In order to load the text embedder ckpt, the text_model.embeddings.token_embedding hasn't been
+        # extended yet. So we  save ext_token_embeddings to be extended to text_model.embeddings.token_embedding
+        # later in main.py.
+        self.ext_token_embeddings = extend_clip_text_embedder(text_embedder, {}, placeholder_strings)
 
         if background_strings is not None:
             self.background_strings = background_strings
@@ -1016,10 +1024,12 @@ class EmbeddingManager(nn.Module):
             # The background token may not have initializer words. So its corresponding
             # init_word_embeddings, avg_init_word_embedding, init_word_weights are None, 
             # and num_init_word_tokens = 0.
-            init_word_tokens, init_word_weights, init_word_embeddings, avg_init_word_embedding = \
+            try:
+                init_word_tokens, init_word_weights, init_word_embeddings, avg_init_word_embedding = \
                 calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
                                           initializer_words, initializer_weights)
-
+            except:
+                breakpoint()
             cls_delta_string = self.list_cls_delta_strings[placeholder_idx] if self.list_cls_delta_strings is not None else None
             cls_delta_tokens, cls_delta_weights, _, _ = \
                 calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
@@ -1257,8 +1267,9 @@ class EmbeddingManager(nn.Module):
             # Some prompts don't contain the placeholder token. This could happen in a compositional 
             # distillation iteration, or an inference iteration. 
             # Anyway, we need to check whether the cls_delta_string
-            # occurs in the prompts without the placeholder token. If so, we need to combine 
-            # their embeddings to the first embedding, and overwrite (delete) the 2nd to the last embeddings.
+            # occurs in the prompts without the placeholder token. If so, we need to merge 
+            # their embeddings to one (the first) embedding, and delete the 2nd to the last embeddings,
+            # using merge_cls_token_embeddings().
             if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0:
                 cls_delta_string_indices = scan_cls_delta_strings(tokenized_text, embedded_text, placeholder_token,
                                                                   placeholder_indices_1st,
@@ -1371,8 +1382,9 @@ class EmbeddingManager(nn.Module):
             # Some prompts don't contain the placeholder token. This could happen in a compositional 
             # distillation iteration, or an inference iteration. 
             # Anyway, we need to check whether the cls_delta_string
-            # occurs in the prompts without the placeholder token. If so, we need to combine 
-            # their embeddings to the first embedding, and overwrite (delete) the 2nd to the last embeddings.
+            # occurs in the prompts without the placeholder token. If so, we need to merge 
+            # their embeddings to one (the first) embedding, and delete the 2nd to the last embeddings,
+            # using merge_cls_token_embeddings().
             # During inference, cls delta strings are not used. So CLS_DELTA_STRING_MAX_SEARCH_SPAN = -1.
             if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0:
                 cls_delta_string_indices = scan_cls_delta_strings(tokenized_text, embedded_text, placeholder_token,
@@ -1756,7 +1768,7 @@ class EmbeddingManager(nn.Module):
             # emb_global_scale_score = -1 -> emb_global_scale = 0.77
             emb_global_scales = self.emb_global_scale_scores.sigmoid() + 0.5
             if self.training and do_perturb:
-                perturbation = torch_uniform(0.8, 1.4, (2,), device=emb_global_scales.device)
+                perturbation = torch_uniform(0.8, 1.4, (emb_global_scales.shape[0],), device=emb_global_scales.device)
                 # 1 -> uniform in [0.8, 1.4]. Inject randomness to reduce overfitting.
                 emb_global_scales = emb_global_scales * perturbation
 

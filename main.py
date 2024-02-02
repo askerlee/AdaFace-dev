@@ -19,7 +19,8 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
-from ldm.util import instantiate_from_config #, extend_clip_text_embedder
+from ldm.data.personalized import SubjectSampler
+from ldm.util import instantiate_from_config, extend_nn_embedding
 import re
 from safetensors.torch import load_file as safetensors_load_file
 
@@ -164,23 +165,20 @@ def get_parser(**parser_kwargs):
         help="max steps",
     )
     '''
-    parser.add_argument(
-        "--datadir_in_name", 
-        type=str2bool, 
-        nargs="?", 
-        const=True, 
-        default=True, 
-        help="Prepend the final directory in the data_root to the output directory name")
 
     parser.add_argument("--actual_resume", 
         type=str,
         required=True,
         help="Path to model to actually resume from")
 
-    parser.add_argument("--data_root", 
+    parser.add_argument("--data_roots", 
         type=str, 
+        nargs='+', 
         required=True, 
-        help="Path to directory with training images")
+        help="Path(s) with training images")
+    parser.add_argument("--subj_info_filepath",
+        type=str, default=argparse.SUPPRESS,
+        help="Path to the subject info file (only necessary if multiple subjects are used)")
 
     parser.add_argument("--embedding_manager_ckpt", 
         type=str, 
@@ -213,7 +211,7 @@ def get_parser(**parser_kwargs):
         type=str, default=None,
         help="Prefix of the placeholder string for compositional prompts. Default: None.")
     
-    parser.add_argument("--init_words", 
+    parser.add_argument("--init_string", 
         type=str, 
         help="Words used to initialize placeholder embedding")
 
@@ -223,7 +221,7 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--init_word_weights", nargs="*", 
         type=float, 
-        help="Weights of each token in init_words")
+        help="Weights of each token in init_string")
 
     parser.add_argument("--cls_delta_string",
         type=str, default=None,
@@ -301,7 +299,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--wds_comp_db_path", type=str, default=None,
                         help="Path to the composition webdatabase .tar file")
     parser.add_argument("--wds_background_string", 
-        type=str, default=None,
+        type=str, default="w",
         help="Background string which will be used in wds prompts to represent the background in wds training images.")
     
     parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
@@ -322,6 +320,79 @@ def nondefault_trainer_args(opt):
     args = parser.parse_args([])
     return sorted(k for k in vars(args) if getattr(opt, k) != getattr(args, k))
 
+# Set placeholder strings and their corresponding initial words and weights.
+# personalization_config_params = config.model.params.personalization_config.params.
+# dataset: data.datasets['train'].
+def set_placeholders_info(personalization_config_params, opt, dataset):
+    num_subjects = dataset.num_subjects
+    
+    # Single subject. All params are specified in the opt arguments.
+    if num_subjects == 1:
+        if len(opt.init_word_weights) > 0:
+            assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_string))
+        else:
+            # None will be converted to a list of 1.0s in EmbeddingManager.
+            opt.init_word_weights = None
+
+        personalization_config_params.placeholder_strings       = [opt.subject_string]
+        # opt.init_string has to be present. 
+        # opt.init_word_weights could be absent.
+        personalization_config_params.list_initializer_words[0]   = opt.init_string
+        personalization_config_params.list_initializer_weights[0] = opt.init_word_weights
+        personalization_config_params.list_cls_delta_strings[0]   = config.data.params.train.params.cls_delta_string
+        personalization_config_params.num_vectors_per_token       = { opt.subject_string: opt.num_vectors_per_token}
+
+        if opt.background_string is not None:
+            config.model.params.use_background_token = True
+            personalization_config_params.placeholder_strings.append(opt.background_string)
+            # Use a list to store both background_string and wds_background_string, 
+            # if the latter is specified.
+            personalization_config_params.list_initializer_words.append(opt.bg_init_words)
+            personalization_config_params.list_initializer_weights.append(None)            
+            personalization_config_params.list_cls_delta_strings.append(config.data.params.train.params.cls_bg_delta_string)
+            # The background token can be represented with multiple embeddings.
+            personalization_config_params.num_vectors_per_token[opt.background_string] = opt.num_vectors_per_bg_token
+            personalization_config_params.background_strings = [opt.background_string]
+
+            if opt.wds_comp_db_path is not None:
+                personalization_config_params.placeholder_strings.append(opt.wds_background_string)
+                # wds_background_strings share the same settings of the background string.
+                personalization_config_params.list_initializer_words.append(opt.bg_init_words)
+                personalization_config_params.list_initializer_weights.append(None)            
+                personalization_config_params.list_cls_delta_strings.append(config.data.params.train.params.cls_bg_delta_string)
+                personalization_config_params.num_vectors_per_token[opt.wds_background_string] = opt.num_vectors_per_bg_token
+                personalization_config_params.background_strings.append(opt.wds_background_string)
+    # Multiple subjects. The params are extracted from the dataset.
+    else:
+        personalization_config_params.placeholder_strings       = dataset.subject_strings
+        personalization_config_params.list_initializer_words    = dataset.cls_delta_strings
+        personalization_config_params.list_initializer_weights  = dataset.list_initializer_weights
+        personalization_config_params.list_cls_delta_strings    = dataset.cls_delta_strings
+        personalization_config_params.num_vectors_per_token     = dict()
+        for subject_string in dataset.subject_strings:
+            personalization_config_params.num_vectors_per_token[subject_string] = opt.num_vectors_per_token
+
+        if opt.background_string is not None:
+            config.model.params.use_background_token = True
+            personalization_config_params.placeholder_strings       += dataset.background_strings
+            personalization_config_params.list_initializer_words    += dataset.cls_bg_delta_strings
+            personalization_config_params.list_initializer_weights  += dataset.list_bg_initializer_weights
+            personalization_config_params.list_cls_delta_strings    += dataset.cls_bg_delta_strings
+            personalization_config_params.background_strings        = dataset.background_strings
+
+            for background_string in dataset.background_strings:
+                personalization_config_params.num_vectors_per_token[background_string] = opt.num_vectors_per_bg_token
+
+        if opt.wds_comp_db_path is not None:
+            # wds_background_strings share the same settings of the background string.
+            personalization_config_params.placeholder_strings       += dataset.wds_background_strings
+            personalization_config_params.list_initializer_words    += dataset.cls_bg_delta_strings
+            personalization_config_params.list_initializer_weights  += dataset.list_bg_initializer_weights
+            personalization_config_params.list_cls_delta_strings    += dataset.cls_bg_delta_strings
+            personalization_config_params.background_strings        += dataset.wds_background_strings
+
+            for wds_background_string in dataset.wds_background_strings:
+                personalization_config_params.num_vectors_per_token[wds_background_string] = opt.num_vectors_per_bg_token
 
 class WrappedDataset(Dataset):
     """Wraps an arbitrary object with __len__ and __getitem__ into a pytorch dataset"""
@@ -355,11 +426,14 @@ def worker_init_fn(_):
 # train: ldm.data.personalized.PersonalizedBase
 # validation path is the same as train.
 class DataModuleFromConfig(pl.LightningDataModule):
-    def __init__(self, batch_size, train=None, validation=None, test=None, predict=None,
+    # train, validation: the corresponding section in the config file,
+    # used by instantiate_from_config(self.dataset_configs[k]).
+    def __init__(self, batch_size, max_steps, train=None, validation=None, test=None, predict=None,
                  wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
-                 shuffle_val_dataloader=False):
+                 shuffle_val_dataloader=False, training_uses_subject_sampler=False):
         super().__init__()
         self.batch_size = batch_size
+        self.num_batches = max_steps
         self.dataset_configs = dict()
         self.num_workers = num_workers if num_workers is not None else batch_size * 2
         self.use_worker_init_fn = use_worker_init_fn        # False
@@ -376,6 +450,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
             self.dataset_configs["predict"] = predict
             self.predict_dataloader = self._predict_dataloader
         self.wrap = wrap
+        self.training_uses_subject_sampler = training_uses_subject_sampler
 
     def prepare_data(self):
         for data_cfg in self.dataset_configs.values():
@@ -389,14 +464,25 @@ class DataModuleFromConfig(pl.LightningDataModule):
             for k in self.datasets:
                 self.datasets[k] = WrappedDataset(self.datasets[k])
 
+    # _train_dataloader() is called within prepare_data().
     def _train_dataloader(self):
         is_iterable_dataset = isinstance(self.datasets['train'], Txt2ImgIterableBaseDataset)
         if is_iterable_dataset or self.use_worker_init_fn:
             init_fn = worker_init_fn
         else:
             init_fn = None
+        
+        shuffle = False if is_iterable_dataset else True
+        if self.training_uses_subject_sampler:
+            shuffle = False
+            sampler = SubjectSampler(self.datasets['train'], self.num_batches, self.batch_size)
+        else:
+            sampler = None
+
+        # shuffle=True        
         return DataLoader(self.datasets["train"], batch_size=self.batch_size,
-                          num_workers=self.num_workers, shuffle=False if is_iterable_dataset else True,
+                          shuffle=shuffle, sampler=sampler,
+                          num_workers=self.num_workers, 
                           worker_init_fn=init_fn, drop_last=True)
 
     def _val_dataloader(self, shuffle=False):
@@ -713,8 +799,9 @@ if __name__ == "__main__":
         else:
             name = ""
 
-        if opt.datadir_in_name:
-            now = os.path.basename(os.path.normpath(opt.data_root)) + now
+        datadir_in_name = True
+        if datadir_in_name:
+            now = os.path.basename(os.path.normpath(opt.data_roots[0])) + now
             
         nowname = now + name + opt.postfix
         logdir = os.path.join(opt.logdir, nowname)
@@ -749,24 +836,13 @@ if __name__ == "__main__":
         trainer_opt = argparse.Namespace(**trainer_config)
         lightning_config.trainer = trainer_config
 
-        # model
-        config.model.params.cond_stage_config.params.last_layers_skip_weights    = opt.clip_last_layers_skip_weights
-        config.model.params.cond_stage_config.params.randomize_clip_skip_weights = opt.randomize_clip_skip_weights
-        config.model.params.use_fp_trick = opt.use_fp_trick
-
-        if len(opt.init_word_weights) > 0:
-            assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_words))
-
-        config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
-        config.model.params.personalization_config.params.load_poolers_only = opt.load_poolers_only
-        config.model.params.personalization_config.params.freeze_poolers = opt.freeze_poolers
-        config.model.params.personalization_config.params.ckpt_params_perturb_ratio = opt.ckpt_params_perturb_ratio
-        config.model.params.personalization_config.params.emb_reg_loss_scale = opt.emb_reg_loss_scale
-        config.model.params.personalization_config.params.placeholder_strings = [opt.subject_string]
-        config.model.params.personalization_config.params.num_vectors_per_token = { opt.subject_string: opt.num_vectors_per_token}
-
+        # Data config
         config.data.params.train.params.subject_string       = opt.subject_string
         config.data.params.validation.params.subject_string  = opt.subject_string
+        if hasattr(opt, 'subj_info_filepath'):
+            config.data.params.train.params.subj_info_filepath       = opt.subj_info_filepath
+            config.data.params.validation.params.subj_info_filepath  = opt.subj_info_filepath
+
         # common_placeholder_prefix, compos_placeholder_prefix
         config.data.params.train.params.common_placeholder_prefix       = opt.common_placeholder_prefix
         config.data.params.validation.params.common_placeholder_prefix  = opt.common_placeholder_prefix
@@ -776,10 +852,9 @@ if __name__ == "__main__":
         config.data.params.train.params.broad_class             = opt.broad_class
         config.data.params.validation.params.broad_class        = opt.broad_class
         # If cls_delta_string is specified, use it for the cls_delta_string of the datasets. 
-        # Otherwise, use init_words as the cls_delta_string of the datasets.
-        config.data.params.train.params.cls_delta_string         = opt.cls_delta_string or opt.init_words
-        config.data.params.validation.params.cls_delta_string    = opt.cls_delta_string or opt.init_words
-        config.model.params.personalization_config.params.list_cls_delta_strings[0] = config.data.params.train.params.cls_delta_string
+        # Otherwise, use init_string as the cls_delta_string of the datasets.
+        config.data.params.train.params.cls_delta_string         = opt.cls_delta_string or opt.init_string
+        config.data.params.validation.params.cls_delta_string    = opt.cls_delta_string or opt.init_string
 
         # num_vectors_per_token
         config.data.params.train.params.num_vectors_per_token           = opt.num_vectors_per_token
@@ -789,65 +864,52 @@ if __name__ == "__main__":
         config.data.params.validation.params.num_vectors_per_bg_token   = opt.num_vectors_per_bg_token
 
         config.data.params.train.params.wds_comp_db_path                   = opt.wds_comp_db_path
-        #if opt.wds_comp_db_path is not None and opt.wds_background_string is None:
-        #    # Set default wds_background_string to "w".
-        #    opt.wds_background_string = "w"
-        # Currently, only supports one group of initial words and weights.
-        if opt.init_words:
-            config.model.params.personalization_config.params.list_initializer_words[0] = opt.init_words
-            if len(opt.init_word_weights) > 0:
-                config.model.params.personalization_config.params.list_initializer_weights[0] = opt.init_word_weights
 
-        if opt.background_string:
-            config.model.params.use_background_token = True
-            config.model.params.personalization_config.params.placeholder_strings.append(opt.background_string)
-            config.model.params.personalization_config.params.background_strings = [opt.background_string]
-            # The background token can also be represented with 1 or more embeddings.
-            config.model.params.personalization_config.params.num_vectors_per_token[opt.background_string] = opt.num_vectors_per_bg_token
-            if opt.wds_background_string:
-                config.model.params.personalization_config.params.placeholder_strings.append(opt.wds_background_string)
-                config.model.params.personalization_config.params.background_strings.append(opt.wds_background_string)
-                config.model.params.personalization_config.params.num_vectors_per_token[opt.wds_background_string] = opt.num_vectors_per_bg_token
-
+        if opt.background_string is not None:
             config.data.params.train.params.background_string           = opt.background_string
             config.data.params.train.params.wds_background_string       = opt.wds_background_string
             config.data.params.validation.params.background_string      = opt.background_string
             config.data.params.validation.params.wds_background_string  = opt.wds_background_string
-
-            config.model.params.personalization_config.params.list_initializer_words.append(opt.bg_init_words)
-            config.model.params.personalization_config.params.list_initializer_weights.append([1.0] * len(re.split("\s+", opt.bg_init_words)))            
-            config.data.params.train.params.cls_bg_delta_string      = opt.bg_init_words
-            config.data.params.validation.params.cls_bg_delta_string = opt.bg_init_words
-            config.model.params.personalization_config.params.list_cls_delta_strings.append(opt.bg_init_words)
-
-        if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
-            K = opt.use_conv_attn_kernel_size
-            assert opt.num_vectors_per_token >= K * K, \
-                    f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
-            config.model.params.personalization_config.params.use_conv_attn_kernel_size \
-                = opt.use_conv_attn_kernel_size
-
-        if hasattr(opt, 'composition_regs_iter_gaps'):
-            config.model.params.composition_regs_iter_gaps = opt.composition_regs_iter_gaps
+            config.data.params.train.params.cls_bg_delta_string         = opt.bg_init_words
+            config.data.params.validation.params.cls_bg_delta_string    = opt.bg_init_words
 
         config.data.params.train.params.num_compositions_per_image = opt.num_compositions_per_image
         config.data.params.train.params.rand_scale_range = opt.rand_scale_range
         
-        # layerwise_lora_rank has the highest priority. 
-        # If layerwise_lora_rank is not specified, use layerwise_lora_rank_token_ratio.
-        if opt.layerwise_lora_rank > 0:
-            config.model.params.personalization_config.params.layerwise_lora_rank = opt.layerwise_lora_rank
-        elif opt.layerwise_lora_rank_token_ratio > 0:
-            config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \
-                                    opt.layerwise_lora_rank_token_ratio
+        # config.data:
+        # {'target': 'main.DataModuleFromConfig', 'params': {'batch_size': 2, 'num_workers': 2, 
+        #  'wrap': False, 'train': {'target': 'ldm.data.personalized.PersonalizedBase', 
+        #  'params': {'size': 512, 'set': 'train', 'repeats': 100, 
+        #  'subject_string': 'z', 'data_roots': 'data/spikelee/'}}, 
+        #  'validation': {'target': 'ldm.data.personalized.PersonalizedBase', 
+        #  'params': {'size': 512, 'set': 'val', 'repeats': 10, 
+        #  'subject_string': 'z', 'data_roots': 'data/spikelee/'}}}}
+        config.data.params.train.params.data_roots       = opt.data_roots
+        config.data.params.validation.params.data_roots  = opt.data_roots
+        # max_steps: Used to initialize DataModuleFromConfig.
+        config.data.params.max_steps = opt.max_steps
+
+        # data: DataModuleFromConfig
+        data = instantiate_from_config(config.data)
+        # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
+        # calling these ourselves should not be necessary but it is.
+        # lightning still takes care of proper multiprocessing though
+        data.prepare_data()
+        data.setup()
+
+        print("#### Data #####")
+        for k in data.datasets:
+            print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
+
+        # DDPM model config
+        config.model.params.cond_stage_config.params.last_layers_skip_weights    = opt.clip_last_layers_skip_weights
+        config.model.params.cond_stage_config.params.randomize_clip_skip_weights = opt.randomize_clip_skip_weights
+        config.model.params.use_fp_trick = opt.use_fp_trick
 
         if opt.static_embedding_reg_weight >= 0:
             config.model.params.static_embedding_reg_weight = opt.static_embedding_reg_weight
         if opt.ada_embedding_reg_weight >= 0:
             config.model.params.ada_embedding_reg_weight = opt.ada_embedding_reg_weight
-            
-        if opt.ada_emb_weight != -1:
-            config.model.params.personalization_config.params.ada_emb_weight = opt.ada_emb_weight
 
         # Setting prompt_emb_delta_reg_weight to 0 will disable prompt delta regularization.
         if opt.prompt_emb_delta_reg_weight >= 0:
@@ -859,21 +921,56 @@ if __name__ == "__main__":
             config.model.params.comp_fg_bg_preserve_loss_weight     = opt.comp_fg_bg_preserve_loss_weight
         if opt.mix_prompt_distill_weight >= 0:
             config.model.params.mix_prompt_distill_weight           = opt.mix_prompt_distill_weight
-            
+
+        if hasattr(opt, 'composition_regs_iter_gaps'):
+            config.model.params.composition_regs_iter_gaps = opt.composition_regs_iter_gaps
+
         if opt.lr > 0:
             config.model.base_learning_rate = opt.lr
 
         if opt.max_steps > 0:
             trainer_opt.max_steps = opt.max_steps
 
+        # Personalization config
+        # layerwise_lora_rank has the highest priority. 
+        # If layerwise_lora_rank is not specified, use layerwise_lora_rank_token_ratio.
+        if opt.layerwise_lora_rank > 0:
+            config.model.params.personalization_config.params.layerwise_lora_rank = opt.layerwise_lora_rank
+        elif opt.layerwise_lora_rank_token_ratio > 0:
+            config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \
+                                    opt.layerwise_lora_rank_token_ratio
+            
+        if opt.ada_emb_weight != -1:
+            config.model.params.personalization_config.params.ada_emb_weight = opt.ada_emb_weight
+
+        if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
+            K = opt.use_conv_attn_kernel_size
+            assert opt.num_vectors_per_token >= K * K, \
+                    f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
+            config.model.params.personalization_config.params.use_conv_attn_kernel_size \
+                = opt.use_conv_attn_kernel_size
+
+        config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
+        config.model.params.personalization_config.params.load_poolers_only = opt.load_poolers_only
+        config.model.params.personalization_config.params.freeze_poolers = opt.freeze_poolers
+        config.model.params.personalization_config.params.ckpt_params_perturb_ratio = opt.ckpt_params_perturb_ratio
+        config.model.params.personalization_config.params.emb_reg_loss_scale = opt.emb_reg_loss_scale
+
+        set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])
+
         if opt.actual_resume:
             model = load_model_from_config(config, opt.actual_resume)
         else:
             model = instantiate_from_config(config.model)
         # model: ldm.models.diffusion.ddpm.LatentDiffusion, inherits from LightningModule.
-
-        # Extend CLIP text embedder with a few cls tokens.
-        # extend_clip_text_embedder(model.cond_stage_model, model.embedding_manager.cls_string2embeddings)
+        # model.cond_stage_model: FrozenCLIPEmbedder = text_embedder
+        # Extend the token embeddings in CLIP text encoder for the new cls strings.
+        # model is still on CPU. So no need to consider where ext_token_embeddings is located.
+        if model.embedding_manager.ext_token_embeddings is not None:
+            model.cond_stage_model.transformer.text_model.embeddings.token_embedding = \
+                extend_nn_embedding(model.cond_stage_model.transformer.text_model.embeddings.token_embedding, 
+                                    model.embedding_manager.ext_token_embeddings)
+            model.embedding_manager.ext_token_embeddings = None
 
         # trainer and callbacks
         trainer_kwargs = dict()
@@ -1003,29 +1100,6 @@ if __name__ == "__main__":
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         trainer.logdir = logdir  ###
 
-        # config.data:
-        # {'target': 'main.DataModuleFromConfig', 'params': {'batch_size': 2, 'num_workers': 2, 
-        #  'wrap': False, 'train': {'target': 'ldm.data.personalized.PersonalizedBase', 
-        #  'params': {'size': 512, 'set': 'train', 'repeats': 100, 
-        #  'subject_string': 'z', 'data_root': 'data/spikelee/'}}, 
-        #  'validation': {'target': 'ldm.data.personalized.PersonalizedBase', 
-        #  'params': {'size': 512, 'set': 'val', 'repeats': 10, 
-        #  'subject_string': 'z', 'data_root': 'data/spikelee/'}}}}
-        config.data.params.train.params.data_root       = opt.data_root
-        config.data.params.validation.params.data_root  = opt.data_root
-        # data: DataModuleFromConfig
-        data = instantiate_from_config(config.data)
-        # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
-        # calling these ourselves should not be necessary but it is.
-        # lightning still takes care of proper multiprocessing though
-        data.prepare_data()
-        data.setup()
-
-
-        print("#### Data #####")
-        for k in data.datasets:
-            print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
-            
         # configure learning rate
         bs, base_lr, weight_decay = config.data.params.batch_size, config.model.base_learning_rate, \
                                     config.model.weight_decay
