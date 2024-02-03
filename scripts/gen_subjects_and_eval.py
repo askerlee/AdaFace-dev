@@ -105,6 +105,8 @@ def parse_args():
     parser.add_argument("--ckpt_sig", dest='ckpt_extra_sig', type=str, default="",
                         help="Extra signature that is part of the checkpoint directory name."
                              " Could be a regular expression.")
+    parser.add_argument("--ckpt_name", type=str, default=argparse.SUPPRESS,
+                        help="CKPT folder name.")
     
     parser.add_argument("--out_dir_tmpl", type=str, default="samples-dbeval",
                         help="Template of parent directory to save generated samples")
@@ -246,9 +248,12 @@ if __name__ == "__main__":
 
         print("Generating samples for subject: " + subject_name)
 
-        ckpt_sig   = subject_name + "-" + args.method
-        # Find the newest checkpoint that matches the subject name.
-        ckpt_name  = find_first_match(all_ckpts, ckpt_sig, args.ckpt_extra_sig)
+        if hasattr(args, 'ckpt_name'):
+            ckpt_name = args.ckpt_name
+        else:
+            ckpt_sig   = subject_name + "-" + args.method
+            # Find the newest checkpoint that matches the subject name.
+            ckpt_name  = find_first_match(all_ckpts, ckpt_sig, args.ckpt_extra_sig)
 
         if ckpt_name is None:
             print("ERROR: No checkpoint found for subject: " + subject_name)
