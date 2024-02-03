@@ -4767,7 +4767,7 @@ class LatentDiffusion(DDPM):
                 single_cycle_steps  = total_cycle_steps / num_scheduler_cycles
                 last_cycle_steps    = total_cycle_steps - single_cycle_steps * (num_scheduler_cycles - 1)
                 schedulers = [warmup_scheduler]
-                print(f"Setting up {num_scheduler_cycles} cycles of {single_cycle_steps} steps each.")
+                print(f"Setting up {num_scheduler_cycles} * {single_cycle_steps} cycles, {self.prodigy_config.warm_up_steps} warm up steps.")
 
                 if self.prodigy_config.scheduler_type == 'Linear':
                     num_scheduler_cycles = int(num_scheduler_cycles)

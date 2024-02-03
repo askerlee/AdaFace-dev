@@ -166,6 +166,9 @@ def get_parser(**parser_kwargs):
     )
     '''
 
+    parser.add_argument("--warmup_steps", type=int, default=argparse.SUPPRESS,
+                        help="Number of warm up steps")
+    
     parser.add_argument("--actual_resume", 
         type=str,
         required=True,
@@ -927,6 +930,12 @@ if __name__ == "__main__":
 
         if hasattr(opt, 'composition_regs_iter_gaps'):
             config.model.params.composition_regs_iter_gaps = opt.composition_regs_iter_gaps
+
+        if hasattr(opt, 'warmup_steps'):
+            if config.model.params.optimizer_type == 'Prodigy':
+                config.model.params.prodigy_config.warm_up_steps                = opt.warmup_steps
+            else:
+                config.model.params.adam_config.scheduler_config.warm_up_steps  = opt.warmup_steps
 
         if opt.lr > 0:
             config.model.base_learning_rate = opt.lr
