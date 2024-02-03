@@ -109,12 +109,14 @@ model:
         prompt_embedding_clamp_value:      10
         # Scale the background embeddings by this factor.
         background_extra_global_scale:     1 #0.5
+        # Share the attn poolers when training multiple subjects simultaneously.
+        use_shared_poolers:               True
         embedding_manager_ckpt:           null
         # Only load attn poolers from the checkpoint.
         load_poolers_only:                False
         # Freeze the poolers after loading them.
         freeze_poolers:                   False
-
+        
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:

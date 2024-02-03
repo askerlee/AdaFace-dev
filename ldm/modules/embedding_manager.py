@@ -913,6 +913,7 @@ class EmbeddingManager(nn.Module):
             prompt_embedding_clamp_value=-1,
             background_extra_global_scale=1.,
             emb_reg_loss_scale=1,
+            use_shared_attn_poolers=True,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1102,6 +1103,8 @@ class EmbeddingManager(nn.Module):
                 self.initial_embeddings[placeholder_string] = nn.Parameter(init_word_embeddings, requires_grad=False)
             else:
                 self.initial_embeddings[placeholder_string] = None
+
+        self.share_ada_attn_poolers(use_shared_attn_poolers)
 
         self.layer_idx = -1
         self.static_subj_embs_dict = {}   
@@ -1608,6 +1611,27 @@ class EmbeddingManager(nn.Module):
 
         return token_static_embedder, token_ada_embedder
 
+    def share_ada_attn_poolers(self, use_shared_attn_poolers):
+        self.use_shared_attn_poolers = use_shared_attn_poolers
+
+        if use_shared_attn_poolers:
+            subj_poolers = self.string_to_ada_embedder_dict[self.subject_strings[0]].poolers
+            bg_poolers   = self.string_to_ada_embedder_dict[self.background_strings[0]].poolers
+            subj_pooler_share_count = 0
+            bg_pooler_share_count   = 0
+            
+            for placeholder_string in self.string_to_ada_embedder_dict.keys():
+                if placeholder_string in self.subject_strings:
+                    self.string_to_ada_embedder_dict[placeholder_string].poolers = subj_poolers
+                    subj_pooler_share_count += 1
+                else:
+                    self.string_to_ada_embedder_dict[placeholder_string].poolers = bg_poolers
+                    bg_pooler_share_count += 1
+
+            print(f"Shared poolers for {subj_pooler_share_count} subject tokens and {bg_pooler_share_count} background tokens")
+        else:
+            print("Not sharing poolers")
+
     # Update prompt_emb_mask.
     # tokenized_text: [B, N] = [2/4, 77].
     # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
@@ -1939,9 +1963,11 @@ class EmbeddingManager(nn.Module):
                      "emb_global_scale_scores":         self.emb_global_scale_scores,
                      "ada_emb_weight":                  self.ada_emb_weight,  
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
+                     "use_shared_attn_poolers":         self.use_shared_attn_poolers,
                      # Learnable weights for scaling conv attns.
                      "subj2conv_attn_layerwise_scales":  self.subj2conv_attn_layerwise_scales,
                      "use_conv_attn_kernel_size":        self.use_conv_attn_kernel_size,
+                     "placeholder_strings":              self.placeholder_strings,
                      "subject_strings":                  self.subject_strings,
                      "background_strings":               self.background_strings,
                      "ca_q_bns":                         self.ca_q_bns,
@@ -1987,7 +2013,17 @@ class EmbeddingManager(nn.Module):
             else:
                 self.emb_ema_as_pooling_probe_weight = 0
 
-            if "subject_strings" in ckpt:
+            if "placeholder_strings" in ckpt:
+                self.placeholder_strings = ckpt["placeholder_strings"]
+                # Model should be still on CPU. So no need to consider the device when extending the text embedder.
+                # Extend CLIP text embedder with the subject strings / background strings / wds background strings.
+                # In order to load the text embedder ckpt, the text_model.embeddings.token_embedding hasn't been
+                # extended yet. So we  save ext_token_embeddings to be extended to text_model.embeddings.token_embedding
+                # later in main.py.
+                self.ext_token_embeddings = extend_clip_text_embedder(self.text_embedder, {}, 
+                                                                      self.placeholder_strings)
+
+            if "background_strings" in ckpt:
                 ckpt_background_strings = ckpt["background_strings"]
             else:
                 ckpt_background_strings = []
@@ -2066,6 +2102,12 @@ class EmbeddingManager(nn.Module):
 
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
+
+            # In theory, if some ckpt has use_shared_attn_poolers = True, and some has False,
+            # then the ckpt attn poolers after the last True ckpt will not be shared.
+            # But this shouldn't be a concern, as such scenarios should be very rare.
+            if "use_shared_attn_poolers" in ckpt:
+                self.share_ada_attn_poolers(ckpt["use_shared_attn_poolers"])
 
         if not load_poolers_only:
             self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(self.string_to_token_dict)), 

@@ -371,6 +371,8 @@ class PersonalizedBase(Dataset):
 
         cls_delta_string      = self.cls_delta_strings[subject_idx]
         wds_background_string = self.wds_background_strings[subject_idx]
+        # subject_token, background_token: subject_string and background_string converted to 
+        # token numbers.        
         subject_token         = self.subject_tokens[subject_idx]
         background_token      = self.background_tokens[subject_idx]
 
@@ -682,8 +684,6 @@ class PersonalizedBase(Dataset):
         # Otherwise, subject_string is simply 'z', and background_string is simply 'y'.
         subject_string      = self.subject_strings[subject_idx]
         background_string   = self.background_strings[subject_idx]        
-        subject_string      = self.subject_strings[subject_idx]
-        background_string   = self.background_strings[subject_idx]
         cls_delta_string    = self.cls_delta_strings[subject_idx]
         broad_class         = self.broad_classes[subject_idx]
         is_animal           = self.are_animals[subject_idx]
@@ -764,6 +764,7 @@ class PersonalizedBase(Dataset):
                 subj_prompt_comps_fp.append(subj_prompt_comp_fp)
                 cls_prompt_comps_fp.append(cls_prompt_comp_fp)
 
+        example["subj_string"]          = subject_string
         # NOTE: "caption" and "caption_bg" are only for image reconstruction iterations.
         # But subj_prompt_single must align with cls_prompt_single, subj_prompt_comp, cls_prompt_comp.
         # So they are different when compos_placeholder_prefix is specified.

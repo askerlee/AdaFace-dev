@@ -17,7 +17,7 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import instantiate_from_config, mix_embeddings, save_grid
+from ldm.util import instantiate_from_config, mix_embeddings, save_grid, extend_nn_embedding
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
@@ -402,10 +402,17 @@ def main(opt):
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
-            
-        model.embedding_manager.subject_strings = list(model.embedding_manager.subject_strings + [opt.subject_string])
-        if opt.background_string is not None:
+        
+        if opt.subject_string not in model.embedding_manager.subject_strings:
+            model.embedding_manager.subject_strings = list(model.embedding_manager.subject_strings + [opt.subject_string])
+        if opt.background_string is not None and opt.background_string not in model.embedding_manager.background_strings:
             model.embedding_manager.background_strings = list(model.embedding_manager.background_strings + [opt.background_string])
+
+        if model.embedding_manager.ext_token_embeddings is not None:
+            model.cond_stage_model.transformer.text_model.embeddings.token_embedding = \
+                extend_nn_embedding(model.cond_stage_model.transformer.text_model.embeddings.token_embedding, 
+                                    model.embedding_manager.ext_token_embeddings)
+            model.embedding_manager.ext_token_embeddings = None
 
         device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
         model  = model.to(device)

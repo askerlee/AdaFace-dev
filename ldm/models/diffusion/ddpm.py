@@ -189,8 +189,7 @@ class DDPM(pl.LightningModule):
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
 
-        self.cached_inits_available          = False
-        self.cached_inits                    = None
+        self.cached_inits = {}
         self.init_iteration_flags()
 
         # Training flags. 
@@ -1385,9 +1384,11 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['wds_comp_avail_ratio'] = batch['has_wds_comp'].sum() / batch['has_wds_comp'].shape[0]
 
-        # If cached_inits_available, cached_inits are only used if do_mix_prompt_distillation = True.
+        self.batch_subj_string = batch['subj_string'][0]
+        # If cached_inits is available (self.batch_subj_string in self.cached_inits), 
+        # cached_inits are only used if do_mix_prompt_distillation = True.
         self.iter_flags['reuse_init_conds']  = (self.iter_flags['do_mix_prompt_distillation'] \
-                                                and self.cached_inits_available)
+                                                and self.batch_subj_string in self.cached_inits)
 
         # do_teacher_filter: If not reuse_init_conds and do_teacher_filtering, then we choose the better instance 
         # between the two in the batch, if it's above the usable threshold.
@@ -1617,15 +1618,16 @@ class LatentDiffusion(DDPM):
 
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
+            cached_inits = self.cached_inits[self.batch_subj_string]
             # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
-            self.iter_flags['delta_prompts']            = self.cached_inits['delta_prompts']
-            self.iter_flags['img_mask']                 = self.cached_inits['img_mask']
-            self.iter_flags['fg_mask']                  = self.cached_inits['fg_mask']
-            self.iter_flags['batch_have_fg_mask']       = self.cached_inits['batch_have_fg_mask']
-            self.iter_flags['filtered_fg_mask']         = self.cached_inits['filtered_fg_mask']
-            self.iter_flags['use_background_token']     = self.cached_inits['use_background_token']
-            self.iter_flags['use_wds_comp']             = self.cached_inits['use_wds_comp']
-            self.iter_flags['comp_init_fg_from_training_image']   = self.cached_inits['comp_init_fg_from_training_image']
+            self.iter_flags['delta_prompts']            = cached_inits['delta_prompts']
+            self.iter_flags['img_mask']                 = cached_inits['img_mask']
+            self.iter_flags['fg_mask']                  = cached_inits['fg_mask']
+            self.iter_flags['batch_have_fg_mask']       = cached_inits['batch_have_fg_mask']
+            self.iter_flags['filtered_fg_mask']         = cached_inits['filtered_fg_mask']
+            self.iter_flags['use_background_token']     = cached_inits['use_background_token']
+            self.iter_flags['use_wds_comp']             = cached_inits['use_wds_comp']
+            self.iter_flags['comp_init_fg_from_training_image']   = cached_inits['comp_init_fg_from_training_image']
 
         # Gradually reduce recon_loss_weight from 1 to 0.5 over the whole course of training.
         self.iter_flags['recon_loss_weight'] = self.recon_loss_weight 
@@ -1659,9 +1661,9 @@ class LatentDiffusion(DDPM):
                     # reuse_init_conds, discard the prompts offered in shared_step().
                     if self.iter_flags['reuse_init_conds']:
                         # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
-                        delta_prompts = self.cached_inits['delta_prompts']
+                        delta_prompts = self.cached_init[self.batch_subj_string]['delta_prompts']
                         # cached_inits will be used in p_losses(), 
-                        # so don't set cached_inits_available to False yet.
+                        # so don't delete cached_init[self.batch_subj_string] to False yet.
                     else:
                         # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
                         delta_prompts = self.iter_flags['delta_prompts']
@@ -2127,11 +2129,10 @@ class LatentDiffusion(DDPM):
                 # But x_start is the denoised result from the previous iteration (noises have been added above), 
                 # so we don't add noise to it again.
                 # x_start already has a BS of 4. No need to slice or repeat it.
-                x_start = self.cached_inits['x_start']
-                prev_t  = self.cached_inits['t']
-                # Clear cache, to avoid the cached inits being used in the next mix iter.
-                self.cached_inits_available = False
-                self.cached_inits = None
+                x_start = self.cached_inits[self.batch_subj_string]['x_start']
+                prev_t  = self.cached_inits[self.batch_subj_string]['t']
+                # Clear cache of batch_subj_string, to avoid the cached inits being used in the next mix iter.
+                del self.cached_inits[self.batch_subj_string]
                 # reuse init iter takes a smaller cfg scale, as in the second denoising step, 
                 # a particular scale tend to make the cfg-denoised mixed images more dissimilar 
                 # to the subject images than in the first denoising step. 
@@ -2572,29 +2573,26 @@ class LatentDiffusion(DDPM):
                     x_recon_sel_rep = x_recon.detach().chunk(2)[0].repeat(2, 1, 1, 1)
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but under some settings, maybe mix comp = subj comp.
-                    # cached_inits['x_start'] has a batch size of 4.
+                    # cached_inits[self.batch_subj_string]['x_start'] has a batch size of 4.
                     # x_recon_sel_rep doesn't have the 1-repeat-4 structure, instead a 
                     # 1-repeat-2 structure that's repeated twice.
                     # But it approximates a 1-repeat-4 structure, so the distillation should still work.
                     # NOTE: no need to update masks to correspond to x_recon_sel_rep, as x_recon_sel_rep
                     # is half-repeat-2 of (the reconstructed images of) x_start_sel. 
                     # Doing half-repeat-2 on masks won't change them, as they are 1-repeat-4.
-                    self.cached_inits = { 'x_start':                 x_recon_sel_rep, 
-                                           'delta_prompts':          cond_orig[2]['delta_prompts'],
-                                           't':                      t_sel,
-                                           # reuse_init_conds implies a compositional iter. So img_mask is always None.
-                                           'img_mask':               None,   
-                                           'fg_mask':                fg_mask,
-                                           'batch_have_fg_mask':     batch_have_fg_mask,
-                                           'filtered_fg_mask':       filtered_fg_mask,
-                                           'use_background_token':   self.iter_flags['use_background_token'],
-                                           'use_wds_comp':           self.iter_flags['use_wds_comp'],
-                                           'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
-                                        }
-                    
-                    # Do not put cached_inits_available on self.iter_flags, as iter_flags will be reset
-                    # in the beginning of the next iteration.
-                    self.cached_inits_available = True
+                    self.cached_inits[self.batch_subj_string] = \
+                        { 'x_start':                x_recon_sel_rep, 
+                          'delta_prompts':          cond_orig[2]['delta_prompts'],
+                          't':                      t_sel,
+                          # reuse_init_conds implies a compositional iter. So img_mask is always None.
+                          'img_mask':               None,   
+                          'fg_mask':                fg_mask,
+                          'batch_have_fg_mask':     batch_have_fg_mask,
+                          'filtered_fg_mask':       filtered_fg_mask,
+                          'use_background_token':   self.iter_flags['use_background_token'],
+                          'use_wds_comp':           self.iter_flags['use_wds_comp'],
+                          'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
+                        }
                     
                 elif not self.iter_flags['is_teachable']:
                     # If not is_teachable, do not do distillation this time 
