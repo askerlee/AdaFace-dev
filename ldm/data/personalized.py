@@ -820,21 +820,20 @@ class PersonalizedBase(Dataset):
 # Randomly sample a subject number.
 # This subject number will be used by an PersonalizedBase instance to draw random images.
 # epoch_len: number of batches in one epoch. Usually initialized to be the same 
-# as the number of batches of the training data 
+# as the number of batches of the training data.
 class SubjectSampler(Sampler):
-    def __init__(self, dataset, num_batches, batch_size, debug=False):
+    def __init__(self, num_subjects, num_batches, batch_size, debug=False):
         self.batch_size = batch_size
-        # num_batches: Just a large number. We can loop on the dataset forever.
-        self.num_batches  = num_batches
-        self.num_subjects = dataset.num_subjects
+        # num_batches: +1 to make sure the last batch is also used.
+        self.num_batches  = num_batches + 1
+        self.num_subjects = num_subjects
         assert self.num_subjects > 0, "FATAL: no subjects found in the dataset!"
-        print("Found {} subjects in the dataset".format(self.num_subjects))
+        print("SubjectSampler initialized on {} subjects, batches: {}*{}".format(self.num_subjects, 
+                                                                                 self.batch_size, self.num_batches))
 
-        # Each subject will go through consecutive two recon iters and one comp iter.
-        self.switch_cycle = self.batch_size
+        self.switch_cycle_length = self.batch_size
         self.curr_subj_idx = 0
         self.curr_subj_count = 0
-        self.debug = debug
 
     def __len__(self):
         return self.num_batches * self.batch_size
@@ -850,9 +849,9 @@ class SubjectSampler(Sampler):
         for i in range(self.num_batches * self.batch_size):
             # If the current subject index has been repeated batch_size times, 
             # we find the next subject index.
-            if self.curr_subj_count >= self.switch_cycle:
+            if self.curr_subj_count >= self.switch_cycle_length:
+                self.curr_subj_idx   = self.next_subject()
                 self.curr_subj_count = 0        
-                self.curr_subj_idx = self.next_subject()
 
             self.curr_subj_count += 1
             yield self.curr_subj_idx, True

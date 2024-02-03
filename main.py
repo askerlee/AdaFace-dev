@@ -481,7 +481,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
         shuffle = False if is_iterable_dataset else True
         if self.training_uses_subject_sampler:
             shuffle = False
-            sampler = SubjectSampler(self.datasets['train'], self.num_batches, self.batch_size)
+            sampler = SubjectSampler(self.datasets['train'].num_subjects, self.num_batches, self.batch_size)
         else:
             sampler = None
 
