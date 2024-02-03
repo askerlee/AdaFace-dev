@@ -163,7 +163,9 @@ class PersonalizedBase(Dataset):
         if isinstance(data_roots, str):
             data_roots = [ data_roots ]
         data_roots_expanded = [ glob.glob(data_root) for data_root in data_roots ]
-        self.data_roots = sum(data_roots_expanded, [])
+        # Sort the data_roots, so that the order of subjects is consistent.
+        self.data_roots = sorted(sum(data_roots_expanded, []))
+        # subject_names: sorted ascendingly for subjects within the same folder.
         self.subject_names = [ os.path.basename(data_root) for data_root in self.data_roots ]
 
         assert len(self.data_roots) > 0, f"No data found in data_roots={data_roots}!"
@@ -241,16 +243,16 @@ class PersonalizedBase(Dataset):
             self.background_strings     = [ background_string ]
             self.wds_background_strings = [ wds_background_string ]
         else:
-            # For multiple subjects, the subject_string is like: 'z0', 'z1', ....
-            self.subject_strings        = [ subject_string + str(i) for i in range(self.num_subjects) ]
-            # For multiple subjects, the background_string is like: 'y0', 'y1', ....
+            # For multiple subjects, the subject_string is like: 'z1', 'z2', ....
+            self.subject_strings        = [ subject_string + str(i+1) for i in range(self.num_subjects) ]
+            # For multiple subjects, the background_string is like: 'y1', 'y2', ....
             # Don't share the background_string, since the background of different subject images
             # has different distributions.
-            self.background_strings     = [ background_string + str(i) for i in range(self.num_subjects) ]
-            # For multiple subjects, the wds_background_string is like: 'w0', 'w1', ....
+            self.background_strings     = [ background_string + str(i+1) for i in range(self.num_subjects) ]
+            # For multiple subjects, the wds_background_string is like: 'w1', 'w2', ....
             # Don't share the wds_background_string, since the background of different subject images
             # has different distributions.
-            self.wds_background_strings = [ wds_background_string + str(i) for i in range(self.num_subjects) ]
+            self.wds_background_strings = [ wds_background_string + str(i+1) for i in range(self.num_subjects) ]
             
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         # subject_token, background_token: subject_string and background_string converted to 
