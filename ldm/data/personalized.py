@@ -243,16 +243,18 @@ class PersonalizedBase(Dataset):
             self.background_strings     = [ background_string ]
             self.wds_background_strings = [ wds_background_string ]
         else:
-            # For multiple subjects, the subject_string is like: 'z1', 'z2', ....
-            self.subject_strings        = [ subject_string + str(i+1) for i in range(self.num_subjects) ]
-            # For multiple subjects, the background_string is like: 'y1', 'y2', ....
+            # For multiple subjects, the subject_string is like: 'z01', 'z02', ....
+            # Avoid using z1 and z11, ..., in case the tokenizer wrongly segments z11 as z1 and 1 (probably won't happen for CLIP
+            # tokenizer, but just to be safe.)
+            self.subject_strings        = [ subject_string          + f"{i+1:02}" for i in range(self.num_subjects) ]
+            # For multiple subjects, the background_string is like: 'y01', 'y02', ....
             # Don't share the background_string, since the background of different subject images
             # has different distributions.
-            self.background_strings     = [ background_string + str(i+1) for i in range(self.num_subjects) ]
-            # For multiple subjects, the wds_background_string is like: 'w1', 'w2', ....
+            self.background_strings     = [ background_string       + f"{i+1:02}" for i in range(self.num_subjects) ]
+            # For multiple subjects, the wds_background_string is like: 'w01', 'w02', ....
             # Don't share the wds_background_string, since the background of different subject images
             # has different distributions.
-            self.wds_background_strings = [ wds_background_string + str(i+1) for i in range(self.num_subjects) ]
+            self.wds_background_strings = [ wds_background_string   + f"{i+1:02}" for i in range(self.num_subjects) ]
             
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         # subject_token, background_token: subject_string and background_string converted to 
