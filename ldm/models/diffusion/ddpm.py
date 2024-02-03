@@ -1661,7 +1661,7 @@ class LatentDiffusion(DDPM):
                     # reuse_init_conds, discard the prompts offered in shared_step().
                     if self.iter_flags['reuse_init_conds']:
                         # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
-                        delta_prompts = self.cached_init[self.batch_subj_string]['delta_prompts']
+                        delta_prompts = self.cached_inits[self.batch_subj_string]['delta_prompts']
                         # cached_inits will be used in p_losses(), 
                         # so don't delete cached_init[self.batch_subj_string] to False yet.
                     else:
