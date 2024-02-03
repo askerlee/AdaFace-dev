@@ -328,9 +328,11 @@ def nondefault_trainer_args(opt):
 # dataset: data.datasets['train'].
 def set_placeholders_info(personalization_config_params, opt, dataset):
     num_subjects = dataset.num_subjects
-    
+    if not hasattr(opt, 'subj_info_filepath'):
+        assert num_subjects == 1
+
     # Single subject. All params are specified in the opt arguments.
-    if num_subjects == 1:
+    if not hasattr(opt, 'subj_info_filepath'):
         if len(opt.init_word_weights) > 0:
             assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_string))
         else:
@@ -365,7 +367,8 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
                 personalization_config_params.list_cls_delta_strings.append(config.data.params.train.params.cls_bg_delta_string)
                 personalization_config_params.num_vectors_per_token[opt.wds_background_string] = opt.num_vectors_per_bg_token
                 personalization_config_params.background_strings.append(opt.wds_background_string)
-    # Multiple subjects. The params are extracted from the dataset.
+    # Multiple subjects. The params are extracted from opt.subj_info_filepath 
+    # by the dataset object.
     else:
         personalization_config_params.placeholder_strings       = dataset.subject_strings
         personalization_config_params.list_initializer_words    = dataset.cls_delta_strings

@@ -828,6 +828,8 @@ class SubjectSampler(Sampler):
         assert self.num_subjects > 0, "FATAL: no subjects found in the dataset!"
         print("Found {} subjects in the dataset".format(self.num_subjects))
 
+        # Each subject will go through consecutive two recon iters and one comp iter.
+        self.switch_cycle = self.batch_size * 3
         self.curr_subj_idx = 0
         self.curr_subj_count = 0
         self.debug = debug
@@ -846,7 +848,7 @@ class SubjectSampler(Sampler):
         for i in range(self.num_batches * self.batch_size):
             # If the current subject index has been repeated batch_size times, 
             # we find the next subject index.
-            if self.curr_subj_count >= self.batch_size:
+            if self.curr_subj_count >= self.switch_cycle:
                 self.curr_subj_count = 0        
                 self.curr_subj_idx = self.next_subject()
 
