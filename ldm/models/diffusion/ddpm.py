@@ -1384,6 +1384,7 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['wds_comp_avail_ratio'] = batch['has_wds_comp'].sum() / batch['has_wds_comp'].shape[0]
 
+        #print(batch["subj_string"])
         self.batch_subj_string = batch['subj_string'][0]
         # If cached_inits is available (self.batch_subj_string in self.cached_inits), 
         # cached_inits are only used if do_mix_prompt_distillation = True.
@@ -2856,9 +2857,10 @@ class LatentDiffusion(DDPM):
                     self.comp_init_fg_from_training_image_reuse_count += 1
                 else:
                     self.comp_init_fg_from_training_image_fresh_count += 1
-                comp_init_fg_from_training_image_reuse_frac = self.comp_init_fg_from_training_image_reuse_count / self.global_step
+                
+                comp_init_fg_from_training_image_reuse_frac = self.comp_init_fg_from_training_image_reuse_count / (self.global_step + 1)
                 loss_dict.update({f'{prefix}/comp_init_fg_from_training_image_reuse_frac': comp_init_fg_from_training_image_reuse_frac})
-                comp_init_fg_from_training_image_fresh_frac = self.comp_init_fg_from_training_image_fresh_count / self.global_step
+                comp_init_fg_from_training_image_fresh_frac = self.comp_init_fg_from_training_image_fresh_count / (self.global_step + 1)
                 loss_dict.update({f'{prefix}/comp_init_fg_from_training_image_fresh_frac': comp_init_fg_from_training_image_fresh_frac})
             else:
                 loss_comp_fg_bg_preserve = 0

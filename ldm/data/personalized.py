@@ -529,6 +529,7 @@ class PersonalizedBase(Dataset):
         if aug_mask is not None:
             aug_mask    = aug_mask.astype(np.uint8)
 
+        example["image_path"]   = image_path
         example["has_fg_mask"]  = has_fg_mask
         # If no fg_mask is loaded from file. 'fg_mask' is all-1, and 'has_fg_mask' is set to False.
         # 'fg_mask' has to be present in all examples, otherwise collation will cause exceptions.
@@ -694,6 +695,8 @@ class PersonalizedBase(Dataset):
         # Don't use all words in self.cls_bg_delta_strings in the same prompt. Otherwise after taking the average,
         # the resulting embedding may have weird semantics and match too many areas.
         cls_bg_delta_string = self.cls_bg_delta_strings[subject_idx]
+        
+        example["subj_string"] = subject_string
 
         # If num_vectors_per_token == 3:
         # "z"    => "z, , "
@@ -766,7 +769,6 @@ class PersonalizedBase(Dataset):
                 subj_prompt_comps_fp.append(subj_prompt_comp_fp)
                 cls_prompt_comps_fp.append(cls_prompt_comp_fp)
 
-        example["subj_string"]          = subject_string
         # NOTE: "caption" and "caption_bg" are only for image reconstruction iterations.
         # But subj_prompt_single must align with cls_prompt_single, subj_prompt_comp, cls_prompt_comp.
         # So they are different when compos_placeholder_prefix is specified.
@@ -829,7 +831,7 @@ class SubjectSampler(Sampler):
         print("Found {} subjects in the dataset".format(self.num_subjects))
 
         # Each subject will go through consecutive two recon iters and one comp iter.
-        self.switch_cycle = self.batch_size * 3
+        self.switch_cycle = self.batch_size
         self.curr_subj_idx = 0
         self.curr_subj_count = 0
         self.debug = debug
@@ -838,7 +840,7 @@ class SubjectSampler(Sampler):
         return self.num_batches * self.batch_size
     
     def next_subject(self):
-        new_subj_idx = (self.curr_subj_idx + 1) % self.num_subjects
+        new_subj_idx = random.randint(0, self.num_subjects - 1)
         return new_subj_idx
 
     def __iter__(self):

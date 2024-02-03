@@ -1049,9 +1049,12 @@ class EmbeddingManager(nn.Module):
             self.placeholder_to_cls_delta_tokens[placeholder_token]  = cls_delta_tokens
             self.placeholder_to_cls_delta_weights[placeholder_token] = cls_delta_weights
 
-            # CLS_DELTA_STRING_MAX_SEARCH_SPAN should be the sum of all extra tokens
+            # CLS_DELTA_STRING_MAX_SEARCH_SPAN should be the max number of extra tokens
             # (all excluding the first of the init word tokens; the first corresponds to the subject token).
-            self.CLS_DELTA_STRING_MAX_SEARCH_SPAN += num_cls_delta_tokens - 1
+            # If multiple subject strings appear in the same prompt, then CLS_DELTA_STRING_MAX_SEARCH_SPAN 
+            # should be multiplied by the number of subject strings. Currently not implemented.
+            if num_cls_delta_tokens - 1 > self.CLS_DELTA_STRING_MAX_SEARCH_SPAN:
+                self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = num_cls_delta_tokens - 1
 
             if self.use_layerwise_embedding:
                 # If layerwise_lora_rank <= 0, then use num_init_word_tokens and rank/num_words ratio 
