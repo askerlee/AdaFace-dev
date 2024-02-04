@@ -436,7 +436,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
     # used by instantiate_from_config(self.dataset_configs[k]).
     def __init__(self, batch_size, max_steps, train=None, validation=None, test=None, predict=None,
                  wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
-                 shuffle_val_dataloader=False, training_uses_subject_sampler=False):
+                 shuffle_val_dataloader=False):
         super().__init__()
         self.batch_size = batch_size
         self.num_batches = max_steps
@@ -456,7 +456,6 @@ class DataModuleFromConfig(pl.LightningDataModule):
             self.dataset_configs["predict"] = predict
             self.predict_dataloader = self._predict_dataloader
         self.wrap = wrap
-        self.training_uses_subject_sampler = training_uses_subject_sampler
 
     def prepare_data(self):
         for data_cfg in self.dataset_configs.values():
@@ -479,7 +478,9 @@ class DataModuleFromConfig(pl.LightningDataModule):
             init_fn = None
         
         shuffle = False if is_iterable_dataset else True
-        if self.training_uses_subject_sampler:
+        # If there are multiple subjects, we use SubjectSampler to ensure that 
+        # each batch contains data from one subject only.
+        if self.datasets['train'].num_subjects > 1:
             shuffle = False
             sampler = SubjectSampler(self.datasets['train'].num_subjects, self.num_batches, self.batch_size)
         else:
