@@ -864,9 +864,9 @@ class LatentDiffusion(DDPM):
         if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
             ckpt_params_perturb_ratio = config.params.get("ckpt_params_perturb_ratio", 0)
             load_poolers_only_from_placeholders = config.params.get("load_poolers_only_from_placeholders", None)
-            freeze_subj_poolers = config.params.get("freeze_subj_poolers", False)
+            frozen_ada_attn_pooler_set = config.params.get("frozen_ada_attn_pooler_set", None)
             model.load(config.params.embedding_manager_ckpt, ckpt_params_perturb_ratio,
-                       load_poolers_only_from_placeholders, freeze_subj_poolers)
+                       load_poolers_only_from_placeholders, frozen_ada_attn_pooler_set)
         
         return model
 

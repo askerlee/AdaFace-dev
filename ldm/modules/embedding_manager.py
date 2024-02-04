@@ -1618,33 +1618,6 @@ class EmbeddingManager(nn.Module):
 
         return token_static_embedder, token_ada_embedder
 
-    def share_ada_attn_poolers(self, shared_ada_attn_pooler_set):
-        self.shared_ada_attn_pooler_set = shared_ada_attn_pooler_set
-
-        if shared_ada_attn_pooler_set is not None:
-            subj_poolers = self.string_to_ada_embedder_dict[self.subject_strings[0]].poolers
-            bg_poolers   = self.string_to_ada_embedder_dict[self.background_strings[0]].poolers
-            subj_pooler_share_count = 0
-            bg_pooler_share_count   = 0
-            pooler_shared_placeholder_strings = []
-
-            if 'subj' in shared_ada_attn_pooler_set:
-                pooler_shared_placeholder_strings += self.subject_strings
-            if 'bg'   in shared_ada_attn_pooler_set:
-                pooler_shared_placeholder_strings += self.background_strings
-
-            for placeholder_string in pooler_shared_placeholder_strings:
-                if placeholder_string in self.subject_strings:
-                    self.string_to_ada_embedder_dict[placeholder_string].poolers = subj_poolers
-                    subj_pooler_share_count += 1
-                else:
-                    self.string_to_ada_embedder_dict[placeholder_string].poolers = bg_poolers
-                    bg_pooler_share_count += 1
-
-            print(f"Shared poolers for {subj_pooler_share_count} subject tokens and {bg_pooler_share_count} background tokens")
-        else:
-            print("Not sharing poolers")
-
     # Update prompt_emb_mask.
     # tokenized_text: [B, N] = [2/4, 77].
     # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
@@ -1992,10 +1965,10 @@ class EmbeddingManager(nn.Module):
     # If load_poolers_only_from_placeholders = None, then load the whole embedding manager. Otherwise, load_poolers_only_from_placeholders should 
     # be two strings, either "subject_string,background_string", or "1,1" which means the first subject and
     # the first background string.
-    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, load_poolers_only_from_placeholders=None, freeze_subj_poolers=False):
+    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, load_poolers_only_from_placeholders=None, frozen_ada_attn_pooler_set=None):
         if load_poolers_only_from_placeholders is not None:
             self.load_poolers(ckpt_paths, pooler_placeholder_strings=load_poolers_only_from_placeholders, 
-                              freeze_subj_poolers=freeze_subj_poolers)
+                              frozen_ada_attn_pooler_set=frozen_ada_attn_pooler_set)
             return
 
         # The default placeholder specified in the config file will be loaded to these dicts.
@@ -2135,7 +2108,7 @@ class EmbeddingManager(nn.Module):
 
     # pooler_placeholder_strings should be two strings, either "subject_string,background_string", 
     # or "1,1" which means the first subject and the first background string.
-    def load_poolers(self, ckpt_paths, pooler_placeholder_strings, freeze_subj_poolers=True):
+    def load_poolers(self, ckpt_paths, pooler_placeholder_strings, frozen_ada_attn_pooler_set=None):
         pooler_subj_string, pooler_bg_string = pooler_placeholder_strings.split(",")
 
         if isinstance(ckpt_paths, str):
@@ -2169,15 +2142,47 @@ class EmbeddingManager(nn.Module):
             # No need to call share_ada_attn_poolers() here, as the poolers are already shared 
             # after the aasignment above.
 
-        if freeze_subj_poolers:
-            for km in self.subject_strings:
-                num_poolers_frozen = 0
-                ada = self.string_to_ada_embedder_dict[km]
-                for pooler in ada.poolers:
-                    for param in pooler.parameters():
-                        param.requires_grad = False
-                    num_poolers_frozen += 1
-                print(f"Froze {num_poolers_frozen} {km} poolers")
+        pooler_frozen_placeholder_strings = []
+        if 'subj' in frozen_ada_attn_pooler_set:
+            pooler_frozen_placeholder_strings += self.subject_strings
+        if 'bg'   in frozen_ada_attn_pooler_set:
+            pooler_frozen_placeholder_strings += self.background_strings
+
+        for placeholder_string in pooler_frozen_placeholder_strings:
+            num_poolers_frozen = 0
+            ada = self.string_to_ada_embedder_dict[placeholder_string]
+            for pooler in ada.poolers:
+                for param in pooler.parameters():
+                    param.requires_grad = False
+                num_poolers_frozen += 1
+            print(f"Froze {num_poolers_frozen} {placeholder_string} poolers")
+
+    def share_ada_attn_poolers(self, shared_ada_attn_pooler_set):
+        self.shared_ada_attn_pooler_set = shared_ada_attn_pooler_set
+
+        if shared_ada_attn_pooler_set is not None:
+            subj_poolers = self.string_to_ada_embedder_dict[self.subject_strings[0]].poolers
+            bg_poolers   = self.string_to_ada_embedder_dict[self.background_strings[0]].poolers
+            subj_pooler_share_count = 0
+            bg_pooler_share_count   = 0
+            pooler_shared_placeholder_strings = []
+
+            if 'subj' in shared_ada_attn_pooler_set:
+                pooler_shared_placeholder_strings += self.subject_strings
+            if 'bg'   in shared_ada_attn_pooler_set:
+                pooler_shared_placeholder_strings += self.background_strings
+
+            for placeholder_string in pooler_shared_placeholder_strings:
+                if placeholder_string in self.subject_strings:
+                    self.string_to_ada_embedder_dict[placeholder_string].poolers = subj_poolers
+                    subj_pooler_share_count += 1
+                else:
+                    self.string_to_ada_embedder_dict[placeholder_string].poolers = bg_poolers
+                    bg_pooler_share_count += 1
+
+            print(f"Shared poolers for {subj_pooler_share_count} subject tokens and {bg_pooler_share_count} background tokens")
+        else:
+            print("Not sharing poolers")
 
     def perturb_model_parameters(self, perturb_ratio=0.2):
         param_group_list = self.optimized_parameters()

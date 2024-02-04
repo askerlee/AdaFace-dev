@@ -190,9 +190,9 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--load_poolers_only_from_placeholders",
         type=str, nargs="?", const='1,1', default=None,
         help="Load only the attn poolers from the checkpoint")
-    parser.add_argument("--freeze_subj_poolers",
-        type=str2bool, nargs="?", const=True, default=False,
-        help="Freeze the attn poolers")
+    parser.add_argument("--frozen_ada_attn_pooler_set",
+        type=str, default=None,
+        help="Freeze this set of ada attn poolers (candidates: subj,bg)")
     
     parser.add_argument("--ckpt_params_perturb_ratio",
         type=float, default=-1,
@@ -968,7 +968,7 @@ if __name__ == "__main__":
 
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
         config.model.params.personalization_config.params.load_poolers_only_from_placeholders = opt.load_poolers_only_from_placeholders
-        config.model.params.personalization_config.params.freeze_subj_poolers = opt.freeze_subj_poolers
+        config.model.params.personalization_config.params.frozen_ada_attn_pooler_set = opt.frozen_ada_attn_pooler_set
         config.model.params.personalization_config.params.ckpt_params_perturb_ratio = opt.ckpt_params_perturb_ratio
         config.model.params.personalization_config.params.emb_reg_loss_scale = opt.emb_reg_loss_scale
 
