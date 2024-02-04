@@ -1290,7 +1290,8 @@ class EmbeddingManager(nn.Module):
                                                                   self.CLS_DELTA_STRING_MAX_SEARCH_SPAN)
                 # cls_delta_string_indices is a list of tuples, each tuple is 
                 # (batch_i, start_N, num_cls_delta_tokens, placeholder_token).
-                self.placeholders_cls_delta_string_indices += cls_delta_string_indices
+                if cls_delta_string_indices is not None:
+                    self.placeholders_cls_delta_string_indices += cls_delta_string_indices
 
             static_embedder = embedder_dict[placeholder_string].to(device)
             if isinstance(static_embedder, StaticLayerwiseEmbedding):
@@ -1407,7 +1408,8 @@ class EmbeddingManager(nn.Module):
                 
                 # cls_delta_string_indices is a list of tuples, each tuple is 
                 # (batch_i, start_N, num_cls_delta_tokens, placeholder_token).
-                self.placeholders_cls_delta_string_indices += cls_delta_string_indices
+                if cls_delta_string_indices is not None:
+                    self.placeholders_cls_delta_string_indices += cls_delta_string_indices
 
             # For fg (subject) tokens, exclude fg embeddings from computing layer_static_extra_emb_mean. 
             # For bg (junk) tokens,    exclude fg embeddings from computing layer_static_extra_emb_mean.
