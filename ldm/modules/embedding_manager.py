@@ -913,7 +913,7 @@ class EmbeddingManager(nn.Module):
             prompt_embedding_clamp_value=-1,
             background_extra_global_scale=1.,
             emb_reg_loss_scale=1,
-            use_shared_attn_poolers=True,
+            shared_ada_attn_pooler_set='subj',
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1111,7 +1111,7 @@ class EmbeddingManager(nn.Module):
             else:
                 self.initial_embeddings[placeholder_string] = None
 
-        self.share_ada_attn_poolers(use_shared_attn_poolers)
+        self.share_ada_attn_poolers(shared_ada_attn_pooler_set)
 
         self.layer_idx = -1
         self.static_subj_embs_dict = {}   
@@ -1618,16 +1618,22 @@ class EmbeddingManager(nn.Module):
 
         return token_static_embedder, token_ada_embedder
 
-    def share_ada_attn_poolers(self, use_shared_attn_poolers):
-        self.use_shared_attn_poolers = use_shared_attn_poolers
+    def share_ada_attn_poolers(self, shared_ada_attn_pooler_set):
+        self.shared_ada_attn_pooler_set = shared_ada_attn_pooler_set
 
-        if use_shared_attn_poolers:
+        if shared_ada_attn_pooler_set is not None:
             subj_poolers = self.string_to_ada_embedder_dict[self.subject_strings[0]].poolers
             bg_poolers   = self.string_to_ada_embedder_dict[self.background_strings[0]].poolers
             subj_pooler_share_count = 0
             bg_pooler_share_count   = 0
-            
-            for placeholder_string in self.string_to_ada_embedder_dict.keys():
+            pooler_shared_placeholder_strings = []
+
+            if 'subj' in shared_ada_attn_pooler_set:
+                pooler_shared_placeholder_strings += self.subject_strings
+            if 'bg'   in shared_ada_attn_pooler_set:
+                pooler_shared_placeholder_strings += self.background_strings
+
+            for placeholder_string in pooler_shared_placeholder_strings:
                 if placeholder_string in self.subject_strings:
                     self.string_to_ada_embedder_dict[placeholder_string].poolers = subj_poolers
                     subj_pooler_share_count += 1
@@ -1970,7 +1976,7 @@ class EmbeddingManager(nn.Module):
                      "emb_global_scale_scores":         self.emb_global_scale_scores,
                      "ada_emb_weight":                  self.ada_emb_weight,  
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
-                     "use_shared_attn_poolers":         self.use_shared_attn_poolers,
+                     "shared_ada_attn_pooler_set":         self.shared_ada_attn_pooler_set,
                      # Learnable weights for scaling conv attns.
                      "subj2conv_attn_layerwise_scales":  self.subj2conv_attn_layerwise_scales,
                      "use_conv_attn_kernel_size":        self.use_conv_attn_kernel_size,
@@ -2105,11 +2111,11 @@ class EmbeddingManager(nn.Module):
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
 
-            # In theory, if some ckpt has use_shared_attn_poolers = True, and some has False,
+            # In theory, if some ckpt has shared_ada_attn_pooler_set = True, and some has False,
             # then the ckpt attn poolers after the last True ckpt will not be shared.
             # But this shouldn't be a concern, as such scenarios should be very rare.
-            if "use_shared_attn_poolers" in ckpt:
-                self.share_ada_attn_poolers(ckpt["use_shared_attn_poolers"])
+            if "shared_ada_attn_pooler_set" in ckpt:
+                self.share_ada_attn_poolers(ckpt["shared_ada_attn_pooler_set"])
 
         self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(self.string_to_token_dict)), 
                                                     requires_grad=True)

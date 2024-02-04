@@ -110,7 +110,7 @@ model:
         # Scale the background embeddings by this factor.
         background_extra_global_scale:     1 #0.5
         # Share the attn poolers when training multiple subjects simultaneously.
-        use_shared_poolers:               True
+        shared_ada_attn_pooler_set:       'subj'
         embedding_manager_ckpt:           null
         # Only load attn poolers from the checkpoint.
         load_poolers_only_from_placeholders:  null
