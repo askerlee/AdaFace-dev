@@ -1146,6 +1146,9 @@ class EmbeddingManager(nn.Module):
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
                ada_emb_weight))
+        
+        # Add the search span by 1, just to be safe.
+        self.CLS_DELTA_STRING_MAX_SEARCH_SPAN += 1
         print(f"CLS_DELTA_STRING_MAX_SEARCH_SPAN={self.CLS_DELTA_STRING_MAX_SEARCH_SPAN}")
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
