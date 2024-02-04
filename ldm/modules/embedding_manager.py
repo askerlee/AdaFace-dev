@@ -138,14 +138,14 @@ class MaskedAvgPool1d(nn.Module):
 # feat_dims (ca_infeat_dims) = [ 320,  320,  640, 640, 1280, 1280, 1280, 1280, 
 #                                1280, 1280, 640, 640, 640,  320,  320,  320 ]
 class AttentionalPooler(nn.Module):
-    def __init__(self, layer_idx, feat_dim, feat_to_lora_dim_ratio=8,
+    def __init__(self, layer_idx, feat_dim, feat_reduction_ratio=8,
                  infeat_grad_scale=0.5):
         super().__init__()
         # Set to the same number of heads as the CrossAttention layers.
         # All CrossAttention layers in UNet have 8 heads.
         self.n_heads = 8    
         self.layer_inner_dim = feat_dim
-        self.lora_dim = feat_dim // feat_to_lora_dim_ratio
+        self.lora_dim = feat_dim // feat_reduction_ratio
         self.lora_attn_score_scale = self.lora_dim ** -0.5
 
         self.lora_fg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
@@ -1986,10 +1986,10 @@ class EmbeddingManager(nn.Module):
     # If load_poolers_only_from_placeholders = None, then load the whole embedding manager. Otherwise, load_poolers_only_from_placeholders should 
     # be two strings, either "subject_string,background_string", or "1,1" which means the first subject and
     # the first background string.
-    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, load_poolers_only_from_placeholders=None, freeze_poolers=False):
+    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, load_poolers_only_from_placeholders=None, freeze_subj_poolers=False):
         if load_poolers_only_from_placeholders is not None:
             self.load_poolers(ckpt_paths, pooler_placeholder_strings=load_poolers_only_from_placeholders, 
-                              freeze_poolers=freeze_poolers)
+                              freeze_subj_poolers=freeze_subj_poolers)
             return
 
         # The default placeholder specified in the config file will be loaded to these dicts.
@@ -2129,7 +2129,7 @@ class EmbeddingManager(nn.Module):
 
     # pooler_placeholder_strings should be two strings, either "subject_string,background_string", 
     # or "1,1" which means the first subject and the first background string.
-    def load_poolers(self, ckpt_paths, pooler_placeholder_strings, freeze_poolers=True):
+    def load_poolers(self, ckpt_paths, pooler_placeholder_strings, freeze_subj_poolers=True):
         pooler_subj_string, pooler_bg_string = pooler_placeholder_strings.split(",")
 
         if isinstance(ckpt_paths, str):
@@ -2163,8 +2163,8 @@ class EmbeddingManager(nn.Module):
             # No need to call share_ada_attn_poolers() here, as the poolers are already shared 
             # after the aasignment above.
 
-        if freeze_poolers:
-            for km in self.placeholder_strings:
+        if freeze_subj_poolers:
+            for km in self.subject_strings:
                 num_poolers_frozen = 0
                 ada = self.string_to_ada_embedder_dict[km]
                 for pooler in ada.poolers:

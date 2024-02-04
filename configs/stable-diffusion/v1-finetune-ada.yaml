@@ -115,7 +115,7 @@ model:
         # Only load attn poolers from the checkpoint.
         load_poolers_only_from_placeholders:  null
         # Freeze the poolers after loading them.
-        freeze_poolers:                   False
+        freeze_subj_poolers:                   False
         
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
