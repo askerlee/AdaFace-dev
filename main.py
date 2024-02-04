@@ -187,8 +187,8 @@ def get_parser(**parser_kwargs):
         type=str, 
         default="", 
         help="Initialize embedding manager from a checkpoint")
-    parser.add_argument("--load_poolers_only",
-        type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--load_poolers_only_from_placeholders",
+        type=str, nargs="?", const='1,1', default=None,
         help="Load only the attn poolers from the checkpoint")
     parser.add_argument("--freeze_poolers",
         type=str2bool, nargs="?", const=True, default=False,
@@ -333,7 +333,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
 
     # Single subject. All params are specified in the opt arguments.
     if not hasattr(opt, 'subj_info_filepath'):
-        if len(opt.init_word_weights) > 0:
+        if opt.init_word_weights is not None and len(opt.init_word_weights) > 0:
             assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_string))
         else:
             # None will be converted to a list of 1.0s in EmbeddingManager.
@@ -966,7 +966,7 @@ if __name__ == "__main__":
                 = opt.use_conv_attn_kernel_size
 
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
-        config.model.params.personalization_config.params.load_poolers_only = opt.load_poolers_only
+        config.model.params.personalization_config.params.load_poolers_only_from_placeholders = opt.load_poolers_only_from_placeholders
         config.model.params.personalization_config.params.freeze_poolers = opt.freeze_poolers
         config.model.params.personalization_config.params.ckpt_params_perturb_ratio = opt.ckpt_params_perturb_ratio
         config.model.params.personalization_config.params.emb_reg_loss_scale = opt.emb_reg_loss_scale

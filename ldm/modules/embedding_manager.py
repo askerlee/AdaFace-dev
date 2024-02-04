@@ -28,8 +28,8 @@ def calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
         # The background embedding is not initialized with any word embedding.
         # In this case,
         # init_word_embeddings = None,    init_word_weights    = None,
-        # avg_init_word_embedding = None, num_init_word_tokens = 0.      
-        return None, None, None, 0
+        # init_word_embeddings = None, avg_init_word_embedding = None.
+        return None, None, None, None
     else:
         init_word_tokens = get_tokens_for_string(initializer_words)
         N = len(init_word_tokens)
@@ -1076,7 +1076,11 @@ class EmbeddingManager(nn.Module):
             # initial_embeddings are only used to compute the regularization loss.
             # Wrap with Parameter so that they will be saved to checkpoints.
             # avg_init_word_embedding_3d: [1, 768] => [16, 9, 768]
-            avg_init_word_embedding_3d = avg_init_word_embedding.unsqueeze(0).repeat(self.num_layers_per_embedder, num_vectors_per_token, 1)
+            if avg_init_word_embedding is not None:
+                avg_init_word_embedding_3d = avg_init_word_embedding.unsqueeze(0).repeat(self.num_layers_per_embedder, num_vectors_per_token, 1)
+            else:
+                # Use zero tensor as avg_init_word_embedding_3d.
+                avg_init_word_embedding_3d = torch.zeros(self.num_layers_per_embedder, num_vectors_per_token, 768)
 
             token_static_embedder, token_ada_embedder = \
                 self.create_static_ada_embedders(num_vectors_per_token, layerwise_lora_rank, initializer_words,
@@ -1979,18 +1983,25 @@ class EmbeddingManager(nn.Module):
                     ckpt_path)
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
-    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, load_poolers_only=False, freeze_poolers=False):
+    # If load_poolers_only_from_placeholders = None, then load the whole embedding manager. Otherwise, load_poolers_only_from_placeholders should 
+    # be two strings, either "subject_string,background_string", or "1,1" which means the first subject and
+    # the first background string.
+    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, load_poolers_only_from_placeholders=None, freeze_poolers=False):
+        if load_poolers_only_from_placeholders is not None:
+            self.load_poolers(ckpt_paths, pooler_placeholder_strings=load_poolers_only_from_placeholders, 
+                              freeze_poolers=freeze_poolers)
+            return
+
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         token2num_vectors                   = {}
         emb_global_scale_scores_dict        = {}
         subj2conv_attn_layerwise_scales     = {}
-
-        if not load_poolers_only:
-            self.string_to_token_dict           = {}
-            self.string_to_emb_ema_dict         = nn.ModuleDict()
-            self.string_to_static_embedder_dict = nn.ParameterDict()
-            self.string_to_ada_embedder_dict    = nn.ModuleDict()
+        
+        self.string_to_token_dict           = {}
+        self.string_to_emb_ema_dict         = nn.ModuleDict()
+        self.string_to_static_embedder_dict = nn.ParameterDict()
+        self.string_to_ada_embedder_dict    = nn.ModuleDict()
 
         if isinstance(ckpt_paths, str):
             ckpt_paths = [ckpt_paths]
@@ -2047,7 +2058,7 @@ class EmbeddingManager(nn.Module):
                     k2 = k
                     k2_token = ckpt["string_to_token"][k]
 
-                if k2 in self.string_to_token_dict and not load_poolers_only:
+                if k2 in self.string_to_token_dict:
                     if k2 in self.background_strings:
                         print(f"Duplicate key {k}->{k2} in {ckpt_path}. Ignored.")
                         continue
@@ -2074,19 +2085,15 @@ class EmbeddingManager(nn.Module):
                 # Shouldn't do the k->k2 mapping on string_to_token_dict.
                 self.string_to_token_dict[k2]   = k2_token
 
-                # Mapped from k in ckpt to k2 in the current session.
+                # Mapped from k in ckpt to k2 in the current session. Partial matching is allowed.
                 for km in ckpt["string_to_static_embedder"].keys():
                     # If there are pseudo-tokens within multi-embedding tokens, load them as well.
                     if km.startswith(k):
                         km2 = km.replace(k, k2)
-
-                        if load_poolers_only:
-                            self.string_to_ada_embedder_dict[km2].poolers = ckpt["string_to_ada_embedder"][km].poolers
-                        else:
-                            self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
-                            self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
-                            if self.emb_ema_as_pooling_probe_weight > 0:
-                                self.string_to_emb_ema_dict[km2]     = ckpt["string_to_emb_ema_dict"][km]
+                        self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
+                        self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
+                        if self.emb_ema_as_pooling_probe_weight > 0:
+                            self.string_to_emb_ema_dict[km2]     = ckpt["string_to_emb_ema_dict"][km]
                         
                         if km in ckpt["token2num_vectors"]:
                             token2num_vectors[km2] = ckpt["token2num_vectors"][km]
@@ -2094,14 +2101,6 @@ class EmbeddingManager(nn.Module):
                         print(f"Loaded {km}->{km2} from {ckpt_path}")
                         ada = self.string_to_ada_embedder_dict[km2]
                         print(f"{km2}: {ada.fg_emb_count}/{ada.bg_emb_count}/{ada.K} fg/bg/total embeddings")
-
-                        if freeze_poolers:
-                            num_poolers_frozen = 0
-                            for pooler in ada.poolers:
-                                for param in pooler.parameters():
-                                    param.requires_grad = False
-                                num_poolers_frozen += 1
-                            print(f"Froze {num_poolers_frozen} {km2} poolers")
 
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
@@ -2112,22 +2111,67 @@ class EmbeddingManager(nn.Module):
             if "use_shared_attn_poolers" in ckpt:
                 self.share_ada_attn_poolers(ckpt["use_shared_attn_poolers"])
 
-        if not load_poolers_only:
-            self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(self.string_to_token_dict)), 
-                                                        requires_grad=True)
-            for token_idx, k in enumerate(self.string_to_token_dict):
-                if k in emb_global_scale_scores_dict:
-                    self.emb_global_scale_scores.data[token_idx] = emb_global_scale_scores_dict[k]
+        self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(self.string_to_token_dict)), 
+                                                    requires_grad=True)
+        for token_idx, k in enumerate(self.string_to_token_dict):
+            if k in emb_global_scale_scores_dict:
+                self.emb_global_scale_scores.data[token_idx] = emb_global_scale_scores_dict[k]
 
-            print(f"Set emb_global_scales = {self.get_emb_global_scales_dict(regen=True, do_perturb=False)}")
+        print(f"Set emb_global_scales = {self.get_emb_global_scales_dict(regen=True, do_perturb=False)}")
 
-            if len(subj2conv_attn_layerwise_scales) > 0:
-                self.initialize_subj2conv_attn_layerwise_scales(1, subj2conv_attn_layerwise_scales)
+        if len(subj2conv_attn_layerwise_scales) > 0:
+            self.initialize_subj2conv_attn_layerwise_scales(1, subj2conv_attn_layerwise_scales)
 
         # When we resume training from a ckpt, sometimes we want to perturb the parameters
         # to reduce overfitting.
         if ckpt_params_perturb_ratio > 0:
             self.perturb_model_parameters(ckpt_params_perturb_ratio)
+
+    # pooler_placeholder_strings should be two strings, either "subject_string,background_string", 
+    # or "1,1" which means the first subject and the first background string.
+    def load_poolers(self, ckpt_paths, pooler_placeholder_strings, freeze_poolers=True):
+        pooler_subj_string, pooler_bg_string = pooler_placeholder_strings.split(",")
+
+        if isinstance(ckpt_paths, str):
+            ckpt_paths = [ckpt_paths]
+
+        for ckpt_i, ckpt_path in enumerate(ckpt_paths):
+            ckpt_path_parts = ckpt_path.split(":")
+            ckpt_path = ckpt_path_parts[0]
+            ckpt = torch.load(ckpt_path, map_location='cpu')
+
+            # If pooler_subj_string/pooler_bg_string are "1", then replace them with the first subject/background string
+            # of the first ckpt. 
+            if ckpt_i == 0:
+                if pooler_subj_string == "1":
+                    pooler_subj_string = ckpt["subject_strings"][0]
+                if pooler_bg_string == "1":
+                    pooler_bg_string   = ckpt["background_strings"][0]
+
+            for km in ckpt["string_to_ada_embedder"].keys():
+                if pooler_subj_string == km:
+                    # All subject strings share the same poolers loaded from the ckpt.
+                    for subj_string in self.subject_strings:
+                        self.string_to_ada_embedder_dict[subj_string].poolers = ckpt["string_to_ada_embedder"][km].poolers
+                    print(f"Loaded poolers {km}->{self.subject_strings} from {ckpt_path}")
+                elif pooler_bg_string == km:
+                    # All background strings share the same poolers loaded from the ckpt.
+                    for bg_string in self.background_strings:
+                        self.string_to_ada_embedder_dict[bg_string].poolers = ckpt["string_to_ada_embedder"][km].poolers
+                    print(f"Loaded poolers {km}->{self.background_strings} from {ckpt_path}")
+
+            # No need to call share_ada_attn_poolers() here, as the poolers are already shared 
+            # after the aasignment above.
+
+        if freeze_poolers:
+            for km in self.placeholder_strings:
+                num_poolers_frozen = 0
+                ada = self.string_to_ada_embedder_dict[km]
+                for pooler in ada.poolers:
+                    for param in pooler.parameters():
+                        param.requires_grad = False
+                    num_poolers_frozen += 1
+                print(f"Froze {num_poolers_frozen} {km} poolers")
 
     def perturb_model_parameters(self, perturb_ratio=0.2):
         param_group_list = self.optimized_parameters()

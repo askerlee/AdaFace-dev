@@ -113,7 +113,7 @@ model:
         use_shared_poolers:               True
         embedding_manager_ckpt:           null
         # Only load attn poolers from the checkpoint.
-        load_poolers_only:                False
+        load_poolers_only_from_placeholders:  null
         # Freeze the poolers after loading them.
         freeze_poolers:                   False
         
