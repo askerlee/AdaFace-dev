@@ -929,7 +929,7 @@ def distribute_embedding_to_M_tokens_by_dict(text_embedding, placeholder_indices
 
     return text_embedding
 
-def scan_cls_delta_strings(tokenized_text, embedded_text, placeholder_token, placeholder_indices_1st,
+def scan_cls_delta_strings(tokenized_text, placeholder_token, placeholder_indices_1st,
                            cls_delta_tokens, MAX_SEARCH_SPAN=10):
 
     # If initializer_words are not specified for this subject token, then in the class prompts,

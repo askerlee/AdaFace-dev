@@ -1283,15 +1283,15 @@ class EmbeddingManager(nn.Module):
             # occurs in the prompts without the placeholder token. If so, we need to merge 
             # their embeddings to one (the first) embedding, and delete the 2nd to the last embeddings,
             # using merge_cls_token_embeddings().
-            if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0:
-                cls_delta_string_indices = scan_cls_delta_strings(tokenized_text, embedded_text, placeholder_token,
+            if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0 \
+              and self.placeholder_to_cls_delta_tokens[placeholder_token] is not None:
+                cls_delta_string_indices = scan_cls_delta_strings(tokenized_text, placeholder_token,
                                                                   placeholder_indices_1st,
                                                                   self.placeholder_to_cls_delta_tokens[placeholder_token],
                                                                   self.CLS_DELTA_STRING_MAX_SEARCH_SPAN)
                 # cls_delta_string_indices is a list of tuples, each tuple is 
                 # (batch_i, start_N, num_cls_delta_tokens, placeholder_token).
-                if cls_delta_string_indices is not None:
-                    self.placeholders_cls_delta_string_indices += cls_delta_string_indices
+                self.placeholders_cls_delta_string_indices += cls_delta_string_indices
 
             static_embedder = embedder_dict[placeholder_string].to(device)
             if isinstance(static_embedder, StaticLayerwiseEmbedding):
@@ -1400,16 +1400,16 @@ class EmbeddingManager(nn.Module):
             # their embeddings to one (the first) embedding, and delete the 2nd to the last embeddings,
             # using merge_cls_token_embeddings().
             # During inference, cls delta strings are not used. So CLS_DELTA_STRING_MAX_SEARCH_SPAN = -1.
-            if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0:
-                cls_delta_string_indices = scan_cls_delta_strings(tokenized_text, embedded_text, placeholder_token,
+            if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0 \
+              and self.placeholder_to_cls_delta_tokens[placeholder_token] is not None:
+                cls_delta_string_indices = scan_cls_delta_strings(tokenized_text, placeholder_token,
                                                                   placeholder_indices_1st,
                                                                   self.placeholder_to_cls_delta_tokens[placeholder_token],
                                                                   self.CLS_DELTA_STRING_MAX_SEARCH_SPAN)
                 
                 # cls_delta_string_indices is a list of tuples, each tuple is 
                 # (batch_i, start_N, num_cls_delta_tokens, placeholder_token).
-                if cls_delta_string_indices is not None:
-                    self.placeholders_cls_delta_string_indices += cls_delta_string_indices
+                self.placeholders_cls_delta_string_indices += cls_delta_string_indices
 
             # For fg (subject) tokens, exclude fg embeddings from computing layer_static_extra_emb_mean. 
             # For bg (junk) tokens,    exclude fg embeddings from computing layer_static_extra_emb_mean.
