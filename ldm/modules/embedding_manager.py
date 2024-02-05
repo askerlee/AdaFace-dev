@@ -559,6 +559,7 @@ class AdaEmbedding(nn.Module):
                  layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                             17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },
                  has_bias=True, use_attn_pooler=True,
+                 attn_pooler_feat_reduction_ratio=8,
                  token_string="", token_is_bg=False, device_type="cuda"):
         super().__init__()
         self.token_string = token_string
@@ -584,6 +585,7 @@ class AdaEmbedding(nn.Module):
 
         self.r = r
         self.use_attn_pooler = use_attn_pooler
+        self.set_attn_pooler_feat_reduction_ratio(attn_pooler_feat_reduction_ratio)
 
         # emb_infeat_types: 0 = fg, 1 = bg, 2 = fg_bg. 
         # Usually there are no type-2 (fg_bg) embeddings.
@@ -647,7 +649,8 @@ class AdaEmbedding(nn.Module):
             infeat_dim = self.ca_infeat_dims[i]
 
             if self.use_attn_pooler:
-                pooler = AttentionalPooler(i, infeat_dim, infeat_grad_scale=1) #0.5)
+                pooler = AttentionalPooler(i, infeat_dim, feat_reduction_ratio=self.attn_pooler_feat_reduction_ratio,
+                                           infeat_grad_scale=1)
             else:
                 pooler = MaskedAvgPool1d() #MaskedAvgPool2d()
             poolers.append(pooler)
@@ -903,7 +906,8 @@ class EmbeddingManager(nn.Module):
             layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             ada_emb_weight=0.5, 
-            ada_use_attn_pooler=True,
+            ada_uses_attn_pooler=True,
+            attn_pooler_feat_reduction_ratio=8,
             emb_ema_as_pooling_probe_weight=0,
             training_begin_add_noise_std_range=None,
             training_end_add_noise_std_range=None,
@@ -928,7 +932,7 @@ class EmbeddingManager(nn.Module):
         self.placeholder_to_emb_cache       = nn.ParameterDict() # These should not be optimized
 
         self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
-        self.ada_use_attn_pooler = ada_use_attn_pooler
+        self.ada_uses_attn_pooler = ada_uses_attn_pooler
         self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight
         self.emb_ema_grad_scale = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
@@ -1085,7 +1089,8 @@ class EmbeddingManager(nn.Module):
             token_static_embedder, token_ada_embedder = \
                 self.create_static_ada_embedders(num_vectors_per_token, layerwise_lora_rank, initializer_words,
                                                  init_word_embeddings, init_word_weights, placeholder_string,
-                                                 avg_init_word_embedding_3d, token_is_bg, ada_use_attn_pooler)
+                                                 avg_init_word_embedding_3d, token_is_bg, ada_uses_attn_pooler,
+                                                 attn_pooler_feat_reduction_ratio)
 
             # avg_init_word_embedding_3d: [16, 9, 768]. 
             # All layers of all 9 embeddings are initialized as avg_init_word_embedding.            
@@ -1570,7 +1575,8 @@ class EmbeddingManager(nn.Module):
     # Initialize static/ada embedders.
     def create_static_ada_embedders(self, num_vectors_per_token, layerwise_lora_rank, initializer_words,
                                     init_word_embeddings, init_word_weights, placeholder_string,
-                                    avg_init_word_embedding_3d, token_is_bg, ada_use_attn_pooler):
+                                    avg_init_word_embedding_3d, token_is_bg, ada_uses_attn_pooler,
+                                    attn_pooler_feat_reduction_ratio):
         # A static/ada embedder can generate K embeddings.
         # layerwise_lora_rank > 0 implies use_layerwise_embedding.
         if layerwise_lora_rank > 0:
@@ -1612,7 +1618,8 @@ class EmbeddingManager(nn.Module):
                                                 layerwise_lora_rank, 
                                                 initializer_words,
                                                 init_word_embeddings,
-                                                use_attn_pooler=ada_use_attn_pooler,
+                                                use_attn_pooler=ada_uses_attn_pooler,
+                                                attn_pooler_feat_reduction_ratio=attn_pooler_feat_reduction_ratio,
                                                 token_string=placeholder_string,
                                                 token_is_bg=token_is_bg)
         else:
@@ -1815,6 +1822,10 @@ class EmbeddingManager(nn.Module):
         self.emb_ema_as_pooling_probe_weight = emb_ema_as_pooling_probe_weight
         print(f"Setting emb_ema_as_pooling_probe_weight = {emb_ema_as_pooling_probe_weight}")
 
+    def set_attn_pooler_feat_reduction_ratio(self, attn_pooler_feat_reduction_ratio):
+        self.attn_pooler_feat_reduction_ratio = attn_pooler_feat_reduction_ratio
+        print(f"Setting attn_pooler_feat_reduction_ratio = {attn_pooler_feat_reduction_ratio}")
+
     # Cache features used to compute ada embeddings.
     def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb):
         self.gen_ada_embedding      = True
@@ -1958,6 +1969,7 @@ class EmbeddingManager(nn.Module):
                      # Learnable weights for scaling conv attns.
                      "subj2conv_attn_layerwise_scales":  self.subj2conv_attn_layerwise_scales,
                      "use_conv_attn_kernel_size":        self.use_conv_attn_kernel_size,
+                     "attn_pooler_feat_reduction_ratio": self.attn_pooler_feat_reduction_ratio,
                      "placeholder_strings":              self.placeholder_strings,
                      "subject_strings":                  self.subject_strings,
                      "background_strings":               self.background_strings,
@@ -2022,6 +2034,12 @@ class EmbeddingManager(nn.Module):
 
             use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
             self.set_embs_attn_tricks(use_conv_attn_kernel_size)
+
+            if "attn_pooler_feat_reduction_ratio" in ckpt:
+                # Setting attn_pooler_feat_reduction_ratio doesn't have much impact actually,
+                # since the attn pooler is loaded from ckpt, whose feat_reduction_ratio has been
+                # implicitly determined.
+                self.set_attn_pooler_feat_reduction_ratio(ckpt["attn_pooler_feat_reduction_ratio"])
 
             if "ca_q_bns" in ckpt:
                 self.ca_q_bns = ckpt["ca_q_bns"]
@@ -2394,7 +2412,7 @@ class EmbeddingManager(nn.Module):
                     for i, map in enumerate(embobj.layer_coeff_maps):
                         loss_ada_maps_weight += reg_loss(map.weight, loss_type=euc_loss_type)
                         loss_ada_maps_bias   += reg_loss(map.bias,   loss_type=euc_loss_type)
-                    if self.ada_use_attn_pooler:
+                    if self.ada_uses_attn_pooler:
                         for i, pooler in enumerate(embobj.poolers):
                             loss_ada_attn_pooler  += reg_loss(pooler.lora_to_k.weight, loss_type=euc_loss_type)
                             loss_ada_attn_pooler  += reg_loss(pooler.lora_to_fg_q.weight, loss_type=euc_loss_type)

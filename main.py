@@ -255,6 +255,11 @@ def get_parser(**parser_kwargs):
         type=float, default=-1,
         help="Layerwise lora rank/token ratio")
 
+    # --attn_pooler_feat_reduction_ratio
+    parser.add_argument("--attn_pooler_feat_reduction_ratio",
+        type=float, default=argparse.SUPPRESS,
+        help="Feature reduction ratio adopted by the attention pooler")
+    
     # static_embedding_reg_weight, ada_embedding_reg_weight
     parser.add_argument("--static_embedding_reg_weight",
         type=float, default=-1,
@@ -962,6 +967,10 @@ if __name__ == "__main__":
         elif opt.layerwise_lora_rank_token_ratio > 0:
             config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \
                                     opt.layerwise_lora_rank_token_ratio
+        
+        if hasattr(opt, 'attn_pooler_feat_reduction_ratio'):
+            config.model.params.personalization_config.params.attn_pooler_feat_reduction_ratio \
+                = opt.attn_pooler_feat_reduction_ratio
             
         if opt.ada_emb_weight != -1:
             config.model.params.personalization_config.params.ada_emb_weight = opt.ada_emb_weight
