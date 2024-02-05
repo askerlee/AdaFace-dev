@@ -585,7 +585,8 @@ class AdaEmbedding(nn.Module):
 
         self.r = r
         self.use_attn_pooler = use_attn_pooler
-
+        self.attn_pooler_feat_reduction_ratio = attn_pooler_feat_reduction_ratio
+        
         # emb_infeat_types: 0 = fg, 1 = bg, 2 = fg_bg. 
         # Usually there are no type-2 (fg_bg) embeddings.
         self.emb_infeat_types = [ 0 ] * self.fg_emb_count + [ 1 ] * self.bg_emb_count \
