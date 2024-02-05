@@ -145,7 +145,7 @@ class AttentionalPooler(nn.Module):
         # All CrossAttention layers in UNet have 8 heads.
         self.n_heads = 8    
         self.layer_inner_dim = feat_dim
-        self.lora_dim = feat_dim // feat_reduction_ratio
+        self.lora_dim = int(feat_dim / feat_reduction_ratio)
         self.lora_attn_score_scale = self.lora_dim ** -0.5
 
         self.lora_fg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
@@ -586,7 +586,7 @@ class AdaEmbedding(nn.Module):
         self.r = r
         self.use_attn_pooler = use_attn_pooler
         self.attn_pooler_feat_reduction_ratio = attn_pooler_feat_reduction_ratio
-        
+
         # emb_infeat_types: 0 = fg, 1 = bg, 2 = fg_bg. 
         # Usually there are no type-2 (fg_bg) embeddings.
         self.emb_infeat_types = [ 0 ] * self.fg_emb_count + [ 1 ] * self.bg_emb_count \
