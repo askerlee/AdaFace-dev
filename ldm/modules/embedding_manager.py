@@ -2150,6 +2150,14 @@ class EmbeddingManager(nn.Module):
             ckpt_path = ckpt_path_parts[0]
             ckpt = torch.load(ckpt_path, map_location='cpu')
 
+            if "attn_pooler_feat_reduction_ratio" in ckpt:
+                # Setting attn_pooler_feat_reduction_ratio doesn't have much impact actually,
+                # since the attn pooler is loaded from ckpt, whose feat_reduction_ratio has been
+                # implicitly determined.
+                # If loading multiple ckpts, and their attn_pooler_feat_reduction_ratio are different,
+                # the last one will be kept. But this should happen extremely rare.
+                self.set_attn_pooler_feat_reduction_ratio(ckpt["attn_pooler_feat_reduction_ratio"])
+
             # If pooler_subj_string/pooler_bg_string are "1", then replace them with the first subject/background string
             # of the first ckpt. 
             if ckpt_i == 0:
