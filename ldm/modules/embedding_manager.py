@@ -1284,7 +1284,7 @@ class EmbeddingManager(nn.Module):
             # their embeddings to one (the first) embedding, and delete the 2nd to the last embeddings,
             # using merge_cls_token_embeddings().
             if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0 \
-              and self.placeholder_to_cls_delta_tokens[placeholder_token] is not None:
+              and placeholder_token in self.placeholder_to_cls_delta_tokens:
                 cls_delta_string_indices = scan_cls_delta_strings(tokenized_text, placeholder_token,
                                                                   placeholder_indices_1st,
                                                                   self.placeholder_to_cls_delta_tokens[placeholder_token],
@@ -1401,7 +1401,7 @@ class EmbeddingManager(nn.Module):
             # using merge_cls_token_embeddings().
             # During inference, cls delta strings are not used. So CLS_DELTA_STRING_MAX_SEARCH_SPAN = -1.
             if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0 \
-              and self.placeholder_to_cls_delta_tokens[placeholder_token] is not None:
+              and placeholder_token in self.placeholder_to_cls_delta_tokens:
                 cls_delta_string_indices = scan_cls_delta_strings(tokenized_text, placeholder_token,
                                                                   placeholder_indices_1st,
                                                                   self.placeholder_to_cls_delta_tokens[placeholder_token],
@@ -1987,6 +1987,10 @@ class EmbeddingManager(nn.Module):
         self.string_to_static_embedder_dict = nn.ParameterDict()
         self.string_to_ada_embedder_dict    = nn.ModuleDict()
 
+        self.subject_strings                = []
+        self.background_strings             = []
+        ext_token_embeddings                = []
+
         if isinstance(ckpt_paths, str):
             ckpt_paths = [ckpt_paths]
 
@@ -2011,16 +2015,6 @@ class EmbeddingManager(nn.Module):
             else:
                 self.emb_ema_as_pooling_probe_weight = 0
 
-            if "placeholder_strings" in ckpt:
-                self.placeholder_strings = ckpt["placeholder_strings"]
-                # Model should be still on CPU. So no need to consider the device when extending the text embedder.
-                # Extend CLIP text embedder with the subject strings / background strings / wds background strings.
-                # In order to load the text embedder ckpt, the text_model.embeddings.token_embedding hasn't been
-                # extended yet. So we  save ext_token_embeddings to be extended to text_model.embeddings.token_embedding
-                # later in main.py.
-                self.ext_token_embeddings = extend_clip_text_embedder(self.text_embedder, {}, 
-                                                                      self.placeholder_strings)
-
             if "background_strings" in ckpt:
                 ckpt_background_strings = ckpt["background_strings"]
             else:
@@ -2037,11 +2031,16 @@ class EmbeddingManager(nn.Module):
             for token_idx, k in enumerate(ckpt["string_to_token"]):
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):
                     k2 = placeholder_mapper[k]
-                    k2_token = self.get_tokens_for_string(k2)[0]
                 else:
                     k2 = k
-                    k2_token = ckpt["string_to_token"][k]
 
+                try:
+                    k2_token = self.get_tokens_for_string(k2, force_single_token=True)[0]
+                except:
+                    k2_embedding = extend_clip_text_embedder(self.text_embedder, {}, [k2])
+                    ext_token_embeddings.append(k2_embedding)
+                    k2_token = self.get_tokens_for_string(k2, force_single_token=True)[0]
+                    print
                 if k2 in self.string_to_token_dict:
                     if k2 in self.background_strings:
                         print(f"Duplicate key {k}->{k2} in {ckpt_path}. Ignored.")
@@ -2072,19 +2071,22 @@ class EmbeddingManager(nn.Module):
                 # Mapped from k in ckpt to k2 in the current session. Partial matching is allowed.
                 for km in ckpt["string_to_static_embedder"].keys():
                     # If there are pseudo-tokens within multi-embedding tokens, load them as well.
-                    if km.startswith(k):
-                        km2 = km.replace(k, k2)
-                        self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
-                        self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
-                        if self.emb_ema_as_pooling_probe_weight > 0:
-                            self.string_to_emb_ema_dict[km2]     = ckpt["string_to_emb_ema_dict"][km]
-                        
-                        if km in ckpt["token2num_vectors"]:
-                            token2num_vectors[km2] = ckpt["token2num_vectors"][km]
+                    if (placeholder_mapper is not None) and (km in placeholder_mapper):
+                        km2 = placeholder_mapper[km]
+                    else:
+                        km2 = km
 
-                        print(f"Loaded {km}->{km2} from {ckpt_path}")
-                        ada = self.string_to_ada_embedder_dict[km2]
-                        print(f"{km2}: {ada.fg_emb_count}/{ada.bg_emb_count}/{ada.K} fg/bg/total embeddings")
+                    self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
+                    self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
+                    if self.emb_ema_as_pooling_probe_weight > 0:
+                        self.string_to_emb_ema_dict[km2]     = ckpt["string_to_emb_ema_dict"][km]
+                        
+                    if km in ckpt["token2num_vectors"]:
+                        token2num_vectors[km2] = ckpt["token2num_vectors"][km]
+
+                    print(f"Loaded {km}->{km2} from {ckpt_path}")
+                    ada = self.string_to_ada_embedder_dict[km2]
+                    print(f"{km2}: {ada.fg_emb_count}/{ada.bg_emb_count}/{ada.K} fg/bg/total embeddings")
 
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
@@ -2105,6 +2107,11 @@ class EmbeddingManager(nn.Module):
 
         if len(subj2conv_attn_layerwise_scales) > 0:
             self.initialize_subj2conv_attn_layerwise_scales(1, subj2conv_attn_layerwise_scales)
+
+        self.placeholder_strings = self.subject_strings + self.background_strings
+        if len(ext_token_embeddings) > 0:
+            self.ext_token_embeddings = torch.cat(ext_token_embeddings, dim=0)
+            print(f"Extended {len(ext_token_embeddings)} token embeddings")
 
         # When we resume training from a ckpt, sometimes we want to perturb the parameters
         # to reduce overfitting.
