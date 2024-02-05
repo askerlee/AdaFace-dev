@@ -166,6 +166,10 @@ def get_parser(**parser_kwargs):
     )
     '''
 
+    parser.add_argument("--optimizer", dest='optimizer_type',
+                        type=str, default=argparse.SUPPRESS, choices=['AdamW', 'Prodigy'],
+                        help="Type of optimizer")
+    
     parser.add_argument("--warmup_steps", type=int, default=argparse.SUPPRESS,
                         help="Number of warm up steps")
     
@@ -935,6 +939,9 @@ if __name__ == "__main__":
         if hasattr(opt, 'composition_regs_iter_gaps'):
             config.model.params.composition_regs_iter_gaps = opt.composition_regs_iter_gaps
 
+        if hasattr(opt, 'optimizer_type'):
+            config.model.params.optimizer_type = opt.optimizer_type
+            
         if hasattr(opt, 'warmup_steps'):
             if config.model.params.optimizer_type == 'Prodigy':
                 config.model.params.prodigy_config.warm_up_steps                = opt.warmup_steps

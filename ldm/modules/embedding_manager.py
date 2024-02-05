@@ -2206,10 +2206,23 @@ class EmbeddingManager(nn.Module):
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def optimized_parameters(self):
+        pooler_param_list = []
+        for placeholder_string in self.placeholder_strings:
+            ada = self.string_to_ada_embedder_dict[placeholder_string]
+            for pooler in ada.poolers:
+                pooler_param_list += list(pooler.parameters())
+        # The LR of the poolers is ~ 1/sqrt(N), where N is the number of subjects.
+        # This is to slow down pooler update when we do multi-subject training.
+        pooler_params = [ { 'params': pooler_param_list, 'lr_ratio': np.sqrt(len(self.subject_strings)),
+                            'excluded_from_prodigy': False } ]
+
+        pooler_param_ids = { id(p) for p in pooler_param_list }
+        ada_params_exclude_poolers = [ p for p in self.string_to_ada_embedder_dict.parameters() if id(p) not in pooler_param_ids ]
+
         # self.initial_embeddings and self.placeholder_to_emb_cache are not included 
         # in the optimized parameters.
         normal_params_list = list(self.string_to_static_embedder_dict.parameters()) \
-                             + list(self.string_to_ada_embedder_dict.parameters()) \
+                             + ada_params_exclude_poolers \
                              + list(self.string_to_emb_ema_dict.parameters()) \
                              + list(self.ca_q_bns.parameters()) \
                              + list(self.ca_outfeat_lns.parameters())
@@ -2228,7 +2241,7 @@ class EmbeddingManager(nn.Module):
         else:
             slow_params_excl_prodigy = []
 
-        return normal_params + slow_params_incl_prodigy + slow_params_excl_prodigy
+        return normal_params + pooler_params + slow_params_incl_prodigy + slow_params_excl_prodigy
 
     def embedding_attractor_loss(self):
         loss = 0.
