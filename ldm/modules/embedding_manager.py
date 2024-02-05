@@ -2213,7 +2213,7 @@ class EmbeddingManager(nn.Module):
                 pooler_param_list += list(pooler.parameters())
         # The LR of the poolers is ~ 1/sqrt(N), where N is the number of subjects.
         # This is to slow down pooler update when we do multi-subject training.
-        pooler_params = [ { 'params': pooler_param_list, 'lr_ratio': np.sqrt(len(self.subject_strings)),
+        pooler_params = [ { 'params': pooler_param_list, 'lr_ratio': 1. / np.sqrt(len(self.subject_strings)),
                             'excluded_from_prodigy': False } ]
 
         pooler_param_ids = { id(p) for p in pooler_param_list }
