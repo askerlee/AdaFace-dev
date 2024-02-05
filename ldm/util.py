@@ -1197,6 +1197,7 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
                 print(f"Token '{string}' already exists in the tokenizer.")
                 breakpoint()
 
+            token = get_tokens_for_string(string, force_single_token=True)[0]
             # text_embedder.transformer.text_model.embeddings.token_embedding: 
             # torch.nn.modules.sparse.Embedding, [49408, 768]
             # cls_token: 49408, 49409...
