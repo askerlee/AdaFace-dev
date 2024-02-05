@@ -585,7 +585,6 @@ class AdaEmbedding(nn.Module):
 
         self.r = r
         self.use_attn_pooler = use_attn_pooler
-        self.set_attn_pooler_feat_reduction_ratio(attn_pooler_feat_reduction_ratio)
 
         # emb_infeat_types: 0 = fg, 1 = bg, 2 = fg_bg. 
         # Usually there are no type-2 (fg_bg) embeddings.
@@ -972,6 +971,7 @@ class EmbeddingManager(nn.Module):
                                           training_end_add_noise_std_range,
                                           training_add_noise_prob)
         self.set_embs_attn_tricks(use_conv_attn_kernel_size)
+        self.set_attn_pooler_feat_reduction_ratio(attn_pooler_feat_reduction_ratio)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
         self.ca_layer_idx2layer_idx = { v: k for k, v in layer_idx2ca_layer_idx.items() }
