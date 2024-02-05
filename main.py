@@ -941,12 +941,12 @@ if __name__ == "__main__":
 
         if hasattr(opt, 'optimizer_type'):
             config.model.params.optimizer_type = opt.optimizer_type
-            
+
         if hasattr(opt, 'warmup_steps'):
             if config.model.params.optimizer_type == 'Prodigy':
-                config.model.params.prodigy_config.warm_up_steps                = opt.warmup_steps
+                config.model.params.prodigy_config.warm_up_steps                       = opt.warmup_steps
             else:
-                config.model.params.adam_config.scheduler_config.warm_up_steps  = opt.warmup_steps
+                config.model.params.adam_config.scheduler_config.params.warm_up_steps  = opt.warmup_steps
 
         if opt.lr > 0:
             config.model.base_learning_rate = opt.lr

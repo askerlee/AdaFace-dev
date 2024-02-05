@@ -4736,8 +4736,7 @@ class LatentDiffusion(DDPM):
                                      betas=self.adam_config.betas)
                 
                 assert 'target' in self.adam_config.scheduler_config
-                self.adam_config.scheduler_config.max_decay_steps = self.trainer.max_steps
-
+                self.adam_config.scheduler_config.params.max_decay_steps = self.trainer.max_steps
                 lambda_scheduler = instantiate_from_config(self.adam_config.scheduler_config)
                 print("Setting up LambdaLR scheduler...")
                 scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
@@ -4856,7 +4855,7 @@ class LatentDiffusion(DDPM):
                                  betas=self.adam_config.betas)
 
             assert 'target' in self.adam_config.scheduler_config
-            self.adam_config.scheduler_config.max_decay_steps = self.trainer.max_steps
+            self.adam_config.scheduler_config.params.max_decay_steps = self.trainer.max_steps
 
             lambda_scheduler = instantiate_from_config(self.adam_config.scheduler_config)
             print("Setting up LambdaLR scheduler...")
