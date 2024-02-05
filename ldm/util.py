@@ -1182,21 +1182,28 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
     num_new_tokens = 0
 
     for string, embedding in string2embedding.items():
-        # num_added_tokens should always be num_new_tokens.
-        num_added_tokens = text_embedder.tokenizer.add_tokens([string])
-        if num_added_tokens == 0:
-            print(f"Token '{string}' already exists in the tokenizer.")
-            continue
-
-        # text_embedder.transformer.text_model.embeddings.token_embedding: 
-        # torch.nn.modules.sparse.Embedding, [49408, 768]
-        # cls_token: 49408, 49409...
-        # So token_embedding needs to be expanded.
         # sanity check.
-        token = get_tokens_for_string(string, force_single_token=True)[0]
-        print(f"Added string: {string} -> token: {token}")
-        ext_token_embeddings.append(embedding)
-        num_new_tokens += 1
+        # Need to check before calling tokenizer.add_tokens([string]), otherwise,
+        # even if string is already in the tokenizer, it will be given to a high priority
+        # and cause parsing errors later.
+        # For example if string='y', then later "toy" will be parsed as "to" and "y",
+        # instead of a single word "toy".
+        try:
+            token = get_tokens_for_string(string, force_single_token=True)[0]
+        except:
+            # num_added_tokens should always be num_new_tokens.
+            num_added_tokens = text_embedder.tokenizer.add_tokens([string])
+            if num_added_tokens == 0:
+                print(f"Token '{string}' already exists in the tokenizer.")
+                breakpoint()
+
+            # text_embedder.transformer.text_model.embeddings.token_embedding: 
+            # torch.nn.modules.sparse.Embedding, [49408, 768]
+            # cls_token: 49408, 49409...
+            # So token_embedding needs to be expanded.
+            print(f"Added string: {string} -> token: {token}")
+            ext_token_embeddings.append(embedding)
+            num_new_tokens += 1
 
     if num_new_tokens == 0:
         return None
