@@ -2203,11 +2203,9 @@ class EmbeddingManager(nn.Module):
         self.shared_ada_subject_set = shared_ada_subject_set
         self.shared_ada_components  = shared_ada_components
 
-        if shared_ada_subject_set is not None:
-            subj_poolers = self.string_to_ada_embedder_dict[self.subject_strings[0]].poolers
-            bg_poolers   = self.string_to_ada_embedder_dict[self.background_strings[0]].poolers
-            subj_layer_coeff_maps = self.string_to_ada_embedder_dict[self.subject_strings[0]].layer_coeff_maps
-            bg_layer_coeff_maps   = self.string_to_ada_embedder_dict[self.background_strings[0]].layer_coeff_maps
+        if shared_ada_subject_set is not None and shared_ada_subject_set is not None:
+            first_subj_ada = self.string_to_ada_embedder_dict[self.subject_strings[0]]
+            first_bg_ada   = self.string_to_ada_embedder_dict[self.background_strings[0]]
 
             subj_pooler_share_count = 0
             bg_pooler_share_count   = 0
@@ -2223,17 +2221,17 @@ class EmbeddingManager(nn.Module):
             for placeholder_string in pooler_shared_placeholder_strings:
                 if 'pooler' in shared_ada_components:
                     if placeholder_string in self.subject_strings:
-                        self.string_to_ada_embedder_dict[placeholder_string].poolers = subj_poolers
+                        self.string_to_ada_embedder_dict[placeholder_string].poolers = first_subj_ada.poolers
                         subj_pooler_share_count += 1
                     else:
-                        self.string_to_ada_embedder_dict[placeholder_string].poolers = bg_poolers
+                        self.string_to_ada_embedder_dict[placeholder_string].poolers = first_bg_ada.poolers
                         bg_pooler_share_count += 1
                 if 'layer_coeff_map' in shared_ada_components:
                     if placeholder_string in self.subject_strings:
-                        self.string_to_ada_embedder_dict[placeholder_string].layer_coeff_maps = subj_layer_coeff_maps
+                        self.string_to_ada_embedder_dict[placeholder_string].layer_coeff_maps = first_subj_ada.layer_coeff_maps
                         subj_layer_coeff_maps_share_count += 1
                     else:
-                        self.string_to_ada_embedder_dict[placeholder_string].layer_coeff_maps = bg_layer_coeff_maps
+                        self.string_to_ada_embedder_dict[placeholder_string].layer_coeff_maps = first_bg_ada.layer_coeff_maps
                         bg_layer_coeff_maps_share_count += 1
 
             if 'pooler' in shared_ada_components:
@@ -2414,7 +2412,7 @@ class EmbeddingManager(nn.Module):
                 # basis_vecs: now [K, r-N, 768] for Ada embedder, or [r-N, 768] for Static embedder.
                 basis_reg_weight = basis_reg_weight_base * torch.norm(embobj.basis_vecs, dim=-1).mean().item() ** T
 
-                # N: number of pre_vecs (init_vecs).
+                # N: number of pre_vecs (init_vecs). N > 0 implies (init_vecs is not None).
                 if embobj.N > 0 and pre_vecs_reg_weight > 0:
                     # pre_vecs has a K dim: [K, N, 768].
                     # init_vecs: [N, 768] => [1, N, 768].

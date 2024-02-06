@@ -2984,6 +2984,10 @@ class LatentDiffusion(DDPM):
             loss +=   (loss_subj_comp_key_ortho   * key_ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
                     + (loss_subj_comp_value_ortho * key_ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight
 
+        if torch.isnan(loss):
+            print('NaN loss detected.')
+            breakpoint()
+
         self.release_plosses_intermediates(locals())
         loss_dict.update({f'{prefix}/loss': loss.mean().detach().item() })
 
