@@ -795,11 +795,11 @@ class AdaEmbedding(nn.Module):
                 # So we use layer_subj_emb_probe as an approximate query to do the attention-based pooling.
                 # layer_subj_emb_probe: [768]. layer_static_extra_emb_mean: [2, 768].
                 infeat_pooled_dict  = pooler(layer_attn_components, 
-                                            fg_q_emb=layer_subj_emb_probe, 
-                                            bg_q_emb=layer_static_extra_emb_mean,
-                                            img_mask=img_mask,
-                                            debug=self.debug)
-
+                                             fg_q_emb=layer_subj_emb_probe, 
+                                             bg_q_emb=layer_static_extra_emb_mean,
+                                             img_mask=img_mask,
+                                             debug=self.debug)
+ 
             if self.use_attn_pooler:
                 # infeat_fg, infeat_bg: [2, 320]
                 infeat_fg = infeat_pooled_dict['fg_out']
@@ -917,7 +917,8 @@ class EmbeddingManager(nn.Module):
             prompt_embedding_clamp_value=-1,
             background_extra_global_scale=1.,
             emb_reg_loss_scale=1,
-            shared_ada_attn_pooler_set='subj',
+            shared_ada_subject_set='subj,bg',
+            shared_ada_components='pooler',
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1117,7 +1118,7 @@ class EmbeddingManager(nn.Module):
             else:
                 self.initial_embeddings[placeholder_string] = None
 
-        self.share_ada_attn_poolers(shared_ada_attn_pooler_set)
+        self.share_ada_components(shared_ada_subject_set, shared_ada_components)
 
         self.layer_idx = -1
         self.static_subj_embs_dict = {}   
@@ -1966,7 +1967,8 @@ class EmbeddingManager(nn.Module):
                      "emb_global_scale_scores":         self.emb_global_scale_scores,
                      "ada_emb_weight":                  self.ada_emb_weight,  
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
-                     "shared_ada_attn_pooler_set":         self.shared_ada_attn_pooler_set,
+                     "shared_ada_subject_set":          self.shared_ada_subject_set,
+                     "shared_ada_components":           self.shared_ada_components,
                      # Learnable weights for scaling conv attns.
                      "subj2conv_attn_layerwise_scales":  self.subj2conv_attn_layerwise_scales,
                      "use_conv_attn_kernel_size":        self.use_conv_attn_kernel_size,
@@ -2110,11 +2112,12 @@ class EmbeddingManager(nn.Module):
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
 
-            # In theory, if some ckpt has shared_ada_attn_pooler_set = True, and some has False,
+            # In theory, if some ckpt has shared_ada_subject_set = True, and some has False,
             # then the ckpt attn poolers after the last True ckpt will not be shared.
             # But this shouldn't be a concern, as such scenarios should be very rare.
-            if "shared_ada_attn_pooler_set" in ckpt:
-                self.share_ada_attn_poolers(ckpt["shared_ada_attn_pooler_set"])
+            if "shared_ada_subject_set" in ckpt:
+                shared_ada_components = ckpt.get("shared_ada_components", "pooler")
+                self.share_ada_components(ckpt["shared_ada_subject_set"], shared_ada_components)
 
         self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(self.string_to_token_dict)), 
                                                     requires_grad=True)
@@ -2178,7 +2181,7 @@ class EmbeddingManager(nn.Module):
                         self.string_to_ada_embedder_dict[bg_string].poolers = ckpt["string_to_ada_embedder"][km].poolers
                     print(f"Loaded poolers {km}->{self.background_strings} from {ckpt_path}")
 
-            # No need to call share_ada_attn_poolers() here, as the poolers are already shared 
+            # No need to call share_ada_components() here, as the poolers are already shared 
             # after the aasignment above.
 
         pooler_frozen_placeholder_strings = []
@@ -2196,32 +2199,49 @@ class EmbeddingManager(nn.Module):
                 num_poolers_frozen += 1
             print(f"Froze {num_poolers_frozen} {placeholder_string} poolers")
 
-    def share_ada_attn_poolers(self, shared_ada_attn_pooler_set):
-        self.shared_ada_attn_pooler_set = shared_ada_attn_pooler_set
+    def share_ada_components(self, shared_ada_subject_set, shared_ada_components):
+        self.shared_ada_subject_set = shared_ada_subject_set
+        self.shared_ada_components  = shared_ada_components
 
-        if shared_ada_attn_pooler_set is not None:
+        if shared_ada_subject_set is not None:
             subj_poolers = self.string_to_ada_embedder_dict[self.subject_strings[0]].poolers
             bg_poolers   = self.string_to_ada_embedder_dict[self.background_strings[0]].poolers
+            subj_layer_coeff_maps = self.string_to_ada_embedder_dict[self.subject_strings[0]].layer_coeff_maps
+            bg_layer_coeff_maps   = self.string_to_ada_embedder_dict[self.background_strings[0]].layer_coeff_maps
+
             subj_pooler_share_count = 0
             bg_pooler_share_count   = 0
+            subj_layer_coeff_maps_share_count = 0
+            bg_layer_coeff_maps_share_count   = 0
             pooler_shared_placeholder_strings = []
 
-            if 'subj' in shared_ada_attn_pooler_set:
+            if 'subj' in shared_ada_subject_set:
                 pooler_shared_placeholder_strings += self.subject_strings
-            if 'bg'   in shared_ada_attn_pooler_set:
+            if 'bg'   in shared_ada_subject_set:
                 pooler_shared_placeholder_strings += self.background_strings
 
             for placeholder_string in pooler_shared_placeholder_strings:
-                if placeholder_string in self.subject_strings:
-                    self.string_to_ada_embedder_dict[placeholder_string].poolers = subj_poolers
-                    subj_pooler_share_count += 1
-                else:
-                    self.string_to_ada_embedder_dict[placeholder_string].poolers = bg_poolers
-                    bg_pooler_share_count += 1
+                if 'pooler' in shared_ada_components:
+                    if placeholder_string in self.subject_strings:
+                        self.string_to_ada_embedder_dict[placeholder_string].poolers = subj_poolers
+                        subj_pooler_share_count += 1
+                    else:
+                        self.string_to_ada_embedder_dict[placeholder_string].poolers = bg_poolers
+                        bg_pooler_share_count += 1
+                if 'layer_coeff_map' in shared_ada_components:
+                    if placeholder_string in self.subject_strings:
+                        self.string_to_ada_embedder_dict[placeholder_string].layer_coeff_maps = subj_layer_coeff_maps
+                        subj_layer_coeff_maps_share_count += 1
+                    else:
+                        self.string_to_ada_embedder_dict[placeholder_string].layer_coeff_maps = bg_layer_coeff_maps
+                        bg_layer_coeff_maps_share_count += 1
 
-            print(f"Shared poolers for {subj_pooler_share_count} subject tokens and {bg_pooler_share_count} background tokens")
+            if 'pooler' in shared_ada_components:
+                print(f"Shared poolers for {subj_pooler_share_count} subject tokens and {bg_pooler_share_count} background tokens")
+            if 'layer_coeff_map' in shared_ada_components:
+                print(f"Shared layer_coeff_maps for {subj_layer_coeff_maps_share_count} subject tokens and {bg_layer_coeff_maps_share_count} background tokens")
         else:
-            print("Not sharing poolers")
+            print("Not sharing any Ada components")
 
     def perturb_model_parameters(self, perturb_ratio=0.2):
         param_group_list = self.optimized_parameters()
