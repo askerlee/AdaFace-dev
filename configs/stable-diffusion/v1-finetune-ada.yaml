@@ -77,7 +77,7 @@ model:
 
     prodigy_config:
       betas: [0.985, 0.993]  # Faster to converge than adam_betas.
-      d_coef: 5.
+      d_coef: 10
       warm_up_steps:    500
       # 2 cycles after the warm_up_steps.
       # Each cycle is linearly decreasing the LR from base_lr to 0.09*base.
