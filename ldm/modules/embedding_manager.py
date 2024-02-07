@@ -2205,7 +2205,7 @@ class EmbeddingManager(nn.Module):
 
     def share_ada_components(self, shared_ada_placeholder_set, shared_ada_components):
         self.shared_ada_placeholder_set = shared_ada_placeholder_set
-        self.shared_ada_components  = shared_ada_components
+        self.shared_ada_components      = shared_ada_components
 
         if shared_ada_placeholder_set is not None and shared_ada_placeholder_set is not None:
             first_subj_ada = self.string_to_ada_embedder_dict[self.subject_strings[0]]

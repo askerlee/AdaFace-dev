@@ -78,13 +78,13 @@ model:
     prodigy_config:
       betas: [0.985, 0.993]  # Faster to converge than adam_betas.
       d_coef: 5.
-      warm_up_steps: 500
+      warm_up_steps:    500
       # 2 cycles after the warm_up_steps.
       # Each cycle is linearly decreasing the LR from base_lr to 0.09*base.
-      scheduler_cycles: 2
+      scheduler_cycles: 1 #2
       # CyclicLR, CosineAnnealingWarmRestarts, Linear. 
       # Linear or CosineAnnealingWarmRestarts doesn't work well.
-      scheduler_type: 'CyclicLR'
+      scheduler_type: 'Linear' #'CyclicLR'
       
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
