@@ -191,13 +191,19 @@ def get_parser(**parser_kwargs):
         type=str, 
         default="", 
         help="Initialize embedding manager from a checkpoint")
-    parser.add_argument("--load_poolers_only_from_placeholders",
+    parser.add_argument("--placeholders_for_ada_components",
         type=str, nargs="?", const='1,1', default=None,
-        help="Load only the attn poolers from the checkpoint")
-    parser.add_argument("--frozen_ada_attn_pooler_set",
+        help="Load the ada components from these placeholders in the checkpoint")
+    parser.add_argument("--loaded_ada_components",
+        type=str, default=None, 
+        help="Ada components to be loaded from the checkpoint (candidates: pooler,layer_coeff_maps)")
+    parser.add_argument("--frozen_ada_placeholder_set",
         type=str, default=None,
-        help="Freeze this set of ada attn poolers (candidates: subj,bg)")
-    
+        help="Freeze the ada components of this set of placeholders (candidates: subj,bg)")
+    parser.add_argument("--frozen_ada_components",
+        type=str, default=None, 
+        help="Ada components to be frozen after loading from the checkpoint (candidates: pooler,layer_coeff_maps)")
+        
     parser.add_argument("--ckpt_params_perturb_ratio",
         type=float, default=-1,
         help="Ratio of parameters in the loaded ckpt to be perturbed")
@@ -983,9 +989,11 @@ if __name__ == "__main__":
                 = opt.use_conv_attn_kernel_size
 
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
-        config.model.params.personalization_config.params.load_poolers_only_from_placeholders = opt.load_poolers_only_from_placeholders
-        config.model.params.personalization_config.params.frozen_ada_attn_pooler_set = opt.frozen_ada_attn_pooler_set
-        config.model.params.personalization_config.params.ckpt_params_perturb_ratio = opt.ckpt_params_perturb_ratio
+        config.model.params.personalization_config.params.placeholders_for_ada_components = opt.placeholders_for_ada_components
+        config.model.params.personalization_config.params.loaded_ada_components      = opt.loaded_ada_components
+        config.model.params.personalization_config.params.frozen_ada_placeholder_set = opt.frozen_ada_placeholder_set
+        config.model.params.personalization_config.params.frozen_ada_components      = opt.frozen_ada_components
+        config.model.params.personalization_config.params.ckpt_params_perturb_ratio  = opt.ckpt_params_perturb_ratio
         config.model.params.personalization_config.params.emb_reg_loss_scale = opt.emb_reg_loss_scale
 
         set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])

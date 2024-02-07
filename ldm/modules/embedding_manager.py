@@ -917,7 +917,7 @@ class EmbeddingManager(nn.Module):
             prompt_embedding_clamp_value=-1,
             background_extra_global_scale=1.,
             emb_reg_loss_scale=1,
-            shared_ada_subject_set='subj,bg',
+            shared_ada_placeholder_set='subj,bg',
             shared_ada_components='pooler',
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
@@ -1118,7 +1118,7 @@ class EmbeddingManager(nn.Module):
             else:
                 self.initial_embeddings[placeholder_string] = None
 
-        self.share_ada_components(shared_ada_subject_set, shared_ada_components)
+        self.share_ada_components(shared_ada_placeholder_set, shared_ada_components)
 
         self.layer_idx = -1
         self.static_subj_embs_dict = {}   
@@ -1967,7 +1967,7 @@ class EmbeddingManager(nn.Module):
                      "emb_global_scale_scores":         self.emb_global_scale_scores,
                      "ada_emb_weight":                  self.ada_emb_weight,  
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
-                     "shared_ada_subject_set":          self.shared_ada_subject_set,
+                     "shared_ada_placeholder_set":          self.shared_ada_placeholder_set,
                      "shared_ada_components":           self.shared_ada_components,
                      # Learnable weights for scaling conv attns.
                      "subj2conv_attn_layerwise_scales":  self.subj2conv_attn_layerwise_scales,
@@ -1982,13 +1982,16 @@ class EmbeddingManager(nn.Module):
                     ckpt_path)
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
-    # If load_poolers_only_from_placeholders = None, then load the whole embedding manager. Otherwise, load_poolers_only_from_placeholders should 
+    # If placeholders_for_ada_components = None, then load the whole embedding manager. Otherwise, placeholders_for_ada_components should 
     # be two strings, either "subject_string,background_string", or "1,1" which means the first subject and
     # the first background string.
-    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, load_poolers_only_from_placeholders=None, frozen_ada_attn_pooler_set=None):
-        if load_poolers_only_from_placeholders is not None:
-            self.load_poolers(ckpt_paths, pooler_placeholder_strings=load_poolers_only_from_placeholders, 
-                              frozen_ada_attn_pooler_set=frozen_ada_attn_pooler_set)
+    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, placeholders_for_ada_components=None, 
+             loaded_ada_components=None, frozen_ada_placeholder_set=None, frozen_ada_components=None):
+        if placeholders_for_ada_components is not None and loaded_ada_components is not None:
+            self.load_ada_components(ckpt_paths, placeholders_for_ada_components=placeholders_for_ada_components, 
+                                     loaded_ada_components=loaded_ada_components,
+                                     frozen_ada_placeholder_set=frozen_ada_placeholder_set,
+                                     frozen_ada_components=frozen_ada_components)
             return
 
         # The default placeholder specified in the config file will be loaded to these dicts.
@@ -2112,12 +2115,12 @@ class EmbeddingManager(nn.Module):
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_token(token2num_vectors)
 
-            # In theory, if some ckpt has shared_ada_subject_set = True, and some has False,
+            # In theory, if some ckpt has shared_ada_placeholder_set = True, and some has False,
             # then the ckpt attn poolers after the last True ckpt will not be shared.
             # But this shouldn't be a concern, as such scenarios should be very rare.
-            if "shared_ada_subject_set" in ckpt:
+            if "shared_ada_placeholder_set" in ckpt:
                 shared_ada_components = ckpt.get("shared_ada_components", "pooler")
-                self.share_ada_components(ckpt["shared_ada_subject_set"], shared_ada_components)
+                self.share_ada_components(ckpt["shared_ada_placeholder_set"], shared_ada_components)
 
         self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(self.string_to_token_dict)), 
                                                     requires_grad=True)
@@ -2140,10 +2143,11 @@ class EmbeddingManager(nn.Module):
         if ckpt_params_perturb_ratio > 0:
             self.perturb_model_parameters(ckpt_params_perturb_ratio)
 
-    # pooler_placeholder_strings should be two strings, either "subject_string,background_string", 
+    # placeholders_for_ada_components should be two strings, either "subject_string,background_string", 
     # or "1,1" which means the first subject and the first background string.
-    def load_poolers(self, ckpt_paths, pooler_placeholder_strings, frozen_ada_attn_pooler_set=None):
-        pooler_subj_string, pooler_bg_string = pooler_placeholder_strings.split(",")
+    def load_ada_components(self, ckpt_paths, placeholders_for_ada_components, 
+                            loaded_ada_components, frozen_ada_placeholder_set, frozen_ada_components):
+        provider_subj_string, provider_bg_string = placeholders_for_ada_components.split(",")
 
         if isinstance(ckpt_paths, str):
             ckpt_paths = [ckpt_paths]
@@ -2161,49 +2165,49 @@ class EmbeddingManager(nn.Module):
                 # the last one will be kept. But this should happen extremely rare.
                 self.set_attn_pooler_feat_reduction_ratio(ckpt["attn_pooler_feat_reduction_ratio"])
 
-            # If pooler_subj_string/pooler_bg_string are "1", then replace them with the first subject/background string
+            # If provider_subj_string/provider_bg_string are "1", then replace them with the first subject/background string
             # of the first ckpt. 
             if ckpt_i == 0:
-                if pooler_subj_string == "1":
-                    pooler_subj_string = ckpt["subject_strings"][0]
-                if pooler_bg_string == "1":
-                    pooler_bg_string   = ckpt["background_strings"][0]
+                if provider_subj_string == "1":
+                    provider_subj_string = ckpt["subject_strings"][0]
+                if provider_bg_string == "1":
+                    provider_bg_string   = ckpt["background_strings"][0]
 
             for km in ckpt["string_to_ada_embedder"].keys():
-                if pooler_subj_string == km:
-                    # All subject strings share the same poolers loaded from the ckpt.
-                    for subj_string in self.subject_strings:
-                        self.string_to_ada_embedder_dict[subj_string].poolers = ckpt["string_to_ada_embedder"][km].poolers
-                    print(f"Loaded poolers {km}->{self.subject_strings} from {ckpt_path}")
-                elif pooler_bg_string == km:
-                    # All background strings share the same poolers loaded from the ckpt.
-                    for bg_string in self.background_strings:
-                        self.string_to_ada_embedder_dict[bg_string].poolers = ckpt["string_to_ada_embedder"][km].poolers
-                    print(f"Loaded poolers {km}->{self.background_strings} from {ckpt_path}")
+                if provider_subj_string == km:
+                    if 'pooler' in loaded_ada_components:
+                        # All subject strings share the same poolers loaded from the ckpt.
+                        for subj_string in self.subject_strings:
+                            self.string_to_ada_embedder_dict[subj_string].poolers = ckpt["string_to_ada_embedder"][km].poolers
+                        print(f"Loaded poolers {km}->{self.subject_strings} from {ckpt_path}")
+                    if 'layer_coeff_map' in loaded_ada_components:
+                        # All subject strings share the same layer_coeff_maps loaded from the ckpt.
+                        for subj_string in self.subject_strings:
+                            self.string_to_ada_embedder_dict[subj_string].layer_coeff_maps = ckpt["string_to_ada_embedder"][km].layer_coeff_maps
+                        print(f"Loaded layer_coeff_maps {km}->{self.subject_strings} from {ckpt_path}")
+
+                elif provider_bg_string == km:
+                    if 'pooler' in loaded_ada_components:
+                        # All background strings share the same poolers loaded from the ckpt.
+                        for bg_string in self.background_strings:
+                            self.string_to_ada_embedder_dict[bg_string].poolers = ckpt["string_to_ada_embedder"][km].poolers
+                        print(f"Loaded poolers {km}->{self.background_strings} from {ckpt_path}")
+                    if 'layer_coeff_map' in loaded_ada_components:
+                        # All background strings share the same layer_coeff_maps loaded from the ckpt.
+                        for bg_string in self.background_strings:
+                            self.string_to_ada_embedder_dict[bg_string].layer_coeff_maps = ckpt["string_to_ada_embedder"][km].layer_coeff_maps
+                        print(f"Loaded layer_coeff_maps {km}->{self.background_strings} from {ckpt_path}")
 
             # No need to call share_ada_components() here, as the poolers are already shared 
             # after the aasignment above.
 
-        pooler_frozen_placeholder_strings = []
-        if 'subj' in frozen_ada_attn_pooler_set:
-            pooler_frozen_placeholder_strings += self.subject_strings
-        if 'bg'   in frozen_ada_attn_pooler_set:
-            pooler_frozen_placeholder_strings += self.background_strings
+        self.freeze_ada_components(frozen_ada_placeholder_set, frozen_ada_components)
 
-        for placeholder_string in pooler_frozen_placeholder_strings:
-            num_poolers_frozen = 0
-            ada = self.string_to_ada_embedder_dict[placeholder_string]
-            for pooler in ada.poolers:
-                for param in pooler.parameters():
-                    param.requires_grad = False
-                num_poolers_frozen += 1
-            print(f"Froze {num_poolers_frozen} {placeholder_string} poolers")
-
-    def share_ada_components(self, shared_ada_subject_set, shared_ada_components):
-        self.shared_ada_subject_set = shared_ada_subject_set
+    def share_ada_components(self, shared_ada_placeholder_set, shared_ada_components):
+        self.shared_ada_placeholder_set = shared_ada_placeholder_set
         self.shared_ada_components  = shared_ada_components
 
-        if shared_ada_subject_set is not None and shared_ada_subject_set is not None:
+        if shared_ada_placeholder_set is not None and shared_ada_placeholder_set is not None:
             first_subj_ada = self.string_to_ada_embedder_dict[self.subject_strings[0]]
             first_bg_ada   = self.string_to_ada_embedder_dict[self.background_strings[0]]
 
@@ -2213,9 +2217,9 @@ class EmbeddingManager(nn.Module):
             bg_layer_coeff_maps_share_count   = 0
             pooler_shared_placeholder_strings = []
 
-            if 'subj' in shared_ada_subject_set:
+            if 'subj' in shared_ada_placeholder_set:
                 pooler_shared_placeholder_strings += self.subject_strings
-            if 'bg'   in shared_ada_subject_set:
+            if 'bg'   in shared_ada_placeholder_set:
                 pooler_shared_placeholder_strings += self.background_strings
 
             for placeholder_string in pooler_shared_placeholder_strings:
@@ -2240,6 +2244,41 @@ class EmbeddingManager(nn.Module):
                 print(f"Shared layer_coeff_maps for {subj_layer_coeff_maps_share_count} subject tokens and {bg_layer_coeff_maps_share_count} background tokens")
         else:
             print("Not sharing any Ada components")
+
+    def freeze_ada_components(self, frozen_ada_placeholder_set, frozen_ada_components):
+        self.frozen_ada_placeholder_set = frozen_ada_placeholder_set
+        self.frozen_ada_components  = frozen_ada_components
+
+        if frozen_ada_placeholder_set is not None and frozen_ada_components is not None:
+            num_frozen_poolers          = 0
+            num_frozen_layer_coeff_maps = 0
+            frozen_placeholder_strings  = []
+
+            if 'subj' in frozen_ada_placeholder_set:
+                frozen_placeholder_strings += self.subject_strings
+            if 'bg'   in frozen_ada_placeholder_set:
+                frozen_placeholder_strings += self.background_strings
+
+            for placeholder_string in frozen_placeholder_strings:
+                ada = self.string_to_ada_embedder_dict[placeholder_string]
+                if 'pooler' in frozen_ada_components:
+                    for pooler in ada.poolers:
+                        for param in pooler.parameters():
+                            param.requires_grad = False
+                        num_frozen_poolers += 1
+
+                if 'layer_coeff_map' in frozen_ada_components:
+                    for layer_coeff_map in ada.layer_coeff_maps:
+                        for param in layer_coeff_map.parameters():
+                            param.requires_grad = False
+                        num_frozen_layer_coeff_maps += 1
+
+            if 'pooler' in frozen_ada_components:
+                print(f"Froze {num_frozen_poolers} poolers for {frozen_placeholder_strings}")
+            if 'layer_coeff_map' in frozen_ada_components:
+                print(f"Froze {num_frozen_layer_coeff_maps} layer_coeff_maps for {frozen_placeholder_strings}")
+        else:
+            print("Not freezing any Ada components")
 
     def perturb_model_parameters(self, perturb_ratio=0.2):
         param_group_list = self.optimized_parameters()
