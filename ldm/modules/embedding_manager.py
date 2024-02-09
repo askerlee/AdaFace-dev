@@ -322,6 +322,10 @@ class AttentionalPooler(nn.Module):
             # fg attn and bg attn are independent of each other.
             attn = sim_scores.softmax(dim=-1)
 
+        if torch.isnan(attn).any():
+            print(f"AttentionalPooler: attn has NaN: {attn}")
+            breakpoint()
+
         attn = self.attn_drop(attn)
         # attn_fg, attn_bg: [B*h, 1, 4096].
         attn_fg, attn_bg = attn.split(1, dim=1)
@@ -1139,6 +1143,8 @@ class EmbeddingManager(nn.Module):
         self.prompt_embedding_clamp_value  = prompt_embedding_clamp_value
         self.background_extra_global_scale = background_extra_global_scale
         self.emb_reg_loss_scale = emb_reg_loss_scale
+        # ca_q_bns and ca_outfeat_lns are used to normalize the q/out features
+        # in loss computation in ddpm.py, and not used in this script.
         ca_q_bns = {}
         ca_outfeat_lns = {}
         for ca_layer_idx in range(self.num_unet_ca_layers):

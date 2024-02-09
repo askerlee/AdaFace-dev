@@ -223,6 +223,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         # embeddings: CLIPTextEmbeddings
         # embeddings.forward = embeddings_forward.__get__(obj)
         # when calling self.embeddings(args), it will call embeddings_forward(obj, args) instead.
+        # i.e., obj is used as self.
         # Therefore, the method is intercepted without modifying the implicit object "embeddings".
         self.transformer.text_model.embeddings.forward = embeddings_forward.__get__(self.transformer.text_model.embeddings)
 

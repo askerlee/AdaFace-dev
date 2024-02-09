@@ -4,7 +4,7 @@ import PIL
 from PIL import Image
 from torch.utils.data import Dataset, Sampler
 from torchvision import transforms
-from transformers import CLIPTokenizer
+from transformers import CLIPTokenizer, AutoProcessor
 from torchvision.transforms import InterpolationMode
 from .compositions import sample_compositions
 import random
@@ -13,6 +13,7 @@ import regex as re
 import webdataset as wds
 import glob
 from evaluation.eval_utils import parse_subject_file
+from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
 
 imagenet_templates_smallest = [
     'a photo of a {}',
@@ -155,6 +156,7 @@ class PersonalizedBase(Dataset):
                  # containing the cls_delta_string of all subjects, in "init_strings".
                  # cls_bg_delta_string is optional, and can be specified in "all_bg_init_words".
                  subj_info_filepath=None,
+                 ext_image_features=False,
                  wds_comp_db_path=None,    # Path to the composition webdatabase .tar file
                  verbose=False,
                  ):
@@ -173,6 +175,7 @@ class PersonalizedBase(Dataset):
         self.image_paths_by_subj    = []
         self.fg_mask_paths_by_subj  = []
         self.caption_paths_by_subj  = []
+        self.feat_paths_by_subj     = []
 
         for data_root in self.data_roots:
             # image_paths and mask_paths are full paths.
@@ -184,10 +187,15 @@ class PersonalizedBase(Dataset):
             caption_paths       = [ os.path.splitext(x)[0] + ".txt" for x in image_paths ]
             caption_paths       = list(map(lambda x: x if x in all_file_paths else None, caption_paths))
             num_valid_captions  = sum([ 1 if x is not None else 0 for x in caption_paths ])
+            feat_paths          = [ os.path.splitext(x)[0] + ".npy" for x in image_paths ]
+            # Don't filter feat_paths. If the .npy file is missing, then it'll be created at the first loading.
+            # feat_paths          = list(map(lambda x: x if x in all_file_paths else None, feat_paths))
+            num_valid_feats     = sum([ 1 if x is not None else 0 for x in feat_paths ])
 
             self.image_paths_by_subj.append(image_paths)
             self.fg_mask_paths_by_subj.append(fg_mask_paths)
             self.caption_paths_by_subj.append(caption_paths)
+            self.feat_paths_by_subj.append(feat_paths)
 
             if verbose:
                 print("{} images, {} fg masks, {} captions found in '{}'".format( \
@@ -196,6 +204,8 @@ class PersonalizedBase(Dataset):
                     print("WARNING: {} fg masks are missing!".format(len(image_paths) - num_valid_fg_masks))
                 if num_valid_captions > 0 and num_valid_captions < len(image_paths):
                     print("WARNING: {} captions are missing!".format(len(image_paths) - num_valid_captions))
+                if num_valid_feats > 0 and num_valid_feats < len(image_paths):
+                    print("WARNING: {} feature files are missing!".format(len(image_paths) - num_valid_feats))
 
         self.num_subjects = len(self.subject_names)
         # self.image_paths, ...         are for the one-level indexing, i.e., directly indexing into a particular image.
@@ -204,6 +214,8 @@ class PersonalizedBase(Dataset):
         self.image_paths   = sum(self.image_paths_by_subj, [])
         self.fg_mask_paths = sum(self.fg_mask_paths_by_subj, [])
         self.caption_paths = sum(self.caption_paths_by_subj, [])
+        self.feat_paths    = sum(self.feat_paths_by_subj, [])
+
         self.num_images = len(self.image_paths)
         if set == "train":
             self.is_training = True
@@ -263,6 +275,14 @@ class PersonalizedBase(Dataset):
                                     for subject_string in self.subject_strings ]
         self.background_tokens  = [ self.tokenizer(background_string)['input_ids'][1] \
                                     for background_string in self.background_strings ]
+
+        self.ext_image_features = ext_image_features
+        if self.ext_image_features:
+            self.clip_image_encoder = CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+            self.clip_preprocessor  = AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+        else:
+            self.clip_image_encoder = None
+            self.clip_preprocessor  = None
 
         # placeholder_prefix could be a list of strings, separated by ",".
         if common_placeholder_prefix is not None:
@@ -359,18 +379,19 @@ class PersonalizedBase(Dataset):
         example = {}
         if is_subject_idx:
             image_paths     = self.image_paths_by_subj[index]
-            fg_mask_paths   = self.fg_mask_paths_by_subj[index]
-            caption_paths   = self.caption_paths_by_subj[index]
             # Draw a random image from the subject dataset indexed by index.
-            image_idx = random.randint(0, len(image_paths) - 1)
+            image_idx       = random.randint(0, len(image_paths) - 1)
+
             image_path      = image_paths[image_idx]
-            fg_mask_path    = fg_mask_paths[image_idx]
-            caption_path    = caption_paths[image_idx]
+            fg_mask_path    = self.fg_mask_paths_by_subj[index][image_idx]
+            caption_path    = self.caption_paths_by_subj[index][image_idx]
+            feat_path       = self.feat_paths_by_subj[index][image_idx]
             subject_idx     = index
         else:
             image_path    = self.image_paths[index % self.num_images]
             fg_mask_path  = self.fg_mask_paths[index % self.num_images] 
             caption_path  = self.caption_paths[index % self.num_images]
+            feat_path     = self.feat_paths[index % self.num_images]
             subject_idx   = 0
 
         cls_delta_string      = self.cls_delta_strings[subject_idx]
@@ -544,6 +565,30 @@ class PersonalizedBase(Dataset):
         # example["image"]: [0, 255] -> [-1, 1]
         example["image"]        = (image / 127.5 - 1.0).astype(np.float32)
         
+        if self.ext_image_features:
+            if os.path.exists(feat_path):
+                # image_embeds: [1, 514, 1280]
+                image_embeds = torch.load(feat_path)
+            else:
+                # First time processing the image, so we need to extract the image features.
+                # input to clip_preprocessor: an image or a batch of images, each being PIL.Image.Image, numpy.ndarray, 
+                # torch.Tensor, tf.Tensor or jax.ndarray.
+                # image_pixel_values: [1, 3, 224, 224]
+                image_pixel_values = self.clip_preprocessor(images=image, return_tensors="pt")
+                with torch.no_grad():
+                    # fg_image_embeds: [1, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
+                    fg_image_embeds  = self.clip_image_encoder(image_pixel_values, attn_mask=fg_mask, output_hidden_states=True).hidden_states[-2]
+                    # A negative mask is used to extract the background features.
+                    bg_image_embeds  = self.clip_image_encoder(image_pixel_values, attn_mask=1-fg_mask, output_hidden_states=True).hidden_states[-2]
+
+                # image_embeds: [1, 514, 1280]
+                image_embeds    = torch.cat([fg_image_embeds, bg_image_embeds], dim=1)
+                # Save the image features to disk, so that we don't need to extract them again.
+                torch.save(image_embeds, feat_path)
+                print(f"Extracted image features for {image_path}, saved to {feat_path}")
+
+            example["image_embeds"] = image_embeds
+
         if gen_wds_comp:
             Found = False
             while not Found:

@@ -1,15 +1,19 @@
-from diffusers import DiffusionPipeline
+import torch
+import numpy as np
+from PIL import Image
+import requests
+from transformers import AutoProcessor
+from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
 
-model_id = "CompVis/ldm-text2im-large-256"
+model = CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+processor = AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
 
-# load model and scheduler
-ldm = DiffusionPipeline.from_pretrained(model_id)
-ldm.to("cuda")
-# run pipeline in inference (sample random noise and denoise)
-prompt = "A painting of an animal not a squirrel eating a burger"
-images = ldm([prompt], num_inference_steps=50, eta=0.3, guidance_scale=6).images
+url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+# image: PIL.Image.Image. np.array(image): (480, 640, 3).
+image = Image.open(requests.get(url, stream=True).raw)
+# (480, 640) -> (224, 224).
+inputs = processor(images=image, return_tensors="pt")
 
-# save images
-for idx, image in enumerate(images):
-    image.save(f"not-squirrel-{idx}.png")
-    
+with torch.no_grad():
+    # [1, 257, 1280]
+    image_embeds = model(**inputs, output_hidden_states=True).hidden_states[-2]

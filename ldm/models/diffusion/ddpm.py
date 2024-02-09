@@ -295,8 +295,6 @@ class DDPM(pl.LightningModule):
         assert not torch.isnan(self.lvlb_weights).all()
 
     # create_clip_evaluator() is called in main.py, so that we can specify device as cuda device.
-    # We couldn't create clip_evaluator on cpu and then move it to cuda device, because 
-    # NoisedCLIPEvaluator is not properly implemented to support this.
     def create_clip_evaluator(self, device):        
         self.clip_evaluator = CLIPEvaluator(device=device)
         for param in self.clip_evaluator.model.parameters():
