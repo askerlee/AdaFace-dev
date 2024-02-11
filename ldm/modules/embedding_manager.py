@@ -173,8 +173,6 @@ class AttentionalPooler(nn.Module):
 
         self.infeat_grad_scale = infeat_grad_scale      # Default 0.5
 
-        # v_pooler is used only if fg_q_emb is None.
-        self.v_pooler = MaskedAvgPool1d(dim=1, keepdim=True)
         self.is_fgbg_competitive = True
         self.attn_drop = nn.Dropout(0.1)
         self.out_drop  = nn.Dropout(0.1)
@@ -290,20 +288,6 @@ class AttentionalPooler(nn.Module):
         # Otherwise, sim_scores of some particular heads may have too large variances.
         sim_scores = sim_scores * 0.5 + avg_sim_scores * 0.5
 
-        if img_mask is not None:
-            # img_mask: [B, 1, 64, 64] 
-            img_mask = F.interpolate(img_mask, size=ca_x_size, mode='nearest')
-            # N, 1, H, W -> N, 1, L=H*W
-            # -> [B, 8, 4096]
-            # float_tensor.bool() converts 0.1/0.2... to True.
-            img_mask = rearrange(img_mask, 'b ... -> b 1 (...)')
-            img_mask = repeat(img_mask.bool(), 'b 1 j -> (b h) () j', h=self.n_heads)
-            max_neg_value = -torch.finfo(sim_scores.dtype).max
-            # masked_fill_() will broadcast img_mask to sim_scores's shape [B, 2, 4096].
-            sim_scores.masked_fill_(~img_mask, max_neg_value)
-            # Prepare to be used by v_pooler.
-            img_mask = img_mask.permute(0, 2, 1)
-
         # attn: [B, 2, 4096]. 2: fg/bg, 4096: image patches.
         # ** If only normalizing across the token (2) dimension, the performance is poor. **
         if self.is_fgbg_competitive:
@@ -325,6 +309,19 @@ class AttentionalPooler(nn.Module):
         if torch.isnan(attn).any():
             print(f"AttentionalPooler: attn has NaN: {attn}")
             breakpoint()
+
+        if img_mask is not None:
+            # img_mask: [B, 1, 64, 64] 
+            img_mask = F.interpolate(img_mask, size=ca_x_size, mode='nearest')
+            # N, 1, H, W -> N, 1, L=H*W
+            # -> [B, 8, 4096]
+            # float_tensor.bool() converts 0.1/0.2... to True.
+            img_mask = rearrange(img_mask, 'b ... -> b 1 (...)')
+            img_mask = repeat(img_mask.bool(), 'b 1 j -> (b h) () j', h=self.n_heads)
+            max_neg_value = -torch.finfo(sim_scores.dtype).max
+            # masked_fill_() will broadcast img_mask to attn's shape [B, 2, 4096].
+            # Mask is applied to attn instead of sim_scores, to avoid the NaN issue.
+            attn.masked_fill_(~img_mask, 0)
 
         attn = self.attn_drop(attn)
         # attn_fg, attn_bg: [B*h, 1, 4096].
