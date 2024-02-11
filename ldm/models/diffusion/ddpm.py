@@ -1386,7 +1386,7 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['wds_comp_avail_ratio'] = batch['has_wds_comp'].sum() / batch['has_wds_comp'].shape[0]
 
-        #print(batch["subj_string"])
+        print(batch["subj_string"])
         self.batch_subj_string = batch['subj_string'][0]
         # If cached_inits is available (self.batch_subj_string in self.cached_inits), 
         # cached_inits are only used if do_mix_prompt_distillation = True.
