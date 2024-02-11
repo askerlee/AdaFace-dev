@@ -183,8 +183,8 @@ def get_parser(**parser_kwargs):
         nargs='+', 
         required=True, 
         help="Path(s) with training images")
-    parser.add_argument("--subj_info_filepath",
-        type=str, default=argparse.SUPPRESS,
+    parser.add_argument("--subj_info_filepaths",
+        type=str, nargs="*", default=argparse.SUPPRESS,
         help="Path to the subject info file (only necessary if multiple subjects are used)")
 
     parser.add_argument("--embedding_manager_ckpt", 
@@ -343,11 +343,11 @@ def nondefault_trainer_args(opt):
 # dataset: data.datasets['train'].
 def set_placeholders_info(personalization_config_params, opt, dataset):
     num_subjects = dataset.num_subjects
-    if not hasattr(opt, 'subj_info_filepath'):
+    if not hasattr(opt, 'subj_info_filepaths'):
         assert num_subjects == 1
 
     # Single subject. All params are specified in the opt arguments.
-    if not hasattr(opt, 'subj_info_filepath'):
+    if not hasattr(opt, 'subj_info_filepaths'):
         if opt.init_word_weights is not None and len(opt.init_word_weights) > 0:
             assert len(opt.init_word_weights) == len(re.split("\s+", opt.init_string))
         else:
@@ -382,7 +382,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
                 personalization_config_params.list_cls_delta_strings.append(config.data.params.train.params.cls_bg_delta_string)
                 personalization_config_params.num_vectors_per_token[opt.wds_background_string] = opt.num_vectors_per_bg_token
                 personalization_config_params.background_strings.append(opt.wds_background_string)
-    # Multiple subjects. The params are extracted from opt.subj_info_filepath 
+    # Multiple subjects. The params are extracted from opt.subj_info_filepaths 
     # by the dataset object.
     else:
         personalization_config_params.placeholder_strings       = dataset.subject_strings
@@ -864,9 +864,9 @@ if __name__ == "__main__":
         # Data config
         config.data.params.train.params.subject_string       = opt.subject_string
         config.data.params.validation.params.subject_string  = opt.subject_string
-        if hasattr(opt, 'subj_info_filepath'):
-            config.data.params.train.params.subj_info_filepath       = opt.subj_info_filepath
-            config.data.params.validation.params.subj_info_filepath  = opt.subj_info_filepath
+        if hasattr(opt, 'subj_info_filepaths'):
+            config.data.params.train.params.subj_info_filepaths      = opt.subj_info_filepaths
+            config.data.params.validation.params.subj_info_filepaths = opt.subj_info_filepaths
 
         # common_placeholder_prefix, compos_placeholder_prefix
         config.data.params.train.params.common_placeholder_prefix       = opt.common_placeholder_prefix

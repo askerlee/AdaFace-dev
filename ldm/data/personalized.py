@@ -152,10 +152,10 @@ class PersonalizedBase(Dataset):
                  num_compositions_per_image=1,
                  broad_class=1,
                  # If data_roots contain multiple folders, a subject each folder, 
-                 # then subj_info_filepath should point to the subject info file 
+                 # then subj_info_filepaths should point to a list of subject info files 
                  # containing the cls_delta_string of all subjects, in "init_strings".
                  # cls_bg_delta_string is optional, and can be specified in "all_bg_init_words".
-                 subj_info_filepath=None,
+                 subj_info_filepaths=None,
                  ext_image_features=False,
                  wds_comp_db_path=None,    # Path to the composition webdatabase .tar file
                  verbose=False,
@@ -167,6 +167,9 @@ class PersonalizedBase(Dataset):
         data_roots_expanded = [ glob.glob(data_root) for data_root in data_roots ]
         # Sort the data_roots, so that the order of subjects is consistent.
         self.data_roots = sorted(sum(data_roots_expanded, []))
+        # Remove non-directories.
+        self.data_roots = list(filter(lambda x: os.path.isdir(x), self.data_roots))
+
         # subject_names: sorted ascendingly for subjects within the same folder.
         self.subject_names = [ os.path.basename(data_root) for data_root in self.data_roots ]
 
@@ -236,10 +239,20 @@ class PersonalizedBase(Dataset):
             self.comp_wds_iter = None
             self.do_wds_comp = False
 
-        if subj_info_filepath is not None:
-            subj_info, subj2attr = parse_subject_file(subj_info_filepath)
-        else:
-            subj2attr = {}
+        subj2attr = {}
+        if subj_info_filepaths is not None:
+            for subj_info_filepath in subj_info_filepaths:
+                _, subj2attr_singlefile = parse_subject_file(subj_info_filepath)
+                # Make sure subject names are always unique across different files.
+                for k in subj2attr_singlefile:
+                    if k not in subj2attr:
+                        subj2attr[k] = subj2attr_singlefile[k]
+                    else:
+                        # Make sure the keys are unique across different files.
+                        # If not, then the keys are duplicated, and we need to fix the data files.
+                        for subj_name in subj2attr_singlefile[k]:
+                            assert subj_name not in subj2attr[k], f"Duplicate subject {k} found in {subj_info_filepaths}!"
+                            subj2attr[k][subj_name] = subj2attr_singlefile[k][subj_name]
 
         if 'broad_classes' not in subj2attr:
             self.broad_classes          = [ broad_class ] * self.num_subjects

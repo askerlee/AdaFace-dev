@@ -97,7 +97,7 @@ class DDPM(pl.LightningModule):
                  recon_loss_weight=1.,
                  conditioning_key=None,
                  parameterization="eps",  # all assuming fixed variance schedules
-                 optimizer_type='AdamW',
+                 optimizer_type='Prodigy',
                  grad_clip=1.,
                  adam_config=None,
                  prodigy_config=None,
@@ -119,16 +119,17 @@ class DDPM(pl.LightningModule):
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
                  fg_bg_token_emb_ortho_loss_weight=0.,
-                 compel_cfg_weight_level_range=None,
+                 compel_cfg_weight_level_range=[2,2],
                  apply_compel_cfg_prob=0.,
                  wds_bg_recon_discount=1.,
-                 do_clip_teacher_filtering=False,
-                 num_candidate_teachers=3,
-                 use_background_token=False,
-                 # 'face portrait' is only valid for humans/animals. On objects, use_fp_trick will be ignored.
+                 do_clip_teacher_filtering=True,
+                 num_candidate_teachers=4,
+                 use_background_token=True,
+                 # 'face portrait' is only valid for humans/animals. 
+                 # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
                  prompt_embedding_clamp_value=-1,
-                 normalize_ca_q_and_outfeat=False,
+                 normalize_ca_q_and_outfeat=True,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
