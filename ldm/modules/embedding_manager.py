@@ -276,8 +276,10 @@ class AttentionalPooler(nn.Module):
         # The sim_scores are too large. So we scale them down by lora_attn_score_scale.
         # The root cause why the sim_scores are too large is due to the different initialization 
         # of nn.Conv1d (compared with nn.Linear).
-        sim_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) \
-                        * self.lora_attn_score_scale
+        # lora_q and lora_k are both torch.float16. But lora_q is often larger.
+        # If we do einsum(...) * self.lora_attn_score_scale, sometimes inf will occur, causing nan.
+        # Therefore we do lora_q * self.lora_attn_score_scale first to avoid nan errors. 
+        sim_scores = einsum('b i d, b j d -> b i j', lora_q * self.lora_attn_score_scale, lora_k)                        
 
         # Average sim scores across the heads. avg_sim_scores: [B, 2, 4096].
         avg_sim_scores = rearrange(sim_scores, '(b h) i j -> b h i j', h=self.n_heads).mean(dim=1, keepdim=True)
@@ -321,7 +323,7 @@ class AttentionalPooler(nn.Module):
             max_neg_value = -torch.finfo(sim_scores.dtype).max
             # masked_fill_() will broadcast img_mask to attn's shape [B, 2, 4096].
             # Mask is applied to attn instead of sim_scores, to avoid the NaN issue.
-            attn.masked_fill_(~img_mask, 0)
+            attn.data.masked_fill_(~img_mask, 0)
 
         attn = self.attn_drop(attn)
         # attn_fg, attn_bg: [B*h, 1, 4096].
