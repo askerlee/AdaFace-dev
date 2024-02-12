@@ -146,7 +146,7 @@ class AttentionalPooler(nn.Module):
         self.n_heads = 8    
         self.layer_inner_dim = feat_dim
         self.lora_dim = int(feat_dim / feat_reduction_ratio)
-        self.lora_attn_score_scale = self.lora_dim ** -0.5
+        #self.lora_attn_score_scale = self.lora_dim ** -0.5
 
         self.lora_fg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
         self.lora_bg_q_ln  = nn.LayerNorm(self.layer_inner_dim, elementwise_affine=False)
@@ -283,7 +283,8 @@ class AttentionalPooler(nn.Module):
         # lora_q and lora_k are both torch.float16. But lora_q is often larger.
         # If we do einsum(...) * self.lora_attn_score_scale, sometimes inf will occur, causing nan.
         # Therefore we do lora_q * self.lora_attn_score_scale first to avoid nan errors. 
-        sim_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) * self.lora_attn_score_scale
+        sim_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k)
+        #print(sim_scores.std())
 
         # Average sim scores across the heads. avg_sim_scores: [B, 2, 4096].
         avg_sim_scores = rearrange(sim_scores, '(b h) i j -> b h i j', h=self.n_heads).mean(dim=1, keepdim=True)
