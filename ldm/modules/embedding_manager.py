@@ -249,7 +249,6 @@ class AttentionalPooler(nn.Module):
         #breakpoint()
         fg_q_ln = self.lora_fg_q_ln(fg_q)
         bg_q_ln = self.lora_bg_q_ln(bg_q)
-
         # q: [B, 1, 320]    -> [B, 320, 1]
         # k: [B, 4096, 320] -> [B, 320, 4096]
         # Permute dims to match the dim order of nn.Conv1d.
@@ -270,7 +269,9 @@ class AttentionalPooler(nn.Module):
         lora_fg_q, lora_bg_q, lora_k = map(lambda t: t.permute(0, 2, 1), (lora_fg_q, lora_bg_q, lora_k))
         # lora_fg_q, lora_bg_q are two artificial tokens, each with 64 dims.
         # lora_q: [B, 2, 64]. 
-        lora_q = torch.cat([lora_fg_q, lora_bg_q], dim=1) * self.conv1d_extra_scale
+        # (lora_fg_q, lora_bg_q) have std 1, but lora_k has std 0.37. So we scale down lora_fg_q, lora_bg_q, so that
+        # the overall scale of (lora_fg_q, lora_bg_q) and lora_k are roughly the same.
+        lora_q = torch.cat([lora_fg_q, lora_bg_q], dim=1) * (self.n_heads ** -0.5) * self.conv1d_extra_scale
 
         # Tuck the 8 heads into the batch dim.
         lora_q, lora_k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=self.n_heads), (lora_q, lora_k, v))

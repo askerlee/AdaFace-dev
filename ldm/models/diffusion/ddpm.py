@@ -215,7 +215,6 @@ class DDPM(pl.LightningModule):
         self.automatic_optimization = False
     
         if 'Prodigy' in self.optimizer_type:
-            assert prodigy_config is not None, "prodigy_config must be specified for Prodigy optimizer."
             self.prodigy_config = prodigy_config
 
         self.training_percent = 0.
