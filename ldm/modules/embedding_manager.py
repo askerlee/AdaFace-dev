@@ -164,7 +164,10 @@ class AttentionalPooler(nn.Module):
         self.lora_to_k     = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
         self.lora_to_fg_q  = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
         self.lora_to_bg_q  = nn.Conv1d(self.layer_inner_dim, self.lora_dim, kernel_size=1, groups=self.n_heads, bias=False)
-
+        # Conv1d weight is normalized as U(-sqrt(k), sqrt(k)), where k = groups / (C_in * kernel_size).
+        # But later einsum(...) uses all 8 groups, making the sum ~8 times larger. Therefore, we scale down
+        # lora_q and lor_k by sqrt(groups), to cancel the magnitude mismatch.
+        self.conv1d_extra_scale = self.n_heads ** -0.5
         #self.ln_fg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
         #self.ln_bg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
@@ -261,13 +264,13 @@ class AttentionalPooler(nn.Module):
         # For these cases, lora_bg_q is 0 => sim_scores[:, 1] = 0, i.e., bg attn is uniform.
         lora_bg_q = self.lora_to_bg_q(bg_q_ln)
         # lora_k: [B, 320, 4096] -> [B, 64, 4096].
-        lora_k = self.lora_to_k(k)
+        lora_k = self.lora_to_k(k) * self.conv1d_extra_scale
         # lora_fg_q, lora_bg_q: [B, 64, 1]    -> [B, 1, 64]
         # lora_k:               [8, 64, 4096] -> [8, 4096, 64]
         lora_fg_q, lora_bg_q, lora_k = map(lambda t: t.permute(0, 2, 1), (lora_fg_q, lora_bg_q, lora_k))
         # lora_fg_q, lora_bg_q are two artificial tokens, each with 64 dims.
         # lora_q: [B, 2, 64]. 
-        lora_q = torch.cat([lora_fg_q, lora_bg_q], dim=1)
+        lora_q = torch.cat([lora_fg_q, lora_bg_q], dim=1) * self.conv1d_extra_scale
 
         # Tuck the 8 heads into the batch dim.
         lora_q, lora_k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=self.n_heads), (lora_q, lora_k, v))
@@ -279,7 +282,7 @@ class AttentionalPooler(nn.Module):
         # lora_q and lora_k are both torch.float16. But lora_q is often larger.
         # If we do einsum(...) * self.lora_attn_score_scale, sometimes inf will occur, causing nan.
         # Therefore we do lora_q * self.lora_attn_score_scale first to avoid nan errors. 
-        sim_scores = einsum('b i d, b j d -> b i j', lora_q * self.lora_attn_score_scale, lora_k)                        
+        sim_scores = einsum('b i d, b j d -> b i j', lora_q, lora_k) * self.lora_attn_score_scale
 
         # Average sim scores across the heads. avg_sim_scores: [B, 2, 4096].
         avg_sim_scores = rearrange(sim_scores, '(b h) i j -> b h i j', h=self.n_heads).mean(dim=1, keepdim=True)
