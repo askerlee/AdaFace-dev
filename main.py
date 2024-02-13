@@ -1005,12 +1005,12 @@ if __name__ == "__main__":
         # model: ldm.models.diffusion.ddpm.LatentDiffusion, inherits from LightningModule.
         # model.cond_stage_model: FrozenCLIPEmbedder = text_embedder
         # Extend the token embeddings in CLIP text encoder for the new cls strings.
-        # model is still on CPU. So no need to consider where ext_token_embeddings is located.
-        if model.embedding_manager.ext_token_embeddings is not None:
+        # model is still on CPU. So no need to consider where extended_token_embeddings is located.
+        if model.embedding_manager.extended_token_embeddings is not None:
             model.cond_stage_model.transformer.text_model.embeddings.token_embedding = \
                 extend_nn_embedding(model.cond_stage_model.transformer.text_model.embeddings.token_embedding, 
-                                    model.embedding_manager.ext_token_embeddings)
-            model.embedding_manager.ext_token_embeddings = None
+                                    model.embedding_manager.extended_token_embeddings)
+            model.embedding_manager.extended_token_embeddings = None
 
         # trainer and callbacks
         trainer_kwargs = dict()

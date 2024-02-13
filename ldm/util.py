@@ -1178,7 +1178,7 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
     print(f"Extended CLIP text encoder with tokens: {string2embedding.keys()}")
     get_tokens_for_string = partial(get_clip_tokens_for_string, text_embedder.tokenizer)
 
-    ext_token_embeddings = []
+    extended_token_embeddings = []
     num_new_tokens = 0
 
     for string, embedding in string2embedding.items():
@@ -1203,16 +1203,16 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
             # cls_token: 49408, 49409...
             # So token_embedding needs to be expanded.
             print(f"Added string: {string} -> token: {token}")
-            ext_token_embeddings.append(embedding)
+            extended_token_embeddings.append(embedding)
             num_new_tokens += 1
 
     if num_new_tokens == 0:
         return None
     
-    # ext_token_embeddings: list of tensors, each [1, 768] => [num_new_tokens, 768].
-    ext_token_embeddings = torch.cat(ext_token_embeddings, dim=0)
+    # extended_token_embeddings: list of tensors, each [1, 768] => [num_new_tokens, 768].
+    extended_token_embeddings = torch.cat(extended_token_embeddings, dim=0)
 
-    return ext_token_embeddings
+    return extended_token_embeddings
 
 # samples:   a list of (B, C, H, W) tensors.
 # img_flags: a list of (B,) ints.

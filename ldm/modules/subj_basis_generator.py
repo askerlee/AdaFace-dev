@@ -103,10 +103,9 @@ class SubjBasisGenerator(nn.Module):
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
         heads=16,       
         # num_queries: number of output latents.                    
-        # 2 * Static/Ada layerwise_lora_rank. *2 for both static and ada bases.
-        # Same for both subj and bg embedder bases, as they only differ on the number of combined output embeddings,
-        # but the layerwise_lora_rank is the same. That is, the same SubjBasisGenerator will be used to 
-        # generate bases for both subj and bg embedders.
+        # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
+        # The same SubjBasisGenerator instance is used to generate both subj and bg embedder bases, 
+        # provided different input features in two different passes.
         num_queries=20,                     
         embedding_dim=768,                  # Internal feature dimension. Same as output_dim.
         output_dim=768,                     # CLIP text embedding input dimension.

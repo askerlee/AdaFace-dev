@@ -408,11 +408,11 @@ def main(opt):
         if opt.background_string is not None and opt.background_string not in model.embedding_manager.background_strings:
             model.embedding_manager.background_strings = list(model.embedding_manager.background_strings + [opt.background_string])
 
-        if model.embedding_manager.ext_token_embeddings is not None:
+        if model.embedding_manager.extended_token_embeddings is not None:
             model.cond_stage_model.transformer.text_model.embeddings.token_embedding = \
                 extend_nn_embedding(model.cond_stage_model.transformer.text_model.embeddings.token_embedding, 
-                                    model.embedding_manager.ext_token_embeddings)
-            model.embedding_manager.ext_token_embeddings = None
+                                    model.embedding_manager.extended_token_embeddings)
+            model.embedding_manager.extended_token_embeddings = None
 
         device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
         model  = model.to(device)
