@@ -262,6 +262,9 @@ class AttentionalPooler(nn.Module):
         # During training, at 20% of the chance, bg_q_emb is dropped out to be 0. 
         # For these cases, lora_bg_q is 0 => sim_scores[:, 1] = 0, i.e., bg attn is uniform.
         lora_bg_q = self.lora_to_bg_q(bg_q_ln)
+        # To be compatible with older ckpts.
+        self.conv1d_extra_scale = self.n_heads ** -0.5
+
         # lora_k: [B, 320, 4096] -> [B, 64, 4096].
         lora_k = self.lora_to_k(k) * self.conv1d_extra_scale
         # lora_fg_q, lora_bg_q: [B, 64, 1]    -> [B, 1, 64]
@@ -970,9 +973,11 @@ class EmbeddingManager(nn.Module):
             self.background_strings = background_strings
         else:
             self.background_strings = []
-        self.background_string_dict = { s: True for s in self.background_strings }
 
         self.subject_strings = [ s for s in placeholder_strings if s not in self.background_string_dict ]
+
+        self.subject_string_dict    = { s: True for s in self.subject_strings }
+        self.background_string_dict = { s: True for s in self.background_strings }
 
         # Each placeholder string has a corresponding emb_global_scale_score, 
         # converted to emb_global_scale.
@@ -2162,7 +2167,9 @@ class EmbeddingManager(nn.Module):
         if ckpt_params_perturb_ratio > 0:
             self.perturb_model_parameters(ckpt_params_perturb_ratio)
 
-        # Regenerate background_string_dict in case background_strings have been changed.
+        # Regenerate subject_string_dict, background_string_dict 
+        # in case subject_strings or background_strings have been changed.
+        self.subject_string_dict    = { s: True for s in self.subject_strings }
         self.background_string_dict = { k: True for k in self.background_strings }
 
     # placeholders_for_ada_components should be two strings, either "subject_string,background_string", 

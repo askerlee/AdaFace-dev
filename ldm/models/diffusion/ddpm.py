@@ -2090,23 +2090,23 @@ class LatentDiffusion(DDPM):
 
         c_static_emb, c_in, extra_info = cond
 
-        placeholder2indices2      = placeholder2indices   = extra_info['placeholder2indices']
-        prompt_emb_mask2    = prompt_emb_mask = extra_info['prompt_emb_mask']
+        placeholder2indices2  = placeholder2indices   = extra_info['placeholder2indices']
+        prompt_emb_mask2      = prompt_emb_mask       = extra_info['prompt_emb_mask']
         cfg_scales_for_clip_loss = None
         uncond_context      = self.empty_context_2b
-        all_subj_indices = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
-                                                                self.embedding_manager.subject_strings)
-        all_bg_indices   = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
-                                                                self.embedding_manager.background_strings)
+        all_subj_indices    = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
+                                                                   self.embedding_manager.subject_string_dict)
+        all_bg_indices      = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
+                                                                   self.embedding_manager.background_string_dict)
         all_subj_indices_1b = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_1b'],
-                                                                   self.embedding_manager.subject_strings)
+                                                                   self.embedding_manager.subject_string_dict)
         all_bg_indices_1b   = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_1b'],
-                                                                   self.embedding_manager.background_strings)
+                                                                   self.embedding_manager.background_string_dict)
         if self.iter_flags['is_compos_iter']:
             all_subj_indices_2b = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
-                                                                       self.embedding_manager.subject_strings)
+                                                                       self.embedding_manager.subject_string_dict)
             all_bg_indices_2b   = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
-                                                                       self.embedding_manager.background_strings)
+                                                                       self.embedding_manager.background_string_dict)
         
         if self.iter_flags['comp_init_fg_from_training_image']:
             k_cls_scale_layerwise_range = [1.0, 1.0]
