@@ -974,10 +974,9 @@ class EmbeddingManager(nn.Module):
         else:
             self.background_strings = []
 
-        self.subject_strings = [ s for s in placeholder_strings if s not in self.background_string_dict ]
-
-        self.subject_string_dict    = { s: True for s in self.subject_strings }
         self.background_string_dict = { s: True for s in self.background_strings }
+        self.subject_strings = [ s for s in placeholder_strings if s not in self.background_string_dict ]
+        self.subject_string_dict    = { s: True for s in self.subject_strings }
 
         # Each placeholder string has a corresponding emb_global_scale_score, 
         # converted to emb_global_scale.
