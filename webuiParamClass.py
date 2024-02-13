@@ -82,7 +82,7 @@ class DictT(dict):
          self.init_word = ""
          self.init_word_weights = 0.5
          self.cls_delta_string = None
-         self.layerwise_lora_rank_token_ratio = -1
+         self.layerwise_lora_rank = 5
          self.embedding_reg_weight = -1
          self.ada_emb_weight = -1
          self.composition_delta_reg_weight = -1

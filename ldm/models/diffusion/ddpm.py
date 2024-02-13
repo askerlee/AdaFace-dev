@@ -130,6 +130,7 @@ class DDPM(pl.LightningModule):
                  use_fp_trick=True,
                  prompt_embedding_clamp_value=-1,
                  normalize_ca_q_and_outfeat=True,
+                 do_zero_shot=False,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -186,6 +187,7 @@ class DDPM(pl.LightningModule):
         self.use_background_token                   = use_background_token
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
+        self.do_zero_shot                           = do_zero_shot
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
@@ -893,7 +895,7 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
-    def get_learned_conditioning(self, cond_in, randomize_clip_weights=False):
+    def get_learned_conditioning(self, cond_in, ref_image_features=None, randomize_clip_weights=False):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
@@ -901,6 +903,9 @@ class LatentDiffusion(DDPM):
                 # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
                 if randomize_clip_weights:
                     self.cond_stage_model.sample_last_layers_skip_weights()
+
+                if self.do_zero_shot:
+                    self.embedding_manager.set_ref_image_features(ref_image_features)
 
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
@@ -1616,6 +1621,12 @@ class LatentDiffusion(DDPM):
         self.iter_flags['batch_have_fg_mask']   = batch_have_fg_mask
         self.iter_flags['delta_prompts']        = delta_prompts
 
+        if self.do_zero_shot:
+            # image_features: [B, 514, 1280] => [1, 514, 1280].
+            self.iter_flags['image_features'] = batch['image_features'].mean(dim=0, keepdim=True)
+        else:
+            self.iter_flags['image_features'] = None
+
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
             cached_inits = self.cached_inits[self.batch_subj_string]
@@ -1704,7 +1715,9 @@ class LatentDiffusion(DDPM):
                     # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
                     # extra_info: a dict that contains extra info.
                     c_static_emb, _, extra_info = \
-                        self.get_learned_conditioning(delta_prompts, randomize_clip_weights=True)
+                        self.get_learned_conditioning(delta_prompts, 
+                                                      self.iter_flags['image_features'],
+                                                      randomize_clip_weights=True)
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
 
@@ -1803,7 +1816,9 @@ class LatentDiffusion(DDPM):
                             # placeholder2indices in captions should be the same as in subj_single_prompts.
                             # "captions" consist of subject single prompts only (no comp prompts).
                             # Embeddings don't need patching as there are no class prompts.
-                            c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions, randomize_clip_weights=True)
+                            c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions, 
+                                                                                         self.iter_flags['image_features'],
+                                                                                         randomize_clip_weights=True)
                             # print(captions)
                             extra_info['placeholder2indices'] = extra_info0['placeholder2indices']
 

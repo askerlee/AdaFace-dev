@@ -253,20 +253,12 @@ def get_parser(**parser_kwargs):
                              "Default: None, not specified.")
 
     parser.add_argument("--layerwise_lora_rank", 
-        type=int, default=-1,
+        type=int, default=5,
         help="Layerwise lora rank")
-    # layerwise_lora_rank_token_ratio. When there are two tokens, 
-    # it seems that increasing the rank to 3 doesn't help.
-    parser.add_argument("--layerwise_lora_rank_token_ratio", 
-        type=float, default=-1,
-        help="Layerwise lora rank/token ratio")
-
-    # --attn_pooler_feat_reduction_ratio
     parser.add_argument("--attn_pooler_feat_reduction_ratio",
         type=float, default=argparse.SUPPRESS,
         help="Feature reduction ratio adopted by the attention pooler")
     
-    # static_embedding_reg_weight, ada_embedding_reg_weight
     parser.add_argument("--static_embedding_reg_weight",
         type=float, default=-1,
         help="Static embedding regularization weight")
@@ -966,14 +958,8 @@ if __name__ == "__main__":
             trainer_opt.max_steps = opt.max_steps
 
         # Personalization config
-        # layerwise_lora_rank has the highest priority. 
-        # If layerwise_lora_rank is not specified, use layerwise_lora_rank_token_ratio.
-        if opt.layerwise_lora_rank > 0:
-            config.model.params.personalization_config.params.layerwise_lora_rank = opt.layerwise_lora_rank
-        elif opt.layerwise_lora_rank_token_ratio > 0:
-            config.model.params.personalization_config.params.layerwise_lora_rank_token_ratio = \
-                                    opt.layerwise_lora_rank_token_ratio
-        
+        config.model.params.personalization_config.params.layerwise_lora_rank = opt.layerwise_lora_rank
+
         if hasattr(opt, 'attn_pooler_feat_reduction_ratio'):
             config.model.params.personalization_config.params.attn_pooler_feat_reduction_ratio \
                 = opt.attn_pooler_feat_reduction_ratio

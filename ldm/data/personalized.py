@@ -578,10 +578,11 @@ class PersonalizedBase(Dataset):
         # example["image"]: [0, 255] -> [-1, 1]
         example["image"]        = (image / 127.5 - 1.0).astype(np.float32)
         
+        cache_image_features = False
         if self.ext_image_features:
-            if os.path.exists(feat_path):
-                # image_embeds: [1, 514, 1280]
-                image_embeds = torch.load(feat_path)
+            if cache_image_features and os.path.exists(feat_path):
+                # image_features: [1, 514, 1280]
+                image_features = torch.load(feat_path)
             else:
                 # First time processing the image, so we need to extract the image features.
                 # input to clip_preprocessor: an image or a batch of images, each being PIL.Image.Image, numpy.ndarray, 
@@ -589,18 +590,19 @@ class PersonalizedBase(Dataset):
                 # image_pixel_values: [1, 3, 224, 224]
                 image_pixel_values = self.clip_preprocessor(images=image, return_tensors="pt")
                 with torch.no_grad():
-                    # fg_image_embeds: [1, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
-                    fg_image_embeds  = self.clip_image_encoder(image_pixel_values, attn_mask=fg_mask, output_hidden_states=True).hidden_states[-2]
+                    # image_fg_features: [1, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
+                    image_fg_features  = self.clip_image_encoder(image_pixel_values, attn_mask=fg_mask, output_hidden_states=True).hidden_states[-2]
                     # A negative mask is used to extract the background features.
-                    bg_image_embeds  = self.clip_image_encoder(image_pixel_values, attn_mask=1-fg_mask, output_hidden_states=True).hidden_states[-2]
+                    image_bg_features  = self.clip_image_encoder(image_pixel_values, attn_mask=1-fg_mask, output_hidden_states=True).hidden_states[-2]
 
-                # image_embeds: [1, 514, 1280]
-                image_embeds    = torch.cat([fg_image_embeds, bg_image_embeds], dim=1)
-                # Save the image features to disk, so that we don't need to extract them again.
-                torch.save(image_embeds, feat_path)
-                print(f"Extracted image features for {image_path}, saved to {feat_path}")
+                # image_features: [1, 514, 1280]
+                image_features    = torch.cat([image_fg_features, image_bg_features], dim=1)
+                if cache_image_features:
+                    # Save the image features to disk, so that we don't need to extract them again.
+                    torch.save(image_features, feat_path)
+                    print(f"Extracted image features for {image_path}, saved to {feat_path}")
 
-            example["image_embeds"] = image_embeds
+            example["image_features"] = image_features
 
         if gen_wds_comp:
             Found = False
@@ -791,7 +793,7 @@ class PersonalizedBase(Dataset):
         subj_prompt_single  = template
         cls_prompt_single   = template
 
-        bg_suffix = " with background {}".format(background_string) if background_string is not None else ""
+        bg_suffix     = " with background {}".format(background_string)   if background_string   is not None else ""
         # If background_string is None, then cls_bg_delta_string is None as well, thus cls_bg_suffix is "".
         cls_bg_suffix = " with background {}".format(cls_bg_delta_string) if cls_bg_delta_string is not None else ""
         # bug_suffix: " with background y". cls_bg_suffix: " with background grass/rock".
