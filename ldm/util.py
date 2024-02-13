@@ -1277,7 +1277,7 @@ def join_dict_of_indices_with_key_filter(indices_dict, key_filter_list):
     if indices_dict is None:
         return None
         
-    sel_indices = [ indices_dict[k] for k in key_filter_list if k in indices_dict ]
+    sel_indices = [ indices_dict[k] for k in indices_dict if k in key_filter_list ]
     if len(sel_indices) == 0:
         return None
     

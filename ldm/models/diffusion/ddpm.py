@@ -913,7 +913,7 @@ class LatentDiffusion(DDPM):
                 # Fix the scales of the static subject embeddings.
                 for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
                     emb_extra_global_scale = emb_global_scales_dict[placeholder]
-                    if placeholder in self.embedding_manager.background_strings:
+                    if placeholder in self.embedding_manager.background_string_dict:
                         emb_extra_global_scale *= self.embedding_manager.background_extra_global_scale
 
                     static_prompt_embedding = fix_emb_scales(static_prompt_embedding, placeholder_indices,
@@ -943,8 +943,6 @@ class LatentDiffusion(DDPM):
                                 'use_ada_context':               self.use_ada_embedding,
                                 'use_conv_attn_kernel_size':     self.embedding_manager.use_conv_attn_kernel_size,
                                 'placeholder2indices':           copy.copy(self.embedding_manager.placeholder2indices),
-                                'subject_strings':               self.embedding_manager.subject_strings,
-                                'background_strings':            self.embedding_manager.background_strings,
                                 'prompt_emb_mask':               copy.copy(self.embedding_manager.prompt_emb_mask),
                                 # subj2conv_attn_layer_scale: a dict of subject strings, whose values are lists of 16 tensor scalars, 
                                 # used to scale conv attention at each CA layer.
@@ -994,7 +992,7 @@ class LatentDiffusion(DDPM):
         # The scales of static subject embeddings are fixed in get_learned_conditioning().
         for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
             emb_extra_global_scale = emb_global_scales_dict[placeholder]
-            if placeholder in self.embedding_manager.background_strings:
+            if placeholder in self.embedding_manager.background_string_dict:
                 emb_extra_global_scale *= self.embedding_manager.background_extra_global_scale
 
             ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, placeholder_indices,
@@ -2069,10 +2067,10 @@ class LatentDiffusion(DDPM):
             if k in local_vars:
                 del local_vars[k]
 
-        cond = local_vars['cond']
+        extra_info = local_vars['extra_info']
         for k in ('ca_layers_activations'):
-            if k in cond[2]:
-                del cond[2][k]
+            if k in extra_info:
+                del extra_info[k]
 
     # t: steps.
     # cond: (c_static_emb, c_in, extra_info). c_in is the textual prompts. 
@@ -2462,6 +2460,7 @@ class LatentDiffusion(DDPM):
         ###### begin of preparation for is_compos_iter ######
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
         if self.iter_flags['is_compos_iter'] and self.iter_flags['calc_clip_loss']:
+            # losses are stored in loss_dict and are not returned.
             clip_images, are_insts_teachable, best_cand_idx, log_image_colors = \
                     self.calc_clip_losses(x_recon, extra_info, loss_dict, prefix)
             
@@ -2470,12 +2469,12 @@ class LatentDiffusion(DDPM):
 
             if self.do_clip_teacher_filtering:
                 # Only do distillation if at least one of teacher instances is teachable.
+                # do_teacher_filter implies not reuse_init_conds.
                 if self.iter_flags['do_teacher_filter'] and self.iter_flags['is_teachable']:
                     # No need the intermediates of the twin-comp instances. Release them to save RAM.
                     # Cannot release the intermediates outside the "if" branch, as the intermediates
                     # will be used in a reuse_init_conds iter.
                     self.release_plosses_intermediates(locals())
-                    # clear_ada_prompt_embeddings_cache() will implicitly clear the cache.
                     self.embedding_manager.clear_ada_prompt_embeddings_cache()
 
                     # Choose the x_start, noise, and t of the better candidate. 
@@ -2573,6 +2572,9 @@ class LatentDiffusion(DDPM):
                     # Use the subject half of the batch, chunk(2)[0], instead of the mix half, chunk(2)[1], as 
                     # the subject half is better at subject authenticity (but may be worse on composition).
                     x_recon_sel_rep = x_recon.detach().chunk(2)[0].repeat(2, 1, 1, 1)
+                    # Release RAM.
+                    del model_output, x_recon
+
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but under some settings, maybe mix comp = subj comp.
                     # cached_inits[self.batch_subj_string]['x_start'] has a batch size of 4.
@@ -2582,6 +2584,7 @@ class LatentDiffusion(DDPM):
                     # NOTE: no need to update masks to correspond to x_recon_sel_rep, as x_recon_sel_rep
                     # is half-repeat-2 of (the reconstructed images of) x_start_sel. 
                     # Doing half-repeat-2 on masks won't change them, as they are 1-repeat-4.
+                    # NOTE: do_teacher_filter implies not reuse_init_conds. So we always need to cache the inits.
                     self.cached_inits[self.batch_subj_string] = \
                         { 'x_start':                x_recon_sel_rep, 
                           'delta_prompts':          cond_orig[2]['delta_prompts'],
@@ -2632,7 +2635,7 @@ class LatentDiffusion(DDPM):
         ###### end of preparation for is_compos_iter ######
 
         # The Prodigy optimizer seems to suppress the embeddings too much, 
-        # so we reduce the scale to 0 to disable the embedding reg loss.
+        # so we reduce the scale to 0.5 to dampen the embedding reg loss.
         emb_reg_loss_scale = 0.5 if self.optimizer_type == 'Prodigy' else 1
         prompt_emb_delta_loss_scale = 0.5 if self.optimizer_type == 'Prodigy' else 1
 
@@ -2654,7 +2657,7 @@ class LatentDiffusion(DDPM):
 
             loss += loss_emb_reg * emb_reg_loss_scale
 
-        if self.fg_bg_token_emb_ortho_loss_weight >= 0:
+        if self.fg_bg_token_emb_ortho_loss_weight > 0:
             # If use_background_token, then loss_fg_bg_token_emb_ortho is nonzero.
             # Otherwise, loss_fg_bg_token_emb_ortho is zero.
             loss_fg_bg_token_emb_ortho = \
@@ -2729,25 +2732,16 @@ class LatentDiffusion(DDPM):
                 # We don't optimize loss_padding_cls_embs_align.
                 if loss_padding_cls_embs_align != 0:
                     loss_dict.update({f'{prefix}/padding_cls_embs_align': loss_padding_cls_embs_align.mean().detach().item() })
-                    loss_padding_cls_embs_align = 0
                 if loss_bg_subj_embs_align != 0:
                     loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach().item() })
                 
                 padding_subj_embs_align_loss_scale = 0.2
                 bg_subj_embs_align_loss_scale  = 0.1 # disabled. # 1
-                # NOTE: loss_padding_cls_embs_align is not included in loss_padding_embs_align.
+                # NOTE: loss_padding_cls_embs_align is not optimized, but we still add it with scale 0 
+                # to release the computation graph.
                 loss_padding_embs_align = (loss_padding_subj_embs_align * padding_subj_embs_align_loss_scale \
+                                            + loss_padding_cls_embs_align * 0 \
                                             + loss_bg_subj_embs_align   * bg_subj_embs_align_loss_scale)
-                
-                '''
-                padding_embs_align_loss_scale_base = 1
-                padding_embs_align_loss_base = 0.3
-                # padding_embs_align_loss_base: 0.3. If loss_padding_embs_align >> 0.3, 
-                # it will be penalized more heavily.
-                padding_embs_align_loss_scale = calc_dyn_loss_scale(loss_padding_embs_align,
-                                                                    padding_embs_align_loss_base,
-                                                                    padding_embs_align_loss_scale_base)
-                '''
 
                 padding_embs_align_loss_scale = 1
                 loss += loss_padding_embs_align * padding_embs_align_loss_scale \
@@ -2994,6 +2988,30 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
+    # pixel-wise recon loss. 
+    # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
+    # img_mask, fg_mask: [2, 1, 64, 64].
+    # model_output, target: [2, 4, 64, 64]
+    def calc_recon_loss(self, model_output, target, img_mask, fg_mask, 
+                        fg_pixel_weight=1, bg_pixel_weight=1):
+        # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+        model_output = model_output * img_mask
+        target       = target       * img_mask
+        loss_recon_pixels = self.get_loss(model_output, target, mean=False)
+
+        # fg_mask,              weighted_fg_mask.sum(): 1747, 1747
+        # bg_mask=(1-fg_mask),  weighted_fg_mask.sum(): 6445, 887
+        weighted_fg_mask = fg_mask       * img_mask * fg_pixel_weight
+        weighted_bg_mask = (1 - fg_mask) * img_mask * bg_pixel_weight
+        weighted_fg_mask = weighted_fg_mask.expand_as(loss_recon_pixels)
+        weighted_bg_mask = weighted_bg_mask.expand_as(loss_recon_pixels)
+
+        loss_recon = (  (loss_recon_pixels * weighted_fg_mask).sum()     \
+                      + (loss_recon_pixels * weighted_bg_mask).sum() )   \
+                     / (weighted_fg_mask.sum() + weighted_bg_mask.sum())
+
+        return loss_recon, loss_recon_pixels
+    
     # Major losses for normal_recon iterations. 
     # (But there are still other losses used after calling this function.)
     def calc_normal_recon_losses(self, x_start, model_output, target, extra_info,
@@ -3113,8 +3131,8 @@ class LatentDiffusion(DDPM):
             
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
-                                                fg_pixel_weight=1,
-                                                bg_pixel_weight=bg_pixel_weight)
+                                             fg_pixel_weight=1,
+                                             bg_pixel_weight=bg_pixel_weight)
 
         loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
 
@@ -3240,30 +3258,6 @@ class LatentDiffusion(DDPM):
 
         return clip_images, are_insts_teachable, best_cand_idx, log_image_colors
 
-    # pixel-wise recon loss. 
-    # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
-    # img_mask, fg_mask: [2, 1, 64, 64].
-    # model_output, target: [2, 4, 64, 64]
-    def calc_recon_loss(self, model_output, target, img_mask, fg_mask, 
-                        fg_pixel_weight=1, bg_pixel_weight=1):
-        # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-        model_output = model_output * img_mask
-        target       = target       * img_mask
-        loss_recon_pixels = self.get_loss(model_output, target, mean=False)
-
-        # fg_mask,              weighted_fg_mask.sum(): 1747, 1747
-        # bg_mask=(1-fg_mask),  weighted_fg_mask.sum(): 6445, 887
-        weighted_fg_mask = fg_mask       * img_mask * fg_pixel_weight
-        weighted_bg_mask = (1 - fg_mask) * img_mask * bg_pixel_weight
-        weighted_fg_mask = weighted_fg_mask.expand_as(loss_recon_pixels)
-        weighted_bg_mask = weighted_bg_mask.expand_as(loss_recon_pixels)
-
-        loss_recon = (  (loss_recon_pixels * weighted_fg_mask).sum()     \
-                      + (loss_recon_pixels * weighted_bg_mask).sum() )   \
-                     / (weighted_fg_mask.sum() + weighted_bg_mask.sum())
-
-        return loss_recon, loss_recon_pixels
-    
     def calc_prompt_mix_loss(self, ca_outfeats, ca_outfeat_lns, ca_attnscores, fg_indices_2b, BLOCK_SIZE):
         # do_mix_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 

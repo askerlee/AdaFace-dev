@@ -771,7 +771,7 @@ class AdaEmbedding(nn.Module):
     # time_emb: [B, 1280].
     def forward(self, layer_idx, layer_attn_components, time_emb, 
                 layer_subj_emb_probe, layer_static_extra_emb_mean, 
-                img_mask=None, cached_infeat_pooled=None):
+                img_mask=None, cached_pooler_bg_out=None):
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         pooler  = self.poolers[ca_layer_idx]
         ## Some Linears mainly use either fg or bg features. So we reduce cross weights.
@@ -779,8 +779,8 @@ class AdaEmbedding(nn.Module):
         #    self.reduce_fg_bg_cross_weights(ca_layer_idx)
 
         if not self.is_fg_only and self.use_cached_bg:
-            # cached_infeat_pooled must be provided when use_cached_bg.
-            if cached_infeat_pooled is None:
+            # cached_pooler_bg_out must be provided when use_cached_bg.
+            if cached_pooler_bg_out is None:
                 breakpoint()
         
         if self.debug:
@@ -796,7 +796,7 @@ class AdaEmbedding(nn.Module):
             # by the cached bg features.
             cached_bg_used = False
             if self.use_attn_pooler and self.use_cached_bg:
-                infeat_bg     = cached_infeat_pooled['bg_out']
+                infeat_bg     = cached_pooler_bg_out
                 cached_bg_used = True
             if not (self.is_bg_only and cached_bg_used):
                 # Either cached_bg_used, or not is_bg_only.
@@ -970,7 +970,9 @@ class EmbeddingManager(nn.Module):
             self.background_strings = background_strings
         else:
             self.background_strings = []
-        self.subject_strings = [ s for s in placeholder_strings if s not in self.background_strings ]
+        self.background_string_dict = { s: True for s in self.background_strings }
+
+        self.subject_strings = [ s for s in placeholder_strings if s not in self.background_string_dict ]
 
         # Each placeholder string has a corresponding emb_global_scale_score, 
         # converted to emb_global_scale.
@@ -1029,7 +1031,7 @@ class EmbeddingManager(nn.Module):
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = 0
 
         for placeholder_idx, placeholder_string in enumerate(placeholder_strings):
-            token_is_bg =  (placeholder_string in self.background_strings)
+            token_is_bg =  (placeholder_string in self.background_string_dict)
             # get_tokens_for_string <= get_clip_tokens_for_string.
             # force_single_token = True, as there should be only one token in placeholder_string.
             placeholder_token = get_tokens_for_string(placeholder_string, force_single_token=True)[0].item()
@@ -1184,7 +1186,7 @@ class EmbeddingManager(nn.Module):
         # even if it's specified as 2, so B=8.
         B, N, device = *tokenized_text.shape, tokenized_text.device
 
-        # gen_ada_embedding is dynamically switched on/off by  cache_layer_features_for_ada()/clear_ada_layer_temp_info().
+        # gen_ada_embedding is dynamically switched on/off by cache_layer_features_for_ada()/clear_ada_layer_temp_info().
         # No need to calculate prompt_emb_mask here, as the mask for ada embeddings is 
         # the same as for the static embeddings. 
         # AdaPrompt combines static and ada embeddings. So the static embedding replacement 
@@ -1199,9 +1201,12 @@ class EmbeddingManager(nn.Module):
             ca_layer_idx = self.layer_idx2ca_layer_idx[self.layer_idx]
             # Cache the ada embeddings to be used in embedding orthogonal loss later.
             for k in ada_subj_embs_dict:
+                '''
                 self.ada_subj_embs_dict[k].cache_layer(ca_layer_idx, 
                                                        ada_subj_embs_dict[k], 
                                                        has_grad=True)
+                '''
+
                 if k in token2ada_attn:
                     self.ada_subj_attn_dict[k] = token2ada_attn[k]
 
@@ -1276,7 +1281,7 @@ class EmbeddingManager(nn.Module):
             if placeholder_indices[0].numel() == 0:
                 continue
             
-            token_is_bg = (placeholder_string in self.background_strings)
+            token_is_bg = (placeholder_string in self.background_string_dict)
             # If multiple occurrences are found in a prompt, only keep the first as the subject.
             # Other occurrences are treated as part of the background prompt (this may happen if
             # composition image overlay is used).
@@ -1378,7 +1383,7 @@ class EmbeddingManager(nn.Module):
             embedded_text,          # [B, N, 768]. Identical B copies along the batch dimension.
     ):
         BS, device = tokenized_text.shape[0], tokenized_text.device
-        cached_infeat_pooled = None
+        cached_pooler_bg_out = None
         ada_subj_embs_dict   = {}
         token2ada_attn       = {}
         
@@ -1392,9 +1397,9 @@ class EmbeddingManager(nn.Module):
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
         # This order ensures that the background Ada embedder can always use 
-        # cached_infeat_pooled produced by the previous subject Ada embedder.
+        # cached_pooler_bg_out produced by the previous subject Ada embedder.
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
-            token_is_bg = (placeholder_string in self.background_strings)
+            token_is_bg = (placeholder_string in self.background_string_dict)
             # There's only one vector per token, we can do a simple replacement
             # embedded_text: [B, N, 768].
             # tokenized_text: [B, N].
@@ -1437,12 +1442,12 @@ class EmbeddingManager(nn.Module):
                 # then self-reinforce and contaminate the bg embeddings with fg features.
                 # However, if we mask out bg embeddings from computing layer_static_extra_emb_mean,
                 # the performance will drop a lot.
-                list_of_indices_to_mask = [ self.placeholder2indices[k] for k in self.subject_strings if k in self.placeholder2indices ]
+                list_of_indices_to_mask = [ self.placeholder2indices[k] for k in self.placeholder2indices if k in self.subject_strings ]
             else:
                 ## Why not mask bg indices for fg ada? bg embeddings are supposed to be of a similar nature 
                 ## as the extra compositional embeddings. Incorporating them in layer_static_extra_emb_mean
                 ## will make fg and bg embeddings more orthogonal (i.e., attend to different areas).
-                list_of_indices_to_mask = [ self.placeholder2indices[k] for k in self.subject_strings if k in self.placeholder2indices ]
+                list_of_indices_to_mask = [ self.placeholder2indices[k] for k in self.placeholder2indices if k in self.subject_strings ]
 
             # layer_static_prompt_embs: [4, 77, 768]. 
             # prompt_emb_mask: [4, 77, 1], which excludes SOT and padding tokens.
@@ -1451,20 +1456,20 @@ class EmbeddingManager(nn.Module):
                 self.calc_layer_static_extra_emb_mean(layer_static_prompt_embs, self.prompt_emb_mask, 
                                                       list_of_indices_to_mask, dropout_prob=0.1)
 
-            # Clear cached_infeat_pooled before generating subject embedding(s) of a subject token.
+            # Clear cached_pooler_bg_out before generating subject embedding(s) of a subject token.
             # If the next token is the background token, the keep the cache, so that the background
-            # token will reuse the cached_infeat_pooled computed by the previous subject token.
+            # token will reuse the cached_pooler_bg_out computed by the previous subject token.
             if not token_is_bg:
-                cached_infeat_pooled = None
+                cached_pooler_bg_out = None
 
             ada_embedder = self.string_to_ada_embedder_dict[placeholder_string].to(device)
             assert isinstance(ada_embedder, AdaEmbedding)
 
-            # When it's the turn of the background Ada embedder, the cached_infeat_pooled
+            # When it's the turn of the background Ada embedder, the cached_pooler_bg_out
             # should have been computed by the previous subject Ada embedder. 
             # Otherwise it's a bug.
             if token_is_bg \
-              and ada_embedder.use_cached_bg and cached_infeat_pooled is None:
+              and ada_embedder.use_cached_bg and cached_pooler_bg_out is None:
                 breakpoint()
 
             # layer_static_prompt_embs[curr_subj_indices]: subj_static_embedding, [(BS/2)*K, 768].
@@ -1520,13 +1525,13 @@ class EmbeddingManager(nn.Module):
             # a call to get_static_embedding(). 
             # The pipeline is generate static embeddings first, then generate the ada embeddings. 
             # So this assumption should always hold.
-            # For background Ada embedder, cached_infeat_pooled is only used when
+            # For background Ada embedder, cached_pooler_bg_out is only used when
             # use_cached_bg. Otherwise, it's ignored.
             subj_ada_embedding, infeat_pooled_dict = \
                         ada_embedder(layer_idx, layer_attn_components, time_emb,
                                      layer_subj_emb_probe,
                                      layer_static_extra_emb_mean, 
-                                     self.img_mask, cached_infeat_pooled)
+                                     self.img_mask, cached_pooler_bg_out)
 
             if self.img_mask is not None and self.img_mask.max() > 1:
                 breakpoint()
@@ -1535,16 +1540,18 @@ class EmbeddingManager(nn.Module):
                 # Cache the bg infeat computed by the first (fg) ada embedder, 
                 # to be used by the second Ada embedder and the background Ada embedder.
                 # NOTE: this assumes the background token always appears after the subject tokens.
-                # Otherwise the cached_infeat_pooled is not available when the background Ada embedder accesses it.
-                cached_infeat_pooled    = infeat_pooled_dict
+                # Otherwise the cached_pooler_bg_out is not available when the background Ada embedder accesses it.
+                cached_pooler_bg_out    = infeat_pooled_dict['bg_out']
                 # During training, emb man self.training is True. 
                 # This is in contrast to the UNet, whose self.training is always False 
                 # (therefore cannot be used as an indicator).
                 token2ada_attn.setdefault(placeholder_string, {})
 
                 if self.training:
-                    token2ada_attn[placeholder_string]['attn_fg'] = infeat_pooled_dict['attn_fg']
-                    token2ada_attn[placeholder_string]['attn_bg'] = infeat_pooled_dict['attn_bg']
+                    # 'attn_fg' and 'attn_bg' are used to reweight the attention maps in the CA layers.
+                    # No need to let the grad flow back to the pooler attn from the weights for the CA layers.
+                    token2ada_attn[placeholder_string]['attn_fg'] = infeat_pooled_dict['attn_fg'].detach()
+                    token2ada_attn[placeholder_string]['attn_bg'] = infeat_pooled_dict['attn_bg'].detach()
                 else:
                     # During inference, the second half of the batch is the unconditional prompts 
                     # which don't contain the placeholder token.
@@ -1785,8 +1792,8 @@ class EmbeddingManager(nn.Module):
 
     def get_subj2conv_attn_layer_scale(self):
         # Clip the scales to [0.1, 3].
-        for subj_string in self.subject_strings:
-            self.subj2conv_attn_layerwise_scales[subj_string].data.clamp_(min=0.1, max=3)
+        #for subj_string in self.subject_strings:
+        #    self.subj2conv_attn_layerwise_scales[subj_string].data.clamp_(min=0.1, max=3)
 
         return self.subj2conv_attn_layerwise_scales
     
@@ -1979,7 +1986,7 @@ class EmbeddingManager(nn.Module):
                      "emb_global_scale_scores":         self.emb_global_scale_scores,
                      "ada_emb_weight":                  self.ada_emb_weight,  
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
-                     "shared_ada_placeholder_set":          self.shared_ada_placeholder_set,
+                     "shared_ada_placeholder_set":      self.shared_ada_placeholder_set,
                      "shared_ada_components":           self.shared_ada_components,
                      # Learnable weights for scaling conv attns.
                      "subj2conv_attn_layerwise_scales":  self.subj2conv_attn_layerwise_scales,
@@ -2154,6 +2161,9 @@ class EmbeddingManager(nn.Module):
         # to reduce overfitting.
         if ckpt_params_perturb_ratio > 0:
             self.perturb_model_parameters(ckpt_params_perturb_ratio)
+
+        # Regenerate background_string_dict in case background_strings have been changed.
+        self.background_string_dict = { k: True for k in self.background_strings }
 
     # placeholders_for_ada_components should be two strings, either "subject_string,background_string", 
     # or "1,1" which means the first subject and the first background string.
@@ -2549,8 +2559,10 @@ class EmbeddingManager(nn.Module):
 
     def calc_fg_bg_token_embs_ortho_loss(self, fg_bg_string_lists=None, ada_grad_scale=0.1, fg_grad_scale=0.5):
         if fg_bg_string_lists is None:
-            fg_bg_string_lists = [ self.subject_strings, self.background_strings ]
-        
+            fg_bg_string_lists = list(filter(lambda k: k not in self.background_string_dict, self.static_subj_embs_dict)), \
+                                 list(filter(lambda k: k in self.background_string_dict, self.static_subj_embs_dict))
+            #print(fg_bg_string_lists)
+
         loss_fg_bg_token_emb_ortho = 0.
         num_fg_bg_pairs = 0
         # Smaller grad scale for ada embeddings, because they are volatile and the gradients are noisy.
@@ -2559,15 +2571,17 @@ class EmbeddingManager(nn.Module):
         # Sum of pairwise fg/bg token embedding ortho losses.
         for fg_string in fg_bg_string_lists[0]:
             for bg_string in fg_bg_string_lists[1]:
+                fg_static_token_emb         = self.static_subj_embs_dict[fg_string]
+                bg_static_token_emb         = self.static_subj_embs_dict[bg_string]
+
+                '''
                 try:
                     # fg_static_token_emb: [16, 9, 768]. 16: num layers. 9: num of vectors.
                     # It's the static token embeddings (not static prompt embeddings) of fg_string.
-                    fg_static_token_emb         = self.static_subj_embs_dict[fg_string]
                     # fg_ada_token_emb_cache_obj: an Embedding3d object that's primarily used 
                     # to compute EMA embeddings.
                     # It stores the ada token embeddings (not ada prompt embeddings) of fg_string.
                     fg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[fg_string]
-                    bg_static_token_emb         = self.static_subj_embs_dict[bg_string]
                     bg_ada_token_emb_cache_obj  = self.ada_subj_embs_dict[bg_string]
                 except KeyError:
                     continue
@@ -2597,7 +2611,11 @@ class EmbeddingManager(nn.Module):
                                         + ada_grad_scaler(fg_ada_token_emb) * self.ada_emb_weight
                 bg_hybrid_token_emb = bg_static_token_emb * (1 - self.ada_emb_weight) \
                                         + ada_grad_scaler(bg_ada_token_emb)  * self.ada_emb_weight
-                
+                '''
+
+                fg_hybrid_token_emb = fg_static_token_emb
+                bg_hybrid_token_emb = bg_static_token_emb
+
                 # The embeddings are token embeddings, not prompt embeddings. 
                 # So clamp_prompt_embedding() is not applicable.
                 #fg_hybrid_token_emb, bg_hybrid_token_emb = \
