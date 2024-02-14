@@ -383,6 +383,7 @@ class PersonalizedBase(Dataset):
             self.clip_image_encoder = None
             self.clip_preprocessor  = None
         else:
+            self.ext_image_features = True
             # CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
             self.clip_image_encoder = image_encoder_dict['clip_image_encoder'] 
             # AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
