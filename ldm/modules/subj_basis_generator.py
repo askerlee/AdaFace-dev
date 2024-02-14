@@ -97,7 +97,7 @@ class PerceiverAttention(nn.Module):
 class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
-        dim=1280,                           # CLIP image feature dimension, as per config.json below.
+        dim=768,                            # Internal feature dimension. Same as output_dim.
         depth=1,                            # number of (PerceiverAttention, FeedForward) layers.     
         dim_head=80,                        # 1280/16 = 80.
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
@@ -107,23 +107,23 @@ class SubjBasisGenerator(nn.Module):
         # The same SubjBasisGenerator instance is used to generate both subj and bg embedder bases, 
         # provided different input features in two different passes.
         num_queries=20,                     
-        embedding_dim=768,                  # Internal feature dimension. Same as output_dim.
+        image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
         output_dim=768,                     # CLIP text embedding input dimension.
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
         # number of latents derived from mean pooled representation of the image.
-        # 6 = 3*2 (3 among 10 static bases and 3 among 10 ada bases).
-        num_latents_mean_pooled: int = 6,   
+        ## 6 = 3*2 (3 among 10 static bases and 3 among 10 ada bases).
+        num_latents_mean_pooled: int = 0,   
     ):
         super().__init__()
-        self.pos_emb = nn.Embedding(max_seq_len, embedding_dim) if apply_pos_emb else None
+        self.pos_emb = nn.Embedding(max_seq_len, image_embedding_dim) if apply_pos_emb else None
 
         self.latents = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
 
-        self.proj_in = nn.Linear(embedding_dim, dim)
+        self.proj_in = nn.Linear(image_embedding_dim, dim)
 
-        # Remove proj_out to reduce the number of parameters, since embedding_dim = output_dim = 768.
+        # Remove proj_out to reduce the number of parameters, since image_embedding_dim = output_dim = 768.
         self.proj_out = nn.Identity() #nn.Linear(dim, output_dim)
         self.norm_out = nn.LayerNorm(output_dim)
 
@@ -198,26 +198,31 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
         
         if attn_mask is not None:
             feat_edge_size = np.sqrt(hidden_states.shape[1] - 1).astype(int)
-            attn_mask = F.interpolate(attn_mask.unsqueeze(1), size=(feat_edge_size, feat_edge_size)).squeeze(1)
-            # Flatten the mask: [1, 16, 16] => [1, 256].
-            attn_mask = attn_mask.reshape(attn_mask.shape[0], -1)
-            # Prepend 1 to the mask: [1, 256] => [1, 257]. 1 corresponds to class_embeds, which is always attended to.
-            attn_mask = torch.cat([torch.ones(attn_mask.shape[0], 1).to(attn_mask.device), attn_mask], dim=-1)
+            attn_mask = F.interpolate(attn_mask.unsqueeze(1), size=(feat_edge_size, feat_edge_size))
+            # Flatten the mask: [1, 1, 16, 16] => [1, 1, 256].
+            attn_mask = attn_mask.reshape(*attn_mask.shape[:2], -1)
+            # Prepend 1 to the mask: [1, 1, 256] => [1, 1, 257]. 
+            # This 1 corresponds to class_embeds, which is always attended to.
+            attn_mask = torch.cat([torch.ones(*attn_mask.shape[:2], 1).to(attn_mask.device), attn_mask], dim=-1)
+            attn_mask_pairs = torch.matmul(attn_mask.transpose(-1, -2), attn_mask).bool().unsqueeze(1)
+        else:
+            attn_mask_pairs = None
 
         # encoder: CLIPEncoder.
         encoder_outputs = self.encoder(
             inputs_embeds=hidden_states,
-            # Newly added:
-            # attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
-            #                 Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
-            #                 - 1 for tokens that are **not masked**,
-            #                 - 0 for tokens that are **masked**.            
-            attention_mask=attn_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
+            # New feature: (***The official documentation is wrong***)
+            # attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length, sequence_length)`, *optional*):
+            #                 Mask to avoid performing attention on pairs of token. Mask values selected in `[0, 1]`:
+            #                 - 1 for pairs that are **not masked**,
+            #                 - 0 for pairs that are **masked**.            
+            attention_mask=attn_mask_pairs,
+            output_attentions=output_attentions,        # False
+            output_hidden_states=output_hidden_states,  # True
+            return_dict=return_dict,                    # True
         )
 
+        # last_hidden_state: [1, 257, 1280]
         last_hidden_state = encoder_outputs[0]
         pooled_output = last_hidden_state[:, 0, :]
         pooled_output = self.post_layernorm(pooled_output)

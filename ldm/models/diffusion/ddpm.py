@@ -904,7 +904,9 @@ class LatentDiffusion(DDPM):
                 if randomize_clip_weights:
                     self.cond_stage_model.sample_last_layers_skip_weights()
 
-                if self.do_zero_shot:
+                # If do_zero_shot, but the prompt is empty (uncond prompt), then ref_image_features is None.
+                # We don't update the ref_image_features in this case.
+                if self.do_zero_shot and ref_image_features is not None:
                     self.embedding_manager.set_ref_image_features(ref_image_features)
 
                 # static_prompt_embedding: [128, 77, 768]

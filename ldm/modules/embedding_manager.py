@@ -530,6 +530,7 @@ class StaticLayerwiseEmbedding(nn.Module):
         print(f"{zero_shot_sig} StaticLayerwiseEmbedding {token_string} initialized with {self.K} total embs, {self.N} init vectors ({init_string}), {self.r} basis vectors")
 
     # Return static embeddings of all layers together.
+    # zs_basis_vecs: [K, r, 768]. K: number of vectors per token. r: number of basis vectors for each vector.
     def forward(self, zs_basis_vecs=None):
         with torch.autocast(device_type=self.device_type, enabled=False):
             # self.basis_comm_weights: [1, K, r] broadcasted to [16, K, r].
@@ -790,6 +791,7 @@ class AdaEmbedding(nn.Module):
     # ca_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. ca_layer_idx: 0 ~ 15.
     # time_emb: [B, 1280].
+    # zs_basis_vecs: [K, r, 768]. K: number of vectors per token. r: number of basis vectors for each vector.                    
     def forward(self, layer_idx, layer_attn_components, time_emb, 
                 layer_subj_emb_probe, layer_static_extra_emb_mean, 
                 img_mask=None, cached_pooler_bg_out=None, zs_basis_vecs=None):
@@ -987,10 +989,10 @@ class EmbeddingManager(nn.Module):
             list_initializer_words=None,
             list_initializer_weights=None,
             list_cls_delta_strings=None,
-            # num_vectors_per_token: how many vectors in each layer are allocated to model 
+            # token2num_vectors: how many vectors in each layer are allocated to model 
             # the subject (represented as the subject token) and the background. 
-            # num_vectors_per_token is an int or a dict.
-            num_vectors_per_token=None,
+            # token2num_vectors is a dict.
+            token2num_vectors=None,
             use_layerwise_embedding=True,
             out_emb_dim=768,
             num_unet_ca_layers=16,
@@ -1079,16 +1081,15 @@ class EmbeddingManager(nn.Module):
                                  1280, 1280, 640, 640, 640,  320,  320,  320 ]
         # ca_outfeat_dims are the same as ca_infeat_dims.
 
-        # num_vectors_per_token: an int or a dict. How many vectors in each layer 
+        # token2num_vectors: a dict. How many vectors in each layer 
         # are allocated to model the subject (represented as the subject token).        
-        # num_vectors_per_token > 1:
+        # token2num_vectors[S*] > 1:
         # *multi-vector subject embeddings*. In this space, S* is embedded into multiple 
         # learned embeddings, an approach that is equivalent to describing
         # the concept through multiple learned pseudo-words. 
         # This setting was proposed in the TI paper,
         # and AdaPrompt also supports it for more expressive modeling.
-        self.token2num_vectors = {}
-        self.set_num_vectors_per_token(num_vectors_per_token, placeholder_strings)
+        self.set_num_vectors_per_token(token2num_vectors)
         self.out_emb_dim = out_emb_dim
 
         # hasattr(text_embedder, 'tokenizer') -> True
@@ -1238,11 +1239,26 @@ class EmbeddingManager(nn.Module):
         if self.do_zero_shot:
             # No matter whether using layerwise embeddings, the basis vecs of either static or ada embedders are always layerwise_lora_rank,
             # as the basis vecs are shared across all CA layers.
-            num_total_basis_vecs = 2 * layerwise_lora_rank
+            # But different vectors of the same embeddings are combinations of different basis vecs.
+            # Therefore, num_total_basis_vecs is multiplied by num_vectors_each_subj_bg_pair.
+            # num_vectors_each_subj_bg_pair: the number of vectors per (subj, bg) placeholder pair.
+            # It's implied that all subj placeholders have the same number of vectors,
+            # and all bg placeholders have the same number of vectors.
+            self.number_vectors_each_subj = self.token2num_vectors[self.subject_strings[0]]
+            if len(self.background_strings) > 0:
+                self.num_vectors_each_bg = self.token2num_vectors[self.background_strings[0]]
+            else:
+                self.num_vectors_each_bg = 0
+            # max_num_vectors_each_placeholder: max(9, 4) = 9.
+            self.max_num_vectors_each_placeholder = max(self.number_vectors_each_subj, self.num_vectors_each_bg)
+
+            num_total_basis_vecs = 2 * layerwise_lora_rank * self.max_num_vectors_each_placeholder
             self.subj_basis_generator = SubjBasisGenerator(num_queries = num_total_basis_vecs, 
-                                                           embedding_dim = out_emb_dim,
+                                                           image_embedding_dim = 1280,
+                                                           dim = out_emb_dim,
                                                            output_dim = out_emb_dim,
-                                                           num_latents_mean_pooled = int(num_total_basis_vecs * 0.3))
+                                                           num_latents_mean_pooled = 0)
+                                                           #int(num_total_basis_vecs * 0.3))
             self.subj2ada_zs_basis_vecs = {}
         else:
             self.subj_basis_generator = None
@@ -1418,8 +1434,18 @@ class EmbeddingManager(nn.Module):
                     else:
                         ref_image_features = ref_image_feat_dict['subj']
 
+                    # ref_image_features: [1, 257, 1280]
+                    # zs_basis_vecs_2sets: [1, 180, 768] -> [9, 20, 768]
                     zs_basis_vecs_2sets = self.subj_basis_generator(ref_image_features)
-                    static_zs_basis_vecs, ada_zs_basis_vecs = zs_basis_vecs_2sets.chunk(2)
+                    zs_basis_vecs_2sets = zs_basis_vecs_2sets.reshape(self.max_num_vectors_each_placeholder,
+                                                                      self.layerwise_lora_rank * 2, -1)
+                    if token_is_bg:
+                        # zs_basis_vecs_2sets: [4, 10, 768]. Simply abandon extra basis vectors.
+                        # in order to reuse the same subj_basis_generator for both subject and background tokens.
+                        zs_basis_vecs_2sets = zs_basis_vecs_2sets[:self.num_vectors_each_bg]
+                    # static_zs_basis_vecs, ada_zs_basis_vecs: [9, 10, 768] for subject tokens.
+                    # or [4, 10, 768] for background tokens.
+                    static_zs_basis_vecs, ada_zs_basis_vecs = zs_basis_vecs_2sets.chunk(2, dim=1)
                     self.subj2ada_zs_basis_vecs[placeholder_string] = ada_zs_basis_vecs
                 else:
                     static_zs_basis_vecs = None
@@ -2013,22 +2039,8 @@ class EmbeddingManager(nn.Module):
 
                     token_emb_cache_obj.reset_cached_layer_tracker()
 
-    def set_num_vectors_per_token(self, num_vectors_per_token, placeholder_strings=None):
-        if num_vectors_per_token is None or type(num_vectors_per_token) == int:
-            # If token2num_vectors is not specified, then set all tokens to have 1 vector.
-            # If token2num_vectors is an int, then set all tokens to have 
-            # token2num_vectors vectors.
-            if num_vectors_per_token is None:
-                num_vectors_per_token = 1
-
-            # During inference, placeholder_strings might be None. 
-            # In that case, we use string_to_token_dict loaded from the ckpt.
-            if placeholder_strings is None:
-                placeholder_strings = self.string_to_token_dict.keys()
-            for k in placeholder_strings:
-                self.token2num_vectors[k] = num_vectors_per_token
-        else:
-            self.token2num_vectors = num_vectors_per_token
+    def set_num_vectors_per_token(self, token2num_vectors):
+        self.token2num_vectors = token2num_vectors
         print(f"Set token2num_vectors: {self.token2num_vectors}")
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
@@ -2418,7 +2430,7 @@ class EmbeddingManager(nn.Module):
         # This is to slow down pooler update when we do multi-subject training.
         # Only applicable to AdamW training, and not for Prodigy.
         ada_shared_params = [ { 'params': ada_shared_param_list, 'lr_ratio': 1. / np.sqrt(len(self.subject_strings)),
-                            'excluded_from_prodigy': False } ]
+                                'excluded_from_prodigy': False } ]
 
         ada_private_params = [ p for p in self.string_to_ada_embedder_dict.parameters() if id(p) not in ada_shared_param_ids ]
 
@@ -2439,14 +2451,14 @@ class EmbeddingManager(nn.Module):
         if self.conv_attn_layerwise_scale_learnable: 
             ## Prodigy is too aggressive on the conv attn layerwise scales. 
             ## So don't train them if using Prodigy.
-            slow_params_excl_prodigy = [ { 'params': self.subj2conv_attn_layerwise_scales.parameters(),
+            slow_params_excl_prodigy = [ { 'params': list(self.subj2conv_attn_layerwise_scales.parameters()),
                                            'lr_ratio': 0.1, 'excluded_from_prodigy': True } ]
         else:
             slow_params_excl_prodigy = []
 
         if self.do_zero_shot:
-            subj_basis_generator_params = [ { 'params': self.subj_basis_generator.parameters(), 'lr_ratio': 1,
-                                              'excluded_from_prodigy': False } ]
+            subj_basis_generator_params = [ { 'params': list(self.subj_basis_generator.parameters()), 
+                                              'lr_ratio': 1, 'excluded_from_prodigy': False } ]
         else:
             subj_basis_generator_params = []
 

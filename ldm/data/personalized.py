@@ -588,15 +588,18 @@ class PersonalizedBase(Dataset):
                 # input to clip_preprocessor: an image or a batch of images, each being PIL.Image.Image, numpy.ndarray, 
                 # torch.Tensor, tf.Tensor or jax.ndarray.
                 # image_pixel_values: [1, 3, 224, 224]
-                image_pixel_values = self.clip_preprocessor(images=image, return_tensors="pt")
+                image_pixel_values = self.clip_preprocessor(images=image, return_tensors="pt").pixel_values
+                # fg_mask2: [1, 1, 512, 512]
+                fg_mask2 = torch.tensor(fg_mask).unsqueeze(0).float()
                 with torch.no_grad():
                     # image_fg_features: [1, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
-                    image_fg_features  = self.clip_image_encoder(image_pixel_values, attn_mask=fg_mask, output_hidden_states=True).hidden_states[-2]
+                    image_fg_features  = self.clip_image_encoder(image_pixel_values, attn_mask=fg_mask2, output_hidden_states=True).hidden_states[-2]
                     # A negative mask is used to extract the background features.
-                    image_bg_features  = self.clip_image_encoder(image_pixel_values, attn_mask=1-fg_mask, output_hidden_states=True).hidden_states[-2]
+                    image_bg_features  = self.clip_image_encoder(image_pixel_values, attn_mask=1-fg_mask2, output_hidden_states=True).hidden_states[-2]
 
-                # image_features: [1, 514, 1280]
-                image_features    = torch.cat([image_fg_features, image_bg_features], dim=1)
+                # image_features: [1, 514, 1280] -> [514, 1280].
+                # Remove the batch dimension before being collated into a batch.
+                image_features    = torch.cat([image_fg_features, image_bg_features], dim=1).squeeze(0)
                 if cache_image_features:
                     # Save the image features to disk, so that we don't need to extract them again.
                     torch.save(image_features, feat_path)

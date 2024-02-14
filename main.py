@@ -252,6 +252,9 @@ def get_parser(**parser_kwargs):
                         help="Use convolutional attention of subject tokens with this kernel size."
                              "Default: None, not specified.")
 
+    parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to use zero-shot learning")
+
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=5,
         help="Layerwise lora rank")
@@ -352,7 +355,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         personalization_config_params.list_initializer_words[0]   = opt.init_string
         personalization_config_params.list_initializer_weights[0] = opt.init_word_weights
         personalization_config_params.list_cls_delta_strings[0]   = config.data.params.train.params.cls_delta_string
-        personalization_config_params.num_vectors_per_token       = { opt.subject_string: opt.num_vectors_per_token}
+        personalization_config_params.token2num_vectors       = { opt.subject_string: opt.num_vectors_per_token}
 
         if opt.background_string is not None:
             config.model.params.use_background_token = True
@@ -363,7 +366,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
             personalization_config_params.list_initializer_weights.append(None)            
             personalization_config_params.list_cls_delta_strings.append(config.data.params.train.params.cls_bg_delta_string)
             # The background token can be represented with multiple embeddings.
-            personalization_config_params.num_vectors_per_token[opt.background_string] = opt.num_vectors_per_bg_token
+            personalization_config_params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
             personalization_config_params.background_strings = [opt.background_string]
 
             if opt.wds_comp_db_path is not None:
@@ -372,7 +375,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
                 personalization_config_params.list_initializer_words.append(opt.bg_init_words)
                 personalization_config_params.list_initializer_weights.append(None)            
                 personalization_config_params.list_cls_delta_strings.append(config.data.params.train.params.cls_bg_delta_string)
-                personalization_config_params.num_vectors_per_token[opt.wds_background_string] = opt.num_vectors_per_bg_token
+                personalization_config_params.token2num_vectors[opt.wds_background_string] = opt.num_vectors_per_bg_token
                 personalization_config_params.background_strings.append(opt.wds_background_string)
     # Multiple subjects. The params are extracted from opt.subj_info_filepaths 
     # by the dataset object.
@@ -381,9 +384,9 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         personalization_config_params.list_initializer_words    = dataset.cls_delta_strings
         personalization_config_params.list_initializer_weights  = dataset.list_initializer_weights
         personalization_config_params.list_cls_delta_strings    = dataset.cls_delta_strings
-        personalization_config_params.num_vectors_per_token     = dict()
+        personalization_config_params.token2num_vectors     = dict()
         for subject_string in dataset.subject_strings:
-            personalization_config_params.num_vectors_per_token[subject_string] = opt.num_vectors_per_token
+            personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_token
 
         if opt.background_string is not None:
             config.model.params.use_background_token = True
@@ -394,7 +397,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
             personalization_config_params.background_strings        = dataset.background_strings
 
             for background_string in dataset.background_strings:
-                personalization_config_params.num_vectors_per_token[background_string] = opt.num_vectors_per_bg_token
+                personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
 
         if opt.wds_comp_db_path is not None:
             # wds_background_strings share the same settings of the background string.
@@ -405,7 +408,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
             personalization_config_params.background_strings        += dataset.wds_background_strings
 
             for wds_background_string in dataset.wds_background_strings:
-                personalization_config_params.num_vectors_per_token[wds_background_string] = opt.num_vectors_per_bg_token
+                personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
 
 class WrappedDataset(Dataset):
     """Wraps an arbitrary object with __len__ and __getitem__ into a pytorch dataset"""
@@ -905,6 +908,12 @@ if __name__ == "__main__":
         config.data.params.validation.params.data_roots  = opt.data_roots
         # max_steps: Used to initialize DataModuleFromConfig.
         config.data.params.max_steps = opt.max_steps
+
+        # zero-shot settings.
+        config.model.params.do_zero_shot = opt.zeroshot
+        config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
+        config.data.params.train.params.ext_image_features = opt.zeroshot
+        config.data.params.validation.params.ext_image_features = opt.zeroshot
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
