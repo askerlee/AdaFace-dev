@@ -155,8 +155,6 @@ class PersonalizedBase(Dataset):
                  # containing the cls_delta_string of all subjects, in "init_strings".
                  # cls_bg_delta_string is optional, and can be specified in "all_bg_init_words".
                  subj_info_filepaths=None,
-                 ext_image_features=False,
-                 ext_image_features_model=None,
                  wds_comp_db_path=None,    # Path to the composition webdatabase .tar file
                  verbose=False,
                  ):
@@ -220,6 +218,7 @@ class PersonalizedBase(Dataset):
         self.feat_paths    = sum(self.feat_paths_by_subj, [])
 
         self.num_images = len(self.image_paths)
+        self.set_name = set
         if set == "train":
             self.is_training = True
             self._length = self.num_images * repeats
@@ -289,15 +288,10 @@ class PersonalizedBase(Dataset):
         self.background_tokens  = [ self.tokenizer(background_string)['input_ids'][1] \
                                     for background_string in self.background_strings ]
 
-        self.ext_image_features = ext_image_features
-        if self.ext_image_features:
-            # CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
-            self.clip_image_encoder = ext_image_features_model['CLIPVisionModelWithMask'] 
-            # AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
-            self.clip_preprocessor  = ext_image_features_model['AutoProcessor']
-        else:
-            self.clip_image_encoder = None
-            self.clip_preprocessor  = None
+        # Could be updated by set_image_encoder().
+        self.ext_image_features = False
+        self.clip_image_encoder = None
+        self.clip_preprocessor  = None
 
         # placeholder_prefix could be a list of strings, separated by ",".
         if common_placeholder_prefix is not None:
@@ -383,6 +377,18 @@ class PersonalizedBase(Dataset):
 
         self.num_compositions_per_image = num_compositions_per_image
    
+    def set_image_encoder(self, image_encoder_dict):
+        if image_encoder_dict is None:
+            self.ext_image_features = False
+            self.clip_image_encoder = None
+            self.clip_preprocessor  = None
+        else:
+            # CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+            self.clip_image_encoder = image_encoder_dict['clip_image_encoder'] 
+            # AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+            self.clip_preprocessor  = image_encoder_dict['clip_preprocessor']
+            print(f"Set image encoder for Dataset {self.set_name}")
+
     def __len__(self):
         return self._length
 

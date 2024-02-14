@@ -448,13 +448,14 @@ class DataModuleFromConfig(pl.LightningDataModule):
     # used by instantiate_from_config(self.dataset_configs[k]).
     def __init__(self, batch_size, max_steps, train=None, validation=None, test=None, predict=None,
                  wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
-                 shuffle_val_dataloader=False):
+                 shuffle_val_dataloader=False, do_zero_shot=False):
         super().__init__()
         self.batch_size = batch_size
         self.num_batches = max_steps
         self.dataset_configs = dict()
         self.num_workers = num_workers if num_workers is not None else batch_size * 2
         self.use_worker_init_fn = use_worker_init_fn        # False
+        self.do_zero_shot   = do_zero_shot                  
         if train is not None:
             self.dataset_configs["train"] = train
             self.train_dataloader = self._train_dataloader
@@ -477,6 +478,17 @@ class DataModuleFromConfig(pl.LightningDataModule):
         self.datasets = dict(
             (k, instantiate_from_config(self.dataset_configs[k]))
             for k in self.dataset_configs)
+        
+        # Initialize the image encoder for zero-shot learning.
+        if self.do_zero_shot:
+            image_encoder_dict = {}
+            image_encoder_dict['clip_image_encoder'] = \
+                        CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+            image_encoder_dict['clip_preprocessor'] = \
+                        AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+            for k in self.datasets:
+                self.datasets[k].set_image_encoder(image_encoder_dict)
+
         if self.wrap:
             for k in self.datasets:
                 self.datasets[k] = WrappedDataset(self.datasets[k])
@@ -914,17 +926,8 @@ if __name__ == "__main__":
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
-        config.data.params.train.params.ext_image_features = opt.zeroshot
-        config.data.params.validation.params.ext_image_features = opt.zeroshot
-        if opt.zeroshot:
-            ext_image_features_model = {}
-            ext_image_features_model['CLIPVisionModelWithMask'] = \
-                        CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
-            ext_image_features_model['AutoProcessor'] = \
-                        AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
-            # All workers share the same CLIPVisionModelWithMask model to save RAM.
-            config.data.params.train.params.ext_image_features_model      = ext_image_features_model
-            config.data.params.validation.params.ext_image_features_model = ext_image_features_model
+        # This do_zero_shot will be passed to DataModuleFromConfig.__init__().
+        config.data.params.do_zero_shot = opt.zeroshot
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
