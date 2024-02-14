@@ -4,7 +4,7 @@ import PIL
 from PIL import Image
 from torch.utils.data import Dataset, Sampler
 from torchvision import transforms
-from transformers import CLIPTokenizer, AutoProcessor
+from transformers import CLIPTokenizer
 from torchvision.transforms import InterpolationMode
 from .compositions import sample_compositions
 import random
@@ -13,7 +13,6 @@ import regex as re
 import webdataset as wds
 import glob
 from evaluation.eval_utils import parse_subject_file
-from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
 
 imagenet_templates_smallest = [
     'a photo of a {}',
@@ -157,6 +156,7 @@ class PersonalizedBase(Dataset):
                  # cls_bg_delta_string is optional, and can be specified in "all_bg_init_words".
                  subj_info_filepaths=None,
                  ext_image_features=False,
+                 ext_image_features_model=None,
                  wds_comp_db_path=None,    # Path to the composition webdatabase .tar file
                  verbose=False,
                  ):
@@ -291,8 +291,10 @@ class PersonalizedBase(Dataset):
 
         self.ext_image_features = ext_image_features
         if self.ext_image_features:
-            self.clip_image_encoder = CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
-            self.clip_preprocessor  = AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+            # CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+            self.clip_image_encoder = ext_image_features_model['CLIPVisionModelWithMask'] 
+            # AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+            self.clip_preprocessor  = ext_image_features_model['AutoProcessor']
         else:
             self.clip_image_encoder = None
             self.clip_preprocessor  = None

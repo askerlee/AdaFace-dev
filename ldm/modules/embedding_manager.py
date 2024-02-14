@@ -2064,6 +2064,8 @@ class EmbeddingManager(nn.Module):
                      "background_strings":               self.background_strings,
                      "ca_q_bns":                         self.ca_q_bns,
                      "ca_outfeat_lns":                   self.ca_outfeat_lns,
+                     "do_zero_shot":                     self.do_zero_shot,
+                     "subj_basis_generator":             self.subj_basis_generator,
                    }, 
                     ckpt_path)
 
@@ -2150,6 +2152,10 @@ class EmbeddingManager(nn.Module):
                 self.ca_q_bns = ckpt["ca_q_bns"]
             if "ca_outfeat_lns" in ckpt:
                 self.ca_outfeat_lns = ckpt["ca_outfeat_lns"]
+
+            if "do_zero_shot" in ckpt:
+                self.do_zero_shot           = ckpt["do_zero_shot"]
+                self.subj_basis_generator   = ckpt["subj_basis_generator"]
 
             for token_idx, k in enumerate(ckpt["string_to_token"]):
                 if (placeholder_mapper is not None) and (k in placeholder_mapper):

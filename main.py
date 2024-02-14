@@ -21,6 +21,8 @@ from pytorch_lightning.utilities import rank_zero_info
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.data.personalized import SubjectSampler
 from ldm.util import instantiate_from_config, extend_nn_embedding
+from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
+from transformers import AutoProcessor
 import re
 from safetensors.torch import load_file as safetensors_load_file
 
@@ -914,6 +916,15 @@ if __name__ == "__main__":
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
         config.data.params.train.params.ext_image_features = opt.zeroshot
         config.data.params.validation.params.ext_image_features = opt.zeroshot
+        if opt.zeroshot:
+            ext_image_features_model = {}
+            ext_image_features_model['CLIPVisionModelWithMask'] = \
+                        CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+            ext_image_features_model['AutoProcessor'] = \
+                        AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+            # All workers share the same CLIPVisionModelWithMask model to save RAM.
+            config.data.params.train.params.ext_image_features_model      = ext_image_features_model
+            config.data.params.validation.params.ext_image_features_model = ext_image_features_model
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
