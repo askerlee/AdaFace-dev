@@ -380,35 +380,67 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
     # Multiple subjects. The params are extracted from opt.subj_info_filepaths 
     # by the dataset object.
     else:
-        personalization_config_params.placeholder_strings       = dataset.subject_strings
-        personalization_config_params.list_initializer_words    = dataset.cls_delta_strings
-        personalization_config_params.list_initializer_weights  = dataset.list_initializer_weights
-        personalization_config_params.list_cls_delta_strings    = dataset.cls_delta_strings
-        personalization_config_params.token2num_vectors     = dict()
-        for subject_string in dataset.subject_strings:
-            personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
+        if not opt.zeroshot:
+            personalization_config_params.placeholder_strings       = dataset.subject_strings
+            personalization_config_params.list_initializer_words    = dataset.cls_delta_strings
+            personalization_config_params.list_initializer_weights  = dataset.list_initializer_weights
+            personalization_config_params.list_cls_delta_strings    = dataset.cls_delta_strings
+            personalization_config_params.token2num_vectors     = dict()
+            for subject_string in dataset.subject_strings:
+                personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
 
-        if opt.background_string is not None:
-            config.model.params.use_background_token = True
-            personalization_config_params.placeholder_strings       += dataset.background_strings
-            personalization_config_params.list_initializer_words    += dataset.cls_bg_delta_strings
-            personalization_config_params.list_initializer_weights  += dataset.list_bg_initializer_weights
-            personalization_config_params.list_cls_delta_strings    += dataset.cls_bg_delta_strings
-            personalization_config_params.background_strings        = dataset.background_strings
+            if opt.background_string is not None:
+                config.model.params.use_background_token = True
+                personalization_config_params.placeholder_strings       += dataset.background_strings
+                personalization_config_params.list_initializer_words    += dataset.cls_bg_delta_strings
+                personalization_config_params.list_initializer_weights  += dataset.list_bg_initializer_weights
+                personalization_config_params.list_cls_delta_strings    += dataset.cls_bg_delta_strings
+                personalization_config_params.background_strings        = dataset.background_strings
 
-            for background_string in dataset.background_strings:
-                personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
+                for background_string in dataset.background_strings:
+                    personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
 
-        if opt.wds_comp_db_path is not None:
-            # wds_background_strings share the same settings of the background string.
-            personalization_config_params.placeholder_strings       += dataset.wds_background_strings
-            personalization_config_params.list_initializer_words    += dataset.cls_bg_delta_strings
-            personalization_config_params.list_initializer_weights  += dataset.list_bg_initializer_weights
-            personalization_config_params.list_cls_delta_strings    += dataset.cls_bg_delta_strings
-            personalization_config_params.background_strings        += dataset.wds_background_strings
+            if opt.wds_comp_db_path is not None:
+                # wds_background_strings share the same settings of the background string.
+                personalization_config_params.placeholder_strings       += dataset.wds_background_strings
+                personalization_config_params.list_initializer_words    += dataset.cls_bg_delta_strings
+                personalization_config_params.list_initializer_weights  += dataset.list_bg_initializer_weights
+                personalization_config_params.list_cls_delta_strings    += dataset.cls_bg_delta_strings
+                personalization_config_params.background_strings        += dataset.wds_background_strings
 
-            for wds_background_string in dataset.wds_background_strings:
-                personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
+                for wds_background_string in dataset.wds_background_strings:
+                    personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
+        else:
+            # Only keep the first subject and background placeholder.
+            personalization_config_params.placeholder_strings       = dataset.subject_strings[:1]
+            personalization_config_params.list_initializer_words    = dataset.cls_delta_strings[:1]
+            personalization_config_params.list_initializer_weights  = dataset.list_initializer_weights[:1]
+            personalization_config_params.list_cls_delta_strings    = dataset.cls_delta_strings[:1]
+            personalization_config_params.token2num_vectors     = dict()
+            for subject_string in dataset.subject_strings[:1]:
+                personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
+
+            if opt.background_string is not None:
+                config.model.params.use_background_token = True
+                personalization_config_params.placeholder_strings       += dataset.background_strings[:1]
+                personalization_config_params.list_initializer_words    += dataset.cls_bg_delta_strings[:1]
+                personalization_config_params.list_initializer_weights  += dataset.list_bg_initializer_weights[:1]
+                personalization_config_params.list_cls_delta_strings    += dataset.cls_bg_delta_strings[:1]
+                personalization_config_params.background_strings        = dataset.background_strings[:1]
+
+                for background_string in dataset.background_strings[:1]:
+                    personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
+
+            if opt.wds_comp_db_path is not None:
+                # wds_background_strings share the same settings of the background string.
+                personalization_config_params.placeholder_strings       += dataset.wds_background_strings[:1]
+                personalization_config_params.list_initializer_words    += dataset.cls_bg_delta_strings[:1]
+                personalization_config_params.list_initializer_weights  += dataset.list_bg_initializer_weights[:1]
+                personalization_config_params.list_cls_delta_strings    += dataset.cls_bg_delta_strings[:1]
+                personalization_config_params.background_strings        += dataset.wds_background_strings[:1]
+
+                for wds_background_string in dataset.wds_background_strings[:1]:
+                    personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
 
 class WrappedDataset(Dataset):
     """Wraps an arbitrary object with __len__ and __getitem__ into a pytorch dataset"""
