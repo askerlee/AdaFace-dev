@@ -27,7 +27,7 @@ model:
         # But it doesn't matter, as EmbeddingManager.load() will completely replace self.string_to_static_embedder_dict,
         # including the wrongly initialized LoraEmbedding object(s).
         list_initializer_words: ["sculpture"]
-        num_vectors_per_token: 1
+        num_vectors_per_subj_token: 1
         use_layerwise_embedding: False      
           
     unet_config:

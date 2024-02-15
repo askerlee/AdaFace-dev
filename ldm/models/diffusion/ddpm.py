@@ -39,7 +39,8 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
                        gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, clamp_prompt_embedding, \
-                       merge_cls_token_embeddings, join_dict_of_indices_with_key_filter, SequentialLR2
+                       merge_cls_token_embeddings, join_dict_of_indices_with_key_filter, SequentialLR2, \
+                       encode_image_fg_bg_with_clip
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -863,13 +864,13 @@ class LatentDiffusion(DDPM):
 
         if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
             ckpt_params_perturb_ratio = config.params.get("ckpt_params_perturb_ratio", 0)
-            placeholders_for_ada_components = config.params.get("placeholders_for_ada_components", None)
-            loaded_ada_components            = config.params.get("loaded_ada_components", None)
-            frozen_ada_placeholder_set       = config.params.get("frozen_ada_placeholder_set", None)
-            frozen_ada_components            = config.params.get("frozen_ada_components", None)
+            src_placeholders = config.params.get("src_placeholders", None)
+            loaded_embedder_components            = config.params.get("loaded_embedder_components", None)
+            frozen_placeholder_set       = config.params.get("frozen_placeholder_set", None)
+            frozen_embedder_components            = config.params.get("frozen_embedder_components", None)
             model.load(config.params.embedding_manager_ckpt, ckpt_params_perturb_ratio,
-                       placeholders_for_ada_components, loaded_ada_components,
-                       frozen_ada_placeholder_set, frozen_ada_components)
+                       src_placeholders, loaded_embedder_components,
+                       frozen_placeholder_set, frozen_embedder_components)
         
         return model
 
@@ -1390,12 +1391,16 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['wds_comp_avail_ratio'] = batch['has_wds_comp'].sum() / batch['has_wds_comp'].shape[0]
 
-        print(batch["subj_string"])
-        self.batch_subj_string = batch['subj_string'][0]
-        # If cached_inits is available (self.batch_subj_string in self.cached_inits), 
+        if len(set(batch['subject_name'])) > 1:
+            print("Different subjects in the batch.")
+            breakpoint()
+        self.batch_subject_name = batch['subject_name'][0]
+        print(self.batch_subject_name)
+
+        # If cached_inits is available (self.batch_subject_name in self.cached_inits), 
         # cached_inits are only used if do_mix_prompt_distillation = True.
         self.iter_flags['reuse_init_conds']  = (self.iter_flags['do_mix_prompt_distillation'] \
-                                                and self.batch_subj_string in self.cached_inits)
+                                                and self.batch_subject_name in self.cached_inits)
 
         # do_teacher_filter: If not reuse_init_conds and do_teacher_filtering, then we choose the better instance 
         # between the two in the batch, if it's above the usable threshold.
@@ -1624,14 +1629,24 @@ class LatentDiffusion(DDPM):
         self.iter_flags['delta_prompts']        = delta_prompts
 
         if self.do_zero_shot:
+            # images: 0~255 uint8 tensor [3, 512, 512, 3] -> [3, 3, 512, 512].
+            images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
+            # batch["fg_mask"]: [3, 512, 512].
+            fg_mask = batch["fg_mask"]
+            # First time processing the image, so we need to extract the image features.
+            image_fg_features, image_bg_features = encode_image_fg_bg_with_clip(images, fg_mask)
+            # image_features: [1, 514, 1280] -> [514, 1280].
+            # Remove the batch dimension before being collated into a batch.
+            image_features    = torch.cat([image_fg_features, image_bg_features], dim=1).squeeze(0)
+
             # image_features: [B, 514, 1280] => [1, 514, 1280].
-            self.iter_flags['image_features'] = batch['image_features'].mean(dim=0, keepdim=True)
+            self.iter_flags['image_features'] = image_features.mean(dim=0, keepdim=True)
         else:
             self.iter_flags['image_features'] = None
 
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
-            cached_inits = self.cached_inits[self.batch_subj_string]
+            cached_inits = self.cached_inits[self.batch_subject_name]
             # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
             self.iter_flags['delta_prompts']            = cached_inits['delta_prompts']
             self.iter_flags['img_mask']                 = cached_inits['img_mask']
@@ -1674,9 +1689,9 @@ class LatentDiffusion(DDPM):
                     # reuse_init_conds, discard the prompts offered in shared_step().
                     if self.iter_flags['reuse_init_conds']:
                         # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
-                        delta_prompts = self.cached_inits[self.batch_subj_string]['delta_prompts']
+                        delta_prompts = self.cached_inits[self.batch_subject_name]['delta_prompts']
                         # cached_inits will be used in p_losses(), 
-                        # so don't delete cached_init[self.batch_subj_string] to False yet.
+                        # so don't delete cached_init[self.batch_subject_name] to False yet.
                     else:
                         # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
                         delta_prompts = self.iter_flags['delta_prompts']
@@ -1720,6 +1735,9 @@ class LatentDiffusion(DDPM):
                         self.get_learned_conditioning(delta_prompts, 
                                                       self.iter_flags['image_features'],
                                                       randomize_clip_weights=True)
+                    # Release image_features.
+                    del self.iter_flags['image_features']
+
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
 
@@ -1819,7 +1837,9 @@ class LatentDiffusion(DDPM):
                             # "captions" consist of subject single prompts only (no comp prompts).
                             # Embeddings don't need patching as there are no class prompts.
                             c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions, 
-                                                                                         self.iter_flags['image_features'],
+                                                                                         # No need to pass image_features, as
+                                                                                         # image_features have been assigned to emb manager.
+                                                                                         None,
                                                                                          randomize_clip_weights=True)
                             # print(captions)
                             extra_info['placeholder2indices'] = extra_info0['placeholder2indices']
@@ -2146,10 +2166,10 @@ class LatentDiffusion(DDPM):
                 # But x_start is the denoised result from the previous iteration (noises have been added above), 
                 # so we don't add noise to it again.
                 # x_start already has a BS of 4. No need to slice or repeat it.
-                x_start = self.cached_inits[self.batch_subj_string]['x_start']
-                prev_t  = self.cached_inits[self.batch_subj_string]['t']
-                # Clear cache of batch_subj_string, to avoid the cached inits being used in the next mix iter.
-                del self.cached_inits[self.batch_subj_string]
+                x_start = self.cached_inits[self.batch_subject_name]['x_start']
+                prev_t  = self.cached_inits[self.batch_subject_name]['t']
+                # Clear cache of batch_subject_name, to avoid the cached inits being used in the next mix iter.
+                del self.cached_inits[self.batch_subject_name]
                 # reuse init iter takes a smaller cfg scale, as in the second denoising step, 
                 # a particular scale tend to make the cfg-denoised mixed images more dissimilar 
                 # to the subject images than in the first denoising step. 
@@ -2594,7 +2614,7 @@ class LatentDiffusion(DDPM):
 
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but under some settings, maybe mix comp = subj comp.
-                    # cached_inits[self.batch_subj_string]['x_start'] has a batch size of 4.
+                    # cached_inits[self.batch_subject_name]['x_start'] has a batch size of 4.
                     # x_recon_sel_rep doesn't have the 1-repeat-4 structure, instead a 
                     # 1-repeat-2 structure that's repeated twice.
                     # But it approximates a 1-repeat-4 structure, so the distillation should still work.
@@ -2602,7 +2622,7 @@ class LatentDiffusion(DDPM):
                     # is half-repeat-2 of (the reconstructed images of) x_start_sel. 
                     # Doing half-repeat-2 on masks won't change them, as they are 1-repeat-4.
                     # NOTE: do_teacher_filter implies not reuse_init_conds. So we always need to cache the inits.
-                    self.cached_inits[self.batch_subj_string] = \
+                    self.cached_inits[self.batch_subject_name] = \
                         { 'x_start':                x_recon_sel_rep, 
                           'delta_prompts':          cond_orig[2]['delta_prompts'],
                           't':                      t_sel,

@@ -17,10 +17,14 @@ from inspect import isfunction
 from PIL import Image, ImageDraw, ImageFont
 from torchvision.utils import make_grid, draw_bounding_boxes
 import random, math
+from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
+from transformers import CLIPImageProcessor
 
 from torch.optim.lr_scheduler import SequentialLR
 from bisect import bisect_right
-
+clip_image_encoder = None
+clip_preprocessor  = None
+clip_device = 'cpu'
 class SequentialLR2(SequentialLR):
     def step(self):
         self.last_epoch += 1
@@ -885,7 +889,7 @@ def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divi
     # So we need to deduplicate them first.
     placeholder_indices_N = torch.unique(placeholder_indices_N)
     M = len(placeholder_indices_N)
-    # num_vectors_per_token = 1. No patching is needed.
+    # num_vectors_per_subj_token = 1. No patching is needed.
     if M == 1:
         return text_embedding
     
@@ -1173,9 +1177,8 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
                 string2embedding[string] = torch.zeros(1, 768)
 
     if len(string2embedding) == 0:
-        return
+        return None
 
-    print(f"Extended CLIP text encoder with tokens: {string2embedding.keys()}")
     get_tokens_for_string = partial(get_clip_tokens_for_string, text_embedder.tokenizer)
 
     extended_token_embeddings = []
@@ -1191,7 +1194,6 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
         try:
             token = get_tokens_for_string(string, force_single_token=True)[0]
         except:
-            # num_added_tokens should always be num_new_tokens.
             num_added_tokens = text_embedder.tokenizer.add_tokens([string])
             if num_added_tokens == 0:
                 print(f"Token '{string}' already exists in the tokenizer.")
@@ -1202,13 +1204,13 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
             # torch.nn.modules.sparse.Embedding, [49408, 768]
             # cls_token: 49408, 49409...
             # So token_embedding needs to be expanded.
-            print(f"Added string: {string} -> token: {token}")
+            print(f"Extended CLIP text encoder with string: {string} -> token {token}")
             extended_token_embeddings.append(embedding)
             num_new_tokens += 1
 
     if num_new_tokens == 0:
         return None
-    
+  
     # extended_token_embeddings: list of tensors, each [1, 768] => [num_new_tokens, 768].
     extended_token_embeddings = torch.cat(extended_token_embeddings, dim=0)
 
@@ -2170,6 +2172,73 @@ def gen_cfg_scales_for_stu_tea(tea_scale, stu_scale, num_teachers, device):
     cfg_scales_for_clip_loss = torch.cat([cfg_scales_for_student, cfg_scales_for_teacher], dim=0)
     cfg_scales_for_clip_loss = cfg_scales_for_clip_loss.to(device)
     return cfg_scales_for_clip_loss
+
+def init_clip_image_encoder(device):
+    global clip_image_encoder, clip_preprocessor, clip_device
+
+    clip_image_encoder = CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+    clip_preprocessor  = CLIPImageProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+    clip_image_encoder = clip_image_encoder.to(device)
+    clip_image_encoder.eval()
+    clip_device = device
+    print(f'CLIP image encoder loaded on {device}.')
+    
+# images: numpy.ndarray or torch.Tensor.
+# images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
+# fg_masks: a list of [Hi, Wi].
+def encode_image_fg_bg_with_clip(images, fg_masks):
+    # Must call init_clip_image_encoder() before calling this function.
+    global clip_image_encoder, clip_preprocessor, clip_device
+
+    image_pixel_values = []
+    # images could be a batch of images that have been collated into a tensor or np array.
+    # images can also be a list of images.
+    # The code below that processes them one by one can be applied in both cases.
+    # If images are a collated batch, processing them one by one will not add much overhead.
+    for image in images:
+        # input to clip_preprocessor: an image or a batch of images, each being PIL.Image.Image, numpy.ndarray, 
+        # torch.Tensor, tf.Tensor or jax.ndarray.
+        # Different sizes of images are standardized to the same size 224*224.
+        single_image_pixel_values = clip_preprocessor(images=image, return_tensors="pt").pixel_values
+        image_pixel_values.append(single_image_pixel_values)
+    
+    # image_pixel_values: [BS, 3, 224, 224]
+    image_pixel_values = torch.cat(image_pixel_values, dim=0)
+    image_pixel_values = image_pixel_values.to(clip_device)
+
+    if fg_masks is not None:
+        assert len(fg_masks) == len(images)
+        # fg_masks is a list of masks.
+        if isinstance(fg_masks, (list, tuple)):
+            fg_masks2 = []
+            for fg_mask in fg_masks:
+                # fg_mask2: [Hi, Wi]
+                # BUG: clip_preprocessor will do central crop on images. But fg_mask is not central cropped.
+                # If the ref image is not square, then the fg_mask will not match the image.
+                # TODO: crop fg_mask and images to square before calling encode_image_fg_bg_with_clip().
+                # fg_mask2: [Hi, Wi] -> [1, 1, 224, 224]            
+                fg_mask2 = torch.tensor(fg_mask, device=clip_device).float().unsqueeze(0).unsqueeze(0)
+                fg_mask2 = F.interpolate(fg_mask2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
+                fg_masks2.append(fg_mask2)
+            # fg_masks2: [BS, 224, 224]
+            fg_masks2 = torch.cat(fg_masks2, dim=0).squeeze(1)
+        else:
+            # fg_masks is a collated batch of masks.
+            # The actual size doesn't matter, 
+            # as fg_mask2 will be resized to the same size as image features 
+            # (much smaller than image_pixel_values).            
+            fg_masks2 = torch.tensor(fg_masks, device=clip_device).float()
+    else:
+        # fg_mask2: [BS, 224, 224]. 
+        fg_masks2 = torch.ones_like(image_pixel_values[:, 0, :, :], device=clip_device)
+        
+    with torch.no_grad():
+        # image_fg_features: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
+        image_fg_features  = clip_image_encoder(image_pixel_values, attn_mask=fg_masks2, output_hidden_states=True).hidden_states[-2]
+        # A negative mask is used to extract the background features.
+        image_bg_features  = clip_image_encoder(image_pixel_values, attn_mask=1-fg_masks2, output_hidden_states=True).hidden_states[-2]
+
+    return image_fg_features, image_bg_features
 
 # prob_mat: [1, 64, 64].
 def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):

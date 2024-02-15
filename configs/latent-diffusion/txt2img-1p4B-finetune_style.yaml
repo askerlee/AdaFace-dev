@@ -24,7 +24,7 @@ model:
         placeholder_strings: ["*"]
         list_initializer_words: ["painting"]
         per_image_tokens: false
-        num_vectors_per_token: 1
+        num_vectors_per_subj_token: 1
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

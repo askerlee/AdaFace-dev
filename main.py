@@ -20,9 +20,7 @@ from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.data.personalized import SubjectSampler
-from ldm.util import instantiate_from_config, extend_nn_embedding
-from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
-from transformers import AutoProcessor
+from ldm.util import instantiate_from_config, extend_nn_embedding, init_clip_image_encoder
 import re
 from safetensors.torch import load_file as safetensors_load_file
 
@@ -193,18 +191,18 @@ def get_parser(**parser_kwargs):
         type=str, 
         default="", 
         help="Initialize embedding manager from a checkpoint")
-    parser.add_argument("--placeholders_for_ada_components",
+    parser.add_argument("--src_placeholders",
         type=str, nargs="?", const='1,1', default=None,
-        help="Load the ada components from these placeholders in the checkpoint")
-    parser.add_argument("--loaded_ada_components",
+        help="Load the embedder components from these placeholders in the checkpoint")
+    parser.add_argument("--loaded_embedder_components",
         type=str, default=None, 
-        help="Ada components to be loaded from the checkpoint (candidates: pooler,layer_coeff_maps)")
-    parser.add_argument("--frozen_ada_placeholder_set",
+        help="Embedder components to be loaded from the checkpoint (candidates: pooler,layer_coeff_maps)")
+    parser.add_argument("--frozen_placeholder_set",
         type=str, default=None,
-        help="Freeze the ada components of this set of placeholders (candidates: subj,bg)")
-    parser.add_argument("--frozen_ada_components",
+        help="Freeze the embedder components of this set of placeholders (candidates: subj,bg)")
+    parser.add_argument("--frozen_embedder_components",
         type=str, default=None, 
-        help="Ada components to be frozen after loading from the checkpoint (candidates: pooler,layer_coeff_maps)")
+        help="Embedder components to be frozen after loading from the checkpoint (candidates: pooler,layer_coeff_maps)")
         
     parser.add_argument("--ckpt_params_perturb_ratio",
         type=float, default=-1,
@@ -242,11 +240,11 @@ def get_parser(**parser_kwargs):
         type=str, default=None,
         help="One or more word tso be used in class-level prompts for delta loss")
     
-    parser.add_argument("--num_vectors_per_token",
-        type=int, default=1,
-        help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
+    parser.add_argument("--num_vectors_per_subj_token",
+        type=int, default=9,
+        help="Number of vectors per subject token. If > 1, use multiple embeddings to represent a subject.")
     parser.add_argument("--num_vectors_per_bg_token",
-        type=int, default=1,
+        type=int, default=4,
         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
     
     parser.add_argument("--use_conv_attn_kernel_size",
@@ -357,7 +355,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         personalization_config_params.list_initializer_words[0]   = opt.init_string
         personalization_config_params.list_initializer_weights[0] = opt.init_word_weights
         personalization_config_params.list_cls_delta_strings[0]   = config.data.params.train.params.cls_delta_string
-        personalization_config_params.token2num_vectors       = { opt.subject_string: opt.num_vectors_per_token}
+        personalization_config_params.token2num_vectors       = { opt.subject_string: opt.num_vectors_per_subj_token}
 
         if opt.background_string is not None:
             config.model.params.use_background_token = True
@@ -388,7 +386,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         personalization_config_params.list_cls_delta_strings    = dataset.cls_delta_strings
         personalization_config_params.token2num_vectors     = dict()
         for subject_string in dataset.subject_strings:
-            personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_token
+            personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
 
         if opt.background_string is not None:
             config.model.params.use_background_token = True
@@ -448,14 +446,13 @@ class DataModuleFromConfig(pl.LightningDataModule):
     # used by instantiate_from_config(self.dataset_configs[k]).
     def __init__(self, batch_size, max_steps, train=None, validation=None, test=None, predict=None,
                  wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
-                 shuffle_val_dataloader=False, do_zero_shot=False):
+                 shuffle_val_dataloader=False):
         super().__init__()
         self.batch_size = batch_size
         self.num_batches = max_steps
         self.dataset_configs = dict()
         self.num_workers = num_workers if num_workers is not None else batch_size * 2
         self.use_worker_init_fn = use_worker_init_fn        # False
-        self.do_zero_shot   = do_zero_shot                  
         if train is not None:
             self.dataset_configs["train"] = train
             self.train_dataloader = self._train_dataloader
@@ -479,16 +476,6 @@ class DataModuleFromConfig(pl.LightningDataModule):
             (k, instantiate_from_config(self.dataset_configs[k]))
             for k in self.dataset_configs)
         
-        # Initialize the image encoder for zero-shot learning.
-        if self.do_zero_shot:
-            image_encoder_dict = {}
-            image_encoder_dict['clip_image_encoder'] = \
-                        CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
-            image_encoder_dict['clip_preprocessor'] = \
-                        AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
-            for k in self.datasets:
-                self.datasets[k].set_image_encoder(image_encoder_dict)
-
         if self.wrap:
             for k in self.datasets:
                 self.datasets[k] = WrappedDataset(self.datasets[k])
@@ -890,10 +877,8 @@ if __name__ == "__main__":
         config.data.params.train.params.cls_delta_string         = opt.cls_delta_string or opt.init_string
         config.data.params.validation.params.cls_delta_string    = opt.cls_delta_string or opt.init_string
 
-        # num_vectors_per_token
-        config.data.params.train.params.num_vectors_per_token           = opt.num_vectors_per_token
-        config.data.params.validation.params.num_vectors_per_token      = opt.num_vectors_per_token
-        # num_vectors_per_bg_token
+        config.data.params.train.params.num_vectors_per_subj_token           = opt.num_vectors_per_subj_token
+        config.data.params.validation.params.num_vectors_per_subj_token      = opt.num_vectors_per_subj_token
         config.data.params.train.params.num_vectors_per_bg_token        = opt.num_vectors_per_bg_token
         config.data.params.validation.params.num_vectors_per_bg_token   = opt.num_vectors_per_bg_token
 
@@ -926,8 +911,14 @@ if __name__ == "__main__":
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
-        # This do_zero_shot will be passed to DataModuleFromConfig.__init__().
-        config.data.params.do_zero_shot = opt.zeroshot
+        config.data.params.train.params.do_zero_shot        = opt.zeroshot
+        config.data.params.validation.params.do_zero_shot   = opt.zeroshot
+
+        if opt.zeroshot:
+            gpus = opt.gpus.strip(",").split(',')
+            # TODO: put clip image encoder on the same device as the model
+            device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
+            init_clip_image_encoder(device)
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
@@ -992,16 +983,16 @@ if __name__ == "__main__":
 
         if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
             K = opt.use_conv_attn_kernel_size
-            assert opt.num_vectors_per_token >= K * K, \
-                    f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
+            assert opt.num_vectors_per_subj_token >= K * K, \
+                    f"--num_vectors_per_subj_token {opt.num_vectors_per_subj_token} should be at least {K*K}"
             config.model.params.personalization_config.params.use_conv_attn_kernel_size \
                 = opt.use_conv_attn_kernel_size
 
         config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
-        config.model.params.personalization_config.params.placeholders_for_ada_components = opt.placeholders_for_ada_components
-        config.model.params.personalization_config.params.loaded_ada_components      = opt.loaded_ada_components
-        config.model.params.personalization_config.params.frozen_ada_placeholder_set = opt.frozen_ada_placeholder_set
-        config.model.params.personalization_config.params.frozen_ada_components      = opt.frozen_ada_components
+        config.model.params.personalization_config.params.src_placeholders = opt.src_placeholders
+        config.model.params.personalization_config.params.loaded_embedder_components      = opt.loaded_embedder_components
+        config.model.params.personalization_config.params.frozen_placeholder_set = opt.frozen_placeholder_set
+        config.model.params.personalization_config.params.frozen_embedder_components      = opt.frozen_embedder_components
         config.model.params.personalization_config.params.ckpt_params_perturb_ratio  = opt.ckpt_params_perturb_ratio
         config.model.params.personalization_config.params.emb_reg_loss_scale = opt.emb_reg_loss_scale
 

@@ -24,7 +24,7 @@ model:
         placeholder_strings: ["*"]
         list_initializer_words: ["sculpture"]
         per_image_tokens: false
-        num_vectors_per_token: 1
+        num_vectors_per_subj_token: 1
         progressive_words: False
 
     unet_config:

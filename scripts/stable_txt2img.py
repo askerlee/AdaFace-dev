@@ -17,7 +17,8 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import instantiate_from_config, mix_embeddings, save_grid, extend_nn_embedding
+from ldm.util import instantiate_from_config, mix_embeddings, save_grid, extend_nn_embedding, \
+                     init_clip_image_encoder, encode_image_fg_bg_with_clip
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
@@ -274,9 +275,13 @@ def parse_args():
                         type=str, default=None,
                         help="Background placeholder string used in prompts to denote the background in training images.")
                     
-    parser.add_argument("--num_vectors_per_token",
-                        type=int, default=argparse.SUPPRESS,
+    parser.add_argument("--num_vectors_per_subj_token",
+                        type=int, default=9,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
+    parser.add_argument("--num_vectors_per_bg_token",
+                        type=int, default=4,
+                        help="Number of vectors per background token. If > 1, use multiple embeddings to represent a background.")
+    
     parser.add_argument("--use_conv_attn_kernel_size",
                         type=int, default=None,
                         help="Use convolutional attention of subject tokens with this kernel size."
@@ -286,6 +291,13 @@ def parse_args():
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
 
+    parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to use zero-shot learning")
+    parser.add_argument("--ref_images", type=str, nargs='+', default=None,
+                        help="Reference image for zero-shot learning")
+    parser.add_argument("--ref_masks", type=str, nargs='+', default=None,
+                        help="Reference mask for zero-shot learning")
+    
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
     parser.add_argument("--bb_type", type=str, default="")
@@ -373,6 +385,8 @@ def main(opt):
     
     if not opt.eval_blip:
         config = OmegaConf.load(f"{opt.config}")
+        config.model.params.do_zero_shot = opt.zeroshot
+        config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
 
         model  = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
@@ -384,30 +398,29 @@ def main(opt):
 
         # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
         model.cond_stage_model.set_last_layers_skip_weights(opt.clip_last_layers_skip_weights)
-        
-        if hasattr(opt, 'num_vectors_per_token'):
-            ckpt_num_vectors_per_token = model.embedding_manager.token2num_vectors[opt.subject_string]
-            assert ckpt_num_vectors_per_token == opt.num_vectors_per_token, \
-                   f"Number of vectors per token mismatch: command line {opt.num_vectors_per_token} != ckpt {ckpt_num_vectors_per_token}."
+
+        # extend_placeholders() has to be called before extend_nn_embedding().
+        model.embedding_manager.extend_placeholders([opt.subject_string], [opt.background_string],
+                                                    opt.num_vectors_per_subj_token, opt.num_vectors_per_bg_token)
+
+        if hasattr(opt, 'num_vectors_per_subj_token'):
+            ckpt_num_vectors_per_subj_token = model.embedding_manager.token2num_vectors[opt.subject_string]
+            assert ckpt_num_vectors_per_subj_token == opt.num_vectors_per_subj_token, \
+                   f"Number of vectors per token mismatch: command line {opt.num_vectors_per_subj_token} != ckpt {ckpt_num_vectors_per_subj_token}."
 
         if hasattr(opt, 'emb_ema_as_pooling_probe'):
             model.embedding_manager.set_emb_ema_as_pooling_probe(opt.emb_ema_as_pooling_probe)
 
         if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
             K = opt.use_conv_attn_kernel_size
-            assert opt.num_vectors_per_token >= K * K, \
-                    f"--num_vectors_per_token {opt.num_vectors_per_token} should be at least {K*K}"
+            assert opt.num_vectors_per_subj_token >= K * K, \
+                    f"--num_vectors_per_subj_token {opt.num_vectors_per_subj_token} should be at least {K*K}"
         
         model.embedding_manager.set_embs_attn_tricks(opt.use_conv_attn_kernel_size)
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
         
-        if opt.subject_string not in model.embedding_manager.subject_strings:
-            model.embedding_manager.subject_strings = list(model.embedding_manager.subject_strings + [opt.subject_string])
-        if opt.background_string is not None and opt.background_string not in model.embedding_manager.background_strings:
-            model.embedding_manager.background_strings = list(model.embedding_manager.background_strings + [opt.background_string])
-
         if model.embedding_manager.extended_token_embeddings is not None:
             model.cond_stage_model.transformer.text_model.embeddings.token_embedding = \
                 extend_nn_embedding(model.cond_stage_model.transformer.text_model.embeddings.token_embedding, 
@@ -417,7 +430,23 @@ def main(opt):
         device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
         model  = model.to(device)
         model.cond_stage_model.device = device
-                                
+        
+        assert model.embedding_manager.do_zero_shot == opt.zeroshot, \
+                f"Zero-shot learning mismatch: command line {opt.zeroshot} != ckpt {model.embedding_manager.do_zero_shot}."
+        if opt.zeroshot:
+            assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
+            ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
+            ref_masks  = [ np.array(Image.open(ref_mask)) for ref_mask in opt.ref_masks ] \
+                            if opt.ref_masks is not None else None
+            init_clip_image_encoder(device)
+            ref_image_fg_features, ref_image_bg_features = encode_image_fg_bg_with_clip(ref_images, ref_masks)
+            # ref_image_features: [BS, 514, 1280]. 
+            ref_image_features = torch.cat([ref_image_fg_features, ref_image_bg_features], dim=1)
+            # ref_image_features: [1, 514, 1280]. Keep the batch dimension.
+            ref_image_features = ref_image_features.mean(dim=0, keepdim=True)
+        else:
+            ref_image_features = None
+
         if opt.plms:
             sampler = PLMSSampler(model)
         else:
@@ -652,7 +681,7 @@ def main(opt):
                             prompts = list(prompts)
 
                         if not opt.eval_blip:
-                            c = model.get_learned_conditioning(prompts)
+                            c = model.get_learned_conditioning(prompts, ref_image_features=ref_image_features)
                             # ref_c is not None, implies (prompt_mix_weight != 0 and ref_prompt is not None).
                             if ref_c is not None:
                                 # c / ref_c are tuples of (cond, prompts, extra_info).

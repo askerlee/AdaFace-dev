@@ -26,7 +26,7 @@ def parse_args():
                         help="method to use for generating samples")
     parser.add_argument("--subject_string", type=str, default="z", 
                         help="Subject placeholder string that represents the subject in prompts")
-    parser.add_argument("--num_vectors_per_token",
+    parser.add_argument("--num_vectors_per_subj_token",
                         type=int, default=argparse.SUPPRESS,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
 
@@ -40,6 +40,13 @@ def parse_args():
                         type=int, default=4,
                         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
  
+    parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to use zero-shot learning")
+    parser.add_argument("--ref_images", type=str, nargs='+', default=None,
+                        help="Reference image for zero-shot learning")
+    parser.add_argument("--ref_masks",  type=str, nargs='+', default=None,
+                        help="Reference mask for zero-shot learning")
+
     parser.add_argument("--use_conv_attn_kernel_size",
                         type=int, default=argparse.SUPPRESS, 
                         help="Use convolutional attention at subject tokens")
@@ -174,11 +181,11 @@ if __name__ == "__main__":
             subj_info['subjects'], subj_info['class_names'], subj_info['broad_classes'], subj_info['sel_set'], subj_info['maxiters']
 
     args.orig_placeholder = args.subject_string
-    # If num_vectors_per_token == 3:
+    # If num_vectors_per_subj_token == 3:
     # "z"    => "z, , "
     # Need to leave a space between multiple ",,", otherwise they are treated as one token.
-    if hasattr(args, 'num_vectors_per_token') and args.num_vectors_per_token > 1:
-        args.subject_string += ", " * (args.num_vectors_per_token - 1)
+    if hasattr(args, 'num_vectors_per_subj_token') and args.num_vectors_per_subj_token > 1:
+        args.subject_string += ", " * (args.num_vectors_per_subj_token - 1)
 
     z_prefixes_by_class     = [""] * 3
     z_prefixes_by_subject   = None
@@ -457,16 +464,25 @@ if __name__ == "__main__":
 
         command_line += f" --clip_last_layers_skip_weights {args.clip_last_layers_skip_weights}"
 
-        if hasattr(args, 'num_vectors_per_token'):
-            command_line += f" --subject_string {args.orig_placeholder} --num_vectors_per_token {args.num_vectors_per_token}"
+        if args.zeroshot:            
+            if isinstance(args.ref_images, (list, tuple)):
+                args.ref_images = " ".join(args.ref_images)
+            if isinstance(args.ref_masks, (list, tuple)):
+                args.ref_masks  = " ".join(args.ref_masks)
+
+            command_line += f" --zeroshot --ref_images {args.ref_images}"
+            if args.ref_masks is not None:
+                command_line += f" --ref_masks {args.ref_masks}"
+
+        if hasattr(args, 'num_vectors_per_subj_token'):
+            command_line += f" --subject_string {args.orig_placeholder} --num_vectors_per_subj_token {args.num_vectors_per_subj_token}"
+        if hasattr(args, 'num_vectors_per_bg_token'):
+            command_line += f" --background_string {args.background_string} --num_vectors_per_bg_token {args.num_vectors_per_bg_token}"
         if hasattr(args, 'use_conv_attn_kernel_size'):
             command_line += f" --use_conv_attn_kernel_size {args.use_conv_attn_kernel_size}"
 
         if hasattr(args, 'emb_ema_as_pooling_probe'):
             command_line += f" --emb_ema_as_pooling_probe"
-           
-        if args.background_string and args.include_bg_string:
-            command_line += f" --background_string {args.background_string}"
 
         if hasattr(args, 'neg_prompt'):
             command_line += f" --neg_prompt \"{args.neg_prompt}\""

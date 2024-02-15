@@ -80,11 +80,11 @@ def calc_stats(emb_name, embeddings, mean_dim=0):
 class LNCat3(nn.Module):
     def __init__(self, chan1, chan2, chan3=0, dim=1):
         super().__init__()
-        self.ln1 = nn.LayerNorm(chan1, elementwise_affine=True)
-        self.ln2 = nn.LayerNorm(chan2, elementwise_affine=True)
+        self.ln1 = nn.LayerNorm(chan1, elementwise_affine=False)
+        self.ln2 = nn.LayerNorm(chan2, elementwise_affine=False)
 
         if chan3 > 0:
-            self.ln3 = nn.LayerNorm(chan3, elementwise_affine=True)
+            self.ln3 = nn.LayerNorm(chan3, elementwise_affine=False)
         else:
             self.ln3 = None
 
@@ -170,8 +170,6 @@ class AttentionalPooler(nn.Module):
         # But later einsum(...) uses all 8 groups, making the sum ~8 times larger. Therefore, we scale down
         # lora_q and lor_k by sqrt(groups), to cancel the magnitude mismatch.
         self.conv1d_extra_scale = self.n_heads ** -0.5
-        #self.ln_fg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
-        #self.ln_bg_out  = nn.LayerNorm(feat_dim, elementwise_affine=True)
 
         # layer_idx is recorded for debugging purpose.
         self.layer_idx = layer_idx
@@ -366,14 +364,14 @@ class AttentionalPooler(nn.Module):
 
 # init_embedding: [L, M, 768].
 class Embedding3d(nn.Module):
-    def __init__(self, num_layers=16, num_vectors_per_token=9, 
+    def __init__(self, num_layers=16, num_vectors_per_subj_token=9, 
                  out_emb_dim=768, init_embedding=None):
         super().__init__()
         self.num_layers = num_layers
-        self.num_vectors_per_token = num_vectors_per_token
+        self.num_vectors_per_subj_token = num_vectors_per_subj_token
         self.out_emb_dim = out_emb_dim
         # self.embedding: [16, K, 768]
-        self.embedding = nn.Parameter(torch.zeros(num_layers, num_vectors_per_token, out_emb_dim), requires_grad=True)
+        self.embedding = nn.Parameter(torch.zeros(num_layers, num_vectors_per_subj_token, out_emb_dim), requires_grad=True)
         if init_embedding is not None:
             # init_embedding: [1, 768] => [16, 9, 768].
             self.embedding.data = init_embedding.clone()
@@ -415,7 +413,7 @@ class StaticLayerwiseEmbedding(nn.Module):
     # Extra copies of init_vecs are added with random noises to avoid the non-identifiability issue.
     # init_up_noise_stds[1] << init_up_noise_stds[0].
     # has_bias: if enabled, the output vectors will be dominated by self.bias.
-    def __init__(self, num_layers=16, num_vectors_per_token=1, 
+    def __init__(self, num_layers=16, num_vectors_per_subj_token=1, 
                  out_emb_dim=768, r=6, init_noise_stds=(0.1, 0.04), 
                  init_string=None, init_vecs=None, init_vec_weights=None, 
                  has_bias=True, token_string="", 
@@ -424,9 +422,12 @@ class StaticLayerwiseEmbedding(nn.Module):
                  do_zero_shot=False,
                  device_type="cuda"):
         super().__init__()
+
+        self.do_zero_shot = do_zero_shot
+
         self.token_string = token_string
         self.num_layers = num_layers
-        self.K = num_vectors_per_token
+        self.K = num_vectors_per_subj_token
         self.out_emb_dim = out_emb_dim
         self.r = r
 
@@ -444,7 +445,11 @@ class StaticLayerwiseEmbedding(nn.Module):
             N = self.N = init_vecs.shape[0]
             # pre_vecs: basis vectors that are initialized by prespecified init_vecs, updated through BP.
             # pre_vecs: [K, N, 768].
-            self.pre_vecs = nn.Parameter(init_vecs.unsqueeze(0).repeat(self.K, 1, 1), requires_grad=True)
+
+            if not self.do_zero_shot:
+                self.pre_vecs = nn.Parameter(init_vecs.unsqueeze(0).repeat(self.K, 1, 1), requires_grad=True)
+            else:
+                self.pre_vecs = None
             # Normalize pre_vecs, to roughly equalize the contributions of different predefined vectors.
             # self.pre_vecs.data = F.normalize(self.pre_vecs.data, dim=-1)
         else:
@@ -453,16 +458,19 @@ class StaticLayerwiseEmbedding(nn.Module):
 
         # basis_rand_weights: 16 * K * r, basis_vecs: K * r * 768. 
         # output embeddings: basis_rand_weights * basis_vecs = 16 * K * 768.
-        self.basis_rand_weights = nn.Parameter(torch.randn(num_layers, self.K, r))
+        self.basis_rand_weights = nn.Parameter(torch.randn(num_layers, self.K, r), requires_grad=True)
         # basis_vecs: [K, r-N, 768], K sets, each consisting of r-N randomly initialized basis vectors. 
         # Will be updated through BP.
         # Each embedding of the K embeddings has its own basis_vecs and pre_vecs.
         # Separate pre_vecs and basis_vecs, to apply different regularizations on them.
-        self.basis_vecs = nn.Parameter(torch.randn(self.K, r - N, out_emb_dim), requires_grad=True)
-        # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
-        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=-1) / 4.
-        # Always set the last basis vector to 0.
-        self.basis_vecs.data[-1] = 0
+        if not self.do_zero_shot:
+            self.basis_vecs = nn.Parameter(torch.randn(self.K, r - N, out_emb_dim), requires_grad=True)
+            # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
+            self.basis_vecs.data = F.normalize(self.basis_vecs, dim=-1) / 4.
+            # Always set the last basis vector to 0.
+            self.basis_vecs.data[-1] = 0
+        else:
+            self.basis_vecs = None
 
         self.has_bias    = has_bias
         self.device_type = device_type
@@ -512,8 +520,8 @@ class StaticLayerwiseEmbedding(nn.Module):
         else:
             self.N = 0
 
-        if self.has_bias:
-            # bias: 16 * 768.
+        if self.has_bias and not self.do_zero_shot:
+            # self.bias: 16 * K * 768.
             self.bias = nn.Parameter(torch.zeros(num_layers, self.K, out_emb_dim), requires_grad=True)
         else:
             self.bias = 0
@@ -521,17 +529,16 @@ class StaticLayerwiseEmbedding(nn.Module):
         layers_out_lns = []
         for i in range(num_layers):
             # A specific LayerNorm is applied on each of the K embeddings in each layer.
-            layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
+            layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=False) for k in range(self.K) ] )
             layers_out_lns.append(layer_out_lns)
         self.layers_out_lns = nn.ModuleList(layers_out_lns)
 
-        self.do_zero_shot = do_zero_shot
         zero_shot_sig = "Zero-shot" if self.do_zero_shot is not None else "Slow"
         print(f"{zero_shot_sig} StaticLayerwiseEmbedding {token_string} initialized with {self.K} total embs, {self.N} init vectors ({init_string}), {self.r} basis vectors")
 
     # Return static embeddings of all layers together.
     # zs_basis_vecs: [K, r, 768]. K: number of vectors per token. r: number of basis vectors for each vector.
-    def forward(self, zs_basis_vecs=None):
+    def forward(self, zs_basis_vecs=None, zs_bias=None):
         with torch.autocast(device_type=self.device_type, enabled=False):
             # self.basis_comm_weights: [1, K, r] broadcasted to [16, K, r].
             basis_weights   = self.basis_rand_weights   + self.basis_comm_weights
@@ -542,6 +549,15 @@ class StaticLayerwiseEmbedding(nn.Module):
                 assert zs_basis_vecs is not None, "Zero-shot StaticLayerwiseEmbedding requires zs_basis_vecs"
                 # basis_vecs: [K, r, 768].
                 basis_vecs = zs_basis_vecs
+                # Copy to basis_vecs, so that zs_basis_vecs will be regularized in layerwise_embedding_norm_loss().
+                # Although self.basis_vecs is supposed to have different sizes from basis_vecs (due to pre_vecs),
+                # since we can't regularize pre_vecs in zero-shot setting, we copy the whole zs_basis_vecs to self.basis_vecs,
+                # so that all vectors in zs_basis_vecs will be regularized.
+                self.basis_vecs = zs_basis_vecs
+                if self.has_bias:
+                    assert zs_bias is not None,  "Zero-shot StaticLayerwiseEmbedding requires zs_bias"
+                    # Copy to bias, so that zs_bias will be regularized in layerwise_embedding_norm_loss().
+                    self.bias = zs_bias
             else:
                 # self.N: number of pre_vecs.
                 if self.N > 0:
@@ -573,7 +589,7 @@ class AdaEmbedding(nn.Module):
     # the input feature from the respective layer. 9 of them are skipped.
     # infeat_dims are (almost) reflective around the middle layer, except for the first and last layers.
     # Layer indices absent in layer_idx2ca_layer_idx are skipped layers.
-    def __init__(self, num_layers=16, num_vectors_per_token=1, 
+    def __init__(self, num_layers=16, num_vectors_per_subj_token=1, 
                  fg_emb_count=1, bg_emb_count=0, use_cached_bg=False,
                  out_emb_dim=768, r=12, 
                  init_string=None, init_vecs=None, 
@@ -591,15 +607,18 @@ class AdaEmbedding(nn.Module):
                  do_zero_shot=False, 
                  device_type="cuda"):
         super().__init__()
+
+        self.do_zero_shot = do_zero_shot
+
         self.token_string = token_string
         assert num_layers == len(layer_idx2ca_layer_idx), f"num_layers={num_layers} != len(layer_idx2ca_layer_idx)={len(layer_idx2ca_layer_idx)}"
         self.num_layers = num_layers
         self.out_emb_dim = out_emb_dim
-        self.K = num_vectors_per_token
+        self.K = num_vectors_per_subj_token
         self.fg_emb_count = fg_emb_count
         self.bg_emb_count = bg_emb_count
         assert fg_emb_count + bg_emb_count <= self.K, \
-            f"fg_emb_count={fg_emb_count} + bg_emb_count={bg_emb_count} > num_vectors_per_token={self.K}"
+            f"fg_emb_count={fg_emb_count} + bg_emb_count={bg_emb_count} > num_vectors_per_subj_token={self.K}"
 
         # token_is_bg: is this token trying to model the background?
         self.token_is_bg    = token_is_bg
@@ -653,7 +672,10 @@ class AdaEmbedding(nn.Module):
             N = self.N = init_vecs.shape[0]
             # pre_vecs: basis vectors that are initialized by prespecified init_vecs, updated through BP.
             # pre_vecs: [K, N, 768].
-            self.pre_vecs = nn.Parameter(init_vecs.unsqueeze(0).repeat(self.K, 1, 1), requires_grad=True)
+            if not self.do_zero_shot:
+                self.pre_vecs = nn.Parameter(init_vecs.unsqueeze(0).repeat(self.K, 1, 1), requires_grad=True)
+            else:
+                self.pre_vecs = None
             # Normalize pre_vecs, to roughly equalize the contributions of different predefined basis vectors.
             # self.pre_vecs.data = F.normalize(self.pre_vecs, dim=-1)
         else:
@@ -664,11 +686,14 @@ class AdaEmbedding(nn.Module):
         # Will be updated through BP.
         # Each embedding of the K embeddings has its own basis_vecs and pre_vecs.
         # Separate pre_vecs and basis_vecs, to apply different regularizations on them.
-        self.basis_vecs = nn.Parameter(torch.randn(self.K, r - N, out_emb_dim), requires_grad=True)
-        # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
-        self.basis_vecs.data = F.normalize(self.basis_vecs, dim=-1) / 4.
-        # Always set the last basis vector to 0.
-        self.basis_vecs.data[:, -1] = 0
+        if not self.do_zero_shot:
+            self.basis_vecs = nn.Parameter(torch.randn(self.K, r - N, out_emb_dim), requires_grad=True)
+            # Normalize basis_vecs, to roughly equalize the contributions of different random vectors.
+            self.basis_vecs.data = F.normalize(self.basis_vecs, dim=-1) / 4.
+            # Always set the last basis vector to 0.
+            self.basis_vecs.data[:, -1] = 0
+        else:
+            self.basis_vecs = None
 
         self.ca_infeat_dims = list(ca_infeat_dims)
         # self.infeat_dims = [ 320 for i in range(25) ]
@@ -707,7 +732,7 @@ class AdaEmbedding(nn.Module):
                                                 r * self.K, bias=True) )
             layer_lncat3s.append(LNCat3(self.ca_infeat_dims[i] * H, TD))
             # A specific LayerNorm is applied on each of the K embeddings in each layer.
-            layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=True) for k in range(self.K) ] )
+            layer_out_lns = nn.ModuleList( [ nn.LayerNorm(out_emb_dim, elementwise_affine=False) for k in range(self.K) ] )
             layers_out_lns.append(layer_out_lns)
 
         self.layer_coeff_maps   = nn.ModuleList(layer_coeff_maps)
@@ -717,13 +742,12 @@ class AdaEmbedding(nn.Module):
         self.reduce_fg_bg_cross_weights()
 
         self.has_bias = has_bias
-        if has_bias:
-            # bias: [16, K, 768].
+        if has_bias and not self.do_zero_shot:
+            # self.bias: [16, K, 768].
             self.bias = nn.Parameter(torch.zeros(num_layers, self.K, out_emb_dim), requires_grad=True)
         else:
             self.bias = 0
 
-        self.do_zero_shot = do_zero_shot
         zero_shot_sig = "Zero-shot" if self.do_zero_shot is not None else "Slow"
         print(f"{zero_shot_sig} AdaEmbedding {token_string} initialized with {fg_emb_count}/{bg_emb_count}/{self.K} fg/bg/total embs, {self.N} init vectors ({init_string}), {self.r} basis vectors")
 
@@ -794,7 +818,7 @@ class AdaEmbedding(nn.Module):
     # zs_basis_vecs: [K, r, 768]. K: number of vectors per token. r: number of basis vectors for each vector.                    
     def forward(self, layer_idx, layer_attn_components, time_emb, 
                 layer_subj_emb_probe, layer_static_extra_emb_mean, 
-                img_mask=None, cached_pooler_bg_out=None, zs_basis_vecs=None):
+                img_mask=None, cached_pooler_bg_out=None, zs_basis_vecs=None, zs_bias=None):
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         pooler  = self.poolers[ca_layer_idx]
         ## Some Linears mainly use either fg or bg features. So we reduce cross weights.
@@ -876,6 +900,15 @@ class AdaEmbedding(nn.Module):
             if self.do_zero_shot:
                 assert zs_basis_vecs is not None, "Zero-shot AdaEmbedding requires zs_basis_vecs"
                 basis_vecs = zs_basis_vecs
+                # Copy to basis_vecs, so that zs_basis_vecs will be regularized in layerwise_embedding_norm_loss().
+                # Although self.basis_vecs is supposed to have different sizes from basis_vecs (due to pre_vecs),
+                # since we can't regularize pre_vecs in zero-shot setting, we copy the whole zs_basis_vecs to self.basis_vecs,
+                # so that all vectors in zs_basis_vecs will be regularized.
+                self.basis_vecs = zs_basis_vecs
+                if self.has_bias:
+                    assert zs_bias is not None,   "Zero-shot AdaEmbedding requires zs_bias"
+                    # Copy to bias, so that zs_bias will be regularized in layerwise_embedding_norm_loss().
+                    self.bias = zs_bias                
             else:
                 # self.N: number of pre_vecs.
                 if self.N > 0:
@@ -917,7 +950,7 @@ class AdaEmbedding(nn.Module):
 
 
 # Initialize static/ada embedders.
-def create_static_ada_embedders(out_emb_dim, num_layers_per_embedder, num_vectors_per_token, layerwise_lora_rank, 
+def create_static_ada_embedders(out_emb_dim, num_layers_per_embedder, num_vectors_per_subj_token, layerwise_lora_rank, 
                                 initializer_words, init_word_embeddings, init_word_weights, 
                                 placeholder_string, avg_init_word_embedding_3d, token_is_bg, ada_uses_attn_pooler,
                                 attn_pooler_feat_reduction_ratio, do_zero_shot):
@@ -928,7 +961,7 @@ def create_static_ada_embedders(out_emb_dim, num_layers_per_embedder, num_vector
         # to be used in Ada attn pooler.
         # num_layers_per_embedder = num_unet_ca_layers
         token_static_embedder   = StaticLayerwiseEmbedding(num_layers_per_embedder, 
-                                                            num_vectors_per_token, 
+                                                            num_vectors_per_subj_token, 
                                                             out_emb_dim, 
                                                             layerwise_lora_rank, 
                                                             (0.1, 0.02), 
@@ -943,19 +976,19 @@ def create_static_ada_embedders(out_emb_dim, num_layers_per_embedder, num_vector
         # and 1/3 are fg embeddings (focus on fg infeat).
         # Note fg embeddings still take 0.3 of bg infeat, and bg embeddings still take 0.3 of fg infeat.
         # No embeddings are fg-bg embeddings, which take fg and bg infeat with equal weights.
-        # If num_vectors_per_token == 1, then fg_emb_count = 1, bg_emb_count = 0.
-        # If num_vectors_per_token == 9, then fg_emb_count = 6, bg_emb_count = 3.
+        # If num_vectors_per_subj_token == 1, then fg_emb_count = 1, bg_emb_count = 0.
+        # If num_vectors_per_subj_token == 9, then fg_emb_count = 6, bg_emb_count = 3.
         if token_is_bg:
-            bg_emb_count = max(1, num_vectors_per_token * 2 // 3)
-            fg_emb_count = num_vectors_per_token - bg_emb_count
+            bg_emb_count = max(1, num_vectors_per_subj_token * 2 // 3)
+            fg_emb_count = num_vectors_per_subj_token - bg_emb_count
         else:
-            fg_emb_count = max(1, num_vectors_per_token * 2 // 3)
-            bg_emb_count = num_vectors_per_token - fg_emb_count
+            fg_emb_count = max(1, num_vectors_per_subj_token * 2 // 3)
+            bg_emb_count = num_vectors_per_subj_token - fg_emb_count
 
         use_cached_bg = token_is_bg
 
         token_ada_embedder  = AdaEmbedding(num_layers_per_embedder, 
-                                            num_vectors_per_token, 
+                                            num_vectors_per_subj_token, 
                                             fg_emb_count, 
                                             bg_emb_count,
                                             use_cached_bg,
@@ -992,7 +1025,7 @@ class EmbeddingManager(nn.Module):
             # token2num_vectors: how many vectors in each layer are allocated to model 
             # the subject (represented as the subject token) and the background. 
             # token2num_vectors is a dict.
-            token2num_vectors=None,
+            token2num_vectors={},
             use_layerwise_embedding=True,
             out_emb_dim=768,
             num_unet_ca_layers=16,
@@ -1011,8 +1044,8 @@ class EmbeddingManager(nn.Module):
             prompt_embedding_clamp_value=-1,
             background_extra_global_scale=1.,
             emb_reg_loss_scale=1,
-            shared_ada_placeholder_set='subj,bg',
-            shared_ada_components='pooler',
+            shared_placeholder_set='subj,bg',
+            shared_embedder_components='pooler',
             do_zero_shot=False,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
@@ -1089,7 +1122,7 @@ class EmbeddingManager(nn.Module):
         # the concept through multiple learned pseudo-words. 
         # This setting was proposed in the TI paper,
         # and AdaPrompt also supports it for more expressive modeling.
-        self.set_num_vectors_per_token(token2num_vectors)
+        self.set_num_vectors_per_subj_token(token2num_vectors)
         self.out_emb_dim = out_emb_dim
 
         # hasattr(text_embedder, 'tokenizer') -> True
@@ -1120,7 +1153,7 @@ class EmbeddingManager(nn.Module):
             # force_single_token = True, as there should be only one token in placeholder_string.
             placeholder_token = get_tokens_for_string(placeholder_string, force_single_token=True)[0].item()
 
-            num_vectors_per_token = self.token2num_vectors[placeholder_string]
+            num_vectors_per_subj_token = self.token2num_vectors.get(placeholder_string, 1)
             initializer_words     = list_initializer_words[placeholder_idx]
             initializer_weights   = list_initializer_weights[placeholder_idx]
 
@@ -1164,13 +1197,13 @@ class EmbeddingManager(nn.Module):
             # Wrap with Parameter so that they will be saved to checkpoints.
             # avg_init_word_embedding_3d: [1, 768] => [16, 9, 768]
             if avg_init_word_embedding is not None:
-                avg_init_word_embedding_3d = avg_init_word_embedding.unsqueeze(0).repeat(self.num_layers_per_embedder, num_vectors_per_token, 1)
+                avg_init_word_embedding_3d = avg_init_word_embedding.unsqueeze(0).repeat(self.num_layers_per_embedder, num_vectors_per_subj_token, 1)
             else:
                 # Use zero tensor as avg_init_word_embedding_3d.
-                avg_init_word_embedding_3d = torch.zeros(self.num_layers_per_embedder, num_vectors_per_token, 768)
+                avg_init_word_embedding_3d = torch.zeros(self.num_layers_per_embedder, num_vectors_per_subj_token, 768)
 
             token_static_embedder, token_ada_embedder = \
-                create_static_ada_embedders(out_emb_dim, self.num_unet_ca_layers, num_vectors_per_token, layerwise_lora_rank, 
+                create_static_ada_embedders(out_emb_dim, self.num_unet_ca_layers, num_vectors_per_subj_token, layerwise_lora_rank, 
                                             initializer_words, init_word_embeddings, init_word_weights, 
                                             placeholder_string, avg_init_word_embedding_3d, token_is_bg, ada_uses_attn_pooler,
                                             attn_pooler_feat_reduction_ratio, do_zero_shot)
@@ -1182,7 +1215,7 @@ class EmbeddingManager(nn.Module):
                 # generated by StaticLayerwiseEmbedding / AdaEmbedding.
                 # Cannot initialize token_emb with avg_init_word_embedding, as avg_init_word_embedding
                 # is the token embedding, not the prompt embedding.
-                token_emb_cache = Embedding3d(self.num_layers_per_embedder, num_vectors_per_token, out_emb_dim, 
+                token_emb_cache = Embedding3d(self.num_layers_per_embedder, num_vectors_per_subj_token, out_emb_dim, 
                                               init_embedding=None)
                 self.placeholder_to_emb_cache[placeholder_string] = token_emb_cache
 
@@ -1199,7 +1232,7 @@ class EmbeddingManager(nn.Module):
             else:
                 self.initial_embeddings[placeholder_string] = None
 
-        self.share_ada_components(shared_ada_placeholder_set, shared_ada_components)
+        self.share_embedder_components(shared_placeholder_set, shared_embedder_components)
 
         self.layer_idx = -1
         self.static_subj_embs_dict = {}   
@@ -1226,7 +1259,7 @@ class EmbeddingManager(nn.Module):
         ca_outfeat_lns = {}
         for ca_layer_idx in range(self.num_unet_ca_layers):
             layer_idx = self.ca_layer_idx2layer_idx[ca_layer_idx]
-            ca_q_bns[str(layer_idx)]       = nn.BatchNorm2d(self.ca_infeat_dims[ca_layer_idx], affine=True)
+            ca_q_bns[str(layer_idx)]       = nn.BatchNorm2d(self.ca_infeat_dims[ca_layer_idx], affine=False)
             ca_outfeat_lns[str(layer_idx)] = nn.LayerNorm(self.ca_infeat_dims[ca_layer_idx], elementwise_affine=False)
             #print(layer_idx, self.ca_infeat_dims[ca_layer_idx])
 
@@ -1244,22 +1277,25 @@ class EmbeddingManager(nn.Module):
             # num_vectors_each_subj_bg_pair: the number of vectors per (subj, bg) placeholder pair.
             # It's implied that all subj placeholders have the same number of vectors,
             # and all bg placeholders have the same number of vectors.
-            self.number_vectors_each_subj = self.token2num_vectors[self.subject_strings[0]]
+            self.number_vectors_each_subj = self.token2num_vectors.get(self.subject_strings[0], 9)
             if len(self.background_strings) > 0:
-                self.num_vectors_each_bg = self.token2num_vectors[self.background_strings[0]]
+                self.num_vectors_each_bg = self.token2num_vectors.get(self.background_strings[0], 4)
             else:
                 self.num_vectors_each_bg = 0
             # max_num_vectors_each_placeholder: max(9, 4) = 9.
             self.max_num_vectors_each_placeholder = max(self.number_vectors_each_subj, self.num_vectors_each_bg)
 
-            num_total_basis_vecs = 2 * layerwise_lora_rank * self.max_num_vectors_each_placeholder
-            self.subj_basis_generator = SubjBasisGenerator(num_queries = num_total_basis_vecs, 
+            # num_zs_vecs_per_token: 10 + 16 = 26.
+            self.num_zs_vecs_per_token = layerwise_lora_rank + self.num_unet_ca_layers
+            # num_total_queries: 9 * 26 = 234.
+            self.num_zs_vecs_per_subj  = self.max_num_vectors_each_placeholder * self.num_zs_vecs_per_token
+            # num_queries: 2 * 234 = 468. * 2 for both static and ada embedders.
+            self.subj_basis_generator = SubjBasisGenerator(num_queries = self.num_zs_vecs_per_subj * 2,
                                                            image_embedding_dim = 1280,
                                                            dim = out_emb_dim,
                                                            output_dim = out_emb_dim,
                                                            num_latents_mean_pooled = 0)
-                                                           #int(num_total_basis_vecs * 0.3))
-            self.subj2ada_zs_basis_vecs = {}
+
         else:
             self.subj_basis_generator = None
 
@@ -1301,10 +1337,10 @@ class EmbeddingManager(nn.Module):
                 self.get_ada_embedding(self.layer_idx, self.layer_attn_components, self.time_emb,
                                        tokenized_text, embedded_text)
 
-            ca_layer_idx = self.layer_idx2ca_layer_idx[self.layer_idx]
             # Cache the ada embeddings to be used in embedding orthogonal loss later.
             for k in ada_subj_embs_dict:
                 '''
+                ca_layer_idx = self.layer_idx2ca_layer_idx[self.layer_idx]
                 self.ada_subj_embs_dict[k].cache_layer(ca_layer_idx, 
                                                        ada_subj_embs_dict[k], 
                                                        has_grad=True)
@@ -1435,22 +1471,29 @@ class EmbeddingManager(nn.Module):
                         ref_image_features = ref_image_feat_dict['subj']
 
                     # ref_image_features: [1, 257, 1280]
-                    # zs_basis_vecs_2sets: [1, 180, 768] -> [9, 20, 768]
-                    zs_basis_vecs_2sets = self.subj_basis_generator(ref_image_features)
-                    zs_basis_vecs_2sets = zs_basis_vecs_2sets.reshape(self.max_num_vectors_each_placeholder,
-                                                                      self.layerwise_lora_rank * 2, -1)
+                    # zs_vecs_2sets: [1, 468, 768] -> [9, 52, 768]
+                    zs_vecs_2sets = self.subj_basis_generator(ref_image_features)
+                    zs_vecs_2sets = zs_vecs_2sets.reshape(self.max_num_vectors_each_placeholder,
+                                                          self.num_zs_vecs_per_token * 2, -1)
                     if token_is_bg:
-                        # zs_basis_vecs_2sets: [4, 10, 768]. Simply abandon extra basis vectors.
+                        # zs_vecs_2sets: [4, 10, 768]. Simply abandon extra basis vectors.
                         # in order to reuse the same subj_basis_generator for both subject and background tokens.
-                        zs_basis_vecs_2sets = zs_basis_vecs_2sets[:self.num_vectors_each_bg]
-                    # static_zs_basis_vecs, ada_zs_basis_vecs: [9, 10, 768] for subject tokens.
+                        zs_vecs_2sets = zs_vecs_2sets[:self.num_vectors_each_bg]
+                    # zs_basis_vecs_2sets: [9, 20, 768], zs_bias_2sets: [9, 32, 768].
+                    zs_basis_vecs_2sets, zs_bias_2sets = zs_vecs_2sets[:, :self.layerwise_lora_rank*2], zs_vecs_2sets[:, self.layerwise_lora_rank*2:]
+                    # static_zs_basis_vecs, ada_zs_basis_vecs: [9, 10, 768] for subject tokens,
                     # or [4, 10, 768] for background tokens.
                     static_zs_basis_vecs, ada_zs_basis_vecs = zs_basis_vecs_2sets.chunk(2, dim=1)
+                    # static_zs_bias, ada_zs_bias: [16, 9, 768] for subject tokens,
+                    # or [16, 4, 768] for background tokens.
+                    static_zs_bias, ada_zs_bias                     = zs_bias_2sets.permute(1, 0, 2).chunk(2, dim=0)
                     self.subj2ada_zs_basis_vecs[placeholder_string] = ada_zs_basis_vecs
+                    self.subj2ada_zs_bias[placeholder_string]       = ada_zs_bias
                 else:
                     static_zs_basis_vecs = None
+                    static_zs_bias       = None
 
-                subj_static_embedding = static_embedder(static_zs_basis_vecs)
+                subj_static_embedding = static_embedder(static_zs_basis_vecs, static_zs_bias)
             else:
                 # static_embedder is already the embeddings.
                 subj_static_embedding = static_embedder
@@ -1487,7 +1530,7 @@ class EmbeddingManager(nn.Module):
             # we don't simply cache placeholder_indices here as they are repeated 16 times 
             # to replace in 16 layers. 
             # But we need them without repetitions for mix prompt distillation.
-            # If num_vectors_per_token > 1, then repeat the indices and add to offsets.
+            # If num_vectors_per_subj_token > 1, then repeat the indices and add to offsets.
             # If background_strings is None, then always update the indices. Otherwise, 
             # skip updating placeholder indices of the background string.
             self.update_placeholder_indices(orig_tokenized_text, placeholder_string, placeholder_token, 
@@ -1643,13 +1686,15 @@ class EmbeddingManager(nn.Module):
                 layer_subj_emb_probe = layer_static_subj_emb
 
             # Fix scale of the subj embedding probe (mean subj embedding), since it's scaled down by 
-            # sqrt(num_vectors_per_token), now we scale it up by sqrt(num_vectors_per_token).
+            # sqrt(num_vectors_per_subj_token), now we scale it up by sqrt(num_vectors_per_subj_token).
             layer_subj_emb_probe = layer_subj_emb_probe * np.sqrt(self.token2num_vectors[placeholder_string])
 
             if self.do_zero_shot:
                 ada_zs_basis_vecs = self.subj2ada_zs_basis_vecs[placeholder_string]
+                ada_zs_bias       = self.subj2ada_zs_bias[placeholder_string]
             else:
                 ada_zs_basis_vecs = None
+                ada_zs_bias       = None
 
             # Generate the actual subj_ada_embedding on the fly.
             # subj_ada_embedding: [B, K, 768]. B: 2 or 4 (regularization batches).
@@ -1664,7 +1709,7 @@ class EmbeddingManager(nn.Module):
                                      layer_subj_emb_probe,
                                      layer_static_extra_emb_mean, 
                                      self.img_mask, cached_pooler_bg_out,
-                                     ada_zs_basis_vecs)
+                                     ada_zs_basis_vecs, ada_zs_bias)
 
             if self.img_mask is not None and self.img_mask.max() > 1:
                 breakpoint()
@@ -1726,6 +1771,50 @@ class EmbeddingManager(nn.Module):
 
         return embedded_text, ada_subj_embs_dict, token2ada_attn
 
+    # extend_placeholders() should only be called during inference, 
+    # or after the model has been initialized.
+    def extend_placeholders(self, new_subject_strings, new_background_strings, 
+                            num_vectors_per_subj_token, num_vectors_per_bg_token):
+        added_placeholders = []
+
+        if new_subject_strings is not None:
+            for k in new_subject_strings:
+                if k is None or k in self.subject_strings:
+                    continue
+                self.subject_strings.append(k)
+                self.subject_string_dict[k] = True
+                self.placeholder_strings.append(k)
+                self.token2num_vectors[k] = num_vectors_per_subj_token
+                added_placeholders.append(k)
+                print(f"Added new subject string: {k}->num_vectors_per_subj_token={num_vectors_per_subj_token}.")
+
+        if new_background_strings is not None:
+            for k in new_background_strings:
+                if k is None or k in self.background_strings:
+                    continue
+                self.background_strings.append(k)
+                self.background_string_dict[k] = True
+                self.placeholder_strings.append(k)
+                self.token2num_vectors[k] = num_vectors_per_bg_token
+                added_placeholders.append(k)
+                print(f"Added new background string: {k}->num_vectors_per_subj_token={num_vectors_per_bg_token}.")
+
+        if len(added_placeholders) > 0:
+            extended_token_embeddings = extend_clip_text_embedder(self.text_embedder, {}, added_placeholders)
+            if extended_token_embeddings is not None:
+                # text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
+                # = LatentDiffusion.cond_stage_model
+                # Make sure text_embedder has been initialized. Otherwise when loading pretrained weights,
+                # it will throw an exception, as now the vocab size of the text_embedder is different from
+                # the pretrained weights.
+                # Update self.extended_token_embeddings. These new token embeddings will be extended
+                # to CLIP text embedder in either main.py or stable_txt2img.py later.
+                if self.extended_token_embeddings is not None:
+                    self.extended_token_embeddings = torch.cat([self.extended_token_embeddings, extended_token_embeddings], dim=0)
+                else:
+                    self.extended_token_embeddings = extended_token_embeddings
+        return
+    
     # Update prompt_emb_mask.
     # tokenized_text: [B, N] = [2/4, 77].
     # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
@@ -1792,7 +1881,7 @@ class EmbeddingManager(nn.Module):
     def clear_prompt_masks(self):
         self.prompt_emb_mask = None
 
-    def update_placeholder_indices(self, tokenized_text, placeholder_string, placeholder_token, num_vectors_per_token, token_is_bg):
+    def update_placeholder_indices(self, tokenized_text, placeholder_string, placeholder_token, num_vectors_per_subj_token, token_is_bg):
         placeholder_indices = torch.where(tokenized_text == placeholder_token)
         placeholder_indices_B, placeholder_indices_N = extract_first_index_in_each_instance(placeholder_indices)
 
@@ -1800,16 +1889,16 @@ class EmbeddingManager(nn.Module):
             self.placeholder2indices[placeholder_string] = None
             return
 
-        if num_vectors_per_token > 1:
+        if num_vectors_per_subj_token > 1:
             BS = placeholder_indices_B.shape[0]
-            # unsqueeze(1) -> [B, 1] => [B, num_vectors_per_token] => [B * num_vectors_per_token].
+            # unsqueeze(1) -> [B, 1] => [B, num_vectors_per_subj_token] => [B * num_vectors_per_subj_token].
             # Make sure the embedding indices of the same instance are grouped together.
             # [b1_v1, b1_v2, b1_v3, b2_v1, b2_v2, b2_v3, ...].
             # Then we can easily get the indices of a certain sub-batch.
-            placeholder_indices_B = placeholder_indices_B.unsqueeze(1).repeat(1, num_vectors_per_token).view(-1)
-            placeholder_indices_N = placeholder_indices_N.unsqueeze(1).repeat(1, num_vectors_per_token).view(-1)
+            placeholder_indices_B = placeholder_indices_B.unsqueeze(1).repeat(1, num_vectors_per_subj_token).view(-1)
+            placeholder_indices_N = placeholder_indices_N.unsqueeze(1).repeat(1, num_vectors_per_subj_token).view(-1)
             # Add offsets to the indices of the pseudo-tokens.
-            placeholder_indices_N_off = placeholder_indices_N + torch.arange(num_vectors_per_token, device=tokenized_text.device).repeat(BS)
+            placeholder_indices_N_off = placeholder_indices_N + torch.arange(num_vectors_per_subj_token, device=tokenized_text.device).repeat(BS)
             placeholder_indices = (placeholder_indices_B, placeholder_indices_N_off)
         else:
             # placeholder_indices contains the indices of all placeholder embeddings.
@@ -1953,6 +2042,15 @@ class EmbeddingManager(nn.Module):
         # ref_image_subj_features, ref_image_bg_features: [1, 257, 1280].
         ref_image_subj_features, ref_image_bg_features = ref_image_features.chunk(2, dim=1)
         self.ref_image_feat_dict = { 'subj': ref_image_subj_features, 'bg': ref_image_bg_features }
+        # Beginning of a new iteration, clear the cached ada_zs_basis_vecs and ada_zs_bias.
+        self.subj2ada_zs_basis_vecs = {}
+        self.subj2ada_zs_bias       = {}
+        # Clear the basis_vecs and bias saved in embedders.
+        for placeholder_string in self.placeholder_strings:
+            self.string_to_static_embedder_dict[placeholder_string].basis_vecs = None
+            self.string_to_static_embedder_dict[placeholder_string].bias       = None
+            self.string_to_ada_embedder_dict[placeholder_string].basis_vecs    = None
+            self.string_to_ada_embedder_dict[placeholder_string].bias          = None
 
     # NOTE: prompt embeddings are the embeddings of the whole prompt (including other tokens), 
     # not just the ada or static embeddings of the subject.
@@ -2039,7 +2137,7 @@ class EmbeddingManager(nn.Module):
 
                     token_emb_cache_obj.reset_cached_layer_tracker()
 
-    def set_num_vectors_per_token(self, token2num_vectors):
+    def set_num_vectors_per_subj_token(self, token2num_vectors):
         self.token2num_vectors = token2num_vectors
         print(f"Set token2num_vectors: {self.token2num_vectors}")
 
@@ -2053,8 +2151,8 @@ class EmbeddingManager(nn.Module):
                      "emb_global_scale_scores":         self.emb_global_scale_scores,
                      "ada_emb_weight":                  self.ada_emb_weight,  
                      "emb_ema_as_pooling_probe_weight": self.emb_ema_as_pooling_probe_weight,
-                     "shared_ada_placeholder_set":      self.shared_ada_placeholder_set,
-                     "shared_ada_components":           self.shared_ada_components,
+                     "shared_placeholder_set":          self.shared_placeholder_set,
+                     "shared_embedder_components":      self.shared_embedder_components,
                      # Learnable weights for scaling conv attns.
                      "subj2conv_attn_layerwise_scales":  self.subj2conv_attn_layerwise_scales,
                      "use_conv_attn_kernel_size":        self.use_conv_attn_kernel_size,
@@ -2083,16 +2181,16 @@ class EmbeddingManager(nn.Module):
                 print(f"{ckpt_path} already fixed, skip")
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
-    # If placeholders_for_ada_components = None, then load the whole embedding manager. Otherwise, placeholders_for_ada_components should 
+    # If src_placeholders = None, then load the whole embedding manager. Otherwise, src_placeholders should 
     # be two strings, either "subject_string,background_string", or "1,1" which means the first subject and
     # the first background string.
-    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, placeholders_for_ada_components=None, 
-             loaded_ada_components=None, frozen_ada_placeholder_set=None, frozen_ada_components=None):
-        if placeholders_for_ada_components is not None and loaded_ada_components is not None:
-            self.load_ada_components(ckpt_paths, placeholders_for_ada_components=placeholders_for_ada_components, 
-                                     loaded_ada_components=loaded_ada_components,
-                                     frozen_ada_placeholder_set=frozen_ada_placeholder_set,
-                                     frozen_ada_components=frozen_ada_components)
+    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, src_placeholders=None, 
+             loaded_embedder_components=None, frozen_placeholder_set=None, frozen_embedder_components=None):
+        if src_placeholders is not None and loaded_embedder_components is not None:
+            self.load_embedder_components(ckpt_paths, src_placeholders=src_placeholders, 
+                                          loaded_embedder_components=loaded_embedder_components,
+                                          frozen_placeholder_set=frozen_placeholder_set,
+                                          frozen_embedder_components=frozen_embedder_components)
             return
 
         # The default placeholder specified in the config file will be loaded to these dicts.
@@ -2195,7 +2293,7 @@ class EmbeddingManager(nn.Module):
 
                 # The mapping in string_to_token_dict is determined by the tokenizer. 
                 # Shouldn't do the k->k2 mapping on string_to_token_dict.
-                self.string_to_token_dict[k2]   = k2_token
+                self.string_to_token_dict[k2] = k2_token
 
                 # Mapped from k in ckpt to k2 in the current session. Partial matching is allowed.
                 for km in ckpt["string_to_static_embedder"].keys():
@@ -2220,21 +2318,21 @@ class EmbeddingManager(nn.Module):
                     if 'do_zero_shot' not in static_embedder.__dict__:
                         static_embedder.do_zero_shot = self.do_zero_shot
 
-                    ada = self.string_to_ada_embedder_dict[km2]
+                    ada_embedder = self.string_to_ada_embedder_dict[km2]
                     # Make compatible with older ckpts which don't have do_zero_shot.
-                    if 'do_zero_shot' not in ada.__dict__:
-                        ada.do_zero_shot = self.do_zero_shot
-                    print(f"{km2}: {ada.fg_emb_count}/{ada.bg_emb_count}/{ada.K} fg/bg/total embeddings")
+                    if 'do_zero_shot' not in ada_embedder.__dict__:
+                        ada_embedder.do_zero_shot = self.do_zero_shot
+
+                    print(f"{km2}: {ada_embedder.fg_emb_count}/{ada_embedder.bg_emb_count}/{ada_embedder.K} fg/bg/total embeddings")
 
             if "token2num_vectors" in ckpt:
-                self.set_num_vectors_per_token(token2num_vectors)
+                self.set_num_vectors_per_subj_token(token2num_vectors)
 
-            # In theory, if some ckpt has shared_ada_placeholder_set = True, and some has False,
+            # In theory, if some ckpt has shared_placeholder_set = True, and some has False,
             # then the ckpt attn poolers after the last True ckpt will not be shared.
             # But this shouldn't be a concern, as such scenarios should be very rare.
-            if "shared_ada_placeholder_set" in ckpt:
-                shared_ada_components = ckpt.get("shared_ada_components", "pooler")
-                self.share_ada_components(ckpt["shared_ada_placeholder_set"], shared_ada_components)
+            if "shared_placeholder_set" in ckpt:
+                self.share_embedder_components(ckpt["shared_placeholder_set"], ckpt["shared_embedder_components"])
 
         self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(self.string_to_token_dict)), 
                                                     requires_grad=True)
@@ -2262,12 +2360,14 @@ class EmbeddingManager(nn.Module):
         self.subject_string_dict    = { s: True for s in self.subject_strings }
         self.background_string_dict = { k: True for k in self.background_strings }
 
-    # placeholders_for_ada_components should be two strings, either "subject_string,background_string", 
+    # src_placeholders should be two strings, either "subject_string,background_string", 
     # or "1,1" which means the first subject and the first background string.
-    def load_ada_components(self, ckpt_paths, placeholders_for_ada_components, 
-                            loaded_ada_components, frozen_ada_placeholder_set, frozen_ada_components):
-        provider_subj_string, provider_bg_string = placeholders_for_ada_components.split(",")
-
+    def load_embedder_components(self, ckpt_paths, src_placeholders, 
+                                 loaded_embedder_components, 
+                                 frozen_placeholder_set, frozen_embedder_components):
+        loaded_embedder_components = loaded_embedder_components.split(",")
+        src_subj_string, src_bg_string = src_placeholders.split(",")
+        
         if isinstance(ckpt_paths, str):
             ckpt_paths = [ckpt_paths]
 
@@ -2284,120 +2384,131 @@ class EmbeddingManager(nn.Module):
                 # the last one will be kept. But this should happen extremely rare.
                 self.set_attn_pooler_feat_reduction_ratio(ckpt["attn_pooler_feat_reduction_ratio"])
 
-            # If provider_subj_string/provider_bg_string are "1", then replace them with the first subject/background string
+            # If src_subj_string/src_bg_string are "1", then replace them with the first subject/background string
             # of the first ckpt. 
             if ckpt_i == 0:
-                if provider_subj_string == "1":
-                    provider_subj_string = ckpt["subject_strings"][0]
-                if provider_bg_string == "1":
-                    provider_bg_string   = ckpt["background_strings"][0]
+                if src_subj_string == "1":
+                    src_subj_string = ckpt["subject_strings"][0]
+                if src_bg_string == "1":
+                    src_bg_string   = ckpt["background_strings"][0]
 
             for km in ckpt["string_to_ada_embedder"].keys():
-                if provider_subj_string == km:
-                    if 'pooler' in loaded_ada_components:
-                        # All subject strings share the same poolers loaded from the ckpt.
-                        for subj_string in self.subject_strings:
+                if src_subj_string == km:
+                    for subj_string in self.subject_strings:
+                        if 'pooler' in loaded_embedder_components:
+                            # All subject strings share the same poolers loaded from the ckpt.
                             self.string_to_ada_embedder_dict[subj_string].poolers = ckpt["string_to_ada_embedder"][km].poolers
-                        print(f"Loaded poolers {km}->{self.subject_strings} from {ckpt_path}")
-                    if 'layer_coeff_map' in loaded_ada_components:
-                        # All subject strings share the same layer_coeff_maps loaded from the ckpt.
-                        for subj_string in self.subject_strings:
+                        if 'layer_coeff_map' in loaded_embedder_components:
+                            # All subject strings share the same layer_coeff_maps loaded from the ckpt.
                             self.string_to_ada_embedder_dict[subj_string].layer_coeff_maps = ckpt["string_to_ada_embedder"][km].layer_coeff_maps
-                        print(f"Loaded layer_coeff_maps {km}->{self.subject_strings} from {ckpt_path}")
+                        if 'basis_weights' in loaded_embedder_components:
+                            self.string_to_static_embedder_dict[subj_string].basis_rand_weights = ckpt["string_to_static_embedder"][km].basis_rand_weights
+                            self.string_to_static_embedder_dict[subj_string].basis_comm_weights = ckpt["string_to_static_embedder"][km].basis_comm_weights
 
-                elif provider_bg_string == km:
-                    if 'pooler' in loaded_ada_components:
-                        # All background strings share the same poolers loaded from the ckpt.
-                        for bg_string in self.background_strings:
+                elif src_bg_string == km:
+                    for bg_string in self.background_strings:
+                        if 'pooler' in loaded_embedder_components:
+                            # All background strings share the same poolers loaded from the ckpt.
                             self.string_to_ada_embedder_dict[bg_string].poolers = ckpt["string_to_ada_embedder"][km].poolers
-                        print(f"Loaded poolers {km}->{self.background_strings} from {ckpt_path}")
-                    if 'layer_coeff_map' in loaded_ada_components:
-                        # All background strings share the same layer_coeff_maps loaded from the ckpt.
-                        for bg_string in self.background_strings:
+                        if 'layer_coeff_map' in loaded_embedder_components:
                             self.string_to_ada_embedder_dict[bg_string].layer_coeff_maps = ckpt["string_to_ada_embedder"][km].layer_coeff_maps
-                        print(f"Loaded layer_coeff_maps {km}->{self.background_strings} from {ckpt_path}")
+                        if 'basis_weights' in loaded_embedder_components:
+                            self.string_to_static_embedder_dict[bg_string].basis_rand_weights = ckpt["string_to_static_embedder"][km].basis_rand_weights
+                            self.string_to_static_embedder_dict[bg_string].basis_comm_weights = ckpt["string_to_static_embedder"][km].basis_comm_weights
+                            print(f"Loaded basis_weights {km}->{src_bg_string} from {ckpt_path}")
 
-            # No need to call share_ada_components() here, as the poolers are already shared 
+            # No need to call share_embedder_components() here, as the poolers are already shared 
             # after the aasignment above.
 
-        self.freeze_ada_components(frozen_ada_placeholder_set, frozen_ada_components)
+        self.freeze_embedder_components(frozen_placeholder_set, frozen_embedder_components)
 
-    def share_ada_components(self, shared_ada_placeholder_set, shared_ada_components):
-        self.shared_ada_placeholder_set = shared_ada_placeholder_set
-        self.shared_ada_components      = shared_ada_components
+    def share_embedder_components(self, shared_placeholder_set, shared_embedder_components):
+        self.shared_placeholder_set      = shared_placeholder_set     = shared_placeholder_set.split(",")
+        self.shared_embedder_components  = shared_embedder_components = shared_embedder_components.split(",")
 
-        if shared_ada_placeholder_set is not None and shared_ada_placeholder_set is not None:
+        if shared_placeholder_set is not None and shared_placeholder_set is not None:
             first_subj_ada = self.string_to_ada_embedder_dict[self.subject_strings[0]]
             first_bg_ada   = self.string_to_ada_embedder_dict[self.background_strings[0]]
+            first_subj_static_embedder = self.string_to_static_embedder_dict[self.subject_strings[0]]
+            first_bg_static_embedder   = self.string_to_static_embedder_dict[self.background_strings[0]]
 
-            subj_pooler_share_count = 0
-            bg_pooler_share_count   = 0
-            subj_layer_coeff_maps_share_count = 0
-            bg_layer_coeff_maps_share_count   = 0
+            subj_components_share_count = dict([(component, 0) for component in shared_embedder_components])
+            bg_components_share_count   = dict([(component, 0) for component in shared_embedder_components])
             pooler_shared_placeholder_strings = []
 
-            if 'subj' in shared_ada_placeholder_set:
+            if 'subj' in shared_placeholder_set:
                 pooler_shared_placeholder_strings += self.subject_strings
-            if 'bg'   in shared_ada_placeholder_set:
+            if 'bg'   in shared_placeholder_set:
                 pooler_shared_placeholder_strings += self.background_strings
 
             for placeholder_string in pooler_shared_placeholder_strings:
-                if 'pooler' in shared_ada_components:
                     if placeholder_string in self.subject_strings:
-                        self.string_to_ada_embedder_dict[placeholder_string].poolers = first_subj_ada.poolers
-                        subj_pooler_share_count += 1
+                        if 'pooler' in shared_embedder_components:
+                            self.string_to_ada_embedder_dict[placeholder_string].poolers = first_subj_ada.poolers
+                            subj_components_share_count['pooler'] += 1
+                        if 'layer_coeff_map' in shared_embedder_components:
+                            self.string_to_ada_embedder_dict[placeholder_string].layer_coeff_maps = first_subj_ada.layer_coeff_maps
+                            subj_components_share_count['layer_coeff_map'] += 1
+                        if 'basis_weights' in shared_embedder_components:
+                            self.string_to_static_embedder_dict[placeholder_string].basis_rand_weights = first_subj_static_embedder.basis_rand_weights
+                            self.string_to_static_embedder_dict[placeholder_string].basis_comm_weights = first_subj_static_embedder.basis_comm_weights
+                            subj_components_share_count['basis_weights'] += 1
                     else:
-                        self.string_to_ada_embedder_dict[placeholder_string].poolers = first_bg_ada.poolers
-                        bg_pooler_share_count += 1
-                if 'layer_coeff_map' in shared_ada_components:
-                    if placeholder_string in self.subject_strings:
-                        self.string_to_ada_embedder_dict[placeholder_string].layer_coeff_maps = first_subj_ada.layer_coeff_maps
-                        subj_layer_coeff_maps_share_count += 1
-                    else:
-                        self.string_to_ada_embedder_dict[placeholder_string].layer_coeff_maps = first_bg_ada.layer_coeff_maps
-                        bg_layer_coeff_maps_share_count += 1
+                        if 'pooler' in shared_embedder_components:
+                            self.string_to_ada_embedder_dict[placeholder_string].poolers = first_bg_ada.poolers
+                            bg_components_share_count['pooler'] += 1
+                        if 'layer_coeff_map' in shared_embedder_components:
+                            self.string_to_ada_embedder_dict[placeholder_string].layer_coeff_maps = first_bg_ada.layer_coeff_maps
+                            bg_components_share_count['layer_coeff_map'] += 1
+                        if 'basis_weights' in shared_embedder_components:
+                            self.string_to_static_embedder_dict[placeholder_string].basis_rand_weights = first_bg_static_embedder.basis_rand_weights
+                            self.string_to_static_embedder_dict[placeholder_string].basis_comm_weights = first_bg_static_embedder.basis_comm_weights
+                            bg_components_share_count['basis_weights'] += 1
 
-            if 'pooler' in shared_ada_components:
-                print(f"Shared poolers for {subj_pooler_share_count} subject tokens and {bg_pooler_share_count} background tokens")
-            if 'layer_coeff_map' in shared_ada_components:
-                print(f"Shared layer_coeff_maps for {subj_layer_coeff_maps_share_count} subject tokens and {bg_layer_coeff_maps_share_count} background tokens")
+            for component in shared_embedder_components:
+                print(f"Shared {component} for {subj_components_share_count[component]} subject tokens and {bg_components_share_count[component]} background tokens")
         else:
-            print("Not sharing any Ada components")
+            print("Not sharing any embedder components")
 
-    def freeze_ada_components(self, frozen_ada_placeholder_set, frozen_ada_components):
-        self.frozen_ada_placeholder_set = frozen_ada_placeholder_set
-        self.frozen_ada_components  = frozen_ada_components
+    def freeze_embedder_components(self, frozen_placeholder_set, frozen_embedder_components):
+        self.frozen_placeholder_set      = frozen_placeholder_set     = frozen_placeholder_set.split(",")
+        self.frozen_embedder_components  = frozen_embedder_components = frozen_embedder_components.split(",")
 
-        if frozen_ada_placeholder_set is not None and frozen_ada_components is not None:
-            num_frozen_poolers          = 0
-            num_frozen_layer_coeff_maps = 0
+        if frozen_placeholder_set is not None and frozen_embedder_components is not None:
+            components_frozen_count     = dict([(component, 0) for component in frozen_embedder_components])
             frozen_placeholder_strings  = []
 
-            if 'subj' in frozen_ada_placeholder_set:
+            if 'subj' in frozen_placeholder_set:
                 frozen_placeholder_strings += self.subject_strings
-            if 'bg'   in frozen_ada_placeholder_set:
+            if 'bg'   in frozen_placeholder_set:
                 frozen_placeholder_strings += self.background_strings
 
             for placeholder_string in frozen_placeholder_strings:
-                ada = self.string_to_ada_embedder_dict[placeholder_string]
-                if 'pooler' in frozen_ada_components:
-                    for pooler in ada.poolers:
+                ada_embedder = self.string_to_ada_embedder_dict[placeholder_string]
+                static_embedder = self.string_to_static_embedder_dict[placeholder_string]
+
+                if 'pooler' in frozen_embedder_components:
+                    for pooler in ada_embedder.poolers:
                         for param in pooler.parameters():
                             param.requires_grad = False
-                        num_frozen_poolers += 1
+                        components_frozen_count['pooler'] += 1
 
-                if 'layer_coeff_map' in frozen_ada_components:
-                    for layer_coeff_map in ada.layer_coeff_maps:
+                if 'layer_coeff_map' in frozen_embedder_components:
+                    for layer_coeff_map in ada_embedder.layer_coeff_maps:
                         for param in layer_coeff_map.parameters():
                             param.requires_grad = False
-                        num_frozen_layer_coeff_maps += 1
+                        components_frozen_count['layer_coeff_map'] += 1
 
-            if 'pooler' in frozen_ada_components:
-                print(f"Froze {num_frozen_poolers} poolers for {frozen_placeholder_strings}")
-            if 'layer_coeff_map' in frozen_ada_components:
-                print(f"Froze {num_frozen_layer_coeff_maps} layer_coeff_maps for {frozen_placeholder_strings}")
+                if 'basis_weights' in frozen_embedder_components:
+                    static_embedder.basis_rand_weights.requires_grad = False
+                    static_embedder.basis_comm_weights.requires_grad = False
+                    components_frozen_count['basis_weights'] += 1
+
+            for component in frozen_embedder_components:
+                print(f"Froze {components_frozen_count[component]} {component}s for {frozen_placeholder_strings}")
+
         else:
-            print("Not freezing any Ada components")
+            print("Not freezing any embedder components")
 
     def perturb_model_parameters(self, perturb_ratio=0.2):
         param_group_list = self.optimized_parameters()
@@ -2416,40 +2527,41 @@ class EmbeddingManager(nn.Module):
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
     def optimized_parameters(self):
-        ada_shared_param_list = []
+        shared_embedder_param_list = []
 
-        if self.shared_ada_components is not None:
+        if self.shared_embedder_components is not None:
+            # Only get the parameters of the first subject and background embedders.
             placeholder_strings = [ self.subject_strings[0], self.background_strings[0] ]
-        else:
-            placeholder_strings = self.placeholder_strings
 
-        for placeholder_string in placeholder_strings:
-            ada = self.string_to_ada_embedder_dict[placeholder_string]
-            if 'pooler' in self.shared_ada_components:
-                ada_shared_param_list += list(ada.poolers.parameters())
-            if 'layer_coeff_map' in self.shared_ada_components:
-                ada_shared_param_list += list(ada.layer_coeff_maps.parameters())
+            for placeholder_string in placeholder_strings:
+                ada_embedder             = self.string_to_ada_embedder_dict[placeholder_string]
+                static_embedder = self.string_to_static_embedder_dict[placeholder_string]
 
-        ada_shared_param_ids =  { id(p) for p in ada_shared_param_list }
+                if 'pooler' in self.shared_embedder_components:
+                    shared_embedder_param_list += list(ada_embedder.poolers.parameters())
+                if 'layer_coeff_map' in self.shared_embedder_components:
+                    shared_embedder_param_list += list(ada_embedder.layer_coeff_maps.parameters())
+                if 'basis_weights' in self.shared_embedder_components:
+                    shared_embedder_param_list += [ static_embedder.basis_rand_weights, static_embedder.basis_comm_weights ]
+
+        shared_embedder_param_ids =  { id(p) for p in shared_embedder_param_list }
 
         # The LR of the poolers is ~ 1/sqrt(N), where N is the number of subjects.
         # This is to slow down pooler update when we do multi-subject training.
         # Only applicable to AdamW training, and not for Prodigy.
-        ada_shared_params = [ { 'params': ada_shared_param_list, 'lr_ratio': 1. / np.sqrt(len(self.subject_strings)),
-                                'excluded_from_prodigy': False } ]
+        shared_embedder_params = [ { 'params': shared_embedder_param_list, 'lr_ratio': 1. / np.sqrt(len(self.subject_strings)),
+                                     'excluded_from_prodigy': False } ]
 
-        ada_private_params = [ p for p in self.string_to_ada_embedder_dict.parameters() if id(p) not in ada_shared_param_ids ]
+        private_embedder_params = [ p for p in self.string_to_static_embedder_dict.parameters() if id(p) not in shared_embedder_param_ids ] \
+                                  + [ p for p in self.string_to_ada_embedder_dict.parameters() if id(p) not in shared_embedder_param_ids ]
 
         # self.initial_embeddings and self.placeholder_to_emb_cache are not included 
         # in the optimized parameters.
-        private_params_list = list(self.string_to_static_embedder_dict.parameters()) \
-                             + ada_private_params \
-                             + list(self.string_to_emb_ema_dict.parameters()) \
-                             + list(self.ca_q_bns.parameters()) \
-                             + list(self.ca_outfeat_lns.parameters())
+        private_params_list = private_embedder_params \
+                             + list(self.string_to_emb_ema_dict.parameters()) 
 
         private_params  = [ { 'params': private_params_list, 'lr_ratio': 1, 
-                             'excluded_from_prodigy': False } ]
+                              'excluded_from_prodigy': False } ]
         # For unknown reason, emb_global_scale_scores are not aggressively optimized by Prodigy.
         slow_params_incl_prodigy = [ { 'params': [ self.emb_global_scale_scores ],   'lr_ratio': 0.1,
                                        'excluded_from_prodigy': False } ]
@@ -2468,67 +2580,19 @@ class EmbeddingManager(nn.Module):
         else:
             subj_basis_generator_params = []
 
-        return ada_shared_params + private_params + subj_basis_generator_params \
+        return shared_embedder_params + private_params + subj_basis_generator_params \
                + slow_params_incl_prodigy + slow_params_excl_prodigy
 
     def embedding_attractor_loss(self):
         loss = 0.
-        num_placeholders = len(self.initial_embeddings)
+        num_placeholders = len(self.placeholder_strings)
 
-        for key in self.initial_embeddings:
+        for key in self.placeholder_strings:
             optimized = self.string_to_static_embedder_dict[key]
             coarse = self.initial_embeddings[key]
             loss = loss + (optimized - coarse) @ (optimized - coarse).T / num_placeholders
 
         return loss
-
-    # Do not use. Performs poorly. 
-    def layerwise_embedding_attractor_loss(self):
-        loss = 0.
-        num_placeholders    = len(self.initial_embeddings)
-        euc_loss_type       = 'l1'       # l1, l2
-        euc_loss_weight     = 1.0
-        cosine_loss_weight  = 1 - euc_loss_weight
-        l2_norm_weight      = 0.00
-        reg_center_type     = 'init'     # avg, init
-
-        for key in self.initial_embeddings:
-            embeddings = self.string_to_static_embedder_dict[key]
-            # Generate the actual embeddings on the fly.
-            if isinstance(embeddings, StaticLayerwiseEmbedding):
-                embeddings = embeddings()
-
-            if reg_center_type == 'init':
-                # initial_embeddings[key] is already [L, 768]. No need to repeat().
-                reg_center = self.initial_embeddings[key]
-            else:
-                # make avg_embedding the same shape as embeddings, 
-                # to avoid F.*_loss() whining about broadcasting.
-                avg_embedding = embeddings.mean(dim=0, keepdim=True).repeat(embeddings.shape[0], 1)
-                reg_center = avg_embedding
-
-            l2_norm_reg = torch.norm(embeddings, dim=1).mean()
-            if euc_loss_type == 'l1':
-                # Push the embedding of each layer towards the mean embedding averaged across layers.
-                euc_loss = F.l1_loss(embeddings, reg_center)
-            elif euc_loss_type == 'l2':
-                # Push the embedding of each layer towards the mean embedding averaged across layers.
-                euc_loss = F.mse_loss(embeddings, reg_center)
-
-            if cosine_loss_weight > 0:
-                cosine_mat = F.cosine_similarity(embeddings[:,:,None], embeddings.t()[None,:,:])
-                # There are N*(N-1)/2 elements in torch.triu(cosine_mat, diagonal=1).
-                cosine_loss = 1. - torch.triu(cosine_mat, diagonal=1).sum() * 2 / (embeddings.shape[0] * (embeddings.shape[0] - 1))
-                # cosines = F.cosine_similarity(embeddings, reg_center)
-                # cosine_loss = 1. - cosines.mean()
-            else:
-                cosine_loss = 0.
-
-            loss = loss + euc_loss * euc_loss_weight \
-                   + cosine_loss * cosine_loss_weight \
-                   + l2_norm_reg * l2_norm_weight
-
-        return loss / num_placeholders
 
     def layerwise_embedding_norm_loss(self):
         loss_static = 0.
@@ -2555,7 +2619,7 @@ class EmbeddingManager(nn.Module):
         T = 1.5
         num_out_embeddings  = 0
 
-        for key in self.initial_embeddings:
+        for key in self.placeholder_strings:
             for embobj in (self.string_to_static_embedder_dict[key], 
                            self.string_to_ada_embedder_dict[key]):
                 # Skip non-layerwise embeddings.
@@ -2573,7 +2637,7 @@ class EmbeddingManager(nn.Module):
                 # pre_vecs: basis vectors that are initialized by prespecified init_vecs. 
                 # pre_vecs are updated through BP. Therefore, loss_pre_vecs prevents pre_vecs 
                 # from drifting too far from init_vecs.
-                if embobj.has_bias:
+                if embobj.has_bias and isinstance(embobj.bias, (torch.Tensor, nn.Parameter)):
                     loss_bias        = reg_loss(embobj.bias, loss_type=euc_loss_type)
                     # bias_reg_weight is computed dynamically. But it's detached from the graph.
                     # embobj.bias: now [Layers, K, 768].
@@ -2582,14 +2646,18 @@ class EmbeddingManager(nn.Module):
                     loss_bias        = 0.
                     bias_reg_weight  = 0.
 
-                loss_basis       = reg_loss(embobj.basis_vecs, loss_type=euc_loss_type)
-                # Like bias_reg_weight, basis_reg_weight is also computed dynamically 
-                # and detached from the graph.
-                # basis_vecs: now [K, r-N, 768] for Ada embedder, or [r-N, 768] for Static embedder.
-                basis_reg_weight = basis_reg_weight_base * torch.norm(embobj.basis_vecs, dim=-1).mean().item() ** T
+                if embobj.basis_vecs is not None:
+                    loss_basis       = reg_loss(embobj.basis_vecs, loss_type=euc_loss_type)
+                    # Like bias_reg_weight, basis_reg_weight is also computed dynamically 
+                    # and detached from the graph.
+                    # basis_vecs: now [K, r-N, 768] for Ada embedder, or [r-N, 768] for Static embedder.
+                    basis_reg_weight = basis_reg_weight_base * torch.norm(embobj.basis_vecs, dim=-1).mean().item() ** T
+                else:
+                    loss_basis       = 0.
+                    basis_reg_weight = 0.
 
                 # N: number of pre_vecs (init_vecs). N > 0 implies (init_vecs is not None).
-                if embobj.N > 0 and pre_vecs_reg_weight > 0:
+                if not self.do_zero_shot and embobj.N > 0 and pre_vecs_reg_weight > 0:
                     # pre_vecs has a K dim: [K, N, 768].
                     # init_vecs: [N, 768] => [1, N, 768].
                     init_vecs = init_vecs.unsqueeze(0)

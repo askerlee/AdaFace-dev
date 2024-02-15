@@ -142,10 +142,10 @@ class PersonalizedBase(Dataset):
                  #cls_uses_subj_init_words=False,
                  # background strings used to compute the delta loss.
                  cls_bg_delta_string=None,
-                # num_vectors_per_token: how many vectors in each layer are allocated to model 
-                # the subject. If num_vectors_per_token > 1, pad with "," in the prompts to leave
+                # num_vectors_per_subj_token: how many vectors in each layer are allocated to model 
+                # the subject. If num_vectors_per_subj_token > 1, pad with "," in the prompts to leave
                 # room for those extra vectors.
-                 num_vectors_per_token=1,
+                 num_vectors_per_subj_token=1,
                  num_vectors_per_bg_token=1,
                  center_crop=False,
                  num_compositions_per_image=1,
@@ -155,10 +155,12 @@ class PersonalizedBase(Dataset):
                  # containing the cls_delta_string of all subjects, in "init_strings".
                  # cls_bg_delta_string is optional, and can be specified in "all_bg_init_words".
                  subj_info_filepaths=None,
+                 do_zero_shot=False,
                  wds_comp_db_path=None,    # Path to the composition webdatabase .tar file
                  verbose=False,
                  ):
 
+        self.do_zero_shot = do_zero_shot
         # Expand wildcards in data_roots.
         if isinstance(data_roots, str):
             data_roots = [ data_roots ]
@@ -262,10 +264,11 @@ class PersonalizedBase(Dataset):
         self.are_animals = [ (broad_class == 1 or broad_class == 2) \
                               for broad_class in self.broad_classes ]
 
-        if self.num_subjects == 1:
-            self.subject_strings        = [ subject_string ]
-            self.background_strings     = [ background_string ]
-            self.wds_background_strings = [ wds_background_string ]
+        # NOTE: if do_zero_shot, all subjects share the same subject/background placeholders and embedders.
+        if self.num_subjects == 1 or self.do_zero_shot:
+            self.subject_strings        = [ subject_string ]         * self.num_subjects
+            self.background_strings     = [ background_string ]      * self.num_subjects
+            self.wds_background_strings = [ wds_background_string ]  * self.num_subjects
         else:
             # For multiple subjects, the subject_string is like: 'z01', 'z02', ....
             # Avoid using z1 and z11, ..., in case the tokenizer wrongly segments z11 as z1 and 1 (probably won't happen for CLIP
@@ -288,10 +291,7 @@ class PersonalizedBase(Dataset):
         self.background_tokens  = [ self.tokenizer(background_string)['input_ids'][1] \
                                     for background_string in self.background_strings ]
 
-        # Could be updated by set_image_encoder().
-        self.ext_image_features = False
-        self.clip_image_encoder = None
-        self.clip_preprocessor  = None
+        self.do_zero_shot = do_zero_shot
 
         # placeholder_prefix could be a list of strings, separated by ",".
         if common_placeholder_prefix is not None:
@@ -334,8 +334,8 @@ class PersonalizedBase(Dataset):
         # bg_initializer_weights are always None (uniform over bg initializer words).
         self.list_bg_initializer_weights = [ None ] * self.num_subjects
 
-        self.num_vectors_per_token    = num_vectors_per_token
-        self.num_vectors_per_bg_token = num_vectors_per_bg_token
+        self.num_vectors_per_subj_token = num_vectors_per_subj_token
+        self.num_vectors_per_bg_token   = num_vectors_per_bg_token
         self.center_crop = center_crop
 
         self.size = size
@@ -376,19 +376,6 @@ class PersonalizedBase(Dataset):
             self.flip = None
 
         self.num_compositions_per_image = num_compositions_per_image
-   
-    def set_image_encoder(self, image_encoder_dict):
-        if image_encoder_dict is None:
-            self.ext_image_features = False
-            self.clip_image_encoder = None
-            self.clip_preprocessor  = None
-        else:
-            self.ext_image_features = True
-            # CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
-            self.clip_image_encoder = image_encoder_dict['clip_image_encoder'] 
-            # AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
-            self.clip_preprocessor  = image_encoder_dict['clip_preprocessor']
-            print(f"Set image encoder for Dataset {self.set_name}")
 
     def __len__(self):
         return self._length
@@ -586,35 +573,6 @@ class PersonalizedBase(Dataset):
         example["image_unnorm"] = image
         # example["image"]: [0, 255] -> [-1, 1]
         example["image"]        = (image / 127.5 - 1.0).astype(np.float32)
-        
-        cache_image_features = False
-        if self.ext_image_features:
-            if cache_image_features and os.path.exists(feat_path):
-                # image_features: [1, 514, 1280]
-                image_features = torch.load(feat_path)
-            else:
-                # First time processing the image, so we need to extract the image features.
-                # input to clip_preprocessor: an image or a batch of images, each being PIL.Image.Image, numpy.ndarray, 
-                # torch.Tensor, tf.Tensor or jax.ndarray.
-                # image_pixel_values: [1, 3, 224, 224]
-                image_pixel_values = self.clip_preprocessor(images=image, return_tensors="pt").pixel_values
-                # fg_mask2: [1, 1, 512, 512]
-                fg_mask2 = torch.tensor(fg_mask).unsqueeze(0).float()
-                with torch.no_grad():
-                    # image_fg_features: [1, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
-                    image_fg_features  = self.clip_image_encoder(image_pixel_values, attn_mask=fg_mask2, output_hidden_states=True).hidden_states[-2]
-                    # A negative mask is used to extract the background features.
-                    image_bg_features  = self.clip_image_encoder(image_pixel_values, attn_mask=1-fg_mask2, output_hidden_states=True).hidden_states[-2]
-
-                # image_features: [1, 514, 1280] -> [514, 1280].
-                # Remove the batch dimension before being collated into a batch.
-                image_features    = torch.cat([image_fg_features, image_bg_features], dim=1).squeeze(0)
-                if cache_image_features:
-                    # Save the image features to disk, so that we don't need to extract them again.
-                    torch.save(image_features, feat_path)
-                    print(f"Extracted image features for {image_path}, saved to {feat_path}")
-
-            example["image_features"] = image_features
 
         if gen_wds_comp:
             Found = False
@@ -759,6 +717,8 @@ class PersonalizedBase(Dataset):
         # If there are multiple subjects, then subject_string is like: 'z0', 'z1', ....
         # the background_string is like: 'y0', 'y1', ....
         # Otherwise, subject_string is simply 'z', and background_string is simply 'y'.
+        # subject_name is unique across different subjects, but subject_string is the same when do_zero_shot.
+        subject_name        = self.subject_names[subject_idx]
         subject_string      = self.subject_strings[subject_idx]
         background_string   = self.background_strings[subject_idx]        
         cls_delta_string    = self.cls_delta_strings[subject_idx]
@@ -770,18 +730,18 @@ class PersonalizedBase(Dataset):
         # the resulting embedding may have weird semantics and match too many areas.
         cls_bg_delta_string = self.cls_bg_delta_strings[subject_idx]
         
-        example["subj_string"] = subject_string
+        example["subject_name"] = subject_name
 
-        # If num_vectors_per_token == 3:
+        # If num_vectors_per_subj_token == 3:
         # "z"    => "z, , "
         # "girl" => "girl, , "
         # Need to leave a space between multiple ",,", otherwise they are treated as one token.
-        if self.num_vectors_per_token > 1:
-            subject_string          += ", " * (self.num_vectors_per_token - 1)
-            cls_delta_string   += ", " * (self.num_vectors_per_token - 1)
+        if self.num_vectors_per_subj_token > 1:
+            subject_string      += ", " * (self.num_vectors_per_subj_token - 1)
+            cls_delta_string    += ", " * (self.num_vectors_per_subj_token - 1)
         if self.num_vectors_per_bg_token > 1 and background_string is not None:
-            background_string       += ", " * (self.num_vectors_per_bg_token - 1)
-            cls_bg_delta_string     += ", " * (self.num_vectors_per_bg_token - 1)
+            background_string   += ", " * (self.num_vectors_per_bg_token - 1)
+            cls_bg_delta_string += ", " * (self.num_vectors_per_bg_token - 1)
 
         if self.common_placeholder_prefixes is not None:
             common_placeholder_prefix = random.choice(self.common_placeholder_prefixes)
