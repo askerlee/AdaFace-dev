@@ -533,7 +533,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             layers_out_lns.append(layer_out_lns)
         self.layers_out_lns = nn.ModuleList(layers_out_lns)
 
-        zero_shot_sig = "Zero-shot" if self.do_zero_shot is not None else "Slow"
+        zero_shot_sig = "Zero-shot" if self.do_zero_shot else "Slow"
         print(f"{zero_shot_sig} StaticLayerwiseEmbedding {token_string} initialized with {self.K} total embs, {self.N} init vectors ({init_string}), {self.r} basis vectors")
 
     # Return static embeddings of all layers together.
@@ -748,7 +748,7 @@ class AdaEmbedding(nn.Module):
         else:
             self.bias = 0
 
-        zero_shot_sig = "Zero-shot" if self.do_zero_shot is not None else "Slow"
+        zero_shot_sig = "Zero-shot" if self.do_zero_shot else "Slow"
         print(f"{zero_shot_sig} AdaEmbedding {token_string} initialized with {fg_emb_count}/{bg_emb_count}/{self.K} fg/bg/total embs, {self.N} init vectors ({init_string}), {self.r} basis vectors")
 
         self.call_count = 0
