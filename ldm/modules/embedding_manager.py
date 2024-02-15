@@ -2398,7 +2398,7 @@ class EmbeddingManager(nn.Module):
                         if 'pooler' in loaded_embedder_components:
                             # All subject strings share the same poolers loaded from the ckpt.
                             self.string_to_ada_embedder_dict[subj_string].poolers = ckpt["string_to_ada_embedder"][km].poolers
-                        if 'layer_coeff_map' in loaded_embedder_components:
+                        if 'layer_coeff_maps' in loaded_embedder_components:
                             # All subject strings share the same layer_coeff_maps loaded from the ckpt.
                             self.string_to_ada_embedder_dict[subj_string].layer_coeff_maps = ckpt["string_to_ada_embedder"][km].layer_coeff_maps
                         if 'basis_weights' in loaded_embedder_components:
@@ -2410,7 +2410,7 @@ class EmbeddingManager(nn.Module):
                         if 'pooler' in loaded_embedder_components:
                             # All background strings share the same poolers loaded from the ckpt.
                             self.string_to_ada_embedder_dict[bg_string].poolers = ckpt["string_to_ada_embedder"][km].poolers
-                        if 'layer_coeff_map' in loaded_embedder_components:
+                        if 'layer_coeff_maps' in loaded_embedder_components:
                             self.string_to_ada_embedder_dict[bg_string].layer_coeff_maps = ckpt["string_to_ada_embedder"][km].layer_coeff_maps
                         if 'basis_weights' in loaded_embedder_components:
                             self.string_to_static_embedder_dict[bg_string].basis_rand_weights = ckpt["string_to_static_embedder"][km].basis_rand_weights
@@ -2434,21 +2434,21 @@ class EmbeddingManager(nn.Module):
 
             subj_components_share_count = dict([(component, 0) for component in shared_embedder_components])
             bg_components_share_count   = dict([(component, 0) for component in shared_embedder_components])
-            pooler_shared_placeholder_strings = []
+            shared_placeholder_strings = []
 
             if 'subj' in shared_placeholder_set:
-                pooler_shared_placeholder_strings += self.subject_strings
+                shared_placeholder_strings += self.subject_strings
             if 'bg'   in shared_placeholder_set:
-                pooler_shared_placeholder_strings += self.background_strings
+                shared_placeholder_strings += self.background_strings
 
-            for placeholder_string in pooler_shared_placeholder_strings:
+            for placeholder_string in shared_placeholder_strings:
                     if placeholder_string in self.subject_strings:
                         if 'pooler' in shared_embedder_components:
                             self.string_to_ada_embedder_dict[placeholder_string].poolers = first_subj_ada.poolers
                             subj_components_share_count['pooler'] += 1
-                        if 'layer_coeff_map' in shared_embedder_components:
+                        if 'layer_coeff_maps' in shared_embedder_components:
                             self.string_to_ada_embedder_dict[placeholder_string].layer_coeff_maps = first_subj_ada.layer_coeff_maps
-                            subj_components_share_count['layer_coeff_map'] += 1
+                            subj_components_share_count['layer_coeff_maps'] += 1
                         if 'basis_weights' in shared_embedder_components:
                             self.string_to_static_embedder_dict[placeholder_string].basis_rand_weights = first_subj_static_embedder.basis_rand_weights
                             self.string_to_static_embedder_dict[placeholder_string].basis_comm_weights = first_subj_static_embedder.basis_comm_weights
@@ -2457,9 +2457,9 @@ class EmbeddingManager(nn.Module):
                         if 'pooler' in shared_embedder_components:
                             self.string_to_ada_embedder_dict[placeholder_string].poolers = first_bg_ada.poolers
                             bg_components_share_count['pooler'] += 1
-                        if 'layer_coeff_map' in shared_embedder_components:
+                        if 'layer_coeff_maps' in shared_embedder_components:
                             self.string_to_ada_embedder_dict[placeholder_string].layer_coeff_maps = first_bg_ada.layer_coeff_maps
-                            bg_components_share_count['layer_coeff_map'] += 1
+                            bg_components_share_count['layer_coeff_maps'] += 1
                         if 'basis_weights' in shared_embedder_components:
                             self.string_to_static_embedder_dict[placeholder_string].basis_rand_weights = first_bg_static_embedder.basis_rand_weights
                             self.string_to_static_embedder_dict[placeholder_string].basis_comm_weights = first_bg_static_embedder.basis_comm_weights
@@ -2493,11 +2493,10 @@ class EmbeddingManager(nn.Module):
                             param.requires_grad = False
                         components_frozen_count['pooler'] += 1
 
-                if 'layer_coeff_map' in frozen_embedder_components:
-                    for layer_coeff_map in ada_embedder.layer_coeff_maps:
-                        for param in layer_coeff_map.parameters():
-                            param.requires_grad = False
-                        components_frozen_count['layer_coeff_map'] += 1
+                if 'layer_coeff_maps' in frozen_embedder_components:
+                    for param in ada_embedder.layer_coeff_maps.parameters():
+                        param.requires_grad = False
+                    components_frozen_count['layer_coeff_maps'] += 1
 
                 if 'basis_weights' in frozen_embedder_components:
                     static_embedder.basis_rand_weights.requires_grad = False
@@ -2539,7 +2538,7 @@ class EmbeddingManager(nn.Module):
 
                 if 'pooler' in self.shared_embedder_components:
                     shared_embedder_param_list += list(ada_embedder.poolers.parameters())
-                if 'layer_coeff_map' in self.shared_embedder_components:
+                if 'layer_coeff_maps' in self.shared_embedder_components:
                     shared_embedder_param_list += list(ada_embedder.layer_coeff_maps.parameters())
                 if 'basis_weights' in self.shared_embedder_components:
                     shared_embedder_param_list += [ static_embedder.basis_rand_weights, static_embedder.basis_comm_weights ]
