@@ -1029,7 +1029,7 @@ class EmbeddingManager(nn.Module):
             use_layerwise_embedding=True,
             out_emb_dim=768,
             num_unet_ca_layers=16,
-            layerwise_lora_rank=5,
+            layerwise_lora_rank=10,
             layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             ada_emb_weight=0.5, 
@@ -2365,7 +2365,9 @@ class EmbeddingManager(nn.Module):
     def load_embedder_components(self, ckpt_paths, src_placeholders, 
                                  loaded_embedder_components, 
                                  frozen_placeholder_set, frozen_embedder_components):
-        loaded_embedder_components = loaded_embedder_components.split(",")
+        if isinstance(loaded_embedder_components, str):
+            loaded_embedder_components = loaded_embedder_components.split(",")
+
         src_subj_string, src_bg_string = src_placeholders.split(",")
         
         if isinstance(ckpt_paths, str):
@@ -2423,8 +2425,13 @@ class EmbeddingManager(nn.Module):
         self.freeze_embedder_components(frozen_placeholder_set, frozen_embedder_components)
 
     def share_embedder_components(self, shared_placeholder_set, shared_embedder_components):
-        self.shared_placeholder_set      = shared_placeholder_set     = shared_placeholder_set.split(",")
-        self.shared_embedder_components  = shared_embedder_components = shared_embedder_components.split(",")
+        if isinstance(shared_placeholder_set, str):
+            shared_placeholder_set = shared_placeholder_set.split(",")
+        if isinstance(shared_embedder_components, str):
+            shared_embedder_components = shared_embedder_components.split(",")
+
+        self.shared_placeholder_set      = shared_placeholder_set
+        self.shared_embedder_components  = shared_embedder_components
 
         if shared_placeholder_set is not None and shared_placeholder_set is not None:
             first_subj_ada = self.string_to_ada_embedder_dict[self.subject_strings[0]]
@@ -2471,8 +2478,13 @@ class EmbeddingManager(nn.Module):
             print("Not sharing any embedder components")
 
     def freeze_embedder_components(self, frozen_placeholder_set, frozen_embedder_components):
-        self.frozen_placeholder_set      = frozen_placeholder_set     = frozen_placeholder_set.split(",")
-        self.frozen_embedder_components  = frozen_embedder_components = frozen_embedder_components.split(",")
+        if isinstance(frozen_placeholder_set, str):
+            frozen_placeholder_set = frozen_placeholder_set.split(",")
+        if isinstance(frozen_embedder_components, str):
+            frozen_embedder_components = frozen_embedder_components.split(",")
+
+        self.frozen_placeholder_set      = frozen_placeholder_set
+        self.frozen_embedder_components  = frozen_embedder_components
 
         if frozen_placeholder_set is not None and frozen_embedder_components is not None:
             components_frozen_count     = dict([(component, 0) for component in frozen_embedder_components])
