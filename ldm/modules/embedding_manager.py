@@ -884,7 +884,6 @@ class AdaEmbedding(nn.Module):
 
             # infeat_time_emb: cat(ln(infeat_fg_bg), ln(time_emb)) as the input features.
             infeat_time_emb    = self.layer_lncat3s[ca_layer_idx](infeat_fg_bg, time_feat)
-
             # basis_dyn_coeffs: [BS, r*K] => [BS, K, r].
             # Consider the last dim. 
             basis_dyn_coeffs = self.layer_coeff_maps[ca_layer_idx](infeat_time_emb).reshape(-1, self.K, self.r)
@@ -2247,75 +2246,68 @@ class EmbeddingManager(nn.Module):
             if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"]:
                 self.subj_basis_generator   = ckpt["subj_basis_generator"]
 
-            for token_idx, k in enumerate(ckpt["string_to_token"]):
-                if (placeholder_mapper is not None) and (k in placeholder_mapper):
-                    k2 = placeholder_mapper[k]
+            for token_idx, km in enumerate(ckpt["placeholder_strings"]):
+                # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.
+                if (placeholder_mapper is not None) and (km in placeholder_mapper):
+                    km2 = placeholder_mapper[km]
                 else:
-                    k2 = k
+                    km2 = km
 
                 try:
-                    k2_token = self.get_tokens_for_string(k2, force_single_token=True)[0]
+                    k2_token = self.get_tokens_for_string(km2, force_single_token=True)[0]
                 except:
-                    k2_embedding = extend_clip_text_embedder(self.text_embedder, {}, [k2])
+                    k2_embedding = extend_clip_text_embedder(self.text_embedder, {}, [km2])
                     extended_token_embeddings.append(k2_embedding)
-                    k2_token = self.get_tokens_for_string(k2, force_single_token=True)[0]
+                    k2_token = self.get_tokens_for_string(km2, force_single_token=True)[0]
                     print
-                if k2 in self.string_to_token_dict:
-                    if k2 in self.background_strings:
-                        print(f"Duplicate key {k}->{k2} in {ckpt_path}. Ignored.")
+                if km2 in self.string_to_token_dict:
+                    if km2 in self.background_strings:
+                        print(f"Duplicate key {km}->{km2} in {ckpt_path}. Ignored.")
                         continue
 
-                    raise ValueError(f"Duplicate key {k}->{k2} in {ckpt_path}")
+                    raise ValueError(f"Duplicate key {km}->{km2} in {ckpt_path}")
 
                 if "emb_global_scale_scores" in ckpt:
-                    emb_global_scale_scores_dict[k2] = ckpt["emb_global_scale_scores"][token_idx]
-                if "subj2conv_attn_layerwise_scales" in ckpt and k in ckpt["subj2conv_attn_layerwise_scales"]:
-                    subj2conv_attn_layerwise_scales[k2] = ckpt["subj2conv_attn_layerwise_scales"][k]
+                    emb_global_scale_scores_dict[km2] = ckpt["emb_global_scale_scores"][token_idx]
+                if "subj2conv_attn_layerwise_scales" in ckpt and km in ckpt["subj2conv_attn_layerwise_scales"]:
+                    subj2conv_attn_layerwise_scales[km2] = ckpt["subj2conv_attn_layerwise_scales"][km]
 
                 # Merge the (possibly substituted) subject strings from the ckpt with 
                 # self.subject_strings and self.background_strings.
-                if k in ckpt_background_strings:
-                    self.background_strings = list(set(self.background_strings + [k2]))
-                    print("Add background string", k2)
-                elif k not in self.background_strings:
-                    # Add k2 to self.subject_strings, even if it's not in ckpt["subject_strings"].
+                if km in ckpt_background_strings:
+                    self.background_strings = list(set(self.background_strings + [km2]))
+                    print("Add background string", km2)
+                elif km not in self.background_strings:
+                    # Add km2 to self.subject_strings, even if it's not in ckpt["subject_strings"].
                     # This is to be compatible with older ckpts which don't save ckpt["subject_strings"].
-                    self.subject_strings = list(set(self.subject_strings + [k2]))
-                    print("Add subject string", k2)
+                    self.subject_strings = list(set(self.subject_strings + [km2]))
+                    print("Add subject string", km2)
 
                 # The mapping in string_to_token_dict is determined by the tokenizer. 
-                # Shouldn't do the k->k2 mapping on string_to_token_dict.
-                self.string_to_token_dict[k2] = k2_token
+                # Shouldn't do the km->km2 mapping on string_to_token_dict.
+                self.string_to_token_dict[km2] = k2_token
 
-                # Mapped from k in ckpt to k2 in the current session. Partial matching is allowed.
-                for km in ckpt["string_to_static_embedder"].keys():
-                    # If there are pseudo-tokens within multi-embedding tokens, load them as well.
-                    if (placeholder_mapper is not None) and (km in placeholder_mapper):
-                        km2 = placeholder_mapper[km]
-                    else:
-                        km2 = km
-
-                    self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
-                    self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
-                    if self.emb_ema_as_pooling_probe_weight > 0:
-                        self.string_to_emb_ema_dict[km2]     = ckpt["string_to_emb_ema_dict"][km]
-                        
-                    if km in ckpt["token2num_vectors"]:
-                        token2num_vectors[km2] = ckpt["token2num_vectors"][km]
-
-                    print(f"Loaded {km}->{km2} from {ckpt_path}")
+                self.string_to_static_embedder_dict[km2] = ckpt["string_to_static_embedder"][km]
+                self.string_to_ada_embedder_dict[km2]    = ckpt["string_to_ada_embedder"][km]
+                if self.emb_ema_as_pooling_probe_weight > 0:
+                    self.string_to_emb_ema_dict[km2]     = ckpt["string_to_emb_ema_dict"][km]
                     
-                    static_embedder = self.string_to_static_embedder_dict[km2]
-                    # Make compatible with older ckpts which don't have do_zero_shot.
-                    if 'do_zero_shot' not in static_embedder.__dict__:
-                        static_embedder.do_zero_shot = self.do_zero_shot
+                if km in ckpt["token2num_vectors"]:
+                    token2num_vectors[km2] = ckpt["token2num_vectors"][km]
 
-                    ada_embedder = self.string_to_ada_embedder_dict[km2]
-                    # Make compatible with older ckpts which don't have do_zero_shot.
-                    if 'do_zero_shot' not in ada_embedder.__dict__:
-                        ada_embedder.do_zero_shot = self.do_zero_shot
+                print(f"Loaded {km}->{km2} from {ckpt_path}")
+                
+                static_embedder = self.string_to_static_embedder_dict[km2]
+                # Make compatible with older ckpts which don't have do_zero_shot.
+                if 'do_zero_shot' not in static_embedder.__dict__:
+                    static_embedder.do_zero_shot = self.do_zero_shot
 
-                    print(f"{km2}: {ada_embedder.fg_emb_count}/{ada_embedder.bg_emb_count}/{ada_embedder.K} fg/bg/total embeddings")
+                ada_embedder = self.string_to_ada_embedder_dict[km2]
+                # Make compatible with older ckpts which don't have do_zero_shot.
+                if 'do_zero_shot' not in ada_embedder.__dict__:
+                    ada_embedder.do_zero_shot = self.do_zero_shot
+
+                print(f"{km2}: {ada_embedder.fg_emb_count}/{ada_embedder.bg_emb_count}/{ada_embedder.K} fg/bg/total embeddings")
 
             if "token2num_vectors" in ckpt:
                 self.set_num_vectors_per_subj_token(token2num_vectors)
@@ -2328,9 +2320,9 @@ class EmbeddingManager(nn.Module):
 
         self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(self.string_to_token_dict)), 
                                                     requires_grad=True)
-        for token_idx, k in enumerate(self.string_to_token_dict):
-            if k in emb_global_scale_scores_dict:
-                self.emb_global_scale_scores.data[token_idx] = emb_global_scale_scores_dict[k]
+        for token_idx, km in enumerate(self.string_to_token_dict):
+            if km in emb_global_scale_scores_dict:
+                self.emb_global_scale_scores.data[token_idx] = emb_global_scale_scores_dict[km]
 
         print(f"Set emb_global_scales = {self.get_emb_global_scales_dict(regen=True, do_perturb=False)}")
 
@@ -2350,7 +2342,7 @@ class EmbeddingManager(nn.Module):
         # Regenerate subject_string_dict, background_string_dict 
         # in case subject_strings or background_strings have been changed.
         self.subject_string_dict    = { s: True for s in self.subject_strings }
-        self.background_string_dict = { k: True for k in self.background_strings }
+        self.background_string_dict = { s: True for s in self.background_strings }
 
     # src_placeholders should be two strings, either "subject_string,background_string", 
     # or "1,1" which means the first subject and the first background string.
