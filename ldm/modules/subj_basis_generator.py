@@ -13,7 +13,7 @@ from einops.layers.torch import Rearrange
 from transformers import CLIPVisionModel
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 import numpy as np
-
+from torch import einsum
 
 def reshape_tensor(x, heads):
     bs, length, width = x.shape
@@ -58,11 +58,11 @@ class PerceiverAttention(nn.Module):
         self.norm1 = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
         self.norm2 = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
 
-        self.to_q = nn.Linear(dim, inner_dim, bias=False)
-        self.to_kv = nn.Linear(dim, inner_dim * 2, bias=False)
+        self.to_q   = nn.Linear(dim, inner_dim, bias=False)
+        self.to_kv  = nn.Linear(dim, inner_dim * 2, bias=False)
         self.to_out = nn.Linear(inner_dim, dim, bias=False)
 
-    def forward(self, x, latents):
+    def forward(self, x, latent_queries):
         """
         Args:
             x (torch.Tensor): image features
@@ -71,14 +71,14 @@ class PerceiverAttention(nn.Module):
                 shape (b, n2, D)
         """
         x = self.norm1(x)
-        latents = self.norm2(latents)
+        latent_queries = self.norm2(latent_queries)
 
-        b, l, _ = latents.shape
+        b, l, _ = latent_queries.shape
 
-        q = self.to_q(latents)
-        kv_input = torch.cat((x, latents), dim=-2)
+        q = self.to_q(latent_queries)
+        kv_input = torch.cat((x, latent_queries), dim=-2)
         k, v = self.to_kv(kv_input).chunk(2, dim=-1)
-
+        
         q = reshape_tensor(q, self.heads)
         k = reshape_tensor(k, self.heads)
         v = reshape_tensor(v, self.heads)
@@ -86,23 +86,69 @@ class PerceiverAttention(nn.Module):
         # attention
         scale = 1 / math.sqrt(math.sqrt(self.dim_head))
         weight = (q * scale) @ (k * scale).transpose(-2, -1)  # More stable with f16 than dividing afterwards
-        weight = torch.softmax(weight.float(), dim=-1).type(weight.dtype)
-        out = weight @ v
+        attn = torch.softmax(weight.float(), dim=-1).type(weight.dtype)
+        out = attn @ v
 
         out = out.permute(0, 2, 1, 3).reshape(b, l, -1)
 
         return self.to_out(out)
+
+
+# All CrossAttention layers have 8 heads.
+class CrossAttention(nn.Module):
+    def __init__(self, input_dim, heads=8, dropout=0.2):
+        super().__init__()
+        dim_head = input_dim // heads
+        inner_dim = dim_head * heads
+
+        self.scale = dim_head ** -0.25
+        self.heads = heads
+
+        self.to_q = nn.Linear(input_dim, inner_dim, bias=False)
+        self.to_k = nn.Linear(input_dim, inner_dim, bias=False)
+        self.to_v = nn.Linear(input_dim, inner_dim, bias=False)
+
+        self.to_out = nn.Sequential(
+            nn.Linear(inner_dim, input_dim),
+            nn.Dropout(dropout)
+        )
+        
+    def forward(self, x, context=None):
+        h = self.heads
+
+        q = self.to_q(x)
+        if context is None:
+            context = x
+
+        k = self.to_k(context)            
+        v = self.to_v(context)
+
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
+        sim = einsum('b i d, b j d -> b i j', q * self.scale, k * self.scale) 
+                
+        # sim: [64, 4096, 77]. 64: bs * h.
+        # attention, what we cannot get enough of
+        # NOTE: the normalization is done across tokens, not across pixels.
+        # So for each pixel, the sum of attention scores across tokens is 1.
+        attn = sim.softmax(dim=-1)
+
+        # v: [64, 77, 40]. 40: dim of each head. out: [64, 4096, 40].
+        out = einsum('b i j, b j d -> b i d', attn, v)
+        # [64, 4096, 40] -> [8, 4096, 320].
+        out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+        out = self.to_out(out)
+
+        return out
 
 # Simplified from IP-Adapter Resampler.
 class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
         dim=768,                            # Internal feature dimension. Same as output_dim.
-        depth=1,                            # number of (PerceiverAttention, FeedForward) layers.     
-        dim_head=80,                        # 1280/16 = 80.
+        depth=2,                            # number of (PerceiverAttention, FeedForward) layers.     
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
-        heads=16,       
-        # num_queries: number of output latents.                    
+        heads=8,       
+        # num_queries: number of output latent_queries.                    
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
         # The same SubjBasisGenerator instance is used to generate both subj and bg embedder bases, 
         # provided different input features in two different passes.
@@ -112,16 +158,16 @@ class SubjBasisGenerator(nn.Module):
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
-        # number of latents derived from mean pooled representation of the image.
+        # number of latent_queries derived from mean pooled representation of the image.
         ## 6 = 3*2 (3 among 10 static bases and 3 among 10 ada bases).
         num_latents_mean_pooled: int = 0,   
     ):
         super().__init__()
-        self.pos_emb    = nn.Embedding(max_seq_len, image_embedding_dim) if apply_pos_emb else None
-        self.pos_emb_ln = nn.LayerNorm(image_embedding_dim, elementwise_affine=False) if apply_pos_emb else None
+        self.pos_emb    = nn.Embedding(max_seq_len, image_embedding_dim)                if apply_pos_emb else None
+        self.pos_emb_ln = nn.LayerNorm(image_embedding_dim, elementwise_affine=False)   if apply_pos_emb else None
 
-        self.latents    = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
-        self.latents_ln = nn.LayerNorm(dim, elementwise_affine=False)
+        self.latent_queries = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
+        self.lq_ln          = nn.LayerNorm(dim, elementwise_affine=False)
         self.proj_in = nn.Sequential(
             nn.Linear(image_embedding_dim, dim),
             nn.LayerNorm(dim, elementwise_affine=False),
@@ -147,7 +193,8 @@ class SubjBasisGenerator(nn.Module):
             self.layers.append(
                 nn.ModuleList(
                     [
-                        PerceiverAttention(dim=dim, dim_head=dim_head, heads=heads, elementwise_affine=False),
+                        # dim=768, heads=16.
+                        CrossAttention(input_dim=dim, heads=heads, dropout=0.2),
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
                         FeedForward(dim=dim, mult=ff_mult),
@@ -161,21 +208,20 @@ class SubjBasisGenerator(nn.Module):
             pos_emb = self.pos_emb(torch.arange(n, device=device))
             x = x + self.pos_emb_ln(pos_emb)
         
-        latents = self.latents_ln(self.latents.repeat(x.size(0), 1, 1))
-
         x = self.proj_in(x)
+        latent_queries = self.lq_ln(self.latent_queries.repeat(x.size(0), 1, 1))
 
         if self.to_latents_from_mean_pooled_seq:
             meanpooled_seq = masked_mean(x, dim=1, mask=torch.ones(x.shape[:2], device=x.device, dtype=torch.bool))
             meanpooled_latents = self.to_latents_from_mean_pooled_seq(meanpooled_seq)
-            latents = torch.cat((meanpooled_latents, latents), dim=-2)
+            latent_queries = torch.cat((meanpooled_latents, latent_queries), dim=-2)
 
         for attn, ff in self.layers:
-            latents = attn(x, latents) + latents
-            latents = ff(latents) + latents
+            latent_queries = attn(latent_queries, x) + latent_queries
+            latent_queries = ff(latent_queries)      + latent_queries
 
-        latents = self.proj_out(latents)
-        return self.norm_out(latents)
+        latent_queries = self.proj_out(latent_queries)
+        return self.norm_out(latent_queries)
 
 # Revised from CLIPVisionTransformer. self: a CLIPVisionTransformer instance.
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py#L821
