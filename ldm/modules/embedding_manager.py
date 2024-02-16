@@ -11,7 +11,7 @@ from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_ea
                      add_noise_to_embedding, calc_ref_cosine_loss, \
                      get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
                      scan_cls_delta_strings, torch_uniform, extend_indices_N_by_n_times, \
-                     extend_clip_text_embedder
+                     extend_clip_text_embedder, calc_init_word_embeddings, calc_stats
 
 from functools import partial
 from collections import OrderedDict
@@ -23,33 +23,6 @@ import glob
 torch.set_printoptions(precision=4, sci_mode=False)
 np.set_printoptions(precision=4, suppress=True)
 
-
-def calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
-                              initializer_words, initializer_weights):
-    if initializer_words is None:  
-        # The background embedding is not initialized with any word embedding.
-        # In this case,
-        # init_word_embeddings = None,    init_word_weights    = None,
-        # init_word_embeddings = None, avg_init_word_embedding = None.
-        return None, None, None, None
-    else:
-        init_word_tokens = get_tokens_for_string(initializer_words)
-        N = len(init_word_tokens)
-        if initializer_weights is not None:
-            init_word_weights = torch.tensor(initializer_weights, dtype=torch.float32)
-            # Increase the weight of the main class word. 
-            init_word_weights = init_word_weights ** 2
-            init_word_weights = init_word_weights / init_word_weights.sum()
-        else:
-            # Equal weights for all words.
-            init_word_weights = torch.ones(N, dtype=torch.float32) / N
-        
-        # init_word_embeddings: [2, 768]. avg_init_word_embedding: [1, 768].
-        init_word_embeddings = get_embeddings_for_tokens(init_word_tokens.cpu())
-        avg_init_word_embedding = (init_word_embeddings * init_word_weights.unsqueeze(1)).sum(dim=0, keepdim=True)
-
-        return init_word_tokens, init_word_weights, init_word_embeddings, avg_init_word_embedding
-          
 def reg_loss(x, loss_type='l2', selector=None):
     if selector is not None:
         # If selector(x) is False, the gradient flow is cut off.
@@ -60,21 +33,6 @@ def reg_loss(x, loss_type='l2', selector=None):
         return (x * x).mean()
     else:
         breakpoint()
-
-def calc_stats(emb_name, embeddings, mean_dim=0):
-    print("%s:" %emb_name)
-    repeat_count = [1] * embeddings.ndim
-    repeat_count[mean_dim] = embeddings.shape[mean_dim]
-    # Average across the mean_dim dim. 
-    # Make emb_mean the same size as embeddings, as required by F.l1_loss.
-    emb_mean = embeddings.mean(mean_dim, keepdim=True).repeat(repeat_count)
-    l1_loss = F.l1_loss(embeddings, emb_mean)
-    # F.l2_loss doesn't take sqrt. So the loss is very small. 
-    # Compute it manually.
-    l2_loss = ((embeddings - emb_mean) ** 2).mean().sqrt()
-    norms = torch.norm(embeddings, dim=1).detach().cpu().numpy()
-    print("L1: %.4f, L2: %.4f" %(l1_loss.item(), l2_loss.item()))
-    print("Norms: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(norms.min(), norms.max(), norms.mean(), norms.std()))
 
 # LNCat3 can be used on 2 or 3 input tensors.
 class LNCat3(nn.Module):
