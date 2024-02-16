@@ -436,7 +436,7 @@ def main(opt):
         if opt.zeroshot:
             assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
             ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
-            ref_masks  = [ np.array(Image.open(ref_mask)) for ref_mask in opt.ref_masks ] \
+            ref_masks  = [ np.array(Image.open(ref_mask), dtype=float) for ref_mask in opt.ref_masks ] \
                             if opt.ref_masks is not None else None
             init_clip_image_encoder(device)
             ref_image_fg_features, ref_image_bg_features = encode_image_fg_bg_with_clip(ref_images, ref_masks)

@@ -41,22 +41,22 @@ def masked_mean(t, *, dim, mask=None):
 def FeedForward(dim, mult=4):
     inner_dim = int(dim * mult)
     return nn.Sequential(
-        nn.LayerNorm(dim),
+        nn.LayerNorm(dim, elementwise_affine=False),
         nn.Linear(dim, inner_dim, bias=False),
         nn.GELU(),
         nn.Linear(inner_dim, dim, bias=False),
     )
 
 class PerceiverAttention(nn.Module):
-    def __init__(self, *, dim, dim_head=64, heads=8):
+    def __init__(self, *, dim, dim_head=64, heads=8, elementwise_affine=True):
         super().__init__()
         self.scale = dim_head**-0.5
         self.dim_head = dim_head
         self.heads = heads
         inner_dim = dim_head * heads
 
-        self.norm1 = nn.LayerNorm(dim)
-        self.norm2 = nn.LayerNorm(dim)
+        self.norm1 = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
+        self.norm2 = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
 
         self.to_q = nn.Linear(dim, inner_dim, bias=False)
         self.to_kv = nn.Linear(dim, inner_dim * 2, bias=False)
@@ -117,19 +117,24 @@ class SubjBasisGenerator(nn.Module):
         num_latents_mean_pooled: int = 0,   
     ):
         super().__init__()
-        self.pos_emb = nn.Embedding(max_seq_len, image_embedding_dim) if apply_pos_emb else None
+        self.pos_emb    = nn.Embedding(max_seq_len, image_embedding_dim) if apply_pos_emb else None
+        self.pos_emb_ln = nn.LayerNorm(image_embedding_dim, elementwise_affine=False) if apply_pos_emb else None
 
-        self.latents = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
-
-        self.proj_in = nn.Linear(image_embedding_dim, dim)
+        self.latents    = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
+        self.latents_ln = nn.LayerNorm(dim, elementwise_affine=False)
+        self.proj_in = nn.Sequential(
+            nn.Linear(image_embedding_dim, dim),
+            nn.LayerNorm(dim, elementwise_affine=False),
+        )
 
         # Remove proj_out to reduce the number of parameters, since image_embedding_dim = output_dim = 768.
         self.proj_out = nn.Identity() #nn.Linear(dim, output_dim)
+        # NOTE: norm_out is the only LayerNorm with elementwise_affine=True.
         self.norm_out = nn.LayerNorm(output_dim)
 
         self.to_latents_from_mean_pooled_seq = (
             nn.Sequential(
-                nn.LayerNorm(dim),
+                nn.LayerNorm(dim, elementwise_affine=False),
                 nn.Linear(dim, dim * num_latents_mean_pooled),
                 Rearrange("b (n d) -> b n d", n=num_latents_mean_pooled),
             )
@@ -142,7 +147,7 @@ class SubjBasisGenerator(nn.Module):
             self.layers.append(
                 nn.ModuleList(
                     [
-                        PerceiverAttention(dim=dim, dim_head=dim_head, heads=heads),
+                        PerceiverAttention(dim=dim, dim_head=dim_head, heads=heads, elementwise_affine=False),
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
                         FeedForward(dim=dim, mult=ff_mult),
@@ -154,9 +159,9 @@ class SubjBasisGenerator(nn.Module):
         if self.pos_emb is not None:
             n, device = x.shape[1], x.device
             pos_emb = self.pos_emb(torch.arange(n, device=device))
-            x = x + pos_emb
-
-        latents = self.latents.repeat(x.size(0), 1, 1)
+            x = x + self.pos_emb_ln(pos_emb)
+        
+        latents = self.latents_ln(self.latents.repeat(x.size(0), 1, 1))
 
         x = self.proj_in(x)
 

@@ -538,7 +538,7 @@ class StaticLayerwiseEmbedding(nn.Module):
 
     # Return static embeddings of all layers together.
     # zs_basis_vecs: [K, r, 768]. K: number of vectors per token. r: number of basis vectors for each vector.
-    def forward(self, zs_basis_vecs=None, zs_bias=None):
+    def forward(self, static_zs_embs=None):
         with torch.autocast(device_type=self.device_type, enabled=False):
             # self.basis_comm_weights: [1, K, r] broadcasted to [16, K, r].
             basis_weights   = self.basis_rand_weights   + self.basis_comm_weights
@@ -546,25 +546,16 @@ class StaticLayerwiseEmbedding(nn.Module):
             # torch.matmul(lora_up, basis_vecs): 16 * 768.
 
             if self.do_zero_shot:
-                assert zs_basis_vecs is not None, "Zero-shot StaticLayerwiseEmbedding requires zs_basis_vecs"
+                # Copy to bias, so that static_zs_embs is regularized by layerwise_embedding_norm_loss().
+                self.bias = static_zs_embs
+                return static_zs_embs
+            
+            # self.N: number of pre_vecs.
+            if self.N > 0:
                 # basis_vecs: [K, r, 768].
-                basis_vecs = zs_basis_vecs
-                # Copy to basis_vecs, so that zs_basis_vecs will be regularized in layerwise_embedding_norm_loss().
-                # Although self.basis_vecs is supposed to have different sizes from basis_vecs (due to pre_vecs),
-                # since we can't regularize pre_vecs in zero-shot setting, we copy the whole zs_basis_vecs to self.basis_vecs,
-                # so that all vectors in zs_basis_vecs will be regularized.
-                self.basis_vecs = zs_basis_vecs
-                if self.has_bias:
-                    assert zs_bias is not None,  "Zero-shot StaticLayerwiseEmbedding requires zs_bias"
-                    # Copy to bias, so that zs_bias will be regularized in layerwise_embedding_norm_loss().
-                    self.bias = zs_bias
+                basis_vecs = torch.cat([self.pre_vecs, self.basis_vecs], dim=1)
             else:
-                # self.N: number of pre_vecs.
-                if self.N > 0:
-                    # basis_vecs: [K, r, 768].
-                    basis_vecs = torch.cat([self.pre_vecs, self.basis_vecs], dim=1)
-                else:
-                    basis_vecs = self.basis_vecs
+                basis_vecs = self.basis_vecs
 
             # For each k < K, [16, 1, r]_k * [r, 768]_k -> [16, 1, 768].
             out_vecs_unnorm = [ torch.matmul(basis_weights[:, k], basis_vecs[k]) for k in range(self.K) ]
@@ -818,7 +809,8 @@ class AdaEmbedding(nn.Module):
     # zs_basis_vecs: [K, r, 768]. K: number of vectors per token. r: number of basis vectors for each vector.                    
     def forward(self, layer_idx, layer_attn_components, time_emb, 
                 layer_subj_emb_probe, layer_static_extra_emb_mean, 
-                img_mask=None, cached_pooler_bg_out=None, zs_basis_vecs=None, zs_bias=None):
+                img_mask=None, cached_pooler_bg_out=None, 
+                zs_basis_vecs=None, zs_bias=None):
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         pooler  = self.poolers[ca_layer_idx]
         ## Some Linears mainly use either fg or bg features. So we reduce cross weights.
@@ -1285,12 +1277,13 @@ class EmbeddingManager(nn.Module):
             # max_num_vectors_each_placeholder: max(9, 4) = 9.
             self.max_num_vectors_each_placeholder = max(self.number_vectors_each_subj, self.num_vectors_each_bg)
 
-            # num_zs_vecs_per_token: 10 + 16 = 26.
-            self.num_zs_vecs_per_token = layerwise_lora_rank + self.num_unet_ca_layers
-            # num_total_queries: 9 * 26 = 234.
+            # num_zs_vecs_per_token: 10 + 16 + 16 = 42.
+            # 10: 10 basis vecs for ada embedder. 16: 16 layerwise biases for ada embedder. 
+            # Another 16: 16 layerwise static embeddings.
+            self.num_zs_vecs_per_token = layerwise_lora_rank + self.num_unet_ca_layers * 2
+            # num_queries: 9 * 42 = 378.
             self.num_zs_vecs_per_subj  = self.max_num_vectors_each_placeholder * self.num_zs_vecs_per_token
-            # num_queries: 2 * 234 = 468. * 2 for both static and ada embedders.
-            self.subj_basis_generator = SubjBasisGenerator(num_queries = self.num_zs_vecs_per_subj * 2,
+            self.subj_basis_generator = SubjBasisGenerator(num_queries = self.num_zs_vecs_per_subj,
                                                            image_embedding_dim = 1280,
                                                            dim = out_emb_dim,
                                                            output_dim = out_emb_dim,
@@ -1474,28 +1467,27 @@ class EmbeddingManager(nn.Module):
                     # zs_vecs_2sets: [1, 468, 768] -> [9, 52, 768]
                     zs_vecs_2sets = self.subj_basis_generator(ref_image_features)
                     zs_vecs_2sets = zs_vecs_2sets.reshape(self.max_num_vectors_each_placeholder,
-                                                          self.num_zs_vecs_per_token * 2, -1)
+                                                          self.num_zs_vecs_per_token, -1)
                     if token_is_bg:
                         # zs_vecs_2sets: [4, 10, 768]. Simply abandon extra basis vectors.
                         # in order to reuse the same subj_basis_generator for both subject and background tokens.
                         zs_vecs_2sets = zs_vecs_2sets[:self.num_vectors_each_bg]
-                    # zs_basis_vecs_2sets: [9, 20, 768], zs_bias_2sets: [9, 32, 768].
-                    zs_basis_vecs_2sets, zs_bias_2sets = zs_vecs_2sets[:, :self.layerwise_lora_rank*2], zs_vecs_2sets[:, self.layerwise_lora_rank*2:]
-                    # static_zs_basis_vecs, ada_zs_basis_vecs: [9, 10, 768] for subject tokens,
-                    # or [4, 10, 768] for background tokens.
-                    static_zs_basis_vecs, ada_zs_basis_vecs = zs_basis_vecs_2sets.chunk(2, dim=1)
-                    # static_zs_bias, ada_zs_bias: [16, 9, 768] for subject tokens,
-                    # or [16, 4, 768] for background tokens.
-                    static_zs_bias, ada_zs_bias                     = zs_bias_2sets.permute(1, 0, 2).chunk(2, dim=0)
-                    self.subj2ada_zs_basis_vecs[placeholder_string] = ada_zs_basis_vecs
-                    self.subj2ada_zs_bias[placeholder_string]       = ada_zs_bias
-                else:
-                    static_zs_basis_vecs = None
-                    static_zs_bias       = None
+                    # ada_zs_basis_vecs: [9, 10, 768], ada_zs_bias: [9, 16, 768], static_zs_embs: [9, 16, 768].
+                    ada_zs_basis_vecs, ada_zs_bias, static_zs_embs = \
+                        zs_vecs_2sets[:, :self.layerwise_lora_rank], \
+                        zs_vecs_2sets[:, self.layerwise_lora_rank:self.layerwise_lora_rank+self.num_unet_ca_layers], \
+                        zs_vecs_2sets[:, self.layerwise_lora_rank+self.num_unet_ca_layers:]
 
-                subj_static_embedding = static_embedder(static_zs_basis_vecs, static_zs_bias)
+                    self.subj2ada_zs_basis_vecs[placeholder_string] = ada_zs_basis_vecs
+                    self.subj2ada_zs_bias[placeholder_string]       = ada_zs_bias.permute(1, 0, 2)
+                    # subj_static_embedding: [9, 16, 768] => [16, 9, 768]
+                    static_zs_embs = static_zs_embs.permute(1, 0, 2)
+                else:
+                    static_zs_embs = None
+
+                subj_static_embedding = static_embedder(static_zs_embs)
             else:
-                # static_embedder is already the embeddings.
+                # static_embedder is already the embedding vectors.
                 subj_static_embedding = static_embedder
 
             static_subj_embs_dict[placeholder_string] = subj_static_embedding
@@ -2251,8 +2243,8 @@ class EmbeddingManager(nn.Module):
             if "ca_outfeat_lns" in ckpt:
                 self.ca_outfeat_lns = ckpt["ca_outfeat_lns"]
 
-            if "do_zero_shot" in ckpt:
-                self.do_zero_shot           = ckpt["do_zero_shot"]
+            # Only load subj_basis_generator from ckpt if the ckpt is set with the same do_zero_shot.
+            if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"]:
                 self.subj_basis_generator   = ckpt["subj_basis_generator"]
 
             for token_idx, k in enumerate(ckpt["string_to_token"]):
@@ -2616,6 +2608,8 @@ class EmbeddingManager(nn.Module):
         # becomes too large (1~2), and may overpower the dynamic part.
         bias_reg_weight_base        = 0.1
         basis_reg_weight_base       = 0.1
+        # We've applied LayerNorm to zs basis_generator pos_emb, so we don't need to regularize it.
+        zs_basis_gennerator_pos_emb_weight = 0 #0.2
         ada_maps_weight_reg_weight  = 0.05
         ada_maps_bias_reg_weight    = 0 #0.001   # 0.001 -> 0
         pre_vecs_reg_weight         = 0.05
@@ -2648,6 +2642,11 @@ class EmbeddingManager(nn.Module):
                 # pre_vecs: basis vectors that are initialized by prespecified init_vecs. 
                 # pre_vecs are updated through BP. Therefore, loss_pre_vecs prevents pre_vecs 
                 # from drifting too far from init_vecs.
+                # NOTE: If self.do_zero_shot, then AdaEmbedding.bias, AdaEmbedding.basis_vecs are
+                # generated by the basis_generator, and are regularized by the losses below.
+                # But StaticLayerwiseEmbedding.basis_vecs are absent and are not regularized.
+                # StaticLayerwiseEmbedding.bias is the embeddings generated by the basis_generator,
+                # and are regularized.
                 if embobj.has_bias and isinstance(embobj.bias, (torch.Tensor, nn.Parameter)):
                     loss_bias        = reg_loss(embobj.bias, loss_type=euc_loss_type)
                     # bias_reg_weight is computed dynamically. But it's detached from the graph.
@@ -2742,6 +2741,15 @@ class EmbeddingManager(nn.Module):
         # It's the twice of the actual number of embeddings. So divide by 2.
         loss_static *= self.emb_reg_loss_scale * 2 / num_out_embeddings
         loss_ada    *= self.emb_reg_loss_scale * 2 / num_out_embeddings
+        
+        '''
+        if self.do_zero_shot and self.subj_basis_generator.pos_emb is not None:
+            # Without this reg loss, the pos_emb of the basis generator may become too large 
+            # and dominate the generated bases, leading to overfitting.
+            loss_zs_basis_gennerator_pos_emb = reg_loss(self.subj_basis_generator.pos_emb, loss_type=euc_loss_type)
+            loss_static += loss_zs_basis_gennerator_pos_emb * zs_basis_gennerator_pos_emb_weight
+        '''
+
         return loss_static, loss_ada
 
     def embedding_reg_loss(self):

@@ -112,7 +112,7 @@ model:
         background_extra_global_scale:     1 #0.5
         # Share this set of attn poolers when training multiple subjects simultaneously.
         shared_placeholder_set:       'subj,bg'
-        shared_embedder_components:   'pooler,layer_coeff_maps,basis_weights'
+        shared_embedder_components:   'pooler,layer_coeff_maps'
         embedding_manager_ckpt:       null
         # Load the ada components from these placeholders in the checkpoint.
         src_placeholders: null
