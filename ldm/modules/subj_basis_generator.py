@@ -43,6 +43,7 @@ def FeedForward(dim, mult=4):
     return nn.Sequential(
         nn.LayerNorm(dim, elementwise_affine=False),
         nn.Linear(dim, inner_dim, bias=False),
+        nn.LayerNorm(dim, elementwise_affine=False),
         nn.GELU(),
         nn.Linear(inner_dim, dim, bias=False),
     )
@@ -161,6 +162,7 @@ class CrossAttention(nn.Module):
         out = einsum('b i j, b j d -> b i d', attn, v)
         # [16, 378, 48] -> [1, 378, 768].
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+
         out = self.to_out(out)
 
         return out
