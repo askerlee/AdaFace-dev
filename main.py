@@ -259,6 +259,10 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning")
+                        
+    parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
+                        default='laion',
+                        help="Type of zero-shot learning clip model")
 
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=5,
@@ -955,7 +959,7 @@ if __name__ == "__main__":
             gpus = opt.gpus.strip(",").split(',')
             # TODO: put clip image encoder on the same device as the model
             device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
-            init_clip_image_encoder(device)
+            init_clip_image_encoder(opt.zs_clip_type, device)
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)

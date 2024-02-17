@@ -292,7 +292,10 @@ def parse_args():
                         help="Use EMA embedding as the pooling probe")
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether to use zero-shot learning")
+                        help="Whether to use zero-shot learning")                    
+    parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
+                        default='laion',
+                        help="Type of zero-shot learning clip model")
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
     parser.add_argument("--ref_masks", type=str, nargs='+', default=None,
@@ -438,7 +441,7 @@ def main(opt):
             ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
             ref_masks  = [ np.array(Image.open(ref_mask), dtype=float) for ref_mask in opt.ref_masks ] \
                             if opt.ref_masks is not None else None
-            init_clip_image_encoder(device)
+            init_clip_image_encoder(opt.zs_clip_type, device)
             ref_image_fg_features, ref_image_bg_features = encode_image_fg_bg_with_clip(ref_images, ref_masks)
             # ref_image_features: [BS, 514, 1280]. 
             ref_image_features = torch.cat([ref_image_fg_features, ref_image_bg_features], dim=1)

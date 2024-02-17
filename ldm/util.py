@@ -2216,15 +2216,20 @@ def gen_cfg_scales_for_stu_tea(tea_scale, stu_scale, num_teachers, device):
     cfg_scales_for_clip_loss = cfg_scales_for_clip_loss.to(device)
     return cfg_scales_for_clip_loss
 
-def init_clip_image_encoder(device):
+def init_clip_image_encoder(clip_type, device):
     global clip_image_encoder, clip_preprocessor, clip_device
 
-    clip_image_encoder = CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
-    clip_preprocessor  = CLIPImageProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+    if clip_type == 'laion':
+        clip_model_tag = 'laion/CLIP-ViT-H-14-laion2B-s32B-b79K'
+    else:
+        clip_model_tag = 'openai/clip-vit-large-patch14'
+
+    clip_image_encoder = CLIPVisionModelWithMask.from_pretrained(clip_model_tag)
+    clip_preprocessor  = CLIPImageProcessor.from_pretrained(clip_model_tag)
     clip_image_encoder = clip_image_encoder.to(device)
     clip_image_encoder.eval()
     clip_device = device
-    print(f'CLIP image encoder loaded on {device}.')
+    print(f'{clip_model_tag} image encoder loaded on {device}.')
     
 # images: numpy.ndarray or torch.Tensor.
 # images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
