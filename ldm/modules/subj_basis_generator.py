@@ -119,6 +119,7 @@ class CrossAttention(nn.Module):
 
         self.to_out = nn.Sequential(
             nn.Linear(inner_dim, input_dim),
+            nn.LayerNorm(inner_dim, elementwise_affine=False),
             nn.Dropout(dropout)
         )
         
@@ -148,16 +149,17 @@ class CrossAttention(nn.Module):
         tensor(4.8963, grad_fn=<StdBackward0>)
         tensor(5.0100, grad_fn=<StdBackward0>)        
         '''        
-        sim = einsum('b i d, b j d -> b i j', q * self.scale, k * self.scale) * 5
-        # sim: [64, 4096, 77]. 64: bs * h.
+        scale = q.size(-1) ** -0.5
+        sim = einsum('b i d, b j d -> b i j', q * scale, k * scale) * 5
+        # sim: [16, 378, 257]. 16: bs 1 * h 16.
         # attention, what we cannot get enough of
         # NOTE: the normalization is done across tokens, not across pixels.
         # So for each pixel, the sum of attention scores across tokens is 1.
         attn = sim.softmax(dim=-1)
 
-        # v: [64, 77, 40]. 40: dim of each head. out: [64, 4096, 40].
+        # v: [16, 257, 48]. 48: dim of each head. out: [16, 378, 48].
         out = einsum('b i j, b j d -> b i d', attn, v)
-        # [64, 4096, 40] -> [8, 4096, 320].
+        # [16, 378, 48] -> [1, 378, 768].
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
         out = self.to_out(out)
 
