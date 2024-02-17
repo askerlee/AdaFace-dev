@@ -173,6 +173,11 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--warmup_steps", type=int, default=argparse.SUPPRESS,
                         help="Number of warm up steps")
     
+    parser.add_argument("--d_coef",
+                        type=float,
+                        default=argparse.SUPPRESS,
+                        help="Coefficient for d_loss")
+    
     parser.add_argument("--actual_resume", 
         type=str,
         required=True,
@@ -996,6 +1001,9 @@ if __name__ == "__main__":
                 config.model.params.prodigy_config.warm_up_steps                       = opt.warmup_steps
             else:
                 config.model.params.adam_config.scheduler_config.params.warm_up_steps  = opt.warmup_steps
+
+        if hasattr(opt, 'd_coef'):
+            config.model.params.prodigy_config.d_coef = opt.d_coef
 
         if opt.lr > 0:
             config.model.base_learning_rate = opt.lr

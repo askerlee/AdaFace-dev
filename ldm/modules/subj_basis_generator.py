@@ -145,7 +145,7 @@ class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
         dim=768,                            # Internal feature dimension. Same as output_dim.
-        depth=2,                            # number of (PerceiverAttention, FeedForward) layers.     
+        depth=1,                            # number of (PerceiverAttention, FeedForward) layers.     
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
         heads=8,       
         # num_queries: number of output latent_queries.                    
@@ -163,15 +163,15 @@ class SubjBasisGenerator(nn.Module):
         num_latents_mean_pooled: int = 0,   
     ):
         super().__init__()
-        self.pos_emb    = nn.Embedding(max_seq_len, image_embedding_dim)                if apply_pos_emb else None
-        self.pos_emb_ln = nn.LayerNorm(image_embedding_dim, elementwise_affine=False)   if apply_pos_emb else None
-
-        self.latent_queries = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
-        self.lq_ln          = nn.LayerNorm(dim, elementwise_affine=False)
         self.proj_in = nn.Sequential(
             nn.Linear(image_embedding_dim, dim),
             nn.LayerNorm(dim, elementwise_affine=False),
         )
+        self.pos_emb    = nn.Embedding(max_seq_len, dim)                if apply_pos_emb else None
+        self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=False)   if apply_pos_emb else None
+
+        self.latent_queries = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
+        self.lq_ln          = nn.LayerNorm(dim, elementwise_affine=False)
 
         # Remove proj_out to reduce the number of parameters, since image_embedding_dim = output_dim = 768.
         self.proj_out = nn.Identity() #nn.Linear(dim, output_dim)
@@ -202,13 +202,14 @@ class SubjBasisGenerator(nn.Module):
                 )
             )
 
-    def forward(self, x):
+    def forward(self, x):        
+        x = self.proj_in(x)
         if self.pos_emb is not None:
             n, device = x.shape[1], x.device
             pos_emb = self.pos_emb(torch.arange(n, device=device))
-            x = x + self.pos_emb_ln(pos_emb)
-        
-        x = self.proj_in(x)
+            # Downscale positional embeddings to reduce its impact.
+            x = x + self.pos_emb_ln(pos_emb) * 0.5
+
         latent_queries = self.lq_ln(self.latent_queries.repeat(x.size(0), 1, 1))
 
         if self.to_latents_from_mean_pooled_seq:
