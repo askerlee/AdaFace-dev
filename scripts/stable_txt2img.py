@@ -385,11 +385,28 @@ def main(opt):
     seed_everything(opt.seed)
     # More complex negative prompts may hurt the performance.
     predefined_negative_prompt = "duplicate, out of frame, cropped, mutilated, bad anatomy, deformed, bad proportions, disfigured, mutation"
+    device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
     
     if not opt.eval_blip:
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
+
+        if opt.zeroshot:
+            assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
+            ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
+            ref_masks  = [ np.array(Image.open(ref_mask), dtype=float) for ref_mask in opt.ref_masks ] \
+                            if opt.ref_masks is not None else None
+            zs_image_emb_dim = init_clip_image_encoder(opt.zs_clip_type, device)
+            config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
+
+            ref_image_fg_features, ref_image_bg_features = encode_image_fg_bg_with_clip(ref_images, ref_masks)
+            # ref_image_features: [BS, 514, 1280]. 
+            ref_image_features = torch.cat([ref_image_fg_features, ref_image_bg_features], dim=1)
+            # ref_image_features: [1, 514, 1280]. Keep the batch dimension.
+            ref_image_features = ref_image_features.mean(dim=0, keepdim=True)
+        else:
+            ref_image_features = None
 
         model  = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
@@ -430,25 +447,11 @@ def main(opt):
                                     model.embedding_manager.extended_token_embeddings)
             model.embedding_manager.extended_token_embeddings = None
 
-        device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
         model  = model.to(device)
         model.cond_stage_model.device = device
         
         assert model.embedding_manager.do_zero_shot == opt.zeroshot, \
                 f"Zero-shot learning mismatch: command line {opt.zeroshot} != ckpt {model.embedding_manager.do_zero_shot}."
-        if opt.zeroshot:
-            assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
-            ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
-            ref_masks  = [ np.array(Image.open(ref_mask), dtype=float) for ref_mask in opt.ref_masks ] \
-                            if opt.ref_masks is not None else None
-            init_clip_image_encoder(opt.zs_clip_type, device)
-            ref_image_fg_features, ref_image_bg_features = encode_image_fg_bg_with_clip(ref_images, ref_masks)
-            # ref_image_features: [BS, 514, 1280]. 
-            ref_image_features = torch.cat([ref_image_fg_features, ref_image_bg_features], dim=1)
-            # ref_image_features: [1, 514, 1280]. Keep the batch dimension.
-            ref_image_features = ref_image_features.mean(dim=0, keepdim=True)
-        else:
-            ref_image_features = None
 
         if opt.plms:
             sampler = PLMSSampler(model)

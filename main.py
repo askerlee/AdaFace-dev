@@ -959,7 +959,8 @@ if __name__ == "__main__":
             gpus = opt.gpus.strip(",").split(',')
             # TODO: put clip image encoder on the same device as the model
             device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
-            init_clip_image_encoder(opt.zs_clip_type, device)
+            zs_image_emb_dim = init_clip_image_encoder(opt.zs_clip_type, device)
+            config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)

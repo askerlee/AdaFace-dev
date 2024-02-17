@@ -996,6 +996,7 @@ class EmbeddingManager(nn.Module):
             shared_placeholder_set='subj,bg',
             shared_embedder_components='pooler',
             do_zero_shot=False,
+            zs_image_emb_dim=1280,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1242,7 +1243,8 @@ class EmbeddingManager(nn.Module):
             self.num_zs_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
             self.subj_basis_generator = SubjBasisGenerator(num_subj_queries = self.num_zs_vecs_per_subj,
                                                            num_bg_queries   = self.num_zs_vecs_per_bg,
-                                                           image_embedding_dim = 1280,
+                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
+                                                           image_embedding_dim = zs_image_emb_dim, 
                                                            dim = out_emb_dim,
                                                            output_dim = out_emb_dim,
                                                            num_latents_mean_pooled = 0)

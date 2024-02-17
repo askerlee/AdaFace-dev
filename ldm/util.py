@@ -25,6 +25,7 @@ from bisect import bisect_right
 clip_image_encoder = None
 clip_preprocessor  = None
 clip_device = 'cpu'
+
 class SequentialLR2(SequentialLR):
     def step(self):
         self.last_epoch += 1
@@ -2230,7 +2231,11 @@ def init_clip_image_encoder(clip_type, device):
     clip_image_encoder.eval()
     clip_device = device
     print(f'{clip_model_tag} image encoder loaded on {device}.')
-    
+
+    zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 768 }
+
+    return zs_clip_type2image_emb_dim[clip_type]
+
 # images: numpy.ndarray or torch.Tensor.
 # images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
 # fg_masks: a list of [Hi, Wi].
