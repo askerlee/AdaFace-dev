@@ -305,7 +305,7 @@ class PersonalizedBase(Dataset):
 
         if 'init_strings' in subj2attr:
             self.cls_delta_strings = [ subj2attr['init_strings'][subject_name] \
-                                            for subject_name in self.subject_names ]
+                                        for subject_name in self.subject_names ]
         else:
             if cls_delta_string is not None:
                 self.cls_delta_strings = [ cls_delta_string ] * self.num_subjects

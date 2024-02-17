@@ -1418,14 +1418,15 @@ class EmbeddingManager(nn.Module):
                 if self.do_zero_shot:
                     if placeholder_is_bg:
                         ref_image_features = ref_image_feat_dict['bg']
+                        num_vectors_each_placeholder = self.num_vectors_each_bg
                     else:
                         ref_image_features = ref_image_feat_dict['subj']
+                        num_vectors_each_placeholder = self.number_vectors_each_subj
 
                     # ref_image_features: [1, 257, 1280]
                     # zs_vecs_2sets: [1, 468, 768] -> [9, 52, 768]
                     zs_vecs_2sets = self.subj_basis_generator(ref_image_features, placeholder_is_bg)
-                    max_num_vectors_each_placeholder = self.num_vectors_each_bg if placeholder_is_bg else self.number_vectors_each_subj
-                    zs_vecs_2sets = zs_vecs_2sets.reshape(max_num_vectors_each_placeholder,
+                    zs_vecs_2sets = zs_vecs_2sets.reshape(num_vectors_each_placeholder,
                                                           self.num_zs_vecs_per_token, -1)
                     # If subj:
                     # ada_zs_basis_vecs: [9, 10, 768], ada_zs_bias: [9, 16, 768], static_zs_embs: [9, 16, 768].

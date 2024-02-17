@@ -313,6 +313,11 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
 
         # last_hidden_state: [1, 257, 1280]
         last_hidden_state = encoder_outputs[0]
+        if attn_mask is not None:
+            # Apply patchwise mask on patches.
+            # attn_mask: [1, 1, 257] -> [1, 257, 1].
+            last_hidden_state = last_hidden_state * attn_mask.permute(0, 2, 1)
+
         pooled_output = last_hidden_state[:, 0, :]
         pooled_output = self.post_layernorm(pooled_output)
 
