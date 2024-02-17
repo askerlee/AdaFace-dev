@@ -2232,7 +2232,9 @@ def init_clip_image_encoder(clip_type, device):
     clip_device = device
     print(f'{clip_model_tag} image encoder loaded on {device}.')
 
-    zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 768 }
+    # image_emb_dim is not the output dim but the second last layer dim. 
+    # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
+    zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
 
     return zs_clip_type2image_emb_dim[clip_type]
 
