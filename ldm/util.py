@@ -2289,9 +2289,17 @@ def encode_image_fg_bg_with_clip(images, fg_masks):
         
     with torch.no_grad():
         # image_fg_features: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
-        image_fg_features  = clip_image_encoder(image_pixel_values, attn_mask=fg_masks2, output_hidden_states=True).hidden_states[-2]
+        image_fg_dict  = clip_image_encoder(image_pixel_values, attn_mask=fg_masks2, output_hidden_states=True)
+        # attn_mask: [BS, 1, 257]
+        image_fg_features = image_fg_dict.hidden_states[-2]
+        if image_fg_dict.attn_mask is not None:
+            image_fg_features = image_fg_features * image_fg_dict.attn_mask
+
         # A negative mask is used to extract the background features.
-        image_bg_features  = clip_image_encoder(image_pixel_values, attn_mask=1-fg_masks2, output_hidden_states=True).hidden_states[-2]
+        image_bg_dict  = clip_image_encoder(image_pixel_values, attn_mask=1-fg_masks2, output_hidden_states=True)
+        image_bg_features = image_bg_dict.hidden_states[-2]
+        if image_bg_dict.attn_mask is not None:
+            image_bg_features = image_bg_features * image_bg_dict.attn_mask
 
     return image_fg_features, image_bg_features
 

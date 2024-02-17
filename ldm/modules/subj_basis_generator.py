@@ -263,7 +263,7 @@ class SubjBasisGenerator(nn.Module):
 
 # Revised from CLIPVisionTransformer. self: a CLIPVisionTransformer instance.
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py#L821
-# pixel_values: preprocessed B*C*H*W images. [1, 3, 224, 224]
+# pixel_values: preprocessed B*C*H*W images. [BS, 3, 224, 224]
 # attn_mask: B*H*W attention mask.
 def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None, 
                                   output_attentions = None,
@@ -280,7 +280,7 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
 
         # Visual tokens are flattended in embeddings().
         # self.embeddings: CLIPVisionEmbeddings.
-        # hidden_states: [1, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
+        # hidden_states: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
         # 16*16 is output from Conv2d(3, 1280, kernel_size=(14, 14), stride=(14, 14), bias=False).
         hidden_states = self.embeddings(pixel_values)
         hidden_states = self.pre_layrnorm(hidden_states)
@@ -288,9 +288,9 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
         if attn_mask is not None:
             feat_edge_size = np.sqrt(hidden_states.shape[1] - 1).astype(int)
             attn_mask = F.interpolate(attn_mask.unsqueeze(1), size=(feat_edge_size, feat_edge_size))
-            # Flatten the mask: [1, 1, 16, 16] => [1, 1, 256].
+            # Flatten the mask: [BS, 1, 16, 16] => [BS, 1, 256].
             attn_mask = attn_mask.reshape(*attn_mask.shape[:2], -1)
-            # Prepend 1 to the mask: [1, 1, 256] => [1, 1, 257]. 
+            # Prepend 1 to the mask: [BS, 1, 256] => [BS, 1, 257]. 
             # This 1 corresponds to class_embeds, which is always attended to.
             attn_mask = torch.cat([torch.ones(*attn_mask.shape[:2], 1).to(attn_mask.device), attn_mask], dim=-1)
             attn_mask_pairs = torch.matmul(attn_mask.transpose(-1, -2), attn_mask).bool().unsqueeze(1)
@@ -311,16 +311,15 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
             return_dict=return_dict,                    # True
         )
 
-        # last_hidden_state: [1, 257, 1280]
+        # last_hidden_state: [BS, 257, 1280]
         last_hidden_state = encoder_outputs[0]
         if attn_mask is not None:
-            # Apply patchwise mask on patches.
-            # attn_mask: [1, 1, 257] -> [1, 257, 1].
             last_hidden_state = last_hidden_state * attn_mask.permute(0, 2, 1)
 
         pooled_output = last_hidden_state[:, 0, :]
         pooled_output = self.post_layernorm(pooled_output)
 
+        # return_dict is True.
         if not return_dict:
             return (last_hidden_state, pooled_output) + encoder_outputs[1:]
 
@@ -329,6 +328,9 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
             pooler_output=pooled_output,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
+            # Newly added: return resized flattened attention mask.
+            # [BS, 1, 257] -> [BS, 257, 1]
+            attn_mask=attn_mask.permute(0, 2, 1)
         )
 
 class CLIPVisionModelWithMask(CLIPVisionModel):
