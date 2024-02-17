@@ -101,7 +101,7 @@ class CrossAttention(nn.Module):
         dim_head = input_dim // heads
         inner_dim = dim_head * heads
 
-        #self.scale = dim_head ** -0.25
+        self.scale = dim_head ** -0.25
         self.heads = heads
 
         # To increase stability,, we add layernorm to q,k,v projections.
@@ -133,7 +133,22 @@ class CrossAttention(nn.Module):
         v = self.to_v(context)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
-        sim = einsum('b i d, b j d -> b i j', q, k) # * self.scale, k * self.scale) 
+        # * 5 to increase the polarity of the attention scores. Otherwise the variance is too small
+        # and the attention is too uniform.
+        '''
+        for N in (768, 7680, 76800, 768000):
+            ln = nn.LayerNorm(N)
+            a = torch.randn(100, N)
+            b = torch.randn(100, N)
+            x=(ln(a) * ln(b)).sum(dim=1) * 5 / (N**0.5)
+            print(x.std(dim=0))
+            
+        tensor(4.6600, grad_fn=<StdBackward0>)
+        tensor(5.3220, grad_fn=<StdBackward0>)
+        tensor(4.8963, grad_fn=<StdBackward0>)
+        tensor(5.0100, grad_fn=<StdBackward0>)        
+        '''        
+        sim = einsum('b i d, b j d -> b i j', q * self.scale, k * self.scale) * 5
         # sim: [64, 4096, 77]. 64: bs * h.
         # attention, what we cannot get enough of
         # NOTE: the normalization is done across tokens, not across pixels.
