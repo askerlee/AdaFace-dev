@@ -42,6 +42,10 @@ def parse_args():
  
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning")
+    parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
+                        default='laion',
+                        help="Type of zero-shot learning clip model")
+    
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
     parser.add_argument("--ref_masks",  type=str, nargs='+', default=None,
@@ -470,7 +474,7 @@ if __name__ == "__main__":
             if isinstance(args.ref_masks, (list, tuple)):
                 args.ref_masks  = " ".join(args.ref_masks)
 
-            command_line += f" --zeroshot --ref_images {args.ref_images}"
+            command_line += f" --zeroshot --zs_clip_type {args.zs_clip_type} --ref_images {args.ref_images}"
             if args.ref_masks is not None:
                 command_line += f" --ref_masks {args.ref_masks}"
 
