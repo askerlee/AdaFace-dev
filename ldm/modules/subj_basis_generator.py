@@ -250,9 +250,13 @@ class SubjBasisGenerator(nn.Module):
             meanpooled_latents = self.to_latents_from_mean_pooled_seq(meanpooled_seq)
             latent_queries = torch.cat((meanpooled_latents, latent_queries), dim=-2)
 
-        for attn, ff in self.layers:
-            latent_queries = attn(latent_queries, x) + latent_queries
-            latent_queries = ff(latent_queries)      + latent_queries
+        for i, (attn, ff) in enumerate(self.layers):
+            if i > 0:
+                latent_queries = attn(latent_queries, x) + latent_queries
+            else:
+                latent_queries = attn(latent_queries, x)
+
+            latent_queries = ff(latent_queries) + latent_queries
 
         latent_queries = self.proj_out(latent_queries)
         return self.norm_out(latent_queries)

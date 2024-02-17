@@ -2316,7 +2316,7 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
-        return 0, 0, 0, 0, None, None
+        return 0, 0, 0, None, None
 
     single_q_grad_scaler    = gen_gradient_scaler(single_q_grad_scale)
     single_feat_grad_scaler = gen_gradient_scaler(single_feat_grad_scale)
