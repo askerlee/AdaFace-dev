@@ -148,11 +148,13 @@ class SubjBasisGenerator(nn.Module):
         depth=1,                            # number of (PerceiverAttention, FeedForward) layers.     
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
         heads=8,       
-        # num_queries: number of output latent_queries.                    
+        # num_subj_queries: number of subject latent_queries.
+        # num_bg_queries:   number of background latent_queries.
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
         # The same SubjBasisGenerator instance is used to generate both subj and bg embedder bases, 
         # provided different input features in two different passes.
-        num_queries=20,                     
+        num_subj_queries=378,               # 378 = 9 * 42.
+        num_bg_queries=168,                 # 168 = 4 * 42.
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
         output_dim=768,                     # CLIP text embedding input dimension.
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
@@ -170,7 +172,8 @@ class SubjBasisGenerator(nn.Module):
         self.pos_emb    = nn.Embedding(max_seq_len, dim)                if apply_pos_emb else None
         self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=False)   if apply_pos_emb else None
 
-        self.latent_queries = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
+        self.latent_subj_queries = nn.Parameter(torch.randn(1, num_subj_queries, dim) / dim**0.5)
+        self.latent_bg_queries   = nn.Parameter(torch.randn(1, num_bg_queries, dim)   / dim**0.5)
         self.lq_ln          = nn.LayerNorm(dim, elementwise_affine=False)
 
         # Remove proj_out to reduce the number of parameters, since image_embedding_dim = output_dim = 768.
@@ -202,7 +205,7 @@ class SubjBasisGenerator(nn.Module):
                 )
             )
 
-    def forward(self, x):        
+    def forward(self, x, placeholder_is_bg=False):        
         x = self.proj_in(x)
         if self.pos_emb is not None:
             n, device = x.shape[1], x.device
@@ -210,7 +213,10 @@ class SubjBasisGenerator(nn.Module):
             # Downscale positional embeddings to reduce its impact.
             x = x + self.pos_emb_ln(pos_emb) * 0.5
 
-        latent_queries = self.lq_ln(self.latent_queries.repeat(x.size(0), 1, 1))
+        # placeholder_is_bg determines whether to select latent_bg_queries or latent_subj_queries,
+        # which then extract either background or subject bases.
+        latent_queries = self.latent_bg_queries if placeholder_is_bg else self.latent_subj_queries
+        latent_queries = self.lq_ln(latent_queries.repeat(x.size(0), 1, 1))
 
         if self.to_latents_from_mean_pooled_seq:
             meanpooled_seq = masked_mean(x, dim=1, mask=torch.ones(x.shape[:2], device=x.device, dtype=torch.bool))
