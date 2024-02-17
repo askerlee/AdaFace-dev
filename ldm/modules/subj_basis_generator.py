@@ -101,12 +101,21 @@ class CrossAttention(nn.Module):
         dim_head = input_dim // heads
         inner_dim = dim_head * heads
 
-        self.scale = dim_head ** -0.25
+        #self.scale = dim_head ** -0.25
         self.heads = heads
 
-        self.to_q = nn.Linear(input_dim, inner_dim, bias=False)
-        self.to_k = nn.Linear(input_dim, inner_dim, bias=False)
-        self.to_v = nn.Linear(input_dim, inner_dim, bias=False)
+        # To increase stability,, we add layernorm to q,k,v projections.
+        self.to_q = nn.Sequential(
+                        nn.Linear(input_dim, inner_dim, bias=False),
+                        nn.LayerNorm(inner_dim, elementwise_affine=False))
+        
+        self.to_k = nn.Sequential(
+                        nn.Linear(input_dim, inner_dim, bias=False),
+                        nn.LayerNorm(inner_dim, elementwise_affine=False))
+        
+        self.to_v = nn.Sequential(
+                        nn.Linear(input_dim, inner_dim, bias=False),
+                        nn.LayerNorm(inner_dim, elementwise_affine=False))
 
         self.to_out = nn.Sequential(
             nn.Linear(inner_dim, input_dim),
@@ -124,8 +133,7 @@ class CrossAttention(nn.Module):
         v = self.to_v(context)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
-        sim = einsum('b i d, b j d -> b i j', q * self.scale, k * self.scale) 
-                
+        sim = einsum('b i d, b j d -> b i j', q, k) # * self.scale, k * self.scale) 
         # sim: [64, 4096, 77]. 64: bs * h.
         # attention, what we cannot get enough of
         # NOTE: the normalization is done across tokens, not across pixels.
@@ -147,7 +155,7 @@ class SubjBasisGenerator(nn.Module):
         dim=768,                            # Internal feature dimension. Same as output_dim.
         depth=1,                            # number of (PerceiverAttention, FeedForward) layers.     
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
-        heads=8,       
+        heads=16,       
         # num_subj_queries: number of subject latent_queries.
         # num_bg_queries:   number of background latent_queries.
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
@@ -162,7 +170,7 @@ class SubjBasisGenerator(nn.Module):
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
         # number of latent_queries derived from mean pooled representation of the image.
         ## 6 = 3*2 (3 among 10 static bases and 3 among 10 ada bases).
-        num_latents_mean_pooled: int = 0,   
+        num_latents_mean_pooled: int = 0,   # Disabled.
     ):
         super().__init__()
         self.proj_in = nn.Sequential(
