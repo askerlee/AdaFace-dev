@@ -213,7 +213,7 @@ class SubjBasisGenerator(nn.Module):
         self.to_latents_from_mean_pooled_seq = (
             nn.Sequential(
                 nn.LayerNorm(dim, elementwise_affine=False),
-                nn.Linear(dim, dim * num_latents_mean_pooled),
+                nn.Linear(dim, dim * num_latents_mean_pooled, bias=False),
                 Rearrange("b (n d) -> b n d", n=num_latents_mean_pooled),
             )
             if num_latents_mean_pooled > 0
