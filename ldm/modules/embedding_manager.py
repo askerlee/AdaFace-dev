@@ -2000,6 +2000,9 @@ class EmbeddingManager(nn.Module):
         # ref_image_features: [1, 514, 1280]
         # ref_image_subj_features, ref_image_bg_features: [1, 257, 1280].
         ref_image_subj_features, ref_image_bg_features = ref_image_features.chunk(2, dim=1)
+        #print(ref_image_subj_features.mean(dim=1).squeeze(0)[:20])
+        #print(ref_image_bg_features.mean(dim=1).squeeze(0)[:20])
+
         self.ref_image_feat_dict = { 'subj': ref_image_subj_features, 'bg': ref_image_bg_features }
         # Beginning of a new iteration, clear the cached ada_zs_basis_vecs and ada_zs_bias.
         self.subj2ada_zs_basis_vecs = {}

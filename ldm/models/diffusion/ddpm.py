@@ -1638,7 +1638,6 @@ class LatentDiffusion(DDPM):
             # image_features: [1, 514, 1280] -> [514, 1280].
             # Remove the batch dimension before being collated into a batch.
             image_features    = torch.cat([image_fg_features, image_bg_features], dim=1).squeeze(0)
-
             # image_features: [B, 514, 1280] => [1, 514, 1280].
             self.iter_flags['image_features'] = image_features.mean(dim=0, keepdim=True)
         else:

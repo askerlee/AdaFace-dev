@@ -320,14 +320,16 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
         hidden_states = self.pre_layrnorm(hidden_states)
         
         if attn_mask is not None:
+            # feat_edge_size: 16.
             feat_edge_size = np.sqrt(hidden_states.shape[1] - 1).astype(int)
-            attn_mask = F.interpolate(attn_mask.unsqueeze(1), size=(feat_edge_size, feat_edge_size))
+            # attn_mask: [BS, 512, 512] -> [BS, 1, 16, 16].
+            attn_mask = F.interpolate(attn_mask.unsqueeze(1), size=(feat_edge_size, feat_edge_size), mode='nearest')
             # Flatten the mask: [BS, 1, 16, 16] => [BS, 1, 256].
-            attn_mask = attn_mask.reshape(*attn_mask.shape[:2], -1)
+            attn_mask = attn_mask.flatten(2)
             # Prepend 1 to the mask: [BS, 1, 256] => [BS, 1, 257]. 
             # This 1 corresponds to class_embeds, which is always attended to.
             attn_mask = torch.cat([torch.ones(*attn_mask.shape[:2], 1).to(attn_mask.device), attn_mask], dim=-1)
-            attn_mask_pairs = torch.matmul(attn_mask.transpose(-1, -2), attn_mask)
+            attn_mask_pairs = torch.matmul(attn_mask.transpose(-1, -2), attn_mask).unsqueeze(1)
         else:
             attn_mask_pairs = None
 
@@ -335,10 +337,12 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
         encoder_outputs = self.encoder(
             inputs_embeds=hidden_states,
             # New feature: (***The official documentation is wrong***)
-            # attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length, sequence_length)`, *optional*):
+            # attention_mask (`torch.Tensor` of shape `(batch_size, 1, sequence_length, sequence_length)`, *optional*):
             #                 Mask to avoid performing attention on pairs of token. Mask values selected in `[0, 1]`:
             #                 - 1 for pairs that are **not masked**,
-            #                 - 0 for pairs that are **masked**.            
+            #                 - 0 for pairs that are **masked**.    
+            # attention_mask is eventually used by CLIPEncoderLayer:
+            # https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py#L370
             attention_mask=attn_mask_pairs,
             output_attentions=output_attentions,        # False
             output_hidden_states=output_hidden_states,  # True
@@ -347,9 +351,6 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
 
         # last_hidden_state: [BS, 257, 1280]
         last_hidden_state = encoder_outputs[0]
-        if attn_mask is not None:
-            last_hidden_state = last_hidden_state * attn_mask.permute(0, 2, 1)
-
         pooled_output = last_hidden_state[:, 0, :]
         pooled_output = self.post_layernorm(pooled_output)
 
@@ -364,7 +365,7 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
             attentions=encoder_outputs.attentions,
             # Newly added: return resized flattened attention mask.
             # [BS, 1, 257] -> [BS, 257, 1]
-            attn_mask=attn_mask.permute(0, 2, 1)
+            attn_mask=attn_mask.permute(0, 2, 1) if attn_mask is not None else None
         )
 
 class CLIPVisionModelWithMask(CLIPVisionModel):

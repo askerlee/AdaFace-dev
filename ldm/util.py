@@ -2294,7 +2294,7 @@ def encode_image_fg_bg_with_clip(images, fg_masks):
         if neg_image_features is None:
             # neg_pixel_values: [1, 3, 224, 224]
             neg_pixel_values = torch.zeros_like(image_pixel_values[:1])
-            neg_image_features = clip_image_encoder(neg_pixel_values, attn_mask=1-fg_masks2[:1], output_hidden_states=True).hidden_states[-2]
+            neg_image_features = clip_image_encoder(neg_pixel_values, attn_mask=None, output_hidden_states=True).hidden_states[-2]
 
         # image_fg_features: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
         image_fg_dict  = clip_image_encoder(image_pixel_values, attn_mask=fg_masks2, output_hidden_states=True)
