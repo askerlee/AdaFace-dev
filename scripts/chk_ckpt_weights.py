@@ -37,6 +37,31 @@ emb_ckpt = torch.load(emb_path)
 tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
 
 
+if 'subj_basis_generator' in emb_ckpt:
+    print("subj_basis_generator weight:")
+    prev_subj_basis_generator = None
+
+    for idx, iteration in enumerate(iterations):
+        if args.only100 and iteration % 100 != 0:
+            continue
+                
+        emb_path = os.path.join(emb_folder, iter2path[iteration])
+        emb_ckpt = torch.load(emb_path)
+
+        subj_basis_generator = emb_ckpt['subj_basis_generator']
+        print(f"{iteration}:")
+
+        if prev_subj_basis_generator is not None:
+            param_total_delta = 0
+            for param_name, param in subj_basis_generator.named_parameters():
+                prev_param = prev_subj_basis_generator.state_dict()[param_name]
+                param_norm = torch.norm(param).item()
+                param_delta = torch.norm(param - prev_param).item()
+                param_total_delta += param_delta
+
+                print(f"{param_name}-{iteration} norm/diff: {param_norm:.4f}/{param_total_delta:.4f}")
+        prev_subj_basis_generator = subj_basis_generator
+
 for idx, iteration in enumerate(iterations):
     if args.only100 and iteration % 100 != 0:
         continue
@@ -75,36 +100,7 @@ for k in tokens:
 
             print(f"{iteration}-{i}: lora_to_fg_q: {lora_to_fg_q_mean:.4f}, lora_to_bg_q: {lora_to_bg_q_mean:.4f}, lora_to_k: {lora_to_k_mean:.4f}")
 
-    print("layer_coeff_maps weight:")
-    prev_ada_embedder = None
-
-    for idx, iteration in enumerate(iterations):
-        if args.only100 and iteration % 100 != 0:
-            continue
-                
-        emb_path = os.path.join(emb_folder, iter2path[iteration])
-        emb_ckpt = torch.load(emb_path)
-
-        ada_embedder = emb_ckpt['string_to_ada_embedder'][k]
-        attn_poolers = ada_embedder.poolers
-
-        layer_coeff_map_means = [ layer_coeff_map.weight.abs().mean().item() for layer_coeff_map in ada_embedder.layer_coeff_maps ]
-        layer_coeff_map_means = np.array(layer_coeff_map_means)
-
-        print(f"{iteration}: {layer_coeff_map_means}")
-
-        if prev_ada_embedder is not None:
-            for layer_idx, pooler in enumerate(attn_poolers):
-                prev_pooler = prev_ada_embedder.poolers[layer_idx]
-                layer_param_total_delta = 0
-                for param_name, param in pooler.named_parameters():
-                    prev_param = prev_pooler.state_dict()[param_name]
-                    param_delta = torch.norm(param - prev_param).item()
-                    layer_param_total_delta += param_delta
-
-                print(f"{iteration}-{k}-{layer_idx}: pooler diff: {layer_param_total_delta:.4f}")
-        prev_ada_embedder = ada_embedder
-
+    '''
     print("layer_coeff_maps bias:")
 
     for idx, iteration in enumerate(iterations):
@@ -121,3 +117,5 @@ for k in tokens:
         layer_coeff_map_means = np.array(layer_coeff_map_means)
 
         print(f"{iteration}: {layer_coeff_map_means}")
+    '''
+    

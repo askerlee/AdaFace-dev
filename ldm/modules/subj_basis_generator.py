@@ -195,7 +195,7 @@ class SubjBasisGenerator(nn.Module):
     ):
         super().__init__()
         self.proj_in = nn.Sequential(
-            nn.Linear(image_embedding_dim, dim),
+            nn.Linear(image_embedding_dim, dim, bias=False),
             nn.LayerNorm(dim, elementwise_affine=False),
         )
         self.pos_emb    = nn.Embedding(max_seq_len, dim)                if apply_pos_emb else None
