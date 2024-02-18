@@ -203,12 +203,11 @@ class SubjBasisGenerator(nn.Module):
 
         self.latent_subj_queries = nn.Parameter(torch.randn(1, num_subj_queries, dim) / dim**0.5)
         self.latent_bg_queries   = nn.Parameter(torch.randn(1, num_bg_queries, dim)   / dim**0.5)
-        self.lq_ln          = nn.LayerNorm(dim, elementwise_affine=False)
+        self.lq_ln               = nn.LayerNorm(dim, elementwise_affine=False)
 
         # Remove proj_out to reduce the number of parameters, since image_embedding_dim = output_dim = 768.
         self.proj_out = nn.Identity() #nn.Linear(dim, output_dim)
-        # NOTE: norm_out is the only LayerNorm with elementwise_affine=True.
-        self.norm_out = nn.LayerNorm(output_dim)
+        self.norm_out = nn.LayerNorm(output_dim, elementwise_affine=False)
         self.output_scale = output_dim ** -0.5
 
         self.to_latents_from_mean_pooled_seq = (

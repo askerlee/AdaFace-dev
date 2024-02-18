@@ -1445,6 +1445,7 @@ class EmbeddingManager(nn.Module):
                         zs_vecs_2sets[:, self.layerwise_lora_rank:self.layerwise_lora_rank+self.num_unet_ca_layers], \
                         zs_vecs_2sets[:, self.layerwise_lora_rank+self.num_unet_ca_layers:]
 
+                    #breakpoint()
                     self.subj2ada_zs_basis_vecs[placeholder_string] = ada_zs_basis_vecs
                     self.subj2ada_zs_bias[placeholder_string]       = ada_zs_bias.permute(1, 0, 2)
                     # subj_static_embedding: [9, 16, 768] => [16, 9, 768]
