@@ -1020,7 +1020,7 @@ class EmbeddingManager(nn.Module):
         if self.do_zero_shot:
             emb_ema_as_pooling_probe_weight = 0
         self.set_emb_ema_as_pooling_probe_weight(emb_ema_as_pooling_probe_weight)
-        
+
         self.emb_ema_grad_scale = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
 
@@ -2187,8 +2187,6 @@ class EmbeddingManager(nn.Module):
 
             if "emb_ema_as_pooling_probe_weight" in ckpt and not self.do_zero_shot:
                 self.set_emb_ema_as_pooling_probe_weight(ckpt["emb_ema_as_pooling_probe_weight"])
-            else:
-                self.emb_ema_as_pooling_probe_weight = 0
 
             if "background_strings" in ckpt:
                 ckpt_background_strings = ckpt["background_strings"]

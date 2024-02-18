@@ -25,6 +25,7 @@ from bisect import bisect_right
 clip_image_encoder = None
 clip_preprocessor  = None
 clip_device = 'cpu'
+neg_image_features = None
 
 class SequentialLR2(SequentialLR):
     def step(self):
@@ -2243,7 +2244,7 @@ def init_clip_image_encoder(clip_type, device):
 # fg_masks: a list of [Hi, Wi].
 def encode_image_fg_bg_with_clip(images, fg_masks):
     # Must call init_clip_image_encoder() before calling this function.
-    global clip_image_encoder, clip_preprocessor, clip_device
+    global clip_image_encoder, clip_preprocessor, neg_image_features, clip_device
 
     image_pixel_values = []
     # images could be a batch of images that have been collated into a tensor or np array.
@@ -2288,18 +2289,23 @@ def encode_image_fg_bg_with_clip(images, fg_masks):
         fg_masks2 = torch.ones_like(image_pixel_values[:, 0, :, :], device=clip_device)
         
     with torch.no_grad():
+        if neg_image_features is None:
+            # neg_pixel_values: [1, 3, 224, 224]
+            neg_pixel_values = torch.zeros_like(image_pixel_values[:1])
+            neg_image_features = clip_image_encoder(neg_pixel_values, attn_mask=1-fg_masks2[:1], output_hidden_states=True).hidden_states[-2]
+
         # image_fg_features: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
         image_fg_dict  = clip_image_encoder(image_pixel_values, attn_mask=fg_masks2, output_hidden_states=True)
         # attn_mask: [BS, 1, 257]
-        image_fg_features = image_fg_dict.hidden_states[-2]
+        image_fg_features = image_fg_dict.hidden_states[-2] - neg_image_features
         if image_fg_dict.attn_mask is not None:
             image_fg_features = image_fg_features * image_fg_dict.attn_mask
 
         # A negative mask is used to extract the background features.
         image_bg_dict  = clip_image_encoder(image_pixel_values, attn_mask=1-fg_masks2, output_hidden_states=True)
-        image_bg_features = image_bg_dict.hidden_states[-2]
+        image_bg_features = image_bg_dict.hidden_states[-2] - neg_image_features
         if image_bg_dict.attn_mask is not None:
-            image_bg_features = image_bg_features * image_bg_dict.attn_mask
+            image_bg_features = image_bg_features * image_bg_dict.attn_mask        
 
     return image_fg_features, image_bg_features
 
