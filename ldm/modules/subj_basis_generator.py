@@ -121,7 +121,7 @@ class CrossAttention(nn.Module):
                         nn.LayerNorm(inner_dim, elementwise_affine=False))
 
         self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, input_dim),
+            nn.Linear(inner_dim, input_dim, bias=False),
             nn.LayerNorm(inner_dim, elementwise_affine=False),
             nn.Dropout(dropout)
         )
