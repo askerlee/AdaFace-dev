@@ -209,6 +209,7 @@ class SubjBasisGenerator(nn.Module):
         self.proj_out = nn.Identity() #nn.Linear(dim, output_dim)
         # NOTE: norm_out is the only LayerNorm with elementwise_affine=True.
         self.norm_out = nn.LayerNorm(output_dim)
+        self.output_scale = output_dim ** -0.5
 
         self.to_latents_from_mean_pooled_seq = (
             nn.Sequential(
@@ -261,7 +262,7 @@ class SubjBasisGenerator(nn.Module):
             latent_queries = ff(latent_queries) + latent_queries
 
         latent_queries = self.proj_out(latent_queries)
-        return self.norm_out(latent_queries)
+        return self.norm_out(latent_queries) * self.output_scale
 
 @dataclass
 class BaseModelOutputWithPooling2(ModelOutput):
