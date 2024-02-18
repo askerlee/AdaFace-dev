@@ -1002,6 +1002,9 @@ class EmbeddingManager(nn.Module):
             **kwargs
     ):
         super().__init__()
+
+        self.do_zero_shot = do_zero_shot
+
         self.string_to_token_dict = OrderedDict()
         
         self.string_to_static_embedder_dict = nn.ParameterDict()
@@ -1012,7 +1015,9 @@ class EmbeddingManager(nn.Module):
 
         self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
         self.ada_uses_attn_pooler = ada_uses_attn_pooler
-        self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight
+        # If self.do_zero_shot, then disable emb_ema_as_pooling_probe. 
+        # Otherwise, emb_ema_as_pooling_probe_weight = 0.5.
+        self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight if not self.do_zero_shot else 0
         self.emb_ema_grad_scale = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
 
@@ -1216,7 +1221,6 @@ class EmbeddingManager(nn.Module):
         self.ca_q_bns       = nn.ModuleDict(ca_q_bns)
         self.ca_outfeat_lns = nn.ModuleDict(ca_outfeat_lns)
 
-        self.do_zero_shot = do_zero_shot
         # ref_image_feat_dict have two keys: 'subj' and 'bg'.
         self.ref_image_feat_dict = {}
         if self.do_zero_shot:
