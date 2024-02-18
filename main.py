@@ -961,7 +961,8 @@ if __name__ == "__main__":
             device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
             zs_image_emb_dim = init_clip_image_encoder(opt.zs_clip_type, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
-
+            config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
+            
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
         # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html

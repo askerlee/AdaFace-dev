@@ -2268,7 +2268,7 @@ def encode_image_fg_bg_with_clip(images, fg_masks):
         if isinstance(fg_masks, (list, tuple)):
             fg_masks2 = []
             for fg_mask in fg_masks:
-                # fg_mask2: [Hi, Wi]
+                # fg_mask: [Hi, Wi]
                 # BUG: clip_preprocessor will do central crop on images. But fg_mask is not central cropped.
                 # If the ref image is not square, then the fg_mask will not match the image.
                 # TODO: crop fg_mask and images to square before calling encode_image_fg_bg_with_clip().
@@ -2283,11 +2283,13 @@ def encode_image_fg_bg_with_clip(images, fg_masks):
             # The actual size doesn't matter, 
             # as fg_mask2 will be resized to the same size as image features 
             # (much smaller than image_pixel_values).            
-            fg_masks2 = torch.tensor(fg_masks, device=clip_device).float()
+            fg_masks2 = torch.tensor(fg_masks, device=clip_device).float().unsqueeze(1)
+            fg_masks2 = F.interpolate(fg_masks2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
+            fg_masks2 = fg_masks2.squeeze(1)
     else:
         # fg_mask2: [BS, 224, 224]. 
         fg_masks2 = torch.ones_like(image_pixel_values[:, 0, :, :], device=clip_device)
-        
+
     with torch.no_grad():
         if neg_image_features is None:
             # neg_pixel_values: [1, 3, 224, 224]

@@ -495,7 +495,8 @@ class StaticLayerwiseEmbedding(nn.Module):
         print(f"{zero_shot_sig} StaticLayerwiseEmbedding {token_string} initialized with {self.K} total embs, {self.N} init vectors ({init_string}), {self.r} basis vectors")
 
     # Return static embeddings of all layers together.
-    # zs_basis_vecs: [K, r, 768]. K: number of vectors per token. r: number of basis vectors for each vector.
+    # static_zs_embs: [16, K, 768]. 
+    # 16: number of layers. K: number of vectors per token. 
     def forward(self, static_zs_embs=None):
         with torch.autocast(device_type=self.device_type, enabled=False):
             # self.basis_comm_weights: [1, K, r] broadcasted to [16, K, r].
