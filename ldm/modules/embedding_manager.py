@@ -1017,7 +1017,10 @@ class EmbeddingManager(nn.Module):
         self.ada_uses_attn_pooler = ada_uses_attn_pooler
         # If self.do_zero_shot, then disable emb_ema_as_pooling_probe. 
         # Otherwise, emb_ema_as_pooling_probe_weight = 0.5.
-        self.emb_ema_as_pooling_probe_weight   = emb_ema_as_pooling_probe_weight if not self.do_zero_shot else 0
+        if self.do_zero_shot:
+            emb_ema_as_pooling_probe_weight = 0
+        self.set_emb_ema_as_pooling_probe_weight(emb_ema_as_pooling_probe_weight)
+        
         self.emb_ema_grad_scale = 0.05
         self.emb_ema_grad_scaler = gen_gradient_scaler(self.emb_ema_grad_scale)
 
@@ -2182,7 +2185,7 @@ class EmbeddingManager(nn.Module):
             if "ada_emb_weight" in ckpt:
                 self.set_ada_emb_weight(ckpt["ada_emb_weight"], is_first_time_print=False)
 
-            if "emb_ema_as_pooling_probe_weight" in ckpt:
+            if "emb_ema_as_pooling_probe_weight" in ckpt and not self.do_zero_shot:
                 self.set_emb_ema_as_pooling_probe_weight(ckpt["emb_ema_as_pooling_probe_weight"])
             else:
                 self.emb_ema_as_pooling_probe_weight = 0
