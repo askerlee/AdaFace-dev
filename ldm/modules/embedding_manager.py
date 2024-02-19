@@ -1431,11 +1431,11 @@ class EmbeddingManager(nn.Module):
                         zs_clip_features = zs_image_feat_dict['subj']
                         num_vectors_each_placeholder = self.number_vectors_each_subj
 
-                    zs_face_features = zs_image_feat_dict['face']
+                    zs_face_embs = zs_image_feat_dict['face']
 
                     # zs_clip_features: [1, 257, 1280]
                     # zs_vecs_2sets: [1, 468, 768] -> [9, 52, 768]
-                    zs_vecs_2sets = self.subj_basis_generator(zs_clip_features, zs_face_features, placeholder_is_bg)
+                    zs_vecs_2sets = self.subj_basis_generator(zs_clip_features, zs_face_embs, placeholder_is_bg)
                     zs_vecs_2sets = zs_vecs_2sets.reshape(num_vectors_each_placeholder,
                                                           self.num_zs_vecs_per_token, -1)
                     # If subj:
@@ -1999,7 +1999,7 @@ class EmbeddingManager(nn.Module):
         self.img_mask = volatile_ds['img_mask']
         self.prompt_emb_mask = volatile_ds['prompt_emb_mask']
 
-    def set_zs_image_features(self, zs_clip_features, zs_face_features):
+    def set_zs_image_features(self, zs_clip_features, zs_face_embs):
         # zs_clip_features: [1, 514, 1280]
         # zs_clip_subj_features, zs_clip_bg_features: [1, 257, 1280].
         zs_clip_subj_features, zs_clip_bg_features = zs_clip_features.chunk(2, dim=1)
@@ -2007,7 +2007,7 @@ class EmbeddingManager(nn.Module):
         #print(zs_clip_bg_features.mean(dim=1).squeeze(0)[:20])
 
         self.zs_image_feat_dict = { 'subj': zs_clip_subj_features, 'bg': zs_clip_bg_features,
-                                    'face': zs_face_features }
+                                    'face': zs_face_embs }
         # Beginning of a new iteration, clear the cached ada_zs_basis_vecs and ada_zs_bias.
         self.subj2ada_zs_basis_vecs = {}
         self.subj2ada_zs_bias       = {}

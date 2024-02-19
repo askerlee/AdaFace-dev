@@ -185,6 +185,7 @@ class SubjBasisGenerator(nn.Module):
         num_subj_queries=378,               # 378 = 9 * 42.
         num_bg_queries=168,                 # 168 = 4 * 42.
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
+        face_embedding_dim=512,             # insightface face feature dimension.
         output_dim=768,                     # CLIP text embedding input dimension.
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
@@ -198,6 +199,11 @@ class SubjBasisGenerator(nn.Module):
             nn.Linear(image_embedding_dim, dim, bias=False),
             nn.LayerNorm(dim, elementwise_affine=False),
         )
+        self.face_proj_in = nn.Sequential(
+            nn.Linear(face_embedding_dim, dim, bias=False),
+            nn.LayerNorm(dim, elementwise_affine=False),
+        )
+
         self.pos_emb    = nn.Embedding(max_seq_len, dim)                if apply_pos_emb else None
         self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=False)   if apply_pos_emb else None
 
@@ -234,13 +240,19 @@ class SubjBasisGenerator(nn.Module):
                 )
             )
 
-    def forward(self, clip_features, face_features, placeholder_is_bg=False):     
+    def forward(self, clip_features, face_embs, placeholder_is_bg=False):     
         x = self.proj_in(clip_features)
         if self.pos_emb is not None:
             n, device = x.shape[1], x.device
             pos_emb = self.pos_emb(torch.arange(n, device=device))
             # Downscale positional embeddings to reduce its impact.
             x = x + self.pos_emb_ln(pos_emb) * 0.5
+
+        use_face_embs = True
+        if use_face_embs:
+            face_embs = self.face_proj_in(face_embs)
+            # x: [1, 257, 768]. face_embs: [1, 768] => [1, 258, 768].
+            x = torch.cat((face_embs.unsqueeze(1), x), dim=1)
 
         # placeholder_is_bg determines whether to select latent_bg_queries or latent_subj_queries,
         # which then extract either background or subject bases.
