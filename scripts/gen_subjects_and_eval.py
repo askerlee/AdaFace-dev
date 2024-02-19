@@ -45,7 +45,9 @@ def parse_args():
     parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
                         default='openai',
                         help="Type of zero-shot learning clip model")
-    
+    parser.add_argument("--no_face_emb", action="store_true",
+                        help="Do not use face embeddings for zero-shot generation")
+      
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
     parser.add_argument("--ref_masks",  type=str, nargs='+', default=None,
@@ -477,7 +479,9 @@ if __name__ == "__main__":
             command_line += f" --zeroshot --zs_clip_type {args.zs_clip_type} --ref_images {args.ref_images}"
             if args.ref_masks is not None:
                 command_line += f" --ref_masks {args.ref_masks}"
-
+            if args.no_face_emb:
+                command_line += f" --no_face_emb"
+                
         if hasattr(args, 'num_vectors_per_subj_token'):
             command_line += f" --subject_string {args.orig_placeholder} --num_vectors_per_subj_token {args.num_vectors_per_subj_token}"
         if hasattr(args, 'num_vectors_per_bg_token'):

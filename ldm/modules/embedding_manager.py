@@ -1254,8 +1254,7 @@ class EmbeddingManager(nn.Module):
                                                            # zs_image_emb_dim: laion: 1280, openai: 768.
                                                            image_embedding_dim = zs_image_emb_dim, 
                                                            dim = out_emb_dim,
-                                                           output_dim = out_emb_dim,
-                                                           num_latents_mean_pooled = 0)
+                                                           output_dim = out_emb_dim)
 
         else:
             self.subj_basis_generator = None

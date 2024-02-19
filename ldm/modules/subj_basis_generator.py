@@ -190,9 +190,6 @@ class SubjBasisGenerator(nn.Module):
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
-        # number of latent_queries derived from mean pooled representation of the image.
-        ## 6 = 3*2 (3 among 10 static bases and 3 among 10 ada bases).
-        num_latents_mean_pooled: int = 0,   # Disabled.
     ):
         super().__init__()
         self.proj_in = nn.Sequential(
@@ -204,9 +201,10 @@ class SubjBasisGenerator(nn.Module):
             nn.LayerNorm(dim, elementwise_affine=False),
         )
 
-        self.pos_emb    = nn.Embedding(max_seq_len, dim)                if apply_pos_emb else None
+        self.pos_emb    = nn.Embedding(max_seq_len, dim)            if apply_pos_emb else None
         self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=False)   if apply_pos_emb else None
 
+        self.latent_face_queries = nn.Parameter(torch.randn(1, num_subj_queries, dim) / dim**0.5)
         self.latent_subj_queries = nn.Parameter(torch.randn(1, num_subj_queries, dim) / dim**0.5)
         self.latent_bg_queries   = nn.Parameter(torch.randn(1, num_bg_queries, dim)   / dim**0.5)
         self.lq_ln               = nn.LayerNorm(dim, elementwise_affine=False)
@@ -215,16 +213,6 @@ class SubjBasisGenerator(nn.Module):
         self.proj_out = nn.Identity() #nn.Linear(dim, output_dim)
         self.norm_out = nn.LayerNorm(output_dim, elementwise_affine=False)
         self.output_scale = output_dim ** -0.5
-
-        self.to_latents_from_mean_pooled_seq = (
-            nn.Sequential(
-                nn.LayerNorm(dim, elementwise_affine=False),
-                nn.Linear(dim, dim * num_latents_mean_pooled, bias=False),
-                Rearrange("b (n d) -> b n d", n=num_latents_mean_pooled),
-            )
-            if num_latents_mean_pooled > 0
-            else None
-        )
 
         self.layers = nn.ModuleList([])
         for _ in range(depth):
@@ -242,29 +230,31 @@ class SubjBasisGenerator(nn.Module):
 
     def forward(self, clip_features, face_embs, placeholder_is_bg=False):     
         x = self.proj_in(clip_features)
+
+        # No need to use face_embs if placeholder_is_bg, or if face embs are disabled (face_embs is None), 
+        # or no face is detected (face_embs is all 0s).
+        use_face_embs = (face_embs is not None) and (face_embs != 0).any() and (not placeholder_is_bg)
+        if use_face_embs:
+            face_embs = self.face_proj_in(face_embs)
+            attn_0, ff_0 = self.layers[0]
+            latent_queries = attn_0(self.latent_face_queries, face_embs.unsqueeze(1))
+            latent_queries = ff_0(latent_queries) + latent_queries
+            layers_for_clip = self.layers[1:]
+        else:
+            layers_for_clip = self.layers
+            # placeholder_is_bg determines whether to select latent_bg_queries or latent_subj_queries,
+            # which then extract either background or subject bases.
+            latent_queries = self.latent_bg_queries if placeholder_is_bg else self.latent_subj_queries
+        
+        latent_queries = self.lq_ln(latent_queries.repeat(x.size(0), 1, 1))
+
         if self.pos_emb is not None:
             n, device = x.shape[1], x.device
             pos_emb = self.pos_emb(torch.arange(n, device=device))
             # Downscale positional embeddings to reduce its impact.
             x = x + self.pos_emb_ln(pos_emb) * 0.5
 
-        use_face_embs = (face_embs is not None)
-        if use_face_embs:
-            face_embs = self.face_proj_in(face_embs)
-            # x: [1, 257, 768]. face_embs: [1, 768] => [1, 258, 768].
-            x = torch.cat((face_embs.unsqueeze(1), x), dim=1)
-
-        # placeholder_is_bg determines whether to select latent_bg_queries or latent_subj_queries,
-        # which then extract either background or subject bases.
-        latent_queries = self.latent_bg_queries if placeholder_is_bg else self.latent_subj_queries
-        latent_queries = self.lq_ln(latent_queries.repeat(x.size(0), 1, 1))
-
-        if self.to_latents_from_mean_pooled_seq:
-            meanpooled_seq = masked_mean(x, dim=1, mask=torch.ones(x.shape[:2], device=x.device, dtype=torch.bool))
-            meanpooled_latents = self.to_latents_from_mean_pooled_seq(meanpooled_seq)
-            latent_queries = torch.cat((meanpooled_latents, latent_queries), dim=-2)
-
-        for i, (attn, ff) in enumerate(self.layers):
+        for i, (attn, ff) in enumerate(layers_for_clip):
             if i > 0:
                 latent_queries = attn(latent_queries, x) + latent_queries
             else:
