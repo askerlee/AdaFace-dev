@@ -2269,7 +2269,7 @@ def encode_zero_shot_image_features(images, fg_masks):
         single_image_pixel_values = clip_preprocessor(images=image, return_tensors="pt").pixel_values
         image_pixel_values.append(single_image_pixel_values)
         if isinstance(image, torch.Tensor):
-            image = image.cpu().numpy()
+            image = image.cpu().numpy().transpose(1, 2, 0)
         face_info = face_analyzer.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
 
         if len(face_info) == 0:
