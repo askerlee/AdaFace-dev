@@ -19,13 +19,17 @@ from torchvision.utils import make_grid, draw_bounding_boxes
 import random, math
 from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
 from transformers import CLIPImageProcessor
+from insightface.app import FaceAnalysis
 
 from torch.optim.lr_scheduler import SequentialLR
 from bisect import bisect_right
-clip_image_encoder = None
-clip_preprocessor  = None
-clip_device = 'cpu'
-neg_image_features = None
+import re, cv2
+
+clip_image_encoder  = None
+clip_preprocessor   = None
+face_analyzer       = None
+clip_device         = 'cpu'
+neg_image_features  = None
 
 class SequentialLR2(SequentialLR):
     def step(self):
@@ -2218,8 +2222,8 @@ def gen_cfg_scales_for_stu_tea(tea_scale, stu_scale, num_teachers, device):
     cfg_scales_for_clip_loss = cfg_scales_for_clip_loss.to(device)
     return cfg_scales_for_clip_loss
 
-def init_clip_image_encoder(clip_type, device):
-    global clip_image_encoder, clip_preprocessor, clip_device
+def init_zero_shot_image_encoders(clip_type, device):
+    global clip_image_encoder, clip_preprocessor, face_analyzer, clip_device
 
     if clip_type == 'laion':
         clip_model_tag = 'laion/CLIP-ViT-H-14-laion2B-s32B-b79K'
@@ -2237,16 +2241,23 @@ def init_clip_image_encoder(clip_type, device):
     # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
     zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
 
+    # BUG: If device='cpu', then it will throw an exception.
+    gpu_id = re.findall(r'\d+', device).pop()
+    gpu_id = int(gpu_id)
+    face_analyzer = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+    face_analyzer.prepare(ctx_id=gpu_id, det_size=(512, 512))
+
     return zs_clip_type2image_emb_dim[clip_type]
 
 # images: numpy.ndarray or torch.Tensor.
 # images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
 # fg_masks: a list of [Hi, Wi].
-def encode_image_fg_bg_with_clip(images, fg_masks):
-    # Must call init_clip_image_encoder() before calling this function.
-    global clip_image_encoder, clip_preprocessor, neg_image_features, clip_device
+def encode_zero_shot_image_features(images, fg_masks):
+    # Must call init_zero_shot_image_encoders() before calling this function.
+    global clip_image_encoder, clip_preprocessor, face_analyzer, neg_image_features, clip_device
 
     image_pixel_values = []
+    face_embs = []
     # images could be a batch of images that have been collated into a tensor or np array.
     # images can also be a list of images.
     # The code below that processes them one by one can be applied in both cases.
@@ -2257,10 +2268,24 @@ def encode_image_fg_bg_with_clip(images, fg_masks):
         # Different sizes of images are standardized to the same size 224*224.
         single_image_pixel_values = clip_preprocessor(images=image, return_tensors="pt").pixel_values
         image_pixel_values.append(single_image_pixel_values)
-    
+        if isinstance(image, torch.Tensor):
+            image = image.cpu().numpy()
+        face_info = face_analyzer.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+
+        if len(face_info) == 0:
+            # If no face is detected (e.g. animals or objects), then use a zero tensor as the face embedding.
+            face_emb = torch.zeros(512, device=clip_device)
+        else:
+            face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
+            # face_emb: [512,]
+            face_emb = torch.from_numpy(face_info['embedding']).to(clip_device)
+        face_embs.append(face_emb)
+
     # image_pixel_values: [BS, 3, 224, 224]
     image_pixel_values = torch.cat(image_pixel_values, dim=0)
     image_pixel_values = image_pixel_values.to(clip_device)
+    # face_embs: [BS, 512].
+    face_embs = torch.stack(face_embs, dim=0)
 
     if fg_masks is not None:
         assert len(fg_masks) == len(images)
@@ -2271,7 +2296,7 @@ def encode_image_fg_bg_with_clip(images, fg_masks):
                 # fg_mask: [Hi, Wi]
                 # BUG: clip_preprocessor will do central crop on images. But fg_mask is not central cropped.
                 # If the ref image is not square, then the fg_mask will not match the image.
-                # TODO: crop fg_mask and images to square before calling encode_image_fg_bg_with_clip().
+                # TODO: crop fg_mask and images to square before calling encode_zero_shot_image_features().
                 # fg_mask2: [Hi, Wi] -> [1, 1, 224, 224]            
                 fg_mask2 = torch.tensor(fg_mask, device=clip_device).float().unsqueeze(0).unsqueeze(0)
                 fg_mask2 = F.interpolate(fg_mask2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
@@ -2309,7 +2334,10 @@ def encode_image_fg_bg_with_clip(images, fg_masks):
         if image_bg_dict.attn_mask is not None:
             image_bg_features = image_bg_features * image_bg_dict.attn_mask        
 
-    return image_fg_features, image_bg_features
+    # clip_features: [BS, 514, 1280].
+    # face_embs: [BS, 512].
+    clip_features = torch.cat([image_fg_features, image_bg_features], dim=1)
+    return clip_features, face_embs
 
 # prob_mat: [1, 64, 64].
 def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):

@@ -20,7 +20,7 @@ from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.data.personalized import SubjectSampler
-from ldm.util import instantiate_from_config, extend_nn_embedding, init_clip_image_encoder
+from ldm.util import instantiate_from_config, extend_nn_embedding, init_zero_shot_image_encoders
 import re
 from safetensors.torch import load_file as safetensors_load_file
 
@@ -959,7 +959,7 @@ if __name__ == "__main__":
             gpus = opt.gpus.strip(",").split(',')
             # TODO: put clip image encoder on the same device as the model
             device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
-            zs_image_emb_dim = init_clip_image_encoder(opt.zs_clip_type, device)
+            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
             

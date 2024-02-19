@@ -1,19 +1,16 @@
 import torch
 import numpy as np
 from PIL import Image
-import requests
-from transformers import AutoProcessor
-from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
+from insightface.app import FaceAnalysis
+import cv2
 
-model = CLIPVisionModelWithMask.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
-processor = AutoProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+gpu_id = 0
+face_analyzer = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+face_analyzer.prepare(ctx_id=gpu_id, det_size=(512, 512))
+face_image = Image.open("subjects-celebrity/jiffpom/aug27-2021.jpg")
+face_info = face_analyzer.get(cv2.cvtColor(np.array(face_image), cv2.COLOR_RGB2BGR))
+breakpoint()
 
-url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-# image: PIL.Image.Image. np.array(image): (480, 640, 3).
-image = Image.open(requests.get(url, stream=True).raw)
-# (480, 640) -> (224, 224).
-inputs = processor(images=image, return_tensors="pt")
-
-with torch.no_grad():
-    # [1, 257, 1280]
-    image_embeds = model(**inputs, output_hidden_states=True).hidden_states[-2]
+face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
+# face_emb: [512,]
+face_emb = face_info['embedding']

@@ -18,7 +18,7 @@ from torch import autocast
 from contextlib import nullcontext
 
 from ldm.util import instantiate_from_config, mix_embeddings, save_grid, extend_nn_embedding, \
-                     init_clip_image_encoder, encode_image_fg_bg_with_clip
+                     init_zero_shot_image_encoders, encode_zero_shot_image_features
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
@@ -385,7 +385,7 @@ def main(opt):
     seed_everything(opt.seed)
     # More complex negative prompts may hurt the performance.
     predefined_negative_prompt = "duplicate, out of frame, cropped, mutilated, bad anatomy, deformed, bad proportions, disfigured, mutation"
-    device = torch.device(f"cuda:{opt.gpu}") if torch.cuda.is_available() else torch.device("cpu")
+    device = f"cuda:{opt.gpu}" if torch.cuda.is_available() else "cpu"
     
     if not opt.eval_blip:
         config = OmegaConf.load(f"{opt.config}")
@@ -397,16 +397,16 @@ def main(opt):
             ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
             ref_masks  = [ np.array(Image.open(ref_mask), dtype=float) for ref_mask in opt.ref_masks ] \
                             if opt.ref_masks is not None else None
-            zs_image_emb_dim = init_clip_image_encoder(opt.zs_clip_type, device)
+            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
 
-            ref_image_fg_features, ref_image_bg_features = encode_image_fg_bg_with_clip(ref_images, ref_masks)
-            # ref_image_features: [BS, 514, 1280]. 
-            ref_image_features = torch.cat([ref_image_fg_features, ref_image_bg_features], dim=1)
-            # ref_image_features: [1, 514, 1280]. Keep the batch dimension.
-            ref_image_features = ref_image_features.mean(dim=0, keepdim=True)
+            # zs_clip_features: [BS, 514, 1280]. zs_face_embs: [BS, 512].
+            zs_clip_features, zs_face_embs = encode_zero_shot_image_features(ref_images, ref_masks)
+            # zs_clip_features: [1, 514, 1280]. Keep the batch dimension.
+            zs_clip_features = zs_clip_features.mean(dim=0, keepdim=True)
         else:
-            ref_image_features = None
+            zs_clip_features = None
+            zs_face_embs     = None
 
         model  = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
@@ -687,7 +687,8 @@ def main(opt):
                             prompts = list(prompts)
 
                         if not opt.eval_blip:
-                            c = model.get_learned_conditioning(prompts, ref_image_features=ref_image_features)
+                            c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
+                                                               zs_face_embs=zs_face_embs)
                             # ref_c is not None, implies (prompt_mix_weight != 0 and ref_prompt is not None).
                             if ref_c is not None:
                                 # c / ref_c are tuples of (cond, prompts, extra_info).

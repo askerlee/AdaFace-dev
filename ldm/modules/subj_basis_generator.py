@@ -234,8 +234,8 @@ class SubjBasisGenerator(nn.Module):
                 )
             )
 
-    def forward(self, x, placeholder_is_bg=False):        
-        x = self.proj_in(x)
+    def forward(self, clip_features, face_features, placeholder_is_bg=False):     
+        x = self.proj_in(clip_features)
         if self.pos_emb is not None:
             n, device = x.shape[1], x.device
             pos_emb = self.pos_emb(torch.arange(n, device=device))

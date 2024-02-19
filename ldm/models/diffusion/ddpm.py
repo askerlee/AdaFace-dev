@@ -40,7 +40,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
                        gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, clamp_prompt_embedding, \
                        merge_cls_token_embeddings, join_dict_of_indices_with_key_filter, SequentialLR2, \
-                       encode_image_fg_bg_with_clip
+                       encode_zero_shot_image_features
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -896,7 +896,8 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
-    def get_learned_conditioning(self, cond_in, ref_image_features=None, randomize_clip_weights=False):
+    def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_face_embs=None, 
+                                 randomize_clip_weights=False):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
@@ -905,10 +906,10 @@ class LatentDiffusion(DDPM):
                 if randomize_clip_weights:
                     self.cond_stage_model.sample_last_layers_skip_weights()
 
-                # If do_zero_shot, but the prompt is empty (uncond prompt), then ref_image_features is None.
-                # We don't update the ref_image_features in this case.
-                if self.do_zero_shot and ref_image_features is not None:
-                    self.embedding_manager.set_ref_image_features(ref_image_features)
+                # If do_zero_shot, but the prompt is empty (uncond prompt), then zs_clip_features is None.
+                # We don't update the zs_clip_features in this case.
+                if self.do_zero_shot and zs_clip_features is not None:
+                    self.embedding_manager.set_zs_image_features(zs_clip_features, zs_face_embs)
 
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
@@ -1633,15 +1634,16 @@ class LatentDiffusion(DDPM):
             images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
             # batch["fg_mask"]: [3, 512, 512].
             fg_mask = batch["fg_mask"]
-            # First time processing the image, so we need to extract the image features.
-            image_fg_features, image_bg_features = encode_image_fg_bg_with_clip(images, fg_mask)
-            # image_features: [1, 514, 1280] -> [514, 1280].
-            # Remove the batch dimension before being collated into a batch.
-            image_features    = torch.cat([image_fg_features, image_bg_features], dim=1).squeeze(0)
-            # image_features: [B, 514, 1280] => [1, 514, 1280].
-            self.iter_flags['image_features'] = image_features.mean(dim=0, keepdim=True)
+            zs_clip_features, zs_face_embs = encode_zero_shot_image_features(images, fg_mask)
+            # zs_clip_features: [B, 514, 1280] => [1, 514, 1280].
+            zs_clip_features = zs_clip_features.mean(dim=0, keepdim=True)
+            # zs_face_embs: [B, 512] => [1, 512].
+            zs_face_embs     = zs_face_embs.mean(dim=0, keepdim=True)
+            self.iter_flags['zs_clip_features'] = zs_clip_features
+            self.iter_flags['zs_face_embs']     = zs_face_embs
         else:
-            self.iter_flags['image_features'] = None
+            self.iter_flags['zs_clip_features'] = None
+            self.iter_flags['face_embs']        = None
 
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
@@ -1732,10 +1734,11 @@ class LatentDiffusion(DDPM):
                     # extra_info: a dict that contains extra info.
                     c_static_emb, _, extra_info = \
                         self.get_learned_conditioning(delta_prompts, 
-                                                      self.iter_flags['image_features'],
+                                                      self.iter_flags['zs_clip_features'],
+                                                      self.iter_flags['zs_face_embs'],
                                                       randomize_clip_weights=True)
                     # Release image_features.
-                    del self.iter_flags['image_features']
+                    del self.iter_flags['zs_clip_features']
 
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)

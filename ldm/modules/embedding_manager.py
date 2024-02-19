@@ -1225,8 +1225,8 @@ class EmbeddingManager(nn.Module):
         self.ca_q_bns       = nn.ModuleDict(ca_q_bns)
         self.ca_outfeat_lns = nn.ModuleDict(ca_outfeat_lns)
 
-        # ref_image_feat_dict have two keys: 'subj' and 'bg'.
-        self.ref_image_feat_dict = {}
+        # zs_image_feat_dict have three keys: 'subj', 'bg', 'face'.
+        self.zs_image_feat_dict = {}
         if self.do_zero_shot:
             # No matter whether using layerwise embeddings, the basis vecs of either static or ada embedders are always layerwise_lora_rank,
             # as the basis vecs are shared across all CA layers.
@@ -1327,7 +1327,7 @@ class EmbeddingManager(nn.Module):
             # The keys of static_subj_embs_dict are the placeholder strings.
             static_embeded_text, tokenized_text_repeated, static_subj_embs_dict = \
                             self.get_static_embedding(tokenized_text, embedded_text.clone(), 
-                                                      self.ref_image_feat_dict,
+                                                      self.zs_image_feat_dict,
                                                       self.string_to_static_embedder_dict,
                                                       B, N, self.num_unet_ca_layers, device)
             # Cache the static embeddings to be used in ada embedding computation and
@@ -1352,7 +1352,7 @@ class EmbeddingManager(nn.Module):
             return static_embeded_text
     
     # N: length of sequence (including padding).
-    def get_static_embedding(self, tokenized_text, embedded_text, ref_image_feat_dict, embedder_dict, 
+    def get_static_embedding(self, tokenized_text, embedded_text, zs_image_feat_dict, embedder_dict, 
                              BS, N, num_unet_ca_layers, device):
         orig_tokenized_text = tokenized_text
         static_subj_embs_dict = {}
@@ -1425,15 +1425,17 @@ class EmbeddingManager(nn.Module):
                 # subj_static_embedding: [16, K, 768].
                 if self.do_zero_shot:
                     if placeholder_is_bg:
-                        ref_image_features = ref_image_feat_dict['bg']
+                        zs_clip_features = zs_image_feat_dict['bg']
                         num_vectors_each_placeholder = self.num_vectors_each_bg
                     else:
-                        ref_image_features = ref_image_feat_dict['subj']
+                        zs_clip_features = zs_image_feat_dict['subj']
                         num_vectors_each_placeholder = self.number_vectors_each_subj
 
-                    # ref_image_features: [1, 257, 1280]
+                    zs_face_features = zs_image_feat_dict['face']
+
+                    # zs_clip_features: [1, 257, 1280]
                     # zs_vecs_2sets: [1, 468, 768] -> [9, 52, 768]
-                    zs_vecs_2sets = self.subj_basis_generator(ref_image_features, placeholder_is_bg)
+                    zs_vecs_2sets = self.subj_basis_generator(zs_clip_features, zs_face_features, placeholder_is_bg)
                     zs_vecs_2sets = zs_vecs_2sets.reshape(num_vectors_each_placeholder,
                                                           self.num_zs_vecs_per_token, -1)
                     # If subj:
@@ -1997,14 +1999,15 @@ class EmbeddingManager(nn.Module):
         self.img_mask = volatile_ds['img_mask']
         self.prompt_emb_mask = volatile_ds['prompt_emb_mask']
 
-    def set_ref_image_features(self, ref_image_features):
-        # ref_image_features: [1, 514, 1280]
-        # ref_image_subj_features, ref_image_bg_features: [1, 257, 1280].
-        ref_image_subj_features, ref_image_bg_features = ref_image_features.chunk(2, dim=1)
-        #print(ref_image_subj_features.mean(dim=1).squeeze(0)[:20])
-        #print(ref_image_bg_features.mean(dim=1).squeeze(0)[:20])
+    def set_zs_image_features(self, zs_clip_features, zs_face_features):
+        # zs_clip_features: [1, 514, 1280]
+        # zs_clip_subj_features, zs_clip_bg_features: [1, 257, 1280].
+        zs_clip_subj_features, zs_clip_bg_features = zs_clip_features.chunk(2, dim=1)
+        #print(zs_clip_subj_features.mean(dim=1).squeeze(0)[:20])
+        #print(zs_clip_bg_features.mean(dim=1).squeeze(0)[:20])
 
-        self.ref_image_feat_dict = { 'subj': ref_image_subj_features, 'bg': ref_image_bg_features }
+        self.zs_image_feat_dict = { 'subj': zs_clip_subj_features, 'bg': zs_clip_bg_features,
+                                    'face': zs_face_features }
         # Beginning of a new iteration, clear the cached ada_zs_basis_vecs and ada_zs_bias.
         self.subj2ada_zs_basis_vecs = {}
         self.subj2ada_zs_bias       = {}
