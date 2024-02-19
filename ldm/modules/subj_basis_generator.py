@@ -45,7 +45,7 @@ def FeedForward(dim, mult=4):
     return nn.Sequential(
         nn.LayerNorm(dim, elementwise_affine=False),
         nn.Linear(dim, inner_dim, bias=False),
-        nn.LayerNorm(dim, elementwise_affine=False),
+        nn.LayerNorm(inner_dim, elementwise_affine=False),
         nn.GELU(),
         nn.Linear(inner_dim, dim, bias=False),
     )
@@ -174,7 +174,7 @@ class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
         dim=768,                            # Internal feature dimension. Same as output_dim.
-        depth=1,                            # number of (PerceiverAttention, FeedForward) layers.     
+        depth=2,                            # number of (PerceiverAttention, FeedForward) layers.     
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
         heads=16,       
         # num_subj_queries: number of subject latent_queries.
