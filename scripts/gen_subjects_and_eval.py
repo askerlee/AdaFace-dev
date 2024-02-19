@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning")
     parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
-                        default='laion',
+                        default='openai',
                         help="Type of zero-shot learning clip model")
     
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,

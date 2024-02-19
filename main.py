@@ -261,7 +261,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to use zero-shot learning")
                         
     parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
-                        default='laion',
+                        default='openai',
                         help="Type of zero-shot learning clip model")
 
     parser.add_argument("--layerwise_lora_rank", 
