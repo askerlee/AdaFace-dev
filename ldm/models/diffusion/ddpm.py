@@ -1634,11 +1634,9 @@ class LatentDiffusion(DDPM):
             images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
             # batch["fg_mask"]: [3, 512, 512].
             fg_mask = batch["fg_mask"]
-            zs_clip_features, zs_face_embs = encode_zero_shot_image_features(images, fg_mask)
-            # zs_clip_features: [B, 514, 1280] => [1, 514, 1280].
-            zs_clip_features = zs_clip_features.mean(dim=0, keepdim=True)
-            # zs_face_embs: [B, 512] => [1, 512].
-            zs_face_embs     = zs_face_embs.mean(dim=0, keepdim=True)
+            # zs_clip_features: [1, 514, 1280]. zs_face_embs: [1, 512].
+            zs_clip_features, zs_face_embs = encode_zero_shot_image_features(images, fg_mask,
+                                                                             calc_avg=True)
             self.iter_flags['zs_clip_features'] = zs_clip_features
             self.iter_flags['zs_face_embs']     = zs_face_embs
         else:

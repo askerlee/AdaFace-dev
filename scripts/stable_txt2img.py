@@ -300,6 +300,8 @@ def parse_args():
                         help="Reference image for zero-shot learning")
     parser.add_argument("--ref_masks", type=str, nargs='+', default=None,
                         help="Reference mask for zero-shot learning")
+    parser.add_argument("--no_face_emb", action="store_true",
+                        help="Do not use face embeddings for zero-shot generation")
     
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
@@ -400,10 +402,12 @@ def main(opt):
             zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
 
-            # zs_clip_features: [BS, 514, 1280]. zs_face_embs: [BS, 512].
-            zs_clip_features, zs_face_embs = encode_zero_shot_image_features(ref_images, ref_masks)
-            # zs_clip_features: [1, 514, 1280]. Keep the batch dimension.
-            zs_clip_features = zs_clip_features.mean(dim=0, keepdim=True)
+            # zs_clip_features: [1, 514, 1280]. zs_face_embs: [1, 512].
+            zs_clip_features, zs_face_embs = encode_zero_shot_image_features(ref_images, ref_masks,
+                                                                             calc_avg=True)
+            # Be compatible with older models that don't use face embeddings.
+            if opt.no_face_emb:
+                zs_face_embs = None
         else:
             zs_clip_features = None
             zs_face_embs     = None

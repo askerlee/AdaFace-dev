@@ -248,7 +248,7 @@ class SubjBasisGenerator(nn.Module):
             # Downscale positional embeddings to reduce its impact.
             x = x + self.pos_emb_ln(pos_emb) * 0.5
 
-        use_face_embs = True
+        use_face_embs = (face_embs is not None)
         if use_face_embs:
             face_embs = self.face_proj_in(face_embs)
             # x: [1, 257, 768]. face_embs: [1, 768] => [1, 258, 768].

@@ -2252,7 +2252,7 @@ def init_zero_shot_image_encoders(clip_type, device):
 # images: numpy.ndarray or torch.Tensor.
 # images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
 # fg_masks: a list of [Hi, Wi].
-def encode_zero_shot_image_features(images, fg_masks):
+def encode_zero_shot_image_features(images, fg_masks, calc_avg=False):
     # Must call init_zero_shot_image_encoders() before calling this function.
     global clip_image_encoder, clip_preprocessor, face_analyzer, neg_image_features, clip_device
 
@@ -2337,6 +2337,12 @@ def encode_zero_shot_image_features(images, fg_masks):
     # clip_features: [BS, 514, 1280].
     # face_embs: [BS, 512].
     clip_features = torch.cat([image_fg_features, image_bg_features], dim=1)
+    if calc_avg:
+        # clip_features: [BS, 514, 1280] -> [1, 514, 1280].
+        # face_embs: [BS, 512] -> [1, 512].
+        clip_features = clip_features.mean(dim=0, keepdim=True)
+        face_embs     = face_embs.mean(dim=0, keepdim=True)
+
     return clip_features, face_embs
 
 # prob_mat: [1, 64, 64].
