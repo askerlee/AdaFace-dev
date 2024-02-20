@@ -91,7 +91,7 @@ model:
       params:
         subject_strings:          ['z']
         background_strings:       ['y']
-        initializer_strings:   ["person"]
+        initializer_strings:   ["person", "unknown"]
         list_initializer_word_weights: [ None ]
         subj_name_to_cls_delta_strings: { 'z': "person" }
         num_vectors_per_subj_token: 9

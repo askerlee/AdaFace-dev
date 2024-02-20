@@ -1249,10 +1249,15 @@ class EmbeddingManager(nn.Module):
     def init_cls_delta_tokens(self, get_tokens_for_string, get_embeddings_for_tokens, 
                               subj_name_to_cls_delta_strings, subj_name_to_cls_delta_word_weights):
         self.subj_name_to_cls_delta_tokens  = {}
+        self.subj_name_to_cls_delta_token_weights = {}
+        self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = 0
+        
+        if subj_name_to_cls_delta_strings is None:
+            return
+
         # subj_name_to_cls_delta_word_weights is of type omegaconf. If without convertion to dict,
         # "subj_name_to_cls_delta_token_weights[subj_name] = cls_delta_token_weights" will throw an error.
         self.subj_name_to_cls_delta_token_weights = dict(subj_name_to_cls_delta_word_weights)
-        self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = 0
 
         for subj_name in subj_name_to_cls_delta_strings:
             cls_delta_string = subj_name_to_cls_delta_strings[subj_name]

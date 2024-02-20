@@ -24,20 +24,20 @@ model:
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
-        subject_strings: ["z", "y"]
+        subject_strings:     ["z"]
         background_strings:  ["y"]
         # The number of initializer words is probably different from that used in fine-tuning.
         # But it doesn't matter, as EmbeddingManager.load() will completely replace self.string_to_static_embedder_dict,
         # including the wrongly initialized LoraEmbedding object(s).
-        initializer_strings: ["man", "stage"]
-        num_vectors_per_subj_token: 1
+        initializer_strings: [ "person", "unknown" ]
+        num_vectors_per_subj_token: 9
         use_layerwise_embedding: True
         layerwise_lora_rank: 10
         ada_emb_weight: 0.5
         ada_uses_attn_pooler: True
         emb_ema_as_pooling_probe_weight: 0.5
         # Don't do prompt_embedding_clamp during inference.
-        prompt_embedding_clamp_value:      -1
+        prompt_embedding_clamp_value:    -1
                 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
