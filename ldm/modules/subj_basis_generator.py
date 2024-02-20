@@ -235,7 +235,7 @@ class SubjBasisGenerator(nn.Module):
 
         # No need to use face_embs if placeholder_is_bg, or if face embs are disabled (use_face_embs is False), 
         # or no face is detected (face_embs is all 0s).
-        if self.use_face_embs and (face_embs != 0).any() and (not placeholder_is_bg)
+        if self.use_face_embs and (face_embs != 0).any() and (not placeholder_is_bg):
             face_embs = self.face_proj_in(face_embs)
             attn_0, ff_0 = self.layers[0]
             latent_queries = attn_0(self.latent_face_queries, face_embs.unsqueeze(1))
