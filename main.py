@@ -266,7 +266,9 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--no_face_emb", dest='zs_use_face_embs', action="store_false",
                         help="Do not use face embeddings for zero-shot generation")
-
+    parser.add_argument("--zs_num_generator_layers", type=int, default=argparse.SUPPRESS,
+                        help="Depth of zero-shot subject feature generator")
+    
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=5,
         help="Layerwise lora rank")
@@ -947,7 +949,6 @@ if __name__ == "__main__":
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
-        config.model.params.personalization_config.params.zs_use_face_embs = opt.zs_use_face_embs
         config.data.params.train.params.do_zero_shot        = opt.zeroshot
         config.data.params.validation.params.do_zero_shot   = opt.zeroshot
 
@@ -958,7 +959,17 @@ if __name__ == "__main__":
             zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, opt.zs_use_face_embs, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
-            
+
+            config.model.params.personalization_config.params.zs_use_face_embs = opt.zs_use_face_embs
+            if hasattr(opt, 'zs_num_generator_layers'):
+                config.model.params.personalization_config.params.zs_num_generator_layers = opt.zs_num_generator_layers
+            else:
+                if opt.zs_use_face_embs:
+                    # One extra layer to process face embeddings.
+                    config.model.params.personalization_config.params.zs_num_generator_layers = 3
+                else:
+                    config.model.params.personalization_config.params.zs_num_generator_layers = 2
+
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
         # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
