@@ -264,6 +264,9 @@ def get_parser(**parser_kwargs):
                         default='openai',
                         help="Type of zero-shot learning clip model")
 
+    parser.add_argument("--no_face_emb", dest='zs_use_face_embs', action="store_false",
+                        help="Do not use face embeddings for zero-shot generation")
+
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=5,
         help="Layerwise lora rank")
@@ -944,6 +947,7 @@ if __name__ == "__main__":
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
+        config.model.params.personalization_config.params.zs_use_face_embs = opt.zs_use_face_embs
         config.data.params.train.params.do_zero_shot        = opt.zeroshot
         config.data.params.validation.params.do_zero_shot   = opt.zeroshot
 

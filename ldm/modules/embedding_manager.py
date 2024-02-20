@@ -999,6 +999,7 @@ class EmbeddingManager(nn.Module):
             shared_embedder_components='pooler',
             do_zero_shot=False,
             zs_image_emb_dim=1280,
+            zs_use_face_embs=False,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1233,7 +1234,8 @@ class EmbeddingManager(nn.Module):
                                                            # zs_image_emb_dim: laion: 1280, openai: 768.
                                                            image_embedding_dim = zs_image_emb_dim, 
                                                            dim = out_emb_dim,
-                                                           output_dim = out_emb_dim)
+                                                           output_dim = out_emb_dim,
+                                                           use_face_embs=zs_use_face_embs)
 
         else:
             self.subj_basis_generator = None
@@ -1251,7 +1253,7 @@ class EmbeddingManager(nn.Module):
         self.subj_name_to_cls_delta_tokens  = {}
         self.subj_name_to_cls_delta_token_weights = {}
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = 0
-        
+
         if subj_name_to_cls_delta_strings is None:
             return
 

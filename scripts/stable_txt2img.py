@@ -300,7 +300,7 @@ def parse_args():
                         help="Reference image for zero-shot learning")
     parser.add_argument("--ref_masks", type=str, nargs='+', default=None,
                         help="Reference mask for zero-shot learning")
-    parser.add_argument("--no_face_emb", action="store_true",
+    parser.add_argument("--no_face_emb", dest='zs_use_face_embs', action="store_false",
                         help="Do not use face embeddings for zero-shot generation")
     
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
@@ -393,6 +393,7 @@ def main(opt):
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
+        config.model.params.personalization_config.params.zs_use_face_embs = opt.zs_use_face_embs
 
         if opt.zeroshot:
             assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
@@ -405,9 +406,6 @@ def main(opt):
             # zs_clip_features: [1, 514, 1280]. zs_face_embs: [1, 512].
             zs_clip_features, zs_face_embs = encode_zero_shot_image_features(ref_images, ref_masks,
                                                                              calc_avg=True)
-            # Be compatible with older models that don't use face embeddings.
-            if opt.no_face_emb:
-                zs_face_embs = None
         else:
             zs_clip_features = None
             zs_face_embs     = None

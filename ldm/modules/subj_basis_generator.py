@@ -190,6 +190,7 @@ class SubjBasisGenerator(nn.Module):
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
+        use_face_embs: bool = True,         # Whether to use face_embs to generate latent_queries.
     ):
         super().__init__()
         self.proj_in = nn.Sequential(
@@ -227,14 +228,14 @@ class SubjBasisGenerator(nn.Module):
                     ]
                 )
             )
+        self.use_face_embs = use_face_embs
 
     def forward(self, clip_features, face_embs, placeholder_is_bg=False):     
         x = self.proj_in(clip_features)
 
-        # No need to use face_embs if placeholder_is_bg, or if face embs are disabled (face_embs is None), 
+        # No need to use face_embs if placeholder_is_bg, or if face embs are disabled (use_face_embs is False), 
         # or no face is detected (face_embs is all 0s).
-        use_face_embs = (face_embs is not None) and (face_embs != 0).any() and (not placeholder_is_bg)
-        if use_face_embs:
+        if self.use_face_embs and (face_embs != 0).any() and (not placeholder_is_bg)
             face_embs = self.face_proj_in(face_embs)
             attn_0, ff_0 = self.layers[0]
             latent_queries = attn_0(self.latent_face_queries, face_embs.unsqueeze(1))
