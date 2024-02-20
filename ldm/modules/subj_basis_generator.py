@@ -174,7 +174,7 @@ class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
         dim=768,                            # Internal feature dimension. Same as output_dim.
-        depth=2,                            # number of (PerceiverAttention, FeedForward) layers.     
+        depth=3,                            # number of (CrossAttention, FeedForward) layers. First layer is for face_embs.     
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
         heads=16,       
         # num_subj_queries: number of subject latent_queries.

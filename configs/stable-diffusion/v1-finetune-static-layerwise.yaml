@@ -48,9 +48,9 @@ model:
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
-        placeholder_strings: ["*"]
-        list_initializer_words: ["sculpture"]
-        list_initializer_weights: [ None ]
+        subject_strings: ["*"]
+        initializer_strings: ["sculpture"]
+        list_initializer_word_weights: [ None ]
         num_vectors_per_subj_token: 1
         use_layerwise_embedding: True
         layerwise_lora_rank: 5

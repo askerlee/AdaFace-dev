@@ -110,7 +110,7 @@ if __name__ == "__main__":
             prompt_idx = 0
 
             # orig_prompt replaces "z short_class_name" in prompt with the 
-            # long_class_name (actually init_string).
+            # long_class_name (actually subj_init_string).
             # E.g., prompt: "a z toy" <=> orig_prompt: "a stuffed animal".
             for _, indiv_subdir, prompt, orig_prompt in indiv_subdirs_prompts:
                 prompt_idx += 1

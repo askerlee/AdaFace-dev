@@ -79,8 +79,8 @@ class DictT(dict):
          self.actural_resume = ""
          self.embedding_manager_ckpt = ""
          self.subject_string = ""
-         self.init_word = ""
-         self.init_word_weights = 0.5
+         self.subj_init_string = "person"
+         self.subj_init_word_weights = [1]
          self.cls_delta_string = None
          self.layerwise_lora_rank = 5
          self.embedding_reg_weight = -1

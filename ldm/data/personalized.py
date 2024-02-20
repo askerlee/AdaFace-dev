@@ -138,10 +138,9 @@ class PersonalizedBase(Dataset):
                  # placeholder_prefix for compositional prompts. Could be a list of strings, separated by ",".
                  compos_placeholder_prefix=None,   
                  # cls string used to compute the delta loss.
+                 # cls_delta_string is the same as subj init string.
                  cls_delta_string=None,  
-                 #cls_uses_subj_init_words=False,
-                 # background strings used to compute the delta loss.
-                 cls_bg_delta_string=None,
+                 bg_init_string=None,
                 # num_vectors_per_subj_token: how many vectors in each layer are allocated to model 
                 # the subject. If num_vectors_per_subj_token > 1, pad with "," in the prompts to leave
                 # room for those extra vectors.
@@ -153,7 +152,6 @@ class PersonalizedBase(Dataset):
                  # If data_roots contain multiple folders, a subject each folder, 
                  # then subj_info_filepaths should point to a list of subject info files 
                  # containing the cls_delta_string of all subjects, in "init_strings".
-                 # cls_bg_delta_string is optional, and can be specified in "all_bg_init_words".
                  subj_info_filepaths=None,
                  do_zero_shot=False,
                  wds_comp_db_path=None,    # Path to the composition webdatabase .tar file
@@ -286,6 +284,9 @@ class PersonalizedBase(Dataset):
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         # subject_token, background_token: subject_string and background_string converted to 
         # token numbers.
+        # BUG: self.tokenizer hasn't been extended with the new tokens yet. 
+        # So the tokens are WRONG under multi-subject training.
+        # But this only matters when we use wds images.
         self.subject_tokens     = [ self.tokenizer(subject_string)['input_ids'][1] \
                                     for subject_string in self.subject_strings ]
         self.background_tokens  = [ self.tokenizer(background_string)['input_ids'][1] \
@@ -313,26 +314,17 @@ class PersonalizedBase(Dataset):
                 self.cls_delta_strings = [ default_cls_delta_strings[broad_class] \
                                             for broad_class in self.broad_classes ]
 
-        if 'all_bg_init_words' in subj2attr:
-            self.cls_bg_delta_strings = [ subj2attr['all_bg_init_words'][subject_name] \
-                                            for subject_name in self.subject_names ]
-        else:                
-            if cls_bg_delta_string is not None:
-                cls_bg_delta_string = re.split(r"\s+", cls_bg_delta_string) 
-            else:
-                cls_bg_delta_string = [ 'unknown' ]
-            # All subjects use the same cls_bg_delta_string.
-            self.cls_bg_delta_strings = cls_bg_delta_string * self.num_subjects
-
-        # list_initializer_weights are not used in the data loader, but are used to initialize
+        # list_subj_initializer_word_weights are not used in the data loader, but are used to initialize
         # the embedding manager.
         if 'all_init_word_weights' in subj2attr:
-            self.list_initializer_weights = [ subj2attr['all_init_word_weights'][subject_name] \
-                                              for subject_name in self.subject_names ]
+            self.list_subj_initializer_word_weights = [ subj2attr['all_init_word_weights'][subject_name] \
+                                                          for subject_name in self.subject_names ]
         else:
-            self.list_initializer_weights = [ None ] * self.num_subjects
-        # bg_initializer_weights are always None (uniform over bg initializer words).
-        self.list_bg_initializer_weights = [ None ] * self.num_subjects
+            self.list_subj_initializer_word_weights = [ None ] * self.num_subjects
+
+        self.bg_initializer_strings             = [ bg_init_string ] * self.num_subjects
+        # bg_initializer_word_weights are always None (uniform over bg initializer words).
+        self.list_bg_initializer_word_weights   = [ None ]           * self.num_subjects
 
         self.num_vectors_per_subj_token = num_vectors_per_subj_token
         self.num_vectors_per_bg_token   = num_vectors_per_bg_token
@@ -722,14 +714,10 @@ class PersonalizedBase(Dataset):
         subject_string      = self.subject_strings[subject_idx]
         background_string   = self.background_strings[subject_idx]        
         cls_delta_string    = self.cls_delta_strings[subject_idx]
+        cls_bg_delta_string = self.bg_initializer_strings[subject_idx]
         broad_class         = self.broad_classes[subject_idx]
         is_animal           = self.are_animals[subject_idx]
-        # If background_string is specified, cls_bg_delta_string should always be specified 
-        # in the commmand line (passed to main.py).
-        # Don't use all words in self.cls_bg_delta_strings in the same prompt. Otherwise after taking the average,
-        # the resulting embedding may have weird semantics and match too many areas.
-        cls_bg_delta_string = self.cls_bg_delta_strings[subject_idx]
-        
+
         example["subject_name"] = subject_name
 
         # If num_vectors_per_subj_token == 3:
@@ -746,7 +734,7 @@ class PersonalizedBase(Dataset):
         if self.common_placeholder_prefixes is not None:
             common_placeholder_prefix = random.choice(self.common_placeholder_prefixes)
             subject_string          = common_placeholder_prefix + " " + subject_string
-            cls_delta_string   = common_placeholder_prefix + " " + cls_delta_string
+            cls_delta_string        = common_placeholder_prefix + " " + cls_delta_string
         # common_placeholder_prefixes are specified for red_cartoon.
         # compos_placeholder_prefixes are specified for fixhand.
         # They usually won't be used together. 
@@ -769,8 +757,8 @@ class PersonalizedBase(Dataset):
         # If background_string is None, then cls_bg_delta_string is None as well, thus cls_bg_suffix is "".
         cls_bg_suffix = " with background {}".format(cls_bg_delta_string) if cls_bg_delta_string is not None else ""
         # bug_suffix: " with background y". cls_bg_suffix: " with background grass/rock".
-        subject_string_with_bg          = subject_string        + bg_suffix
-        compos_subject_string_with_bg   = compos_subject_string + bg_suffix
+        subject_string_with_bg          = subject_string            + bg_suffix
+        compos_subject_string_with_bg   = compos_subject_string     + bg_suffix
         compos_cls_delta_string_with_bg = compos_cls_delta_string   + cls_bg_suffix
 
         # "face portrait" trick for humans/animals.

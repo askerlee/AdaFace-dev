@@ -872,6 +872,8 @@ class UNetModel(nn.Module):
             # context: [16*B, N, 768] reshape => [B, 16, N, 768] permute => [16, B, N, 768]
             context = context.reshape(B, 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
 
+        # If use_ada_context, return the average of static and ada contexts.
+        # Otherwise, return the static context.
         def get_layer_context(layer_idx, layer_attn_components):
             # print(h.shape)
             if not use_layerwise_context:

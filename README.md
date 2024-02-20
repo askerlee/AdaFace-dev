@@ -42,7 +42,7 @@ python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml
          -n <run_name> --gpus 0, --no-test
          --data_root data/subject_images/
          --subject_string <subject_string>
-         --init_word "word1 word2..." --init_word_weights w1 w2...
+         --subj_init_string "word1 word2..." --subj_init_word_weights w1 w2...
 ```
 
 Example:
@@ -53,15 +53,15 @@ python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml
          -n alexachung-ada --gpus 0, --no-test 
          --data_root data/alexachung/  
          --subject_string "z"  
-         --init_word "young girl woman" 
-         --init_word_weights 1 2 2
+         --subj_init_string "young girl woman" 
+         --subj_init_word_weights 1 2 2
 ```
 
 where `subject_string` is a chosen uncommonly used single-token, such as ‘z’, ‘y’.
 
-`init_word` is a few words that roughly describe the subject (e.g., 'man', ‘girl’, ‘dog’). It is used to initialize the low-rank semantic space of the subject embeddings.
+`subj_init_string` is a few words that roughly describe the subject (e.g., 'man', ‘girl’, ‘dog’). It is used to initialize the low-rank semantic space of the subject embeddings.
 
-`init_word_weights` are the weights of each words in `init_word`. The number of weights are expected to be equal to the number of words. Intuitively, category words (”girl”, “man”, etc.) are given higher weights than modifier words (”young”, “chinese”, etc.).
+`subj_init_word_weights` are the weights of each words in `subj_init_string`. The number of weights are expected to be equal to the number of words. Intuitively, category words (”girl”, “man”, etc.) are given higher weights than modifier words (”young”, “chinese”, etc.).
 
 The number of training iterations is specified in `configs/stable-diffusion/v1-finetune-ada.yaml`. We chose 4k training iterations.
 

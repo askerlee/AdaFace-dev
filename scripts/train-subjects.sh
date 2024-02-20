@@ -141,10 +141,10 @@ echo Training on $subjects[$indices]
 
 for i in $indices
     set subject     $subjects[$i]
-    set init_string  $init_strings[$i]
-    set init_word_weights  (string split " " $all_init_word_weights[$i])
-    set cls_string $init_string
-    #set -q all_bg_init_words; and set bg_init_words $all_bg_init_words[$i]; or set bg_init_words ""
+    set subj_init_string  $init_strings[$i]
+    set subj_init_word_weights  (string split " " $all_init_word_weights[$i])
+    set cls_string $subj_init_string
+    #set -q bg_init_strings; and set bg_init_string $bg_init_strings[$i]; or set bg_init_string ""
     set class_name $class_names[$i]
 
     if [ $method = 'ti' ]; or [ $method = 'ada' ]; or [ $method = 'static-layerwise' ]
@@ -185,9 +185,9 @@ for i in $indices
             set EXTRA_TRAIN_ARGS1 $EXTRA_TRAIN_ARGS1 --embedding_manager_ckpt $emb_man_ckpt --ckpt_params_perturb_ratio 0.2 --emb_reg_loss_scale 0.2
         end
 
-        echo $subject: --init_string $init_string $EXTRA_TRAIN_ARGS1
+        echo $subject: --subj_init_string $subj_init_string $EXTRA_TRAIN_ARGS1
         set fish_trace 1
-        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_roots $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --subject_string "z" --init_string $init_string --init_word_weights $init_word_weights --broad_class $broad_class $EXTRA_TRAIN_ARGS1
+        python3 main.py --base configs/stable-diffusion/v1-finetune-$method.yaml  -t --actual_resume $sd_ckpt --gpus $GPU, --data_roots $data_folder/$subject/ -n $subject-$method --no-test --max_steps $max_iters --subject_string "z" --subj_init_string $subj_init_string --subj_init_word_weights $subj_init_word_weights --broad_class $broad_class $EXTRA_TRAIN_ARGS1
 
         if set -q _flag_eval
             if [ "$data_folder"  = 'subjects-dreambench' ]
@@ -203,14 +203,14 @@ for i in $indices
         end
 
     else
-        echo $subject: $init_string
+        echo $subject: $subj_init_string
 
         # -1: use the default max_iters.
         set fish_trace 1
         # $EXTRA_TRAIN_ARGS is not for DreamBooth. It is for AdaPrompt/TI only.
         # --lr and --max_steps are absent in DreamBooth. 
         # It always uses the default lr and max_steps specified in the config file.
-        python3 main_db.py --base configs/stable-diffusion/v1-finetune-db.yaml -t --actual_resume $sd_ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $init_string) --data_roots $data_folder/$subject -n $subject-db --no-test --token "z" --class_word $init_string
+        python3 main_db.py --base configs/stable-diffusion/v1-finetune-db.yaml -t --actual_resume $sd_ckpt --gpus $GPU, --reg_data_root regularization_images/(string replace -a " " "" $subj_init_string) --data_roots $data_folder/$subject -n $subject-db --no-test --token "z" --class_word $subj_init_string
         
         if set -q _flag_eval
             if [ "$data_folder"  = 'subjects-dreambench' ]

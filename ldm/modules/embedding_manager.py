@@ -901,7 +901,7 @@ class AdaEmbedding(nn.Module):
 
 # Initialize static/ada embedders.
 def create_static_ada_embedders(out_emb_dim, num_layers_per_embedder, num_vectors_per_subj_token, layerwise_lora_rank, 
-                                initializer_words, init_word_embeddings, init_word_weights, 
+                                initializer_string, init_word_embeddings, init_word_weights, 
                                 placeholder_string, avg_init_word_embedding_3d, placeholder_is_bg, ada_uses_attn_pooler,
                                 attn_pooler_feat_reduction_ratio, do_zero_shot):
     # A static/ada embedder can generate K embeddings.
@@ -915,7 +915,7 @@ def create_static_ada_embedders(out_emb_dim, num_layers_per_embedder, num_vector
                                                             out_emb_dim, 
                                                             layerwise_lora_rank, 
                                                             (0.1, 0.02), 
-                                                            initializer_words,
+                                                            initializer_string,
                                                             init_word_embeddings, init_word_weights, 
                                                             token_string=placeholder_string,
                                                             do_zero_shot=do_zero_shot)
@@ -944,7 +944,7 @@ def create_static_ada_embedders(out_emb_dim, num_layers_per_embedder, num_vector
                                             use_cached_bg,
                                             out_emb_dim,                                                    
                                             layerwise_lora_rank, 
-                                            initializer_words,
+                                            initializer_string,
                                             init_word_embeddings,
                                             use_attn_pooler=ada_uses_attn_pooler,
                                             attn_pooler_feat_reduction_ratio=attn_pooler_feat_reduction_ratio,
@@ -966,12 +966,13 @@ class EmbeddingManager(nn.Module):
     def __init__(
             self,
             text_embedder,              
-            placeholder_strings=None,
+            subject_strings,
             # If background_strings are specified, they are part of the list placeholder_strings.
             background_strings=None,
-            list_initializer_words=None,
-            list_initializer_weights=None,
-            list_cls_delta_strings=None,
+            initializer_strings=None,
+            list_initializer_word_weights=None,
+            subj_name_to_cls_delta_strings=None,
+            subj_name_to_cls_delta_word_weights=None,
             # token2num_vectors: how many vectors in each layer are allocated to model 
             # the subject (represented as the subject token) and the background. 
             # token2num_vectors is a dict.
@@ -1034,26 +1035,27 @@ class EmbeddingManager(nn.Module):
         else:
             self.num_layers_per_embedder = 1
 
-        self.placeholder_strings = placeholder_strings
+        self.subject_strings = subject_strings
+        if background_strings is not None:
+            self.background_strings = list(background_strings)
+        else:
+            self.background_strings = []
+
+        self.background_string_dict = { s: True for s in self.background_strings }
+        self.placeholder_strings    = list(subject_strings) + self.background_strings
+        self.subject_string_dict    = { s: True for s in self.subject_strings }
+
         # Model should be still on CPU. So no need to consider the device when extending the text embedder.
         # Extend CLIP text embedder with the subject strings / background strings / wds background strings.
         # In order to load the text embedder ckpt, the text_model.embeddings.token_embedding hasn't been
         # extended yet. So we  save extended_token_embeddings to be extended to text_model.embeddings.token_embedding
         # later in main.py.
-        self.extended_token_embeddings = extend_clip_text_embedder(text_embedder, {}, placeholder_strings)
+        self.extended_token_embeddings = extend_clip_text_embedder(text_embedder, {}, self.placeholder_strings)
 
-        if background_strings is not None:
-            self.background_strings = background_strings
-        else:
-            self.background_strings = []
-
-        self.background_string_dict = { s: True for s in self.background_strings }
-        self.subject_strings = [ s for s in placeholder_strings if s not in self.background_string_dict ]
-        self.subject_string_dict    = { s: True for s in self.subject_strings }
 
         # Each placeholder string has a corresponding emb_global_scale_score, 
         # converted to emb_global_scale.
-        self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(placeholder_strings)), 
+        self.emb_global_scale_scores = nn.Parameter(torch.zeros(len(self.placeholder_strings)), 
                                                     requires_grad=True)
         self.subj2conv_attn_layerwise_scales = nn.ParameterDict()
         self.initialize_subj2conv_attn_layerwise_scales(1, learnable=conv_attn_layerwise_scale_learnable)
@@ -1095,60 +1097,34 @@ class EmbeddingManager(nn.Module):
         self.get_tokens_for_string = get_tokens_for_string
         str2lora_rank = {}
         # "," -> 267, "z": 345, "y": 344.
-        self.placeholder_to_cls_delta_tokens = {}
-        self.placeholder_to_cls_delta_weights = {}
+        self.subj_idx_to_cls_delta_tokens   = {}
+        self.subj_idx_to_cls_delta_token_weights  = {}
+        self.placeholder_token_to_idx       = {}
 
-        assert list_initializer_words is not None, "list_initializer_words must be specified"
-        if list_initializer_weights is None:
-            list_initializer_weights = [ None ] * len(placeholder_strings)
-        self.list_initializer_weights   = list_initializer_weights
-        self.list_cls_delta_strings     = list_cls_delta_strings
-        self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = 0
+        assert initializer_strings is not None, "initializer_strings must be specified"
+        if list_initializer_word_weights is None:
+            list_initializer_word_weights = [ None ] * len(self.placeholder_strings)
+        self.list_initializer_word_weights   = list_initializer_word_weights
         self.layerwise_lora_rank = layerwise_lora_rank
 
-        for placeholder_idx, placeholder_string in enumerate(placeholder_strings):
+        for placeholder_idx, placeholder_string in enumerate(self.placeholder_strings):
             placeholder_is_bg =  (placeholder_string in self.background_string_dict)
             # get_tokens_for_string <= get_clip_tokens_for_string.
             # force_single_token = True, as there should be only one token in placeholder_string.
             placeholder_token = get_tokens_for_string(placeholder_string, force_single_token=True)[0].item()
 
             num_vectors_per_subj_token = self.token2num_vectors.get(placeholder_string, 1)
-            initializer_words     = list_initializer_words[placeholder_idx]
-            initializer_weights   = list_initializer_weights[placeholder_idx]
+            initializer_string     = initializer_strings[placeholder_idx]
+            initializer_word_weights   = list_initializer_word_weights[placeholder_idx]
 
             # The background token may not have initializer words. So its corresponding
-            # init_word_embeddings, avg_init_word_embedding, init_word_weights are None, 
-            # and num_init_word_tokens = 0.
+            # init_word_embeddings, avg_init_word_embedding, init_word_weights are None.
             try:
                 init_word_tokens, init_word_weights, init_word_embeddings, avg_init_word_embedding = \
                 calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
-                                          initializer_words, initializer_weights)
+                                          initializer_string, initializer_word_weights)
             except:
                 breakpoint()
-            cls_delta_string = self.list_cls_delta_strings[placeholder_idx] if self.list_cls_delta_strings is not None else None
-            cls_delta_tokens, cls_delta_weights, _, _ = \
-                calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
-                                          cls_delta_string, None)
-            
-            # If initializer_words are used as cls_delta_tokens, then use the corresponding initializer_weights as cls_delta_weights.
-            # Otherwise, cls_delta_weights are uniform, i.e., all are 1/M.
-            if (init_word_tokens is not None) and (cls_delta_tokens is not None) and (cls_delta_tokens == init_word_tokens).all():
-                cls_delta_weights = init_word_weights
-
-            num_init_word_tokens = len(init_word_tokens) if init_word_tokens is not None else 0
-            num_cls_delta_tokens = len(cls_delta_tokens) if cls_delta_tokens is not None else 0
-            # placeholder_to_cls_delta_tokens is used to examine class prompts, 
-            # to see if there are subsequences of cls_delta_tokens.
-            # If there are, the embeddings of init_word_tokens should be combined through weighted sum.
-            self.placeholder_to_cls_delta_tokens[placeholder_token]  = cls_delta_tokens
-            self.placeholder_to_cls_delta_weights[placeholder_token] = cls_delta_weights
-
-            # CLS_DELTA_STRING_MAX_SEARCH_SPAN should be the max number of extra tokens
-            # (all excluding the first of the init word tokens; the first corresponds to the subject token).
-            # If multiple subject strings appear in the same prompt, then CLS_DELTA_STRING_MAX_SEARCH_SPAN 
-            # should be multiplied by the number of subject strings. Currently not implemented.
-            if num_cls_delta_tokens - 1 > self.CLS_DELTA_STRING_MAX_SEARCH_SPAN:
-                self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = num_cls_delta_tokens - 1
 
             str2lora_rank[placeholder_string] = layerwise_lora_rank
             self.string_to_token_dict[placeholder_string] = placeholder_token
@@ -1163,7 +1139,7 @@ class EmbeddingManager(nn.Module):
 
             token_static_embedder, token_ada_embedder = \
                 create_static_ada_embedders(out_emb_dim, self.num_unet_ca_layers, num_vectors_per_subj_token, layerwise_lora_rank, 
-                                            initializer_words, init_word_embeddings, init_word_weights, 
+                                            initializer_string, init_word_embeddings, init_word_weights, 
                                             placeholder_string, avg_init_word_embedding_3d, placeholder_is_bg, ada_uses_attn_pooler,
                                             attn_pooler_feat_reduction_ratio, do_zero_shot)
 
@@ -1191,6 +1167,9 @@ class EmbeddingManager(nn.Module):
             else:
                 self.initial_embeddings[placeholder_string] = None
 
+        # Initialize self.subj_name_to_cls_delta_tokens and self.subj_name_to_cls_delta_token_weights.
+        self.init_cls_delta_tokens(get_tokens_for_string, get_embeddings_for_tokens, 
+                                   subj_name_to_cls_delta_strings, subj_name_to_cls_delta_word_weights)
         self.share_embedder_components(shared_placeholder_set, shared_embedder_components)
 
         self.layer_idx = -1
@@ -1198,8 +1177,8 @@ class EmbeddingManager(nn.Module):
         self.ada_subj_embs_dict    = {}
         self.ada_subj_attn_dict    = {}
         self.clear_ada_layer_temp_info()
-        self.clear_placeholder_indices()
-        self.clear_prompt_masks()
+        self.clear_prompt_adhoc_info()
+        self.curr_batch_subj_names = []
         self.img_mask = None
         self.loss_call_count = 0
         self.training_percent = 0
@@ -1267,9 +1246,39 @@ class EmbeddingManager(nn.Module):
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN += 1
         print(f"CLS_DELTA_STRING_MAX_SEARCH_SPAN={self.CLS_DELTA_STRING_MAX_SEARCH_SPAN}")
 
-        if False:
-            self.fix_ckpts("logs/all2024-02-13T01-50-25_celebdb-ada/checkpoints")
-            exit(0)
+    def init_cls_delta_tokens(self, get_tokens_for_string, get_embeddings_for_tokens, 
+                              subj_name_to_cls_delta_strings, subj_name_to_cls_delta_word_weights):
+        self.subj_name_to_cls_delta_tokens  = {}
+        # subj_name_to_cls_delta_word_weights is of type omegaconf. If without convertion to dict,
+        # "subj_name_to_cls_delta_token_weights[subj_name] = cls_delta_token_weights" will throw an error.
+        self.subj_name_to_cls_delta_token_weights = dict(subj_name_to_cls_delta_word_weights)
+        self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = 0
+
+        for subj_name in subj_name_to_cls_delta_strings:
+            cls_delta_string = subj_name_to_cls_delta_strings[subj_name]
+            cls_delta_token_weights = subj_name_to_cls_delta_word_weights[subj_name]
+            cls_delta_tokens, cls_delta_token_weights, _, _ = \
+                calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
+                                          cls_delta_string, cls_delta_token_weights)
+
+            num_cls_delta_tokens = len(cls_delta_tokens)
+            if len(cls_delta_token_weights) != num_cls_delta_tokens:
+                # BUG: some rare words may be split into two tokens. But this should be extremely rare.
+                # Any common words will be mapped to one token only.
+                breakpoint()
+            
+            # subj_idx_to_cls_delta_tokens is used to examine class prompts, 
+            # to see if there are subsequences of cls_delta_tokens.
+            # If there are, the embeddings of init_word_tokens should be combined through weighted sum.
+            self.subj_name_to_cls_delta_tokens[subj_name]        = cls_delta_tokens
+            self.subj_name_to_cls_delta_token_weights[subj_name] = cls_delta_token_weights
+
+            # CLS_DELTA_STRING_MAX_SEARCH_SPAN should be the max number of extra tokens
+            # (all excluding the first of the init word tokens; the first corresponds to the subject token).
+            # If multiple subject strings appear in the same prompt, then CLS_DELTA_STRING_MAX_SEARCH_SPAN 
+            # should be multiplied by the number of subject strings. Currently not implemented.
+            if num_cls_delta_tokens - 1 > self.CLS_DELTA_STRING_MAX_SEARCH_SPAN:
+                self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = num_cls_delta_tokens - 1
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
@@ -1318,8 +1327,7 @@ class EmbeddingManager(nn.Module):
         else:
             # placeholder_indices will be regenerated with update_placeholder_indices() 
             # within get_static_embedding().
-            self.clear_placeholder_indices()
-            self.clear_prompt_masks()
+            self.clear_prompt_adhoc_info()
             
             # We need to clone embedded_text, as sometimes (when it's not layerwise, such as TI) 
             # the modification in get_static_embedding() is in-place. 
@@ -1355,7 +1363,9 @@ class EmbeddingManager(nn.Module):
                              BS, N, num_unet_ca_layers, device):
         orig_tokenized_text = tokenized_text
         static_subj_embs_dict = {}
-        self.placeholders_cls_delta_string_indices = []
+        self.cls_delta_string_indices = []
+        prompt_subj_name_to_cls_delta_tokens = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
+                                                 for subj_name in self.curr_batch_subj_names }
 
         if self.use_layerwise_embedding:
             # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
@@ -1407,14 +1417,14 @@ class EmbeddingManager(nn.Module):
             # their embeddings to one (the first) embedding, and delete the 2nd to the last embeddings,
             # using merge_cls_token_embeddings().
             if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0 \
-              and placeholder_token in self.placeholder_to_cls_delta_tokens:
-                cls_delta_string_indices = scan_cls_delta_strings(tokenized_text, placeholder_token,
+              and len(prompt_subj_name_to_cls_delta_tokens) > 0:
+                cls_delta_string_indices = scan_cls_delta_strings(tokenized_text,
                                                                   placeholder_indices_1st,
-                                                                  self.placeholder_to_cls_delta_tokens[placeholder_token],
+                                                                  prompt_subj_name_to_cls_delta_tokens,
                                                                   self.CLS_DELTA_STRING_MAX_SEARCH_SPAN)
                 # cls_delta_string_indices is a list of tuples, each tuple is 
                 # (batch_i, start_N, num_cls_delta_tokens, placeholder_token).
-                self.placeholders_cls_delta_string_indices += cls_delta_string_indices
+                self.cls_delta_string_indices += cls_delta_string_indices
 
             static_embedder = embedder_dict[placeholder_string].to(device)
             if isinstance(static_embedder, StaticLayerwiseEmbedding):
@@ -1498,7 +1508,7 @@ class EmbeddingManager(nn.Module):
                                             self.token2num_vectors[placeholder_string],
                                             placeholder_is_bg=placeholder_is_bg)
         
-        #print(self.placeholders_cls_delta_string_indices)
+        #print(self.cls_delta_string_indices)
 
         return embedded_text, tokenized_text, static_subj_embs_dict
 
@@ -1524,7 +1534,9 @@ class EmbeddingManager(nn.Module):
         # Clamping here seems to reduce the performance.
         # layer_static_prompt_embs   = clamp_prompt_embedding(self.prompt_embedding_clamp_value, layer_static_prompt_embs)
         
-        self.placeholders_cls_delta_string_indices = []
+        self.cls_delta_string_indices = []
+        prompt_subj_name_to_cls_delta_tokens = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
+                                                 for subj_name in self.curr_batch_subj_names }
 
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
@@ -1557,15 +1569,15 @@ class EmbeddingManager(nn.Module):
             # using merge_cls_token_embeddings().
             # During inference, cls delta strings are not used. So CLS_DELTA_STRING_MAX_SEARCH_SPAN = -1.
             if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0 \
-              and placeholder_token in self.placeholder_to_cls_delta_tokens:
-                cls_delta_string_indices = scan_cls_delta_strings(tokenized_text, placeholder_token,
+              and len(prompt_subj_name_to_cls_delta_tokens) > 0:
+                cls_delta_string_indices = scan_cls_delta_strings(tokenized_text,
                                                                   placeholder_indices_1st,
-                                                                  self.placeholder_to_cls_delta_tokens[placeholder_token],
+                                                                  prompt_subj_name_to_cls_delta_tokens,
                                                                   self.CLS_DELTA_STRING_MAX_SEARCH_SPAN)
                 
                 # cls_delta_string_indices is a list of tuples, each tuple is 
                 # (batch_i, start_N, num_cls_delta_tokens, placeholder_token).
-                self.placeholders_cls_delta_string_indices += cls_delta_string_indices
+                self.cls_delta_string_indices += cls_delta_string_indices
 
             # For fg (subject) tokens, exclude fg embeddings from computing layer_static_extra_emb_mean. 
             # For bg (junk) tokens,    exclude fg embeddings from computing layer_static_extra_emb_mean.
@@ -1728,7 +1740,7 @@ class EmbeddingManager(nn.Module):
             # Remove the batch dim.
             ada_subj_embs_dict[placeholder_string] = subj_ada_embedding.mean(dim=0)
 
-        #print(self.placeholders_cls_delta_string_indices)
+        #print(self.cls_delta_string_indices)
 
         return embedded_text, ada_subj_embs_dict, token2ada_attn
 
@@ -1836,11 +1848,39 @@ class EmbeddingManager(nn.Module):
 
         return layer_static_extra_emb_mean
     
-    def clear_placeholder_indices(self):
-        self.placeholder2indices = {}
+    def clear_prompt_adhoc_info(self):
+        self.placeholder2indices    = {}
+        self.img_mask               = None
+        self.prompt_emb_mask        = None
 
-    def clear_prompt_masks(self):
-        self.prompt_emb_mask = None
+    # Set ad-hoc data structures for computing placeholder embeddings and various losses.
+    def set_prompt_adhoc_info(self, prompt_adhoc_info):
+        self.placeholder2indices    = prompt_adhoc_info['placeholder2indices']
+        # There are image margins after the original image is scaled down, or 
+        # after using wds overlay images as input.
+        # When doing attentional pooling / average pooling of image features, 
+        # the margin area contains no signal, so we use img_mask to mask it out. 
+        # Each image has its own img_mask, so img_mask has a shape of [B, 1, H, W].
+        self.img_mask               = prompt_adhoc_info['img_mask']
+        self.prompt_emb_mask        = prompt_adhoc_info['prompt_emb_mask']
+    
+    def set_curr_batch_subject_names(self, subj_names):
+        self.curr_batch_subj_names = subj_names
+
+    # Cache features used to compute ada embeddings.
+    def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb):
+        self.gen_ada_embedding      = True
+        self.layer_idx              = layer_idx
+        self.time_emb               = time_emb
+        self.layer_attn_components  = layer_attn_components
+
+    # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
+    # which will be enabled again through cache_layer_features_for_ada() in ddpm.py.
+    def clear_ada_layer_temp_info(self):
+        self.gen_ada_embedding      = False
+        self.layer_idx              = -1
+        self.time_emb               = None
+        self.layer_attn_components  = None
 
     def update_placeholder_indices(self, tokenized_text, placeholder_string, placeholder_token, num_vectors_per_subj_token, placeholder_is_bg):
         placeholder_indices = torch.where(tokenized_text == placeholder_token)
@@ -1971,32 +2011,6 @@ class EmbeddingManager(nn.Module):
     def set_attn_pooler_feat_reduction_ratio(self, attn_pooler_feat_reduction_ratio):
         self.attn_pooler_feat_reduction_ratio = attn_pooler_feat_reduction_ratio
         print(f"Setting attn_pooler_feat_reduction_ratio = {attn_pooler_feat_reduction_ratio}")
-
-    # Cache features used to compute ada embeddings.
-    def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb):
-        self.gen_ada_embedding      = True
-        self.layer_idx              = layer_idx
-        self.time_emb               = time_emb
-        self.layer_attn_components  = layer_attn_components
-
-    # Clear layer-specific intermediate variables. Also clear gen_ada_embedding,
-    # which will be enabled again through cache_layer_features_for_ada() in ddpm.py.
-    def clear_ada_layer_temp_info(self):
-        self.gen_ada_embedding      = False
-        self.layer_idx              = -1
-        self.time_emb               = None
-        self.layer_attn_components  = None
-
-    # Set volatile data structures for computing ada embeddings.
-    def set_volatile_ds(self, volatile_ds):
-        self.placeholder2indices          = volatile_ds['placeholder2indices']
-        # There are image margins after the original image is scaled down, or 
-        # after using wds overlay images as input.
-        # When doing attentional pooling / average pooling of image features, 
-        # the margin area contains no signal, so we use img_mask to mask it out. 
-        # Each image has its own img_mask, so img_mask has a shape of [B, 1, H, W].
-        self.img_mask = volatile_ds['img_mask']
-        self.prompt_emb_mask = volatile_ds['prompt_emb_mask']
 
     def set_zs_image_features(self, zs_clip_features, zs_face_embs):
         # zs_clip_features: [1, 514, 1280]
@@ -2131,19 +2145,6 @@ class EmbeddingManager(nn.Module):
                      "subj_basis_generator":             self.subj_basis_generator,
                    }, 
                     ckpt_path)
-
-    def fix_ckpts(self, ckpt_folder):
-        ckpt_paths = glob.glob(f"{ckpt_folder}/*.pt")
-        for ckpt_path in ckpt_paths:
-            ckpt = torch.load(ckpt_path, map_location='cpu')
-            if 'placeholder_strings' not in ckpt:
-                ckpt['subject_strings'] = self.subject_strings
-                ckpt['background_strings'] = self.background_strings
-                ckpt['placeholder_strings'] = self.placeholder_strings
-                torch.save(ckpt, ckpt_path)
-                print(f"{ckpt_path} fixed.")
-            else:
-                print(f"{ckpt_path} already fixed, skip")
 
     # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
     # If src_placeholders = None, then load the whole embedding manager. Otherwise, src_placeholders should 

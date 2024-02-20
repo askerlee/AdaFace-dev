@@ -930,13 +930,13 @@ class LatentDiffusion(DDPM):
                                                              extra_scale=emb_extra_global_scale)
 
                 # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scales first().
-                # If placeholders_cls_delta_string_indices is not empty, then it must be a compositional 
+                # If cls_delta_string_indices is not empty, then it must be a compositional 
                 # distillation iteration, and placeholder_indices only contains the indices of the subject 
-                # instances. Whereas placeholders_cls_delta_string_indices only contains the indices of the
+                # instances. Whereas cls_delta_string_indices only contains the indices of the
                 # class (mix) instances. Switching their order doesn't affect the results.
                 static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
-                                                                     self.embedding_manager.placeholders_cls_delta_string_indices,
-                                                                     self.embedding_manager.placeholder_to_cls_delta_weights)
+                                                                     self.embedding_manager.cls_delta_string_indices,
+                                                                     self.embedding_manager.subj_name_to_cls_delta_token_weights)
 
                 '''
                 'subj_indices':                  filter_dict_by_key(self.embedding_manager.placeholder2indices,
@@ -994,9 +994,9 @@ class LatentDiffusion(DDPM):
         self.embedding_manager.cache_layer_features_for_ada(layer_idx, layer_attn_components, time_emb)
         # DO NOT call sample_last_layers_skip_weights() here, to make the ada embeddings are generated with 
         # CLIP skip weights consistent with the static embeddings.
-        ada_prompt_embedding = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
+        ada_prompt_embedding    = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
         #print('ada', ada_prompt_embedding.abs().max())
-        emb_global_scales_dict     = self.embedding_manager.get_emb_global_scales_dict(regen=False)
+        emb_global_scales_dict  = self.embedding_manager.get_emb_global_scales_dict(regen=False)
         # The scales of ada embeddings are fixed here.
         # The scales of static subject embeddings are fixed in get_learned_conditioning().
         for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
@@ -1008,13 +1008,13 @@ class LatentDiffusion(DDPM):
                                                   extra_scale=emb_extra_global_scale)
             
         # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scales first().
-        # If placeholders_cls_delta_string_indices is not empty, then it must be a compositional 
+        # If cls_delta_string_indices is not empty, then it must be a compositional 
         # distillation iteration, and placeholder_indices only contains the indices of the subject 
-        # instances. Whereas placeholders_cls_delta_string_indices only contains the indices of the
+        # instances. Whereas cls_delta_string_indices only contains the indices of the
         # class (mix) instances. Switching their order doesn't affect the results.
         ada_prompt_embedding = merge_cls_token_embeddings(ada_prompt_embedding, 
-                                                          self.embedding_manager.placeholders_cls_delta_string_indices,
-                                                          self.embedding_manager.placeholder_to_cls_delta_weights)
+                                                          self.embedding_manager.cls_delta_string_indices,
+                                                          self.embedding_manager.subj_name_to_cls_delta_token_weights)
                 
         ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
 
@@ -1396,6 +1396,8 @@ class LatentDiffusion(DDPM):
             print("Different subjects in the batch.")
             breakpoint()
         self.batch_subject_name = batch['subject_name'][0]
+        # Currently, only one subject name is allowed in the batch.
+        self.embedding_manager.set_curr_batch_subject_names([self.batch_subject_name])
         print(self.batch_subject_name)
 
         # If cached_inits is available (self.batch_subject_name in self.cached_inits), 
@@ -2029,7 +2031,7 @@ class LatentDiffusion(DDPM):
         kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
         return mean_flat(kl_prior) / np.log(2.0)
 
-    # emb_man_volatile_ds: volatile data structures changing along with the prompts or the input images.
+    # emb_man_prompt_adhoc_info: volatile data structures changing along with the prompts or the input images.
     # Sometimes the prompts changed after generating the static embeddings, 
     # so in such cases we need to manually specify these data structures. 
     # If they are not provided (None),
@@ -2040,10 +2042,10 @@ class LatentDiffusion(DDPM):
     # unet_has_grad: when returning do_pixel_recon (e.g. to select the better instance by smaller clip loss), 
     # to speed up, no BP is done on these instances, so unet_has_grad=False.
     def guided_denoise(self, x_start, noise, t, cond, 
-                       emb_man_volatile_ds,
+                       emb_man_prompt_adhoc_info,
                        unet_has_grad=True, do_pixel_recon=False, cfg_info=None):
         
-        self.embedding_manager.set_volatile_ds(emb_man_volatile_ds)
+        self.embedding_manager.set_prompt_adhoc_info(emb_man_prompt_adhoc_info)
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
@@ -2077,7 +2079,7 @@ class LatentDiffusion(DDPM):
                 # Clear the cached placeholder indices, as they are for conditional embeddings.
                 # Now we generate model_output_uncond under unconditional (negative) prompts,
                 # which don't contain placeholder tokens.
-                self.embedding_manager.clear_placeholder_indices()
+                self.embedding_manager.clear_prompt_adhoc_info()
                 # self.uncond_context: precomputed unconditional embedding and other info.
                 # This statement (executed above) disables deep neg prompts on unconditional embeddings. 
                 # Otherwise, it will cancel out the effect of unconditional embeddings.
@@ -2315,7 +2317,7 @@ class LatentDiffusion(DDPM):
                         chunk_list(c_in, 4)
                     # We change the prompts to be twin structure: (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
                     # Since subj comp and subj single have the same placeholder_indices,
-                    # We don't need to update placeholder2indices of emb_man_volatile_ds.
+                    # We don't need to update placeholder2indices of emb_man_prompt_adhoc_info.
                     c_in2 = subj_comp_prompts * self.num_candidate_teachers + cls_comp_prompts * self.num_candidate_teachers
                     # Back up cond as cond_orig. Replace cond with the cond for the twin comp sets.
                     cond_orig = cond
@@ -2452,11 +2454,11 @@ class LatentDiffusion(DDPM):
         # Do not consider mask on compositional distillation iterations, 
         # as in such iters, the original pixels (out of the fg_mask) do not matter and 
         # can freely compose any contents.
-        emb_man_volatile_ds = { 'placeholder2indices':    placeholder2indices2,
-                                # In compositional iterations, img_mask is always None.
-                                # No need to consider whether do_teacher_filter or not.
-                                'img_mask':         extra_info['img_mask'],
-                                'prompt_emb_mask':  prompt_emb_mask2 }
+        emb_man_prompt_adhoc_info = { 'placeholder2indices':    placeholder2indices2,
+                                      # In compositional iterations, img_mask is always None.
+                                      # No need to consider whether do_teacher_filter or not.
+                                      'img_mask':         extra_info['img_mask'],
+                                      'prompt_emb_mask':  prompt_emb_mask2 }
         
         # cfg_scales: classifier-free guidance scales.
         # By default, 'capture_distill_attn' = False in a generated context, including uncond_context.
@@ -2466,7 +2468,7 @@ class LatentDiffusion(DDPM):
         
         model_output, x_recon, ada_embeddings = \
             self.guided_denoise(x_start, noise, t, cond, 
-                                emb_man_volatile_ds=emb_man_volatile_ds,
+                                emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
                                 unet_has_grad=not self.iter_flags['do_teacher_filter'], 
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 # do_pixel_recon is not used for the iter_type 'do_normal_recon'.
@@ -2572,9 +2574,9 @@ class LatentDiffusion(DDPM):
                     # so we can still use the old placeholder2indices_2b.
                     # Otherwise, we need to update placeholder2indices_2b to correspond to the selected
                     # best candidate block.
-                    emb_man_volatile_ds = { 'placeholder2indices':  extra_info['placeholder2indices_2b'],
-                                            'img_mask':             None,
-                                            'prompt_emb_mask':      extra_info['prompt_emb_mask'] }
+                    emb_man_prompt_adhoc_info = { 'placeholder2indices':  extra_info['placeholder2indices_2b'],
+                                                  'img_mask':             None,
+                                                  'prompt_emb_mask':      extra_info['prompt_emb_mask'] }
 
                     cfg_scales_for_clip_loss = \
                         gen_cfg_scales_for_stu_tea(6, 5, BLOCK_SIZE * 2, x_start.device)
@@ -2594,7 +2596,7 @@ class LatentDiffusion(DDPM):
                     # student prompts are subject prompts.  
                     model_output, x_recon, ada_embeddings = \
                         self.guided_denoise(x_start_sel, noise_sel, t_sel, cond_orig_qv, 
-                                            emb_man_volatile_ds=emb_man_volatile_ds,
+                                            emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
                                             unet_has_grad=True, 
                                             do_pixel_recon=True, cfg_info=cfg_info)
 

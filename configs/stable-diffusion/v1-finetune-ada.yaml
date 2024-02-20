@@ -89,13 +89,14 @@ model:
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
-        placeholder_strings: ["*"]
-        list_initializer_words: ["sculpture"]
-        list_initializer_weights: [ None ]
-        list_cls_delta_strings: [ "person" ]
-        num_vectors_per_subj_token: 1
+        subject_strings:          ['z']
+        background_strings:       ['y']
+        initializer_strings:   ["person"]
+        list_initializer_word_weights: [ None ]
+        subj_name_to_cls_delta_strings: { 'z': "person" }
+        num_vectors_per_subj_token: 9
         use_layerwise_embedding: True
-        layerwise_lora_rank: 5
+        layerwise_lora_rank: 10
         ada_emb_weight: 0.5
         emb_ema_as_pooling_probe_weight: 0.5  # Should be the same as ada_emb_weight.
         ada_uses_attn_pooler: True
@@ -115,7 +116,7 @@ model:
         shared_embedder_components:   'pooler,layer_coeff_maps'
         embedding_manager_ckpt:       null
         # Load the ada components from these placeholders in the checkpoint.
-        src_placeholders: null
+        src_placeholders:             null
         # Freeze this set of poolers after loading them from the checkpoint.
         frozen_placeholder_set:       'subj,bg'
         

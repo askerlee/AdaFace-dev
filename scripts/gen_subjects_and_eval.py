@@ -229,7 +229,7 @@ if __name__ == "__main__":
 
     if args.method == 'db':
         # For DreamBooth, use_z_suffix is the default.
-        args.z_suffix_type = 'init_string'
+        args.z_suffix_type = 'subj_init_string'
 
     all_ckpts = os.listdir(args.ckpt_dir)
     # Sort all_ckpts by name (actually by timestamp in the name), so that most recent first.
@@ -249,7 +249,7 @@ if __name__ == "__main__":
         class_name      = class_names[subject_idx]
         broad_class     = broad_classes[subject_idx]
         is_face         = are_faces[subject_idx]
-        init_string      = init_strings[subject_idx]
+        subj_init_string      = init_strings[subject_idx]
 
         # z_prefixes_by_subject is only for selected subjects. So in most cases,
         # subject_name is not in z_prefixes_by_subject. 
@@ -283,9 +283,9 @@ if __name__ == "__main__":
         else:
             z_suffix_type = args.z_suffix_type
 
-        if z_suffix_type == 'init_string':
-            # DreamBooth always uses init_string as z_suffix.
-            z_suffix = " " + init_string
+        if z_suffix_type == 'subj_init_string':
+            # DreamBooth always uses subj_init_string as z_suffix.
+            z_suffix = " " + subj_init_string
         elif z_suffix_type == 'class_name':
             # For Ada/TI, if we append class token to "z" -> "z dog", 
             # the chance of occasional under-expression of the subject may be reduced.
@@ -376,10 +376,10 @@ if __name__ == "__main__":
                 args.n_samples = 4
             if args.bs == -1:
                 args.bs = 4
-            # E.g., get_prompt_list(placeholder="z", z_suffix="cat", init_string="tabby cat", broad_class=1)
+            # E.g., get_prompt_list(placeholder="z", z_suffix="cat", subj_init_string="tabby cat", broad_class=1)
             prompt_list, class_short_prompt_list, class_long_prompt_list = \
                 get_prompt_list(args.subject_string, z_prefix, z_suffix, background_string, 
-                                class_name, init_string, 
+                                class_name, subj_init_string, 
                                 broad_class, args.prompt_set)
             prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set}{bg_suffix}.txt"
             PROMPTS = open(prompt_filepath, "w")
@@ -393,11 +393,11 @@ if __name__ == "__main__":
             if len(z_prefix) > 0:
                 subject_string  = z_prefix + " " + subject_string
                 class_name      = z_prefix + " " + class_name
-                init_string      = z_prefix + " " + init_string
+                subj_init_string      = z_prefix + " " + subj_init_string
 
             prompt_tmpl = args.prompt if args.prompt != "" else "a {}"
             prompt = prompt_tmpl.format(subject_string + z_suffix)
-            class_long_prompt  = prompt_tmpl.format(init_string + z_suffix)
+            class_long_prompt  = prompt_tmpl.format(subj_init_string + z_suffix)
             class_short_prompt = prompt_tmpl.format(class_name + z_suffix)
             # If --background_string is not specified, background_string is "".
             # Only add the background_string to prompt used for image generation,

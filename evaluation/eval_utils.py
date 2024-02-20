@@ -348,7 +348,7 @@ def parse_subject_file(subject_file_path):
         subj_info['broad_classes'] = [ 1 for _ in subj_info['subjects'] ]
 
     for var_name in [ "class_names", "init_strings", "all_init_word_weights", 
-                      "all_bg_init_words", "broad_classes", "are_faces" ]:
+                      "bg_init_strings", "broad_classes", "are_faces" ]:
         if var_name in subj_info:
             subj2attr[var_name] = {}
             if len(subj_info[var_name]) != len(subj_info['subjects']):
