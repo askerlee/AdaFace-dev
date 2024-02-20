@@ -955,7 +955,7 @@ if __name__ == "__main__":
             gpus = opt.gpus.strip(",").split(',')
             # TODO: put clip image encoder on the same device as the model
             device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
-            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, device)
+            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, opt.zs_use_face_embs, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
             

@@ -400,7 +400,7 @@ def main(opt):
             ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
             ref_masks  = [ np.array(Image.open(ref_mask), dtype=float) for ref_mask in opt.ref_masks ] \
                             if opt.ref_masks is not None else None
-            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, device)
+            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, opt.zs_use_face_embs, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
 
             # zs_clip_features: [1, 514, 1280]. zs_face_embs: [1, 512].

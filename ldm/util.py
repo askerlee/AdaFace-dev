@@ -2229,7 +2229,7 @@ def gen_cfg_scales_for_stu_tea(tea_scale, stu_scale, num_teachers, device):
     cfg_scales_for_clip_loss = cfg_scales_for_clip_loss.to(device)
     return cfg_scales_for_clip_loss
 
-def init_zero_shot_image_encoders(clip_type, device):
+def init_zero_shot_image_encoders(clip_type, zs_use_face_embs, device):
     global clip_image_encoder, clip_preprocessor, face_analyzer, clip_device
 
     if clip_type == 'laion':
@@ -2248,11 +2248,14 @@ def init_zero_shot_image_encoders(clip_type, device):
     # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
     zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
 
-    # BUG: If device='cpu', then it will throw an exception.
-    gpu_id = re.findall(r'\d+', device).pop()
-    gpu_id = int(gpu_id)
-    face_analyzer = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-    face_analyzer.prepare(ctx_id=gpu_id, det_size=(512, 512))
+    if zs_use_face_embs:
+        # BUG: If device='cpu', then it will throw an exception.
+        gpu_id = re.findall(r'\d+', device).pop()
+        gpu_id = int(gpu_id)
+        face_analyzer = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        face_analyzer.prepare(ctx_id=gpu_id, det_size=(512, 512))
+    else:
+        face_analyzer = None
 
     return zs_clip_type2image_emb_dim[clip_type]
 
@@ -2275,24 +2278,29 @@ def encode_zero_shot_image_features(images, fg_masks, calc_avg=False):
         # Different sizes of images are standardized to the same size 224*224.
         single_image_pixel_values = clip_preprocessor(images=image, return_tensors="pt").pixel_values
         image_pixel_values.append(single_image_pixel_values)
-        if isinstance(image, torch.Tensor):
-            image = image.cpu().numpy().transpose(1, 2, 0)
-        face_info = face_analyzer.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
 
-        if len(face_info) == 0:
-            # If no face is detected (e.g. animals or objects), then use a zero tensor as the face embedding.
-            face_emb = torch.zeros(512, device=clip_device)
-        else:
-            face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
-            # face_emb: [512,]
-            face_emb = torch.from_numpy(face_info['embedding']).to(clip_device)
-        face_embs.append(face_emb)
+        if face_analyzer is not None:
+            if isinstance(image, torch.Tensor):
+                image = image.cpu().numpy().transpose(1, 2, 0)
+            face_info = face_analyzer.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+
+            if len(face_info) == 0:
+                # If no face is detected (e.g. animals or objects), then use a zero tensor as the face embedding.
+                face_emb = torch.zeros(512, device=clip_device)
+            else:
+                face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
+                # face_emb: [512,]
+                face_emb = torch.from_numpy(face_info['embedding']).to(clip_device)
+            face_embs.append(face_emb)
 
     # image_pixel_values: [BS, 3, 224, 224]
     image_pixel_values = torch.cat(image_pixel_values, dim=0)
     image_pixel_values = image_pixel_values.to(clip_device)
-    # face_embs: [BS, 512].
-    face_embs = torch.stack(face_embs, dim=0)
+    if face_analyzer is not None:
+        # face_embs: [BS, 512].
+        face_embs = torch.stack(face_embs, dim=0)
+    else:
+        face_embs = None
 
     if fg_masks is not None:
         assert len(fg_masks) == len(images)
@@ -2342,13 +2350,13 @@ def encode_zero_shot_image_features(images, fg_masks, calc_avg=False):
             image_bg_features = image_bg_features * image_bg_dict.attn_mask        
 
     # clip_features: [BS, 514, 1280].
-    # face_embs: [BS, 512].
+    # face_embs: [BS, 512] or None, if zs_use_face_embs is False.
     clip_features = torch.cat([image_fg_features, image_bg_features], dim=1)
     if calc_avg:
         # clip_features: [BS, 514, 1280] -> [1, 514, 1280].
         # face_embs: [BS, 512] -> [1, 512].
         clip_features = clip_features.mean(dim=0, keepdim=True)
-        face_embs     = face_embs.mean(dim=0, keepdim=True)
+        face_embs     = face_embs.mean(dim=0, keepdim=True) if face_embs is not None else None
 
     return clip_features, face_embs
 
