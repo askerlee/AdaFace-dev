@@ -242,7 +242,7 @@ class SubjBasisGenerator(nn.Module):
             )
         self.use_face_embs = use_face_embs
 
-        print(f"SubjBasisGenerator: num_subj_queries={num_subj_queries}, num_bg_queries={num_bg_queries}, use_face_embs={use_face_embs}")
+        print(f"SubjBasisGenerator: {depth} layers, num_subj_queries={num_subj_queries}, num_bg_queries={num_bg_queries}, use_face_embs={use_face_embs}")
 
     def forward(self, clip_features, face_embs, placeholder_is_bg=False):     
         x = self.proj_in(clip_features)

@@ -266,7 +266,7 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--no_face_emb", dest='zs_use_face_embs', action="store_false",
                         help="Do not use face embeddings for zero-shot generation")
-    parser.add_argument("--zs_num_generator_layers", type=int, default=argparse.SUPPRESS,
+    parser.add_argument("--zs_num_generator_layers", type=int, default=1,
                         help="Depth of zero-shot subject feature generator")
     
     parser.add_argument("--layerwise_lora_rank", 
@@ -961,14 +961,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
 
             config.model.params.personalization_config.params.zs_use_face_embs = opt.zs_use_face_embs
-            if hasattr(opt, 'zs_num_generator_layers'):
-                config.model.params.personalization_config.params.zs_num_generator_layers = opt.zs_num_generator_layers
-            else:
-                if opt.zs_use_face_embs:
-                    # One extra layer to process face embeddings.
-                    config.model.params.personalization_config.params.zs_num_generator_layers = 3
-                else:
-                    config.model.params.personalization_config.params.zs_num_generator_layers = 2
+            config.model.params.personalization_config.params.zs_num_generator_layers = opt.zs_num_generator_layers
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)

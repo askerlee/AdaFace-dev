@@ -1000,7 +1000,7 @@ class EmbeddingManager(nn.Module):
             do_zero_shot=False,
             zs_image_emb_dim=1280,
             zs_use_face_embs=False,
-            zs_num_generator_layers=3,
+            zs_num_generator_layers=1,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
