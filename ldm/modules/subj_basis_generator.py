@@ -174,7 +174,7 @@ class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
         dim=768,                            # Internal feature dimension. Same as output_dim.
-        depth=3,                            # number of (CrossAttention, FeedForward) layers. First layer is for face_embs.     
+        depth=1,                            # number of (CrossAttention, FeedForward) layers. First layer is for face_embs.     
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
         heads=16,       
         # num_subj_queries: number of subject latent_queries.
@@ -186,6 +186,7 @@ class SubjBasisGenerator(nn.Module):
         num_bg_queries=168,                 # 168 = 4 * 42.
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
         face_embedding_dim=512,             # insightface face feature dimension.
+        face_lora_queries=32,               # number of face low-rank latent_queries.
         output_dim=768,                     # CLIP text embedding input dimension.
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
@@ -198,8 +199,16 @@ class SubjBasisGenerator(nn.Module):
             nn.LayerNorm(dim, elementwise_affine=False),
         )
         self.face_proj_in = nn.Sequential(
-            nn.Linear(face_embedding_dim, dim, bias=False),
+            nn.Linear(face_embedding_dim, face_lora_queries * dim, bias=False),
+            # Reshape to [BS, face_lora_queries, dim].
+            Rearrange('b (q d) -> b q d', q=face_lora_queries, d=dim),
             nn.LayerNorm(dim, elementwise_affine=False),
+            # Permute to [BS, dim, face_lora_queries].
+            Rearrange('b q d -> b d q'),
+            # Transpose to [BS, dim, num_subj_queries].
+            nn.Linear(face_lora_queries, num_subj_queries),
+            # Permute to [BS, num_subj_queries, dim].
+            Rearrange('b d q -> b q d'),
         )
 
         self.pos_emb    = nn.Embedding(max_seq_len, dim)            if apply_pos_emb else None
@@ -239,17 +248,15 @@ class SubjBasisGenerator(nn.Module):
         # No need to use face_embs if placeholder_is_bg, or if face embs are disabled (use_face_embs is False), 
         # or no face is detected (face_embs is all 0s).
         if self.use_face_embs and (face_embs != 0).any() and (not placeholder_is_bg):
-            face_embs = self.face_proj_in(face_embs)
-            attn_0, ff_0 = self.layers[0]
-            latent_queries = attn_0(self.latent_face_queries, face_embs.unsqueeze(1))
-            latent_queries = ff_0(latent_queries) + latent_queries
-            layers_for_clip = self.layers[1:]
+            # face_embs: [1, 512].
+            # latent_subj_queries: [1, 378, 768].
+            latent_subj_queries = self.face_proj_in(face_embs)
         else:
-            layers_for_clip = self.layers
-            # placeholder_is_bg determines whether to select latent_bg_queries or latent_subj_queries,
-            # which then extract either background or subject bases.
-            latent_queries = self.latent_bg_queries if placeholder_is_bg else self.latent_subj_queries
-        
+            latent_subj_queries = self.latent_subj_queries
+
+        # placeholder_is_bg determines whether to select latent_bg_queries or latent_subj_queries,
+        # which then extract either background or subject bases.
+        latent_queries = self.latent_bg_queries if placeholder_is_bg else latent_subj_queries        
         latent_queries = self.lq_ln(latent_queries.repeat(x.size(0), 1, 1))
 
         if self.pos_emb is not None:
@@ -258,8 +265,8 @@ class SubjBasisGenerator(nn.Module):
             # Downscale positional embeddings to reduce its impact.
             x = x + self.pos_emb_ln(pos_emb) * 0.5
 
-        for i, (attn, ff) in enumerate(layers_for_clip):
-            if i > 0:
+        for i, (attn, ff) in enumerate(self.layers):
+            if not placeholder_is_bg:
                 latent_queries = attn(latent_queries, x) + latent_queries
             else:
                 latent_queries = attn(latent_queries, x)
