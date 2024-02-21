@@ -2313,8 +2313,8 @@ def encode_zero_shot_image_features(images, fg_masks, is_face, calc_avg=False):
             # last_hidden_states: [1, 197, 384]
             last_hidden_states = dino_encoder(**dino_input).last_hidden_state
             # We only use CLS token's features, so that the spatial location of the subject will not impact matching. 
-            # [1, 384]
-            id_emb = last_hidden_states[:, 0]
+            # [1, 197, 384] -> [384,]
+            id_emb = last_hidden_states[0, 0]
             id_embs.append(id_emb)
 
     # image_pixel_values: [BS, 3, 224, 224]
