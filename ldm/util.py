@@ -2261,6 +2261,7 @@ def init_zero_shot_image_encoders(clip_type, zs_use_id_embs, device):
         dino_encoder = dino_encoder.to(device)
         dino_encoder.eval()
         dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
+        print(f'Face and DINO encoders loaded on {device}.')
 
     else:
         face_encoder = None
