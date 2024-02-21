@@ -5,7 +5,7 @@ from transformers import ViTFeatureExtractor, ViTModel
 from PIL import Image
 from transformers.image_utils  import ImageInput
 
-class ViTEvaluator(object):
+class DINOEvaluator(object):
     def __init__(self, device, vit_model='facebook/dino-vits16') -> None:
         self.device = device
         self.vit_model = vit_model

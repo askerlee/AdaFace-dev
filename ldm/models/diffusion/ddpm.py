@@ -898,7 +898,7 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
-    def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_face_embs=None, 
+    def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_id_embs=None, 
                                  randomize_clip_weights=False):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
@@ -911,7 +911,7 @@ class LatentDiffusion(DDPM):
                 # If do_zero_shot, but the prompt is empty (uncond prompt), then zs_clip_features is None.
                 # We don't update the zs_clip_features in this case.
                 if self.do_zero_shot and zs_clip_features is not None:
-                    self.embedding_manager.set_zs_image_features(zs_clip_features, zs_face_embs)
+                    self.embedding_manager.set_zs_image_features(zs_clip_features, zs_id_embs)
 
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
@@ -1398,6 +1398,8 @@ class LatentDiffusion(DDPM):
             print("Different subjects in the batch.")
             breakpoint()
         self.batch_subject_name = batch['subject_name'][0]
+        self.iter_flags['is_face'] = self.embedding_manager.subj_name_to_being_faces[self.batch_subject_name]
+
         # Currently, only one subject name is allowed in the batch.
         self.embedding_manager.set_curr_batch_subject_names([self.batch_subject_name])
         print(self.batch_subject_name)
@@ -1638,14 +1640,15 @@ class LatentDiffusion(DDPM):
             images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
             # batch["fg_mask"]: [3, 512, 512].
             fg_mask = batch["fg_mask"]
-            # zs_clip_features: [1, 514, 1280]. zs_face_embs: [1, 512].
-            zs_clip_features, zs_face_embs = encode_zero_shot_image_features(images, fg_mask,
-                                                                             calc_avg=True)
+            # zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
+            zs_clip_features, zs_id_embs = encode_zero_shot_image_features(images, fg_mask,
+                                                                           is_face=self.iter_flags['is_face'],
+                                                                           calc_avg=True)
             self.iter_flags['zs_clip_features'] = zs_clip_features
-            self.iter_flags['zs_face_embs']     = zs_face_embs
+            self.iter_flags['zs_id_embs']       = zs_id_embs
         else:
             self.iter_flags['zs_clip_features'] = None
-            self.iter_flags['face_embs']        = None
+            self.iter_flags['zs_id_embs']       = None
 
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
@@ -1737,7 +1740,7 @@ class LatentDiffusion(DDPM):
                     c_static_emb, _, extra_info = \
                         self.get_learned_conditioning(delta_prompts, 
                                                       self.iter_flags['zs_clip_features'],
-                                                      self.iter_flags['zs_face_embs'],
+                                                      self.iter_flags['zs_id_embs'],
                                                       randomize_clip_weights=True)
                     # Release image_features.
                     del self.iter_flags['zs_clip_features']
@@ -1843,7 +1846,7 @@ class LatentDiffusion(DDPM):
                             c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions, 
                                                                                          # No need to pass image_features, as
                                                                                          # image_features have been assigned to emb manager.
-                                                                                         None,
+                                                                                         None, None,
                                                                                          randomize_clip_weights=True)
                             # print(captions)
                             extra_info['placeholder2indices'] = extra_info0['placeholder2indices']

@@ -300,8 +300,8 @@ def parse_args():
                         help="Reference image for zero-shot learning")
     parser.add_argument("--ref_masks", type=str, nargs='+', default=None,
                         help="Reference mask for zero-shot learning")
-    parser.add_argument("--no_face_emb", dest='zs_use_face_embs', action="store_false",
-                        help="Do not use face embeddings for zero-shot generation")
+    parser.add_argument("--no_id_emb", dest='zs_use_id_embs', action="store_false",
+                        help="Do not use face/DINO embeddings for zero-shot generation")
     
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
@@ -393,22 +393,23 @@ def main(opt):
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
-        config.model.params.personalization_config.params.zs_use_face_embs = opt.zs_use_face_embs
-
+        config.model.params.personalization_config.params.zs_use_id_embs = opt.zs_use_id_embs
+        
         if opt.zeroshot:
             assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
             ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
             ref_masks  = [ np.array(Image.open(ref_mask), dtype=float) for ref_mask in opt.ref_masks ] \
                             if opt.ref_masks is not None else None
-            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, opt.zs_use_face_embs, device)
+            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, opt.zs_use_id_embs, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
 
-            # zs_clip_features: [1, 514, 1280]. zs_face_embs: [1, 512].
-            zs_clip_features, zs_face_embs = encode_zero_shot_image_features(ref_images, ref_masks,
-                                                                             calc_avg=True)
+            # zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
+            zs_clip_features, zs_id_embs = encode_zero_shot_image_features(ref_images, ref_masks,
+                                                                           is_face=opt.calc_face_sim,
+                                                                           calc_avg=True)
         else:
             zs_clip_features = None
-            zs_face_embs     = None
+            zs_id_embs     = None
 
         model  = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
@@ -449,6 +450,8 @@ def main(opt):
                                     model.embedding_manager.extended_token_embeddings)
             model.embedding_manager.extended_token_embeddings = None
 
+        model.embedding_manager.curr_subj_is_face = opt.calc_face_sim
+        
         model  = model.to(device)
         model.cond_stage_model.device = device
         
@@ -689,8 +692,10 @@ def main(opt):
                             prompts = list(prompts)
 
                         if not opt.eval_blip:
+                            # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
+                            # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                             c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
-                                                               zs_face_embs=zs_face_embs)
+                                                               zs_id_embs=zs_id_embs)
                             # ref_c is not None, implies (prompt_mix_weight != 0 and ref_prompt is not None).
                             if ref_c is not None:
                                 # c / ref_c are tuples of (cond, prompts, extra_info).

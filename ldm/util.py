@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw, ImageFont
 from torchvision.utils import make_grid, draw_bounding_boxes
 import random, math
 from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
-from transformers import CLIPImageProcessor
+from transformers import CLIPImageProcessor, ViTFeatureExtractor, ViTModel
 from insightface.app import FaceAnalysis
 
 from torch.optim.lr_scheduler import SequentialLR
@@ -27,7 +27,9 @@ import re, cv2
 
 clip_image_encoder  = None
 clip_preprocessor   = None
-face_analyzer       = None
+face_encoder        = None
+dino_encoder        = None
+dino_preprocessor   = None
 clip_device         = 'cpu'
 neg_image_features  = None
 
@@ -2229,8 +2231,8 @@ def gen_cfg_scales_for_stu_tea(tea_scale, stu_scale, num_teachers, device):
     cfg_scales_for_clip_loss = cfg_scales_for_clip_loss.to(device)
     return cfg_scales_for_clip_loss
 
-def init_zero_shot_image_encoders(clip_type, zs_use_face_embs, device):
-    global clip_image_encoder, clip_preprocessor, face_analyzer, clip_device
+def init_zero_shot_image_encoders(clip_type, zs_use_id_embs, device):
+    global clip_image_encoder, clip_preprocessor, face_encoder, dino_encoder, dino_preprocess, clip_device
 
     if clip_type == 'laion':
         clip_model_tag = 'laion/CLIP-ViT-H-14-laion2B-s32B-b79K'
@@ -2248,26 +2250,36 @@ def init_zero_shot_image_encoders(clip_type, zs_use_face_embs, device):
     # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
     zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
 
-    if zs_use_face_embs:
+    if zs_use_id_embs:
         # BUG: If device='cpu', then it will throw an exception.
         gpu_id = re.findall(r'\d+', device).pop()
         gpu_id = int(gpu_id)
-        face_analyzer = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        face_analyzer.prepare(ctx_id=gpu_id, det_size=(512, 512))
+        face_encoder = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
+
+        dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
+        dino_encoder = dino_encoder.to(device)
+        dino_encoder.eval()
+        dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
+
     else:
-        face_analyzer = None
+        face_encoder = None
+        dino_encoder = None
+        dino_preprocess = None
 
     return zs_clip_type2image_emb_dim[clip_type]
 
 # images: numpy.ndarray or torch.Tensor.
 # images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
+# is_face: whether the images are faces. If True, then face embedding will be extracted. 
+# Otherwise, DINO embedding will be extracted.
 # fg_masks: a list of [Hi, Wi].
-def encode_zero_shot_image_features(images, fg_masks, calc_avg=False):
+def encode_zero_shot_image_features(images, fg_masks, is_face, calc_avg=False):
     # Must call init_zero_shot_image_encoders() before calling this function.
-    global clip_image_encoder, clip_preprocessor, face_analyzer, neg_image_features, clip_device
+    global clip_image_encoder, clip_preprocessor, face_encoder, dino_encoder, dino_preprocess, clip_device, neg_image_features
 
     image_pixel_values = []
-    face_embs = []
+    id_embs = []
     # images could be a batch of images that have been collated into a tensor or np array.
     # images can also be a list of images.
     # The code below that processes them one by one can be applied in both cases.
@@ -2276,31 +2288,42 @@ def encode_zero_shot_image_features(images, fg_masks, calc_avg=False):
         # input to clip_preprocessor: an image or a batch of images, each being PIL.Image.Image, numpy.ndarray, 
         # torch.Tensor, tf.Tensor or jax.ndarray.
         # Different sizes of images are standardized to the same size 224*224.
-        single_image_pixel_values = clip_preprocessor(images=image, return_tensors="pt").pixel_values
-        image_pixel_values.append(single_image_pixel_values)
+        clip_image_pixel_values = clip_preprocessor(images=image, return_tensors="pt").pixel_values
+        image_pixel_values.append(clip_image_pixel_values)
 
-        if face_analyzer is not None:
+        if is_face and face_encoder is not None:
             if isinstance(image, torch.Tensor):
                 image = image.cpu().numpy().transpose(1, 2, 0)
-            face_info = face_analyzer.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+            face_info = face_encoder.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
 
             if len(face_info) == 0:
                 # If no face is detected (e.g. animals or objects), then use a zero tensor as the face embedding.
-                face_emb = torch.zeros(512, device=clip_device)
+                id_emb = torch.zeros(512, device=clip_device)
             else:
                 face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
-                # face_emb: [512,]
-                face_emb = torch.from_numpy(face_info['embedding']).to(clip_device)
-            face_embs.append(face_emb)
+                # id_emb: [512,]
+                id_emb = torch.from_numpy(face_info['embedding']).to(clip_device)
+            id_embs.append(id_emb)
+
+        elif not is_face:
+            # DINO embedding.
+            dino_input = dino_preprocess(images=image, return_tensors="pt")
+            dino_input = dino_input.to(clip_device)
+            # last_hidden_states: [1, 197, 384]
+            last_hidden_states = dino_encoder(**dino_input).last_hidden_state
+            # We only use CLS token's features, so that the spatial location of the subject will not impact matching. 
+            # [1, 384]
+            id_emb = last_hidden_states[:, 0]
+            id_embs.append(id_emb)
 
     # image_pixel_values: [BS, 3, 224, 224]
     image_pixel_values = torch.cat(image_pixel_values, dim=0)
     image_pixel_values = image_pixel_values.to(clip_device)
-    if face_analyzer is not None:
-        # face_embs: [BS, 512].
-        face_embs = torch.stack(face_embs, dim=0)
+    if face_encoder is not None:
+        # id_embs: [BS, 512] if is_face, or [BS, 384] if not is_face.
+        id_embs = torch.stack(id_embs, dim=0)
     else:
-        face_embs = None
+        id_embs = None
 
     if fg_masks is not None:
         assert len(fg_masks) == len(images)
@@ -2350,15 +2373,15 @@ def encode_zero_shot_image_features(images, fg_masks, calc_avg=False):
             image_bg_features = image_bg_features * image_bg_dict.attn_mask        
 
     # clip_features: [BS, 514, 1280].
-    # face_embs: [BS, 512] or None, if zs_use_face_embs is False.
+    # id_embs: [BS, 512] or None, if zs_use_id_embs is False.
     clip_features = torch.cat([image_fg_features, image_bg_features], dim=1)
     if calc_avg:
         # clip_features: [BS, 514, 1280] -> [1, 514, 1280].
-        # face_embs: [BS, 512] -> [1, 512].
+        # id_embs: [BS, 512] -> [1, 512].
         clip_features = clip_features.mean(dim=0, keepdim=True)
-        face_embs     = face_embs.mean(dim=0, keepdim=True) if face_embs is not None else None
+        id_embs       = id_embs.mean(dim=0, keepdim=True) if id_embs is not None else None
 
-    return clip_features, face_embs
+    return clip_features, id_embs
 
 # prob_mat: [1, 64, 64].
 def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):

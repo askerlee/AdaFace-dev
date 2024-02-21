@@ -52,6 +52,22 @@ def FeedForward(dim, mult=4):
         nn.Dropout(0.1),
     )
 
+def LoRA_Emb2Queries(input_dim, lora_rank, output_dim, num_output_queries):
+    return nn.Sequential(
+        # Project to [BS, lora_rank * output_dim].
+        nn.Linear(input_dim, lora_rank * output_dim, bias=False),
+        # Reshape to [BS, lora_rank, output_dim].
+        Rearrange('b (q d) -> b q d', q=lora_rank, d=output_dim),
+        nn.LayerNorm(output_dim, elementwise_affine=True),
+        nn.Dropout(0.1),
+        # Permute to [BS, output_dim, lora_rank].
+        Rearrange('b q d -> b d q'),
+        # Project to [BS, output_dim, num_output_queries].
+        nn.Linear(lora_rank, num_output_queries, bias=False),
+        # Permute to [BS, num_output_queries, output_dim].
+        Rearrange('b d q -> b q d'),
+    )
+
 class PerceiverAttention(nn.Module):
     def __init__(self, *, dim, dim_head=64, heads=8, elementwise_affine=True):
         super().__init__()
@@ -176,7 +192,7 @@ class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
         dim=768,                            # Internal feature dimension. Same as output_dim.
-        depth=1,                            # number of (CrossAttention, FeedForward) layers. First layer is for face_embs.     
+        depth=1,                            # number of (CrossAttention, FeedForward) layers.     
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
         heads=16,       
         # num_subj_queries: number of subject latent_queries.
@@ -187,33 +203,22 @@ class SubjBasisGenerator(nn.Module):
         num_subj_queries=378,               # 378 = 9 * 42.
         num_bg_queries=168,                 # 168 = 4 * 42.
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
-        face_embedding_dim=512,             # insightface face feature dimension.
-        face_lora_queries=32,               # number of face low-rank latent_queries.
+        face_embedding_dim=512,             # insightface face feature dimension for humans.
+        dino_embedding_dim=384,             # DINO object feature dimension for objects.
+        num_lora_queries=32,                # number of low-rank latent_queries.
         output_dim=768,                     # CLIP text embedding input dimension.
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
-        use_face_embs: bool = True,         # Whether to use face_embs to generate latent_queries.
+        use_id_embs: bool = True,           # Whether to use an identity embedding to generate latent_queries.
     ):
         super().__init__()
         self.proj_in = nn.Sequential(
             nn.Linear(image_embedding_dim, dim, bias=False),
             nn.LayerNorm(dim, elementwise_affine=True),
         )
-        self.face_proj_in = nn.Sequential(
-            # Project to [BS, face_lora_queries * dim].
-            nn.Linear(face_embedding_dim, face_lora_queries * dim, bias=False),
-            # Reshape to [BS, face_lora_queries, dim].
-            Rearrange('b (q d) -> b q d', q=face_lora_queries, d=dim),
-            nn.LayerNorm(dim, elementwise_affine=True),
-            nn.Dropout(0.1),
-            # Permute to [BS, dim, face_lora_queries].
-            Rearrange('b q d -> b d q'),
-            # Project to [BS, dim, num_subj_queries].
-            nn.Linear(face_lora_queries, num_subj_queries, bias=False),
-            # Permute to [BS, num_subj_queries, dim].
-            Rearrange('b d q -> b q d'),
-        )
+        self.face_proj_in = LoRA_Emb2Queries(face_embedding_dim, num_lora_queries, dim, num_subj_queries)
+        self.obj_proj_in  = LoRA_Emb2Queries(dino_embedding_dim, num_lora_queries, dim, num_subj_queries)
 
         self.pos_emb    = nn.Embedding(max_seq_len, dim)            if apply_pos_emb else None
         self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=True)   if apply_pos_emb else None
@@ -231,8 +236,8 @@ class SubjBasisGenerator(nn.Module):
         self.num_subj_queries = num_subj_queries
         self.num_bg_queries = num_bg_queries
 
-        if not use_face_embs:
-            assert depth > 0, "depth must be > 0 if not use_face_embs."
+        if not use_id_embs:
+            assert depth > 0, "depth must be > 0 if not use_id_embs."
 
         self.layers = nn.ModuleList([])
         for _ in range(depth):
@@ -247,22 +252,22 @@ class SubjBasisGenerator(nn.Module):
                     ]
                 )
             )
-        self.use_face_embs = use_face_embs
+        self.use_id_embs = use_id_embs
 
         print(self.desc())
 
-    def forward(self, clip_features, face_embs, placeholder_is_bg=False):     
+    def forward(self, clip_features, id_embs, is_face, placeholder_is_bg=False):     
         x = self.proj_in(clip_features)
 
-        if not hasattr(self, 'use_face_embs'):
-            self.use_face_embs = True
-            
-        # No need to use face_embs if placeholder_is_bg, or if face embs are disabled (use_face_embs is False), 
-        # or no face is detected (face_embs is all 0s).
-        if self.use_face_embs and (face_embs is not None) and (face_embs != 0).any() and (not placeholder_is_bg):
-            # face_embs: [1, 512].
+        # No need to use id_embs if placeholder_is_bg, or if face embs are disabled (use_id_embs is False), 
+        # or no face is detected (id_embs is all 0s).
+        if self.use_id_embs and (id_embs is not None) and (id_embs != 0).any() and (not placeholder_is_bg):
+            # id_embs: [1, 512].
             # latent_subj_queries: [1, 378, 768].
-            latent_subj_queries = self.face_proj_in(face_embs)
+            if is_face:
+                latent_subj_queries = self.face_proj_in(id_embs)
+            else:
+                latent_subj_queries = self.obj_proj_in(id_embs)
         else:
             latent_subj_queries = self.latent_subj_queries
 
@@ -277,8 +282,8 @@ class SubjBasisGenerator(nn.Module):
             # Downscale positional embeddings to reduce its impact.
             x = x + self.pos_emb_ln(pos_emb) * 0.5
 
-        # If use_face_embs and depth = 0, then latent_queries from face_embs is directly returned.
-        # If not use_face_embs, then depth must be > 0.
+        # If use_id_embs and depth = 0, then latent_queries from id_embs is directly returned.
+        # If not use_id_embs, then depth must be > 0.
         for i, (attn, ff) in enumerate(self.layers):
             if not placeholder_is_bg:
                 latent_queries = attn(latent_queries, x) + latent_queries
@@ -291,6 +296,8 @@ class SubjBasisGenerator(nn.Module):
         return self.norm_out(latent_queries) * self.output_scale
 
     def desc(self):
+        if not hasattr(self, 'use_id_embs'):
+            self.use_id_embs = True
         if not hasattr(self, 'depth'):
             self.depth = len(self.layers)
         if not hasattr(self, 'num_subj_queries'):
@@ -298,7 +305,7 @@ class SubjBasisGenerator(nn.Module):
         if not hasattr(self, 'num_bg_queries'):
             self.num_bg_queries = self.latent_bg_queries.shape[1]
 
-        return f"SubjBasisGenerator: depth={self.depth}, num_subj_queries={self.num_subj_queries}, num_bg_queries={self.num_bg_queries}, use_face_embs={self.use_face_embs}"
+        return f"SubjBasisGenerator: depth={self.depth}, num_subj_queries={self.num_subj_queries}, num_bg_queries={self.num_bg_queries}, use_id_embs={self.use_id_embs}"
     
 @dataclass
 class BaseModelOutputWithPooling2(ModelOutput):

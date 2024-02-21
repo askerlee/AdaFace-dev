@@ -264,8 +264,8 @@ def get_parser(**parser_kwargs):
                         default='openai',
                         help="Type of zero-shot learning clip model")
 
-    parser.add_argument("--no_face_emb", dest='zs_use_face_embs', action="store_false",
-                        help="Do not use face embeddings for zero-shot generation")
+    parser.add_argument("--no_id_emb", dest='zs_use_id_embs', action="store_false",
+                        help="Do not use identity (face or DINO) embeddings for zero-shot generation")
     parser.add_argument("--zs_num_generator_layers", type=int, default=1,
                         help="Depth of zero-shot subject feature generator")
     
@@ -447,7 +447,10 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
 
                 for wds_background_string in dataset.wds_background_strings[:1]:
                     personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
-
+    # subjects_are_faces are always available in dataset. But if not do_zero_shot, the values may be wrong, 
+    # but in this case, they are not used anyway.
+    personalization_config_params.subj_name_to_being_faces = dict(zip(dataset.subject_names, dataset.subjects_are_faces))
+    
 class WrappedDataset(Dataset):
     """Wraps an arbitrary object with __len__ and __getitem__ into a pytorch dataset"""
 
@@ -956,11 +959,11 @@ if __name__ == "__main__":
             gpus = opt.gpus.strip(",").split(',')
             # TODO: put clip image encoder on the same device as the model
             device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
-            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, opt.zs_use_face_embs, device)
+            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, opt.zs_use_id_embs, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
 
-            config.model.params.personalization_config.params.zs_use_face_embs = opt.zs_use_face_embs
+            config.model.params.personalization_config.params.zs_use_id_embs = opt.zs_use_id_embs
             config.model.params.personalization_config.params.zs_num_generator_layers = opt.zs_num_generator_layers
 
         # data: DataModuleFromConfig

@@ -999,8 +999,9 @@ class EmbeddingManager(nn.Module):
             shared_embedder_components='pooler',
             do_zero_shot=False,
             zs_image_emb_dim=1280,
-            zs_use_face_embs=False,
+            zs_use_id_embs=False,
             zs_num_generator_layers=1,
+            subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1053,7 +1054,6 @@ class EmbeddingManager(nn.Module):
         # extended yet. So we  save extended_token_embeddings to be extended to text_model.embeddings.token_embedding
         # later in main.py.
         self.extended_token_embeddings = extend_clip_text_embedder(text_embedder, {}, self.placeholder_strings)
-
 
         # Each placeholder string has a corresponding emb_global_scale_score, 
         # converted to emb_global_scale.
@@ -1181,6 +1181,7 @@ class EmbeddingManager(nn.Module):
         self.clear_ada_layer_temp_info()
         self.clear_prompt_adhoc_info()
         self.curr_batch_subj_names = []
+        self.curr_subj_is_face = True
         self.img_mask = None
         self.loss_call_count = 0
         self.training_percent = 0
@@ -1206,7 +1207,11 @@ class EmbeddingManager(nn.Module):
         self.ca_q_bns       = nn.ModuleDict(ca_q_bns)
         self.ca_outfeat_lns = nn.ModuleDict(ca_outfeat_lns)
 
-        # zs_image_feat_dict have three keys: 'subj', 'bg', 'face'.
+        # subj_name_to_being_faces: a dict that maps subject names to is_face.
+        # subj_name_to_being_faces is used in ddpm.py and not here.
+        self.subj_name_to_being_faces = subj_name_to_being_faces if subj_name_to_being_faces is not None \
+                                            else {subj_name: True for subj_name in self.subject_strings}
+        # zs_image_feat_dict have three keys: 'subj', 'bg', 'id'.
         self.zs_image_feat_dict = {}
         if self.do_zero_shot:
             # No matter whether using layerwise embeddings, the basis vecs of either static or ada embedders are always layerwise_lora_rank,
@@ -1237,7 +1242,7 @@ class EmbeddingManager(nn.Module):
                                                            image_embedding_dim = zs_image_emb_dim, 
                                                            dim = out_emb_dim,
                                                            output_dim = out_emb_dim,
-                                                           use_face_embs=zs_use_face_embs)
+                                                           use_id_embs=zs_use_id_embs)
 
         else:
             self.subj_basis_generator = None
@@ -1449,11 +1454,20 @@ class EmbeddingManager(nn.Module):
                         zs_clip_features = zs_image_feat_dict['subj']
                         num_vectors_each_placeholder = self.number_vectors_each_subj
 
-                    zs_face_embs = zs_image_feat_dict['face']
+                    zs_id_embs = zs_image_feat_dict['id']
+                    # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
+                    # curr_subj_is_face. 
+                    # During inference, we set curr_subj_is_face directly.
+                    # BUG: if there are multiple subjects in the same batch, then is_face is only 
+                    # about the first subject. But now we only support one subject in a batch.
+                    if len(self.curr_batch_subj_names) > 0:
+                        self.curr_subj_is_face = self.subj_name_to_being_faces[self.curr_batch_subj_names[0]]
 
                     # zs_clip_features: [1, 257, 1280]
                     # zs_vecs_2sets: [1, 468, 768] -> [9, 52, 768]
-                    zs_vecs_2sets = self.subj_basis_generator(zs_clip_features, zs_face_embs, placeholder_is_bg)
+                    zs_vecs_2sets = self.subj_basis_generator(zs_clip_features, zs_id_embs, 
+                                                              self.curr_subj_is_face, 
+                                                              placeholder_is_bg)
                     zs_vecs_2sets = zs_vecs_2sets.reshape(num_vectors_each_placeholder,
                                                           self.num_zs_vecs_per_token, -1)
                     # If subj:
@@ -2021,7 +2035,7 @@ class EmbeddingManager(nn.Module):
         self.attn_pooler_feat_reduction_ratio = attn_pooler_feat_reduction_ratio
         print(f"Setting attn_pooler_feat_reduction_ratio = {attn_pooler_feat_reduction_ratio}")
 
-    def set_zs_image_features(self, zs_clip_features, zs_face_embs):
+    def set_zs_image_features(self, zs_clip_features, zs_id_embs):
         # zs_clip_features: [1, 514, 1280]
         # zs_clip_subj_features, zs_clip_bg_features: [1, 257, 1280].
         zs_clip_subj_features, zs_clip_bg_features = zs_clip_features.chunk(2, dim=1)
@@ -2029,7 +2043,7 @@ class EmbeddingManager(nn.Module):
         #print(zs_clip_bg_features.mean(dim=1).squeeze(0)[:20])
 
         self.zs_image_feat_dict = { 'subj': zs_clip_subj_features, 'bg': zs_clip_bg_features,
-                                    'face': zs_face_embs }
+                                    'id': zs_id_embs }
         # Beginning of a new iteration, clear the cached ada_zs_basis_vecs and ada_zs_bias.
         self.subj2ada_zs_basis_vecs = {}
         self.subj2ada_zs_bias       = {}

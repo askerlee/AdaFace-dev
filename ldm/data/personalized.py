@@ -322,6 +322,14 @@ class PersonalizedBase(Dataset):
         else:
             self.list_subj_initializer_word_weights = [ None ] * self.num_subjects
 
+        if 'are_faces' in subj2attr:
+            self.subjects_are_faces = [ subj2attr['are_faces'][subject_name] \
+                                        for subject_name in self.subject_names ]
+        else:
+            # This shouldn't happen, as 'are_faces' is expected to be present in each subject info file.
+            # Since our focus is human faces, we set the default values to True.
+            self.subjects_are_faces = [ True ] * self.num_subjects
+
         self.bg_initializer_strings             = [ bg_init_string ] * self.num_subjects
         # bg_initializer_word_weights are always None (uniform over bg initializer words).
         self.list_bg_initializer_word_weights   = [ None ]           * self.num_subjects

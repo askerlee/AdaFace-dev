@@ -6,7 +6,7 @@ import time
 import numpy as np
 
 from evaluation.clip_eval import ImageDirEvaluator
-from evaluation.vit_eval import ViTEvaluator
+from evaluation.dino_eval import DINOEvaluator
 from evaluation.community_prompts import community_prompt_list
 from deepface import DeepFace
 from deepface.commons import functions as deepface_functions
@@ -32,7 +32,7 @@ def init_evaluators(gpu_id):
     else:
         device = f'cuda:{gpu_id}'
     clip_evator = ImageDirEvaluator(device)
-    dino_evator = ViTEvaluator(device)
+    dino_evator = DINOEvaluator(device)
     return clip_evator, dino_evator
 
 # num_samples: only evaluate the last (latest) num_samples images. 
