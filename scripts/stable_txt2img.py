@@ -861,7 +861,7 @@ def main(opt):
                         date_sig = subjfolder_mat.group(2)
                         # subjname_method: gabrielleunion-ada
                         subjname_method = subjfolder_mat.group(3)
-                        if opt.do_zero_shot and opt.compare_with:
+                        if opt.zeroshot and opt.compare_with:
                             # all-ada => all-ada-gabrielleunion
                             subjname_method += "-" + os.path.basename(opt.compare_with)
 

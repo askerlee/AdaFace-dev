@@ -254,7 +254,7 @@ class SubjBasisGenerator(nn.Module):
     def forward(self, clip_features, face_embs, placeholder_is_bg=False):     
         x = self.proj_in(clip_features)
 
-        if 'use_face_embs' not in self.__dict__:
+        if not hasattr(self, 'use_face_embs'):
             self.use_face_embs = True
             
         # No need to use face_embs if placeholder_is_bg, or if face embs are disabled (use_face_embs is False), 
@@ -291,6 +291,13 @@ class SubjBasisGenerator(nn.Module):
         return self.norm_out(latent_queries) * self.output_scale
 
     def desc(self):
+        if not hasattr(self, 'depth'):
+            self.depth = len(self.layers)
+        if not hasattr(self, 'num_subj_queries'):
+            self.num_subj_queries = self.latent_subj_queries.shape[1]
+        if not hasattr(self, 'num_bg_queries'):
+            self.num_bg_queries = self.latent_bg_queries.shape[1]
+
         return f"SubjBasisGenerator: depth={self.depth}, num_subj_queries={self.num_subj_queries}, num_bg_queries={self.num_bg_queries}, use_face_embs={self.use_face_embs}"
     
 @dataclass
