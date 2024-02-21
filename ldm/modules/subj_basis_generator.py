@@ -199,14 +199,15 @@ class SubjBasisGenerator(nn.Module):
             nn.LayerNorm(dim, elementwise_affine=False),
         )
         self.face_proj_in = nn.Sequential(
+            # Project to [BS, face_lora_queries * dim].
             nn.Linear(face_embedding_dim, face_lora_queries * dim, bias=False),
             # Reshape to [BS, face_lora_queries, dim].
             Rearrange('b (q d) -> b q d', q=face_lora_queries, d=dim),
             nn.LayerNorm(dim, elementwise_affine=False),
             # Permute to [BS, dim, face_lora_queries].
             Rearrange('b q d -> b d q'),
-            # Transpose to [BS, dim, num_subj_queries].
-            nn.Linear(face_lora_queries, num_subj_queries),
+            # Project to [BS, dim, num_subj_queries].
+            nn.Linear(face_lora_queries, num_subj_queries, bias=False),
             # Permute to [BS, num_subj_queries, dim].
             Rearrange('b d q -> b q d'),
         )
@@ -214,7 +215,6 @@ class SubjBasisGenerator(nn.Module):
         self.pos_emb    = nn.Embedding(max_seq_len, dim)            if apply_pos_emb else None
         self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=False)   if apply_pos_emb else None
 
-        self.latent_face_queries = nn.Parameter(torch.randn(1, num_subj_queries, dim) / dim**0.5)
         self.latent_subj_queries = nn.Parameter(torch.randn(1, num_subj_queries, dim) / dim**0.5)
         self.latent_bg_queries   = nn.Parameter(torch.randn(1, num_bg_queries, dim)   / dim**0.5)
         self.lq_ln               = nn.LayerNorm(dim, elementwise_affine=False)
