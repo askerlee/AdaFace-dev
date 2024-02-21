@@ -43,11 +43,13 @@ def masked_mean(t, *, dim, mask=None):
 def FeedForward(dim, mult=4):
     inner_dim = int(dim * mult)
     return nn.Sequential(
-        nn.LayerNorm(dim, elementwise_affine=False),
         nn.Linear(dim, inner_dim, bias=False),
-        nn.LayerNorm(inner_dim, elementwise_affine=False),
+        nn.LayerNorm(inner_dim, elementwise_affine=True),
+        nn.Dropout(0.1),
         nn.GELU(),
         nn.Linear(inner_dim, dim, bias=False),
+        nn.LayerNorm(dim, elementwise_affine=True),
+        nn.Dropout(0.1),
     )
 
 class PerceiverAttention(nn.Module):
@@ -110,19 +112,19 @@ class CrossAttention(nn.Module):
         # To increase stability,, we add layernorm to q,k,v projections.
         self.to_q = nn.Sequential(
                         nn.Linear(input_dim, inner_dim, bias=False),
-                        nn.LayerNorm(inner_dim, elementwise_affine=False))
+                        nn.LayerNorm(inner_dim, elementwise_affine=True))
         
         self.to_k = nn.Sequential(
                         nn.Linear(input_dim, inner_dim, bias=False),
-                        nn.LayerNorm(inner_dim, elementwise_affine=False))
+                        nn.LayerNorm(inner_dim, elementwise_affine=True))
         
         self.to_v = nn.Sequential(
                         nn.Linear(input_dim, inner_dim, bias=False),
-                        nn.LayerNorm(inner_dim, elementwise_affine=False))
+                        nn.LayerNorm(inner_dim, elementwise_affine=True))
 
         self.to_out = nn.Sequential(
             nn.Linear(inner_dim, input_dim, bias=False),
-            nn.LayerNorm(inner_dim, elementwise_affine=False),
+            nn.LayerNorm(inner_dim, elementwise_affine=True),
             nn.Dropout(dropout)
         )
         
@@ -196,14 +198,15 @@ class SubjBasisGenerator(nn.Module):
         super().__init__()
         self.proj_in = nn.Sequential(
             nn.Linear(image_embedding_dim, dim, bias=False),
-            nn.LayerNorm(dim, elementwise_affine=False),
+            nn.LayerNorm(dim, elementwise_affine=True),
         )
         self.face_proj_in = nn.Sequential(
             # Project to [BS, face_lora_queries * dim].
             nn.Linear(face_embedding_dim, face_lora_queries * dim, bias=False),
             # Reshape to [BS, face_lora_queries, dim].
             Rearrange('b (q d) -> b q d', q=face_lora_queries, d=dim),
-            nn.LayerNorm(dim, elementwise_affine=False),
+            nn.LayerNorm(dim, elementwise_affine=True),
+            nn.Dropout(0.1),
             # Permute to [BS, dim, face_lora_queries].
             Rearrange('b q d -> b d q'),
             # Project to [BS, dim, num_subj_queries].
@@ -213,15 +216,15 @@ class SubjBasisGenerator(nn.Module):
         )
 
         self.pos_emb    = nn.Embedding(max_seq_len, dim)            if apply_pos_emb else None
-        self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=False)   if apply_pos_emb else None
+        self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=True)   if apply_pos_emb else None
 
         self.latent_subj_queries = nn.Parameter(torch.randn(1, num_subj_queries, dim) / dim**0.5)
         self.latent_bg_queries   = nn.Parameter(torch.randn(1, num_bg_queries, dim)   / dim**0.5)
-        self.lq_ln               = nn.LayerNorm(dim, elementwise_affine=False)
+        self.lq_ln               = nn.LayerNorm(dim, elementwise_affine=True)
 
         # Remove proj_out to reduce the number of parameters, since image_embedding_dim = output_dim = 768.
         self.proj_out = nn.Identity() #nn.Linear(dim, output_dim)
-        self.norm_out = nn.LayerNorm(output_dim, elementwise_affine=False)
+        self.norm_out = nn.LayerNorm(output_dim, elementwise_affine=True)
         self.output_scale = output_dim ** -0.5
 
         self.layers = nn.ModuleList([])
