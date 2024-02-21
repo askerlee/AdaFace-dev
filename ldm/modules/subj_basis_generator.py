@@ -233,6 +233,9 @@ class SubjBasisGenerator(nn.Module):
     def forward(self, clip_features, face_embs, placeholder_is_bg=False):     
         x = self.proj_in(clip_features)
 
+        if 'use_face_embs' not in self.__dict__:
+            self.use_face_embs = True
+            
         # No need to use face_embs if placeholder_is_bg, or if face embs are disabled (use_face_embs is False), 
         # or no face is detected (face_embs is all 0s).
         if self.use_face_embs and (face_embs != 0).any() and (not placeholder_is_bg):
