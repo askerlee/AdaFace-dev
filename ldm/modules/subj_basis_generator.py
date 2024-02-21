@@ -227,6 +227,10 @@ class SubjBasisGenerator(nn.Module):
         self.norm_out = nn.LayerNorm(output_dim, elementwise_affine=True)
         self.output_scale = output_dim ** -0.5
 
+        self.depth = depth
+        self.num_subj_queries = num_subj_queries
+        self.num_bg_queries = num_bg_queries
+
         if not use_face_embs:
             assert depth > 0, "depth must be > 0 if not use_face_embs."
 
@@ -245,7 +249,7 @@ class SubjBasisGenerator(nn.Module):
             )
         self.use_face_embs = use_face_embs
 
-        print(f"SubjBasisGenerator: {depth} (attn, ffn) layers, num_subj_queries={num_subj_queries}, num_bg_queries={num_bg_queries}, use_face_embs={use_face_embs}")
+        print(self.desc())
 
     def forward(self, clip_features, face_embs, placeholder_is_bg=False):     
         x = self.proj_in(clip_features)
@@ -286,6 +290,9 @@ class SubjBasisGenerator(nn.Module):
         latent_queries = self.proj_out(latent_queries)
         return self.norm_out(latent_queries) * self.output_scale
 
+    def desc(self):
+        return f"SubjBasisGenerator: depth={self.depth}, num_subj_queries={self.num_subj_queries}, num_bg_queries={self.num_bg_queries}, use_face_embs={self.use_face_embs}"
+    
 @dataclass
 class BaseModelOutputWithPooling2(ModelOutput):
     """

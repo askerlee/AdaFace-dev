@@ -2226,7 +2226,9 @@ class EmbeddingManager(nn.Module):
 
             # Only load subj_basis_generator from ckpt if the ckpt is set with the same do_zero_shot.
             if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"]:
+                print(self.subj_basis_generator.desc(), end=" => ")
                 self.subj_basis_generator   = ckpt["subj_basis_generator"]
+                print(self.subj_basis_generator.desc())
 
             for token_idx, km in enumerate(ckpt["placeholder_strings"]):
                 # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.

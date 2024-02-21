@@ -861,6 +861,10 @@ def main(opt):
                         date_sig = subjfolder_mat.group(2)
                         # subjname_method: gabrielleunion-ada
                         subjname_method = subjfolder_mat.group(3)
+                        if opt.do_zero_shot and opt.compare_with:
+                            # all-ada => all-ada-gabrielleunion
+                            subjname_method += "-" + os.path.basename(opt.compare_with)
+
                         iter_mat = re.search(r"(\d+).pt", opt.subj_model_path)
                         if iter_mat is not None:
                             iter_sig = iter_mat.group(1)
