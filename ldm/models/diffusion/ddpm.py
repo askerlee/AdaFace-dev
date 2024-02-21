@@ -198,10 +198,12 @@ class DDPM(pl.LightningModule):
 
         # Training flags. 
         # No matter wheter the scheme is layerwise or not,
-        # as long as composition_regs_iter_gaps is not None, and prompt_emb_delta_reg_weight > 0, 
+        # as long as composition_regs_iter_gaps is not None, and prompt_emb_delta_reg_weight >= 0, 
         # do static comp delta reg.
+        # If self.prompt_emb_delta_reg_weight == 0, we still do_static_prompt_delta_reg to monitor this loss, 
+        # but this loss won't be involved in the optimization.
         self.do_static_prompt_delta_reg = self.composition_regs_iter_gaps is not None \
-                                            and self.prompt_emb_delta_reg_weight > 0
+                                            and self.prompt_emb_delta_reg_weight >= 0
         # Is this for DreamBooth training? Will be overwritten in LatentDiffusion ctor.
         self.is_dreambooth                  = False
 
