@@ -300,6 +300,8 @@ def parse_args():
                         help="Reference image for zero-shot learning")
     parser.add_argument("--ref_masks", type=str, nargs='+', default=None,
                         help="Reference mask for zero-shot learning")
+    parser.add_argument("--ignore_ref_masks", action="store_true",
+                        help="Ignore reference masks for zero-shot learning")    
     parser.add_argument("--no_id_emb", dest='zs_use_id_embs', action="store_false",
                         help="Do not use face/DINO embeddings for zero-shot generation")
     
@@ -399,7 +401,7 @@ def main(opt):
             assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
             ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
             ref_masks  = [ np.array(Image.open(ref_mask), dtype=float) for ref_mask in opt.ref_masks ] \
-                            if opt.ref_masks is not None else None
+                            if (opt.ref_masks is not None) and (not opt.ignore_ref_masks) else None
             zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, opt.zs_use_id_embs, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
 

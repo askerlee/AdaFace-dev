@@ -479,8 +479,10 @@ if __name__ == "__main__":
                 args.ref_masks  = " ".join(args.ref_masks)
 
             command_line += f" --zeroshot --zs_clip_type {args.zs_clip_type} --ref_images {args.ref_images}"
-            if (not args.ignore_ref_masks) and (args.ref_masks is not None):
+            if args.ref_masks is not None:
                 command_line += f" --ref_masks {args.ref_masks}"
+            if args.ignore_ref_masks:
+                command_line += f" --ignore_ref_masks"
             if args.no_id_emb:
                 command_line += f" --no_id_emb"
                 
