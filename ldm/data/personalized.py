@@ -203,7 +203,6 @@ class PersonalizedBase(Dataset):
             all_file_paths      = [os.path.join(data_root, file_path) for file_path in sorted(os.listdir(data_root))]
             image_paths         = list(filter(lambda x: "_mask" not in x and os.path.splitext(x)[1].lower() != '.txt', all_file_paths))
             # Limit the number of images for each subject to 100, to speed up loading.
-            breakpoint()
             if max_num_images_per_subject > 0:
                 image_paths         = image_paths[:max_num_images_per_subject]
             fg_mask_paths       = [ os.path.splitext(x)[0] + "_mask.png" for x in image_paths ]
