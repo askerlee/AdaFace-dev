@@ -52,13 +52,39 @@ def FeedForward(dim, mult=4):
         nn.Dropout(0.1),
     )
 
-def LoRA_Emb2Queries(input_dim, lora_rank, output_dim, num_output_queries):
+# group_dim: the tensor dimension that corresponds to the multiple groups.
+class LearnedSoftAggregate(nn.Module):
+    def __init__(self, num_feat, group_dim, keepdim=False):
+        super(LearnedSoftAggregate, self).__init__()
+        self.group_dim  = group_dim
+        # num_feat = 1: element-wise score function & softmax.
+        # num_feat > 1: the linear score function is applied to the last dim (features) of the input tensor. 
+        self.num_feat   = num_feat
+        self.feat2score = nn.Linear(num_feat, 1)
+        self.keepdim    = keepdim
+
+    def forward(self, x, score_basis=None):
+        # Assume the last dim of x is the feature dim.
+        if score_basis is None:
+            score_basis = x
+        
+        if self.num_feat == 1:
+            mode_scores = self.feat2score(score_basis.unsqueeze(-1)).squeeze(-1)
+        else:
+            mode_scores = self.feat2score(score_basis)
+        attn_probs  = mode_scores.softmax(dim=self.group_dim)
+        x_aggr      = (x * attn_probs).sum(dim=self.group_dim, keepdim=self.keepdim)
+        return x_aggr
+    
+def LoRA_Emb2Queries(input_dim, lora_rank, output_dim, num_modes, num_output_queries):
     return nn.Sequential(
-        # Project to [BS, lora_rank * output_dim].
-        nn.Linear(input_dim, lora_rank * output_dim, bias=False),
+        # Project to [BS, lora_rank * output_dim * num_modes].
+        nn.Linear(input_dim, lora_rank * output_dim * num_modes, bias=False),
         # Reshape to [BS, lora_rank, output_dim].
-        Rearrange('b (q d) -> b q d', q=lora_rank, d=output_dim),
+        Rearrange('b (m q d) -> b m q d', q=lora_rank, m=num_modes, d=output_dim),
         nn.LayerNorm(output_dim, elementwise_affine=True),
+        # Aggregate [BS, num_modes, loar_rank, output_dim] -> [BS, lora_rank, output_dim].
+        LearnedSoftAggregate(num_feat=output_dim, group_dim=1, keepdim=False),
         nn.Dropout(0.1),
         # Permute to [BS, output_dim, lora_rank].
         Rearrange('b q d -> b d q'),
@@ -217,8 +243,8 @@ class SubjBasisGenerator(nn.Module):
             nn.Linear(image_embedding_dim, dim, bias=False),
             nn.LayerNorm(dim, elementwise_affine=True),
         )
-        self.face_proj_in = LoRA_Emb2Queries(face_embedding_dim, num_lora_queries, dim, num_subj_queries)
-        self.obj_proj_in  = LoRA_Emb2Queries(dino_embedding_dim, num_lora_queries, dim, num_subj_queries)
+        self.face_proj_in = LoRA_Emb2Queries(face_embedding_dim, num_lora_queries, dim, num_modes=4, num_output_queries=num_subj_queries)
+        self.obj_proj_in  = LoRA_Emb2Queries(dino_embedding_dim, num_lora_queries, dim, num_modes=4, num_output_queries=num_subj_queries)
 
         self.pos_emb    = nn.Embedding(max_seq_len, dim)            if apply_pos_emb else None
         self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=True)   if apply_pos_emb else None
