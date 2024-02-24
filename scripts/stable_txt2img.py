@@ -893,7 +893,7 @@ def main(opt):
                     if opt.neg_prompt != "":
                         experiment_sig += "-neg"
 
-                    if opt.zeroshot and opt.ref_masks is not None:
+                    if opt.zeroshot and (opt.ref_masks is not None) and (not opt.ignore_ref_masks):
                         experiment_sig += "-mask"
                     
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
