@@ -126,6 +126,8 @@ class PersonalizedBase(Dataset):
                  data_roots,
                  size=None,
                  repeats=100,
+                 max_num_subjects_per_base_folder=1000,  # Set to -1 to load all subjects in each base folder.
+                 max_num_images_per_subject=100,         # Set to -1 to load all images in each subject folder.
                  flip_p=0.5,
                  # rand_scale_range: None (disabled) or a tuple of floats
                  # that specifies the (minimum, maximum) scaling factors.
@@ -168,15 +170,19 @@ class PersonalizedBase(Dataset):
             data_roots = [ data_roots ]
         
         data_roots2 = []
-        for base_dir in data_roots:
-            subfolders = [f.path for f in os.scandir(base_dir) if f.is_dir()]
-            # If base_dir contains subfolders, then expand them.
+        for base_folder in data_roots:
+            subfolders = [f.path for f in os.scandir(base_folder) if f.is_dir()]
+            # If base_folder contains subfolders, then expand them.
             if len(subfolders) > 0:
-                # Limit the number of subjects from each base_dir to 1000, to speed up loading.
-                data_roots2.extend(subfolders[:1000])
+                # Limit the number of subjects from each base_folder to 1000, to speed up loading.
+                if max_num_subjects_per_base_folder > 0:
+                    data_roots2.extend(subfolders[:max_num_subjects_per_base_folder])
+                else:
+                    # Load all subjects in each base folder.
+                    data_roots2.extend(subfolders)
             else:
-                # base_dir is a single folder containing images of a subject. No need to expand its subfolders.
-                data_roots2.append(base_dir)
+                # base_folder is a single folder containing images of a subject. No need to expand its subfolders.
+                data_roots2.append(base_folder)
 
         # Sort the data_roots, so that the order of subjects is consistent.
         self.data_roots = sorted(data_roots2)
@@ -197,7 +203,9 @@ class PersonalizedBase(Dataset):
             all_file_paths      = [os.path.join(data_root, file_path) for file_path in sorted(os.listdir(data_root))]
             image_paths         = list(filter(lambda x: "_mask" not in x and os.path.splitext(x)[1].lower() != '.txt', all_file_paths))
             # Limit the number of images for each subject to 100, to speed up loading.
-            image_paths         = image_paths[:100]
+            breakpoint()
+            if max_num_images_per_subject > 0:
+                image_paths         = image_paths[:max_num_images_per_subject]
             fg_mask_paths       = [ os.path.splitext(x)[0] + "_mask.png" for x in image_paths ]
             fg_mask_paths       = list(map(lambda x: x if x in all_file_paths else None, fg_mask_paths))
             num_valid_fg_masks  = sum([ 1 if x is not None else 0 for x in fg_mask_paths ])
