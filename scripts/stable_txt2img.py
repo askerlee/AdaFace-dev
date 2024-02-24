@@ -403,13 +403,13 @@ def main(opt):
             zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, opt.zs_use_id_embs, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
 
-            # zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
+            # zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512] if is_face or [1, 384] if not.
             zs_clip_features, zs_id_embs = encode_zero_shot_image_features(ref_images, ref_masks,
                                                                            is_face=opt.calc_face_sim,
                                                                            calc_avg=True)
         else:
             zs_clip_features = None
-            zs_id_embs     = None
+            zs_id_embs       = None
 
         model  = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:

@@ -867,9 +867,9 @@ class LatentDiffusion(DDPM):
         if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
             ckpt_params_perturb_ratio = config.params.get("ckpt_params_perturb_ratio", 0)
             src_placeholders = config.params.get("src_placeholders", None)
-            loaded_embedder_components            = config.params.get("loaded_embedder_components", None)
+            loaded_embedder_components   = config.params.get("loaded_embedder_components", None)
             frozen_placeholder_set       = config.params.get("frozen_placeholder_set", None)
-            frozen_embedder_components            = config.params.get("frozen_embedder_components", None)
+            frozen_embedder_components   = config.params.get("frozen_embedder_components", None)
             model.load(config.params.embedding_manager_ckpt, ckpt_params_perturb_ratio,
                        src_placeholders, loaded_embedder_components,
                        frozen_placeholder_set, frozen_embedder_components)

@@ -1,7 +1,7 @@
 #!/usr/bin/fish
 #                               1               2                 3                  4                       5                   6                    7                  8                       9 
 set -g subjects                 cat_statue      clock             colorful_teapot    elephant                mug_skulls          physics_mug          red_teapot         round_bird              thin_bird
-set -g init_strings           "cat figurine"  "alarm clock"     "colorful teapot"  "elephant figurine"     "face skull mug"    "brown formula mug"  "painted teapot"   "rustic bird figurine"  "abstract bird figurine"       
+set -g cls_delta_strings        "cat figurine"  "alarm clock"     "colorful teapot"  "elephant figurine"     "face skull mug"    "brown formula mug"  "painted teapot"   "rustic bird figurine"  "abstract bird figurine"       
 set -g all_init_word_weights    "1 2"           "1 2"             "1 2"               "1 2"                  "1 1 2"             "1 1 2"              "1 2"              "1 1 2"                 "1 1 2" 
 set -g class_names              figurine        clock             teapot             figurine                mug                 mug                  teapot             figurine                figurine
 set -g broad_classes            0               0                 0                   0                      0                   0                    0                  0                       0

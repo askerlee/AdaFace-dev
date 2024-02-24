@@ -39,7 +39,7 @@ end
 for i in (seq $L $H)
     set subject $subjects[$i]
     set folder  $subject
-    set db_prompt0 $init_strings[$i]
+    set db_prompt0 $cls_delta_strings[$i]
     if [ "$argv[1]" = 'db' ]
         set prompt "a z $prompt0$db_suffix"
     else

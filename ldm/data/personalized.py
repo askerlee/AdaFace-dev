@@ -122,7 +122,8 @@ human_animal_pat = "|".join([single_human_pat, single_role_pat, plural_human_pat
 
 class PersonalizedBase(Dataset):
     def __init__(self,
-                 data_roots,    # a list of strings, each string is a path to a folder containing images.
+                 # a list of folders containing subfolders, each subfolder containing images of a subject.
+                 data_roots,
                  size=None,
                  repeats=100,
                  flip_p=0.5,
@@ -141,6 +142,7 @@ class PersonalizedBase(Dataset):
                  # cls_delta_string is the same as subj init string.
                  cls_delta_string=None,  
                  bg_init_string=None,
+                 subj_initializer_word_weights=None,
                 # num_vectors_per_subj_token: how many vectors in each layer are allocated to model 
                 # the subject. If num_vectors_per_subj_token > 1, pad with "," in the prompts to leave
                 # room for those extra vectors.
@@ -149,25 +151,35 @@ class PersonalizedBase(Dataset):
                  center_crop=False,
                  num_compositions_per_image=1,
                  broad_class=1,
-                 # If data_roots contain multiple folders, a subject each folder, 
-                 # then subj_info_filepaths should point to a list of subject info files 
-                 # containing the cls_delta_string of all subjects, in "init_strings".
+                 # If data_roots contain multiple top folders, and multiple subfolders in each top folder, 
+                 # and a subject in each subfolder folder, 
+                 # then we could provide a list of subject info files in subj_info_filepaths,
+                 # where the files contain the cls_delta_string of all subjects, in the field "cls_delta_strings".
                  subj_info_filepaths=None,
                  do_zero_shot=False,
-                 wds_comp_db_path=None,    # Path to the composition webdatabase .tar file
-                 verbose=False,
+                 wds_db_path=None,    # Path to a folder containing webdatabase .tar files
+                 use_wds_prompts=False, # Use or ignore the prompts (when the prompts are noisy) in the webdataset.
+                 verbose=False, 
                  ):
 
         self.do_zero_shot = do_zero_shot
         # Expand wildcards in data_roots.
         if isinstance(data_roots, str):
             data_roots = [ data_roots ]
-        data_roots_expanded = [ glob.glob(data_root) for data_root in data_roots ]
-        # Sort the data_roots, so that the order of subjects is consistent.
-        self.data_roots = sorted(sum(data_roots_expanded, []))
-        # Remove non-directories.
-        self.data_roots = list(filter(lambda x: os.path.isdir(x), self.data_roots))
+        
+        data_roots2 = []
+        for base_dir in data_roots:
+            subfolders = [f.path for f in os.scandir(base_dir) if f.is_dir()]
+            # If base_dir contains subfolders, then expand them.
+            if len(subfolders) > 0:
+                # Limit the number of subjects from each base_dir to 1000, to speed up loading.
+                data_roots2.extend(subfolders[:1000])
+            else:
+                # base_dir is a single folder containing images of a subject. No need to expand its subfolders.
+                data_roots2.append(base_dir)
 
+        # Sort the data_roots, so that the order of subjects is consistent.
+        self.data_roots = sorted(data_roots2)
         # subject_names: sorted ascendingly for subjects within the same folder.
         self.subject_names = [ os.path.basename(data_root) for data_root in self.data_roots ]
 
@@ -177,36 +189,36 @@ class PersonalizedBase(Dataset):
         self.fg_mask_paths_by_subj  = []
         self.caption_paths_by_subj  = []
         self.feat_paths_by_subj     = []
+        total_num_valid_fg_masks    = 0
+        total_num_valid_captions    = 0
 
         for data_root in self.data_roots:
             # image_paths and mask_paths are full paths.
             all_file_paths      = [os.path.join(data_root, file_path) for file_path in sorted(os.listdir(data_root))]
             image_paths         = list(filter(lambda x: "_mask" not in x and os.path.splitext(x)[1].lower() != '.txt', all_file_paths))
+            # Limit the number of images for each subject to 100, to speed up loading.
+            image_paths         = image_paths[:100]
             fg_mask_paths       = [ os.path.splitext(x)[0] + "_mask.png" for x in image_paths ]
             fg_mask_paths       = list(map(lambda x: x if x in all_file_paths else None, fg_mask_paths))
             num_valid_fg_masks  = sum([ 1 if x is not None else 0 for x in fg_mask_paths ])
             caption_paths       = [ os.path.splitext(x)[0] + ".txt" for x in image_paths ]
             caption_paths       = list(map(lambda x: x if x in all_file_paths else None, caption_paths))
             num_valid_captions  = sum([ 1 if x is not None else 0 for x in caption_paths ])
-            feat_paths          = [ os.path.splitext(x)[0] + ".npy" for x in image_paths ]
-            # Don't filter feat_paths. If the .npy file is missing, then it'll be created at the first loading.
-            # feat_paths          = list(map(lambda x: x if x in all_file_paths else None, feat_paths))
-            num_valid_feats     = sum([ 1 if x is not None else 0 for x in feat_paths ])
 
             self.image_paths_by_subj.append(image_paths)
             self.fg_mask_paths_by_subj.append(fg_mask_paths)
             self.caption_paths_by_subj.append(caption_paths)
-            self.feat_paths_by_subj.append(feat_paths)
 
-            if verbose:
+            total_num_valid_fg_masks += num_valid_fg_masks
+            total_num_valid_captions += num_valid_captions
+
+            if verbose and len(self.data_roots) < 80:
                 print("{} images, {} fg masks, {} captions found in '{}'".format( \
                     len(image_paths), num_valid_fg_masks, num_valid_captions, data_root))
                 if num_valid_fg_masks > 0 and num_valid_fg_masks < len(image_paths):
                     print("WARNING: {} fg masks are missing!".format(len(image_paths) - num_valid_fg_masks))
                 if num_valid_captions > 0 and num_valid_captions < len(image_paths):
                     print("WARNING: {} captions are missing!".format(len(image_paths) - num_valid_captions))
-                if num_valid_feats > 0 and num_valid_feats < len(image_paths):
-                    print("WARNING: {} feature files are missing!".format(len(image_paths) - num_valid_feats))
 
         self.num_subjects = len(self.subject_names)
         # self.image_paths, ...         are for the one-level indexing, i.e., directly indexing into a particular image.
@@ -215,8 +227,8 @@ class PersonalizedBase(Dataset):
         self.image_paths   = sum(self.image_paths_by_subj, [])
         self.fg_mask_paths = sum(self.fg_mask_paths_by_subj, [])
         self.caption_paths = sum(self.caption_paths_by_subj, [])
-        self.feat_paths    = sum(self.feat_paths_by_subj, [])
-
+        print(f"Found {len(self.image_paths)} images in {len(self.data_roots)} folders, {total_num_valid_fg_masks} fg masks, {total_num_valid_captions} captions")
+  
         self.num_images = len(self.image_paths)
         self.set_name = set
         if set == "train":
@@ -226,17 +238,18 @@ class PersonalizedBase(Dataset):
             self.is_training = False
             self._length = self.num_images 
 
-        self.wds_comp_db_path = wds_comp_db_path
+        self.wds_db_path = wds_db_path
+        self.use_wds_prompts = use_wds_prompts
         # wds composition is enabled if there are fg masks.
-        if self.is_training and (self.wds_comp_db_path is not None) and (num_valid_fg_masks > 0):
-            self.comp_wds = wds.WebDataset(self.wds_comp_db_path).shuffle(100).decode("pil").to_tuple("jpg;png", "json")
+        if self.is_training and (self.wds_db_path is not None):
+            self.comp_wds = wds.WebDataset(self.wds_db_path).shuffle(100).decode("pil").to_tuple("jpg;png", "json")
             self.comp_wds_iter = iter(self.comp_wds)
-            self.do_wds_comp = True
-            print(f"Composition webdataset {self.wds_comp_db_path} is enabled")
+            self.train_with_wds_data = True
+            print(f"Webdataset {self.wds_db_path} is enabled")
         else:
             self.comp_wds = None
             self.comp_wds_iter = None
-            self.do_wds_comp = False
+            self.train_with_wds_data = False
 
         subj2attr = {}
         if subj_info_filepaths is not None:
@@ -280,17 +293,18 @@ class PersonalizedBase(Dataset):
             # Don't share the wds_background_string, since the background of different subject images
             # has different distributions.
             self.wds_background_strings = [ wds_background_string   + f"{i+1:02}" for i in range(self.num_subjects) ]
-            
-        self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-        # subject_token, background_token: subject_string and background_string converted to 
-        # token numbers.
-        # BUG: self.tokenizer hasn't been extended with the new tokens yet. 
-        # So the tokens are WRONG under multi-subject training.
-        # But this only matters when we use wds images.
-        self.subject_tokens     = [ self.tokenizer(subject_string)['input_ids'][1] \
-                                    for subject_string in self.subject_strings ]
-        self.background_tokens  = [ self.tokenizer(background_string)['input_ids'][1] \
-                                    for background_string in self.background_strings ]
+        
+        if self.train_with_wds_data:
+            self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+            # subject_token, background_token: subject_string and background_string converted to 
+            # token numbers.
+            # BUG: self.tokenizer hasn't been extended with the new tokens yet. 
+            # So the tokens are WRONG under multi-subject training.
+            # But this only matters when we use wds images.
+            self.subject_tokens     = [ self.tokenizer(subject_string)['input_ids'][1] \
+                                        for subject_string in self.subject_strings ]
+            self.background_tokens  = [ self.tokenizer(background_string)['input_ids'][1] \
+                                        for background_string in self.background_strings ]
 
         self.do_zero_shot = do_zero_shot
 
@@ -304,8 +318,8 @@ class PersonalizedBase(Dataset):
         else:
             self.compos_placeholder_prefixes   = None
 
-        if 'init_strings' in subj2attr:
-            self.cls_delta_strings = [ subj2attr['init_strings'][subject_name] \
+        if 'cls_delta_strings' in subj2attr:
+            self.cls_delta_strings = [ subj2attr['cls_delta_strings'][subject_name] \
                                         for subject_name in self.subject_names ]
         else:
             if cls_delta_string is not None:
@@ -320,7 +334,7 @@ class PersonalizedBase(Dataset):
             self.list_subj_initializer_word_weights = [ subj2attr['all_init_word_weights'][subject_name] \
                                                           for subject_name in self.subject_names ]
         else:
-            self.list_subj_initializer_word_weights = [ None ] * self.num_subjects
+            self.list_subj_initializer_word_weights = [ subj_initializer_word_weights ] * self.num_subjects
 
         if 'are_faces' in subj2attr:
             self.subjects_are_faces = [ subj2attr['are_faces'][subject_name] \
@@ -363,7 +377,7 @@ class PersonalizedBase(Dataset):
                                      ])
                 print(f"{set} images will be randomly scaled in range {rand_scale_range}")
 
-            if self.do_wds_comp:
+            if self.train_with_wds_data:
                 # rand_scale_range is (0.7, 1.0) by default. Here we use a smaller range, 
                 # i.e., more aggressive scaling.
                 print(f"{set} fg will be randomly scaled to (0.5, 0.8) before overlaying to bg images")
@@ -394,21 +408,15 @@ class PersonalizedBase(Dataset):
             image_path      = image_paths[image_idx]
             fg_mask_path    = self.fg_mask_paths_by_subj[index][image_idx]
             caption_path    = self.caption_paths_by_subj[index][image_idx]
-            feat_path       = self.feat_paths_by_subj[index][image_idx]
             subject_idx     = index
         else:
             image_path    = self.image_paths[index % self.num_images]
             fg_mask_path  = self.fg_mask_paths[index % self.num_images] 
             caption_path  = self.caption_paths[index % self.num_images]
-            feat_path     = self.feat_paths[index % self.num_images]
             subject_idx   = 0
 
         cls_delta_string      = self.cls_delta_strings[subject_idx]
         wds_background_string = self.wds_background_strings[subject_idx]
-        # subject_token, background_token: subject_string and background_string converted to 
-        # token numbers.        
-        subject_token         = self.subject_tokens[subject_idx]
-        background_token      = self.background_tokens[subject_idx]
 
         image_obj = Image.open(image_path)
         if not image_obj.mode == "RGB":
@@ -469,9 +477,9 @@ class PersonalizedBase(Dataset):
         
         image_mask = np.array(image_mask_obj)
 
-        if has_fg_mask and self.do_wds_comp:
+        if self.train_with_wds_data:
             gen_wds_comp = True
-            # If do_wds_comp, and fg areas are large enough, then we do more aggressive scaling to fg,
+            # If train_with_wds_data, and fg areas are large enough, then we do more aggressive scaling to fg,
             # so that fg won't dominate the whole image, which may help learning composition.
         else:
             gen_wds_comp = False
@@ -546,7 +554,7 @@ class PersonalizedBase(Dataset):
             # If random scaling or wds composition is enabled, then even if no scaling happens
             # or no wds_image_mask is generated, we still need to put a all-1 'aug_mask' into the example.
             # 'aug_mask' has to be present in all examples, otherwise collation will encounter exceptions.
-            if self.random_scaler or self.do_wds_comp:
+            if self.random_scaler or self.train_with_wds_data:
                 aug_mask = np.ones_like(image_mask[:, :, 0])
             else:
                 # aug_mask will not be present in any examples, so set it to None.
@@ -575,6 +583,11 @@ class PersonalizedBase(Dataset):
         example["image"]        = (image / 127.5 - 1.0).astype(np.float32)
 
         if gen_wds_comp:
+            # subject_token, background_token: subject_string and background_string converted to 
+            # token numbers.        
+            subject_token         = self.subject_tokens[subject_idx]
+            background_token      = self.background_tokens[subject_idx]
+
             Found = False
             while not Found:
                 try:

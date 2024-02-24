@@ -228,21 +228,18 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--compos_placeholder_prefix",
         type=str, default=None,
         help="Prefix of the placeholder string for compositional prompts. Default: None.")
-    
-    parser.add_argument("--subj_init_string", 
-        type=str, 
-        help="Words used to initialize placeholder embedding")
 
     parser.add_argument("--bg_init_string", 
-        type=str, default="unknown",    # 'unknown' should be a wild-card word to match various actual background patterns.
+        type=str, default="unknown",    # 'unknown' is a wild-card word to match various actual background patterns.
         help="Words used to initialize background embedding")
 
     parser.add_argument("--subj_init_word_weights", nargs="*", 
         type=float, 
-        help="Weights of each token in subj_init_string")
+        help="Weights of each token in cls_delta_string/subj_init_string")
 
+    # cls_delta_string is also used as subj_init_string.
     parser.add_argument("--cls_delta_string",
-        type=str, default=None,
+        type=str, default='person',
         help="One or more word tso be used in class-level prompts for delta loss")
     
     parser.add_argument("--num_vectors_per_subj_token",
@@ -270,7 +267,7 @@ def get_parser(**parser_kwargs):
                         help="Depth of zero-shot subject feature generator")
     
     parser.add_argument("--layerwise_lora_rank", 
-        type=int, default=5,
+        type=int, default=10,
         help="Layerwise lora rank")
     parser.add_argument("--attn_pooler_feat_reduction_ratio",
         type=float, default=argparse.SUPPRESS,
@@ -323,7 +320,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
 
-    parser.add_argument("--wds_comp_db_path", type=str, default=None,
+    parser.add_argument("--wds_db_path", type=str, default=None,
                         help="Path to the composition webdatabase .tar file")
     parser.add_argument("--wds_background_string", 
         type=str, default="w",
@@ -351,102 +348,62 @@ def nondefault_trainer_args(opt):
 # personalization_config_params = config.model.params.personalization_config.params.
 # dataset: data.datasets['train'].
 def set_placeholders_info(personalization_config_params, opt, dataset):
-    num_subjects = dataset.num_subjects
-    if not hasattr(opt, 'subj_info_filepaths'):
-        assert num_subjects == 1
-
-    # Single subject. All params are specified in the opt arguments.
-    if not hasattr(opt, 'subj_info_filepaths'):
-        if opt.subj_init_word_weights is not None and len(opt.subj_init_word_weights) > 0:
-            assert len(opt.subj_init_word_weights) == len(re.split("\s+", opt.subj_init_string))
-        else:
-            # None will be converted to a list of 1.0s in EmbeddingManager.
-            opt.subj_init_word_weights = None
-
-        personalization_config_params.subject_strings   = [opt.subject_string]
-        # opt.subj_init_string has to be present. 
-        # opt.subj_init_word_weights could be absent.
-        personalization_config_params.initializer_strings[0]   = opt.subj_init_string
-        personalization_config_params.list_initializer_word_weights[0] = opt.subj_init_word_weights
-        personalization_config_params.subj_name_to_cls_delta_strings[opt.subject_string]  = config.data.params.train.params.cls_delta_string
-        # cls_delta_string should be the same as the subj_init_string, and they also share the same word weights.
-        personalization_config_params.subj_name_to_cls_delta_word_weights[opt.subject_string]   = opt.subj_init_word_weights
-        personalization_config_params.token2num_vectors       = { opt.subject_string: opt.num_vectors_per_subj_token}
+    if not opt.zeroshot:
+        personalization_config_params.subject_strings                     = dataset.subject_strings
+        personalization_config_params.initializer_strings                 = dataset.cls_delta_strings
+        personalization_config_params.list_initializer_word_weights       = dataset.list_subj_initializer_word_weights
+        personalization_config_params.subj_name_to_cls_delta_strings      = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
+        personalization_config_params.subj_name_to_cls_delta_word_weights = dict(zip(dataset.subject_names, dataset.list_subj_initializer_word_weights))
+        personalization_config_params.token2num_vectors         = dict()
+        for subject_string in dataset.subject_strings:
+            personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
 
         if opt.background_string is not None:
             config.model.params.use_background_token = True
-            # Use a list to store both background_string and wds_background_string, 
-            # if the latter is specified.
-            personalization_config_params.initializer_strings.append(opt.bg_init_string)
-            personalization_config_params.list_initializer_word_weights.append(None)            
-            # The background token can be represented with multiple embeddings.
-            personalization_config_params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
-            personalization_config_params.background_strings = [opt.background_string]
+            personalization_config_params.background_strings             = dataset.background_strings
+            personalization_config_params.initializer_strings           += dataset.bg_initializer_strings
+            personalization_config_params.list_initializer_word_weights += dataset.list_bg_initializer_word_weights
 
-            if opt.wds_comp_db_path is not None:
-                # wds_background_strings share the same settings of the background string.
-                personalization_config_params.initializer_strings.append(opt.bg_init_string)
-                personalization_config_params.list_initializer_word_weights.append(None)            
-                personalization_config_params.token2num_vectors[opt.wds_background_string] = opt.num_vectors_per_bg_token
-                personalization_config_params.background_strings.append(opt.wds_background_string)
-    # Multiple subjects. The params are extracted from opt.subj_info_filepaths 
-    # by the dataset object.
+            for background_string in dataset.background_strings:
+                personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
+
+        if opt.wds_db_path is not None:
+            # wds_background_strings share the same settings of the background string.
+            personalization_config_params.background_strings        += dataset.wds_background_strings
+            personalization_config_params.initializer_strings       += dataset.bg_initializer_strings
+            personalization_config_params.list_initializer_word_weights  += dataset.list_bg_initializer_word_weights
+
+            for wds_background_string in dataset.wds_background_strings:
+                personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
     else:
-        if not opt.zeroshot:
-            personalization_config_params.subject_strings                     = dataset.subject_strings
-            personalization_config_params.initializer_strings                 = dataset.cls_delta_strings
-            personalization_config_params.list_initializer_word_weights       = dataset.list_subj_initializer_word_weights
-            personalization_config_params.subj_name_to_cls_delta_strings      = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
-            personalization_config_params.subj_name_to_cls_delta_word_weights = dict(zip(dataset.subject_names, dataset.list_subj_initializer_word_weights))
-            personalization_config_params.token2num_vectors         = dict()
-            for subject_string in dataset.subject_strings:
-                personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
+        # Only keep the first subject and background placeholder.
+        personalization_config_params.subject_strings           = dataset.subject_strings[:1]
+        personalization_config_params.initializer_strings       = dataset.cls_delta_strings[:1]
+        personalization_config_params.list_initializer_word_weights  = dataset.list_subj_initializer_word_weights[:1]
+        personalization_config_params.subj_name_to_cls_delta_strings      = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
+        personalization_config_params.subj_name_to_cls_delta_word_weights = dict(zip(dataset.subject_names, dataset.list_subj_initializer_word_weights))
+        personalization_config_params.token2num_vectors         = dict()
+        for subject_string in dataset.subject_strings[:1]:
+            personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
 
-            if opt.background_string is not None:
-                config.model.params.use_background_token = True
-                personalization_config_params.background_strings             = dataset.background_strings
-                personalization_config_params.initializer_strings           += dataset.bg_initializer_strings
-                personalization_config_params.list_initializer_word_weights += dataset.list_bg_initializer_word_weights
+        if opt.background_string is not None:
+            config.model.params.use_background_token = True
+            personalization_config_params.background_strings              = dataset.background_strings[:1]
+            personalization_config_params.initializer_strings            += dataset.bg_initializer_strings[:1]
+            personalization_config_params.list_initializer_word_weights  += dataset.list_bg_initializer_word_weights[:1]
 
-                for background_string in dataset.background_strings:
-                    personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
+            for background_string in dataset.background_strings[:1]:
+                personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
 
-            if opt.wds_comp_db_path is not None:
-                # wds_background_strings share the same settings of the background string.
-                personalization_config_params.background_strings        += dataset.wds_background_strings
-                personalization_config_params.initializer_strings       += dataset.bg_initializer_strings
-                personalization_config_params.list_initializer_word_weights  += dataset.list_bg_initializer_word_weights
+        if opt.wds_db_path is not None:
+            # wds_background_strings share the same settings of the background string.
+            personalization_config_params.background_strings        += dataset.wds_background_strings[:1]
+            personalization_config_params.initializer_strings       += dataset.bg_initializer_strings[:1]
+            personalization_config_params.list_initializer_word_weights  += dataset.list_bg_initializer_word_weights[:1]
 
-                for wds_background_string in dataset.wds_background_strings:
-                    personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
-        else:
-            # Only keep the first subject and background placeholder.
-            personalization_config_params.subject_strings           = dataset.subject_strings[:1]
-            personalization_config_params.initializer_strings       = dataset.cls_delta_strings[:1]
-            personalization_config_params.list_initializer_word_weights  = dataset.list_subj_initializer_word_weights[:1]
-            personalization_config_params.subj_name_to_cls_delta_strings      = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
-            personalization_config_params.subj_name_to_cls_delta_word_weights = dict(zip(dataset.subject_names, dataset.list_subj_initializer_word_weights))
-            personalization_config_params.token2num_vectors         = dict()
-            for subject_string in dataset.subject_strings[:1]:
-                personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
+            for wds_background_string in dataset.wds_background_strings[:1]:
+                personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
 
-            if opt.background_string is not None:
-                config.model.params.use_background_token = True
-                personalization_config_params.background_strings              = dataset.background_strings[:1]
-                personalization_config_params.initializer_strings            += dataset.bg_initializer_strings[:1]
-                personalization_config_params.list_initializer_word_weights  += dataset.list_bg_initializer_word_weights[:1]
-
-                for background_string in dataset.background_strings[:1]:
-                    personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
-
-            if opt.wds_comp_db_path is not None:
-                # wds_background_strings share the same settings of the background string.
-                personalization_config_params.background_strings        += dataset.wds_background_strings[:1]
-                personalization_config_params.initializer_strings       += dataset.bg_initializer_strings[:1]
-                personalization_config_params.list_initializer_word_weights  += dataset.list_bg_initializer_word_weights[:1]
-
-                for wds_background_string in dataset.wds_background_strings[:1]:
-                    personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
     # subjects_are_faces are always available in dataset. But if not do_zero_shot, the values may be wrong, 
     # but in this case, they are not used anyway.
     personalization_config_params.subj_name_to_being_faces = dict(zip(dataset.subject_names, dataset.subjects_are_faces))
@@ -913,17 +870,19 @@ if __name__ == "__main__":
         # broad_class
         config.data.params.train.params.broad_class             = opt.broad_class
         config.data.params.validation.params.broad_class        = opt.broad_class
-        # If cls_delta_string is specified, use it for the cls_delta_string of the datasets. 
-        # Otherwise, use subj_init_string as the cls_delta_string of the datasets.
-        config.data.params.train.params.cls_delta_string         = opt.cls_delta_string or opt.subj_init_string
-        config.data.params.validation.params.cls_delta_string    = opt.cls_delta_string or opt.subj_init_string
+        config.data.params.train.params.cls_delta_string        = opt.cls_delta_string
+        config.data.params.validation.params.cls_delta_string   = opt.cls_delta_string
+        if opt.subj_init_word_weights is not None and len(opt.subj_init_word_weights) > 0:
+            assert len(opt.subj_init_word_weights) == len(re.split("\s+", opt.cls_delta_string))
 
+        config.data.params.train.params.subj_initializer_word_weights = opt.subj_init_word_weights
+        config.data.params.validation.params.subj_initializer_word_weights = opt.subj_init_word_weights
         config.data.params.train.params.num_vectors_per_subj_token           = opt.num_vectors_per_subj_token
         config.data.params.validation.params.num_vectors_per_subj_token      = opt.num_vectors_per_subj_token
         config.data.params.train.params.num_vectors_per_bg_token        = opt.num_vectors_per_bg_token
         config.data.params.validation.params.num_vectors_per_bg_token   = opt.num_vectors_per_bg_token
 
-        config.data.params.train.params.wds_comp_db_path                   = opt.wds_comp_db_path
+        config.data.params.train.params.wds_db_path                   = opt.wds_db_path
 
         if opt.background_string is not None:
             config.data.params.train.params.background_string           = opt.background_string

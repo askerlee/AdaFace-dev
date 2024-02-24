@@ -2240,9 +2240,21 @@ class EmbeddingManager(nn.Module):
 
             # Only load subj_basis_generator from ckpt if the ckpt is set with the same do_zero_shot.
             if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"]:
-                print(self.subj_basis_generator.desc(), end=" => ")
-                self.subj_basis_generator   = ckpt["subj_basis_generator"]
-                print(self.subj_basis_generator.desc())
+                # repr(ckpt['subj_basis_generator']) will also assign missing variables to ckpt['subj_basis_generator'].
+                print(f"Loading {repr(ckpt['subj_basis_generator'])}")
+                # self.subj_basis_generator is either not initialized, or initialized with a smaller depth.
+                # Then replace it with the one in ckpt.
+                if self.subj_basis_generator is None or self.subj_basis_generator.depth < ckpt["subj_basis_generator"].depth:
+                    print(f"Overwrite {repr(self.subj_basis_generator)}")
+                    self.subj_basis_generator   = ckpt["subj_basis_generator"]
+                else:
+                    # ckpt["subj_basis_generator"] contains a subset of the params of self.subj_basis_generator.
+                    # Only load this subset.
+                    missing_keys, unexpected_keys = self.subj_basis_generator.load_state_dict(ckpt["subj_basis_generator"].state_dict(), strict=False)
+                    if len(missing_keys) > 0:
+                        print(f"Missing keys: {missing_keys}")
+                    if len(unexpected_keys) > 0:
+                        print(f"Unexpected keys: {unexpected_keys}")
 
             for token_idx, km in enumerate(ckpt["placeholder_strings"]):
                 # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.

@@ -192,7 +192,7 @@ class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
         dim=768,                            # Internal feature dimension. Same as output_dim.
-        depth=1,                            # number of (CrossAttention, FeedForward) layers.     
+        depth=2,                            # number of (CrossAttention, FeedForward) layers.     
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
         heads=16,       
         # num_subj_queries: number of subject latent_queries.
@@ -210,7 +210,7 @@ class SubjBasisGenerator(nn.Module):
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
-        use_id_embs: bool = True,           # Whether to use an identity embedding to generate latent_queries.
+        use_id_embs: bool   = True,         # Whether to use an identity embedding to generate latent_queries.
     ):
         super().__init__()
         self.proj_in = nn.Sequential(
@@ -254,7 +254,7 @@ class SubjBasisGenerator(nn.Module):
             )
         self.use_id_embs = use_id_embs
 
-        print(self.desc())
+        print(repr(self))
 
     def forward(self, clip_features, id_embs, is_face, placeholder_is_bg=False):     
         x = self.proj_in(clip_features)
@@ -295,7 +295,7 @@ class SubjBasisGenerator(nn.Module):
         latent_queries = self.proj_out(latent_queries)
         return self.norm_out(latent_queries) * self.output_scale
 
-    def desc(self):
+    def __repr__(self):
         if not hasattr(self, 'use_id_embs'):
             self.use_id_embs = True
         if not hasattr(self, 'depth'):

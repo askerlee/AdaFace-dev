@@ -331,14 +331,14 @@ def parse_subject_file(subject_file_path):
                         values = substrings
 
                     if len(values) == 1 and values[0].startswith("$"):
-                        # e.g., set -g cls_strings    $init_strings
+                        # e.g., set -g cls_strings    $cls_delta_strings
                         values = subj_info[values[0][1:]]
 
                     subj_info[var_name] = values
                 else:
                     breakpoint()
 
-    for var_name in [ "subjects", "class_names", "init_strings", "data_folder" ]:
+    for var_name in [ "subjects", "class_names", "cls_delta_strings", "data_folder" ]:
         if var_name not in subj_info:
             print("Variable %s is not defined in %s" %(var_name, subject_file_path))
             breakpoint()
@@ -347,7 +347,7 @@ def parse_subject_file(subject_file_path):
         # By default, all subjects are humans/animals, unless specified in the subject file.
         subj_info['broad_classes'] = [ 1 for _ in subj_info['subjects'] ]
 
-    for var_name in [ "class_names", "init_strings", "all_init_word_weights", 
+    for var_name in [ "class_names", "cls_delta_strings", "all_init_word_weights", 
                       "bg_init_strings", "broad_classes", "are_faces" ]:
         if var_name in subj_info:
             subj2attr[var_name] = {}
@@ -362,7 +362,7 @@ def parse_subject_file(subject_file_path):
     if 'sel_set' not in subj_info:
         subj_info['sel_set'] = list(range(len(subj_info['subjects'])))
 
-    # The most important variables: "subjects", "init_strings", "data_folder", "class_names"
+    # The most important variables: "subjects", "cls_delta_strings", "data_folder", "class_names"
     return subj_info, subj2attr
 
 # extra_sig could be a regular expression
