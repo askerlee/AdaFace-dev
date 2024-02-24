@@ -52,7 +52,9 @@ def parse_args():
                         help="Reference image for zero-shot learning")
     parser.add_argument("--ref_masks",  type=str, nargs='+', default=None,
                         help="Reference mask for zero-shot learning")
-
+    parser.add_argument("--ignore_ref_masks", action="store_true",
+                        help="Ignore reference masks for zero-shot learning")
+    
     parser.add_argument("--use_conv_attn_kernel_size",
                         type=int, default=argparse.SUPPRESS, 
                         help="Use convolutional attention at subject tokens")
@@ -477,7 +479,7 @@ if __name__ == "__main__":
                 args.ref_masks  = " ".join(args.ref_masks)
 
             command_line += f" --zeroshot --zs_clip_type {args.zs_clip_type} --ref_images {args.ref_images}"
-            if args.ref_masks is not None:
+            if (not args.ignore_ref_masks) and (args.ref_masks is not None):
                 command_line += f" --ref_masks {args.ref_masks}"
             if args.no_id_emb:
                 command_line += f" --no_id_emb"
