@@ -507,6 +507,8 @@ class StaticLayerwiseEmbedding(nn.Module):
             if self.do_zero_shot:
                 # Copy to bias, so that static_zs_embs is regularized by layerwise_embedding_norm_loss().
                 self.bias = static_zs_embs
+                # Make sure static_zs_embs is regularized by layerwise_embedding_norm_loss().
+                self.has_bias = True
                 return static_zs_embs
             
             # self.N: number of pre_vecs.
@@ -559,6 +561,8 @@ class AdaEmbedding(nn.Module):
         super().__init__()
 
         self.do_zero_shot = do_zero_shot
+        if self.do_zero_shot:
+            assert has_bias, "Zero-shot AdaEmbedding must set has_bias=True"
 
         self.token_string = token_string
         assert num_layers == len(layer_idx2ca_layer_idx), f"num_layers={num_layers} != len(layer_idx2ca_layer_idx)={len(layer_idx2ca_layer_idx)}"
@@ -855,10 +859,10 @@ class AdaEmbedding(nn.Module):
                 # since we can't regularize pre_vecs in zero-shot setting, we copy the whole zs_basis_vecs to self.basis_vecs,
                 # so that all vectors in zs_basis_vecs will be regularized.
                 self.basis_vecs = zs_basis_vecs
-                if self.has_bias:
-                    assert zs_bias is not None,   "Zero-shot AdaEmbedding requires zs_bias"
-                    # Copy to bias, so that zs_bias will be regularized in layerwise_embedding_norm_loss().
-                    self.bias = zs_bias                
+                # has_bias is always True in zero-shot AdaEmbedding.
+                assert zs_bias is not None,   "Zero-shot AdaEmbedding requires zs_bias"
+                # Copy to bias, so that zs_bias will be regularized in layerwise_embedding_norm_loss().
+                self.bias = zs_bias                
             else:
                 # self.N: number of pre_vecs.
                 if self.N > 0:
