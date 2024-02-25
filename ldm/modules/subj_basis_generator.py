@@ -338,7 +338,7 @@ class SubjBasisGenerator(nn.Module):
             self.num_emb2queries_modes = self.face_proj_in[1].axes_lengths['m']
 
         return f"SubjBasisGenerator: depth={self.depth}, num_subj_queries={self.num_subj_queries}, " \
-                "num_bg_queries={self.num_bg_queries}, use_id_embs={self.use_id_embs}, " \
+                f"num_bg_queries={self.num_bg_queries}, use_id_embs={self.use_id_embs}, " \
                 f"num_emb2queries_modes={self.num_emb2queries_modes}"
     
 @dataclass
