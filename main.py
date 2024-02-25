@@ -267,7 +267,9 @@ def get_parser(**parser_kwargs):
                         help="Layers (depth) of zero-shot subject feature generator")
     parser.add_argument("--zs_num_emb2queries_modes", type=int, default=4,
                         help="Number of modes for the zero-shot embedding to queries mapping")
-        
+    parser.add_argument("--zs_elementwise_affine", type=str2bool, nargs="?", const=True, default=True,
+                        help="Whether to use elementwise affine in zero-shot subject feature generator")
+    
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=10,
         help="Layerwise lora rank")
@@ -927,6 +929,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_use_id_embs            = opt.zs_use_id_embs
             config.model.params.personalization_config.params.zs_num_generator_layers   = opt.zs_num_generator_layers
             config.model.params.personalization_config.params.zs_num_emb2queries_modes  = opt.zs_num_emb2queries_modes
+            config.model.params.personalization_config.params.zs_elementwise_affine     = opt.zs_elementwise_affine
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)

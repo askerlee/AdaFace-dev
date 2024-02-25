@@ -40,15 +40,15 @@ def masked_mean(t, *, dim, mask=None):
 
 
 # FFN
-def FeedForward(dim, mult=4):
+def FeedForward(dim, mult=4, elementwise_affine=True):
     inner_dim = int(dim * mult)
     return nn.Sequential(
         nn.Linear(dim, inner_dim, bias=False),
-        nn.LayerNorm(inner_dim, elementwise_affine=True),
+        nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine),
         nn.Dropout(0.1),
         nn.GELU(),
         nn.Linear(inner_dim, dim, bias=False),
-        nn.LayerNorm(dim, elementwise_affine=True),
+        nn.LayerNorm(dim, elementwise_affine=elementwise_affine),
         nn.Dropout(0.1),
     )
 
@@ -76,13 +76,14 @@ class LearnedSoftAggregate(nn.Module):
         x_aggr      = (x * attn_probs).sum(dim=self.group_dim, keepdim=self.keepdim)
         return x_aggr
     
-def LoRA_Emb2Queries(input_dim, lora_rank, output_dim, num_modes, num_output_queries):
+def LoRA_Emb2Queries(input_dim, lora_rank, output_dim, num_modes, 
+                     num_output_queries, elementwise_affine=True):
     return nn.Sequential(
         # Project to [BS, lora_rank * output_dim * num_modes].
         nn.Linear(input_dim, lora_rank * output_dim * num_modes, bias=False),
         # Reshape to [BS, lora_rank, output_dim].
         Rearrange('b (m q d) -> b m q d', q=lora_rank, m=num_modes, d=output_dim),
-        nn.LayerNorm(output_dim, elementwise_affine=True),
+        nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
         # Aggregate [BS, num_modes, loar_rank, output_dim] -> [BS, lora_rank, output_dim].
         LearnedSoftAggregate(num_feat=output_dim, group_dim=1, keepdim=False),
         nn.Dropout(0.1),
@@ -143,7 +144,7 @@ class PerceiverAttention(nn.Module):
 
 # All CrossAttention layers have 8 heads.
 class CrossAttention(nn.Module):
-    def __init__(self, input_dim, heads=8, dropout=0.2):
+    def __init__(self, input_dim, heads=8, dropout=0.1, elementwise_affine=True):
         super().__init__()
         dim_head = input_dim // heads
         inner_dim = dim_head * heads
@@ -154,19 +155,19 @@ class CrossAttention(nn.Module):
         # To increase stability,, we add layernorm to q,k,v projections.
         self.to_q = nn.Sequential(
                         nn.Linear(input_dim, inner_dim, bias=False),
-                        nn.LayerNorm(inner_dim, elementwise_affine=True))
+                        nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine))
         
         self.to_k = nn.Sequential(
                         nn.Linear(input_dim, inner_dim, bias=False),
-                        nn.LayerNorm(inner_dim, elementwise_affine=True))
+                        nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine))
         
         self.to_v = nn.Sequential(
                         nn.Linear(input_dim, inner_dim, bias=False),
-                        nn.LayerNorm(inner_dim, elementwise_affine=True))
+                        nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine))
 
         self.to_out = nn.Sequential(
             nn.Linear(inner_dim, input_dim, bias=False),
-            nn.LayerNorm(inner_dim, elementwise_affine=True),
+            nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine),
             nn.Dropout(dropout)
         )
         
@@ -238,27 +239,30 @@ class SubjBasisGenerator(nn.Module):
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
         use_id_embs: bool   = True,         # Whether to use an identity embedding to generate latent_queries.
+        elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
     ):
         super().__init__()
         self.proj_in = nn.Sequential(
             nn.Linear(image_embedding_dim, dim, bias=False),
-            nn.LayerNorm(dim, elementwise_affine=True),
+            nn.LayerNorm(dim, elementwise_affine=elementwise_affine),
         )
         self.face_proj_in = LoRA_Emb2Queries(face_embedding_dim, num_lora_queries, dim, 
-                                             num_modes=num_emb2queries_modes, num_output_queries=num_subj_queries)
+                                             num_modes=num_emb2queries_modes, num_output_queries=num_subj_queries,
+                                             elementwise_affine=elementwise_affine)
         self.obj_proj_in  = LoRA_Emb2Queries(dino_embedding_dim, num_lora_queries, dim, 
-                                             num_modes=num_emb2queries_modes, num_output_queries=num_subj_queries)
+                                             num_modes=num_emb2queries_modes, num_output_queries=num_subj_queries,
+                                             elementwise_affine=elementwise_affine)
 
-        self.pos_emb    = nn.Embedding(max_seq_len, dim)            if apply_pos_emb else None
-        self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=True)   if apply_pos_emb else None
+        self.pos_emb    = nn.Embedding(max_seq_len, dim)                             if apply_pos_emb else None
+        self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)   if apply_pos_emb else None
 
         self.latent_subj_queries = nn.Parameter(torch.randn(1, num_subj_queries, dim) / dim**0.5)
         self.latent_bg_queries   = nn.Parameter(torch.randn(1, num_bg_queries, dim)   / dim**0.5)
-        self.lq_ln               = nn.LayerNorm(dim, elementwise_affine=True)
+        self.lq_ln               = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
 
         # Remove proj_out to reduce the number of parameters, since image_embedding_dim = output_dim = 768.
         self.proj_out = nn.Identity() #nn.Linear(dim, output_dim)
-        self.norm_out = nn.LayerNorm(output_dim, elementwise_affine=True)
+        self.norm_out = nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine)
         self.output_scale = output_dim ** -0.5
 
         self.depth = depth
@@ -275,10 +279,10 @@ class SubjBasisGenerator(nn.Module):
                 nn.ModuleList(
                     [
                         # dim=768, heads=16.
-                        CrossAttention(input_dim=dim, heads=heads, dropout=0.2),
+                        CrossAttention(input_dim=dim, heads=heads, dropout=0.1),
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
-                        FeedForward(dim=dim, mult=ff_mult),
+                        FeedForward(dim=dim, mult=ff_mult, elementwise_affine=elementwise_affine),
                     ]
                 )
             )
