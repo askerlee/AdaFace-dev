@@ -2246,11 +2246,12 @@ class EmbeddingManager(nn.Module):
 
             # Only load subj_basis_generator from ckpt if the ckpt is set with the same do_zero_shot.
             if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"]:
-                # repr(ckpt['subj_basis_generator']) will also assign missing variables to ckpt['subj_basis_generator'].
+                # repr(ckpt['subj_basis_generator']) will assign missing variables to ckpt['subj_basis_generator'].
                 print(f"Loading {repr(ckpt['subj_basis_generator'])}")
                 # self.subj_basis_generator is either not initialized, or initialized with a smaller depth.
                 # Then replace it with the one in ckpt.
-                if self.subj_basis_generator is None or self.subj_basis_generator.depth < ckpt["subj_basis_generator"].depth:
+                if self.subj_basis_generator is None or self.subj_basis_generator.depth < ckpt["subj_basis_generator"].depth \
+                  or self.subj_basis_generator.num_emb2queries_modes != ckpt["subj_basis_generator"].num_emb2queries_modes:
                     print(f"Overwrite {repr(self.subj_basis_generator)}")
                     self.subj_basis_generator   = ckpt["subj_basis_generator"]
                 else:

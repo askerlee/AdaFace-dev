@@ -264,6 +264,7 @@ class SubjBasisGenerator(nn.Module):
         self.depth = depth
         self.num_subj_queries = num_subj_queries
         self.num_bg_queries = num_bg_queries
+        self.num_emb2queries_modes = num_emb2queries_modes
 
         if not use_id_embs:
             assert depth > 0, "depth must be > 0 if not use_id_embs."
@@ -333,8 +334,12 @@ class SubjBasisGenerator(nn.Module):
             self.num_subj_queries = self.latent_subj_queries.shape[1]
         if not hasattr(self, 'num_bg_queries'):
             self.num_bg_queries = self.latent_bg_queries.shape[1]
+        if not hasattr(self, 'num_emb2queries_modes'):
+            self.num_emb2queries_modes = self.face_proj_in[1].axes_lengths['m']
 
-        return f"SubjBasisGenerator: depth={self.depth}, num_subj_queries={self.num_subj_queries}, num_bg_queries={self.num_bg_queries}, use_id_embs={self.use_id_embs}"
+        return f"SubjBasisGenerator: depth={self.depth}, num_subj_queries={self.num_subj_queries}, " \
+                "num_bg_queries={self.num_bg_queries}, use_id_embs={self.use_id_embs}, " \
+                f"num_emb2queries_modes={self.num_emb2queries_modes}"
     
 @dataclass
 class BaseModelOutputWithPooling2(ModelOutput):
