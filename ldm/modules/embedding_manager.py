@@ -1004,7 +1004,8 @@ class EmbeddingManager(nn.Module):
             do_zero_shot=False,
             zs_image_emb_dim=1280,
             zs_use_id_embs=False,
-            zs_num_generator_layers=1,
+            zs_num_generator_layers=2,
+            zs_num_emb2queries_modes=4,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
@@ -1236,12 +1237,13 @@ class EmbeddingManager(nn.Module):
             # Another 16: 16 layerwise static embeddings.
             self.num_zs_vecs_per_token = layerwise_lora_rank + self.num_unet_ca_layers * 2
             # num_subj_queries: 9 * 42 = 378.
-            self.num_zs_vecs_per_subj  = self.number_vectors_each_subj * self.num_zs_vecs_per_token
+            self.zs_num_vecs_per_subj  = self.number_vectors_each_subj * self.num_zs_vecs_per_token
             # num_bg_queries: 4 * 42 = 168.
-            self.num_zs_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
+            self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
             self.subj_basis_generator = SubjBasisGenerator(depth=zs_num_generator_layers,
-                                                           num_subj_queries = self.num_zs_vecs_per_subj,
-                                                           num_bg_queries   = self.num_zs_vecs_per_bg,
+                                                           num_subj_queries      = self.zs_num_vecs_per_subj,
+                                                           num_bg_queries        = self.zs_num_vecs_per_bg,
+                                                           num_emb2queries_modes = zs_num_emb2queries_modes,
                                                            # zs_image_emb_dim: laion: 1280, openai: 768.
                                                            image_embedding_dim = zs_image_emb_dim, 
                                                            dim = out_emb_dim,

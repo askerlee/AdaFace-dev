@@ -232,6 +232,7 @@ class SubjBasisGenerator(nn.Module):
         face_embedding_dim=512,             # insightface face feature dimension for humans.
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
         num_lora_queries=32,                # number of low-rank latent_queries.
+        num_emb2queries_modes=4,            # number of modes for LoRA_Emb2Queries.  
         output_dim=768,                     # CLIP text embedding input dimension.
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
@@ -243,8 +244,10 @@ class SubjBasisGenerator(nn.Module):
             nn.Linear(image_embedding_dim, dim, bias=False),
             nn.LayerNorm(dim, elementwise_affine=True),
         )
-        self.face_proj_in = LoRA_Emb2Queries(face_embedding_dim, num_lora_queries, dim, num_modes=4, num_output_queries=num_subj_queries)
-        self.obj_proj_in  = LoRA_Emb2Queries(dino_embedding_dim, num_lora_queries, dim, num_modes=4, num_output_queries=num_subj_queries)
+        self.face_proj_in = LoRA_Emb2Queries(face_embedding_dim, num_lora_queries, dim, 
+                                             num_modes=num_emb2queries_modes, num_output_queries=num_subj_queries)
+        self.obj_proj_in  = LoRA_Emb2Queries(dino_embedding_dim, num_lora_queries, dim, 
+                                             num_modes=num_emb2queries_modes, num_output_queries=num_subj_queries)
 
         self.pos_emb    = nn.Embedding(max_seq_len, dim)            if apply_pos_emb else None
         self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=True)   if apply_pos_emb else None

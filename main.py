@@ -263,9 +263,11 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--no_id_emb", dest='zs_use_id_embs', action="store_false",
                         help="Do not use identity (face or DINO) embeddings for zero-shot generation")
-    parser.add_argument("--zs_num_generator_layers", type=int, default=1,
-                        help="Depth of zero-shot subject feature generator")
-    
+    parser.add_argument("--zs_num_generator_layers", type=int, default=2,
+                        help="Layers (depth) of zero-shot subject feature generator")
+    parser.add_argument("--zs_num_emb2queries_modes", type=int, default=4,
+                        help="Number of modes for the zero-shot embedding to queries mapping")
+        
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=10,
         help="Layerwise lora rank")
@@ -922,8 +924,9 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
 
-            config.model.params.personalization_config.params.zs_use_id_embs = opt.zs_use_id_embs
-            config.model.params.personalization_config.params.zs_num_generator_layers = opt.zs_num_generator_layers
+            config.model.params.personalization_config.params.zs_use_id_embs            = opt.zs_use_id_embs
+            config.model.params.personalization_config.params.zs_num_generator_layers   = opt.zs_num_generator_layers
+            config.model.params.personalization_config.params.zs_num_emb2queries_modes  = opt.zs_num_emb2queries_modes
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
