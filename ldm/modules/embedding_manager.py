@@ -2253,7 +2253,8 @@ class EmbeddingManager(nn.Module):
                 # self.subj_basis_generator is either not initialized, or initialized with a smaller depth.
                 # Then replace it with the one in ckpt.
                 if self.subj_basis_generator is None or self.subj_basis_generator.depth < ckpt["subj_basis_generator"].depth \
-                  or self.subj_basis_generator.num_emb2queries_modes != ckpt["subj_basis_generator"].num_emb2queries_modes:
+                  or self.subj_basis_generator.num_emb2queries_modes != ckpt["subj_basis_generator"].num_emb2queries_modes \
+                  or self.subj_basis_generator.elementwise_affine != ckpt["subj_basis_generator"].elementwise_affine:
                     print(f"Overwrite {repr(self.subj_basis_generator)}")
                     self.subj_basis_generator   = ckpt["subj_basis_generator"]
                 else:
