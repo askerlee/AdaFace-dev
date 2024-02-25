@@ -2152,14 +2152,27 @@ class LatentDiffusion(DDPM):
             all_bg_indices_2b   = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
                                                                        self.embedding_manager.background_string_dict)
         
-        if self.iter_flags['comp_init_fg_from_training_image']:
-            k_cls_scale_layerwise_range = [1.0, 1.0]
-            # Less subject embeddings mixed into v.
-            v_cls_scale_layerwise_range = [1.0, 0.85]
+        if self.do_zero_shot:
+            # If do_zero_shot, then mix more of the subject embeddings into the class embeddings.
+            # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
+            # posing too strong regularizations to the subject embeddings.
+            if self.iter_flags['comp_init_fg_from_training_image']:
+                k_cls_scale_layerwise_range = [1.0, 1.0]
+                # Less (compared with the settings below) subject embeddings mixed into v.
+                v_cls_scale_layerwise_range = [1.0, 0.7]
+            else:
+                k_cls_scale_layerwise_range = [1.0, 1.0]
+                # More subject embeddings mixed into v.
+                v_cls_scale_layerwise_range = [1.0, 0.5]
         else:
-            k_cls_scale_layerwise_range = [1.0, 1.0]
-            # More subject embeddings mixed into v.
-            v_cls_scale_layerwise_range = [1.0, 0.7]
+            if self.iter_flags['comp_init_fg_from_training_image']:
+                k_cls_scale_layerwise_range = [1.0, 1.0]
+                # Less (compared with the settings below) subject embeddings mixed into v.
+                v_cls_scale_layerwise_range = [1.0, 0.85]
+            else:
+                k_cls_scale_layerwise_range = [1.0, 1.0]
+                # More subject embeddings mixed into v.
+                v_cls_scale_layerwise_range = [1.0, 0.7]
 
         if self.iter_flags['is_compos_iter']:
             # Only reuse_init_conds if do_mix_prompt_distillation.
