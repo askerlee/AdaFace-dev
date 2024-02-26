@@ -62,8 +62,10 @@ if 'subj_basis_generator' in emb_ckpt:
                 param_total_delta += param_delta
 
                 print(f"{param_name}-{iteration} norm/diff: {param_norm:.4f}/{param_delta:.4f}")
+
+            print(f"Total norm/diff: {param_total_norm:.4f}/{param_total_delta:.4f}")
+
         prev_subj_basis_generator = subj_basis_generator
-        print(f"Total norm/diff: {param_total_norm:.4f}/{param_total_delta:.4f}")
 
 for idx, iteration in enumerate(iterations):
     if args.only100 and iteration % 100 != 0:
