@@ -132,6 +132,7 @@ class DDPM(pl.LightningModule):
                  prompt_embedding_clamp_value=-1,
                  normalize_ca_q_and_outfeat=True,
                  do_zero_shot=False,
+                 each_batch_from_same_subject=True
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -189,6 +190,7 @@ class DDPM(pl.LightningModule):
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
         self.do_zero_shot                           = do_zero_shot
+        self.each_batch_from_same_subject           = each_batch_from_same_subject
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
@@ -1394,20 +1396,25 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['wds_comp_avail_ratio'] = batch['has_wds_comp'].sum() / batch['has_wds_comp'].shape[0]
 
-        if len(set(batch['subject_name'])) > 1:
-            print("Different subjects in the batch.")
+        if self.each_batch_from_same_subject and len(set(batch['subject_name'])) > 1:
+            print("Different subjects in the batch when each_batch_from_same_subject=True.")
             breakpoint()
-        self.batch_subject_name = batch['subject_name'][0]
-        self.iter_flags['is_face'] = self.embedding_manager.subj_name_to_being_faces[self.batch_subject_name]
+
+        self.batch_subject_names = batch['subject_name']
+        # If it's a compositional distillation iteration, only the first instance in the batch is used.
+        # Therefore, self.batch_1st_subject_name is the only subject name in the batch.
+        self.batch_1st_subject_name  = self.batch_subject_names[0]
+        self.iter_flags['is_face'] = [ self.embedding_manager.subj_name_to_being_faces[subject_name] \
+                                        for subject_name in self.batch_subject_names ]
 
         # Currently, only one subject name is allowed in the batch.
-        self.embedding_manager.set_curr_batch_subject_names([self.batch_subject_name])
-        print(self.batch_subject_name)
+        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names)
+        print(self.batch_subject_names)
 
-        # If cached_inits is available (self.batch_subject_name in self.cached_inits), 
+        # If cached_inits is available (self.batch_1st_subject_name in self.cached_inits), 
         # cached_inits are only used if do_mix_prompt_distillation = True.
         self.iter_flags['reuse_init_conds']  = (self.iter_flags['do_mix_prompt_distillation'] \
-                                                and self.batch_subject_name in self.cached_inits)
+                                                and self.batch_1st_subject_name in self.cached_inits)
 
         # do_teacher_filter: If not reuse_init_conds and do_teacher_filtering, then we choose the better instance 
         # between the two in the batch, if it's above the usable threshold.
@@ -1640,10 +1647,13 @@ class LatentDiffusion(DDPM):
             images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
             # batch["fg_mask"]: [3, 512, 512].
             fg_mask = batch["fg_mask"]
-            # zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
+            # If each_batch_from_same_subject:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
+            # Otherwise:                        zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
+            # If each_batch_from_same_subject, then we average the zs_clip_features and zs_id_embs to get 
+            # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
             zs_clip_features, zs_id_embs = encode_zero_shot_image_features(images, fg_mask,
                                                                            is_face=self.iter_flags['is_face'],
-                                                                           calc_avg=True)
+                                                                           calc_avg=self.each_batch_from_same_subject)
             self.iter_flags['zs_clip_features'] = zs_clip_features
             self.iter_flags['zs_id_embs']       = zs_id_embs
         else:
@@ -1652,7 +1662,7 @@ class LatentDiffusion(DDPM):
 
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
-            cached_inits = self.cached_inits[self.batch_subject_name]
+            cached_inits = self.cached_inits[self.batch_1st_subject_name]
             # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
             self.iter_flags['delta_prompts']            = cached_inits['delta_prompts']
             self.iter_flags['img_mask']                 = cached_inits['img_mask']
@@ -1695,9 +1705,9 @@ class LatentDiffusion(DDPM):
                     # reuse_init_conds, discard the prompts offered in shared_step().
                     if self.iter_flags['reuse_init_conds']:
                         # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
-                        delta_prompts = self.cached_inits[self.batch_subject_name]['delta_prompts']
+                        delta_prompts = self.cached_inits[self.batch_1st_subject_name]['delta_prompts']
                         # cached_inits will be used in p_losses(), 
-                        # so don't delete cached_init[self.batch_subject_name] to False yet.
+                        # so don't delete cached_init[self.batch_1st_subject_name] to False yet.
                     else:
                         # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
                         delta_prompts = self.iter_flags['delta_prompts']
@@ -2186,10 +2196,10 @@ class LatentDiffusion(DDPM):
                 # But x_start is the denoised result from the previous iteration (noises have been added above), 
                 # so we don't add noise to it again.
                 # x_start already has a BS of 4. No need to slice or repeat it.
-                x_start = self.cached_inits[self.batch_subject_name]['x_start']
-                prev_t  = self.cached_inits[self.batch_subject_name]['t']
-                # Clear cache of batch_subject_name, to avoid the cached inits being used in the next mix iter.
-                del self.cached_inits[self.batch_subject_name]
+                x_start = self.cached_inits[self.batch_1st_subject_name]['x_start']
+                prev_t  = self.cached_inits[self.batch_1st_subject_name]['t']
+                # Clear cache of batch_1st_subject_name, to avoid the cached inits being used in the next mix iter.
+                del self.cached_inits[self.batch_1st_subject_name]
                 # reuse init iter takes a smaller cfg scale, as in the second denoising step, 
                 # a particular scale tend to make the cfg-denoised mixed images more dissimilar 
                 # to the subject images than in the first denoising step. 
@@ -2634,7 +2644,7 @@ class LatentDiffusion(DDPM):
 
                     # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but under some settings, maybe mix comp = subj comp.
-                    # cached_inits[self.batch_subject_name]['x_start'] has a batch size of 4.
+                    # cached_inits[self.batch_1st_subject_name]['x_start'] has a batch size of 4.
                     # x_recon_sel_rep doesn't have the 1-repeat-4 structure, instead a 
                     # 1-repeat-2 structure that's repeated twice.
                     # But it approximates a 1-repeat-4 structure, so the distillation should still work.
@@ -2642,7 +2652,7 @@ class LatentDiffusion(DDPM):
                     # is half-repeat-2 of (the reconstructed images of) x_start_sel. 
                     # Doing half-repeat-2 on masks won't change them, as they are 1-repeat-4.
                     # NOTE: do_teacher_filter implies not reuse_init_conds. So we always need to cache the inits.
-                    self.cached_inits[self.batch_subject_name] = \
+                    self.cached_inits[self.batch_1st_subject_name] = \
                         { 'x_start':                x_recon_sel_rep, 
                           'delta_prompts':          cond_orig[2]['delta_prompts'],
                           't':                      t_sel,
@@ -2714,7 +2724,12 @@ class LatentDiffusion(DDPM):
 
             loss += loss_emb_reg * emb_reg_loss_scale
 
-        if self.fg_bg_token_emb_ortho_loss_weight > 0:
+        # If do_zero_shot but not each_batch_from_same_subject, then in each batch,
+        # the subject instances are from different subjects, and their embeddings are different as well.
+        # The fg_bg_token_embs_ortho_loss will be too complicated to compute (we need to separately consider
+        # compositional and non-compositional iterations), so we disable it.
+        if not (self.do_zero_shot and not self.each_batch_from_same_subject) \
+          and self.fg_bg_token_emb_ortho_loss_weight > 0:
             # If use_background_token, then loss_fg_bg_token_emb_ortho is nonzero.
             # Otherwise, loss_fg_bg_token_emb_ortho is zero.
             loss_fg_bg_token_emb_ortho = \

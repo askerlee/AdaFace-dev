@@ -222,13 +222,10 @@ class SubjBasisGenerator(nn.Module):
         depth=2,                            # number of (CrossAttention, FeedForward) layers.     
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
         heads=16,       
-        # num_subj_queries: number of subject latent_queries.
-        # num_bg_queries:   number of background latent_queries.
+        # num_queries: number of latent_queries.
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
-        # The same SubjBasisGenerator instance is used to generate both subj and bg embedder bases, 
-        # provided different input features in two different passes.
-        num_subj_queries=378,               # 378 = 9 * 42.
-        num_bg_queries=168,                 # 168 = 4 * 42.
+        # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
+        num_queries=378,                    # fg: 378 = 9 * 42. bg: 168 = 4 * 42.
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
         face_embedding_dim=512,             # insightface face feature dimension for humans.
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
@@ -247,18 +244,17 @@ class SubjBasisGenerator(nn.Module):
             nn.LayerNorm(dim, elementwise_affine=elementwise_affine),
         )
         self.face_proj_in = LoRA_Emb2Queries(face_embedding_dim, num_lora_queries, dim, 
-                                             num_modes=num_emb2queries_modes, num_output_queries=num_subj_queries,
+                                             num_modes=num_emb2queries_modes, num_output_queries=num_queries,
                                              elementwise_affine=elementwise_affine)
         self.obj_proj_in  = LoRA_Emb2Queries(dino_embedding_dim, num_lora_queries, dim, 
-                                             num_modes=num_emb2queries_modes, num_output_queries=num_subj_queries,
+                                             num_modes=num_emb2queries_modes, num_output_queries=num_queries,
                                              elementwise_affine=elementwise_affine)
 
         self.pos_emb    = nn.Embedding(max_seq_len, dim)                             if apply_pos_emb else None
         self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)   if apply_pos_emb else None
 
-        self.latent_subj_queries = nn.Parameter(torch.randn(1, num_subj_queries, dim) / dim**0.5)
-        self.latent_bg_queries   = nn.Parameter(torch.randn(1, num_bg_queries, dim)   / dim**0.5)
-        self.lq_ln               = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
+        self.latent_queries = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
+        self.lq_ln          = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
 
         # Remove proj_out to reduce the number of parameters, since image_embedding_dim = output_dim = 768.
         self.proj_out = nn.Identity() #nn.Linear(dim, output_dim)
@@ -266,8 +262,7 @@ class SubjBasisGenerator(nn.Module):
         self.output_scale = output_dim ** -0.5
 
         self.depth = depth
-        self.num_subj_queries = num_subj_queries
-        self.num_bg_queries = num_bg_queries
+        self.num_queries = num_queries
         self.num_emb2queries_modes = num_emb2queries_modes
         self.elementwise_affine = elementwise_affine
 
@@ -298,19 +293,16 @@ class SubjBasisGenerator(nn.Module):
 
         # No need to use id_embs if placeholder_is_bg, or if face embs are disabled (use_id_embs is False), 
         # or no face is detected (id_embs is all 0s).
-        if self.use_id_embs and (id_embs is not None) and (id_embs != 0).any() and (not placeholder_is_bg):
+        if self.use_id_embs and (id_embs is not None) and (id_embs != 0).any() and not placeholder_is_bg:
             # id_embs: [1, 512].
-            # latent_subj_queries: [1, 378, 768].
+            # latent_queries: [1, 378, 768].
             if is_face:
-                latent_subj_queries = self.face_proj_in(id_embs)
+                latent_queries = self.face_proj_in(id_embs)
             else:
-                latent_subj_queries = self.obj_proj_in(id_embs)
+                latent_queries = self.obj_proj_in(id_embs)
         else:
-            latent_subj_queries = self.latent_subj_queries
-
-        # placeholder_is_bg determines whether to select latent_bg_queries or latent_subj_queries,
-        # which then extract either background or subject bases.
-        latent_queries = self.latent_bg_queries if placeholder_is_bg else latent_subj_queries        
+            latent_queries = self.latent_queries
+    
         latent_queries = self.lq_ln(latent_queries.repeat(x.size(0), 1, 1))
 
         if self.pos_emb is not None:
@@ -322,11 +314,7 @@ class SubjBasisGenerator(nn.Module):
         # If use_id_embs and depth = 0, then latent_queries from id_embs is directly returned.
         # If not use_id_embs, then depth must be > 0.
         for i, (attn, ff) in enumerate(self.layers):
-            if not placeholder_is_bg:
-                latent_queries = attn(latent_queries, x) + latent_queries
-            else:
-                latent_queries = attn(latent_queries, x)
-
+            latent_queries = attn(latent_queries, x) + latent_queries
             latent_queries = ff(latent_queries) + latent_queries
 
         latent_queries = self.proj_out(latent_queries)
@@ -337,17 +325,14 @@ class SubjBasisGenerator(nn.Module):
             self.use_id_embs = True
         if not hasattr(self, 'depth'):
             self.depth = len(self.layers)
-        if not hasattr(self, 'num_subj_queries'):
-            self.num_subj_queries = self.latent_subj_queries.shape[1]
-        if not hasattr(self, 'num_bg_queries'):
-            self.num_bg_queries = self.latent_bg_queries.shape[1]
+        if not hasattr(self, 'num_queries'):
+            self.num_queries = self.latent_queries.shape[1]
         if not hasattr(self, 'num_emb2queries_modes'):
             self.num_emb2queries_modes = self.face_proj_in[1].axes_lengths['m']
         if not hasattr(self, 'elementwise_affine'):
             self.elementwise_affine = self.proj_in[1].elementwise_affine
 
-        return f"SubjBasisGenerator: depth={self.depth}, num_subj_queries={self.num_subj_queries}, " \
-                f"num_bg_queries={self.num_bg_queries}, use_id_embs={self.use_id_embs}, " \
+        return f"SubjBasisGenerator: depth={self.depth}, num_queries={self.num_queries}, use_id_embs={self.use_id_embs}, " \
                 f"num_emb2queries_modes={self.num_emb2queries_modes}, elementwise_affine={self.elementwise_affine}"
     
 @dataclass

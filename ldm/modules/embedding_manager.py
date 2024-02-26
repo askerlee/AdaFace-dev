@@ -495,7 +495,7 @@ class StaticLayerwiseEmbedding(nn.Module):
         print(f"{zero_shot_sig} StaticLayerwiseEmbedding {token_string} initialized with {self.K} total embs, {self.N} init vectors ({init_string}), {self.r} basis vectors")
 
     # Return static embeddings of all layers together.
-    # static_zs_embs: [16, K, 768]. 
+    # static_zs_embs: [BS, 16, K, 768]. 
     # 16: number of layers. K: number of vectors per token. 
     def forward(self, static_zs_embs=None):
         with torch.autocast(device_type=self.device_type, enabled=False):
@@ -1018,9 +1018,10 @@ class EmbeddingManager(nn.Module):
 
         self.string_to_token_dict = OrderedDict()
         
-        self.string_to_static_embedder_dict = nn.ParameterDict()
-        self.string_to_ada_embedder_dict    = nn.ModuleDict()
-        self.string_to_emb_ema_dict         = nn.ModuleDict()
+        self.string_to_static_embedder_dict      = nn.ParameterDict()
+        self.string_to_ada_embedder_dict         = nn.ModuleDict()
+        self.string_to_emb_ema_dict              = nn.ModuleDict()
+        self.string_to_subj_basis_generator_dict = nn.ModuleDict()
         self.initial_embeddings             = nn.ParameterDict() # These should not be optimized
         self.placeholder_to_emb_cache       = nn.ParameterDict() # These should not be optimized
 
@@ -1115,6 +1116,29 @@ class EmbeddingManager(nn.Module):
         self.list_initializer_word_weights   = list_initializer_word_weights
         self.layerwise_lora_rank = layerwise_lora_rank
 
+        if self.do_zero_shot:
+            # No matter whether using layerwise embeddings, the basis vecs of either static or ada embedders are always layerwise_lora_rank,
+            # as the basis vecs are shared across all CA layers.
+            # But different vectors of the same embeddings are combinations of different basis vecs.
+            # Therefore, num_total_basis_vecs is multiplied by num_vectors_each_subj_bg_pair.
+            # num_vectors_each_subj_bg_pair: the number of vectors per (subj, bg) placeholder pair.
+            # It's implied that all subj placeholders have the same number of vectors,
+            # and all bg placeholders have the same number of vectors.
+            self.number_vectors_each_subj = self.token2num_vectors.get(self.subject_strings[0], 9)
+            if len(self.background_strings) > 0:
+                self.num_vectors_each_bg = self.token2num_vectors.get(self.background_strings[0], 4)
+            else:
+                self.num_vectors_each_bg = 0
+
+            # num_zs_vecs_per_token: 10 + 16 + 16 = 42.
+            # 10: 10 basis vecs for ada embedder. 16: 16 layerwise biases for ada embedder. 
+            # Another 16: 16 layerwise static embeddings.
+            self.num_zs_vecs_per_token = layerwise_lora_rank + self.num_unet_ca_layers * 2
+            # num_subj_queries: 9 * 42 = 378.
+            self.zs_num_vecs_per_subj  = self.number_vectors_each_subj * self.num_zs_vecs_per_token
+            # num_bg_queries:   4 * 42 = 168.
+            self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
+
         for placeholder_idx, placeholder_string in enumerate(self.placeholder_strings):
             placeholder_is_bg =  (placeholder_string in self.background_string_dict)
             # get_tokens_for_string <= get_clip_tokens_for_string.
@@ -1175,6 +1199,20 @@ class EmbeddingManager(nn.Module):
             else:
                 self.initial_embeddings[placeholder_string] = None
 
+            if self.do_zero_shot:
+                num_queries = self.zs_num_vecs_per_subj if not placeholder_is_bg else self.zs_num_vecs_per_bg
+                subj_basis_generator = SubjBasisGenerator(depth=zs_num_generator_layers,
+                                                            num_queries = num_queries,
+                                                            num_emb2queries_modes = zs_num_emb2queries_modes,
+                                                            # zs_image_emb_dim: laion: 1280, openai: 768.
+                                                            image_embedding_dim = zs_image_emb_dim, 
+                                                            dim = out_emb_dim,
+                                                            output_dim = out_emb_dim,
+                                                            use_id_embs=zs_use_id_embs,
+                                                            elementwise_affine=zs_elementwise_affine)
+
+                self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
+
         # Initialize self.subj_name_to_cls_delta_tokens and self.subj_name_to_cls_delta_token_weights.
         self.init_cls_delta_tokens(get_tokens_for_string, get_embeddings_for_tokens, 
                                    subj_name_to_cls_delta_strings, subj_name_to_cls_delta_word_weights)
@@ -1219,41 +1257,6 @@ class EmbeddingManager(nn.Module):
                                             else {subj_name: True for subj_name in self.subject_strings}
         # zs_image_feat_dict have three keys: 'subj', 'bg', 'id'.
         self.zs_image_feat_dict = {}
-        if self.do_zero_shot:
-            # No matter whether using layerwise embeddings, the basis vecs of either static or ada embedders are always layerwise_lora_rank,
-            # as the basis vecs are shared across all CA layers.
-            # But different vectors of the same embeddings are combinations of different basis vecs.
-            # Therefore, num_total_basis_vecs is multiplied by num_vectors_each_subj_bg_pair.
-            # num_vectors_each_subj_bg_pair: the number of vectors per (subj, bg) placeholder pair.
-            # It's implied that all subj placeholders have the same number of vectors,
-            # and all bg placeholders have the same number of vectors.
-            self.number_vectors_each_subj = self.token2num_vectors.get(self.subject_strings[0], 9)
-            if len(self.background_strings) > 0:
-                self.num_vectors_each_bg = self.token2num_vectors.get(self.background_strings[0], 4)
-            else:
-                self.num_vectors_each_bg = 0
-
-            # num_zs_vecs_per_token: 10 + 16 + 16 = 42.
-            # 10: 10 basis vecs for ada embedder. 16: 16 layerwise biases for ada embedder. 
-            # Another 16: 16 layerwise static embeddings.
-            self.num_zs_vecs_per_token = layerwise_lora_rank + self.num_unet_ca_layers * 2
-            # num_subj_queries: 9 * 42 = 378.
-            self.zs_num_vecs_per_subj  = self.number_vectors_each_subj * self.num_zs_vecs_per_token
-            # num_bg_queries:   4 * 42 = 168.
-            self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
-            self.subj_basis_generator = SubjBasisGenerator(depth=zs_num_generator_layers,
-                                                           num_subj_queries      = self.zs_num_vecs_per_subj,
-                                                           num_bg_queries        = self.zs_num_vecs_per_bg,
-                                                           num_emb2queries_modes = zs_num_emb2queries_modes,
-                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
-                                                           image_embedding_dim = zs_image_emb_dim, 
-                                                           dim = out_emb_dim,
-                                                           output_dim = out_emb_dim,
-                                                           use_id_embs=zs_use_id_embs,
-                                                           elementwise_affine=zs_elementwise_affine)
-
-        else:
-            self.subj_basis_generator = None
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
@@ -1471,17 +1474,19 @@ class EmbeddingManager(nn.Module):
                     if len(self.curr_batch_subj_names) > 0:
                         self.curr_subj_is_face = self.subj_name_to_being_faces[self.curr_batch_subj_names[0]]
 
-                    # zs_clip_features: [1, 257, 1280]
-                    # zs_vecs_2sets: [1, 468, 768] -> [9, 52, 768]
-                    zs_vecs_2sets = self.subj_basis_generator(zs_clip_features, zs_id_embs, 
-                                                              self.curr_subj_is_face, 
-                                                              placeholder_is_bg)
+                    subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
+                    # zs_clip_features: [BS, 257, 1280]
+                    # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
+                    zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs, 
+                                                        self.curr_subj_is_face, 
+                                                        placeholder_is_bg)
+                    # TODO: support multiple subjects in a batch, i.e., zs_vecs_2sets will be reshaped to 4D.
                     zs_vecs_2sets = zs_vecs_2sets.reshape(num_vectors_each_placeholder,
                                                           self.num_zs_vecs_per_token, -1)
                     # If subj:
-                    # ada_zs_basis_vecs: [9, 10, 768], ada_zs_bias: [9, 16, 768], static_zs_embs: [9, 16, 768].
+                    # ada_zs_basis_vecs: [BS, 9, 10, 768], ada_zs_bias: [BS, 9, 16, 768], static_zs_embs: [BS, 9, 16, 768].
                     # If bg:
-                    # ada_zs_basis_vecs: [4, 10, 768], ada_zs_bias: [4, 16, 768], static_zs_embs: [4, 16, 768].
+                    # ada_zs_basis_vecs: [BS, 4, 10, 768], ada_zs_bias: [BS, 4, 16, 768], static_zs_embs: [BS, 4, 16, 768].
                     ada_zs_basis_vecs, ada_zs_bias, static_zs_embs = \
                         zs_vecs_2sets[:, :self.layerwise_lora_rank], \
                         zs_vecs_2sets[:, self.layerwise_lora_rank:self.layerwise_lora_rank+self.num_unet_ca_layers], \
@@ -1489,9 +1494,10 @@ class EmbeddingManager(nn.Module):
 
                     #breakpoint()
                     self.subj2ada_zs_basis_vecs[placeholder_string] = ada_zs_basis_vecs
-                    self.subj2ada_zs_bias[placeholder_string]       = ada_zs_bias.permute(1, 0, 2)
-                    # subj_static_embedding: [9, 16, 768] => [16, 9, 768]
-                    static_zs_embs = static_zs_embs.permute(1, 0, 2)
+                    # ada_zs_bias:           [BS, 9, 16, 768] => [BS, 16, 9, 768]
+                    self.subj2ada_zs_bias[placeholder_string]       = ada_zs_bias.permute(1, 0, 2) #(0, 2, 1, 3)
+                    # subj_static_embedding: [BS, 9, 16, 768] => [BS, 16, 9, 768]
+                    static_zs_embs = static_zs_embs.permute(1, 0, 2) #(0, 2, 1, 3)
                 else:
                     static_zs_embs = None
 
@@ -2157,6 +2163,7 @@ class EmbeddingManager(nn.Module):
                      "string_to_static_embedder":       self.string_to_static_embedder_dict,
                      "string_to_ada_embedder":          self.string_to_ada_embedder_dict,
                      "string_to_emb_ema_dict":          self.string_to_emb_ema_dict,
+                     "string_to_subj_basis_generator_dict": self.string_to_subj_basis_generator_dict,
                      "token2num_vectors":               self.token2num_vectors,
                      "emb_global_scale_scores":         self.emb_global_scale_scores,
                      "ada_emb_weight":                  self.ada_emb_weight,  
@@ -2173,7 +2180,6 @@ class EmbeddingManager(nn.Module):
                      "ca_q_bns":                         self.ca_q_bns,
                      "ca_outfeat_lns":                   self.ca_outfeat_lns,
                      "do_zero_shot":                     self.do_zero_shot,
-                     "subj_basis_generator":             self.subj_basis_generator,
                    }, 
                     ckpt_path)
 
@@ -2248,23 +2254,24 @@ class EmbeddingManager(nn.Module):
 
             # Only load subj_basis_generator from ckpt if the ckpt is set with the same do_zero_shot.
             if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"]:
-                # repr(ckpt['subj_basis_generator']) will assign missing variables to ckpt['subj_basis_generator'].
-                print(f"Loading {repr(ckpt['subj_basis_generator'])}")
-                # self.subj_basis_generator is either not initialized, or initialized with a smaller depth.
-                # Then replace it with the one in ckpt.
-                if self.subj_basis_generator is None or self.subj_basis_generator.depth < ckpt["subj_basis_generator"].depth \
-                  or self.subj_basis_generator.num_emb2queries_modes != ckpt["subj_basis_generator"].num_emb2queries_modes \
-                  or self.subj_basis_generator.elementwise_affine != ckpt["subj_basis_generator"].elementwise_affine:
-                    print(f"Overwrite {repr(self.subj_basis_generator)}")
-                    self.subj_basis_generator   = ckpt["subj_basis_generator"]
-                else:
-                    # ckpt["subj_basis_generator"] contains a subset of the params of self.subj_basis_generator.
-                    # Only load this subset.
-                    missing_keys, unexpected_keys = self.subj_basis_generator.load_state_dict(ckpt["subj_basis_generator"].state_dict(), strict=False)
-                    if len(missing_keys) > 0:
-                        print(f"Missing keys: {missing_keys}")
-                    if len(unexpected_keys) > 0:
-                        print(f"Unexpected keys: {unexpected_keys}")
+                for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
+                    # repr(ckpt_subj_basis_generator) will assign missing variables to ckpt_subj_basis_generator.
+                    print(f"Loading {repr(ckpt_subj_basis_generator)}")
+                    # self.string_to_subj_basis_generator_dict[km] is either not initialized, or initialized with a smaller depth.
+                    # Then replace it with the one in ckpt.
+                    if self.string_to_subj_basis_generator_dict[km] is None or self.string_to_subj_basis_generator_dict[km].depth < ckpt_subj_basis_generator.depth \
+                      or self.string_to_subj_basis_generator_dict[km].num_emb2queries_modes != ckpt_subj_basis_generator.num_emb2queries_modes \
+                      or self.string_to_subj_basis_generator_dict[km].elementwise_affine    != ckpt_subj_basis_generator.elementwise_affine:
+                        print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
+                        self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
+                    else:
+                        # ckpt_subj_basis_generator contains a subset of the params of string_to_subj_basis_generator_dict[km].
+                        # Only load this subset.
+                        missing_keys, unexpected_keys = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
+                        if len(missing_keys) > 0:
+                            print(f"Missing keys: {missing_keys}")
+                        if len(unexpected_keys) > 0:
+                            print(f"Unexpected keys: {unexpected_keys}")
 
             for token_idx, km in enumerate(ckpt["placeholder_strings"]):
                 # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.
@@ -2590,7 +2597,7 @@ class EmbeddingManager(nn.Module):
             slow_params_excl_prodigy = []
 
         if self.do_zero_shot:
-            subj_basis_generator_params = [ { 'params': list(self.subj_basis_generator.parameters()), 
+            subj_basis_generator_params = [ { 'params': list(self.string_to_subj_basis_generator_dict.parameters()), 
                                               'lr_ratio': 1, 'excluded_from_prodigy': False } ]
         else:
             subj_basis_generator_params = []
@@ -2755,10 +2762,10 @@ class EmbeddingManager(nn.Module):
         loss_ada    *= self.emb_reg_loss_scale * 2 / num_out_embeddings
         
         '''
-        if self.do_zero_shot and self.subj_basis_generator.pos_emb is not None:
+        if self.do_zero_shot and self.string_to_subj_basis_generator_dict[km].pos_emb is not None:
             # Without this reg loss, the pos_emb of the basis generator may become too large 
             # and dominate the generated bases, leading to overfitting.
-            loss_zs_basis_gennerator_pos_emb = reg_loss(self.subj_basis_generator.pos_emb, loss_type=euc_loss_type)
+            loss_zs_basis_gennerator_pos_emb = reg_loss(self.string_to_subj_basis_generator_dict[km].pos_emb, loss_type=euc_loss_type)
             loss_static += loss_zs_basis_gennerator_pos_emb * zs_basis_gennerator_pos_emb_weight
         '''
 
@@ -2771,9 +2778,13 @@ class EmbeddingManager(nn.Module):
         else:
             return self.embedding_attractor_loss()
 
+    # NOTE: calc_fg_bg_token_embs_ortho_loss() is DISABLED if do_zero_shot but not each_batch_from_same_subject,
+    # i.e., do_zero_shot and different subjects are sampled in the same batch,
+    # because the fg/bg ortho loss with multiple subjects will be too complicated, esp. considering
+    # that in a compositional iteration, only the first prompt (corresponding to the first subject) is active.
     def calc_fg_bg_token_embs_ortho_loss(self, fg_bg_string_lists=None, ada_grad_scale=0.1, fg_grad_scale=0.5):
         if fg_bg_string_lists is None:
-            fg_bg_string_lists = list(filter(lambda k: k not in self.background_string_dict, self.static_subj_embs_dict)), \
+            fg_bg_string_lists = list(filter(lambda k: k in self.subject_string_dict,    self.static_subj_embs_dict)), \
                                  list(filter(lambda k: k in self.background_string_dict, self.static_subj_embs_dict))
             #print(fg_bg_string_lists)
 

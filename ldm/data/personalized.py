@@ -876,7 +876,7 @@ class PersonalizedBase(Dataset):
 # epoch_len: number of batches in one epoch. Usually initialized to be the same 
 # as the number of batches of the training data.
 class SubjectSampler(Sampler):
-    def __init__(self, num_subjects, num_batches, batch_size, debug=False):
+    def __init__(self, num_subjects, num_batches, batch_size, each_batch_from_same_subject=True, debug=False):
         self.batch_size = batch_size
         # num_batches: +1 to make sure the last batch is also used.
         self.num_batches  = num_batches + 1
@@ -885,7 +885,13 @@ class SubjectSampler(Sampler):
         print("SubjectSampler initialized on {} subjects, batches: {}*{}".format(self.num_subjects, 
                                                                                  self.batch_size, self.num_batches))
 
-        self.switch_cycle_length = self.batch_size
+        if each_batch_from_same_subject:
+            self.switch_cycle_length = self.batch_size
+        else:
+            # Each batch has samples from different subjects. 
+            # Setting switch_cycle_length to 1, so that we switch to a new subject for each sample.
+            self.switch_cycle_length = 1
+
         self.curr_subj_idx = 0
         self.curr_subj_count = 0
 
