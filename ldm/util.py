@@ -1618,17 +1618,17 @@ def mix_embeddings(mix_scheme, c1, c2, mix_indices=None,
         
     if mix_scheme == 'add':
         # c1_mix_scale is an all-one tensor. No need to mix.
-        if isinstance(c1_mix_scale, torch.Tensor)       and (c1_mix_scale == 1).all():
-            return c1
-        # c1_mix_scale = 1. No need to mix.
-        elif not isinstance(c1_mix_scale, torch.Tensor) and c1_mix_scale == 1:
+        # c1_mix_scale = 1. No need to mix. 
+        if isinstance(c1_mix_scale, torch.Tensor)       and (c1_mix_scale == 1).all() \
+          or not isinstance(c1_mix_scale, torch.Tensor) and c1_mix_scale == 1:
             return c1
 
         if mix_indices is not None:
             scale_mask = torch.ones_like(c1)
 
             if type(c1_mix_scale) == torch.Tensor:
-                # c1_mix_scale is only for one instance. Repeat it for all instances in the batch.
+                # c1_mix_scale is only for the first one/few instances. 
+                # Repeat it to cover all instances in the batch.
                 if len(c1_mix_scale) < len(scale_mask):
                     assert len(scale_mask) % len(c1_mix_scale) == 0
                     BS = len(scale_mask) // len(c1_mix_scale)
@@ -1638,15 +1638,19 @@ def mix_embeddings(mix_scheme, c1, c2, mix_indices=None,
                     c1_mix_scale = c1_mix_scale.unsqueeze(-1)
 
             scale_mask[:, mix_indices] = c1_mix_scale
+
             # 1 - scale_mask: almost 0 everywhere, except those corresponding to the placeholder tokens 
             # being 1 - c1_mix_scale.
             # c1, c2: [16, 77, 768].
             # Each is of a single instance. So only provides subj_indices_N 
             # (multiple token indices of the same instance).
             c_mix = c1 * scale_mask + c2 * (1 - scale_mask)
+            #print("cls/subj/mix:", c1[:, mix_indices].norm().detach().item(), c2[:, mix_indices].norm().detach().item(), 
+            #                       c_mix[:, mix_indices].norm().detach().item())
         else:
             # Mix the whole sequence.
             c_mix = c1 * c1_mix_scale + c2 * (1 - c1_mix_scale)
+            #print("cls/subj/mix:", c1.norm().detach().item(), c2.norm().detach().item(), c_mix.norm().detach().item())
 
     elif mix_scheme == 'concat':
         c_mix = torch.cat([ c1, c2 * c2_mix_weight ], dim=1)

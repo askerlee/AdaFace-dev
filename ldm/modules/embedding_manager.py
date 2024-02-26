@@ -1239,7 +1239,7 @@ class EmbeddingManager(nn.Module):
             self.num_zs_vecs_per_token = layerwise_lora_rank + self.num_unet_ca_layers * 2
             # num_subj_queries: 9 * 42 = 378.
             self.zs_num_vecs_per_subj  = self.number_vectors_each_subj * self.num_zs_vecs_per_token
-            # num_bg_queries: 4 * 42 = 168.
+            # num_bg_queries:   4 * 42 = 168.
             self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
             self.subj_basis_generator = SubjBasisGenerator(depth=zs_num_generator_layers,
                                                            num_subj_queries      = self.zs_num_vecs_per_subj,
