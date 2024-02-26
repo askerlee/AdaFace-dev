@@ -33,7 +33,7 @@ for emb_path in os.listdir(emb_folder):
 iterations = sorted(iter2path.keys())
 
 emb_path = os.path.join(emb_folder, iter2path[iterations[0]])
-emb_ckpt = torch.load(emb_path)
+emb_ckpt = torch.load(emb_path, map_location="cpu")
 tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
 
 
@@ -46,7 +46,7 @@ if 'subj_basis_generator' in emb_ckpt:
             continue
                 
         emb_path = os.path.join(emb_folder, iter2path[iteration])
-        emb_ckpt = torch.load(emb_path)
+        emb_ckpt = torch.load(emb_path, map_location="cpu")
 
         subj_basis_generator = emb_ckpt['subj_basis_generator']
         print(f"{iteration}:")
@@ -72,7 +72,7 @@ for idx, iteration in enumerate(iterations):
         continue
             
     emb_path = os.path.join(emb_folder, iter2path[iteration])
-    emb_ckpt = torch.load(emb_path)
+    emb_ckpt = torch.load(emb_path, map_location="cpu")
     emb_global_scale_scores = emb_ckpt['emb_global_scale_scores'].sigmoid() + 0.5
     emb_global_scale_scores = emb_global_scale_scores.detach().cpu().numpy()
     print(f"{iteration} emb_global_scale_scores: {emb_global_scale_scores}")
@@ -94,7 +94,7 @@ for k in tokens:
             continue
 
         emb_path = os.path.join(emb_folder, iter2path[iteration])
-        emb_ckpt = torch.load(emb_path)
+        emb_ckpt = torch.load(emb_path, map_location="cpu")
 
         ada_embedder = emb_ckpt['string_to_ada_embedder'][k]
         attn_poolers = ada_embedder.poolers
@@ -113,7 +113,7 @@ for k in tokens:
             continue
                 
         emb_path = os.path.join(emb_folder, iter2path[iteration])
-        emb_ckpt = torch.load(emb_path)
+        emb_ckpt = torch.load(emb_path, map_location="cpu")
 
         ada_embedder = emb_ckpt['string_to_ada_embedder'][k]
         attn_poolers = ada_embedder.poolers
