@@ -37,35 +37,37 @@ emb_ckpt = torch.load(emb_path, map_location="cpu")
 tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
 
 
-if 'subj_basis_generator' in emb_ckpt:
-    print("subj_basis_generator weight:")
-    prev_subj_basis_generator = None
+if 'string_to_subj_basis_generator_dict' in emb_ckpt:
+    for token in tokens:
+        print(f"{token} => subj_basis_generator:")
 
-    for idx, iteration in enumerate(iterations):
-        if args.only100 and iteration % 100 != 0:
-            continue
-                
-        emb_path = os.path.join(emb_folder, iter2path[iteration])
-        emb_ckpt = torch.load(emb_path, map_location="cpu")
+        prev_subj_basis_generator = None
 
-        subj_basis_generator = emb_ckpt['subj_basis_generator']
-        print(f"{iteration}:")
+        for idx, iteration in enumerate(iterations):
+            if args.only100 and iteration % 100 != 0:
+                continue
+                    
+            emb_path = os.path.join(emb_folder, iter2path[iteration])
+            emb_ckpt = torch.load(emb_path, map_location="cpu")
 
-        if prev_subj_basis_generator is not None:
-            param_total_norm  = 0
-            param_total_delta = 0
-            for param_name, param in subj_basis_generator.named_parameters():
-                prev_param = prev_subj_basis_generator.state_dict()[param_name]
-                param_norm = torch.norm(param).item()
-                param_delta = torch.norm(param - prev_param).item()
-                param_total_norm  += param_norm
-                param_total_delta += param_delta
+            subj_basis_generator = emb_ckpt['string_to_subj_basis_generator_dict'][token]
+            print(f"{iteration}:")
 
-                print(f"{param_name}-{iteration} norm/diff: {param_norm:.4f}/{param_delta:.4f}")
+            if prev_subj_basis_generator is not None:
+                param_total_norm  = 0
+                param_total_delta = 0
+                for param_name, param in subj_basis_generator.named_parameters():
+                    prev_param = prev_subj_basis_generator.state_dict()[param_name]
+                    param_norm = torch.norm(param).item()
+                    param_delta = torch.norm(param - prev_param).item()
+                    param_total_norm  += param_norm
+                    param_total_delta += param_delta
 
-            print(f"Total norm/diff: {param_total_norm:.4f}/{param_total_delta:.4f}")
+                    print(f"{param_name}-{iteration} norm/diff: {param_norm:.4f}/{param_delta:.4f}")
 
-        prev_subj_basis_generator = subj_basis_generator
+                print(f"Total norm/diff: {param_total_norm:.4f}/{param_total_delta:.4f}")
+
+            prev_subj_basis_generator = subj_basis_generator
 
 for idx, iteration in enumerate(iterations):
     if args.only100 and iteration % 100 != 0:
