@@ -2719,8 +2719,9 @@ class LatentDiffusion(DDPM):
             if loss_ada_emb_reg > 0:
                 loss_dict.update({f'{prefix}/loss_ada_emb_reg':    loss_ada_emb_reg.mean().detach().item() })
 
+            ada_embedding_reg_scale = 0.1 if self.do_zero_shot else 1
             loss_emb_reg = loss_static_emb_reg * self.static_embedding_reg_weight \
-                            + loss_ada_emb_reg  * self.ada_embedding_reg_weight
+                            + loss_ada_emb_reg  * self.ada_embedding_reg_weight * ada_embedding_reg_scale
 
             loss += loss_emb_reg * emb_reg_loss_scale
 

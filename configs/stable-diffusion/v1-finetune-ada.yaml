@@ -33,8 +33,8 @@ model:
     # By default, SOT embeddings have a max value around 33. We cut it to 10.
     # Only used when computing losses, not used for CFG.
     prompt_embedding_clamp_value:      10
-    do_clip_teacher_filtering:  True
-    num_candidate_teachers:     4
+    do_clip_teacher_filtering:         True
+    num_candidate_teachers:             4
     composition_regs_iter_gaps:         3
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     static_embedding_reg_weight:        2e-5
