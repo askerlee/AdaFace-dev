@@ -242,6 +242,7 @@ class SubjBasisGenerator(nn.Module):
         self.proj_in = nn.Sequential(
             nn.Linear(image_embedding_dim, dim, bias=False),
             nn.LayerNorm(dim, elementwise_affine=elementwise_affine),
+            nn.Dropout(0.1),
         )
         self.face_proj_in = LoRA_Emb2Queries(face_embedding_dim, num_lora_queries, dim, 
                                              num_modes=num_emb2queries_modes, num_output_queries=num_queries,
@@ -254,7 +255,10 @@ class SubjBasisGenerator(nn.Module):
         self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)   if apply_pos_emb else None
 
         self.latent_queries = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
-        self.lq_ln          = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
+        self.lq_ln          = nn.Sequential(
+                                    nn.LayerNorm(dim, elementwise_affine=elementwise_affine),
+                                    nn.Dropout(0.1),
+                              )
 
         # Remove proj_out to reduce the number of parameters, since image_embedding_dim = output_dim = 768.
         self.proj_out = nn.Identity() #nn.Linear(dim, output_dim)

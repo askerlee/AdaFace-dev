@@ -697,8 +697,8 @@ class AdaEmbedding(nn.Module):
 
         self.has_bias = has_bias
         if has_bias and not self.do_zero_shot:
-            # self.bias: [16, K, 768].
-            self.bias = nn.Parameter(torch.zeros(num_layers, self.K, out_emb_dim), requires_grad=True)
+            # self.bias: [1, 16, K, 768].
+            self.bias = nn.Parameter(torch.zeros(1, num_layers, self.K, out_emb_dim), requires_grad=True)
         else:
             self.bias = 0
 
@@ -769,11 +769,14 @@ class AdaEmbedding(nn.Module):
     # ca_infeat: 4D image feature tensor [B, C, H, W]. C: 320.
     # layer_idx: 0 ~ 24. ca_layer_idx: 0 ~ 15.
     # time_emb: [B, 1280].
-    # zs_basis_vecs: [K, r, 768]. K: number of vectors per token. r: number of basis vectors for each vector.                    
+    # zs_basis_vecs: [ZS_BS, K, r, 768]. K: number of vectors per token. r: number of basis vectors for each vector. 
+    # zs_bias:       [ZS_BS, num_layers=16, K, 768].
     def forward(self, layer_idx, layer_attn_components, time_emb, 
                 layer_subj_emb_probe, layer_static_extra_emb_mean, 
                 img_mask=None, cached_pooler_bg_out=None, 
                 zs_basis_vecs=None, zs_bias=None):
+        
+        BS = time_emb.shape[0]
         ca_layer_idx = self.layer_idx2ca_layer_idx[layer_idx]
         pooler  = self.poolers[ca_layer_idx]
         ## Some Linears mainly use either fg or bg features. So we reduce cross weights.
@@ -853,6 +856,9 @@ class AdaEmbedding(nn.Module):
 
             if self.do_zero_shot:
                 assert zs_basis_vecs is not None, "Zero-shot AdaEmbedding requires zs_basis_vecs"
+                # If do_zero_shot, basis_vecs: [ZS_BS, K, r, 768]. Note it has a batch dimension.
+                # ZS_BS: 1 (doing feature averaging across instances, so that they share the same set of embeddings) 
+                # or BS (each instance has its own embeddings).
                 basis_vecs = zs_basis_vecs
                 # Copy to basis_vecs, so that zs_basis_vecs will be regularized in layerwise_embedding_norm_loss().
                 # Although self.basis_vecs is supposed to have different sizes from basis_vecs (due to pre_vecs),
@@ -872,16 +878,21 @@ class AdaEmbedding(nn.Module):
                 else:
                     basis_vecs = self.basis_vecs
 
-            out_lns = self.layers_out_lns[ca_layer_idx]
-            # out_vecs_unnorm: K elements, each is [BS, 1, r] x [r, 768]_k = [BS, 1, 768].
-            out_vecs_unnorm = [ torch.matmul(basis_dyn_coeffs[:, k], basis_vecs[k]) for k in range(self.K) ]
+                # Repeat BS times to be consistent with the shape of basis_vecs when do_zero_shot.
+                # basis_vecs: [K, r, 768] => [1, K, r, 768] # => [BS, K, r, 768].
+                # No need to repeat BS time, as matmul() will broadcast along the batch dimension.
+                basis_vecs = basis_vecs.unsqueeze(0) #.repeat(BS, 1, 1, 1)
 
-            out_vecs0 = torch.stack([ out_lns[k](out_vecs_unnorm[k]) for k in range(self.K) ], dim=1)
+            out_lns = self.layers_out_lns[ca_layer_idx]
+            # out_vecs_unnorm: K elements, each is [BS, 1, r] x [BS, r, 768]_k = [BS, 1, 768].
+            out_vecs_unnorm = [ torch.matmul(basis_dyn_coeffs[:, k].unsqueeze(1), basis_vecs[:, k]) for k in range(self.K) ]
+
+            out_vecs0 = torch.cat([ out_lns[k](out_vecs_unnorm[k]) for k in range(self.K) ], dim=1)
             # out_emb_dim: 768.
             out_vecs0 = out_vecs0 / np.sqrt(self.out_emb_dim)
 
-            # bias: [1, K, 768]
-            bias = self.bias[ca_layer_idx].unsqueeze(0)
+            # bias: [1, K, 768] if not do_zero_shot, or [BS, K, 768] if do_zero_shot.
+            bias = self.bias[:, ca_layer_idx] #.unsqueeze(0)
             # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
             out_vecs  = out_vecs0 + bias
 
@@ -1475,32 +1486,45 @@ class EmbeddingManager(nn.Module):
                         self.curr_subj_is_face = self.subj_name_to_being_faces[self.curr_batch_subj_names[0]]
 
                     subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
-                    # zs_clip_features: [BS, 257, 1280]
-                    # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
+                    # ZS_BS = 1 (if doing feature averaging across instances) or BS (otherwise).
+                    ZS_BS = zs_clip_features.shape[0]
+                    assert ZS_BS == 1 or ZS_BS == BS, f"ZS_BS={ZS_BS}, BS={BS}"
+
+                    # zs_clip_features: [ZS_BS, 257, 1280]
+                    # zs_vecs_2sets:    [ZS_BS, 468, 768] => [ZS_BS, 9, 52, 768]
                     zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs, 
                                                         self.curr_subj_is_face, 
                                                         placeholder_is_bg)
                     # TODO: support multiple subjects in a batch, i.e., zs_vecs_2sets will be reshaped to 4D.
-                    zs_vecs_2sets = zs_vecs_2sets.reshape(num_vectors_each_placeholder,
+                    zs_vecs_2sets = zs_vecs_2sets.reshape(ZS_BS,
+                                                          num_vectors_each_placeholder,
                                                           self.num_zs_vecs_per_token, -1)
                     # If subj:
-                    # ada_zs_basis_vecs: [BS, 9, 10, 768], ada_zs_bias: [BS, 9, 16, 768], static_zs_embs: [BS, 9, 16, 768].
+                    # ada_zs_basis_vecs: [ZS_BS, 9, 10, 768], ada_zs_bias: [ZS_BS, 9, 16, 768], static_zs_embs: [ZS_BS, 9, 16, 768].
                     # If bg:
-                    # ada_zs_basis_vecs: [BS, 4, 10, 768], ada_zs_bias: [BS, 4, 16, 768], static_zs_embs: [BS, 4, 16, 768].
+                    # ada_zs_basis_vecs: [ZS_BS, 4, 10, 768], ada_zs_bias: [ZS_BS, 4, 16, 768], static_zs_embs: [ZS_BS, 4, 16, 768].
                     ada_zs_basis_vecs, ada_zs_bias, static_zs_embs = \
-                        zs_vecs_2sets[:, :self.layerwise_lora_rank], \
-                        zs_vecs_2sets[:, self.layerwise_lora_rank:self.layerwise_lora_rank+self.num_unet_ca_layers], \
-                        zs_vecs_2sets[:, self.layerwise_lora_rank+self.num_unet_ca_layers:]
+                        zs_vecs_2sets[:, :, :self.layerwise_lora_rank], \
+                        zs_vecs_2sets[:, :, self.layerwise_lora_rank:self.layerwise_lora_rank+self.num_unet_ca_layers], \
+                        zs_vecs_2sets[:, :, self.layerwise_lora_rank+self.num_unet_ca_layers:]
 
                     #breakpoint()
                     self.subj2ada_zs_basis_vecs[placeholder_string] = ada_zs_basis_vecs
-                    # ada_zs_bias:           [BS, 9, 16, 768] => [BS, 16, 9, 768]
-                    self.subj2ada_zs_bias[placeholder_string]       = ada_zs_bias.permute(1, 0, 2) #(0, 2, 1, 3)
-                    # subj_static_embedding: [BS, 9, 16, 768] => [BS, 16, 9, 768]
-                    static_zs_embs = static_zs_embs.permute(1, 0, 2) #(0, 2, 1, 3)
+                    # ada_zs_bias:           [ZS_BS, 9, 16, 768] => [ZS_BS, 16, 9, 768]
+                    self.subj2ada_zs_bias[placeholder_string]       = ada_zs_bias.permute(0, 2, 1, 3)
+                    # subj_static_embedding: [ZS_BS, 9, 16, 768] => [ZS_BS, 16, 9, 768]
+                    static_zs_embs = static_zs_embs.permute(0, 2, 1, 3)
+                    if ZS_BS == 1:
+                        # [ZS_BS, 16, 9, 768] => [BS, 16, 9, 768]
+                        static_zs_embs = static_zs_embs.repeat(BS, 1, 1, 1)
+                    # Otherwise, static_zs_embs is already [BS, 16, 9, 768] as ZS_BS = BS.
+                        
+                    # [BS, 16, 9, 768] => [16*BS, 9, 768]
+                    static_zs_embs = static_zs_embs.reshape(BS * num_unet_ca_layers, -1, 768)
                 else:
                     static_zs_embs = None
 
+                # subj_static_embedding: [16, 9, 768] if not do_zero_shot or [16*BS, 9, 768] if do_zero_shot.
                 subj_static_embedding = static_embedder(static_zs_embs)
             else:
                 # static_embedder is already the embedding vectors.
@@ -1531,7 +1555,16 @@ class EmbeddingManager(nn.Module):
                                                                      self.training_end_add_noise_std_range,
                                                                      self.training_add_noise_prob[self.iter_type])
                 # subj_static_embedding_k: [16, 768] => [16*REAL_OCCURS_IN_BATCH, 768]
-                embedded_text[placeholder_indices_k] = subj_static_embedding_k.repeat(REAL_OCCURS_IN_BATCH, 1)
+                if self.do_zero_shot:
+                    assert REAL_OCCURS_IN_BATCH == BS, "Zero-shot mode only supports REAL_OCCURS_IN_BATCH == BS."
+                    # No need to repeat along the batch dimension, as each instance already has its own embeddings.
+                    # subj_static_embedding_k: [16*BS, 768].
+                    # If doing feature averaging across instances, then subj_static_embedding_k has been repeated 
+                    # along the batch dimension above.
+                    embedded_text[placeholder_indices_k] = subj_static_embedding_k
+                else:
+                    # subj_static_embedding_k: [16, 768] => [16*REAL_OCCURS_IN_BATCH, 768]
+                    embedded_text[placeholder_indices_k] = subj_static_embedding_k.repeat(REAL_OCCURS_IN_BATCH, 1)
 
             # Cache the placeholder indices for mix prompt distillation.
             # Note placeholder_indices are recomputed in update_placeholder_indices(), 
@@ -1700,14 +1733,29 @@ class EmbeddingManager(nn.Module):
             layer_subj_emb_probe = layer_subj_emb_probe * np.sqrt(self.token2num_vectors[placeholder_string])
 
             if self.do_zero_shot:
+                # If subj:
+                # ada_zs_basis_vecs: [ZS_BS, 9, 10, 768], ada_zs_bias: [ZS_BS, 16, 9, 768].
+                # If bg:
+                # ada_zs_basis_vecs: [ZS_BS, 4, 10, 768], ada_zs_bias: [ZS_BS, 16, 4, 768].
+                # ZS_BS: 1 (if doing feature averaging across instances) or BS (otherwise).
                 ada_zs_basis_vecs = self.subj2ada_zs_basis_vecs[placeholder_string]
                 ada_zs_bias       = self.subj2ada_zs_bias[placeholder_string]
+                ZS_BS = ada_zs_basis_vecs.shape[0]
+                # No need to repeat, as they will be broadcasted by matmul() in AdaEmbeding to match the batch size.
+                '''
+                if ZS_BS == 1:
+                    # [ZS_BS, 9, 10, 768] => [BS, 9, 10, 768]
+                    ada_zs_basis_vecs = ada_zs_basis_vecs.repeat(BS, 1, 1, 1)         
+                    # [ZS_BS, 16, 9, 768] => [BS, 16, 9, 768]
+                    ada_zs_bias       = ada_zs_bias.repeat(BS, 1, 1, 1)
+                '''
+
             else:
                 ada_zs_basis_vecs = None
                 ada_zs_bias       = None
 
             # Generate the actual subj_ada_embedding on the fly.
-            # subj_ada_embedding: [B, K, 768]. B: 2 or 4 (regularization batches).
+            # subj_ada_embedding: [BS, K, 768]. BS: 2 or 4 (regularization batches).
             # Before this call, we assume static_subj_embs has been generated by 
             # a call to get_static_embedding(). 
             # The pipeline is generate static embeddings first, then generate the ada embeddings. 
