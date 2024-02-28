@@ -20,20 +20,22 @@ face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
 face_encoder.prepare(ctx_id=gpu_id)
 trash_img_count = 0
 trash_mask_count = 0
+num_subjects = len(os.listdir(base_folder))
+print(f'num_subjects={num_subjects}')
 
-for subj_folder in os.listdir(base_folder):
+for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
     image_fullpaths = []
     id_embs = []
+    print(f"{subj_i+1}/{num_subjects}: {subj_path}")
     subj_path = os.path.join(base_folder, subj_folder)
-    print(subj_path)
     subj_trash_path = os.path.join(trash_folder, subj_folder)
 
-    for i, image_path in enumerate(os.listdir(subj_path)):
+    for image_i, image_path in enumerate(os.listdir(subj_path)):
         if "_mask.png" in image_path:
             continue
 
-        if i % 20 == 0:
-            print(i)
+        if image_i % 20 == 0:
+            print(image_i)
         image_fullpath = os.path.join(subj_path, image_path)
         image_np = cv2.imread(image_fullpath)
         # id_emb_np: [1, 512].
@@ -65,8 +67,9 @@ for subj_folder in os.listdir(base_folder):
         continue
 
     id_embs = torch.stack(id_embs)
+    id_embs = F.normalize(id_embs, p=2, dim=1)
     # Compute pairwise similarities of the embeddings.
-    mean_emb = F.normalize(id_embs, p=2, dim=1).mean(dim=0, keepdim=True)
+    mean_emb = id_embs.mean(dim=0, keepdim=True)
     mean_emb = F.normalize(mean_emb, p=2, dim=1)
     # [1, 512] * [512, BS] => [1, BS]
     sims_to_mean = torch.matmul(mean_emb, id_embs.t())[0]
