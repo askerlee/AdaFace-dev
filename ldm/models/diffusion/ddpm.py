@@ -1647,13 +1647,16 @@ class LatentDiffusion(DDPM):
             images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
             # batch["fg_mask"]: [3, 512, 512].
             fg_mask = batch["fg_mask"]
+            image_paths = batch["image_path"]
             # If each_batch_from_same_subject:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
             # Otherwise:                        zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
             # If each_batch_from_same_subject, then we average the zs_clip_features and zs_id_embs to get 
             # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
             zs_clip_features, zs_id_embs = encode_zero_shot_image_features(images, fg_mask,
                                                                            is_face=self.iter_flags['is_face'],
-                                                                           calc_avg=self.each_batch_from_same_subject)
+                                                                           calc_avg=self.each_batch_from_same_subject,
+                                                                           image_paths=image_paths)
+            
             self.iter_flags['zs_clip_features'] = zs_clip_features
             self.iter_flags['zs_id_embs']       = zs_id_embs
         else:

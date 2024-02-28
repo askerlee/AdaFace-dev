@@ -27,7 +27,7 @@ webdataset
 bitsandbytes
 prodigyopt
 numpy>=1.24.0
-onnxruntime
+onnxruntime-gpu
 insightface
 -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
 -e git+https://github.com/openai/CLIP.git@main#egg=clip

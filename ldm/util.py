@@ -2279,7 +2279,7 @@ def init_zero_shot_image_encoders(clip_type, zs_use_id_embs, device):
 # is_face: whether the images are faces. If True, then face embedding will be extracted. 
 # Otherwise, DINO embedding will be extracted.
 # fg_masks: a list of [Hi, Wi].
-def encode_zero_shot_image_features(images, fg_masks, is_face, calc_avg=False):
+def encode_zero_shot_image_features(images, fg_masks, is_face, calc_avg=False, image_paths=None, debug=False):
     # Must call init_zero_shot_image_encoders() before calling this function.
     global clip_image_encoder, clip_preprocessor, face_encoder, dino_encoder, dino_preprocess, clip_device, neg_image_features
 
@@ -2384,6 +2384,16 @@ def encode_zero_shot_image_features(images, fg_masks, is_face, calc_avg=False):
         # clip_features: [BS, 514, 1280] -> [1, 514, 1280].
         # id_embs: [BS, 512] -> [1, 512].
         clip_features = clip_features.mean(dim=0, keepdim=True)
+
+        #debug = True
+        if debug and id_embs is not None:
+            print(image_paths)
+            calc_stats('id_embs', id_embs)
+            # Compute pairwise similarities of the embeddings.
+            id_embs = F.normalize(id_embs, p=2, dim=1)
+            pairwise_sim = torch.matmul(id_embs, id_embs.t())
+            print('pairwise_sim:', pairwise_sim)
+
         id_embs       = id_embs.mean(dim=0, keepdim=True) if id_embs is not None else None
 
     return clip_features, id_embs
