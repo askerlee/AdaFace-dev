@@ -936,9 +936,8 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_elementwise_affine     = opt.zs_elementwise_affine
 
             # When using zero-shot, we load different subjects in the same batch.
-            config.data.params.each_batch_from_same_subject  = opt.each_batch_from_same_subject
-            config.model.params.each_batch_from_same_subject = opt.each_batch_from_same_subject
-
+            config.data.params.each_batch_from_same_subject = opt.each_batch_from_same_subject
+        
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
         # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
