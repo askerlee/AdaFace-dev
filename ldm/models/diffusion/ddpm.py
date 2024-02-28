@@ -2706,13 +2706,16 @@ class LatentDiffusion(DDPM):
 
         # The Prodigy optimizer seems to suppress the embeddings too much, 
         # so we reduce the scale to 0.5 to dampen the embedding reg loss.
-        emb_reg_loss_scale = 0.5 if self.optimizer_type == 'Prodigy' else 1
-        # Completely disable the embedding reg loss if do_zero_shot, as it hurts performance.
-        if self.do_zero_shot:
-            emb_reg_loss_scale = 0
-
+        emb_reg_loss_scale          = 0.5 if self.optimizer_type == 'Prodigy' else 1
         prompt_emb_delta_loss_scale = 0.5 if self.optimizer_type == 'Prodigy' else 1
 
+        if self.do_zero_shot:
+            # Completely disable the embedding reg loss if do_zero_shot, as it hurts performance.
+            emb_reg_loss_scale = 0
+            # Reduce the prompt_emb_delta_loss_scale by 5x (from 0.5 to 0.1) if do_zero_shot, 
+            # as it might make learning slow.
+            prompt_emb_delta_loss_scale /= 5
+        
         if self.static_embedding_reg_weight + self.ada_embedding_reg_weight > 0:
             loss_emb_reg = self.embedding_manager.embedding_reg_loss()
             if self.use_layerwise_embedding:
@@ -2989,7 +2992,7 @@ class LatentDiffusion(DDPM):
 
             # loss_subj_attn_delta_align_* use L2 losses, 
             # so no need to use dynamic loss scale.
-            subj_attn_delta_distill_loss_scale = 0 #1 #0.5
+            subj_attn_delta_align_loss_scale = 0
             # loss_feat_delta_align is around 0.5~1.5. loss_subj_attn_delta_align is around 0.3~0.6.
             # loss_subj_attn_norm_distill is usually 5~10. 
             # So scale it down by 0.2 to match the other two. New range: 1~2.
@@ -3003,7 +3006,7 @@ class LatentDiffusion(DDPM):
                                                                      subj_attn_norm_distill_loss_base,
                                                                      subj_attn_norm_distill_loss_scale_base)
 
-            loss_mix_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_distill_loss_scale \
+            loss_mix_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_align_loss_scale \
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                         + loss_feat_delta_align       * feat_delta_align_scale
                                         
