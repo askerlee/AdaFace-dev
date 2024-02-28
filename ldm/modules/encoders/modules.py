@@ -184,7 +184,6 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         self.tokenizer = CLIPTokenizer.from_pretrained(version)
         self.transformer = CLIPTextModel.from_pretrained(version)
         self.device = device
-        breakpoint()
         self.max_length = max_length
         # If randomize_clip_skip_weights, then use last_layers_skip_weights as Dirichlet weights
         # and dynamically sample the actual last_layers_skip_weights from the Dirichlet distribution.
