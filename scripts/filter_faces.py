@@ -22,13 +22,19 @@ trash_img_count = 0
 trash_mask_count = 0
 num_subjects = len(os.listdir(base_folder))
 print(f'num_subjects={num_subjects}')
+resumed_subj_folder = None #'n007809'
+resumed = True
 
 for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
     image_fullpaths = []
     id_embs = []
-    print(f"{subj_i+1}/{num_subjects}: {subj_path}")
+    print(f"{subj_i+1}/{num_subjects}: {subj_folder}")
     subj_path = os.path.join(base_folder, subj_folder)
     subj_trash_path = os.path.join(trash_folder, subj_folder)
+    if not resumed and resumed_subj_folder == subj_folder:
+        resumed = True
+    if not resumed:
+        continue
 
     for image_i, image_path in enumerate(os.listdir(subj_path)):
         if "_mask.png" in image_path:
