@@ -2737,13 +2737,18 @@ class LatentDiffusion(DDPM):
         # The fg_bg_token_embs_ortho_loss will be too complicated to compute (we need to separately consider
         # compositional and non-compositional iterations), so we disable it.
         if not (self.do_zero_shot and not self.each_batch_from_same_subject) \
-          and self.fg_bg_token_emb_ortho_loss_weight > 0:
+          and self.fg_bg_token_emb_ortho_loss_weight >= 0:
             # If use_background_token, then loss_fg_bg_token_emb_ortho is nonzero.
             # Otherwise, loss_fg_bg_token_emb_ortho is zero.
             loss_fg_bg_token_emb_ortho = \
                 self.embedding_manager.calc_fg_bg_token_embs_ortho_loss(ada_grad_scale=0.1, fg_grad_scale=0.5)
             if loss_fg_bg_token_emb_ortho > 0:
                 loss_dict.update({f'{prefix}/fg_bg_token_emb_ortho': loss_fg_bg_token_emb_ortho.mean().detach().item() })
+
+            if self.do_zero_shot:
+                # Completely disable the fg_bg_token_emb_ortho_loss if do_zero_shot, as it hurts performance.
+                loss_fg_bg_token_emb_ortho = 0
+
             loss += loss_fg_bg_token_emb_ortho * self.fg_bg_token_emb_ortho_loss_weight
 
         if self.do_static_prompt_delta_reg:
@@ -3128,8 +3133,10 @@ class LatentDiffusion(DDPM):
             if loss_fg_bg_mask_contrast > 0:
                 loss_dict.update({f'{prefix}/fg_bg_mask_contrast': loss_fg_bg_mask_contrast.mean().detach()})
 
+            # Reduce the scale of fg_bg_complementary_loss if do_zero_shot, as it hurts performance. 
+            loss_fg_bg_mask_contrast_scale = 0.2 if self.do_zero_shot else 1
             loss += (loss_fg_bg_complementary + loss_subj_mb_suppress \
-                        + loss_bg_mf_suppress + loss_fg_bg_mask_contrast) \
+                        + loss_bg_mf_suppress + loss_fg_bg_mask_contrast * loss_fg_bg_mask_contrast_scale) \
                     * self.fg_bg_complementary_loss_weight
 
         if self.iter_flags['use_wds_comp'] and self.fg_wds_complementary_loss_weight > 0:
