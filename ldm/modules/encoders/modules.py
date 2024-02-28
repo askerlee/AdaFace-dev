@@ -206,10 +206,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                     position_ids = self.position_ids[:, :seq_length]
 
                 if inputs_embeds is None:
-                    try:
-                        inputs_embeds = self.token_embedding(input_ids)
-                    except:
-                        breakpoint()
+                    inputs_embeds = self.token_embedding(input_ids)
 
                 # The two lines of embedding_manager are newly added. Other code pieces 
                 # are the same as the original CLIPTextEmbeddings.forward().
