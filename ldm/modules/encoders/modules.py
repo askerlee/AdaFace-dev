@@ -184,6 +184,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         self.tokenizer = CLIPTokenizer.from_pretrained(version)
         self.transformer = CLIPTextModel.from_pretrained(version)
         self.device = device
+        breakpoint()
         self.max_length = max_length
         # If randomize_clip_skip_weights, then use last_layers_skip_weights as Dirichlet weights
         # and dynamically sample the actual last_layers_skip_weights from the Dirichlet distribution.
@@ -206,7 +207,10 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                     position_ids = self.position_ids[:, :seq_length]
 
                 if inputs_embeds is None:
-                    inputs_embeds = self.token_embedding(input_ids)
+                    try:
+                        inputs_embeds = self.token_embedding(input_ids)
+                    except:
+                        breakpoint()
 
                 # The two lines of embedding_manager are newly added. Other code pieces 
                 # are the same as the original CLIPTextEmbeddings.forward().

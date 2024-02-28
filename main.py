@@ -922,10 +922,10 @@ if __name__ == "__main__":
         config.data.params.train.params.do_zero_shot        = opt.zeroshot
         config.data.params.validation.params.do_zero_shot   = opt.zeroshot
 
+        gpus = opt.gpus.strip(",").split(',')
+        device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
+
         if opt.zeroshot:
-            gpus = opt.gpus.strip(",").split(',')
-            # TODO: put clip image encoder on the same device as the model
-            device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
             zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, opt.zs_use_id_embs, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
@@ -953,6 +953,7 @@ if __name__ == "__main__":
         # DDPM model config
         config.model.params.cond_stage_config.params.last_layers_skip_weights    = opt.clip_last_layers_skip_weights
         config.model.params.cond_stage_config.params.randomize_clip_skip_weights = opt.randomize_clip_skip_weights
+        config.model.params.cond_stage_config.params.device                      = device
         config.model.params.use_fp_trick = opt.use_fp_trick
 
         if opt.static_embedding_reg_weight >= 0:

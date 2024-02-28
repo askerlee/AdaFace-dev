@@ -1491,7 +1491,6 @@ class EmbeddingManager(nn.Module):
                         zs_vecs_2sets[:, :self.layerwise_lora_rank], \
                         zs_vecs_2sets[:, self.layerwise_lora_rank:self.layerwise_lora_rank+self.num_unet_ca_layers], \
                         zs_vecs_2sets[:, self.layerwise_lora_rank+self.num_unet_ca_layers:]
-
                     #breakpoint()
                     self.subj2ada_zs_basis_vecs[placeholder_string] = ada_zs_basis_vecs
                     # ada_zs_bias:           [BS, 9, 16, 768] => [BS, 16, 9, 768]

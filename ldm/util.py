@@ -2281,7 +2281,8 @@ def init_zero_shot_image_encoders(clip_type, zs_use_id_embs, device):
 # fg_masks: a list of [Hi, Wi].
 def encode_zero_shot_image_features(images, fg_masks, is_face, calc_avg=False, image_paths=None, debug=False):
     # Must call init_zero_shot_image_encoders() before calling this function.
-    global clip_image_encoder, clip_preprocessor, face_encoder, dino_encoder, dino_preprocess, clip_device, neg_image_features
+    global clip_image_encoder, clip_preprocessor, face_encoder, dino_encoder, dino_preprocess, \
+            clip_device, neg_image_features
 
     image_pixel_values = []
     id_embs = []
@@ -2361,7 +2362,7 @@ def encode_zero_shot_image_features(images, fg_masks, is_face, calc_avg=False, i
     with torch.no_grad():
         if neg_image_features is None:
             # neg_pixel_values: [1, 3, 224, 224]
-            neg_pixel_values = torch.zeros_like(image_pixel_values[:1])
+            neg_pixel_values = torch.zeros_like(image_pixel_values[:1], device=clip_device)
             neg_image_features = clip_image_encoder(neg_pixel_values, attn_mask=None, output_hidden_states=True).hidden_states[-2]
 
         # image_fg_features: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
@@ -2394,7 +2395,7 @@ def encode_zero_shot_image_features(images, fg_masks, is_face, calc_avg=False, i
             pairwise_sim = torch.matmul(id_embs, id_embs.t())
             print('pairwise_sim:', pairwise_sim)
 
-        id_embs       = id_embs.mean(dim=0, keepdim=True) if id_embs is not None else None
+        id_embs = id_embs.mean(dim=0, keepdim=True) if id_embs is not None else None
 
     return clip_features, id_embs
 
