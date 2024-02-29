@@ -357,7 +357,7 @@ class SubjBasisGenerator(nn.Module):
     def __repr__(self):
         # Compatible with old ckpt.
         if hasattr(self, 'codebook') and self.codebook is not None and not hasattr(self, 'codebooks'):
-            self.codebooks = nn.ModuleList([self.codebook])
+            self.codebooks = nn.ParameterList([self.codebook])
             self.codebook = None
         if not hasattr(self, 'codebook_size'):
             self.codebook_size = self.codebooks[0].size(1) if self.codebooks is not None else -1
