@@ -1006,7 +1006,6 @@ class EmbeddingManager(nn.Module):
             zs_num_generator_layers=1,
             zs_num_emb2queries_modes=4,
             zs_elementwise_affine=True,
-            zs_use_codebook=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
@@ -1208,7 +1207,6 @@ class EmbeddingManager(nn.Module):
                                                           image_embedding_dim = zs_image_emb_dim, 
                                                           dim = out_emb_dim,
                                                           output_dim = out_emb_dim,
-                                                          use_codebook=zs_use_codebook,
                                                           elementwise_affine=zs_elementwise_affine,
                                                           placeholder_is_bg=placeholder_is_bg)
 
@@ -2261,7 +2259,6 @@ class EmbeddingManager(nn.Module):
                     if self.string_to_subj_basis_generator_dict[km] is None or self.string_to_subj_basis_generator_dict[km].depth < ckpt_subj_basis_generator.depth \
                       or self.string_to_subj_basis_generator_dict[km].num_emb2queries_modes != ckpt_subj_basis_generator.num_emb2queries_modes \
                       or self.string_to_subj_basis_generator_dict[km].elementwise_affine    != ckpt_subj_basis_generator.elementwise_affine \
-                      or self.string_to_subj_basis_generator_dict[km].use_codebook          != ckpt_subj_basis_generator.use_codebook \
                       or self.string_to_subj_basis_generator_dict[km].codebook_size         != ckpt_subj_basis_generator.codebook_size:
                         print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                         self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator

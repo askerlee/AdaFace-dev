@@ -300,9 +300,7 @@ def parse_args():
                         help="Reference mask for zero-shot learning")
     parser.add_argument("--ignore_ref_masks", action="store_true",
                         help="Ignore reference masks for zero-shot learning")    
-    parser.add_argument("--zs_use_codebook", dest='zs_use_codebook', action="store_true",
-                        help="Use codebook to attend to identity (face or DINO) embeddings for zero-shot generation")
-    
+
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
     parser.add_argument("--bb_type", type=str, default="")
@@ -393,7 +391,6 @@ def main(opt):
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
-        config.model.params.personalization_config.params.zs_use_codebook = opt.zs_use_codebook
         
         if opt.zeroshot:
             assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"

@@ -263,8 +263,6 @@ def get_parser(**parser_kwargs):
                         default='openai',
                         help="Type of zero-shot learning clip model")
 
-    parser.add_argument("--zs_use_codebook", dest='zs_use_codebook', action="store_true",
-                        help="Use codebook to attend to identity (face or DINO) embeddings for zero-shot generation")
     parser.add_argument("--zs_num_generator_layers", type=int, default=1,
                         help="Layers (depth) of zero-shot subject feature generator")
     parser.add_argument("--zs_num_emb2queries_modes", type=int, default=4,
@@ -934,7 +932,6 @@ if __name__ == "__main__":
             config.model.params.zs_clip_type = opt.zs_clip_type
 
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
-            config.model.params.personalization_config.params.zs_use_codebook           = opt.zs_use_codebook
             config.model.params.personalization_config.params.zs_num_generator_layers   = opt.zs_num_generator_layers
             config.model.params.personalization_config.params.zs_num_emb2queries_modes  = opt.zs_num_emb2queries_modes
             config.model.params.personalization_config.params.zs_elementwise_affine     = opt.zs_elementwise_affine

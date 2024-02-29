@@ -237,7 +237,6 @@ class SubjBasisGenerator(nn.Module):
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
-        use_codebook: bool = False,         # Whether to use a codebook to attend to latent_queries.
         codebook_size: int = 18900,         # Size of the codebook, 50 * num_queries.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
     ):
@@ -258,14 +257,19 @@ class SubjBasisGenerator(nn.Module):
             self.obj_proj_in  = LoRA_Emb2Queries(dino_embedding_dim, num_lora_queries, dim, 
                                                 num_modes=num_emb2queries_modes, num_output_queries=num_queries,
                                                 elementwise_affine=elementwise_affine)
+            # If it's a subject placeholder, then latent_queries 
+            # are generated from face or object embeddings. No static_latent_queries.
+            self.static_latent_queries = None            
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.face_proj_in = None
             self.obj_proj_in  = None
+            # These static set of latent queries are used to attend to the ad-hoc CLIP image features.
+            self.static_latent_queries = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
 
         # If placeholder_is_bg, then don't use codebook, instead draw features 
         # from the ad-hoc CLIP image features.
-        self.use_codebook = use_codebook and (not placeholder_is_bg)
+        self.use_codebook = not placeholder_is_bg
         # If use_codebook, then no point to use positional embeddings.
         if self.use_codebook:
             apply_pos_emb = False
