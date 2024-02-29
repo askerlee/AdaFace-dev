@@ -64,6 +64,13 @@ class LearnedSoftAggregate(nn.Module):
         self.keepdim    = keepdim
 
     def forward(self, x, score_basis=None):
+        # If there's only one mode, do nothing.
+        if x.shape[self.group_dim] == 1:
+            if self.keepdim:
+                return x
+            else:
+                return x.squeeze(self.group_dim)
+            
         # Assume the last dim of x is the feature dim.
         if score_basis is None:
             score_basis = x
@@ -94,6 +101,8 @@ def LoRA_Emb2Queries(input_dim, lora_rank, output_dim, num_modes,
         nn.Linear(lora_rank, num_output_queries, bias=False),
         # Permute to [BS, num_output_queries, output_dim].
         Rearrange('b d q -> b q d'),
+        nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
+        nn.Dropout(0.1),
     )
 
 class PerceiverAttention(nn.Module):
@@ -221,8 +230,10 @@ class SubjBasisGenerator(nn.Module):
         self,
         dim=768,                            # Internal feature dimension. Same as output_dim.
         depth=1,                            # number of (CrossAttention, FeedForward) layers.     
-        # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
-        heads=16,       
+        # number of cross-attention heads as per:
+        # laion=16,  https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json  
+        # openai=12, https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json      
+        heads=12,       
         # num_queries: number of latent_queries.
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
         # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
@@ -231,7 +242,7 @@ class SubjBasisGenerator(nn.Module):
         face_embedding_dim=512,             # insightface face feature dimension for humans.
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
         num_lora_queries=32,                # number of low-rank latent_queries.
-        num_emb2queries_modes=4,            # number of modes for LoRA_Emb2Queries.  
+        num_emb2queries_modes=1,            # number of modes for LoRA_Emb2Queries.  
         output_dim=768,                     # CLIP text embedding input dimension.
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]

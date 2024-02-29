@@ -1004,7 +1004,7 @@ class EmbeddingManager(nn.Module):
             do_zero_shot=False,
             zs_image_emb_dim=1280,
             zs_num_subj_generator_layers=1,
-            zs_num_emb2queries_modes=4,
+            zs_num_emb2queries_modes=1,
             zs_elementwise_affine=True,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
