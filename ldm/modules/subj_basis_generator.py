@@ -361,7 +361,7 @@ class SubjBasisGenerator(nn.Module):
             self.codebook = None
         if self.use_codebook and not hasattr(self, 'codebook_size'):
             self.codebook_size = self.codebooks[0].size(1) if self.codebooks is not None else -1
-        else:
+        elif not self.use_codebook:
             self.codebook_size = -1
 
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
