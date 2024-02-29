@@ -930,7 +930,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
 
-            config.model.params.personalization_config.params.zs_use_codebook              = opt.zs_use_codebook
+            config.model.params.personalization_config.params.zs_use_codebook           = opt.zs_use_codebook
             config.model.params.personalization_config.params.zs_num_generator_layers   = opt.zs_num_generator_layers
             config.model.params.personalization_config.params.zs_num_emb2queries_modes  = opt.zs_num_emb2queries_modes
             config.model.params.personalization_config.params.zs_elementwise_affine     = opt.zs_elementwise_affine

@@ -267,8 +267,10 @@ class SubjBasisGenerator(nn.Module):
         if self.use_codebook:
             apply_pos_emb = False
             self.codebook = nn.Parameter(torch.randn(1, codebook_size, dim) / dim**0.5)
+            self.codebook_size = codebook_size
         else:
             self.codebook = None
+            self.codebook_size = -1
 
         if apply_pos_emb:
             self.pos_emb    = nn.Embedding(max_seq_len, dim)                             
@@ -346,6 +348,9 @@ class SubjBasisGenerator(nn.Module):
         return self.norm_out(latent_queries) * self.output_scale
 
     def __repr__(self):
+        if not hasattr(self, 'codebook_size'):
+            self.codebook_size = self.codebook.size(1) if self.codebook is not None else -1
+
         return f"SubjBasisGenerator: depth={self.depth}, num_queries={self.num_queries}, placeholder_is_bg={self.placeholder_is_bg}, " \
                 f"num_emb2queries_modes={self.num_emb2queries_modes}, elementwise_affine={self.elementwise_affine}, use_codebook={self.use_codebook}"
     

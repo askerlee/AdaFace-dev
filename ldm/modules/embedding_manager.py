@@ -2261,7 +2261,8 @@ class EmbeddingManager(nn.Module):
                     if self.string_to_subj_basis_generator_dict[km] is None or self.string_to_subj_basis_generator_dict[km].depth < ckpt_subj_basis_generator.depth \
                       or self.string_to_subj_basis_generator_dict[km].num_emb2queries_modes != ckpt_subj_basis_generator.num_emb2queries_modes \
                       or self.string_to_subj_basis_generator_dict[km].elementwise_affine    != ckpt_subj_basis_generator.elementwise_affine \
-                      or self.string_to_subj_basis_generator_dict[km].zs_use_codebook      != ckpt_subj_basis_generator.zs_use_codebook:
+                      or self.string_to_subj_basis_generator_dict[km].use_codebook          != ckpt_subj_basis_generator.use_codebook \
+                      or self.string_to_subj_basis_generator_dict[km].codebook_size         != ckpt_subj_basis_generator.codebook_size:
                         print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                         self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
                     else:
