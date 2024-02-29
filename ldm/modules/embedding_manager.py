@@ -1003,7 +1003,7 @@ class EmbeddingManager(nn.Module):
             shared_embedder_components='pooler',
             do_zero_shot=False,
             zs_image_emb_dim=1280,
-            zs_num_generator_layers=1,
+            zs_num_subj_generator_layers=1,
             zs_num_emb2queries_modes=4,
             zs_elementwise_affine=True,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
@@ -1200,7 +1200,9 @@ class EmbeddingManager(nn.Module):
 
             if self.do_zero_shot:
                 num_queries = self.zs_num_vecs_per_subj if not placeholder_is_bg else self.zs_num_vecs_per_bg
-                subj_basis_generator = SubjBasisGenerator(depth=zs_num_generator_layers,
+                # bg placeholder always has depth=1.
+                depth = zs_num_subj_generator_layers if not placeholder_is_bg else 1
+                subj_basis_generator = SubjBasisGenerator(depth=depth,
                                                           num_queries = num_queries,
                                                           num_emb2queries_modes = zs_num_emb2queries_modes,
                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
