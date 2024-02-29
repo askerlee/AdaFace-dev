@@ -17,14 +17,12 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import instantiate_from_config, mix_embeddings, save_grid, extend_nn_embedding, \
-                     init_zero_shot_image_encoders, encode_zero_shot_image_features
+from ldm.util import instantiate_from_config, mix_embeddings, save_grid, extend_nn_embedding
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
                                   init_evaluators, set_tf_gpu
 from ldm.data.personalized import PersonalizedBase
-
 from safetensors.torch import load_file as safetensors_load_file
 
 
@@ -402,16 +400,15 @@ def main(opt):
             ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
             ref_masks  = [ np.array(Image.open(ref_mask), dtype=float) for ref_mask in opt.ref_masks ] \
                             if (opt.ref_masks is not None) and (not opt.ignore_ref_masks) else None
-            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, device)
+            # image_emb_dim is not the output dim but the second last layer dim. 
+            # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
+            zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
+            zs_image_emb_dim = zs_clip_type2image_emb_dim[opt.zs_clip_type]            
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
-
-            # zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512] if is_face or [1, 384] if not.
-            zs_clip_features, zs_id_embs = encode_zero_shot_image_features(ref_images, ref_masks,
-                                                                           is_face=opt.calc_face_sim,
-                                                                           calc_avg=True)
+            config.model.params.zs_clip_type = opt.zs_clip_type
         else:
-            zs_clip_features = None
-            zs_id_embs       = None
+            ref_images = None
+            ref_masks  = None
 
         model  = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
@@ -456,9 +453,15 @@ def main(opt):
         
         model  = model.to(device)
         model.cond_stage_model.device = device
-        
+
         assert model.embedding_manager.do_zero_shot == opt.zeroshot, \
                 f"Zero-shot learning mismatch: command line {opt.zeroshot} != ckpt {model.embedding_manager.do_zero_shot}."
+        
+        if opt.zeroshot:
+            # zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512] if is_face or [1, 384] if not.
+            zs_clip_features, zs_id_embs = model.encode_zero_shot_image_features(ref_images, ref_masks,
+                                                                                 is_face=opt.calc_face_sim,
+                                                                                 calc_avg=True)
 
         if opt.plms:
             sampler = PLMSSampler(model)

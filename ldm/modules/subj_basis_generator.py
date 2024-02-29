@@ -242,6 +242,9 @@ class SubjBasisGenerator(nn.Module):
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
     ):
         super().__init__()
+        assert depth > 0, "depth must be > 0."
+        self.depth = depth
+
         self.proj_in = nn.Sequential(
             nn.Linear(image_embedding_dim, dim, bias=False),
             nn.LayerNorm(dim, elementwise_affine=elementwise_affine),
@@ -266,10 +269,9 @@ class SubjBasisGenerator(nn.Module):
         # If use_codebook, then no point to use positional embeddings.
         if self.use_codebook:
             apply_pos_emb = False
-            self.codebook = nn.Parameter(torch.randn(1, codebook_size, dim) / dim**0.5)
-            self.codebook_size = codebook_size
+            # Evenly distribute the codebooks across the depth.
+            self.codebook_size = codebook_size // self.depth
         else:
-            self.codebook = None
             self.codebook_size = -1
 
         if apply_pos_emb:
@@ -291,14 +293,13 @@ class SubjBasisGenerator(nn.Module):
         self.norm_out = nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine)
         self.output_scale = output_dim ** -0.5
 
-        self.depth = depth
         self.num_queries = num_queries
         self.num_emb2queries_modes = num_emb2queries_modes
         self.elementwise_affine = elementwise_affine
 
-        assert depth > 0, "depth must be > 0."
+        self.layers    = nn.ModuleList([])
+        self.codebooks = nn.ParameterList([]) if self.use_codebook else None
 
-        self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(
                 nn.ModuleList(
@@ -313,14 +314,14 @@ class SubjBasisGenerator(nn.Module):
                     ]
                 )
             )
+            if self.use_codebook:
+                layer_codebook = nn.Parameter(torch.randn(1, self.codebook_size, dim) / dim**0.5)
+                self.codebooks.append(layer_codebook)
 
         print(repr(self))
 
     def forward(self, clip_features, id_embs, is_face):     
-        if self.use_codebook:
-            # x: [BS, codebook_size, dim] = [3, 37800, 768].
-            x = self.codebook.repeat(clip_features.size(0), 1, 1)
-        else:
+        if not self.use_codebook:
             x = self.proj_in(clip_features)
             if self.pos_emb is not None:
                 n, device = x.shape[1], x.device
@@ -339,20 +340,31 @@ class SubjBasisGenerator(nn.Module):
         else:
             latent_queries = self.static_latent_queries
     
-        latent_queries = self.lq_ln(latent_queries.repeat(x.size(0), 1, 1))
+        latent_queries = self.lq_ln(latent_queries.repeat(clip_features.size(0), 1, 1))
 
         for i, (attn, ff) in enumerate(self.layers):
-            latent_queries = attn(latent_queries, x) + latent_queries
+            if self.use_codebook:
+                context = self.codebooks[i]
+            else:
+                # Otherwise, context is the ad-hoc CLIP image features.
+                context = x
+                
+            latent_queries = attn(latent_queries, context) + latent_queries
             latent_queries = ff(latent_queries) + latent_queries
 
         return self.norm_out(latent_queries) * self.output_scale
 
     def __repr__(self):
+        # Compatible with old ckpt.
+        if hasattr(self, 'codebook') and self.codebook is not None and not hasattr(self, 'codebooks'):
+            self.codebooks = nn.ModuleList([self.codebook])
+            self.codebook = None
         if not hasattr(self, 'codebook_size'):
-            self.codebook_size = self.codebook.size(1) if self.codebook is not None else -1
+            self.codebook_size = self.codebooks[0].size(1) if self.codebooks is not None else -1
 
-        return f"SubjBasisGenerator: depth={self.depth}, num_queries={self.num_queries}, placeholder_is_bg={self.placeholder_is_bg}, " \
-                f"num_emb2queries_modes={self.num_emb2queries_modes}, elementwise_affine={self.elementwise_affine}, use_codebook={self.use_codebook}"
+        type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
+        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, num_queries={self.num_queries}, " \
+               f"num_emb2queries_modes={self.num_emb2queries_modes}, elementwise_affine={self.elementwise_affine}, codebook_size={self.codebook_size}"
     
 @dataclass
 class BaseModelOutputWithPooling2(ModelOutput):

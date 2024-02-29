@@ -22,9 +22,12 @@ from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
+from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
+from transformers import CLIPImageProcessor, ViTFeatureExtractor, ViTModel
+from insightface.app import FaceAnalysis
 
 from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
-                       count_params, instantiate_from_config, \
+                       count_params, calc_stats, instantiate_from_config, \
                        ortho_subtract, ortho_l2loss, gen_gradient_scaler, \
                        convert_attn_to_spatial_weight, masked_mean, \
                        calc_ref_cosine_loss, calc_delta_alignment_loss, \
@@ -39,8 +42,8 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
                        gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, clamp_prompt_embedding, \
-                       merge_cls_token_embeddings, join_dict_of_indices_with_key_filter, SequentialLR2, \
-                       encode_zero_shot_image_features
+                       merge_cls_token_embeddings, join_dict_of_indices_with_key_filter, SequentialLR2
+                       
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -55,6 +58,7 @@ import random
 from safetensors.torch import load_file as safetensors_load_file
 import sys
 import collections
+import re, cv2
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -132,6 +136,7 @@ class DDPM(pl.LightningModule):
                  prompt_embedding_clamp_value=-1,
                  normalize_ca_q_and_outfeat=True,
                  do_zero_shot=False,
+                 zs_clip_type='openai',
                  each_batch_from_same_subject=True
                  ):
         super().__init__()
@@ -194,6 +199,8 @@ class DDPM(pl.LightningModule):
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
+        self.zs_image_encoder_instantiated          = False
+        self.zs_clip_type                           = zs_clip_type
 
         self.cached_inits = {}
         self.init_iteration_flags()
@@ -878,6 +885,33 @@ class LatentDiffusion(DDPM):
         
         return model
 
+    def instantiate_zero_shot_image_encoders(self, clip_type):
+        if clip_type == 'laion':
+            clip_model_tag = 'laion/CLIP-ViT-H-14-laion2B-s32B-b79K'
+        else:
+            clip_model_tag = 'openai/clip-vit-large-patch14'
+
+        self.clip_image_encoder = CLIPVisionModelWithMask.from_pretrained(clip_model_tag)
+        self.clip_preprocessor  = CLIPImageProcessor.from_pretrained(clip_model_tag)
+        self.clip_image_encoder = self.clip_image_encoder.to(self.device)
+        self.clip_image_encoder.eval()
+        print(f'{clip_model_tag} image encoder loaded on {self.device}.')
+
+        # BUG: If device='cpu', then it will throw an exception.
+        gpu_id = re.findall(r'\d+', str(self.device)).pop()
+        gpu_id = int(gpu_id)
+        self.face_encoder = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        self.face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
+
+        self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
+        self.dino_encoder = self.dino_encoder.to(self.device)
+        self.dino_encoder.eval()
+        self.dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
+        print(f'Face and DINO encoders loaded on {self.device}.')
+
+        self.neg_image_features = None
+        self.zs_image_encoder_instantiated = True
+
     def _get_denoise_row_from_list(self, samples, desc='', force_no_decoder_quantization=False):
         denoise_row = []
         for zd in tqdm(samples, desc=desc):
@@ -907,6 +941,7 @@ class LatentDiffusion(DDPM):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
                 # each prompt in c is encoded as [1, 77, 768].
                 # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
+                self.cond_stage_model.device = self.device
                 if randomize_clip_weights:
                     self.cond_stage_model.sample_last_layers_skip_weights()
 
@@ -1652,10 +1687,10 @@ class LatentDiffusion(DDPM):
             # Otherwise:                        zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
             # If each_batch_from_same_subject, then we average the zs_clip_features and zs_id_embs to get 
             # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
-            zs_clip_features, zs_id_embs = encode_zero_shot_image_features(images, fg_mask,
-                                                                           is_face=self.iter_flags['is_face'],
-                                                                           calc_avg=self.each_batch_from_same_subject,
-                                                                           image_paths=image_paths)
+            zs_clip_features, zs_id_embs = self.encode_zero_shot_image_features(images, fg_mask,
+                                                                                is_face=self.iter_flags['is_face'],
+                                                                                calc_avg=self.each_batch_from_same_subject,
+                                                                                image_paths=image_paths)
             
             self.iter_flags['zs_clip_features'] = zs_clip_features
             self.iter_flags['zs_id_embs']       = zs_id_embs
@@ -2048,6 +2083,132 @@ class LatentDiffusion(DDPM):
         qt_mean, _, qt_log_variance = self.q_mean_variance(x_start, t)
         kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
         return mean_flat(kl_prior) / np.log(2.0)
+
+    # images: numpy.ndarray or torch.Tensor.
+    # images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
+    # is_face: whether the images are faces. If True, then face embedding will be extracted. 
+    # Otherwise, DINO embedding will be extracted.
+    # fg_masks: a list of [Hi, Wi].
+    def encode_zero_shot_image_features(self, images, fg_masks, is_face, calc_avg=False, image_paths=None, debug=False):
+        if not self.zs_image_encoder_instantiated:
+            self.instantiate_zero_shot_image_encoders(self.zs_clip_type)
+
+        # Must call self.instantiate_zero_shot_image_encoders() before calling this function.
+        image_pixel_values = []
+        id_embs = []
+        # images could be a batch of images that have been collated into a tensor or np array.
+        # images can also be a list of images.
+        # The code below that processes them one by one can be applied in both cases.
+        # If images are a collated batch, processing them one by one will not add much overhead.
+        for image in images:
+            # input to clip_preprocessor: an image or a batch of images, each being PIL.Image.Image, numpy.ndarray, 
+            # torch.Tensor, tf.Tensor or jax.ndarray.
+            # Different sizes of images are standardized to the same size 224*224.
+            clip_image_pixel_values = self.clip_preprocessor(images=image, return_tensors="pt").pixel_values
+            image_pixel_values.append(clip_image_pixel_values)
+
+            if is_face and self.face_encoder is not None:
+                if isinstance(image, torch.Tensor):
+                    image = image.cpu().numpy().transpose(1, 2, 0)
+                face_info = self.face_encoder.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+
+                if len(face_info) == 0:
+                    # If no face is detected (e.g. animals or objects), then use a zero tensor as the face embedding.
+                    id_emb = torch.zeros(512, device=self.device)
+                else:
+                    face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
+                    # id_emb: [512,]
+                    id_emb = torch.from_numpy(face_info['embedding']).to(self.device)
+                    
+                id_embs.append(id_emb)
+
+            elif not is_face:
+                # DINO embedding.
+                dino_input = self.dino_preprocess(images=image, return_tensors="pt")
+                dino_input = dino_input.to(self.device)
+                # last_hidden_states: [1, 197, 384]
+                last_hidden_states = self.dino_encoder(**dino_input).last_hidden_state
+                # We only use CLS token's features, so that the spatial location of the subject will not impact matching. 
+                # [1, 197, 384] -> [384,]
+                id_emb = last_hidden_states[0, 0]
+                id_embs.append(id_emb)
+
+        # image_pixel_values: [BS, 3, 224, 224]
+        image_pixel_values = torch.cat(image_pixel_values, dim=0)
+        image_pixel_values = image_pixel_values.to(self.device)
+        if self.face_encoder is not None:
+            # id_embs: [BS, 512] if is_face, or [BS, 384] if not is_face.
+            id_embs = torch.stack(id_embs, dim=0)
+        else:
+            id_embs = None
+
+        if fg_masks is not None:
+            assert len(fg_masks) == len(images)
+            # fg_masks is a list of masks.
+            if isinstance(fg_masks, (list, tuple)):
+                fg_masks2 = []
+                for fg_mask in fg_masks:
+                    # fg_mask: [Hi, Wi]
+                    # BUG: clip_preprocessor will do central crop on images. But fg_mask is not central cropped.
+                    # If the ref image is not square, then the fg_mask will not match the image.
+                    # TODO: crop fg_mask and images to square before calling encode_zero_shot_image_features().
+                    # fg_mask2: [Hi, Wi] -> [1, 1, 224, 224]            
+                    fg_mask2 = torch.tensor(fg_mask, device=self.device).float().unsqueeze(0).unsqueeze(0)
+                    fg_mask2 = F.interpolate(fg_mask2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
+                    fg_masks2.append(fg_mask2)
+                # fg_masks2: [BS, 224, 224]
+                fg_masks2 = torch.cat(fg_masks2, dim=0).squeeze(1)
+            else:
+                # fg_masks is a collated batch of masks.
+                # The actual size doesn't matter, 
+                # as fg_mask2 will be resized to the same size as image features 
+                # (much smaller than image_pixel_values).            
+                fg_masks2 = torch.tensor(fg_masks, device=self.device).float().unsqueeze(1)
+                fg_masks2 = F.interpolate(fg_masks2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
+                fg_masks2 = fg_masks2.squeeze(1)
+        else:
+            # fg_mask2: [BS, 224, 224]. 
+            fg_masks2 = torch.ones_like(image_pixel_values[:, 0, :, :], device=self.device)
+
+        with torch.no_grad():
+            if self.neg_image_features is None:
+                # neg_pixel_values: [1, 3, 224, 224]
+                neg_pixel_values = torch.zeros_like(image_pixel_values[:1], device=self.device)
+                self.neg_image_features = self.clip_image_encoder(neg_pixel_values, attn_mask=None, output_hidden_states=True).hidden_states[-2]
+
+            # image_fg_features: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
+            image_fg_dict  = self.clip_image_encoder(image_pixel_values, attn_mask=fg_masks2, output_hidden_states=True)
+            # attn_mask: [BS, 1, 257]
+            image_fg_features = image_fg_dict.hidden_states[-2] - self.neg_image_features
+            if image_fg_dict.attn_mask is not None:
+                image_fg_features = image_fg_features * image_fg_dict.attn_mask
+
+            # A negative mask is used to extract the background features.
+            image_bg_dict  = self.clip_image_encoder(image_pixel_values, attn_mask=1-fg_masks2, output_hidden_states=True)
+            image_bg_features = image_bg_dict.hidden_states[-2] - self.neg_image_features
+            if image_bg_dict.attn_mask is not None:
+                image_bg_features = image_bg_features * image_bg_dict.attn_mask        
+
+        # clip_features: [BS, 514, 1280].
+        # id_embs:       [BS, 512].
+        clip_features = torch.cat([image_fg_features, image_bg_features], dim=1)
+        if calc_avg:
+            # clip_features: [BS, 514, 1280] -> [1, 514, 1280].
+            # id_embs:       [BS, 512]       -> [1, 512].
+            clip_features = clip_features.mean(dim=0, keepdim=True)
+
+            #debug = True
+            if debug and id_embs is not None:
+                print(image_paths)
+                calc_stats('id_embs', id_embs)
+                # Compute pairwise similarities of the embeddings.
+                id_embs = F.normalize(id_embs, p=2, dim=1)
+                pairwise_sim = torch.matmul(id_embs, id_embs.t())
+                print('pairwise_sim:', pairwise_sim)
+
+            id_embs = id_embs.mean(dim=0, keepdim=True) if id_embs is not None else None
+
+        return clip_features, id_embs
 
     # emb_man_prompt_adhoc_info: volatile data structures changing along with the prompts or the input images.
     # Sometimes the prompts changed after generating the static embeddings, 

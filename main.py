@@ -20,7 +20,7 @@ from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.data.personalized import SubjectSampler
-from ldm.util import instantiate_from_config, extend_nn_embedding, init_zero_shot_image_encoders
+from ldm.util import instantiate_from_config, extend_nn_embedding
 import re
 from safetensors.torch import load_file as safetensors_load_file
 
@@ -926,10 +926,14 @@ if __name__ == "__main__":
         device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
 
         if opt.zeroshot:
-            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, device)
+            # image_emb_dim is not the output dim but the second last layer dim. 
+            # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
+            zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
+            zs_image_emb_dim = zs_clip_type2image_emb_dim[opt.zs_clip_type]
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
-            config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
+            config.model.params.zs_clip_type = opt.zs_clip_type
 
+            config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
             config.model.params.personalization_config.params.zs_use_codebook           = opt.zs_use_codebook
             config.model.params.personalization_config.params.zs_num_generator_layers   = opt.zs_num_generator_layers
             config.model.params.personalization_config.params.zs_num_emb2queries_modes  = opt.zs_num_emb2queries_modes
@@ -953,7 +957,6 @@ if __name__ == "__main__":
         # DDPM model config
         config.model.params.cond_stage_config.params.last_layers_skip_weights    = opt.clip_last_layers_skip_weights
         config.model.params.cond_stage_config.params.randomize_clip_skip_weights = opt.randomize_clip_skip_weights
-        config.model.params.cond_stage_config.params.device                      = device
         config.model.params.use_fp_trick = opt.use_fp_trick
 
         if opt.static_embedding_reg_weight >= 0:
