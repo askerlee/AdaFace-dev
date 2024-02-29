@@ -265,7 +265,7 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--zs_use_codebook", dest='zs_use_codebook', action="store_true",
                         help="Use codebook to attend to identity (face or DINO) embeddings for zero-shot generation")
-    parser.add_argument("--zs_num_generator_layers", type=int, default=2,
+    parser.add_argument("--zs_num_generator_layers", type=int, default=1,
                         help="Layers (depth) of zero-shot subject feature generator")
     parser.add_argument("--zs_num_emb2queries_modes", type=int, default=4,
                         help="Number of modes for the zero-shot embedding to queries mapping")
