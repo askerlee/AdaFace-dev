@@ -359,8 +359,10 @@ class SubjBasisGenerator(nn.Module):
         if hasattr(self, 'codebook') and self.codebook is not None and not hasattr(self, 'codebooks'):
             self.codebooks = nn.ParameterList([self.codebook])
             self.codebook = None
-        if not hasattr(self, 'codebook_size'):
+        if self.use_codebook and not hasattr(self, 'codebook_size'):
             self.codebook_size = self.codebooks[0].size(1) if self.codebooks is not None else -1
+        else:
+            self.codebook_size = -1
 
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
         return f"{type_sig} SubjBasisGenerator: depth={self.depth}, num_queries={self.num_queries}, " \
