@@ -302,8 +302,8 @@ def parse_args():
                         help="Reference mask for zero-shot learning")
     parser.add_argument("--ignore_ref_masks", action="store_true",
                         help="Ignore reference masks for zero-shot learning")    
-    parser.add_argument("--no_id_emb", dest='zs_use_id_embs', action="store_false",
-                        help="Do not use face/DINO embeddings for zero-shot generation")
+    parser.add_argument("--zs_use_codebook", dest='zs_use_codebook', action="store_true",
+                        help="Use codebook to attend to identity (face or DINO) embeddings for zero-shot generation")
     
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
@@ -395,14 +395,14 @@ def main(opt):
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
-        config.model.params.personalization_config.params.zs_use_id_embs = opt.zs_use_id_embs
+        config.model.params.personalization_config.params.zs_use_codebook = opt.zs_use_codebook
         
         if opt.zeroshot:
             assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
             ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
             ref_masks  = [ np.array(Image.open(ref_mask), dtype=float) for ref_mask in opt.ref_masks ] \
                             if (opt.ref_masks is not None) and (not opt.ignore_ref_masks) else None
-            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, opt.zs_use_id_embs, device)
+            zs_image_emb_dim = init_zero_shot_image_encoders(opt.zs_clip_type, device)
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
 
             # zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512] if is_face or [1, 384] if not.

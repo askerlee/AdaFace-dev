@@ -80,6 +80,7 @@ def LoRA_Emb2Queries(input_dim, lora_rank, output_dim, num_modes,
                      num_output_queries, elementwise_affine=True):
     return nn.Sequential(
         # Project to [BS, lora_rank * output_dim * num_modes].
+        # It takes a huge param size. 512 * 32 * 768 * 4 = 6,291,456.
         nn.Linear(input_dim, lora_rank * output_dim * num_modes, bias=False),
         # Reshape to [BS, lora_rank, output_dim].
         Rearrange('b (m q d) -> b m q d', q=lora_rank, m=num_modes, d=output_dim),
@@ -214,12 +215,12 @@ class CrossAttention(nn.Module):
 
         return out
 
-# Simplified from IP-Adapter Resampler.
+# Revised from IP-Adapter Resampler.
 class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
         dim=768,                            # Internal feature dimension. Same as output_dim.
-        depth=2,                            # number of (CrossAttention, FeedForward) layers.     
+        depth=1,                            # number of (CrossAttention, FeedForward) layers.     
         # number of heads as per https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json        
         heads=16,       
         # num_queries: number of latent_queries.
@@ -235,29 +236,56 @@ class SubjBasisGenerator(nn.Module):
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
-        use_id_embs: bool   = True,         # Whether to use an identity embedding to generate latent_queries.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
+        use_codebook: bool = False,         # Whether to use a codebook to attend to latent_queries.
+        codebook_size: int = 37800,         # Size of the codebook, 100 * num_queries.
+        placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
     ):
         super().__init__()
         self.proj_in = nn.Sequential(
             nn.Linear(image_embedding_dim, dim, bias=False),
             nn.LayerNorm(dim, elementwise_affine=elementwise_affine),
         )
-        self.face_proj_in = LoRA_Emb2Queries(face_embedding_dim, num_lora_queries, dim, 
-                                             num_modes=num_emb2queries_modes, num_output_queries=num_queries,
-                                             elementwise_affine=elementwise_affine)
-        self.obj_proj_in  = LoRA_Emb2Queries(dino_embedding_dim, num_lora_queries, dim, 
-                                             num_modes=num_emb2queries_modes, num_output_queries=num_queries,
-                                             elementwise_affine=elementwise_affine)
 
-        self.pos_emb    = nn.Embedding(max_seq_len, dim)                             if apply_pos_emb else None
-        self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)   if apply_pos_emb else None
+        self.placeholder_is_bg = placeholder_is_bg
+        if not self.placeholder_is_bg:
+            self.face_proj_in = LoRA_Emb2Queries(face_embedding_dim, num_lora_queries, dim, 
+                                                num_modes=num_emb2queries_modes, num_output_queries=num_queries,
+                                                elementwise_affine=elementwise_affine)
+            self.obj_proj_in  = LoRA_Emb2Queries(dino_embedding_dim, num_lora_queries, dim, 
+                                                num_modes=num_emb2queries_modes, num_output_queries=num_queries,
+                                                elementwise_affine=elementwise_affine)
+        else:
+            # For background placeholders, face and object embeddings are not used as they are foreground.
+            self.face_proj_in = None
+            self.obj_proj_in  = None
 
-        self.latent_queries = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
-        self.lq_ln          = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
+        # If placeholder_is_bg, then don't use codebook, instead draw features 
+        # from the ad-hoc CLIP image features.
+        self.use_codebook = use_codebook and (not placeholder_is_bg)
+        # If use_codebook, then no point to use positional embeddings.
+        if self.use_codebook:
+            apply_pos_emb = False
+            self.codebook = nn.Parameter(torch.randn(1, codebook_size, dim) / dim**0.5)
+        else:
+            self.codebook = None
 
-        # Remove proj_out to reduce the number of parameters, since image_embedding_dim = output_dim = 768.
-        self.proj_out = nn.Identity() #nn.Linear(dim, output_dim)
+        if apply_pos_emb:
+            self.pos_emb    = nn.Embedding(max_seq_len, dim)                             
+            self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)  
+        else:
+            self.pos_emb    = None
+            self.pos_emb_ln = None
+
+        if placeholder_is_bg:
+            # These static set of latent queries are used to attend to the ad-hoc CLIP image features.
+            self.static_latent_queries = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
+        else:
+            # If it's a subject placeholder, then latent_queries 
+            # are generated from face or object embeddings. No static_latent_queries.
+            self.static_latent_queries = None
+
+        self.lq_ln    = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
         self.norm_out = nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine)
         self.output_scale = output_dim ** -0.5
 
@@ -266,8 +294,7 @@ class SubjBasisGenerator(nn.Module):
         self.num_emb2queries_modes = num_emb2queries_modes
         self.elementwise_affine = elementwise_affine
 
-        if not use_id_embs:
-            assert depth > 0, "depth must be > 0 if not use_id_embs."
+        assert depth > 0, "depth must be > 0."
 
         self.layers = nn.ModuleList([])
         for _ in range(depth):
@@ -284,16 +311,23 @@ class SubjBasisGenerator(nn.Module):
                     ]
                 )
             )
-        self.use_id_embs = use_id_embs
 
         print(repr(self))
 
-    def forward(self, clip_features, id_embs, is_face, placeholder_is_bg=False):     
-        x = self.proj_in(clip_features)
+    def forward(self, clip_features, id_embs, is_face):     
+        if self.use_codebook:
+            # x: [BS, codebook_size, dim] = [3, 37800, 768].
+            x = self.codebook.repeat(clip_features.size(0), 1, 1)
+        else:
+            x = self.proj_in(clip_features)
+            if self.pos_emb is not None:
+                n, device = x.shape[1], x.device
+                pos_emb = self.pos_emb(torch.arange(n, device=device))
+                # Downscale positional embeddings to reduce its impact.
+                x = x + self.pos_emb_ln(pos_emb) * 0.5
 
-        # No need to use id_embs if placeholder_is_bg, or if face embs are disabled (use_id_embs is False), 
-        # or no face is detected (id_embs is all 0s).
-        if self.use_id_embs and (id_embs is not None) and (id_embs != 0).any() and not placeholder_is_bg:
+        # No need to use id_embs if placeholder_is_bg.
+        if (not self.placeholder_is_bg) and (id_embs is not None):
             # id_embs: [1, 512].
             # latent_queries: [1, 378, 768].
             if is_face:
@@ -301,39 +335,19 @@ class SubjBasisGenerator(nn.Module):
             else:
                 latent_queries = self.obj_proj_in(id_embs)
         else:
-            latent_queries = self.latent_queries
+            latent_queries = self.static_latent_queries
     
         latent_queries = self.lq_ln(latent_queries.repeat(x.size(0), 1, 1))
 
-        if self.pos_emb is not None:
-            n, device = x.shape[1], x.device
-            pos_emb = self.pos_emb(torch.arange(n, device=device))
-            # Downscale positional embeddings to reduce its impact.
-            x = x + self.pos_emb_ln(pos_emb) * 0.5
-
-        # If use_id_embs and depth = 0, then latent_queries from id_embs is directly returned.
-        # If not use_id_embs, then depth must be > 0.
         for i, (attn, ff) in enumerate(self.layers):
             latent_queries = attn(latent_queries, x) + latent_queries
             latent_queries = ff(latent_queries) + latent_queries
 
-        latent_queries = self.proj_out(latent_queries)
         return self.norm_out(latent_queries) * self.output_scale
 
     def __repr__(self):
-        if not hasattr(self, 'use_id_embs'):
-            self.use_id_embs = True
-        if not hasattr(self, 'depth'):
-            self.depth = len(self.layers)
-        if not hasattr(self, 'num_queries'):
-            self.num_queries = self.latent_queries.shape[1]
-        if not hasattr(self, 'num_emb2queries_modes'):
-            self.num_emb2queries_modes = self.face_proj_in[1].axes_lengths['m']
-        if not hasattr(self, 'elementwise_affine'):
-            self.elementwise_affine = self.proj_in[1].elementwise_affine
-
-        return f"SubjBasisGenerator: depth={self.depth}, num_queries={self.num_queries}, use_id_embs={self.use_id_embs}, " \
-                f"num_emb2queries_modes={self.num_emb2queries_modes}, elementwise_affine={self.elementwise_affine}"
+        return f"SubjBasisGenerator: depth={self.depth}, num_queries={self.num_queries}, placeholder_is_bg={self.placeholder_is_bg}, " \
+                f"num_emb2queries_modes={self.num_emb2queries_modes}, elementwise_affine={self.elementwise_affine}, use_codebook={self.use_codebook}"
     
 @dataclass
 class BaseModelOutputWithPooling2(ModelOutput):

@@ -1003,10 +1003,10 @@ class EmbeddingManager(nn.Module):
             shared_embedder_components='pooler',
             do_zero_shot=False,
             zs_image_emb_dim=1280,
-            zs_use_id_embs=False,
             zs_num_generator_layers=2,
             zs_num_emb2queries_modes=4,
             zs_elementwise_affine=True,
+            zs_use_codebook=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
@@ -1202,14 +1202,15 @@ class EmbeddingManager(nn.Module):
             if self.do_zero_shot:
                 num_queries = self.zs_num_vecs_per_subj if not placeholder_is_bg else self.zs_num_vecs_per_bg
                 subj_basis_generator = SubjBasisGenerator(depth=zs_num_generator_layers,
-                                                            num_queries = num_queries,
-                                                            num_emb2queries_modes = zs_num_emb2queries_modes,
-                                                            # zs_image_emb_dim: laion: 1280, openai: 768.
-                                                            image_embedding_dim = zs_image_emb_dim, 
-                                                            dim = out_emb_dim,
-                                                            output_dim = out_emb_dim,
-                                                            use_id_embs=zs_use_id_embs,
-                                                            elementwise_affine=zs_elementwise_affine)
+                                                          num_queries = num_queries,
+                                                          num_emb2queries_modes = zs_num_emb2queries_modes,
+                                                          # zs_image_emb_dim: laion: 1280, openai: 768.
+                                                          image_embedding_dim = zs_image_emb_dim, 
+                                                          dim = out_emb_dim,
+                                                          output_dim = out_emb_dim,
+                                                          use_codebook=zs_use_codebook,
+                                                          elementwise_affine=zs_elementwise_affine,
+                                                          placeholder_is_bg=placeholder_is_bg)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 
@@ -1478,8 +1479,7 @@ class EmbeddingManager(nn.Module):
                     # zs_clip_features: [BS, 257, 1280]
                     # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
                     zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs, 
-                                                        self.curr_subj_is_face, 
-                                                        placeholder_is_bg)
+                                                        self.curr_subj_is_face)
                     # TODO: support multiple subjects in a batch, i.e., zs_vecs_2sets will be reshaped to 4D.
                     zs_vecs_2sets = zs_vecs_2sets.reshape(num_vectors_each_placeholder,
                                                           self.num_zs_vecs_per_token, -1)
@@ -2260,7 +2260,8 @@ class EmbeddingManager(nn.Module):
                     # Then replace it with the one in ckpt.
                     if self.string_to_subj_basis_generator_dict[km] is None or self.string_to_subj_basis_generator_dict[km].depth < ckpt_subj_basis_generator.depth \
                       or self.string_to_subj_basis_generator_dict[km].num_emb2queries_modes != ckpt_subj_basis_generator.num_emb2queries_modes \
-                      or self.string_to_subj_basis_generator_dict[km].elementwise_affine    != ckpt_subj_basis_generator.elementwise_affine:
+                      or self.string_to_subj_basis_generator_dict[km].elementwise_affine    != ckpt_subj_basis_generator.elementwise_affine \
+                      or self.string_to_subj_basis_generator_dict[km].zs_use_codebook      != ckpt_subj_basis_generator.zs_use_codebook:
                         print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                         self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
                     else:
@@ -2387,14 +2388,6 @@ class EmbeddingManager(nn.Module):
             ckpt_path_parts = ckpt_path.split(":")
             ckpt_path = ckpt_path_parts[0]
             ckpt = torch.load(ckpt_path, map_location='cpu')
-
-            if "attn_pooler_feat_reduction_ratio" in ckpt:
-                # Setting attn_pooler_feat_reduction_ratio doesn't have much impact actually,
-                # since the attn pooler is loaded from ckpt, whose feat_reduction_ratio has been
-                # implicitly determined.
-                # If loading multiple ckpts, and their attn_pooler_feat_reduction_ratio are different,
-                # the last one will be kept. But this should happen extremely rare.
-                self.set_attn_pooler_feat_reduction_ratio(ckpt["attn_pooler_feat_reduction_ratio"])
 
             # If src_subj_string/src_bg_string are "1", then replace them with the first subject/background string
             # of the first ckpt. 

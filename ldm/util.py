@@ -2235,7 +2235,7 @@ def gen_cfg_scales_for_stu_tea(tea_scale, stu_scale, num_teachers, device):
     cfg_scales_for_clip_loss = cfg_scales_for_clip_loss.to(device)
     return cfg_scales_for_clip_loss
 
-def init_zero_shot_image_encoders(clip_type, zs_use_id_embs, device):
+def init_zero_shot_image_encoders(clip_type, device):
     global clip_image_encoder, clip_preprocessor, face_encoder, dino_encoder, dino_preprocess, clip_device
 
     if clip_type == 'laion':
@@ -2254,23 +2254,17 @@ def init_zero_shot_image_encoders(clip_type, zs_use_id_embs, device):
     # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
     zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
 
-    if zs_use_id_embs:
-        # BUG: If device='cpu', then it will throw an exception.
-        gpu_id = re.findall(r'\d+', device).pop()
-        gpu_id = int(gpu_id)
-        face_encoder = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
+    # BUG: If device='cpu', then it will throw an exception.
+    gpu_id = re.findall(r'\d+', device).pop()
+    gpu_id = int(gpu_id)
+    face_encoder = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+    face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
 
-        dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
-        dino_encoder = dino_encoder.to(device)
-        dino_encoder.eval()
-        dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
-        print(f'Face and DINO encoders loaded on {device}.')
-
-    else:
-        face_encoder = None
-        dino_encoder = None
-        dino_preprocess = None
+    dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
+    dino_encoder = dino_encoder.to(device)
+    dino_encoder.eval()
+    dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
+    print(f'Face and DINO encoders loaded on {device}.')
 
     return zs_clip_type2image_emb_dim[clip_type]
 
@@ -2309,6 +2303,7 @@ def encode_zero_shot_image_features(images, fg_masks, is_face, calc_avg=False, i
                 face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
                 # id_emb: [512,]
                 id_emb = torch.from_numpy(face_info['embedding']).to(clip_device)
+                
             id_embs.append(id_emb)
 
         elif not is_face:
@@ -2379,7 +2374,7 @@ def encode_zero_shot_image_features(images, fg_masks, is_face, calc_avg=False, i
             image_bg_features = image_bg_features * image_bg_dict.attn_mask        
 
     # clip_features: [BS, 514, 1280].
-    # id_embs: [BS, 512] or None, if zs_use_id_embs is False.
+    # id_embs: [BS, 512].
     clip_features = torch.cat([image_fg_features, image_bg_features], dim=1)
     if calc_avg:
         # clip_features: [BS, 514, 1280] -> [1, 514, 1280].
