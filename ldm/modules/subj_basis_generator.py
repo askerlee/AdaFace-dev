@@ -238,7 +238,7 @@ class SubjBasisGenerator(nn.Module):
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
         use_codebook: bool = False,         # Whether to use a codebook to attend to latent_queries.
-        codebook_size: int = 37800,         # Size of the codebook, 100 * num_queries.
+        codebook_size: int = 18900,         # Size of the codebook, 50 * num_queries.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
     ):
         super().__init__()
