@@ -379,21 +379,6 @@ class SubjBasisGenerator(nn.Module):
         return self.norm_out(latent_queries) * self.output_scale
 
     def __repr__(self):
-        # Compatible with old ckpt.
-        if hasattr(self, 'codebook') and self.codebook is not None and not hasattr(self, 'codebooks'):
-            self.codebooks = nn.ParameterList([self.codebook])
-            self.codebook = None
-        if self.use_codebook and not hasattr(self, 'codebook_size'):
-            self.codebook_size = self.codebooks[0].size(1) if self.codebooks is not None else -1
-        elif not self.use_codebook:
-            self.codebook_size = -1
-
-        if not hasattr(self, 'use_FFN'):
-            if isinstance(self.layers[0][1], nn.Identity):
-                self.use_FFN = False
-            else:
-                self.use_FFN = True
-
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
         return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, num_queries={self.num_queries}, " \
                f"num_emb2queries_modes={self.num_emb2queries_modes}, elementwise_affine={self.elementwise_affine}, codebook_size={self.codebook_size}"
