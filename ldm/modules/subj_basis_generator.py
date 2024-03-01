@@ -105,6 +105,32 @@ def LoRA_Emb2Queries(input_dim, lora_rank, output_dim, num_modes,
         nn.Dropout(0.1),
     )
 
+def Emb2Queries(input_dim, output_dim, num_output_queries, elementwise_affine=True):
+    return nn.Sequential(
+        # Project to [BS, num_output_queries * output_dim * num_modes].
+        # It takes a huge param size. 512 * 32 * 768 * 4 = 6,291,456.
+        nn.Linear(input_dim, num_output_queries * output_dim, bias=False),
+        # Reshape to [BS, num_output_queries, output_dim].
+        Rearrange('b (q d) -> b q d', q=num_output_queries, d=output_dim),
+        nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
+        nn.Dropout(0.1),
+    )
+
+# Low-rank to high-rank transformation.
+def Lora2Hira(lora_rank, output_dim, num_modes, num_output_queries, elementwise_affine=True):
+    return nn.Sequential(        
+        # Permute to [BS, output_dim, lora_rank].
+        Rearrange('b q d -> b d q'),
+        # Project to [BS, output_dim, num_output_queries].
+        nn.Linear(lora_rank, num_output_queries * num_modes, bias=False),
+        # Reshape and permute to [BS, num_modes, num_output_queries, output_dim].
+        Rearrange('b d (m q) -> b m q d', m=num_modes, q=num_output_queries),
+        # Aggregate [BS, num_modes, num_output_queries, output_dim] -> [BS, num_output_queries, output_dim].
+        LearnedSoftAggregate(num_feat=output_dim, group_dim=1, keepdim=False),        
+        nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
+        nn.Dropout(0.1),    
+    )
+
 class PerceiverAttention(nn.Module):
     def __init__(self, *, dim, dim_head=64, heads=8, elementwise_affine=True):
         super().__init__()
@@ -241,8 +267,8 @@ class SubjBasisGenerator(nn.Module):
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
         face_embedding_dim=512,             # insightface face feature dimension for humans.
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
-        num_lora_queries=32,                # number of low-rank latent_queries.
-        num_emb2queries_modes=1,            # number of modes for LoRA_Emb2Queries.  
+        num_lora_queries=64,                # number of low-rank latent_queries.
+        num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
@@ -254,6 +280,8 @@ class SubjBasisGenerator(nn.Module):
     ):
         super().__init__()
         assert depth > 0, "depth must be > 0."
+        assert output_dim == dim, "output_dim must be equal to dim."
+
         self.depth = depth
 
         self.proj_in = nn.Sequential(
@@ -262,13 +290,12 @@ class SubjBasisGenerator(nn.Module):
         )
 
         self.placeholder_is_bg = placeholder_is_bg
+        self.num_lora_queries  = num_lora_queries
         if not self.placeholder_is_bg:
-            self.face_proj_in = LoRA_Emb2Queries(face_embedding_dim, num_lora_queries, dim, 
-                                                num_modes=num_emb2queries_modes, num_output_queries=num_queries,
-                                                elementwise_affine=elementwise_affine)
-            self.obj_proj_in  = LoRA_Emb2Queries(dino_embedding_dim, num_lora_queries, dim, 
-                                                num_modes=num_emb2queries_modes, num_output_queries=num_queries,
-                                                elementwise_affine=elementwise_affine)
+            self.face_proj_in = Emb2Queries(face_embedding_dim, dim, num_output_queries=num_lora_queries,
+                                            elementwise_affine=elementwise_affine)
+            self.obj_proj_in  = Emb2Queries(dino_embedding_dim, dim, num_output_queries=num_lora_queries,
+                                            elementwise_affine=elementwise_affine)
             # If it's a subject placeholder, then latent_queries 
             # are generated from face or object embeddings. No static_latent_queries.
             self.static_latent_queries = None            
@@ -277,7 +304,7 @@ class SubjBasisGenerator(nn.Module):
             self.face_proj_in = None
             self.obj_proj_in  = None
             # These static set of latent queries are used to attend to the ad-hoc CLIP image features.
-            self.static_latent_queries = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
+            self.static_latent_queries = nn.Parameter(torch.randn(1, num_lora_queries, dim) / dim**0.5)
 
         # If placeholder_is_bg, then don't use codebook, instead draw features 
         # from the ad-hoc CLIP image features.
@@ -297,22 +324,15 @@ class SubjBasisGenerator(nn.Module):
             self.pos_emb    = None
             self.pos_emb_ln = None
 
-        if placeholder_is_bg:
-            # These static set of latent queries are used to attend to the ad-hoc CLIP image features.
-            self.static_latent_queries = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
-        else:
-            # If it's a subject placeholder, then latent_queries 
-            # are generated from face or object embeddings. No static_latent_queries.
-            self.static_latent_queries = None
-
         self.lq_ln    = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
-        self.norm_out = nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine)
         self.output_scale = output_dim ** -0.5
 
-        self.num_queries = num_queries
-        self.num_emb2queries_modes = num_emb2queries_modes
-        self.elementwise_affine = elementwise_affine
-
+        self.num_queries            = num_queries
+        self.num_lora2hira_modes    = num_lora2hira_modes
+        self.elementwise_affine     = elementwise_affine
+        self.lora2hira = Lora2Hira(lora_rank=num_lora_queries, output_dim=output_dim, num_modes=num_lora2hira_modes,
+                                   num_output_queries=num_queries, elementwise_affine=elementwise_affine)
+        
         self.layers    = nn.ModuleList([])
         self.codebooks = nn.ParameterList([]) if self.use_codebook else None
         self.use_FFN   = use_FFN
@@ -375,13 +395,14 @@ class SubjBasisGenerator(nn.Module):
 
             if self.use_FFN:
                 latent_queries = ff(latent_queries) + latent_queries
-            
-        return self.norm_out(latent_queries) * self.output_scale
+        
+        latent_queries = self.lora2hira(latent_queries)
+        return latent_queries * self.output_scale
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
-        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, num_queries={self.num_queries}, " \
-               f"num_emb2queries_modes={self.num_emb2queries_modes}, elementwise_affine={self.elementwise_affine}, codebook_size={self.codebook_size}"
+        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, num_queries={self.num_queries}, num_lora_queries={self.num_lora_queries}," \
+               f"num_lora2hira_modes={self.num_lora2hira_modes}, elementwise_affine={self.elementwise_affine}, codebook_size={self.codebook_size}"
     
 @dataclass
 class BaseModelOutputWithPooling2(ModelOutput):

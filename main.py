@@ -263,13 +263,13 @@ def get_parser(**parser_kwargs):
                         default='openai',
                         help="Type of zero-shot learning clip model")
 
-    parser.add_argument("--zs_num_subj_generator_layers", type=int, default=1,
+    parser.add_argument("--zs_num_subj_generator_layers", type=int, default=3,
                         help="Layers (depth) of zero-shot subject feature generator")
-    parser.add_argument("--zs_num_emb2queries_modes", type=int, default=1,
+    parser.add_argument("--zs_num_lora2hira_modes", type=int, default=4,
                         help="Number of modes for the zero-shot embedding to queries mapping")
     parser.add_argument("--zs_elementwise_affine", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use elementwise affine in zero-shot subject feature generator")
-    parser.add_argument("--zs_use_FFN", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--zs_use_FFN", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use FFN in zero-shot subject feature generator")
     
     parser.add_argument("--layerwise_lora_rank", 
@@ -935,7 +935,7 @@ if __name__ == "__main__":
 
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
             config.model.params.personalization_config.params.zs_num_subj_generator_layers   = opt.zs_num_subj_generator_layers
-            config.model.params.personalization_config.params.zs_num_emb2queries_modes  = opt.zs_num_emb2queries_modes
+            config.model.params.personalization_config.params.zs_num_lora2hira_modes  = opt.zs_num_lora2hira_modes
             config.model.params.personalization_config.params.zs_elementwise_affine     = opt.zs_elementwise_affine
             config.model.params.personalization_config.params.zs_use_FFN                = opt.zs_use_FFN
 

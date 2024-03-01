@@ -1003,10 +1003,10 @@ class EmbeddingManager(nn.Module):
             shared_embedder_components='pooler',
             do_zero_shot=False,
             zs_image_emb_dim=1280,
-            zs_num_subj_generator_layers=1,
-            zs_num_emb2queries_modes=1,
+            zs_num_subj_generator_layers=3,
+            zs_num_lora2hira_modes=4,
             zs_elementwise_affine=True,
-            zs_use_FFN=True,
+            zs_use_FFN=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
@@ -1205,7 +1205,7 @@ class EmbeddingManager(nn.Module):
                 depth = zs_num_subj_generator_layers if not placeholder_is_bg else 1
                 subj_basis_generator = SubjBasisGenerator(depth=depth,
                                                           num_queries = num_queries,
-                                                          num_emb2queries_modes = zs_num_emb2queries_modes,
+                                                          num_lora2hira_modes = zs_num_lora2hira_modes,
                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
                                                           image_embedding_dim = zs_image_emb_dim, 
                                                           dim = out_emb_dim,
@@ -2261,7 +2261,7 @@ class EmbeddingManager(nn.Module):
                     # self.string_to_subj_basis_generator_dict[km] is either not initialized, or initialized with a smaller depth.
                     # Then replace it with the one in ckpt.
                     if self.string_to_subj_basis_generator_dict[km] is None or self.string_to_subj_basis_generator_dict[km].depth < ckpt_subj_basis_generator.depth \
-                      or self.string_to_subj_basis_generator_dict[km].num_emb2queries_modes != ckpt_subj_basis_generator.num_emb2queries_modes \
+                      or self.string_to_subj_basis_generator_dict[km].num_lora2hira_modes != ckpt_subj_basis_generator.num_lora2hira_modes \
                       or self.string_to_subj_basis_generator_dict[km].elementwise_affine    != ckpt_subj_basis_generator.elementwise_affine \
                       or self.string_to_subj_basis_generator_dict[km].codebook_size         != ckpt_subj_basis_generator.codebook_size:
                         print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
