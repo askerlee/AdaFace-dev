@@ -405,6 +405,9 @@ class SubjBasisGenerator(nn.Module):
         return latent_queries * self.output_scale
 
     def __repr__(self):
+        # Compatible with old code
+        if not hasattr(self, 'num_out_queries') and hasattr(self, 'num_queries'):
+            self.num_out_queries = self.num_queries
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
         return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, num_out_queries={self.num_out_queries}, num_lora_queries={self.num_lora_queries}," \
                f"num_lora2hira_modes={self.num_lora2hira_modes}, elementwise_affine={self.elementwise_affine}, codebook_size={self.codebook_size}"
