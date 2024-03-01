@@ -1200,11 +1200,11 @@ class EmbeddingManager(nn.Module):
                 self.initial_embeddings[placeholder_string] = None
 
             if self.do_zero_shot:
-                num_queries = self.zs_num_vecs_per_subj if not placeholder_is_bg else self.zs_num_vecs_per_bg
+                num_out_queries = self.zs_num_vecs_per_subj if not placeholder_is_bg else self.zs_num_vecs_per_bg
                 # bg placeholder always has depth=1.
                 depth = zs_num_subj_generator_layers if not placeholder_is_bg else 1
                 subj_basis_generator = SubjBasisGenerator(depth=depth,
-                                                          num_queries = num_queries,
+                                                          num_out_queries = num_out_queries,
                                                           num_lora2hira_modes = zs_num_lora2hira_modes,
                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
                                                           image_embedding_dim = zs_image_emb_dim, 

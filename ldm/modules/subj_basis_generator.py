@@ -180,13 +180,14 @@ class PerceiverAttention(nn.Module):
 
 # All CrossAttention layers have 8 heads.
 class CrossAttention(nn.Module):
-    def __init__(self, input_dim, heads=8, dropout=0.1, elementwise_affine=True):
+    def __init__(self, input_dim, heads=8, dropout=0.1, attn_polarity=5, elementwise_affine=True):
         super().__init__()
         dim_head = input_dim // heads
         inner_dim = dim_head * heads
 
         self.scale = dim_head ** -0.25
         self.heads = heads
+        self.attn_polarity = attn_polarity
 
         # To increase stability,, we add layernorm to q,k,v projections.
         self.to_q = nn.Sequential(
@@ -218,8 +219,8 @@ class CrossAttention(nn.Module):
         v = self.to_v(context)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
-        # * 5 to increase the polarity of the attention scores. Otherwise the variance is too small
-        # and the attention is too uniform.
+        # * self.attn_polarity to increase the polarity of the attention scores. 
+        # Otherwise the variance is too small and the attention is too uniform.
         '''
         for N in (768, 7680, 76800, 768000):
             ln = nn.LayerNorm(N)
@@ -234,7 +235,7 @@ class CrossAttention(nn.Module):
         tensor(5.0100, grad_fn=<StdBackward0>)        
         '''        
         scale = q.size(-1) ** -0.5
-        sim = einsum('b i d, b j d -> b i j', q * scale, k * scale) * 5
+        sim = einsum('b i d, b j d -> b i j', q * scale, k * scale) * self.attn_polarity
         # sim: [16, 378, 257]. 16: bs 1 * h 16.
         # attention, what we cannot get enough of
         # NOTE: the normalization is done across tokens, not across pixels.
@@ -260,21 +261,21 @@ class SubjBasisGenerator(nn.Module):
         # laion=16,  https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json  
         # openai=12, https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json      
         heads=12,       
-        # num_queries: number of latent_queries.
+        # num_out_queries: number of output queries.
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
         # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
-        num_queries=378,                    # fg: 378 = 9 * 42. bg: 168 = 4 * 42.
+        num_out_queries=378,                # fg: 378 = 9 * 42. bg: 168 = 4 * 42.
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
         face_embedding_dim=512,             # insightface face feature dimension for humans.
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
-        num_lora_queries=64,                # number of low-rank latent_queries.
+        num_lora_queries=64,                # number of low-rank latent queries.
         num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
         ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
-        codebook_size: int = 18900,         # Size of the codebook, 50 * num_queries.
+        codebook_size: int = 18900,         # Size of the codebook, 50 * num_out_queries.
         use_FFN: bool = True,              # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
     ):
@@ -327,11 +328,11 @@ class SubjBasisGenerator(nn.Module):
         self.lq_ln    = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
         self.output_scale = output_dim ** -0.5
 
-        self.num_queries            = num_queries
+        self.num_out_queries            = num_out_queries
         self.num_lora2hira_modes    = num_lora2hira_modes
         self.elementwise_affine     = elementwise_affine
         self.lora2hira = Lora2Hira(lora_rank=num_lora_queries, output_dim=output_dim, num_modes=num_lora2hira_modes,
-                                   num_output_queries=num_queries, elementwise_affine=elementwise_affine)
+                                   num_output_queries=num_out_queries, elementwise_affine=elementwise_affine)
         
         self.layers    = nn.ModuleList([])
         self.codebooks = nn.ParameterList([]) if self.use_codebook else None
@@ -401,7 +402,7 @@ class SubjBasisGenerator(nn.Module):
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
-        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, num_queries={self.num_queries}, num_lora_queries={self.num_lora_queries}," \
+        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, num_out_queries={self.num_out_queries}, num_lora_queries={self.num_lora_queries}," \
                f"num_lora2hira_modes={self.num_lora2hira_modes}, elementwise_affine={self.elementwise_affine}, codebook_size={self.codebook_size}"
     
 @dataclass
