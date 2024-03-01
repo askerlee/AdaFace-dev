@@ -13,6 +13,7 @@ import regex as re
 import webdataset as wds
 import glob
 from evaluation.eval_utils import parse_subject_file
+import torch.distributed as dist
 
 imagenet_templates_smallest = [
     'a photo of a {}',
@@ -875,14 +876,19 @@ class PersonalizedBase(Dataset):
 # This subject number will be used by an PersonalizedBase instance to draw random images.
 # epoch_len: number of batches in one epoch. Usually initialized to be the same 
 # as the number of batches of the training data.
+# In a multi-GPU training, we haven't done anything to seed each sampler differently.
+# In the first few iterations, they will sample the same subjects, but 
+# due to randomness in the DDPM model (?), soon the sampled subjects will be different on different GPUs.
 class SubjectSampler(Sampler):
-    def __init__(self, num_subjects, num_batches, batch_size, each_batch_from_same_subject=True, debug=False):
+    def __init__(self, num_subjects, num_batches, batch_size, each_batch_from_same_subject=True, 
+                 debug=False):
         self.batch_size = batch_size
         # num_batches: +1 to make sure the last batch is also used.
         self.num_batches  = num_batches + 1
         self.num_subjects = num_subjects
         assert self.num_subjects > 0, "FATAL: no subjects found in the dataset!"
-        print("SubjectSampler initialized on {} subjects, batches: {}*{}".format(self.num_subjects, 
+        rank = dist.get_rank()
+        print("SubjectSampler rank {}, initialized on {} subjects, batches: {}*{}".format(rank, self.num_subjects, 
                                                                                  self.batch_size, self.num_batches))
 
         if each_batch_from_same_subject:

@@ -797,7 +797,7 @@ class LatentDiffusion(DDPM):
         ids = torch.round(torch.linspace(0, self.num_timesteps - 1, self.num_timesteps_cond)).long()
         self.cond_ids[:self.num_timesteps_cond] = ids
 
-    @rank_zero_only
+    #@rank_zero_only
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
         if self.global_step == 0:
@@ -4790,6 +4790,7 @@ class LatentDiffusion(DDPM):
 
         return samples, intermediates
 
+    @rank_zero_only
     def cache_and_log_generations(self, samples, img_colors, max_cache_size=48):
         self.generation_cache.append(samples)
         self.generation_cache_img_colors.append(img_colors)
