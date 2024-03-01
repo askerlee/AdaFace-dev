@@ -269,6 +269,8 @@ def get_parser(**parser_kwargs):
                         help="Number of modes for the zero-shot embedding to queries mapping")
     parser.add_argument("--zs_elementwise_affine", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use elementwise affine in zero-shot subject feature generator")
+    parser.add_argument("--zs_use_FFN", type=str2bool, nargs="?", const=True, default=True,
+                        help="Whether to use FFN in zero-shot subject feature generator")
     
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=10,
@@ -935,6 +937,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_num_subj_generator_layers   = opt.zs_num_subj_generator_layers
             config.model.params.personalization_config.params.zs_num_emb2queries_modes  = opt.zs_num_emb2queries_modes
             config.model.params.personalization_config.params.zs_elementwise_affine     = opt.zs_elementwise_affine
+            config.model.params.personalization_config.params.zs_use_FFN                = opt.zs_use_FFN
 
             # When using zero-shot, we load different subjects in the same batch.
             config.data.params.each_batch_from_same_subject = opt.each_batch_from_same_subject

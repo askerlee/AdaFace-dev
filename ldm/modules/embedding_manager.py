@@ -1006,6 +1006,7 @@ class EmbeddingManager(nn.Module):
             zs_num_subj_generator_layers=1,
             zs_num_emb2queries_modes=1,
             zs_elementwise_affine=True,
+            zs_use_FFN=True,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
@@ -1210,6 +1211,7 @@ class EmbeddingManager(nn.Module):
                                                           dim = out_emb_dim,
                                                           output_dim = out_emb_dim,
                                                           elementwise_affine=zs_elementwise_affine,
+                                                          use_FFN=zs_use_FFN,
                                                           placeholder_is_bg=placeholder_is_bg)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator

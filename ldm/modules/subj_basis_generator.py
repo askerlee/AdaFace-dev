@@ -249,6 +249,7 @@ class SubjBasisGenerator(nn.Module):
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
         codebook_size: int = 18900,         # Size of the codebook, 50 * num_queries.
+        use_FFN: bool = True,              # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
     ):
         super().__init__()
@@ -314,6 +315,7 @@ class SubjBasisGenerator(nn.Module):
 
         self.layers    = nn.ModuleList([])
         self.codebooks = nn.ParameterList([]) if self.use_codebook else None
+        self.use_FFN   = use_FFN
 
         for _ in range(depth):
             self.layers.append(
@@ -325,7 +327,8 @@ class SubjBasisGenerator(nn.Module):
                         CrossAttention(input_dim=dim, heads=heads, dropout=0.1), #, elementwise_affine=elementwise_affine),
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
-                        FeedForward(dim=dim, mult=ff_mult, elementwise_affine=elementwise_affine),
+                        FeedForward(dim=dim, mult=ff_mult, elementwise_affine=elementwise_affine) \
+                            if self.use_FFN else nn.Identity(),
                     ]
                 )
             )
@@ -363,10 +366,16 @@ class SubjBasisGenerator(nn.Module):
             else:
                 # Otherwise, context is the ad-hoc CLIP image features.
                 context = x
-                
-            latent_queries = attn(latent_queries, context) + latent_queries
-            latent_queries = ff(latent_queries) + latent_queries
+            
+            # No residual connection at the first layer.
+            if i == 0:
+                latent_queries = attn(latent_queries, context)
+            else:
+                latent_queries = attn(latent_queries, context) + latent_queries
 
+            if self.use_FFN:
+                latent_queries = ff(latent_queries) + latent_queries
+            
         return self.norm_out(latent_queries) * self.output_scale
 
     def __repr__(self):
@@ -380,7 +389,7 @@ class SubjBasisGenerator(nn.Module):
             self.codebook_size = -1
 
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
-        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, num_queries={self.num_queries}, " \
+        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, num_queries={self.num_queries}, " \
                f"num_emb2queries_modes={self.num_emb2queries_modes}, elementwise_affine={self.elementwise_affine}, codebook_size={self.codebook_size}"
     
 @dataclass
