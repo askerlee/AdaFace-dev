@@ -235,6 +235,10 @@ class CrossAttention(nn.Module):
         tensor(5.0100, grad_fn=<StdBackward0>)        
         '''        
         scale = q.size(-1) ** -0.5
+        
+        if not hasattr(self, 'attn_polarity'):
+            self.attn_polarity = 5
+
         sim = einsum('b i d, b j d -> b i j', q * scale, k * scale) * self.attn_polarity
         # sim: [16, 378, 257]. 16: bs 1 * h 16.
         # attention, what we cannot get enough of
