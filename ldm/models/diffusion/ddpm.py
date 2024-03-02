@@ -900,6 +900,13 @@ class LatentDiffusion(DDPM):
         # BUG: If device='cpu', then it will throw an exception.
         gpu_id = re.findall(r'\d+', str(self.device)).pop()
         gpu_id = int(gpu_id)
+        '''
+        {'landmark_3d_68': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc190>, 
+         'landmark_2d_106': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc2b0>, 
+         'detection': <insightface.model_zoo.retinaface.RetinaFace object at 0x7f8e3f0cc100>, 
+         'genderage': <insightface.model_zoo.attribute.Attribute object at 0x7f8e3f0cc1f0>, 
+         'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
+        '''
         self.face_encoder = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
 
@@ -2110,6 +2117,13 @@ class LatentDiffusion(DDPM):
             if is_face and self.face_encoder is not None:
                 if isinstance(image, torch.Tensor):
                     image = image.cpu().numpy().transpose(1, 2, 0)
+                '''
+                {'landmark_3d_68': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc190>, 
+                 'landmark_2d_106': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc2b0>, 
+                 'detection': <insightface.model_zoo.retinaface.RetinaFace object at 0x7f8e3f0cc100>, 
+                 'genderage': <insightface.model_zoo.attribute.Attribute object at 0x7f8e3f0cc1f0>, 
+                 'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
+                '''                    
                 face_info = self.face_encoder.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
 
                 if len(face_info) == 0:
