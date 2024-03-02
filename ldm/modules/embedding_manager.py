@@ -706,6 +706,7 @@ class AdaEmbedding(nn.Module):
         print(f"{zero_shot_sig} AdaEmbedding {token_string} initialized with {fg_emb_count}/{bg_emb_count}/{self.K} fg/bg/total embs, {self.N} init vectors ({init_string}), {self.r} basis vectors")
 
         self.call_count = 0
+        self.basis_dyn_coeffs_grad_scale = 0.1
         self.debug = False
 
     # If reduced_layer_idx is specified, then only mask for one layer. Otherwise, mask for all layers.
@@ -859,6 +860,9 @@ class AdaEmbedding(nn.Module):
                 # since we can't regularize pre_vecs in zero-shot setting, we copy the whole zs_basis_vecs to self.basis_vecs,
                 # so that all vectors in zs_basis_vecs will be regularized.
                 self.basis_vecs = zs_basis_vecs
+                # Scale down the gradient to basis_dyn_coeffs, i.e., update layer_coeff_maps more slowly.
+                basis_dyn_coeffs_scaler = gen_gradient_scaler(self.basis_dyn_coeffs_grad_scale)
+                basis_dyn_coeffs = basis_dyn_coeffs_scaler(basis_dyn_coeffs)
             else:
                 # self.N: number of pre_vecs.
                 if self.N > 0:
