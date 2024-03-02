@@ -181,7 +181,7 @@ class PerceiverAttention(nn.Module):
 # All CrossAttention layers have 8 heads.
 class CrossAttention(nn.Module):
     def __init__(self, input_dim, context_dim, num_heads, dropout=0.1, attn_polarity=5, elementwise_affine=True, 
-                 identity_to_q=False, identity_to_v=False):
+                 identity_to_q=False, identity_to_v=False, identity_to_out=False):
         super().__init__()
         dim_head  = input_dim // num_heads
         inner_dim = dim_head   * num_heads
@@ -205,7 +205,7 @@ class CrossAttention(nn.Module):
                         nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine))
 
         self.to_out = nn.Sequential(
-            nn.Linear(context_dim, context_dim, bias=False),
+            nn.Linear(context_dim, context_dim, bias=False) if not identity_to_out else nn.Identity(),
             nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine),
             nn.Dropout(dropout)
         )
@@ -348,7 +348,7 @@ class SubjBasisGenerator(nn.Module):
                         # Should we disable elementwise_affine in CrossAttention layernorms? I'm not sure.
                         # Currently it's the only place where elementwise_affine is used.
                         CrossAttention(input_dim=input_dim, context_dim=output_dim, num_heads=num_heads, dropout=0.1,
-                                       identity_to_q=True, identity_to_v=True),
+                                       identity_to_q=True, identity_to_v=True, identity_to_out=True)
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
                         FeedForward(dim=output_dim, mult=1, elementwise_affine=elementwise_affine) \
