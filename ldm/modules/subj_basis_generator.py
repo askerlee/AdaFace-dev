@@ -347,7 +347,7 @@ class SubjBasisGenerator(nn.Module):
                         # Should we disable elementwise_affine in CrossAttention layernorms? I'm not sure.
                         # Currently it's the only place where elementwise_affine is used.
                         CrossAttention(input_dim=input_dim, context_dim=output_dim, num_heads=num_heads, dropout=0.1,
-                                       identity_to_q=True, identity_to_v=True, identity_to_out=True)
+                                       identity_to_q=True, identity_to_v=True, identity_to_out=True),
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
                         FeedForward(dim=output_dim, mult=1, elementwise_affine=elementwise_affine) \
