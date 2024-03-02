@@ -700,7 +700,7 @@ class AdaEmbedding(nn.Module):
             # self.bias: [16, K, 768].
             self.bias = nn.Parameter(torch.zeros(num_layers, self.K, out_emb_dim), requires_grad=True)
         else:
-            self.bias = 0
+            self.bias = None
 
         zero_shot_sig = "Zero-shot" if self.do_zero_shot else "Slow"
         print(f"{zero_shot_sig} AdaEmbedding {token_string} initialized with {fg_emb_count}/{bg_emb_count}/{self.K} fg/bg/total embs, {self.N} init vectors ({init_string}), {self.r} basis vectors")
@@ -859,10 +859,6 @@ class AdaEmbedding(nn.Module):
                 # since we can't regularize pre_vecs in zero-shot setting, we copy the whole zs_basis_vecs to self.basis_vecs,
                 # so that all vectors in zs_basis_vecs will be regularized.
                 self.basis_vecs = zs_basis_vecs
-                # has_bias is always True in zero-shot AdaEmbedding.
-                assert zs_bias is not None,   "Zero-shot AdaEmbedding requires zs_bias"
-                # Copy to bias, so that zs_bias will be regularized in layerwise_embedding_norm_loss().
-                self.bias = zs_bias                
             else:
                 # self.N: number of pre_vecs.
                 if self.N > 0:
@@ -880,11 +876,15 @@ class AdaEmbedding(nn.Module):
             # out_emb_dim: 768.
             out_vecs0 = out_vecs0 / np.sqrt(self.out_emb_dim)
 
-            # bias: [1, K, 768]
-            bias = self.bias[ca_layer_idx].unsqueeze(0)
+            if self.has_bias and not self.do_zero_shot:
+                # bias: [1, K, 768]
+                bias = self.bias[ca_layer_idx].unsqueeze(0)
+            else:
+                bias = 0
+                
             # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
             out_vecs  = out_vecs0 + bias
-
+            
             if 'call_count' not in self.__dict__:
                 self.call_count = 0
 
@@ -1130,13 +1130,12 @@ class EmbeddingManager(nn.Module):
             else:
                 self.num_vectors_each_bg = 0
 
-            # num_zs_vecs_per_token: 10 + 16 + 16 = 42.
-            # 10: 10 basis vecs for ada embedder. 16: 16 layerwise biases for ada embedder. 
-            # Another 16: 16 layerwise static embeddings.
-            self.num_zs_vecs_per_token = layerwise_lora_rank + self.num_unet_ca_layers * 2
-            # num_subj_queries: 9 * 42 = 378.
+            # num_zs_vecs_per_token: 10 + 16 = 26.
+            # 10: 10 basis vecs for ada embedder. 16: 16 layerwise static embeddings.
+            self.num_zs_vecs_per_token = layerwise_lora_rank + self.num_unet_ca_layers
+            # num_subj_queries: 9 * 26 = 234.
             self.zs_num_vecs_per_subj  = self.number_vectors_each_subj * self.num_zs_vecs_per_token
-            # num_bg_queries:   4 * 42 = 168.
+            # num_bg_queries:   4 * 26 = 104.
             self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
 
         for placeholder_idx, placeholder_string in enumerate(self.placeholder_strings):
@@ -1208,7 +1207,6 @@ class EmbeddingManager(nn.Module):
                                                           num_lora2hira_modes = zs_num_lora2hira_modes,
                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
                                                           image_embedding_dim = zs_image_emb_dim, 
-                                                          dim = out_emb_dim,
                                                           output_dim = out_emb_dim,
                                                           elementwise_affine=zs_elementwise_affine,
                                                           use_FFN=zs_use_FFN,
@@ -1486,17 +1484,14 @@ class EmbeddingManager(nn.Module):
                     zs_vecs_2sets = zs_vecs_2sets.reshape(num_vectors_each_placeholder,
                                                           self.num_zs_vecs_per_token, -1)
                     # If subj:
-                    # ada_zs_basis_vecs: [BS, 9, 10, 768], ada_zs_bias: [BS, 9, 16, 768], static_zs_embs: [BS, 9, 16, 768].
+                    # ada_zs_basis_vecs: [BS, 9, 10, 768], static_zs_embs: [BS, 9, 16, 768].
                     # If bg:
-                    # ada_zs_basis_vecs: [BS, 4, 10, 768], ada_zs_bias: [BS, 4, 16, 768], static_zs_embs: [BS, 4, 16, 768].
-                    ada_zs_basis_vecs, ada_zs_bias, static_zs_embs = \
+                    # ada_zs_basis_vecs: [BS, 4, 10, 768], static_zs_embs: [BS, 4, 16, 768].
+                    ada_zs_basis_vecs, static_zs_embs = \
                         zs_vecs_2sets[:, :self.layerwise_lora_rank], \
-                        zs_vecs_2sets[:, self.layerwise_lora_rank:self.layerwise_lora_rank+self.num_unet_ca_layers], \
-                        zs_vecs_2sets[:, self.layerwise_lora_rank+self.num_unet_ca_layers:]
+                        zs_vecs_2sets[:, self.layerwise_lora_rank:]
                     #breakpoint()
                     self.subj2ada_zs_basis_vecs[placeholder_string] = ada_zs_basis_vecs
-                    # ada_zs_bias:           [BS, 9, 16, 768] => [BS, 16, 9, 768]
-                    self.subj2ada_zs_bias[placeholder_string]       = ada_zs_bias.permute(1, 0, 2) #(0, 2, 1, 3)
                     # subj_static_embedding: [BS, 9, 16, 768] => [BS, 16, 9, 768]
                     static_zs_embs = static_zs_embs.permute(1, 0, 2) #(0, 2, 1, 3)
                 else:
@@ -1702,7 +1697,7 @@ class EmbeddingManager(nn.Module):
 
             if self.do_zero_shot:
                 ada_zs_basis_vecs = self.subj2ada_zs_basis_vecs[placeholder_string]
-                ada_zs_bias       = self.subj2ada_zs_bias[placeholder_string]
+                ada_zs_bias       = None
             else:
                 ada_zs_basis_vecs = None
                 ada_zs_bias       = None
@@ -2061,7 +2056,6 @@ class EmbeddingManager(nn.Module):
                                     'id': zs_id_embs }
         # Beginning of a new iteration, clear the cached ada_zs_basis_vecs and ada_zs_bias.
         self.subj2ada_zs_basis_vecs = {}
-        self.subj2ada_zs_bias       = {}
         # Clear the basis_vecs and bias saved in embedders.
         for placeholder_string in self.placeholder_strings:
             self.string_to_static_embedder_dict[placeholder_string].basis_vecs = None

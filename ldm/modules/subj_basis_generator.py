@@ -17,14 +17,14 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 from transformers.utils import ModelOutput
 
-def reshape_tensor(x, heads):
+def reshape_tensor(x, num_heads):
     bs, length, width = x.shape
     # (bs, length, width) --> (bs, length, n_heads, dim_per_head)
-    x = x.view(bs, length, heads, -1)
+    x = x.view(bs, length, num_heads, -1)
     # (bs, length, n_heads, dim_per_head) --> (bs, n_heads, length, dim_per_head)
     x = x.transpose(1, 2)
     # (bs, n_heads, length, dim_per_head) --> (bs*n_heads, length, dim_per_head)
-    x = x.reshape(bs, heads, length, -1)
+    x = x.reshape(bs, num_heads, length, -1)
     return x
 
 
@@ -132,12 +132,12 @@ def Lora2Hira(lora_rank, output_dim, num_modes, num_output_queries, elementwise_
     )
 
 class PerceiverAttention(nn.Module):
-    def __init__(self, *, dim, dim_head=64, heads=8, elementwise_affine=True):
+    def __init__(self, *, dim, dim_head=64, num_heads=8, elementwise_affine=True):
         super().__init__()
         self.scale = dim_head**-0.5
         self.dim_head = dim_head
-        self.heads = heads
-        inner_dim = dim_head * heads
+        self.num_heads = num_heads
+        inner_dim = dim_head * num_heads
 
         self.norm1 = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
         self.norm2 = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
@@ -163,9 +163,9 @@ class PerceiverAttention(nn.Module):
         kv_input = torch.cat((x, latent_queries), dim=-2)
         k, v = self.to_kv(kv_input).chunk(2, dim=-1)
         
-        q = reshape_tensor(q, self.heads)
-        k = reshape_tensor(k, self.heads)
-        v = reshape_tensor(v, self.heads)
+        q = reshape_tensor(q, self.num_heads)
+        k = reshape_tensor(k, self.num_heads)
+        v = reshape_tensor(v, self.num_heads)
 
         # attention
         scale = 1 / math.sqrt(math.sqrt(self.dim_head))
@@ -180,36 +180,38 @@ class PerceiverAttention(nn.Module):
 
 # All CrossAttention layers have 8 heads.
 class CrossAttention(nn.Module):
-    def __init__(self, input_dim, heads=8, dropout=0.1, attn_polarity=5, elementwise_affine=True):
+    def __init__(self, input_dim, context_dim, num_heads, dropout=0.1, attn_polarity=5, elementwise_affine=True, 
+                 identity_to_q=False, identity_to_v=False):
         super().__init__()
-        dim_head = input_dim // heads
-        inner_dim = dim_head * heads
+        dim_head  = input_dim // num_heads
+        inner_dim = dim_head   * num_heads
 
-        self.scale = dim_head ** -0.25
-        self.heads = heads
+        self.num_heads = num_heads
         self.attn_polarity = attn_polarity
 
         # To increase stability,, we add layernorm to q,k,v projections.
         self.to_q = nn.Sequential(
-                        nn.Linear(input_dim, inner_dim, bias=False),
+                        nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_q else nn.Identity(),
                         nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine))
         
         self.to_k = nn.Sequential(
-                        nn.Linear(input_dim, inner_dim, bias=False),
+                        # If context_dim != input_dim, then we need to project context_dim to input_dim 
+                        # for similarity computation.
+                        nn.Linear(context_dim, inner_dim, bias=False),
                         nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine))
         
         self.to_v = nn.Sequential(
-                        nn.Linear(input_dim, inner_dim, bias=False),
-                        nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine))
+                        nn.Linear(context_dim, context_dim, bias=False) if not identity_to_v else nn.Identity(),
+                        nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine))
 
         self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, input_dim, bias=False),
-            nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine),
+            nn.Linear(context_dim, context_dim, bias=False),
+            nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine),
             nn.Dropout(dropout)
         )
         
     def forward(self, x, context=None):
-        h = self.heads
+        h = self.num_heads
 
         q = self.to_q(x)
         if context is None:
@@ -234,10 +236,7 @@ class CrossAttention(nn.Module):
         tensor(4.8963, grad_fn=<StdBackward0>)
         tensor(5.0100, grad_fn=<StdBackward0>)        
         '''        
-        scale = q.size(-1) ** -0.5
-        
-        if not hasattr(self, 'attn_polarity'):
-            self.attn_polarity = 5
+        scale = q.size(-1) ** -0.25
 
         sim = einsum('b i d, b j d -> b i j', q * scale, k * scale) * self.attn_polarity
         # sim: [16, 378, 257]. 16: bs 1 * h 16.
@@ -255,27 +254,23 @@ class CrossAttention(nn.Module):
 
         return out
 
-# Revised from IP-Adapter Resampler.
 class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
-        dim=768,                            # Internal feature dimension. Same as output_dim.
         depth=1,                            # number of (CrossAttention, FeedForward) layers.     
-        # number of cross-attention heads as per:
-        # laion=16,  https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json  
-        # openai=12, https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json      
-        heads=12,       
+        # number of cross-attention heads.
+        num_heads=1,
         # num_out_queries: number of output queries.
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
         # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
-        num_out_queries=378,                # fg: 378 = 9 * 42. bg: 168 = 4 * 42.
+        num_out_queries=234,                # fg: 234 = 9 * 26. bg: 104 = 4 * 26.
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
         face_embedding_dim=512,             # insightface face feature dimension for humans.
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
-        num_lora_queries=64,                # number of low-rank latent queries.
+        num_latent_queries=64,              # number of low-rank latent queries.
+        latent_query_dim=64,                # Latent query dimension.
         num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
-        ff_mult=1,                          # FF inner_dim = dim * ff_mult. Set to 1 to reduce the number of parameters.
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
@@ -285,21 +280,19 @@ class SubjBasisGenerator(nn.Module):
     ):
         super().__init__()
         assert depth > 0, "depth must be > 0."
-        assert output_dim == dim, "output_dim must be equal to dim."
-
         self.depth = depth
 
         self.proj_in = nn.Sequential(
-            nn.Linear(image_embedding_dim, dim, bias=False),
-            nn.LayerNorm(dim, elementwise_affine=elementwise_affine),
+            nn.Linear(image_embedding_dim, output_dim, bias=False),
+            nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
         )
 
         self.placeholder_is_bg = placeholder_is_bg
-        self.num_lora_queries  = num_lora_queries
+        self.num_latent_queries  = num_latent_queries
         if not self.placeholder_is_bg:
-            self.face_proj_in = Emb2Queries(face_embedding_dim, dim, num_output_queries=num_lora_queries,
+            self.face_proj_in = Emb2Queries(face_embedding_dim, latent_query_dim, num_output_queries=num_latent_queries,
                                             elementwise_affine=elementwise_affine)
-            self.obj_proj_in  = Emb2Queries(dino_embedding_dim, dim, num_output_queries=num_lora_queries,
+            self.obj_proj_in  = Emb2Queries(dino_embedding_dim, latent_query_dim, num_output_queries=num_latent_queries,
                                             elementwise_affine=elementwise_affine)
             # If it's a subject placeholder, then latent_queries 
             # are generated from face or object embeddings. No static_latent_queries.
@@ -309,7 +302,7 @@ class SubjBasisGenerator(nn.Module):
             self.face_proj_in = None
             self.obj_proj_in  = None
             # These static set of latent queries are used to attend to the ad-hoc CLIP image features.
-            self.static_latent_queries = nn.Parameter(torch.randn(1, num_lora_queries, dim) / dim**0.5)
+            self.static_latent_queries = nn.Parameter(torch.randn(1, num_latent_queries, latent_query_dim) / latent_query_dim**0.5)
 
         # If placeholder_is_bg, then don't use codebook, instead draw features 
         # from the ad-hoc CLIP image features.
@@ -323,42 +316,48 @@ class SubjBasisGenerator(nn.Module):
             self.codebook_size = -1
 
         if apply_pos_emb:
-            self.pos_emb    = nn.Embedding(max_seq_len, dim)                             
-            self.pos_emb_ln = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)  
+            self.pos_emb    = nn.Embedding(max_seq_len, output_dim)                             
+            self.pos_emb_ln = nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine)  
         else:
             self.pos_emb    = None
             self.pos_emb_ln = None
 
-        self.lq_ln    = nn.LayerNorm(dim, elementwise_affine=elementwise_affine)
-        self.output_scale = output_dim ** -0.5
+        self.lq_ln    = nn.LayerNorm(latent_query_dim, elementwise_affine=elementwise_affine)
 
-        self.num_out_queries            = num_out_queries
+        self.num_out_queries        = num_out_queries
         self.num_lora2hira_modes    = num_lora2hira_modes
         self.elementwise_affine     = elementwise_affine
-        self.lora2hira = Lora2Hira(lora_rank=num_lora_queries, output_dim=output_dim, num_modes=num_lora2hira_modes,
+        self.output_scale           = output_dim ** -0.5
+        self.lora2hira = Lora2Hira(lora_rank=num_latent_queries, output_dim=output_dim, num_modes=num_lora2hira_modes,
                                    num_output_queries=num_out_queries, elementwise_affine=elementwise_affine)
         
         self.layers    = nn.ModuleList([])
         self.codebooks = nn.ParameterList([]) if self.use_codebook else None
         self.use_FFN   = use_FFN
 
-        for _ in range(depth):
+        for dep in range(depth):
+            if dep == 0:
+                input_dim = latent_query_dim
+            else:
+                input_dim = output_dim
+
             self.layers.append(
                 nn.ModuleList(
                     [
-                        # dim=768, heads=16.
+                        # dim=768, num_heads=16.
                         # Should we disable elementwise_affine in CrossAttention layernorms? I'm not sure.
                         # Currently it's the only place where elementwise_affine is used.
-                        CrossAttention(input_dim=dim, heads=heads, dropout=0.1), #, elementwise_affine=elementwise_affine),
+                        CrossAttention(input_dim=input_dim, context_dim=output_dim, num_heads=num_heads, dropout=0.1,
+                                       identity_to_q=True, identity_to_v=True),
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
-                        FeedForward(dim=dim, mult=ff_mult, elementwise_affine=elementwise_affine) \
+                        FeedForward(dim=output_dim, mult=1, elementwise_affine=elementwise_affine) \
                             if self.use_FFN else nn.Identity(),
                     ]
                 )
             )
             if self.use_codebook:
-                layer_codebook = nn.Parameter(torch.randn(1, self.codebook_size, dim) / dim**0.5)
+                layer_codebook = nn.Parameter(torch.randn(1, self.codebook_size, output_dim) / output_dim**0.5)
                 self.codebooks.append(layer_codebook)
 
         print(repr(self))
@@ -375,7 +374,7 @@ class SubjBasisGenerator(nn.Module):
         # No need to use id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (id_embs is not None):
             # id_embs: [1, 512].
-            # latent_queries: [1, 378, 768].
+            # latent_queries: [1, 64, 64].
             if is_face:
                 latent_queries = self.face_proj_in(id_embs)
             else:
@@ -409,7 +408,7 @@ class SubjBasisGenerator(nn.Module):
         if not hasattr(self, 'num_out_queries') and hasattr(self, 'num_queries'):
             self.num_out_queries = self.num_queries
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
-        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, num_out_queries={self.num_out_queries}, num_lora_queries={self.num_lora_queries}," \
+        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, num_out_queries={self.num_out_queries}, num_latent_queries={self.num_latent_queries}," \
                f"num_lora2hira_modes={self.num_lora2hira_modes}, elementwise_affine={self.elementwise_affine}, codebook_size={self.codebook_size}"
     
 @dataclass
