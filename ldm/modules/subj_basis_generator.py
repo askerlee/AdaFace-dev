@@ -178,7 +178,6 @@ class PerceiverAttention(nn.Module):
         return self.to_out(out)
 
 
-# All CrossAttention layers have 8 heads.
 class CrossAttention(nn.Module):
     def __init__(self, input_dim, context_dim, num_heads, dropout=0.1, attn_polarity=5, elementwise_affine=True, 
                  identity_to_q=False, identity_to_v=False, identity_to_out=False):
