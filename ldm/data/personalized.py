@@ -881,12 +881,13 @@ class PersonalizedBase(Dataset):
 # In the first few iterations, they will sample the same subjects, but 
 # due to randomness in the DDPM model (?), soon the sampled subjects will be different on different GPUs.
 class SubjectSampler(Sampler):
-    def __init__(self, num_subjects, num_batches, batch_size, replay_buffer_size=20, p_replay=0.2,
+    def __init__(self, num_subjects, subject_names, num_batches, batch_size, replay_buffer_size=20, p_replay=0.2,
                  each_batch_from_same_subject=True, debug=False):
         self.batch_size = batch_size
         # num_batches: +1 to make sure the last batch is also used.
         self.num_batches  = num_batches + 1
         self.num_subjects = num_subjects
+        self.subject_names = subject_names
         assert self.num_subjects > 0, "FATAL: no subjects found in the dataset!"
         rank = dist.get_rank()
         print("SubjectSampler rank {}, initialized on {} subjects, batches: {}*{}".format(rank, self.num_subjects, 
@@ -911,7 +912,7 @@ class SubjectSampler(Sampler):
     def next_subject(self):
         if self.replay_buffer.qsize() > 0 and random.random() < self.p_replay:
             new_subj_idx = self.replay_buffer.get()
-            print(f"Replay subject {new_subj_idx}, qsize: {self.replay_buffer.qsize()}")
+            print(f"Replay subject {self.subject_names[new_subj_idx]}, qsize: {self.replay_buffer.qsize()}")
         else:
             new_subj_idx = random.randint(0, self.num_subjects - 1)
             self.replay_buffer.put(new_subj_idx)

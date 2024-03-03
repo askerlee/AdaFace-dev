@@ -498,7 +498,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
         # each batch contains data from one subject only.
         if self.datasets['train'].num_subjects > 1:
             shuffle = False
-            sampler = SubjectSampler(self.datasets['train'].num_subjects, self.num_batches, 
+            sampler = SubjectSampler(self.datasets['train'].num_subjects, self.datasets['train'].subject_names, self.num_batches, 
                                      self.batch_size, each_batch_from_same_subject=self.each_batch_from_same_subject)
         else:
             sampler = None
