@@ -14,6 +14,7 @@ import webdataset as wds
 import glob
 from evaluation.eval_utils import parse_subject_file
 import torch.distributed as dist
+from queue import Queue
 
 imagenet_templates_smallest = [
     'a photo of a {}',
@@ -880,8 +881,8 @@ class PersonalizedBase(Dataset):
 # In the first few iterations, they will sample the same subjects, but 
 # due to randomness in the DDPM model (?), soon the sampled subjects will be different on different GPUs.
 class SubjectSampler(Sampler):
-    def __init__(self, num_subjects, num_batches, batch_size, each_batch_from_same_subject=True, 
-                 debug=False):
+    def __init__(self, num_subjects, num_batches, batch_size, replay_buffer_size=20, p_replay=0.2,
+                 each_batch_from_same_subject=True, debug=False):
         self.batch_size = batch_size
         # num_batches: +1 to make sure the last batch is also used.
         self.num_batches  = num_batches + 1
@@ -898,6 +899,9 @@ class SubjectSampler(Sampler):
             # Setting switch_cycle_length to 1, so that we switch to a new subject for each sample.
             self.switch_cycle_length = 1
 
+        self.replay_buffer_size = replay_buffer_size
+        self.replay_buffer = Queue()
+        self.p_replay = p_replay
         self.curr_subj_idx = 0
         self.curr_subj_count = 0
 
@@ -905,7 +909,16 @@ class SubjectSampler(Sampler):
         return self.num_batches * self.batch_size
     
     def next_subject(self):
-        new_subj_idx = random.randint(0, self.num_subjects - 1)
+        if self.replay_buffer.qsize() > 0 and random.random() < self.p_replay:
+            new_subj_idx = self.replay_buffer.get()
+        else:
+            new_subj_idx = random.randint(0, self.num_subjects - 1)
+            self.replay_buffer.put(new_subj_idx)
+            # Pop out the oldest subject index if the replay buffer is full, so that
+            # the replay buffer always contains <= replay_buffer_size subjects.
+            if self.replay_buffer.qsize() > self.replay_buffer_size:
+                self.replay_buffer.get()
+
         return new_subj_idx
 
     def __iter__(self):
