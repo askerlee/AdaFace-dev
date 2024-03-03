@@ -911,6 +911,7 @@ class SubjectSampler(Sampler):
     def next_subject(self):
         if self.replay_buffer.qsize() > 0 and random.random() < self.p_replay:
             new_subj_idx = self.replay_buffer.get()
+            print(f"Replay subject {new_subj_idx}, qsize: {self.replay_buffer.qsize()}")
         else:
             new_subj_idx = random.randint(0, self.num_subjects - 1)
             self.replay_buffer.put(new_subj_idx)
@@ -918,7 +919,8 @@ class SubjectSampler(Sampler):
             # the replay buffer always contains <= replay_buffer_size subjects.
             if self.replay_buffer.qsize() > self.replay_buffer_size:
                 self.replay_buffer.get()
-
+            #print(f"Random subject {new_subj_idx}, qsize: {self.replay_buffer.qsize()}")
+                  
         return new_subj_idx
 
     def __iter__(self):
