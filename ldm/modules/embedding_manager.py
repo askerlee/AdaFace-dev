@@ -884,7 +884,7 @@ class AdaEmbedding(nn.Module):
                 bias = self.bias[ca_layer_idx].unsqueeze(0)
             else:
                 bias = 0
-                
+
             # [BS, K, 768] + [1, K, 768] = [BS, K, 768].
             out_vecs  = out_vecs0 + bias
             
@@ -2257,7 +2257,7 @@ class EmbeddingManager(nn.Module):
                     print(f"Loading {repr(ckpt_subj_basis_generator)}")
                     # self.string_to_subj_basis_generator_dict[km] is either not initialized, or initialized with a smaller depth.
                     # Then replace it with the one in ckpt.
-                    if self.string_to_subj_basis_generator_dict[km] is None or self.string_to_subj_basis_generator_dict[km].depth < ckpt_subj_basis_generator.depth \
+                    if True or self.string_to_subj_basis_generator_dict[km] is None or self.string_to_subj_basis_generator_dict[km].depth < ckpt_subj_basis_generator.depth \
                       or self.string_to_subj_basis_generator_dict[km].num_lora2hira_modes != ckpt_subj_basis_generator.num_lora2hira_modes \
                       or self.string_to_subj_basis_generator_dict[km].elementwise_affine    != ckpt_subj_basis_generator.elementwise_affine \
                       or self.string_to_subj_basis_generator_dict[km].codebook_size         != ckpt_subj_basis_generator.codebook_size:

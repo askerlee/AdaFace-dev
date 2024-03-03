@@ -258,8 +258,9 @@ class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
         depth=1,                            # number of (CrossAttention, FeedForward) layers.     
-        # number of cross-attention heads.
-        num_heads=1,
+        # number of cross-attention heads. Same as OpenAI clip-vit-large-patch14.
+        # https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
+        num_heads=12,                       
         # num_out_queries: number of output queries.
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
         # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
@@ -268,7 +269,7 @@ class SubjBasisGenerator(nn.Module):
         face_embedding_dim=512,             # insightface face feature dimension for humans.
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
         num_latent_queries=64,              # number of low-rank latent queries.
-        latent_query_dim=64,                # Latent query dimension.
+        latent_query_dim=96,                # Latent query dimension. num_heads * 8.
         num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
         max_seq_len: int = 257,             # [CLS token, image tokens]
@@ -405,7 +406,7 @@ class SubjBasisGenerator(nn.Module):
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
-        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, num_out_queries={self.num_out_queries}, num_latent_queries={self.num_latent_queries}," \
+        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, num_out_queries={self.num_out_queries}, num_latent_queries={self.num_latent_queries}, " \
                f"num_lora2hira_modes={self.num_lora2hira_modes}, elementwise_affine={self.elementwise_affine}, codebook_size={self.codebook_size}"
     
 @dataclass
