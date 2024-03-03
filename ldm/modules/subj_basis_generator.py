@@ -243,6 +243,7 @@ class CrossAttention(nn.Module):
         # NOTE: the normalization is done across tokens, not across pixels.
         # So for each pixel, the sum of attention scores across tokens is 1.
         attn = sim.softmax(dim=-1)
+        #breakpoint()
 
         # v: [16, 257, 48]. 48: dim of each head. out: [16, 378, 48].
         out = einsum('b i j, b j d -> b i d', attn, v)
@@ -273,8 +274,8 @@ class SubjBasisGenerator(nn.Module):
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
-        codebook_size: int = 18900,         # Size of the codebook, 50 * num_out_queries.
-        use_FFN: bool = True,              # Whether to use FeedForward layer after cross-attention.
+        codebook_size: int = 2340,          # Size of the codebook, 50 * num_out_queries.
+        use_FFN: bool = True,               # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
     ):
         super().__init__()
