@@ -268,9 +268,9 @@ class SubjBasisGenerator(nn.Module):
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
         face_embedding_dim=512,             # insightface face feature dimension for humans.
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
-        num_latent_queries=64,              # number of low-rank latent queries.
+        num_latent_queries=16,              # Number of low-rank latent queries.
         latent_query_dim=96,                # Latent query dimension. num_heads * 8.
-        num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
+        num_lora2hira_modes=1,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.

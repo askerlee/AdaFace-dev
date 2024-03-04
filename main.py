@@ -265,7 +265,7 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--zs_num_subj_generator_layers", type=int, default=3,
                         help="Layers (depth) of zero-shot subject feature generator")
-    parser.add_argument("--zs_num_lora2hira_modes", type=int, default=4,
+    parser.add_argument("--zs_num_lora2hira_modes", type=int, default=1,
                         help="Number of modes for the zero-shot embedding to queries mapping")
     parser.add_argument("--zs_elementwise_affine", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use elementwise affine in zero-shot subject feature generator")
