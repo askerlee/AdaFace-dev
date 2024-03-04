@@ -8,7 +8,7 @@ import shutil
 import os
 
 gpu_id = 0
-T = 0.5
+T = 0.65
 
 base_folder  = '/data/rafter/VGGface2_HQ_masks/'
 trash_folder = '/data/rafter/VGGface2_HQ_masks_trash/'
@@ -37,7 +37,7 @@ for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
         continue
 
     for image_i, image_path in enumerate(os.listdir(subj_path)):
-        if "_mask.png" in image_path:
+        if "_mask.png" in image_path or ".pt" in image_path:
             continue
 
         if image_i % 20 == 0:
@@ -77,9 +77,12 @@ for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
     # Compute pairwise similarities of the embeddings.
     mean_emb = id_embs.mean(dim=0, keepdim=True)
     mean_emb = F.normalize(mean_emb, p=2, dim=1)
+    torch.save(mean_emb, os.path.join(subj_path, 'mean_emb.pt'))
+               
     # [1, 512] * [512, BS] => [1, BS]
     sims_to_mean = torch.matmul(mean_emb, id_embs.t())[0]
-    
+    print(f"Avg sim: {sims_to_mean.mean().item():.3f}")
+
     for i, sim in enumerate(sims_to_mean):
         if sim < T:
             if not os.path.exists(subj_trash_path):

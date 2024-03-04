@@ -419,10 +419,21 @@ class PersonalizedBase(Dataset):
         example = {}
         if is_subject_idx:
             image_paths     = self.image_paths_by_subj[index]
-            # Draw a random image from the subject dataset indexed by index.
-            image_idx       = random.randint(0, len(image_paths) - 1)
+            for trial in range(10):
+                # Draw a random image from the subject dataset indexed by index.
+                image_idx       = random.randint(0, len(image_paths) - 1)
+                image_path      = image_paths[image_idx]
+                # Sometimes we remove some images during the training process, 
+                # so we need to check if the image exists.
+                if not os.path.exists(image_path):
+                    print(f"WARNING: {image_path} doesn't exist!")
+                    continue
 
-            image_path      = image_paths[image_idx]
+            if not os.path.exists(image_path):
+                print(f"ERROR: {image_path} still doesn't exist after 10 trials!")
+                breakpoint()
+                return None                
+            
             fg_mask_path    = self.fg_mask_paths_by_subj[index][image_idx]
             caption_path    = self.caption_paths_by_subj[index][image_idx]
             subject_idx     = index
