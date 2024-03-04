@@ -186,7 +186,7 @@ class CrossAttention(nn.Module):
         inner_dim = dim_head   * num_heads
 
         self.num_heads = num_heads
-        self.attn_polarity = attn_polarity
+        self.attn_polarity = 1
 
         # To increase stability,, we add layernorm to q,k,v projections.
         self.to_q = nn.Sequential(
@@ -219,6 +219,7 @@ class CrossAttention(nn.Module):
         k = self.to_k(context)            
         v = self.to_v(context)
 
+        # q: [12, 16, 8], k: [12, 117, 8], v: [12, 117, 64].
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
         # * self.attn_polarity to increase the polarity of the attention scores. 
         # Otherwise the variance is too small and the attention is too uniform.
@@ -243,7 +244,7 @@ class CrossAttention(nn.Module):
         # NOTE: the normalization is done across tokens, not across pixels.
         # So for each pixel, the sum of attention scores across tokens is 1.
         attn = sim.softmax(dim=-1)
-        #breakpoint()
+        #print(attn.std())
 
         # v: [16, 257, 48]. 48: dim of each head. out: [16, 378, 48].
         out = einsum('b i j, b j d -> b i d', attn, v)
