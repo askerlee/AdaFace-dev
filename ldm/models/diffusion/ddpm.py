@@ -1690,6 +1690,7 @@ class LatentDiffusion(DDPM):
             # batch["fg_mask"]: [3, 512, 512].
             fg_mask = batch["fg_mask"]
             image_paths = batch["image_path"]
+
             # If each_batch_from_same_subject:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
             # Otherwise:                        zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
             # If each_batch_from_same_subject, then we average the zs_clip_features and zs_id_embs to get 
@@ -1699,6 +1700,21 @@ class LatentDiffusion(DDPM):
                                                                                 calc_avg=self.each_batch_from_same_subject,
                                                                                 image_paths=image_paths)
             
+            '''
+            # Sanity check for zs_id_embs.
+            mean_emb = batch["mean_emb"]
+            # The whole batch of mean_emb should be repetitions of the same mean_emb.
+            assert ((mean_emb - mean_emb[[0]]) == 0).all()
+
+            mean_emb = mean_emb[0].to(x_start.device)
+            zs_id_embs2 = F.normalize(zs_id_embs, p=2, dim=1)
+            # Compute pairwise similarities of the embeddings.
+            mean_emb2 = F.normalize(mean_emb, p=2, dim=1)
+            # [1, 512] * [512, BS] => [1, BS]
+            sims_to_mean = torch.matmul(mean_emb2, zs_id_embs2.t())[0]
+            print(f"Avg sim: {sims_to_mean.mean().item():.3f}")
+            '''
+
             self.iter_flags['zs_clip_features'] = zs_clip_features
             self.iter_flags['zs_id_embs']       = zs_id_embs
         else:

@@ -171,48 +171,51 @@ class PersonalizedBase(Dataset):
                  ):
 
         self.do_zero_shot = do_zero_shot
-        # Expand wildcards in data_roots.
+        # If data_roots is a single string, convert it to a list of strings.
+        # Otherwise, data_roots is already a list of strings.
         if isinstance(data_roots, str):
             data_roots = [ data_roots ]
         
-        data_roots2 = []
+        subj_roots = []
         for base_folder in data_roots:
             subfolders = [f.path for f in os.scandir(base_folder) if f.is_dir()]
             # If base_folder contains subfolders, then expand them.
             if len(subfolders) > 0:
                 # Limit the number of subjects from each base_folder to 1000, to speed up loading.
                 if max_num_subjects_per_base_folder > 0:
-                    data_roots2.extend(subfolders[:max_num_subjects_per_base_folder])
+                    subj_roots.extend(subfolders[:max_num_subjects_per_base_folder])
                 else:
                     # Load all subjects in each base folder.
-                    data_roots2.extend(subfolders)
+                    subj_roots.extend(subfolders)
             else:
                 # base_folder is a single folder containing images of a subject. No need to expand its subfolders.
-                data_roots2.append(base_folder)
+                subj_roots.append(base_folder)
 
-        # Sort the data_roots, so that the order of subjects is consistent.
-        self.data_roots = sorted(data_roots2)
+        # Sort subj_roots, so that the order of subjects is consistent.
+        self.subj_roots = sorted(subj_roots)
         # subject_names: sorted ascendingly for subjects within the same folder.
-        self.subject_names = [ os.path.basename(data_root) for data_root in self.data_roots ]
+        self.subject_names = [ os.path.basename(subj_root) for subj_root in self.subj_roots ]
 
-        assert len(self.data_roots) > 0, f"No data found in data_roots={data_roots}!"
+        assert len(self.subj_roots) > 0, f"No data found in data_roots={data_roots}!"
 
         self.image_paths_by_subj    = []
         self.fg_mask_paths_by_subj  = []
         self.caption_paths_by_subj  = []
-        self.feat_paths_by_subj     = []
+        self.mean_emb_path_by_subj  = []
         total_num_valid_fg_masks    = 0
         total_num_valid_captions    = 0
+        total_num_valid_mean_embs   = 0
 
-        for data_root in self.data_roots:
+        for subj_root in self.subj_roots:
+            all_filenames = sorted(os.listdir(subj_root))
             # image_paths and mask_paths are full paths.
-            all_file_paths      = [os.path.join(data_root, file_path) for file_path in sorted(os.listdir(data_root))]
+            all_file_paths      = [ os.path.join(subj_root, file_path) for file_path in all_filenames ]
             image_paths         = list(filter(lambda x: filter_non_image(x) and os.path.splitext(x)[1].lower() != '.txt', all_file_paths))
             # Limit the number of images for each subject to 100, to speed up loading.
             if max_num_images_per_subject > 0:
                 image_paths = image_paths[:max_num_images_per_subject]
             if len(image_paths) == 0:
-                print(f"No images found in '{data_root}', skip")
+                print(f"No images found in '{subj_root}', skip")
                 continue
 
             fg_mask_paths       = [ os.path.splitext(x)[0] + "_mask.png" for x in image_paths ]
@@ -226,12 +229,19 @@ class PersonalizedBase(Dataset):
             self.fg_mask_paths_by_subj.append(fg_mask_paths)
             self.caption_paths_by_subj.append(caption_paths)
 
+            if 'mean_emb.pt' in all_filenames:
+                mean_emb_path = os.path.join(subj_root, 'mean_emb.pt')
+                self.mean_emb_path_by_subj.append(mean_emb_path)
+                total_num_valid_mean_embs += 1
+            else:
+                self.mean_emb_path_by_subj.append(None)
+
             total_num_valid_fg_masks += num_valid_fg_masks
             total_num_valid_captions += num_valid_captions
 
-            if verbose and len(self.data_roots) < 80:
+            if verbose and len(self.subj_roots) < 80:
                 print("{} images, {} fg masks, {} captions found in '{}'".format( \
-                    len(image_paths), num_valid_fg_masks, num_valid_captions, data_root))
+                    len(image_paths), num_valid_fg_masks, num_valid_captions, subj_root))
                 if num_valid_fg_masks > 0 and num_valid_fg_masks < len(image_paths):
                     print("WARNING: {} fg masks are missing!".format(len(image_paths) - num_valid_fg_masks))
                 if num_valid_captions > 0 and num_valid_captions < len(image_paths):
@@ -244,7 +254,8 @@ class PersonalizedBase(Dataset):
         self.image_paths   = sum(self.image_paths_by_subj, [])
         self.fg_mask_paths = sum(self.fg_mask_paths_by_subj, [])
         self.caption_paths = sum(self.caption_paths_by_subj, [])
-        print(f"Found {len(self.image_paths)} images in {len(self.data_roots)} folders, {total_num_valid_fg_masks} fg masks, {total_num_valid_captions} captions")
+        print(f"Found {len(self.image_paths)} images in {len(self.subj_roots)} folders, {total_num_valid_fg_masks} fg masks, " \
+              f"{total_num_valid_mean_embs} total_num_valid_mean_embs, {total_num_valid_captions} captions")
   
         self.num_images = len(self.image_paths)
         self.set_name = set
@@ -436,11 +447,13 @@ class PersonalizedBase(Dataset):
             
             fg_mask_path    = self.fg_mask_paths_by_subj[index][image_idx]
             caption_path    = self.caption_paths_by_subj[index][image_idx]
+            mean_emb_path   = self.mean_emb_path_by_subj[index]
             subject_idx     = index
         else:
             image_path    = self.image_paths[index % self.num_images]
             fg_mask_path  = self.fg_mask_paths[index % self.num_images] 
             caption_path  = self.caption_paths[index % self.num_images]
+            mean_emb_path   = self.mean_emb_path_by_subj[0]
             subject_idx   = 0
 
         cls_delta_string      = self.cls_delta_strings[subject_idx]
@@ -609,6 +622,12 @@ class PersonalizedBase(Dataset):
         example["image_unnorm"] = image
         # example["image"]: [0, 255] -> [-1, 1]
         example["image"]        = (image / 127.5 - 1.0).astype(np.float32)
+
+        if mean_emb_path is not None:
+            mean_emb = torch.load(mean_emb_path, map_location="cpu")
+            example["mean_emb"] = mean_emb
+        else:
+            example["mean_emb"] = torch.zeros(1, 512)
 
         if gen_wds_comp:
             # subject_token, background_token: subject_string and background_string converted to 
