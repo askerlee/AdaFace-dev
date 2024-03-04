@@ -122,6 +122,10 @@ plural_role_pat  = "cooks|chefs|waiters|waitresses|doctors|nurses|policemen|poli
 animal_pat       = "cat|cats|dog|dogs"
 human_animal_pat = "|".join([single_human_pat, single_role_pat, plural_human_pat, plural_role_pat, animal_pat])
 
+def filter_non_image(x):
+    exclusion_pats = [ "_mask.png", ".pt" ]
+    return not any([ pat in x for pat in exclusion_pats ])
+
 class PersonalizedBase(Dataset):
     def __init__(self,
                  # a list of folders containing subfolders, each subfolder containing images of a subject.
@@ -203,7 +207,7 @@ class PersonalizedBase(Dataset):
         for data_root in self.data_roots:
             # image_paths and mask_paths are full paths.
             all_file_paths      = [os.path.join(data_root, file_path) for file_path in sorted(os.listdir(data_root))]
-            image_paths         = list(filter(lambda x: "_mask.png" not in x and os.path.splitext(x)[1].lower() != '.txt', all_file_paths))
+            image_paths         = list(filter(lambda x: filter_non_image(x) and os.path.splitext(x)[1].lower() != '.txt', all_file_paths))
             # Limit the number of images for each subject to 100, to speed up loading.
             if max_num_images_per_subject > 0:
                 image_paths = image_paths[:max_num_images_per_subject]
