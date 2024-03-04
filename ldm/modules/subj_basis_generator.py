@@ -191,13 +191,15 @@ class CrossAttention(nn.Module):
         # To increase stability,, we add layernorm to q,k,v projections.
         self.to_q = nn.Sequential(
                         nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_q else nn.Identity(),
-                        nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine))
+                        #nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine)
+                        )
         
         self.to_k = nn.Sequential(
                         # If context_dim != input_dim, then we need to project context_dim to input_dim 
                         # for similarity computation.
                         nn.Linear(context_dim, inner_dim, bias=False),
-                        nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine))
+                        #nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine)
+                        )
         
         self.to_v = nn.Sequential(
                         nn.Linear(context_dim, context_dim, bias=False) if not identity_to_v else nn.Identity(),
@@ -335,6 +337,7 @@ class SubjBasisGenerator(nn.Module):
         
         self.layers    = nn.ModuleList([])
         self.codebooks = nn.ParameterList([]) if self.use_codebook else None
+        self.codebook_lns = nn.ParameterList([]) if self.use_codebook else None
         self.use_FFN   = use_FFN
 
         for dep in range(depth):
@@ -361,6 +364,7 @@ class SubjBasisGenerator(nn.Module):
             if self.use_codebook:
                 layer_codebook = nn.Parameter(torch.randn(1, self.codebook_size, output_dim) / output_dim**0.5)
                 self.codebooks.append(layer_codebook)
+                self.codebook_lns.append(nn.LayerNorm(output_dim))
 
         print(repr(self))
 
@@ -388,7 +392,7 @@ class SubjBasisGenerator(nn.Module):
 
         for i, (attn, ff) in enumerate(self.layers):
             if self.use_codebook:
-                context = self.codebooks[i]
+                context = self.codebook_lns[i](self.codebooks[i])
             else:
                 # Otherwise, context is the ad-hoc CLIP image features.
                 context = x
