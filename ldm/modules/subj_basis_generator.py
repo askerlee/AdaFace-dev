@@ -260,7 +260,7 @@ class CrossAttention(nn.Module):
 class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
-        depth=1,                            # number of (CrossAttention, FeedForward) layers.     
+        depth=2,                            # number of (CrossAttention, FeedForward) layers.     
         # number of cross-attention heads. Same as OpenAI clip-vit-large-patch14.
         # https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
         num_heads=12,                       
@@ -273,12 +273,12 @@ class SubjBasisGenerator(nn.Module):
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
         num_latent_queries=16,              # Number of low-rank latent queries.
         latent_query_dim=96,                # Latent query dimension. num_heads * 8.
-        num_lora2hira_modes=1,              # number of modes for Lora2Hira.  
+        num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
         max_seq_len: int = 257,             # [CLS token, image tokens]
         apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
-        codebook_size: int = 234,          # Size of the codebook, 50 * num_out_queries.
+        codebook_size: int = 468,           # Size of the codebook, 2 * num_out_queries.
         use_FFN: bool = True,               # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
     ):

@@ -1006,8 +1006,8 @@ class EmbeddingManager(nn.Module):
             shared_embedder_components='pooler',
             do_zero_shot=False,
             zs_image_emb_dim=1280,
-            zs_num_subj_generator_layers=3,
-            zs_num_lora2hira_modes=1,
+            zs_num_subj_generator_layers=2,
+            zs_num_lora2hira_modes=4,
             zs_elementwise_affine=True,
             zs_use_FFN=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
