@@ -12,7 +12,7 @@ gpu_id = 0
 T = 0.65
 
 base_folder  = '/data/shaohua/VGGface2_HQ_masks/'
-face_encoder = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+face_encoder = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
 face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
 
 face_encoder.prepare(ctx_id=gpu_id)
@@ -20,7 +20,7 @@ trash_img_count = 0
 trash_mask_count = 0
 num_subjects = len(os.listdir(base_folder))
 print(f'num_subjects={num_subjects}')
-resumed_subj_folder = None #'n007809'
+resumed_subj_folder = None 
 resumed = True
 
 subj_embs = []

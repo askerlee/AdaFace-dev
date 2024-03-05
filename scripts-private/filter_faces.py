@@ -14,7 +14,7 @@ base_folder  = '/data/rafter/VGGface2_HQ_masks/'
 trash_folder = '/data/rafter/VGGface2_HQ_masks_trash/'
 #face_encoder = insightface.model_zoo.get_model('models/insightface/model.onnx', 
 #                                               providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-face_encoder = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+face_encoder = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
 face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
 
 face_encoder.prepare(ctx_id=gpu_id)
@@ -65,7 +65,7 @@ for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
         else:
             face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
             # id_emb: [512,]
-            id_emb = torch.from_numpy(face_info['embedding']).to(f"cuda:{gpu_id}")
+            id_emb = torch.from_numpy(face_info.normed_embedding).to(f"cuda:{gpu_id}")
             id_embs.append(id_emb)
             image_fullpaths.append(image_fullpath)
     
