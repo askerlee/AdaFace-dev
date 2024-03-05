@@ -907,7 +907,7 @@ class LatentDiffusion(DDPM):
          'genderage': <insightface.model_zoo.attribute.Attribute object at 0x7f8e3f0cc1f0>, 
          'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
         '''
-        self.face_encoder = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        self.face_encoder = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
 
         self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
@@ -2148,7 +2148,7 @@ class LatentDiffusion(DDPM):
                 else:
                     face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
                     # id_emb: [512,]
-                    id_emb = torch.from_numpy(face_info['embedding']).to(self.device)
+                    id_emb = torch.from_numpy(face_info.normed_embedding).to(self.device)
                     
                 id_embs.append(id_emb)
 
