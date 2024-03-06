@@ -1474,10 +1474,14 @@ class EmbeddingManager(nn.Module):
                         num_vectors_each_placeholder = self.number_vectors_each_subj
 
                     zs_id_embs = zs_image_feat_dict['id']
-                    noise_std = 0.025
                     # Add noise to zs_id_embs during training with probability 0.5.
-                    if self.training and random.random() < 0.5:
-                        zs_id_embs_noisy = zs_id_embs + noise_std * torch.randn_like(zs_id_embs)
+                    # Noise level is gradually reduced from [0.04, 0.06] to [0.02, 0.03] during training.
+                    # Noise std is absolute, not relative (to the std of zs_id_embs).
+                    if self.training:
+                        zs_id_embs_noisy = add_noise_to_embedding(zs_id_embs, self.training_percent,
+                                                                  begin_noise_std_range=[0.04, 0.06], 
+                                                                  end_noise_std_range  =[0.02, 0.03],
+                                                                  add_noise_prob=0.5, noise_std_is_relative=False)
                     else:
                         zs_id_embs_noisy = zs_id_embs
 

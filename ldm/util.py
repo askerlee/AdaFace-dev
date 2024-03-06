@@ -2142,18 +2142,21 @@ def normalized_sum(losses_list, norm_pow=0):
     return normalized_loss_sum
 
 # embeddings: [N, 768]. 
-# noise_rel_std_range: the noise std / embeddings std falls within this range.
+# noise_std_range: the noise std / embeddings std falls within this range.
 def add_noise_to_embedding(embeddings, training_percent,
-                           begin_noise_rel_std_range, 
-                           end_noise_rel_std_range, 
-                           add_noise_prob):
+                           begin_noise_std_range, end_noise_std_range, 
+                           add_noise_prob, noise_std_is_relative=True):
     if random.random() > add_noise_prob:
         return embeddings
     
-    noise_rel_std_lb = anneal_value(training_percent, 1, (begin_noise_rel_std_range[0], end_noise_rel_std_range[0]))
-    noise_rel_std_ub = anneal_value(training_percent, 1, (begin_noise_rel_std_range[1], end_noise_rel_std_range[1]))
-    emb_std_mean = embeddings.std(dim=-1).mean()
-    noise_std = np.random.uniform(noise_rel_std_lb, noise_rel_std_ub) * emb_std_mean
+    noise_std_lb = anneal_value(training_percent, 1, (begin_noise_std_range[0], end_noise_std_range[0]))
+    noise_std_ub = anneal_value(training_percent, 1, (begin_noise_std_range[1], end_noise_std_range[1]))
+    noise_std = np.random.uniform(noise_std_lb, noise_std_ub)
+
+    if noise_std_is_relative:
+        emb_std_mean = embeddings.std(dim=-1).mean()
+        noise_std *= emb_std_mean
+
     noise = torch.randn_like(embeddings) * noise_std
     embeddings = embeddings + noise
     return embeddings
