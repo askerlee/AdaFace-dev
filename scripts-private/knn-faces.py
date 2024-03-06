@@ -38,15 +38,24 @@ print(f"Num subjects: {len(subj_embs)}")
 
 # [N, 512]
 subj_embs = torch.cat(subj_embs)
-# [N, 512] * [512, N] => [N, N]
-pairwise_sims = torch.matmul(subj_embs, subj_embs.t())
-# Set the diagonal of the similarity matrix to zero
-pairwise_sims.fill_diagonal_(0)
-topk_sims, topk_indices = torch.topk(pairwise_sims, k=1, dim=1)
-# Avg top-1 sim: 0.250
-print(f"Avg top-1 sim: {topk_sims.mean().item():.3f}")
+print(subj_embs.std(dim=1).mean())
+
+for noise_std in [0.00, 0.01, 0.02, 0.03, 0.04, 0.05]:
+    # Add noise to the embeddings
+    noisy_embs = subj_embs + noise_std * torch.randn_like(subj_embs)
+    # [N, 512] * [512, N] => [N, N]
+    pairwise_sims = torch.matmul(noisy_embs, noisy_embs.t())
+    # Set the diagonal of the similarity matrix to zero
+    pairwise_sims.fill_diagonal_(0)
+
+    topk_sims, topk_indices = torch.topk(pairwise_sims, k=1, dim=1)
+    # Avg top-1 sim: 0.250
+    print(f"Avg top-1 sim: {topk_sims.mean().item():.3f}")
+
+'''
 for i in range(len(subj_folders)):
     print(f"{subj_folders[i]}: {subj_folders[topk_indices[i].item()]}: {topk_sims[i].item():.3f}")
     subj1_image_path = glob.glob(os.path.join(base_folder, subj_folders[i], "*.jpg"))[0]
     subj2_image_path = glob.glob(os.path.join(base_folder, subj_folders[topk_indices[i].item()], "*.jpg"))[0]
     print(f"{subj1_image_path}\n{subj2_image_path}")
+'''

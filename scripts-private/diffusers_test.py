@@ -1,56 +1,81 @@
-from diffusers import DiffusionPipeline, UNet2DConditionModel, LCMScheduler, DDIMScheduler
+import cv2
+from insightface.app import FaceAnalysis
 import torch
+from diffusers import StableDiffusionPipeline, DDIMScheduler, AutoencoderKL
+from PIL import Image
+import sys
+sys.path.append("/home/shaohua/ip_adapter")
+import os, glob
+import argparse
 
-from diffusers import AutoPipelineForText2Image, DPMSolverMultistepScheduler
-from compel import Compel
+parser = argparse.ArgumentParser()
+parser.add_argument("--subject", type=str, default="subjects-celebrity/taylorswift")
+# "a man in superman costume"
+parser.add_argument("--prompt", type=str, required=True)
+args = parser.parse_args()
 
-torch.set_printoptions(precision=4, sci_mode=False)
+from ip_adapter.ip_adapter_faceid_separate import IPAdapterFaceID
 
-model_sig = 'sd15'
+app = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+app.prepare(ctx_id=0, det_size=(640, 640))
 
-if model_sig == 'sd21':
-    model_id = "stabilityai/stable-diffusion-2-1"
-elif model_sig == 'sd15':
-    model_id = "runwayml/stable-diffusion-v1-5"
-elif model_sig == 'turbo':
-    model_id = "stabilityai/sd-turbo"
-elif model_sig == 'xl':
-    model_id = "stabilityai/stable-diffusion-xl-base-1.0"
+image_folder = args.subject
+subject_name = os.path.basename(image_folder)
+image_paths = glob.glob(os.path.join(image_folder, "*.jpg"))
+image_count = 0
+faceid_embeds = []
+for image_path in image_paths:
+    image = cv2.imread(image_path)
+    faces = app.get(image)
+    faceid_embeds.append(torch.from_numpy(faces[0].normed_embedding).unsqueeze(0).unsqueeze(0))
+    image_count += 1
 
-def dummy(images, **kwargs):
-    return images, [False] * len(images)
+print(f"Extracted ID embeddings from {image_count} images in {image_folder}")
+faceid_embeds = torch.cat(faceid_embeds, dim=1)
 
-pipe = AutoPipelineForText2Image.from_pretrained(model_id, torch_dtype=torch.float16, variant="fp16")
-if model_sig != 'turbo':
-    pipe.scheduler = DDIMScheduler.from_config(
-        pipe.scheduler.config #, rescale_betas_zero_snr=True, timestep_spacing="trailing"
-    )
+base_model_path = "SG161222/Realistic_Vision_V4.0_noVAE"
+vae_model_path = "stabilityai/sd-vae-ft-mse"
+ip_ckpt = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
+device = "cuda"
 
-# print(type(pipe))
-# pipe: diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline
-pipe.to("cuda")
+noise_scheduler = DDIMScheduler(
+    num_train_timesteps=1000,
+    beta_start=0.00085,
+    beta_end=0.012,
+    beta_schedule="scaled_linear",
+    clip_sample=False,
+    set_alpha_to_one=False,
+    steps_offset=1,
+)
+vae = AutoencoderKL.from_pretrained(vae_model_path).to(dtype=torch.float16)
+pipe = StableDiffusionPipeline.from_pretrained(
+    base_model_path,
+    torch_dtype=torch.float16,
+    scheduler=noise_scheduler,
+    vae=vae,
+    feature_extractor=None,
+    safety_checker=None
+)
 
-pipe.safety_checker = dummy
+# load ip-adapter
+ip_model = IPAdapterFaceID(pipe, ip_ckpt, device, num_tokens=16, n_cond=5)
 
-compel_proc = Compel(tokenizer=pipe.tokenizer, text_encoder=pipe.text_encoder)
+# generate image
+prompt = args.prompt 
+negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality, blurry"
 
-#image = pipe(prompt=prompt, num_inference_steps=1, guidance_scale=0.0).images[0]
-#prompt = "a portrait of a frog with golden hair and a crown"
-prompt = "A cinematic shot of a baby racoon wearing an intricate italian priest robe"
+images = ip_model.generate(
+    prompt=prompt, negative_prompt=negative_prompt, faceid_embeds=faceid_embeds, num_samples=4, width=512, height=512, num_inference_steps=30, seed=2023
+)
+save_dir = "samples-ip"
+os.makedirs(save_dir, exist_ok=True)
+# Save 4 images as a grid image in save_dir
+grid_image = Image.new('RGB', (512 * 2, 512 * 2))
+for i, image in enumerate(images):
+    image = image.resize((512, 512))
+    grid_image.paste(image, (512 * (i % 2), 512 * (i // 2)))
 
-prompt_embeds = compel_proc(prompt)
-empty_prompt = ""
-empty_prompt_embeds = compel_proc(empty_prompt)
-word_weight = 1.1 ** 2
-prompt_weighted_embeds = empty_prompt_embeds + (prompt_embeds - empty_prompt_embeds) * word_weight
-
-generator = torch.manual_seed(0)
-if model_sig == 'turbo':    
-    image = pipe(
-        prompt=prompt, num_inference_steps=1, generator=generator, guidance_scale=0.0
-    ).images[0]
-else:
-    image = pipe(prompt_embeds=prompt_weighted_embeds, guidance_scale=5).images[0]
-
-image.save(f"test-{model_sig}.png")
-# breakpoint()
+prompt_sig = prompt.replace(" ", "_").replace(",", "_")
+grid_path = os.path.join(save_dir, f"{subject_name}-{prompt_sig}.png")
+grid_image.save(grid_path)
+print(f"Saved to {grid_path}")

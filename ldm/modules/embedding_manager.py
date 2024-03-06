@@ -1474,6 +1474,13 @@ class EmbeddingManager(nn.Module):
                         num_vectors_each_placeholder = self.number_vectors_each_subj
 
                     zs_id_embs = zs_image_feat_dict['id']
+                    noise_std = 0.05
+                    # Add noise to zs_id_embs during training with probability 0.5.
+                    if self.training and random.random() < 0.5:
+                        zs_id_embs_noisy = zs_id_embs + noise_std * torch.randn_like(zs_id_embs)
+                    else:
+                        zs_id_embs_noisy = zs_id_embs
+
                     # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
                     # curr_subj_is_face. 
                     # During inference, we set curr_subj_is_face directly.
@@ -1485,10 +1492,10 @@ class EmbeddingManager(nn.Module):
                     subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
                     # zs_clip_features: [BS, 257, 1280]
                     # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
-                    zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs, 
-                                                        self.curr_subj_is_face)
+                    zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs_noisy, 
+                                                         self.curr_subj_is_face)
                     if self.zs_apply_neg_subj_bases:
-                        zs_vecs_2sets_neg = subj_basis_generator(-zs_clip_features, -zs_id_embs, 
+                        zs_vecs_2sets_neg = subj_basis_generator(-zs_clip_features, -zs_id_embs_noisy, 
                                                                  self.curr_subj_is_face)
                         zs_neg_subj_bases_weight = 0.2
                         zs_vecs_2sets = zs_vecs_2sets * (1 + zs_neg_subj_bases_weight) \
