@@ -1474,7 +1474,7 @@ class EmbeddingManager(nn.Module):
                         num_vectors_each_placeholder = self.number_vectors_each_subj
 
                     zs_id_embs = zs_image_feat_dict['id']
-                    noise_std = 0.05
+                    noise_std = 0.025
                     # Add noise to zs_id_embs during training with probability 0.5.
                     if self.training and random.random() < 0.5:
                         zs_id_embs_noisy = zs_id_embs + noise_std * torch.randn_like(zs_id_embs)

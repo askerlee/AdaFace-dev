@@ -12,6 +12,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--subject", type=str, default="subjects-celebrity/taylorswift")
 # "a man in superman costume"
 parser.add_argument("--prompt", type=str, required=True)
+parser.add_argument("--noise", type=float, default=0)
 args = parser.parse_args()
 
 from ip_adapter.ip_adapter_faceid_separate import IPAdapterFaceID
@@ -20,6 +21,8 @@ app = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider', 'CPUExe
 app.prepare(ctx_id=0, det_size=(640, 640))
 
 image_folder = args.subject
+if image_folder.endswith("/"):
+    image_folder = image_folder[:-1]
 subject_name = os.path.basename(image_folder)
 image_paths = glob.glob(os.path.join(image_folder, "*.jpg"))
 image_count = 0
@@ -32,6 +35,7 @@ for image_path in image_paths:
 
 print(f"Extracted ID embeddings from {image_count} images in {image_folder}")
 faceid_embeds = torch.cat(faceid_embeds, dim=1)
+faceid_embeds += torch.randn_like(faceid_embeds) * args.noise
 
 base_model_path = "SG161222/Realistic_Vision_V4.0_noVAE"
 vae_model_path = "stabilityai/sd-vae-ft-mse"
@@ -76,6 +80,13 @@ for i, image in enumerate(images):
     grid_image.paste(image, (512 * (i % 2), 512 * (i // 2)))
 
 prompt_sig = prompt.replace(" ", "_").replace(",", "_")
-grid_path = os.path.join(save_dir, f"{subject_name}-{prompt_sig}.png")
-grid_image.save(grid_path)
-print(f"Saved to {grid_path}")
+grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{args.noise}.png")
+if os.path.exists(grid_filepath):
+    grid_count = 2
+    grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{args.noise}-{grid_count}.jpg')
+    while os.path.exists(grid_filepath):
+        grid_count += 1
+        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{args.noise}-{grid_count}.jpg')
+
+grid_image.save(grid_filepath)
+print(f"Saved to {grid_filepath}")
