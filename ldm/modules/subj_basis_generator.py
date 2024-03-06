@@ -261,20 +261,22 @@ class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
         depth=2,                            # number of (CrossAttention, FeedForward) layers.     
-        # number of cross-attention heads. Same as OpenAI clip-vit-large-patch14.
+        # number of cross-attention heads. Half of the number of heads 12 of OpenAI clip-vit-large-patch14:
         # https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
-        num_heads=12,                       
+        num_heads=6,                       
         # num_out_queries: number of output queries.
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
         # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
         num_out_queries=234,                # fg: 234 = 9 * 26. bg: 104 = 4 * 26.
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
         face_embedding_dim=512,             # insightface face feature dimension for humans.
+        # DINO vits16 has 6 attention heads:
+        # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
         # Number of low-rank latent queries. If num_latent_queries = 1, 
         # then basically all output queries are the same.
         num_latent_queries=1,               
-        latent_query_dim=96,                # Latent query dimension. num_heads * 8.
+        latent_query_dim=192,               # Latent query dimension. num_heads * 32.
         num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
         max_seq_len: int = 257,             # [CLS token, image tokens]
@@ -296,10 +298,15 @@ class SubjBasisGenerator(nn.Module):
         self.placeholder_is_bg = placeholder_is_bg
         self.num_latent_queries  = num_latent_queries
         if not self.placeholder_is_bg:
+            # 512 -> num_latent_queries * latent_query_dim = 1 * 192.
             self.face_proj_in = Emb2Queries(face_embedding_dim, latent_query_dim, num_output_queries=num_latent_queries,
                                             elementwise_affine=elementwise_affine)
-            self.obj_proj_in  = Emb2Queries(dino_embedding_dim, latent_query_dim, num_output_queries=num_latent_queries,
-                                            elementwise_affine=elementwise_affine)
+            if num_latent_queries == 1 and latent_query_dim == dino_embedding_dim:
+                # No need to project the object embeddings.
+                self.obj_proj_in = nn.Identity()
+            else:
+                self.obj_proj_in  = Emb2Queries(dino_embedding_dim, latent_query_dim, num_output_queries=num_latent_queries,
+                                                elementwise_affine=elementwise_affine)
             # If it's a subject placeholder, then latent_queries 
             # are generated from face or object embeddings. No static_latent_queries.
             self.static_latent_queries = None            
