@@ -297,6 +297,8 @@ class SubjBasisGenerator(nn.Module):
 
         self.placeholder_is_bg = placeholder_is_bg
         self.num_latent_queries  = num_latent_queries
+        self.latent_query_dim    = latent_query_dim
+
         if not self.placeholder_is_bg:
             # 512 -> num_latent_queries * latent_query_dim = 1 * 192.
             self.face_proj_in = Emb2Queries(face_embedding_dim, latent_query_dim, num_output_queries=num_latent_queries,
@@ -422,7 +424,7 @@ class SubjBasisGenerator(nn.Module):
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
-        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, num_out_queries={self.num_out_queries}, num_latent_queries={self.num_latent_queries}, " \
+        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, latent_queries={self.num_latent_queries}*{self.latent_query_dim}, num_out_queries={self.num_out_queries}, " \
                f"num_lora2hira_modes={self.num_lora2hira_modes}, elementwise_affine={self.elementwise_affine}, codebook_size={self.codebook_size}"
     
 @dataclass
