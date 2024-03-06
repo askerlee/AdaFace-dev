@@ -10,8 +10,8 @@ import os
 gpu_id = 0
 T = 0.65
 
-base_folder  = '/data/rafter/VGGface2_HQ_masks/'
-trash_folder = '/data/rafter/VGGface2_HQ_masks_trash/'
+base_folder  = '/data/shaohua/VGGface2_HQ_masks/'
+trash_folder = '/data/shaohua/VGGface2_HQ_masks_trash/'
 #face_encoder = insightface.model_zoo.get_model('models/insightface/model.onnx', 
 #                                               providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
 face_encoder = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])

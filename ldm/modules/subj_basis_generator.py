@@ -117,15 +117,15 @@ def Emb2Queries(input_dim, output_dim, num_output_queries, elementwise_affine=Tr
     )
 
 # Low-rank to high-rank transformation.
-def Lora2Hira(lora_rank, output_dim, num_modes, num_output_queries, elementwise_affine=True):
+def Lora2Hira(lora_rank, hira_rank, output_dim, num_modes, elementwise_affine=True):
     return nn.Sequential(        
         # Permute to [BS, output_dim, lora_rank].
         Rearrange('b q d -> b d q'),
-        # Project to [BS, output_dim, num_output_queries].
-        nn.Linear(lora_rank, num_output_queries * num_modes, bias=False),
+        # Project to [BS, output_dim, hira_rank].
+        nn.Linear(lora_rank, hira_rank * num_modes, bias=False),
         # Reshape and permute to [BS, num_modes, num_output_queries, output_dim].
-        Rearrange('b d (m q) -> b m q d', m=num_modes, q=num_output_queries),
-        # Aggregate [BS, num_modes, num_output_queries, output_dim] -> [BS, num_output_queries, output_dim].
+        Rearrange('b d (m q) -> b m q d', m=num_modes, q=hira_rank),
+        # Aggregate [BS, num_modes, hira_rank, output_dim] -> [BS, hira_rank, output_dim].
         LearnedSoftAggregate(num_feat=output_dim, group_dim=1, keepdim=False),        
         nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
         nn.Dropout(0.1),    
@@ -271,7 +271,9 @@ class SubjBasisGenerator(nn.Module):
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
         face_embedding_dim=512,             # insightface face feature dimension for humans.
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
-        num_latent_queries=16,              # Number of low-rank latent queries.
+        # Number of low-rank latent queries. If num_latent_queries = 1, 
+        # then basically all output queries are the same.
+        num_latent_queries=1,               
         latent_query_dim=96,                # Latent query dimension. num_heads * 8.
         num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
@@ -332,13 +334,15 @@ class SubjBasisGenerator(nn.Module):
         self.num_lora2hira_modes    = num_lora2hira_modes
         self.elementwise_affine     = elementwise_affine
         self.output_scale           = output_dim ** -0.5
-        self.lora2hira = Lora2Hira(lora_rank=num_latent_queries, output_dim=output_dim, num_modes=num_lora2hira_modes,
-                                   num_output_queries=num_out_queries, elementwise_affine=elementwise_affine)
+        # Linearly combine the latent queries to generate the output queries.
+        self.lora2hira = Lora2Hira(lora_rank=num_latent_queries, hira_rank=num_out_queries, 
+                                   output_dim=output_dim, num_modes=num_lora2hira_modes,
+                                   elementwise_affine=elementwise_affine)
         
-        self.layers    = nn.ModuleList([])
-        self.codebooks = nn.ParameterList([]) if self.use_codebook else None
-        self.codebook_lns = nn.ParameterList([]) if self.use_codebook else None
-        self.use_FFN   = use_FFN
+        self.layers         = nn.ModuleList([])
+        self.codebooks      = nn.ParameterList([]) if self.use_codebook else None
+        self.codebook_lns   = nn.ParameterList([]) if self.use_codebook else None
+        self.use_FFN        = use_FFN
 
         for dep in range(depth):
             if dep == 0:

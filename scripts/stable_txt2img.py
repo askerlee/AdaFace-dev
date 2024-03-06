@@ -294,6 +294,9 @@ def parse_args():
     parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
                         default='openai',
                         help="Type of zero-shot learning clip model")
+    parser.add_argument("--zs_apply_neg_subj_bases", type=str2bool, nargs="?", const=True, default=False,
+                        help="Apply negative subject bases for zero-shot learning")
+    
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
     parser.add_argument("--ref_masks", type=str, nargs='+', default=None,
@@ -403,6 +406,7 @@ def main(opt):
             zs_image_emb_dim = zs_clip_type2image_emb_dim[opt.zs_clip_type]            
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.zs_clip_type = opt.zs_clip_type
+            config.model.params.personalization_config.params.zs_apply_neg_subj_bases = opt.zs_apply_neg_subj_bases
         else:
             ref_images = None
             ref_masks  = None

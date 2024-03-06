@@ -45,6 +45,8 @@ def parse_args():
     parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
                         default='openai',
                         help="Type of zero-shot learning clip model")
+    parser.add_argument("--zs_apply_neg_subj_bases", type=str2bool, nargs="?", const=True, default=False,
+                        help="Apply negative subject bases for zero-shot learning")    
     parser.add_argument("--no_id_emb", action="store_true",
                         help="Do not use face/DINO embeddings for zero-shot generation")
       
@@ -485,6 +487,8 @@ if __name__ == "__main__":
                 command_line += f" --ignore_ref_masks"
             if args.no_id_emb:
                 command_line += f" --no_id_emb"
+            if args.zs_apply_neg_subj_bases:
+                command_line += f" --zs_apply_neg_subj_bases"
                 
         if hasattr(args, 'num_vectors_per_subj_token'):
             command_line += f" --subject_string {args.orig_placeholder} --num_vectors_per_subj_token {args.num_vectors_per_subj_token}"

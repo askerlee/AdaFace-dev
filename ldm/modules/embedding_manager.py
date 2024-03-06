@@ -1011,6 +1011,8 @@ class EmbeddingManager(nn.Module):
             zs_elementwise_affine=True,
             zs_use_FFN=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
+            zs_apply_neg_subj_bases=False,
+            zs_num_latent_queries=1,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1206,14 +1208,15 @@ class EmbeddingManager(nn.Module):
                 # bg placeholder always has depth=1.
                 depth = zs_num_subj_generator_layers if not placeholder_is_bg else 1
                 subj_basis_generator = SubjBasisGenerator(depth=depth,
+                                                          num_latent_queries = zs_num_latent_queries,
                                                           num_out_queries = num_out_queries,
                                                           num_lora2hira_modes = zs_num_lora2hira_modes,
                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
                                                           image_embedding_dim = zs_image_emb_dim, 
                                                           output_dim = out_emb_dim,
-                                                          elementwise_affine=zs_elementwise_affine,
-                                                          use_FFN=zs_use_FFN,
-                                                          placeholder_is_bg=placeholder_is_bg)
+                                                          elementwise_affine = zs_elementwise_affine,
+                                                          use_FFN = zs_use_FFN,
+                                                          placeholder_is_bg = placeholder_is_bg)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 
@@ -1261,6 +1264,7 @@ class EmbeddingManager(nn.Module):
                                             else {subj_name: True for subj_name in self.subject_strings}
         # zs_image_feat_dict have three keys: 'subj', 'bg', 'id'.
         self.zs_image_feat_dict = {}
+        self.zs_apply_neg_subj_bases = zs_apply_neg_subj_bases
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
@@ -1483,6 +1487,13 @@ class EmbeddingManager(nn.Module):
                     # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
                     zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs, 
                                                         self.curr_subj_is_face)
+                    if self.zs_apply_neg_subj_bases:
+                        zs_vecs_2sets_neg = subj_basis_generator(-zs_clip_features, -zs_id_embs, 
+                                                                 self.curr_subj_is_face)
+                        zs_neg_subj_bases_weight = 0.2
+                        zs_vecs_2sets = zs_vecs_2sets * (1 + zs_neg_subj_bases_weight) \
+                                        - zs_vecs_2sets_neg * zs_neg_subj_bases_weight
+
                     # TODO: support multiple subjects in a batch, i.e., zs_vecs_2sets will be reshaped to 4D.
                     zs_vecs_2sets = zs_vecs_2sets.reshape(num_vectors_each_placeholder,
                                                           self.num_zs_vecs_per_token, -1)

@@ -255,7 +255,7 @@ class PersonalizedBase(Dataset):
         self.fg_mask_paths = sum(self.fg_mask_paths_by_subj, [])
         self.caption_paths = sum(self.caption_paths_by_subj, [])
         print(f"Found {len(self.image_paths)} images in {len(self.subj_roots)} folders, {total_num_valid_fg_masks} fg masks, " \
-              f"{total_num_valid_mean_embs} total_num_valid_mean_embs, {total_num_valid_captions} captions")
+              f"{total_num_valid_mean_embs} mean embs, {total_num_valid_captions} captions")
   
         self.num_images = len(self.image_paths)
         self.set_name = set
