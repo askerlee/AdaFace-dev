@@ -15,6 +15,7 @@ import glob
 from evaluation.eval_utils import parse_subject_file
 import torch.distributed as dist
 from queue import Queue
+import json
 
 imagenet_templates_smallest = [
     'a photo of a {}',
@@ -123,7 +124,7 @@ animal_pat       = "cat|cats|dog|dogs"
 human_animal_pat = "|".join([single_human_pat, single_role_pat, plural_human_pat, plural_role_pat, animal_pat])
 
 def filter_non_image(x):
-    exclusion_pats = [ "_mask.png", ".pt" ]
+    exclusion_pats = [ "_mask.png", ".pt", ".json" ]
     return not any([ pat in x for pat in exclusion_pats ])
 
 class PersonalizedBase(Dataset):
@@ -147,10 +148,10 @@ class PersonalizedBase(Dataset):
                  # placeholder_prefix for compositional prompts. Could be a list of strings, separated by ",".
                  compos_placeholder_prefix=None,   
                  # cls string used to compute the delta loss.
-                 # cls_delta_string is the same as subj init string.
-                 cls_delta_string=None,  
+                 # default_cls_delta_string is the same as subj init string.
+                 default_cls_delta_string=None,  
                  bg_init_string=None,
-                 subj_initializer_word_weights=None,
+                 default_subj_initializer_word_weights=None,
                 # num_vectors_per_subj_token: how many vectors in each layer are allocated to model 
                 # the subject. If num_vectors_per_subj_token > 1, pad with "," in the prompts to leave
                 # room for those extra vectors.
@@ -205,8 +206,10 @@ class PersonalizedBase(Dataset):
         total_num_valid_fg_masks    = 0
         total_num_valid_captions    = 0
         total_num_valid_mean_embs   = 0
+        meta_subj2person_type       = {}
 
         for subj_root in self.subj_roots:
+            subject_name = os.path.basename(subj_root)
             all_filenames = sorted(os.listdir(subj_root))
             # image_paths and mask_paths are full paths.
             all_file_paths      = [ os.path.join(subj_root, file_path) for file_path in all_filenames ]
@@ -235,6 +238,14 @@ class PersonalizedBase(Dataset):
                 total_num_valid_mean_embs += 1
             else:
                 self.mean_emb_path_by_subj.append(None)
+
+            if 'metainfo.json' in all_filenames:
+                metainfo_path = os.path.join(subj_root, 'metainfo.json')
+                metainfo = json.load(open(metainfo_path, "r"))
+                if 'person_type' in metainfo:
+                    meta_subj2person_type[subject_name] = metainfo['person_type']
+                else:
+                    meta_subj2person_type[subject_name] = default_cls_delta_string
 
             total_num_valid_fg_masks += num_valid_fg_masks
             total_num_valid_captions += num_valid_captions
@@ -295,10 +306,10 @@ class PersonalizedBase(Dataset):
                             subj2attr[k][subj_name] = subj2attr_singlefile[k][subj_name]
 
         if 'broad_classes' not in subj2attr:
-            self.broad_classes          = [ broad_class ] * self.num_subjects
+            self.broad_classes  = [ broad_class ] * self.num_subjects
         else:
-            self.broad_classes          = [ subj2attr['broad_classes'][subject_name] \
-                                            for subject_name in self.subject_names ]
+            self.broad_classes  = [ subj2attr['broad_classes'][subject_name] if subject_name in subj2attr['broad_classes'] else broad_class \
+                                    for subject_name in self.subject_names ]
         # cartoon characters are usually depicted as human-like, so is_animal is True.
         self.are_animals = [ (broad_class == 1 or broad_class == 2) \
                               for broad_class in self.broad_classes ]
@@ -346,31 +357,47 @@ class PersonalizedBase(Dataset):
         else:
             self.compos_placeholder_prefixes   = None
 
-        if 'cls_delta_strings' in subj2attr:
-            self.cls_delta_strings = [ subj2attr['cls_delta_strings'][subject_name] \
-                                        for subject_name in self.subject_names ]
-        else:
-            if cls_delta_string is not None:
-                self.cls_delta_strings = [ cls_delta_string ] * self.num_subjects
+        self.cls_delta_strings = []
+        self.list_subj_initializer_word_weights = []
+        self.subjects_are_faces = []
+        
+        for subject_name in self.subject_names:
+            # Set the cls_delta_string for each subject.
+            if 'cls_delta_strings' in subj2attr and subject_name in subj2attr['cls_delta_strings']:
+                cls_delta_string = subj2attr['cls_delta_strings'][subject_name]
+            elif subject_name in meta_subj2person_type:
+                cls_delta_string = meta_subj2person_type[subject_name]
+            elif default_cls_delta_string is not None:
+                cls_delta_string = default_cls_delta_string
             else:
-                self.cls_delta_strings = [ default_cls_delta_strings[broad_class] \
-                                            for broad_class in self.broad_classes ]
+                cls_delta_string = default_cls_delta_strings[broad_class]
 
-        # list_subj_initializer_word_weights are not used in the data loader, but are used to initialize
-        # the embedding manager.
-        if 'all_init_word_weights' in subj2attr:
-            self.list_subj_initializer_word_weights = [ subj2attr['all_init_word_weights'][subject_name] \
-                                                          for subject_name in self.subject_names ]
-        else:
-            self.list_subj_initializer_word_weights = [ subj_initializer_word_weights ] * self.num_subjects
+            self.cls_delta_strings.append(cls_delta_string)
 
-        if 'are_faces' in subj2attr:
-            self.subjects_are_faces = [ subj2attr['are_faces'][subject_name] \
-                                        for subject_name in self.subject_names ]
-        else:
-            # This shouldn't happen, as 'are_faces' is expected to be present in each subject info file.
-            # Since our focus is human faces, we set the default values to True.
-            self.subjects_are_faces = [ True ] * self.num_subjects
+            # Set all_init_word_weights for each subject.
+            # list_subj_initializer_word_weights are not used in the data loader, but are used to initialize
+            # the embedding manager.
+            if 'all_init_word_weights' in subj2attr and subject_name in subj2attr['all_init_word_weights']:
+                subj_initializer_word_weights = subj2attr['all_init_word_weights'][subject_name]
+            elif subject_name in meta_subj2person_type:
+                cls_delta_string_num_words = len(cls_delta_string.split())
+                if cls_delta_string_num_words > 1:
+                    # subj_initializer_word_weights: [1, ..., 1, 2]
+                    subj_initializer_word_weights = [1] * (cls_delta_string_num_words - 1) + [2]
+                else:
+                    # If cls_delta_string is a single word, then the weights are [1].
+                    subj_initializer_word_weights = [1]
+            else:
+                subj_initializer_word_weights = default_subj_initializer_word_weights
+            self.list_subj_initializer_word_weights.append(subj_initializer_word_weights)
+
+            if 'are_faces' in subj2attr and subject_name in subj2attr['are_faces']:
+                is_face = subj2attr['are_faces'][subject_name]
+            else:
+                # By default, assume all subjects are faces.
+                is_face = True
+
+            self.subjects_are_faces.append(is_face)
 
         self.bg_initializer_strings             = [ bg_init_string ] * self.num_subjects
         # bg_initializer_word_weights are always None (uniform over bg initializer words).

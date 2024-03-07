@@ -2112,7 +2112,7 @@ class LatentDiffusion(DDPM):
     # is_face: whether the images are faces. If True, then face embedding will be extracted. 
     # Otherwise, DINO embedding will be extracted.
     # fg_masks: a list of [Hi, Wi].
-    def encode_zero_shot_image_features(self, images, fg_masks, is_face, calc_avg=False, image_paths=None, debug=False):
+    def encode_zero_shot_image_features(self, images, fg_masks, is_face, calc_avg=False, image_paths=None):
         if not self.zs_image_encoder_instantiated:
             self.instantiate_zero_shot_image_encoders(self.zs_clip_type)
 
@@ -2134,6 +2134,7 @@ class LatentDiffusion(DDPM):
                 if isinstance(image, torch.Tensor):
                     image = image.cpu().numpy().transpose(1, 2, 0)
                 '''
+                face_encoder:
                 {'landmark_3d_68': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc190>, 
                  'landmark_2d_106': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc2b0>, 
                  'detection': <insightface.model_zoo.retinaface.RetinaFace object at 0x7f8e3f0cc100>, 
@@ -2141,7 +2142,6 @@ class LatentDiffusion(DDPM):
                  'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
                 '''                    
                 face_info = self.face_encoder.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-
                 if len(face_info) == 0:
                     # If no face is detected (e.g. animals or objects), then use a zero tensor as the face embedding.
                     id_emb = torch.zeros(512, device=self.device)
@@ -2222,19 +2222,26 @@ class LatentDiffusion(DDPM):
         # clip_features: [BS, 514, 1280].
         # id_embs:       [BS, 512].
         clip_features = torch.cat([image_fg_features, image_bg_features], dim=1)
+
         if calc_avg:
             # clip_features: [BS, 514, 1280] -> [1, 514, 1280].
             # id_embs:       [BS, 512]       -> [1, 512].
             clip_features = clip_features.mean(dim=0, keepdim=True)
 
-            #debug = True
+            debug = False
             if debug and id_embs is not None:
-                print(image_paths)
+                print(image_paths)                    
                 calc_stats('id_embs', id_embs)
                 # Compute pairwise similarities of the embeddings.
                 id_embs = F.normalize(id_embs, p=2, dim=1)
                 pairwise_sim = torch.matmul(id_embs, id_embs.t())
                 print('pairwise_sim:', pairwise_sim)
+                top_dir = os.path.dirname(image_paths[0]) 
+                mean_emb_path = os.path.join(top_dir, "mean_emb.pt")
+                if os.path.exists(mean_emb_path):
+                    mean_emb = torch.load(mean_emb_path)
+                    sim_to_mean = torch.matmul(id_embs, mean_emb.t())
+                    print('sim_to_mean:', sim_to_mean)
 
             id_embs = id_embs.mean(dim=0, keepdim=True) if id_embs is not None else None
 

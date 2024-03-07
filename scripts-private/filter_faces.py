@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import cv2
 import shutil
 import os
+import json
 
 gpu_id = 0
 T = 0.65
@@ -36,8 +37,11 @@ for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
     if not resumed:
         continue
 
+    genders = []
+    ages = []
+
     for image_i, image_path in enumerate(os.listdir(subj_path)):
-        if "_mask.png" in image_path or ".pt" in image_path:
+        if "_mask.png" in image_path or ".pt" in image_path or ".json" in image_path:
             continue
 
         if image_i % 20 == 0:
@@ -68,7 +72,11 @@ for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
             id_emb = torch.from_numpy(face_info.normed_embedding).to(f"cuda:{gpu_id}")
             id_embs.append(id_emb)
             image_fullpaths.append(image_fullpath)
-    
+            gender  = face_info['gender']
+            age     = face_info['age']
+            genders.append(gender)
+            ages.append(age)
+
     if len(id_embs) == 0:
         continue
 
@@ -78,10 +86,36 @@ for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
     mean_emb = id_embs.mean(dim=0, keepdim=True)
     mean_emb = F.normalize(mean_emb, p=2, dim=1)
     torch.save(mean_emb, os.path.join(subj_path, 'mean_emb.pt'))
-               
+
     # [1, 512] * [512, BS] => [1, BS]
     sims_to_mean = torch.matmul(mean_emb, id_embs.t())[0]
-    print(f"Avg sim: {sims_to_mean.mean().item():.3f}")
+    avg_sim = sims_to_mean.mean().item()
+    print(f"Avg sim: {avg_sim:.3f}")
+
+    # Majority vote for age and gender.
+    avg_age     = sum(ages) / len(ages)
+    avg_gender  = sum(genders) / len(genders)
+    # Neutral face? 
+    if avg_gender == 0.5:
+        breakpoint()
+
+    # Map gender and avg_age to one in ["man", "woman", "young man", "young woman", "boy", "girl"]:
+    if avg_age <= 18 and avg_gender < 0.5:
+        person_type = "girl"
+    if avg_age <= 18 and avg_gender > 0.5:
+        person_type = "boy"
+    if avg_age > 18 and avg_age < 30 and avg_gender < 0.5:
+        person_type = "young woman"
+    if avg_age > 18 and avg_age < 30 and avg_gender > 0.5:
+        person_type = "young man"
+    if avg_age >= 30 and avg_gender < 0.5:
+        person_type = "woman"
+    if avg_age >= 30 and avg_gender > 0.5:
+        person_type = "man"
+
+    metainfo = { 'gender': round(avg_gender), 'age': round(avg_age), 'person_type': person_type,
+                 'avg_sim': avg_sim }
+    json.dump(metainfo, open(os.path.join(subj_path, 'metainfo.json'), 'w'))
 
     for i, sim in enumerate(sims_to_mean):
         if sim < T:

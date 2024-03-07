@@ -235,10 +235,10 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--subj_init_word_weights", nargs="*", 
         type=float, 
-        help="Weights of each token in cls_delta_string/subj_init_string")
+        help="Weights of each token in default_cls_delta_string/subj_init_string")
 
-    # cls_delta_string is also used as subj_init_string.
-    parser.add_argument("--cls_delta_string",
+    # default_cls_delta_string is also used as subj_init_string.
+    parser.add_argument("--default_cls_delta_string",
         type=str, default='person',
         help="One or more word tso be used in class-level prompts for delta loss")
     
@@ -882,13 +882,13 @@ if __name__ == "__main__":
         # broad_class
         config.data.params.train.params.broad_class             = opt.broad_class
         config.data.params.validation.params.broad_class        = opt.broad_class
-        config.data.params.train.params.cls_delta_string        = opt.cls_delta_string
-        config.data.params.validation.params.cls_delta_string   = opt.cls_delta_string
+        config.data.params.train.params.default_cls_delta_string        = opt.default_cls_delta_string
+        config.data.params.validation.params.default_cls_delta_string   = opt.default_cls_delta_string
         if opt.subj_init_word_weights is not None and len(opt.subj_init_word_weights) > 0:
-            assert len(opt.subj_init_word_weights) == len(re.split("\s+", opt.cls_delta_string))
+            assert len(opt.subj_init_word_weights) == len(re.split("\s+", opt.default_cls_delta_string))
 
-        config.data.params.train.params.subj_initializer_word_weights = opt.subj_init_word_weights
-        config.data.params.validation.params.subj_initializer_word_weights = opt.subj_init_word_weights
+        config.data.params.train.params.default_subj_initializer_word_weights       = opt.subj_init_word_weights
+        config.data.params.validation.params.default_subj_initializer_word_weights  = opt.subj_init_word_weights
         config.data.params.train.params.num_vectors_per_subj_token           = opt.num_vectors_per_subj_token
         config.data.params.validation.params.num_vectors_per_subj_token      = opt.num_vectors_per_subj_token
         config.data.params.train.params.num_vectors_per_bg_token        = opt.num_vectors_per_bg_token
