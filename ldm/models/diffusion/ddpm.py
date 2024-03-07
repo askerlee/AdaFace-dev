@@ -2369,13 +2369,13 @@ class LatentDiffusion(DDPM):
             # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
             # posing too strong regularizations to the subject embeddings.
             if self.iter_flags['comp_init_fg_from_training_image']:
-                k_cls_scale_layerwise_range = [0.9, 0.6]
+                k_cls_scale_layerwise_range = [1.0, 1.0]
                 # Less (compared with the settings below) subject embeddings mixed into v.
-                v_cls_scale_layerwise_range = [0.9, 0.6]
+                v_cls_scale_layerwise_range = [1.0, 0.85]
             else:
-                k_cls_scale_layerwise_range = [0.8, 0.4]
+                k_cls_scale_layerwise_range = [1.0, 1.0]
                 # More subject embeddings mixed into v.
-                v_cls_scale_layerwise_range = [0.8, 0.4]
+                v_cls_scale_layerwise_range = [1.0, 0.7]
         else:
             if self.iter_flags['comp_init_fg_from_training_image']:
                 k_cls_scale_layerwise_range = [1.0, 1.0]
