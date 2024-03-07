@@ -1696,7 +1696,8 @@ class LatentDiffusion(DDPM):
             # If each_batch_from_same_subject, then we average the zs_clip_features and zs_id_embs to get 
             # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
             zs_clip_features, zs_id_embs = self.encode_zero_shot_image_features(images, fg_mask,
-                                                                                is_face=self.iter_flags['is_face'],
+                                                                                # iter_flags['is_face'] is a list of 0/1 elements.
+                                                                                is_face=self.iter_flags['is_face'][0],
                                                                                 calc_avg=self.each_batch_from_same_subject,
                                                                                 image_paths=image_paths)
             
