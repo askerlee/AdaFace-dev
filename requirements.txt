@@ -23,6 +23,7 @@ captionizer
 safetensors
 wandb
 gradio
+diffusers
 webdataset
 bitsandbytes
 prodigyopt
