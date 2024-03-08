@@ -4,7 +4,7 @@ import torch
 from diffusers import StableDiffusionPipeline, DDIMScheduler, AutoencoderKL
 from PIL import Image
 import sys
-sys.path.append("/home/shaohua/ip_adapter")
+#sys.path.append("/home/shaohua/ip_adapter")
 import os, glob
 import argparse
 import numpy as np
@@ -17,7 +17,7 @@ parser.add_argument("--prompt", type=str, required=True)
 parser.add_argument("--noise", type=float, default=0)
 args = parser.parse_args()
 
-from ip_adapter.ip_adapter_faceid_separate import IPAdapterFaceID
+from ip_adapter.ip_adapter.ip_adapter_faceid_separate import IPAdapterFaceID
 
 app = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
 app.prepare(ctx_id=0, det_size=(512, 512))

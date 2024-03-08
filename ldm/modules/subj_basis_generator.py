@@ -107,8 +107,7 @@ def LoRA_Emb2Queries(input_dim, lora_rank, output_dim, num_modes,
 
 def Emb2Queries(input_dim, output_dim, num_output_queries, elementwise_affine=True):
     return nn.Sequential(
-        # Project to [BS, num_output_queries * output_dim * num_modes].
-        # It takes a huge param size. 512 * 32 * 768 * 4 = 6,291,456.
+        # Project to [BS, num_output_queries * output_dim].
         nn.Linear(input_dim, num_output_queries * output_dim, bias=False),
         # Reshape to [BS, num_output_queries, output_dim].
         Rearrange('b (q d) -> b q d', q=num_output_queries, d=output_dim),
@@ -269,14 +268,14 @@ class SubjBasisGenerator(nn.Module):
         # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
         num_out_queries=234,                # fg: 234 = 9 * 26. bg: 104 = 4 * 26.
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
-        face_embedding_dim=512,             # insightface face feature dimension for humans.
+        face_embedding_dim=768,             # insightface face feature dimension for humans.
         # DINO vits16 has 6 attention heads:
         # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
         # Number of low-rank latent queries. If num_latent_queries = 1, 
         # then basically all output queries are the same.
-        num_latent_queries=1,               
-        latent_query_dim=192,               # Latent query dimension. num_heads * 32.
+        num_latent_queries=16,               
+        latent_query_dim=768,               # Latent query dimension. num_heads * 128.
         num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
         max_seq_len: int = 257,             # [CLS token, image tokens]
@@ -300,15 +299,9 @@ class SubjBasisGenerator(nn.Module):
         self.latent_query_dim    = latent_query_dim
 
         if not self.placeholder_is_bg:
-            # 512 -> num_latent_queries * latent_query_dim = 1 * 192.
-            self.face_proj_in = Emb2Queries(face_embedding_dim, latent_query_dim, num_output_queries=num_latent_queries,
+            # [1, 384] -> [1, 16, 768].
+            self.obj_proj_in  = Emb2Queries(dino_embedding_dim, latent_query_dim, num_output_queries=num_latent_queries,
                                             elementwise_affine=elementwise_affine)
-            if num_latent_queries == 1 and latent_query_dim == dino_embedding_dim:
-                # No need to project the object embeddings.
-                self.obj_proj_in = nn.Identity()
-            else:
-                self.obj_proj_in  = Emb2Queries(dino_embedding_dim, latent_query_dim, num_output_queries=num_latent_queries,
-                                                elementwise_affine=elementwise_affine)
             # If it's a subject placeholder, then latent_queries 
             # are generated from face or object embeddings. No static_latent_queries.
             self.static_latent_queries = None            
@@ -392,10 +385,10 @@ class SubjBasisGenerator(nn.Module):
 
         # No need to use id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (id_embs is not None):
-            # id_embs: [1, 512].
-            # latent_queries: [1, 64, 64].
+            # id_embs: [1, 16, 768].
+            # latent_queries: [1, 16, 768].
             if is_face:
-                latent_queries = self.face_proj_in(id_embs)
+                latent_queries = id_embs
             else:
                 latent_queries = self.obj_proj_in(id_embs)
         else:

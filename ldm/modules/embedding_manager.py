@@ -1012,7 +1012,7 @@ class EmbeddingManager(nn.Module):
             zs_use_FFN=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_apply_neg_subj_bases=False,
-            zs_num_latent_queries=1,
+            zs_num_latent_queries=16,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1473,17 +1473,13 @@ class EmbeddingManager(nn.Module):
                         zs_clip_features = zs_image_feat_dict['subj']
                         num_vectors_each_placeholder = self.number_vectors_each_subj
 
+                    # zs_id_embs: [1, 512] or [2, 16, 768] if IP-Adapter is used.
                     zs_id_embs = zs_image_feat_dict['id']
-                    # Add noise to zs_id_embs during training with probability 0.5.
-                    # Noise level is gradually reduced from [0.04, 0.06] to [0.02, 0.03] during training.
-                    # Noise std is absolute, not relative (to the std of zs_id_embs).
-                    if self.training:
-                        zs_id_embs_noisy = add_noise_to_embedding(zs_id_embs, self.training_percent,
-                                                                  begin_noise_std_range=[0.04, 0.06], 
-                                                                  end_noise_std_range  =[0.02, 0.03],
-                                                                  add_noise_prob=0.5, noise_std_is_relative=False)
+                    if zs_id_embs.dim() == 2:
+                        uncond_id_embs = -zs_id_embs
                     else:
-                        zs_id_embs_noisy = zs_id_embs
+                        # zs_id_embs, uncond_id_embs: [1, 16, 768].
+                        zs_id_embs, uncond_id_embs = zs_id_embs.chunk(2)
 
                     # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
                     # curr_subj_is_face. 
@@ -1496,10 +1492,10 @@ class EmbeddingManager(nn.Module):
                     subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
                     # zs_clip_features: [BS, 257, 1280]
                     # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
-                    zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs_noisy, 
+                    zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs, 
                                                          self.curr_subj_is_face)
                     if self.zs_apply_neg_subj_bases:
-                        zs_vecs_2sets_neg = subj_basis_generator(-zs_clip_features, -zs_id_embs_noisy, 
+                        zs_vecs_2sets_neg = subj_basis_generator(-zs_clip_features, uncond_id_embs, 
                                                                  self.curr_subj_is_face)
                         zs_neg_subj_bases_weight = 0.2
                         zs_vecs_2sets = zs_vecs_2sets * (1 + zs_neg_subj_bases_weight) \
@@ -2073,6 +2069,7 @@ class EmbeddingManager(nn.Module):
     def set_zs_image_features(self, zs_clip_features, zs_id_embs):
         # zs_clip_features: [1, 514, 1280]
         # zs_clip_subj_features, zs_clip_bg_features: [1, 257, 1280].
+        # zs_id_embs: [1, 512] or [2, 16, 768]
         zs_clip_subj_features, zs_clip_bg_features = zs_clip_features.chunk(2, dim=1)
         #print(zs_clip_subj_features.mean(dim=1).squeeze(0)[:20])
         #print(zs_clip_bg_features.mean(dim=1).squeeze(0)[:20])

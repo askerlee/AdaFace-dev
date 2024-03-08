@@ -150,8 +150,8 @@ class PersonalizedBase(Dataset):
                  # cls string used to compute the delta loss.
                  # default_cls_delta_string is the same as subj init string.
                  default_cls_delta_string=None,  
-                 bg_init_string=None,
                  default_subj_initializer_word_weights=None,
+                 bg_init_string=None,
                 # num_vectors_per_subj_token: how many vectors in each layer are allocated to model 
                 # the subject. If num_vectors_per_subj_token > 1, pad with "," in the prompts to leave
                 # room for those extra vectors.
@@ -632,7 +632,6 @@ class PersonalizedBase(Dataset):
         # fg_mask is a 1-channel mask.
         fg_mask     = image_mask[:, :, 3]
         # Scale and round fg_mask to 0 or 1.
-        breakpoint()
         fg_mask     = (fg_mask  / 255).astype(np.uint8)
         # No need to scale aug_mask, as it's already 0 or 1.
         if aug_mask is not None:

@@ -25,7 +25,6 @@ __pycache__/
 /glide_model_cache
 /.vscode/*
 /.vscode
-scripts/stable_txt2img_db.py
 /regularization_images
 *.zip
 /._*
@@ -45,3 +44,5 @@ subjects-private
 wds-samples/*
 wds-samples
 /*.png
+/ip_adapter/*
+/ip_adapter

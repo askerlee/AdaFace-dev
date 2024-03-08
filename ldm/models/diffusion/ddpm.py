@@ -26,6 +26,8 @@ from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
 from transformers import CLIPImageProcessor, ViTFeatureExtractor, ViTModel
 from insightface.app import FaceAnalysis
 
+from ip_adapter.ip_adapter.ip_adapter_faceid_separate import IPAdapterFaceID
+
 from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, calc_stats, instantiate_from_config, \
                        ortho_subtract, ortho_l2loss, gen_gradient_scaler, \
@@ -38,7 +40,7 @@ from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_fla
                        extend_indices_B_by_n_times, split_indices_by_instance, \
                        resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
                        anneal_t_keep_prob, anneal_value, draw_annealed_bool, select_piecewise_value, \
-                       calc_layer_subj_comp_k_or_v_ortho_loss, \
+                       calc_layer_subj_comp_k_or_v_ortho_loss, add_noise_to_embedding, \
                        replace_prompt_comp_extra, sel_emb_attns_by_indices, \
                        gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
                        gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, clamp_prompt_embedding, \
@@ -199,6 +201,9 @@ class DDPM(pl.LightningModule):
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
+        self.face_encoder                           = None
+        self.dino_encoder                           = None
+        self.ip_model                               = None
         self.zs_image_encoder_instantiated          = False
         self.zs_clip_type                           = zs_clip_type
 
@@ -916,6 +921,34 @@ class LatentDiffusion(DDPM):
         self.dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
         print(f'Face and DINO encoders loaded on {self.device}.')
 
+        base_model_path = "SG161222/Realistic_Vision_V4.0_noVAE"
+        vae_model_path = "stabilityai/sd-vae-ft-mse"
+        ip_ckpt = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
+
+        from diffusers import StableDiffusionPipeline, DDIMScheduler, AutoencoderKL
+
+        noise_scheduler = DDIMScheduler(
+            num_train_timesteps=1000,
+            beta_start=0.00085,
+            beta_end=0.012,
+            beta_schedule="scaled_linear",
+            clip_sample=False,
+            set_alpha_to_one=False,
+            steps_offset=1,
+        )
+        vae = AutoencoderKL.from_pretrained(vae_model_path).to(dtype=torch.float16)
+        pipe = StableDiffusionPipeline.from_pretrained(
+            base_model_path,
+            torch_dtype=torch.float16,
+            scheduler=noise_scheduler,
+            vae=vae,
+            feature_extractor=None,
+            safety_checker=None
+        )
+
+        self.ip_model = IPAdapterFaceID(pipe, ip_ckpt, self.device, num_tokens=16, n_cond=1)
+        # Release RAM, as the pipeline is only used during initialization.
+        self.ip_model.pipe = None
         self.neg_image_features = None
         self.zs_image_encoder_instantiated = True
 
@@ -1693,6 +1726,7 @@ class LatentDiffusion(DDPM):
 
             # If each_batch_from_same_subject:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
             # Otherwise:                        zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
+            # If IP-adapter is used, then zs_id_embs: [2, 16, 768].
             # If each_batch_from_same_subject, then we average the zs_clip_features and zs_id_embs to get 
             # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
             zs_clip_features, zs_id_embs = self.encode_zero_shot_image_features(images, fg_mask,
@@ -2245,6 +2279,20 @@ class LatentDiffusion(DDPM):
                     print('sim_to_mean:', sim_to_mean)
 
             id_embs = id_embs.mean(dim=0, keepdim=True) if id_embs is not None else None
+            # Add noise to id_embs during training with probability 0.5.
+            # Noise level is gradually reduced from [0.04, 0.06] to [0.02, 0.03] during training.
+            # Noise std is absolute, not relative (to the std of id_embs).
+            if self.training:
+                id_embs = add_noise_to_embedding(id_embs, self.training_percent,
+                                                 begin_noise_std_range=[0.04, 0.06], 
+                                                 end_noise_std_range  =[0.02, 0.03],
+                                                 add_noise_prob=0.5, noise_std_is_relative=False)
+
+            if is_face and self.ip_model is not None:
+                # ip_embs, uncond_ip_embeds: [1, 16, 768].
+                ip_embs, uncond_ip_embeds = self.ip_model.get_image_embeds(id_embs)
+                # id_embs: [2, 16, 768].
+                id_embs = torch.cat([ip_embs, uncond_ip_embeds], dim=0).to(id_embs.dtype)
 
         return clip_features, id_embs
 
