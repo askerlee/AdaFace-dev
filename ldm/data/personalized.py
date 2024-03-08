@@ -131,7 +131,7 @@ class PersonalizedBase(Dataset):
     def __init__(self,
                  # a list of folders containing subfolders, each subfolder containing images of a subject.
                  data_roots,
-                 size=None,
+                 size=512,
                  repeats=100,
                  max_num_subjects_per_base_folder=1000,  # Set to -1 to load all subjects in each base folder.
                  max_num_images_per_subject=100,         # Set to -1 to load all images in each subject folder.
@@ -487,7 +487,7 @@ class PersonalizedBase(Dataset):
         wds_background_string = self.wds_background_strings[subject_idx]
 
         image_obj = Image.open(image_path)
-        if not image_obj.mode == "RGB":
+        if image_obj.mode != "RGB":
             image_obj = image_obj.convert("RGB")
 
         # default to score-sde preprocessing -- i don't understand what this comment means, but keep it here. 
@@ -497,7 +497,7 @@ class PersonalizedBase(Dataset):
        
         if fg_mask_path is not None:
             # mask is 8-bit grayscale, with same size as image. E.g., image is of [1282, 1282, 3],
-            # then mask is of [1282, 1282], with values True or False. 
+            # then mask is of [1282, 1282], with values True or False, converting to 0/1, which is wrong.
             # After converting to "L", mask is still [1282, 1282],
             # but pixel values change from True (1) to 255.
             fg_mask_obj = Image.open(fg_mask_path).convert("L")
@@ -632,6 +632,7 @@ class PersonalizedBase(Dataset):
         # fg_mask is a 1-channel mask.
         fg_mask     = image_mask[:, :, 3]
         # Scale and round fg_mask to 0 or 1.
+        breakpoint()
         fg_mask     = (fg_mask  / 255).astype(np.uint8)
         # No need to scale aug_mask, as it's already 0 or 1.
         if aug_mask is not None:
