@@ -83,8 +83,8 @@ class LearnedSoftAggregate(nn.Module):
         x_aggr      = (x * attn_probs).sum(dim=self.group_dim, keepdim=self.keepdim)
         return x_aggr
     
-def LoRA_Emb2Queries(input_dim, lora_rank, output_dim, num_modes, 
-                     num_output_queries, elementwise_affine=True):
+def LoRA_ExpandEmbs(input_dim, lora_rank, output_dim, num_modes, 
+                     num_output_vecs, elementwise_affine=True):
     return nn.Sequential(
         # Project to [BS, lora_rank * output_dim * num_modes].
         # It takes a huge param size. 512 * 32 * 768 * 4 = 6,291,456.
@@ -97,20 +97,20 @@ def LoRA_Emb2Queries(input_dim, lora_rank, output_dim, num_modes,
         nn.Dropout(0.1),
         # Permute to [BS, output_dim, lora_rank].
         Rearrange('b q d -> b d q'),
-        # Project to [BS, output_dim, num_output_queries].
-        nn.Linear(lora_rank, num_output_queries, bias=False),
-        # Permute to [BS, num_output_queries, output_dim].
+        # Project to [BS, output_dim, num_output_vecs].
+        nn.Linear(lora_rank, num_output_vecs, bias=False),
+        # Permute to [BS, num_output_vecs, output_dim].
         Rearrange('b d q -> b q d'),
         nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
         nn.Dropout(0.1),
     )
 
-def Emb2Queries(input_dim, output_dim, num_output_queries, elementwise_affine=True):
+def ExpandEmbs(input_dim, output_dim, num_output_vecs, elementwise_affine=True):
     return nn.Sequential(
-        # Project to [BS, num_output_queries * output_dim].
-        nn.Linear(input_dim, num_output_queries * output_dim, bias=False),
-        # Reshape to [BS, num_output_queries, output_dim].
-        Rearrange('b (q d) -> b q d', q=num_output_queries, d=output_dim),
+        # Project to [BS, num_output_vecs * output_dim].
+        nn.Linear(input_dim, num_output_vecs * output_dim, bias=False),
+        # Reshape to [BS, num_output_vecs, output_dim].
+        Rearrange('b (q d) -> b q d', q=num_output_vecs, d=output_dim),
         nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
         nn.Dropout(0.1),
     )
@@ -122,7 +122,7 @@ def Lora2Hira(lora_rank, hira_rank, output_dim, num_modes, elementwise_affine=Tr
         Rearrange('b q d -> b d q'),
         # Project to [BS, output_dim, hira_rank].
         nn.Linear(lora_rank, hira_rank * num_modes, bias=False),
-        # Reshape and permute to [BS, num_modes, num_output_queries, output_dim].
+        # Reshape and permute to [BS, num_modes, num_output_vecs, output_dim].
         Rearrange('b d (m q) -> b m q d', m=num_modes, q=hira_rank),
         # Aggregate [BS, num_modes, hira_rank, output_dim] -> [BS, hira_rank, output_dim].
         LearnedSoftAggregate(num_feat=output_dim, group_dim=1, keepdim=False),        
@@ -178,31 +178,32 @@ class PerceiverAttention(nn.Module):
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, input_dim, context_dim, num_heads, dropout=0.1, attn_polarity=5, elementwise_affine=True, 
+    def __init__(self, input_dim, context_dim, num_heads, dropout=0.1, attn_polarity=1, elementwise_affine=True, 
                  identity_to_q=False, identity_to_v=False, identity_to_out=False):
         super().__init__()
         dim_head  = input_dim // num_heads
         inner_dim = dim_head   * num_heads
 
         self.num_heads = num_heads
-        self.attn_polarity = 1
+        self.attn_polarity = attn_polarity
 
         # To increase stability,, we add layernorm to q,k,v projections.
         self.to_q = nn.Sequential(
                         nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_q else nn.Identity(),
                         #nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine)
-                        )
+                    )
         
         self.to_k = nn.Sequential(
                         # If context_dim != input_dim, then we need to project context_dim to input_dim 
                         # for similarity computation.
                         nn.Linear(context_dim, inner_dim, bias=False),
                         #nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine)
-                        )
+                    )
         
         self.to_v = nn.Sequential(
                         nn.Linear(context_dim, context_dim, bias=False) if not identity_to_v else nn.Identity(),
-                        nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine))
+                        nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine)
+                    )
 
         self.to_out = nn.Sequential(
             nn.Linear(context_dim, context_dim, bias=False) if not identity_to_out else nn.Identity(),
@@ -266,22 +267,20 @@ class SubjBasisGenerator(nn.Module):
         # num_out_queries: number of output queries.
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
         # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
+        num_id_vecs=16,                     # number of identity vectors.
         num_out_queries=234,                # fg: 234 = 9 * 26. bg: 104 = 4 * 26.
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
-        face_embedding_dim=768,             # insightface face feature dimension for humans.
+        face_embedding_dim=768,             # The dimension of IP-Adapter face features for humans. Same as latent_query_dim.
         # DINO vits16 has 6 attention heads:
         # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
         # Number of low-rank latent queries. If num_latent_queries = 1, 
         # then basically all output queries are the same.
-        num_latent_queries=16,               
+        num_latent_queries=64,               
         latent_query_dim=768,               # Latent query dimension. num_heads * 128.
         num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
-        max_seq_len: int = 257,             # [CLS token, image tokens]
-        apply_pos_emb: bool = True,         # Newer IP Adapter uses positional embeddings.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
-        codebook_size: int = 468,           # Size of the codebook, 2 * num_out_queries.
         use_FFN: bool = True,               # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
     ):
@@ -294,41 +293,18 @@ class SubjBasisGenerator(nn.Module):
             nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
         )
 
-        self.placeholder_is_bg = placeholder_is_bg
+        self.placeholder_is_bg   = placeholder_is_bg
         self.num_latent_queries  = num_latent_queries
         self.latent_query_dim    = latent_query_dim
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
-            self.obj_proj_in  = Emb2Queries(dino_embedding_dim, latent_query_dim, num_output_queries=num_latent_queries,
-                                            elementwise_affine=elementwise_affine)
-            # If it's a subject placeholder, then latent_queries 
-            # are generated from face or object embeddings. No static_latent_queries.
-            self.static_latent_queries = None            
+            self.obj_proj_in  = ExpandEmbs(dino_embedding_dim, latent_query_dim, num_output_vecs=num_id_vecs,
+                                           elementwise_affine=elementwise_affine)
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.face_proj_in = None
             self.obj_proj_in  = None
-            # These static set of latent queries are used to attend to the ad-hoc CLIP image features.
-            self.static_latent_queries = nn.Parameter(torch.randn(1, num_latent_queries, latent_query_dim) / latent_query_dim**0.5)
-
-        # If placeholder_is_bg, then don't use codebook, instead draw features 
-        # from the ad-hoc CLIP image features.
-        self.use_codebook = not placeholder_is_bg
-        # If use_codebook, then no point to use positional embeddings.
-        if self.use_codebook:
-            apply_pos_emb = False
-            # Evenly distribute the codebooks across the depth.
-            self.codebook_size = codebook_size // self.depth
-        else:
-            self.codebook_size = -1
-
-        if apply_pos_emb:
-            self.pos_emb    = nn.Embedding(max_seq_len, output_dim)                             
-            self.pos_emb_ln = nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine)  
-        else:
-            self.pos_emb    = None
-            self.pos_emb_ln = None
 
         self.lq_ln    = nn.LayerNorm(latent_query_dim, elementwise_affine=elementwise_affine)
 
@@ -341,10 +317,10 @@ class SubjBasisGenerator(nn.Module):
                                    output_dim=output_dim, num_modes=num_lora2hira_modes,
                                    elementwise_affine=elementwise_affine)
         
-        self.layers         = nn.ModuleList([])
-        self.codebooks      = nn.ParameterList([]) if self.use_codebook else None
-        self.codebook_lns   = nn.ParameterList([]) if self.use_codebook else None
-        self.use_FFN        = use_FFN
+        self.layers             = nn.ModuleList([])
+        self.latent_queries     = nn.ParameterList([])
+        self.latent_query_lns   = nn.ModuleList([])
+        self.use_FFN            = use_FFN
 
         for dep in range(depth):
             if dep == 0:
@@ -355,11 +331,9 @@ class SubjBasisGenerator(nn.Module):
             self.layers.append(
                 nn.ModuleList(
                     [
-                        # dim=768, num_heads=16.
-                        # Should we disable elementwise_affine in CrossAttention layernorms? I'm not sure.
-                        # Currently it's the only place where elementwise_affine is used.
+                        # dim=768, num_heads=6.
                         CrossAttention(input_dim=input_dim, context_dim=output_dim, num_heads=num_heads, dropout=0.1,
-                                       identity_to_q=True, identity_to_v=True, identity_to_out=True),
+                                       identity_to_q=True, identity_to_v=False, identity_to_out=False),
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
                         FeedForward(dim=output_dim, mult=1, elementwise_affine=elementwise_affine) \
@@ -367,58 +341,46 @@ class SubjBasisGenerator(nn.Module):
                     ]
                 )
             )
-            if self.use_codebook:
-                layer_codebook = nn.Parameter(torch.randn(1, self.codebook_size, output_dim) / output_dim**0.5)
-                self.codebooks.append(layer_codebook)
-                self.codebook_lns.append(nn.LayerNorm(output_dim))
+            # These sets of latent queries are used to attend to the ad-hoc identity features.
+            layer_latent_queries = nn.Parameter(torch.randn(1, self.num_latent_queries, output_dim) / output_dim**0.5)
+            self.latent_queries.append(layer_latent_queries)
+            self.latent_query_lns.append(nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine))
 
         print(repr(self))
 
     def forward(self, clip_features, id_embs, is_face):     
-        if not self.use_codebook:
-            x = self.proj_in(clip_features)
-            if self.pos_emb is not None:
-                n, device = x.shape[1], x.device
-                pos_emb = self.pos_emb(torch.arange(n, device=device))
-                # Downscale positional embeddings to reduce its impact.
-                x = x + self.pos_emb_ln(pos_emb) * 0.5
-
         # No need to use id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (id_embs is not None):
             # id_embs: [1, 16, 768].
-            # latent_queries: [1, 16, 768].
-            if is_face:
-                latent_queries = id_embs
-            else:
-                latent_queries = self.obj_proj_in(id_embs)
+            if not is_face:
+                id_embs = self.obj_proj_in(id_embs)
         else:
-            latent_queries = self.static_latent_queries
-    
-        latent_queries = self.lq_ln(latent_queries.repeat(clip_features.size(0), 1, 1))
+            # Otherwise, context is the ad-hoc CLIP image features.
+            # id_embs: [1, 257, 768].
+            id_embs = self.proj_in(clip_features)
+
+        context = id_embs
 
         for i, (attn, ff) in enumerate(self.layers):
-            if self.use_codebook:
-                context = self.codebook_lns[i](self.codebooks[i])
-            else:
-                # Otherwise, context is the ad-hoc CLIP image features.
-                context = x
+            context = self.latent_query_lns[i](context)
+            latent_queries = self.latent_queries[i]
             
             # No residual connection at the first layer.
             if i == 0:
-                latent_queries = attn(latent_queries, context)
+                context = attn(latent_queries, context)
             else:
-                latent_queries = attn(latent_queries, context) + latent_queries
+                context = attn(latent_queries, context) + context
 
             if self.use_FFN:
-                latent_queries = ff(latent_queries) + latent_queries
+                context = ff(context) + context
         
-        latent_queries = self.lora2hira(latent_queries)
-        return latent_queries * self.output_scale
+        output_queries = self.lora2hira(context)
+        return output_queries * self.output_scale
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
         return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, latent_queries={self.num_latent_queries}*{self.latent_query_dim}, num_out_queries={self.num_out_queries}, " \
-               f"num_lora2hira_modes={self.num_lora2hira_modes}, elementwise_affine={self.elementwise_affine}, codebook_size={self.codebook_size}"
+               f"num_lora2hira_modes={self.num_lora2hira_modes}, elementwise_affine={self.elementwise_affine}"
     
 @dataclass
 class BaseModelOutputWithPooling2(ModelOutput):
