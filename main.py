@@ -387,11 +387,11 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
                 personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
     else:
         # Only keep the first subject and background placeholder.
-        personalization_config_params.subject_strings           = dataset.subject_strings[:1]
-        personalization_config_params.initializer_strings       = dataset.cls_delta_strings[:1]
-        personalization_config_params.list_initializer_word_weights  = dataset.list_subj_initializer_word_weights[:1]
-        personalization_config_params.subj_name_to_cls_delta_strings      = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
-        personalization_config_params.subj_name_to_cls_delta_word_weights = dict(zip(dataset.subject_names, dataset.list_subj_initializer_word_weights))
+        personalization_config_params.subject_strings                       = dataset.subject_strings[:1]
+        personalization_config_params.initializer_strings                   = ["person"]
+        personalization_config_params.list_initializer_word_weights         = [None]
+        personalization_config_params.subj_name_to_cls_delta_strings        = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
+        personalization_config_params.subj_name_to_cls_delta_word_weights   = dict(zip(dataset.subject_names, dataset.list_subj_initializer_word_weights))
         personalization_config_params.token2num_vectors         = dict()
         for subject_string in dataset.subject_strings[:1]:
             personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
@@ -1019,12 +1019,12 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.use_conv_attn_kernel_size \
                 = opt.use_conv_attn_kernel_size
 
-        config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
-        config.model.params.personalization_config.params.src_placeholders = opt.src_placeholders
-        config.model.params.personalization_config.params.loaded_embedder_components      = opt.loaded_embedder_components
-        config.model.params.personalization_config.params.frozen_placeholder_set = opt.frozen_placeholder_set
-        config.model.params.personalization_config.params.frozen_embedder_components      = opt.frozen_embedder_components
-        config.model.params.personalization_config.params.ckpt_params_perturb_ratio  = opt.ckpt_params_perturb_ratio
+        config.model.params.personalization_config.params.embedding_manager_ckpt        = opt.embedding_manager_ckpt
+        config.model.params.personalization_config.params.src_placeholders              = opt.src_placeholders
+        config.model.params.personalization_config.params.loaded_embedder_components    = opt.loaded_embedder_components
+        config.model.params.personalization_config.params.frozen_placeholder_set        = opt.frozen_placeholder_set
+        config.model.params.personalization_config.params.frozen_embedder_components    = opt.frozen_embedder_components
+        config.model.params.personalization_config.params.ckpt_params_perturb_ratio     = opt.ckpt_params_perturb_ratio
         config.model.params.personalization_config.params.emb_reg_loss_scale = opt.emb_reg_loss_scale
 
         set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])
