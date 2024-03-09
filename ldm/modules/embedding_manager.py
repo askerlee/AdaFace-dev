@@ -648,7 +648,9 @@ class AdaEmbedding(nn.Module):
             self.basis_vecs.data[:, -1] = 0
         else:
             self.basis_vecs = None
-
+            # Scale down the gradient to basis_dyn_coeffs, i.e., update layer_coeff_maps more slowly.
+            self.basis_dyn_coeffs_scaler = gen_gradient_scaler(0.01)
+            
         self.ca_infeat_dims = list(ca_infeat_dims)
         # self.infeat_dims = [ 320 for i in range(25) ]
 
@@ -859,9 +861,9 @@ class AdaEmbedding(nn.Module):
                 # since we can't regularize pre_vecs in zero-shot setting, we copy the whole zs_basis_vecs to self.basis_vecs,
                 # so that all vectors in zs_basis_vecs will be regularized.
                 self.basis_vecs = zs_basis_vecs
-                # Scale down the gradient to basis_dyn_coeffs, i.e., update layer_coeff_maps more slowly.
-                basis_dyn_coeffs_scaler = gen_gradient_scaler(0.1)
-                basis_dyn_coeffs = basis_dyn_coeffs_scaler(basis_dyn_coeffs)
+                if not hasattr(self, 'basis_dyn_coeffs_scaler'):
+                    self.basis_dyn_coeffs_scaler = gen_gradient_scaler(0.01)
+                basis_dyn_coeffs = self.basis_dyn_coeffs_scaler(basis_dyn_coeffs)
             else:
                 # self.N: number of pre_vecs.
                 if self.N > 0:
