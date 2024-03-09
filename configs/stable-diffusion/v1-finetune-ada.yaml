@@ -65,7 +65,7 @@ model:
     optimizer_type: Prodigy      # NAdam     # AdamW, NAdam, Prodigy, ProdigyAdamW
     grad_clip:  0.5
     adam_config:
-      betas:    [0.99,  0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.        
+      betas:    [0.9,  0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.        
       scheduler_config:
         target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
         params:
@@ -76,7 +76,8 @@ model:
           lr_min:        0.1
 
     prodigy_config:
-      betas: [0.985, 0.993]  # Faster to converge than adam_betas.
+      betas:    [0.985, 0.993]  # Faster to converge than zs_betas.
+      zs_betas: [0.9,  0.999]   # Slower to converge than betas.
       d_coef: 10
       warm_up_steps:    500
       # 2 cycles after the warm_up_steps.

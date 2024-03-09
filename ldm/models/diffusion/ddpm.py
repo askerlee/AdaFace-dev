@@ -2304,7 +2304,8 @@ class LatentDiffusion(DDPM):
                     ip_embs, uncond_ip_embeds = self.ip_model.get_image_embeds(id_embs)
                     # id_embs: [2, 16, 768].
                     id_embs = torch.cat([ip_embs, uncond_ip_embeds], dim=0).to(id_embs.dtype)
-
+            # id_embs is None only if face_encoder is None, i.e., disabled by the user.
+                    
         return clip_features, id_embs
 
     # emb_man_prompt_adhoc_info: volatile data structures changing along with the prompts or the input images.
@@ -5094,9 +5095,16 @@ class LatentDiffusion(DDPM):
                                    if not param_group['excluded_from_prodigy'] ]
                 prodigy_params = sum(prodigy_params, [])
 
+                if self.do_zero_shot:
+                    # [0.9, 0.999]. Converge more slowly.
+                    betas = self.prodigy_config.zs_betas
+                else:
+                    # [0.985, 0.993]. Converge faster.
+                    betas = self.prodigy_config.betas
+
                 # Prodigy uses an LR = 1.
                 opt = OptimizerClass(prodigy_params, lr=1., weight_decay=self.weight_decay,
-                                     betas=self.prodigy_config.betas,   # default: [0.985, 0.993]
+                                     betas=betas,   # default: [0.985, 0.993]
                                      d_coef=self.prodigy_config.d_coef, # default: 5
                                      safeguard_warmup= self.prodigy_config.scheduler_cycles > 1, 
                                      use_bias_correction=True)
