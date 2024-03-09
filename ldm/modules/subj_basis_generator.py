@@ -365,10 +365,12 @@ class SubjBasisGenerator(nn.Module):
             context = self.latent_query_lns[i](context)
             latent_queries = self.latent_queries[i]
             
-            # No residual connection at the first layer.
             if i == 0:
+                # No residual connection at the first layer, as the semantic space is different
+                # (prompt embedding vs. token embedding).
                 context = attn(latent_queries, context)
             else:
+                # The semantic space is already in the token embedding space.
                 context = attn(latent_queries, context) + context
 
             if self.use_FFN:
