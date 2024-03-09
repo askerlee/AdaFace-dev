@@ -61,6 +61,7 @@ from safetensors.torch import load_file as safetensors_load_file
 import sys
 import collections
 import re, cv2
+from PIL import Image
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -949,6 +950,7 @@ class LatentDiffusion(DDPM):
         self.ip_model = IPAdapterFaceID(pipe, ip_ckpt, self.device, num_tokens=16, n_cond=1)
         # Release RAM, as the pipeline is only used during initialization.
         self.ip_model.pipe = None
+        print(f'IP adapter loaded on {self.device}.')
         self.neg_image_features = None
         self.zs_image_encoder_instantiated = True
 
@@ -2147,7 +2149,8 @@ class LatentDiffusion(DDPM):
     # is_face: whether the images are faces. If True, then face embedding will be extracted. 
     # Otherwise, DINO embedding will be extracted.
     # fg_masks: a list of [Hi, Wi].
-    def encode_zero_shot_image_features(self, images, fg_masks, is_face, calc_avg=False, image_paths=None):
+    def encode_zero_shot_image_features(self, images, fg_masks, is_face, size=(512, 512), 
+                                        calc_avg=False, image_paths=None):
         if not self.zs_image_encoder_instantiated:
             self.instantiate_zero_shot_image_encoders(self.zs_clip_type)
 
@@ -2168,6 +2171,11 @@ class LatentDiffusion(DDPM):
             if is_face and self.face_encoder is not None:
                 if isinstance(image, torch.Tensor):
                     image = image.cpu().numpy().transpose(1, 2, 0)
+                # Resize image to (512, 512). The scheme is Image.NEAREST, to be consistent with 
+                # PersonalizedBase dataset class.
+                image = np.array(Image.fromarray(image).resize(size, Image.NEAREST))
+                cv2.resize(image, size, interpolation=cv2.INTER_AREA)
+
                 '''
                 face_encoder:
                 {'landmark_3d_68': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc190>, 
