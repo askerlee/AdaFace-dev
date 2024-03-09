@@ -1012,7 +1012,7 @@ class EmbeddingManager(nn.Module):
             zs_use_FFN=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_apply_neg_subj_bases=False,
-            zs_num_latent_queries=16,
+            zs_num_latent_queries=64,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
