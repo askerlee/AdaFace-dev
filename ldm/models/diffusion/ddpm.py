@@ -2286,21 +2286,24 @@ class LatentDiffusion(DDPM):
                     sim_to_mean = torch.matmul(id_embs, mean_emb.t())
                     print('sim_to_mean:', sim_to_mean)
 
-            id_embs = id_embs.mean(dim=0, keepdim=True) if id_embs is not None else None
-            # Add noise to id_embs during training with probability 0.5.
-            # Noise level is gradually reduced from [0.04, 0.06] to [0.02, 0.03] during training.
-            # Noise std is absolute, not relative (to the std of id_embs).
-            if self.training:
-                id_embs = add_noise_to_embedding(id_embs, self.training_percent,
-                                                 begin_noise_std_range=[0.04, 0.06], 
-                                                 end_noise_std_range  =[0.02, 0.03],
-                                                 add_noise_prob=0.5, noise_std_is_relative=False)
+            if id_embs is not None:
+                id_embs = id_embs.mean(dim=0, keepdim=True)
 
-            if is_face and self.ip_model is not None:
-                # ip_embs, uncond_ip_embeds: [1, 16, 768].
-                ip_embs, uncond_ip_embeds = self.ip_model.get_image_embeds(id_embs)
-                # id_embs: [2, 16, 768].
-                id_embs = torch.cat([ip_embs, uncond_ip_embeds], dim=0).to(id_embs.dtype)
+                # Add noise to id_embs during training with probability 0.5.
+                # Noise level is gradually reduced from [0.04, 0.06] to [0.02, 0.03] during training.
+                # Noise std is absolute, not relative (to the std of id_embs).
+                if self.training:
+                    id_embs = add_noise_to_embedding(id_embs, self.training_percent,
+                                                    begin_noise_std_range=[0.04, 0.06], 
+                                                    end_noise_std_range  =[0.02, 0.03],
+                                                    add_noise_prob=0.5, noise_std_is_relative=False)
+
+                if is_face and self.ip_model is not None:
+                    # Convert the face embedding to IP Adapter face prompt embeddings.
+                    # ip_embs, uncond_ip_embeds: [1, 16, 768].
+                    ip_embs, uncond_ip_embeds = self.ip_model.get_image_embeds(id_embs)
+                    # id_embs: [2, 16, 768].
+                    id_embs = torch.cat([ip_embs, uncond_ip_embeds], dim=0).to(id_embs.dtype)
 
         return clip_features, id_embs
 
