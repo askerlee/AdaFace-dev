@@ -1727,10 +1727,7 @@ class LatentDiffusion(DDPM):
             self.iter_flags['use_wds_comp']             = cached_inits['use_wds_comp']
             self.iter_flags['comp_init_fg_from_training_image']   = cached_inits['comp_init_fg_from_training_image']
 
-        # Gradually reduce recon_loss_weight from 1 to 0.5 over the whole course of training.
         self.iter_flags['recon_loss_weight'] = self.recon_loss_weight 
-                                                # anneal_value(self.training_percent, 1, (1.0, 0.5)) \
-                                                # * self.recon_loss_weight 
 
         self.embedding_manager.iter_type = 'distill_iter' if self.iter_flags['is_compos_iter'] else 'recon_iter'
 
@@ -3440,7 +3437,7 @@ class LatentDiffusion(DDPM):
 
         loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
 
-        # iter_flags['recon_loss_weight']: gradually decrease from 1 to 0.5 during the course of training.
+        #breakpoint()
         loss += self.iter_flags['recon_loss_weight'] * loss_recon
 
         return loss
