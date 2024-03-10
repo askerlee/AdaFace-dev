@@ -2156,7 +2156,7 @@ class LatentDiffusion(DDPM):
 
         # Must call self.instantiate_zero_shot_image_encoders() before calling this function.
         image_pixel_values = []
-        id_embs = []
+        all_id_embs = []
         # images could be a batch of images that have been collated into a tensor or np array.
         # images can also be a list of images.
         # The code below that processes them one by one can be applied in both cases.
@@ -2193,7 +2193,7 @@ class LatentDiffusion(DDPM):
                     # id_emb: [512,]
                     id_emb = torch.from_numpy(face_info.normed_embedding).to(self.device)
                     
-                id_embs.append(id_emb)
+                all_id_embs.append(id_emb)
 
             elif not is_face:
                 # DINO embedding.
@@ -2204,16 +2204,16 @@ class LatentDiffusion(DDPM):
                 # We only use CLS token's features, so that the spatial location of the subject will not impact matching. 
                 # [1, 197, 384] -> [384,]
                 id_emb = last_hidden_states[0, 0]
-                id_embs.append(id_emb)
+                all_id_embs.append(id_emb)
 
         # image_pixel_values: [BS, 3, 224, 224]
         image_pixel_values = torch.cat(image_pixel_values, dim=0)
         image_pixel_values = image_pixel_values.to(self.device)
         if self.face_encoder is not None:
-            # id_embs: [BS, 512] if is_face, or [BS, 384] if not is_face.
-            id_embs = torch.stack(id_embs, dim=0)
+            # all_id_embs: [BS, 512] if is_face, or [BS, 384] if not is_face.
+            all_id_embs = torch.stack(all_id_embs, dim=0)
         else:
-            id_embs = None
+            all_id_embs = None
 
         if fg_masks is not None:
             assert len(fg_masks) == len(images)
@@ -2263,40 +2263,42 @@ class LatentDiffusion(DDPM):
                 image_bg_features = image_bg_features * image_bg_dict.attn_mask        
 
         # clip_features: [BS, 514, 1280].
-        # id_embs:       [BS, 512].
+        # all_id_embs:   [BS, 512].
         clip_features = torch.cat([image_fg_features, image_bg_features], dim=1)
 
         if calc_avg:
             # clip_features: [BS, 514, 1280] -> [1, 514, 1280].
-            # id_embs:       [BS, 512]       -> [1, 512].
+            # all_id_embs:       [BS, 512]       -> [1, 512].
             clip_features = clip_features.mean(dim=0, keepdim=True)
 
             debug = False
-            if debug and id_embs is not None:
+            if debug and all_id_embs is not None:
                 print(image_paths)                    
-                calc_stats('id_embs', id_embs)
+                calc_stats('all_id_embs', all_id_embs)
                 # Compute pairwise similarities of the embeddings.
-                id_embs = F.normalize(id_embs, p=2, dim=1)
-                pairwise_sim = torch.matmul(id_embs, id_embs.t())
+                all_id_embs = F.normalize(all_id_embs, p=2, dim=1)
+                pairwise_sim = torch.matmul(all_id_embs, all_id_embs.t())
                 print('pairwise_sim:', pairwise_sim)
                 top_dir = os.path.dirname(image_paths[0]) 
                 mean_emb_path = os.path.join(top_dir, "mean_emb.pt")
                 if os.path.exists(mean_emb_path):
                     mean_emb = torch.load(mean_emb_path)
-                    sim_to_mean = torch.matmul(id_embs, mean_emb.t())
+                    sim_to_mean = torch.matmul(all_id_embs, mean_emb.t())
                     print('sim_to_mean:', sim_to_mean)
 
-            if id_embs is not None:
-                id_embs = id_embs.mean(dim=0, keepdim=True)
+            if all_id_embs is not None:
+                id_embs = all_id_embs.mean(dim=0, keepdim=True)
+                id_embs = F.normalize(id_embs, p=2, dim=1)
 
-                # Add noise to id_embs during training with probability 0.5.
+                # Add noise to all_id_embs during training with probability 0.5.
                 # Noise level is gradually reduced from [0.04, 0.06] to [0.02, 0.03] during training.
-                # Noise std is absolute, not relative (to the std of id_embs).
+                # Noise std is absolute, not relative (to the std of all_id_embs).
                 if self.training:
                     id_embs = add_noise_to_embedding(id_embs, self.training_percent,
-                                                    begin_noise_std_range=[0.04, 0.06], 
-                                                    end_noise_std_range  =[0.02, 0.03],
-                                                    add_noise_prob=0.5, noise_std_is_relative=False)
+                                                     begin_noise_std_range=[0.04, 0.06], 
+                                                     end_noise_std_range  =[0.02, 0.03],
+                                                     add_noise_prob=0.5, noise_std_is_relative=False,
+                                                     keep_norm=True)
 
                 if is_face and self.ip_model is not None:
                     # Convert the face embedding to IP Adapter face prompt embeddings.
@@ -2305,6 +2307,9 @@ class LatentDiffusion(DDPM):
                     # id_embs: [2, 16, 768].
                     id_embs = torch.cat([ip_embs, uncond_ip_embeds], dim=0).to(id_embs.dtype)
             # id_embs is None only if face_encoder is None, i.e., disabled by the user.
+        else:
+            # Don't do average of all_id_embs.
+            id_embs = all_id_embs
                     
         return clip_features, id_embs
 

@@ -2145,7 +2145,7 @@ def normalized_sum(losses_list, norm_pow=0):
 # noise_std_range: the noise std / embeddings std falls within this range.
 def add_noise_to_embedding(embeddings, training_percent,
                            begin_noise_std_range, end_noise_std_range, 
-                           add_noise_prob, noise_std_is_relative=True):
+                           add_noise_prob, noise_std_is_relative=True, keep_norm=False):
     if random.random() > add_noise_prob:
         return embeddings
     
@@ -2158,7 +2158,14 @@ def add_noise_to_embedding(embeddings, training_percent,
         noise_std *= emb_std_mean
 
     noise = torch.randn_like(embeddings) * noise_std
-    embeddings = embeddings + noise
+    if keep_norm:
+        orig_norm = embeddings.norm(dim=-1, keepdim=True)
+        embeddings = embeddings + noise
+        new_norm = embeddings.norm(dim=-1, keepdim=True)
+        embeddings = embeddings * orig_norm / new_norm
+    else:
+        embeddings = embeddings + noise
+        
     return embeddings
 
 # At scaled background, fill new x_start with random values (100% noise). 

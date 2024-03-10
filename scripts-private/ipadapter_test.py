@@ -61,6 +61,8 @@ if len(faceid_embeds) == 0:
 # faceid_embeds: [1, 10, 512]
 faceid_embeds = torch.cat(faceid_embeds, dim=1)
 faceid_embeds += torch.randn_like(faceid_embeds) * args.noise
+# faceid_embeds: [1, 1, 512]. If we don't keepdim, then it's [1, 512], 
+# and the resulted prompt embeddings are the same.
 faceid_embeds = faceid_embeds.mean(dim=1, keepdim=True)
 n_cond = faceid_embeds.shape[1]
 
