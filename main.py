@@ -983,7 +983,7 @@ if __name__ == "__main__":
 
         if hasattr(opt, 'composition_regs_iter_gap'):   
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
-        elif opt.do_zero_shot:
+        elif opt.zeroshot:
             # If do_zero_shot, composition_regs_iter_gap changes from 3 to 6, i.e., 
             # the frequency of composition_regs is halved.
             config.model.params.composition_regs_iter_gap *= 2
