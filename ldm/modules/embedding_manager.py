@@ -1207,6 +1207,7 @@ class EmbeddingManager(nn.Module):
                 num_out_queries = self.zs_num_vecs_per_subj if not placeholder_is_bg else self.zs_num_vecs_per_bg
                 # bg placeholder always has depth=1.
                 depth = zs_num_subj_generator_layers if not placeholder_is_bg else 1
+                ip_model_ckpt_path = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
                 subj_basis_generator = SubjBasisGenerator(depth=depth,
                                                           num_latent_queries = zs_num_latent_queries,
                                                           num_out_queries = num_out_queries,
@@ -1216,7 +1217,8 @@ class EmbeddingManager(nn.Module):
                                                           output_dim = out_emb_dim,
                                                           elementwise_affine = zs_elementwise_affine,
                                                           use_FFN = zs_use_FFN,
-                                                          placeholder_is_bg = placeholder_is_bg)
+                                                          placeholder_is_bg = placeholder_is_bg,
+                                                          ip_model_ckpt_path = ip_model_ckpt_path)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 
@@ -1473,13 +1475,9 @@ class EmbeddingManager(nn.Module):
                         zs_clip_features = zs_image_feat_dict['subj']
                         num_vectors_each_placeholder = self.number_vectors_each_subj
 
-                    # zs_id_embs: [1, 512] or [2, 16, 768] if IP-Adapter is used.
+                    # zs_id_embs: [1, 512].
                     zs_id_embs = zs_image_feat_dict['id']
-                    if zs_id_embs.dim() == 2:
-                        uncond_id_embs = -zs_id_embs
-                    else:
-                        # zs_id_embs, uncond_id_embs: [1, 16, 768].
-                        zs_id_embs, uncond_id_embs = zs_id_embs.chunk(2)
+                    uncond_id_embs = torch.zeros_like(zs_id_embs)
 
                     # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
                     # curr_subj_is_face. 
@@ -2276,20 +2274,8 @@ class EmbeddingManager(nn.Module):
                     print(f"Loading {repr(ckpt_subj_basis_generator)}")
                     # self.string_to_subj_basis_generator_dict[km] is either not initialized, or initialized with a smaller depth.
                     # Then replace it with the one in ckpt.
-                    if True or self.string_to_subj_basis_generator_dict[km] is None or self.string_to_subj_basis_generator_dict[km].depth < ckpt_subj_basis_generator.depth \
-                      or self.string_to_subj_basis_generator_dict[km].num_lora2hira_modes != ckpt_subj_basis_generator.num_lora2hira_modes \
-                      or self.string_to_subj_basis_generator_dict[km].elementwise_affine    != ckpt_subj_basis_generator.elementwise_affine \
-                      or self.string_to_subj_basis_generator_dict[km].codebook_size         != ckpt_subj_basis_generator.codebook_size:
-                        print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
-                        self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
-                    else:
-                        # ckpt_subj_basis_generator contains a subset of the params of string_to_subj_basis_generator_dict[km].
-                        # Only load this subset.
-                        missing_keys, unexpected_keys = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
-                        if len(missing_keys) > 0:
-                            print(f"Missing keys: {missing_keys}")
-                        if len(unexpected_keys) > 0:
-                            print(f"Unexpected keys: {unexpected_keys}")
+                    print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
+                    self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
 
             for token_idx, km in enumerate(ckpt["placeholder_strings"]):
                 # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.

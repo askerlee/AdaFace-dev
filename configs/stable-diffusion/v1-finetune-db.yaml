@@ -25,7 +25,7 @@ model:
     use_layerwise_embedding: false
     use_ada_embedding: false
     # No compositional regularizations.
-    composition_regs_iter_gaps: None
+    composition_regs_iter_gap: None
 
     # A dummy EmbeddingManager that does nothing and has no impact.
     personalization_config:

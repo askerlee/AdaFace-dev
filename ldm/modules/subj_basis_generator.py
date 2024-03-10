@@ -52,6 +52,27 @@ def FeedForward(dim, mult=4, elementwise_affine=True):
         nn.Dropout(0.1),
     )
 
+# From: https://github.com/tencent-ailab/IP-Adapter/blob/main/ip_adapter/ip_adapter_faceid_separate.py
+class IP_MLPProjModel(nn.Module):
+    def __init__(self, cross_attention_dim=768, id_embeddings_dim=512, num_tokens=4):
+        super().__init__()
+        
+        self.cross_attention_dim = cross_attention_dim
+        self.num_tokens = num_tokens
+        
+        self.proj = torch.nn.Sequential(
+            torch.nn.Linear(id_embeddings_dim, id_embeddings_dim*2),
+            torch.nn.GELU(),
+            torch.nn.Linear(id_embeddings_dim*2, cross_attention_dim*num_tokens),
+        )
+        self.norm = torch.nn.LayerNorm(cross_attention_dim)
+        
+    def forward(self, id_embeds):
+        x = self.proj(id_embeds)
+        x = x.reshape(-1, self.num_tokens, self.cross_attention_dim)
+        x = self.norm(x)
+        return x
+
 # group_dim: the tensor dimension that corresponds to the multiple groups.
 class LearnedSoftAggregate(nn.Module):
     def __init__(self, num_feat, group_dim, keepdim=False):
@@ -179,14 +200,16 @@ class PerceiverAttention(nn.Module):
 
 class CrossAttention(nn.Module):
     def __init__(self, input_dim, context_dim, num_heads, dropout=0.1, attn_polarity=1, elementwise_affine=True, 
-                 identity_to_q=False, identity_to_v=False, identity_to_out=False):
+                 identity_to_q=False, identity_to_k=False, identity_to_v=False, identity_to_out=False):
         super().__init__()
         dim_head  = input_dim // num_heads
         inner_dim = dim_head   * num_heads
 
         self.num_heads = num_heads
         self.attn_polarity = attn_polarity
-
+        # If context_dim != inner_dim, then we need to project context_dim to inner_dim.
+        identity_to_k = identity_to_k and (context_dim == inner_dim)
+        
         # To increase stability,, we add layernorm to q,k,v projections.
         self.to_q = nn.Sequential(
                         nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_q else nn.Identity(),
@@ -196,19 +219,19 @@ class CrossAttention(nn.Module):
         self.to_k = nn.Sequential(
                         # If context_dim != input_dim, then we need to project context_dim to input_dim 
                         # for similarity computation.
-                        nn.Linear(context_dim, inner_dim, bias=False),
+                        nn.Linear(context_dim, inner_dim, bias=False) if not identity_to_k else nn.Identity(),
                         #nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine)
                     )
         
         self.to_v = nn.Sequential(
                         nn.Linear(context_dim, context_dim, bias=False) if not identity_to_v else nn.Identity(),
-                        nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine)
+                        #nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine)
                     )
 
         self.to_out = nn.Sequential(
             nn.Linear(context_dim, context_dim, bias=False) if not identity_to_out else nn.Identity(),
-            nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine),
-            # nn.Dropout(dropout)
+            # nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine),
+            nn.Dropout(dropout)
         )
         self.attn_drop = nn.Dropout(dropout)
 
@@ -272,7 +295,6 @@ class SubjBasisGenerator(nn.Module):
         num_id_vecs=16,                     # number of identity vectors.
         num_out_queries=234,                # fg: 234 = 9 * 26. bg: 104 = 4 * 26.
         image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
-        face_embedding_dim=768,             # The dimension of IP-Adapter face features for humans. Same as latent_query_dim.
         # DINO vits16 has 6 attention heads:
         # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
@@ -285,6 +307,7 @@ class SubjBasisGenerator(nn.Module):
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
         use_FFN: bool = True,               # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
+        ip_model_ckpt_path: str = None,     # Path to the IP-Adapter model checkpoint.
     ):
         super().__init__()
         assert depth > 0, "depth must be > 0."
@@ -298,6 +321,12 @@ class SubjBasisGenerator(nn.Module):
         self.placeholder_is_bg   = placeholder_is_bg
         self.num_latent_queries  = num_latent_queries
         self.latent_query_dim    = latent_query_dim
+
+        # If not self.placeholder_is_bg:
+        # The dimension of IP-Adapter face features for humans is the same as output_dim = latent_query_dim.   
+        # self.face_proj_in: [1, 512] -> [1, 16, 768].
+        # If self.placeholder_is_bg: face_proj_in is set to None.
+        self.init_face_proj_in(output_dim, ip_model_ckpt_path, device='cpu')
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
@@ -327,15 +356,25 @@ class SubjBasisGenerator(nn.Module):
         for dep in range(depth):
             if dep == 0:
                 input_dim = latent_query_dim
+                # First layer uses k, q, v, and out projections.
+                identity_to_k = False
+                identity_to_v = False
+                identity_to_out = False
             else:
+                # Subsequent layers don't use k, v, and out projections.
+                # q projection is always used.
                 input_dim = output_dim
+                identity_to_k = True
+                identity_to_v = True
+                identity_to_out = True
 
             self.layers.append(
                 nn.ModuleList(
                     [
                         # dim=768, num_heads=6.
                         CrossAttention(input_dim=input_dim, context_dim=output_dim, num_heads=num_heads, dropout=0.1,
-                                       identity_to_q=True, identity_to_v=False, identity_to_out=False),
+                                       identity_to_q=False, identity_to_k=identity_to_k,
+                                       identity_to_v=identity_to_v, identity_to_out=identity_to_out),
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
                         FeedForward(dim=output_dim, mult=1, elementwise_affine=elementwise_affine) \
@@ -353,8 +392,17 @@ class SubjBasisGenerator(nn.Module):
     def forward(self, clip_features, id_embs, is_face):     
         # No need to use id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (id_embs is not None):
-            # id_embs: [1, 16, 768].
-            if not is_face:
+            if is_face:
+                # id_embs: [1, 512] -> [1, 16, 768].
+                if self.freeze_face_proj_in:
+                    # Loaded pretrained IP-Adapter model weight. No need to update face_proj_in.
+                    with torch.no_grad():
+                        id_embs = self.face_proj_in(id_embs)
+                else:
+                    # face_proj_in will be updated during training.
+                    id_embs = self.face_proj_in(id_embs)
+            else:
+                # id_embs: [1, 384] -> [1, 16, 768].
                 id_embs = self.obj_proj_in(id_embs)
         else:
             # Otherwise, context is the ad-hoc CLIP image features.
@@ -380,6 +428,26 @@ class SubjBasisGenerator(nn.Module):
         
         output_queries = self.lora2hira(context)
         return output_queries * self.output_scale
+
+    def init_face_proj_in(self, output_dim=768, ip_model_ckpt_path=None, device='cpu'):
+        if self.placeholder_is_bg:
+            self.face_proj_in = None
+            self.freeze_face_proj_in = False
+            print("Bg face_proj_in is set to None")
+            return
+        
+        self.face_proj_in = IP_MLPProjModel(cross_attention_dim=output_dim, 
+                                            id_embeddings_dim=512, num_tokens=16)
+        self.face_proj_in.to(device)
+
+        if ip_model_ckpt_path is not None:
+            ip_model_ckpt = torch.load(ip_model_ckpt_path, map_location=device)
+            self.face_proj_in.load_state_dict(ip_model_ckpt['image_proj'])
+            self.freeze_face_proj_in = True
+            print(f"Subj face_proj_in is loaded from {ip_model_ckpt_path}")
+        else:
+            self.freeze_face_proj_in = False
+            print("Subj face_proj_in is randomly initialized")
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'

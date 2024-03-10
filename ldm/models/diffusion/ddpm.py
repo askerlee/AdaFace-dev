@@ -26,8 +26,6 @@ from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
 from transformers import CLIPImageProcessor, ViTFeatureExtractor, ViTModel
 from insightface.app import FaceAnalysis
 
-from ip_adapter.ip_adapter.ip_adapter_faceid_separate import IPAdapterFaceID
-
 from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                        count_params, calc_stats, instantiate_from_config, \
                        ortho_subtract, ortho_l2loss, gen_gradient_scaler, \
@@ -114,7 +112,7 @@ class DDPM(pl.LightningModule):
                  logvar_init=0.,
                  use_layerwise_embedding=False,
                  use_ada_embedding=False,
-                 composition_regs_iter_gaps=None,
+                 composition_regs_iter_gap=3,
                  static_embedding_reg_weight=0.,
                  ada_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
@@ -161,19 +159,7 @@ class DDPM(pl.LightningModule):
 
         self.static_embedding_reg_weight = static_embedding_reg_weight
         self.ada_embedding_reg_weight    = ada_embedding_reg_weight
-
-        if isinstance(composition_regs_iter_gaps, int):
-            if composition_regs_iter_gaps <= 0:
-                self.composition_regs_iter_gaps = None
-            else:
-                self.composition_regs_iter_gaps = [[0, composition_regs_iter_gaps]]
-        else:
-            # If composition_regs_iter_gaps is specified as a list in config yaml,
-            # its actual type is 'omegaconf.listconfig.ListConfig'. 
-            # But it's still a collections.abc.Iterable.
-            assert isinstance(composition_regs_iter_gaps, (collections.abc.Iterable, type(None))), \
-                f"composition_regs_iter_gaps must be int, list or None, but got {composition_regs_iter_gaps}"
-            self.composition_regs_iter_gaps = composition_regs_iter_gaps
+        self.composition_regs_iter_gap   = composition_regs_iter_gap
 
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
         self.padding_embs_align_loss_weight     = padding_embs_align_loss_weight
@@ -198,13 +184,16 @@ class DDPM(pl.LightningModule):
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
         self.do_zero_shot                           = do_zero_shot
+        if self.do_zero_shot:
+            # composition_regs_iter_gap: 3 -> 6. Halve the frequency of compositionality regularization.
+            self.composition_regs_iter_gap *= 2
+            
         self.each_batch_from_same_subject           = each_batch_from_same_subject
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
         self.face_encoder                           = None
         self.dino_encoder                           = None
-        self.ip_model                               = None
         self.zs_image_encoder_instantiated          = False
         self.zs_clip_type                           = zs_clip_type
 
@@ -213,12 +202,10 @@ class DDPM(pl.LightningModule):
 
         # Training flags. 
         # No matter wheter the scheme is layerwise or not,
-        # as long as composition_regs_iter_gaps is not None, and prompt_emb_delta_reg_weight >= 0, 
-        # do static comp delta reg.
+        # as long as prompt_emb_delta_reg_weight >= 0, do static comp delta reg.
         # If self.prompt_emb_delta_reg_weight == 0, we still do_static_prompt_delta_reg to monitor this loss, 
         # but this loss won't be involved in the optimization.
-        self.do_static_prompt_delta_reg = self.composition_regs_iter_gaps is not None \
-                                            and self.prompt_emb_delta_reg_weight >= 0
+        self.do_static_prompt_delta_reg = (self.prompt_emb_delta_reg_weight >= 0)
         # Is this for DreamBooth training? Will be overwritten in LatentDiffusion ctor.
         self.is_dreambooth                  = False
 
@@ -556,8 +543,7 @@ class DDPM(pl.LightningModule):
         cand_reg_probs = np.array(cand_reg_probs) / np.sum(cand_reg_probs)
 
         # If N_CAND_REGS == 0, then no intermittent regularizations, set the two flags to False.
-        if N_CAND_REGS > 0 and self.composition_regs_iter_gaps is not None:
-            self.composition_regs_iter_gap = select_piecewise_value(self.composition_regs_iter_gaps, self.training_percent)
+        if N_CAND_REGS > 0 and self.composition_regs_iter_gap > 0:
             if self.global_step % self.composition_regs_iter_gap == 0:
                 # Alternate among the regularizations in cand_reg_types. 
                 # If both do_ada_prompt_delta_reg and do_mix_prompt_distillation,
@@ -922,35 +908,9 @@ class LatentDiffusion(DDPM):
         self.dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
         print(f'Face and DINO encoders loaded on {self.device}.')
 
-        base_model_path = "SG161222/Realistic_Vision_V4.0_noVAE"
-        vae_model_path = "stabilityai/sd-vae-ft-mse"
         ip_ckpt = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
-
-        from diffusers import StableDiffusionPipeline, DDIMScheduler, AutoencoderKL
-
-        noise_scheduler = DDIMScheduler(
-            num_train_timesteps=1000,
-            beta_start=0.00085,
-            beta_end=0.012,
-            beta_schedule="scaled_linear",
-            clip_sample=False,
-            set_alpha_to_one=False,
-            steps_offset=1,
-        )
-        vae = AutoencoderKL.from_pretrained(vae_model_path).to(dtype=torch.float16)
-        pipe = StableDiffusionPipeline.from_pretrained(
-            base_model_path,
-            torch_dtype=torch.float16,
-            scheduler=noise_scheduler,
-            vae=vae,
-            feature_extractor=None,
-            safety_checker=None
-        )
-
-        self.ip_model = IPAdapterFaceID(pipe, ip_ckpt, self.device, num_tokens=16, n_cond=1)
-        # Release RAM, as the pipeline is only used during initialization.
-        self.ip_model.pipe = None
-        print(f'IP adapter loaded on {self.device}.')
+        for _, subj_basis_generator in self.embedding_manager.string_to_subj_basis_generator_dict.items():
+            subj_basis_generator.init_face_proj_in(768, ip_ckpt, self.device)
         self.neg_image_features = None
         self.zs_image_encoder_instantiated = True
 
@@ -1728,7 +1688,6 @@ class LatentDiffusion(DDPM):
 
             # If each_batch_from_same_subject:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
             # Otherwise:                        zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
-            # If IP-adapter is used, then zs_id_embs: [2, 16, 768].
             # If each_batch_from_same_subject, then we average the zs_clip_features and zs_id_embs to get 
             # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
             zs_clip_features, zs_id_embs = self.encode_zero_shot_image_features(images, fg_mask,
@@ -2300,12 +2259,6 @@ class LatentDiffusion(DDPM):
                                                      add_noise_prob=0.5, noise_std_is_relative=False,
                                                      keep_norm=True)
 
-                if is_face and self.ip_model is not None:
-                    # Convert the face embedding to IP Adapter face prompt embeddings.
-                    # ip_embs, uncond_ip_embeds: [1, 16, 768].
-                    ip_embs, uncond_ip_embeds = self.ip_model.get_image_embeds(id_embs)
-                    # id_embs: [2, 16, 768].
-                    id_embs = torch.cat([ip_embs, uncond_ip_embeds], dim=0).to(id_embs.dtype)
             # id_embs is None only if face_encoder is None, i.e., disabled by the user.
         else:
             # Don't do average of all_id_embs.
