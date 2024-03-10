@@ -982,7 +982,11 @@ if __name__ == "__main__":
             config.model.params.mix_prompt_distill_weight           = opt.mix_prompt_distill_weight
 
         if hasattr(opt, 'composition_regs_iter_gap'):
-            config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
+            if opt.do_zero_shot:
+                # composition_regs_iter_gap: 3 -> 6. Halve the frequency of compositionality regularization.
+                config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap * 2
+            else:               
+                config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
 
         if hasattr(opt, 'optimizer_type'):
             config.model.params.optimizer_type = opt.optimizer_type

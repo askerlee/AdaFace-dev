@@ -184,10 +184,7 @@ class DDPM(pl.LightningModule):
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
         self.do_zero_shot                           = do_zero_shot
-        if self.do_zero_shot:
-            # composition_regs_iter_gap: 3 -> 6. Halve the frequency of compositionality regularization.
-            self.composition_regs_iter_gap *= 2
-            
+
         self.each_batch_from_same_subject           = each_batch_from_same_subject
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
