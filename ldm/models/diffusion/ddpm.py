@@ -1779,15 +1779,14 @@ class LatentDiffusion(DDPM):
                             subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
                             cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE]
                     else:
+                        # Otherwise, do_static_prompt_delta_reg but not do_ada_prompt_delta_reg.
+                        # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
+                        # 12 prompts will be fed into get_learned_conditioning().
                         BLOCK_SIZE = ORIG_BS
-
-                    # Otherwise, do_static_prompt_delta_reg but not do_ada_prompt_delta_reg.
-                    # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 2.
-                    # 8 prompts will be fed into get_learned_conditioning().
-                                            
+                                                
                     # If not do_ada_prompt_delta_reg, we still compute the static embeddings 
                     # of the 4 types of prompts, to compute static delta loss. 
-                    # But now there are 8 prompts (4 * ORIG_BS = 8), as the batch is not halved.
+                    # But now there are 12 prompts (4 * ORIG_BS = 12), as the batch is not halved.
                     delta_prompts = subj_single_prompts + subj_comp_prompts \
                                     + cls_single_prompts + cls_comp_prompts
                     #print(delta_prompts)
@@ -1803,8 +1802,8 @@ class LatentDiffusion(DDPM):
                                                       self.iter_flags['zs_clip_features'],
                                                       self.iter_flags['zs_id_embs'],
                                                       randomize_clip_weights=True)
-                    # Release image_features.
-                    del self.iter_flags['zs_clip_features']
+                    # Release zs_clip_features and zs_id_embs.
+                    del self.iter_flags['zs_clip_features'], self.iter_flags['zs_id_embs']
 
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
@@ -2959,11 +2958,10 @@ class LatentDiffusion(DDPM):
             if loss_fg_bg_token_emb_ortho > 0:
                 loss_dict.update({f'{prefix}/fg_bg_token_emb_ortho': loss_fg_bg_token_emb_ortho.mean().detach().item() })
 
-            if self.do_zero_shot:
-                # Completely disable the fg_bg_token_emb_ortho_loss if do_zero_shot, as it hurts performance.
-                loss_fg_bg_token_emb_ortho = 0
+            # Completely disable the fg_bg_token_emb_ortho_loss if do_zero_shot, as it hurts performance.
+            fg_bg_token_emb_ortho_loss_scale = 0 if self.do_zero_shot else 1
 
-            loss += loss_fg_bg_token_emb_ortho * self.fg_bg_token_emb_ortho_loss_weight
+            loss += loss_fg_bg_token_emb_ortho * fg_bg_token_emb_ortho_loss_scale * self.fg_bg_token_emb_ortho_loss_weight
 
         if self.do_static_prompt_delta_reg:
             # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
@@ -2977,9 +2975,8 @@ class LatentDiffusion(DDPM):
                         self.prompt_embedding_clamp_value
                     )
 
-            if self.iter_flags['do_ada_prompt_delta_reg'] and ada_embeddings is not None:
-                # The cached ada prompt embeddings are useless now, release them.
-                self.embedding_manager.clear_ada_prompt_embeddings_cache()
+            # The cached ada prompt embeddings are useless now, release them.
+            self.embedding_manager.clear_ada_prompt_embeddings_cache()
 
             loss_dict.update({f'{prefix}/static_prompt_delta':      loss_static_prompt_delta.mean().detach().item() })
             if loss_ada_prompt_delta != 0:
@@ -3035,16 +3032,14 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach().item() })
                 
                 padding_subj_embs_align_loss_scale = 0.2
-                bg_subj_embs_align_loss_scale  = 0.1 # disabled. # 1
+                bg_subj_embs_align_loss_scale  = 0.01 if self.do_zero_shot else 0.1
                 # NOTE: loss_padding_cls_embs_align is not optimized, but we still add it with scale 0 
                 # to release the computation graph.
                 loss_padding_embs_align = (loss_padding_subj_embs_align * padding_subj_embs_align_loss_scale \
                                             + loss_padding_cls_embs_align * 0 \
                                             + loss_bg_subj_embs_align   * bg_subj_embs_align_loss_scale)
 
-                padding_embs_align_loss_scale = 1
-                loss += loss_padding_embs_align * padding_embs_align_loss_scale \
-                        * self.padding_embs_align_loss_weight
+                loss += loss_padding_embs_align * self.padding_embs_align_loss_weight
 
         if self.fg_bg_xlayer_consist_loss_weight > 0 \
           and (self.iter_flags['do_normal_recon'] \
@@ -3065,9 +3060,11 @@ class LatentDiffusion(DDPM):
             if loss_bg_xlayer_consist > 0:
                 loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach().item() })
 
-            bg_xlayer_consist_loss_scale = 0.3
+            # Reduce the loss_fg_xlayer_consist_loss_scale by 5x if do_zero_shot.
+            fg_xlayer_consist_loss_scale = 0.2  if self.do_zero_shot else 1
+            bg_xlayer_consist_loss_scale = 0.06 if self.do_zero_shot else 0.3
 
-            loss += (loss_fg_xlayer_consist + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale) \
+            loss += (loss_fg_xlayer_consist * fg_xlayer_consist_loss_scale + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale) \
                     * self.fg_bg_xlayer_consist_loss_weight
 
         if self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']:
@@ -3347,10 +3344,10 @@ class LatentDiffusion(DDPM):
             if loss_fg_bg_mask_contrast > 0:
                 loss_dict.update({f'{prefix}/fg_bg_mask_contrast': loss_fg_bg_mask_contrast.mean().detach()})
 
-            # Reduce the scale of fg_bg_complementary_loss if do_zero_shot, as it hurts performance. 
-            loss_fg_bg_mask_contrast_scale = 0.2 if self.do_zero_shot else 1
-            loss += (loss_fg_bg_complementary + loss_subj_mb_suppress \
-                        + loss_bg_mf_suppress + loss_fg_bg_mask_contrast * loss_fg_bg_mask_contrast_scale) \
+            # Reduce the scale of loss_fg_bg_complementary if do_zero_shot, as it hurts performance. 
+            loss_fg_bg_complementary_scale = 0.2 if self.do_zero_shot else 1
+            loss += (loss_fg_bg_complementary * loss_fg_bg_complementary_scale + loss_subj_mb_suppress \
+                        + loss_bg_mf_suppress + loss_fg_bg_mask_contrast) \
                     * self.fg_bg_complementary_loss_weight
 
         if self.iter_flags['use_wds_comp'] and self.fg_wds_complementary_loss_weight > 0:
@@ -3437,7 +3434,6 @@ class LatentDiffusion(DDPM):
 
         loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
 
-        #breakpoint()
         loss += self.iter_flags['recon_loss_weight'] * loss_recon
 
         return loss

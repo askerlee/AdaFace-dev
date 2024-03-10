@@ -2118,6 +2118,7 @@ class EmbeddingManager(nn.Module):
             self.update_emb_ema(self.ada_prompt_placeholder2indices_cache)
 
         self.ada_prompt_embeddings_cache = {}
+        self.ada_prompt_placeholder2indices_cache = {}
 
     def update_emb_ema(self, placeholder2indices):
         if self.training and self.emb_ema_as_pooling_probe_weight > 0:
