@@ -208,9 +208,10 @@ class CrossAttention(nn.Module):
         self.to_out = nn.Sequential(
             nn.Linear(context_dim, context_dim, bias=False) if not identity_to_out else nn.Identity(),
             nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine),
-            nn.Dropout(dropout)
+            # nn.Dropout(dropout)
         )
-        
+        self.attn_drop = nn.Dropout(dropout)
+
     def forward(self, x, context=None):
         h = self.num_heads
 
@@ -246,6 +247,7 @@ class CrossAttention(nn.Module):
         # NOTE: the normalization is done across tokens, not across pixels.
         # So for each pixel, the sum of attention scores across tokens is 1.
         attn = sim.softmax(dim=-1)
+        attn = self.attn_drop(attn)
         #print(attn.std())
 
         # v: [16, 257, 48]. 48: dim of each head. out: [16, 378, 48].
@@ -362,9 +364,9 @@ class SubjBasisGenerator(nn.Module):
         context = id_embs
 
         for i, (attn, ff) in enumerate(self.layers):
-            context = self.latent_query_lns[i](context)
             latent_queries = self.latent_queries[i]
-            
+            latent_queries = self.latent_query_lns[i](latent_queries)
+
             if i == 0:
                 # No residual connection at the first layer, as the semantic space is different
                 # (prompt embedding vs. token embedding).

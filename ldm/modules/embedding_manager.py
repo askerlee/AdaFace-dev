@@ -861,8 +861,6 @@ class AdaEmbedding(nn.Module):
                 # since we can't regularize pre_vecs in zero-shot setting, we copy the whole zs_basis_vecs to self.basis_vecs,
                 # so that all vectors in zs_basis_vecs will be regularized.
                 self.basis_vecs = zs_basis_vecs
-                if not hasattr(self, 'basis_dyn_coeffs_scaler'):
-                    self.basis_dyn_coeffs_scaler = gen_gradient_scaler(0.01)
                 basis_dyn_coeffs = self.basis_dyn_coeffs_scaler(basis_dyn_coeffs)
             else:
                 # self.N: number of pre_vecs.
