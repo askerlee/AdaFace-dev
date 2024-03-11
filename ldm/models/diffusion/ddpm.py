@@ -26,24 +26,21 @@ from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
 from transformers import CLIPImageProcessor, ViTFeatureExtractor, ViTModel
 from insightface.app import FaceAnalysis
 
-from ldm.util import   log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
-                       count_params, calc_stats, instantiate_from_config, \
-                       ortho_subtract, ortho_l2loss, gen_gradient_scaler, \
-                       convert_attn_to_spatial_weight, masked_mean, \
-                       calc_ref_cosine_loss, calc_delta_alignment_loss, \
-                       calc_prompt_emb_delta_loss, calc_dyn_loss_scale, \
-                       save_grid, chunk_list, normalize_dict_values, \
-                       distribute_embedding_to_M_tokens_by_dict, fix_emb_scales, \
-                       halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
-                       extend_indices_B_by_n_times, split_indices_by_instance, \
-                       resize_mask_for_feat_or_attn, mix_static_vk_embeddings, repeat_selected_instances, \
-                       anneal_t_keep_prob, anneal_value, draw_annealed_bool, select_piecewise_value, \
-                       calc_layer_subj_comp_k_or_v_ortho_loss, add_noise_to_embedding, \
-                       replace_prompt_comp_extra, sel_emb_attns_by_indices, \
-                       gen_comp_extra_indices_by_block, calc_elastic_matching_loss, normalized_sum, \
-                       gen_cfg_scales_for_stu_tea, init_x_with_fg_from_training_image, clamp_prompt_embedding, \
-                       merge_cls_token_embeddings, join_dict_of_indices_with_key_filter, SequentialLR2
-                       
+from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
+                        count_params, calc_stats, instantiate_from_config, SequentialLR2, \
+                        ortho_subtract, ortho_l2loss, gen_gradient_scaler, calc_dyn_loss_scale, \
+                        save_grid, chunk_list, normalize_dict_values, normalized_sum, masked_mean, \
+                        join_dict_of_indices_with_key_filter, init_x_with_fg_from_training_image, \
+                        sel_emb_attns_by_indices, convert_attn_to_spatial_weight, resize_mask_for_feat_or_attn, \
+                        calc_ref_cosine_loss, calc_delta_alignment_loss, calc_prompt_emb_delta_loss, \
+                        calc_elastic_matching_loss, calc_layer_subj_comp_k_or_v_ortho_loss, \
+                        distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_vk_embeddings, \
+                        clamp_prompt_embedding, fix_emb_scales, replace_prompt_comp_extra, \
+                        halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
+                        gen_comp_extra_indices_by_block, extend_indices_B_by_n_times, \
+                        split_indices_by_instance, repeat_selected_instances, \
+                        anneal_t_keep_prob, anneal_value, gen_cfg_scales_for_stu_tea
+                                              
 
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -2241,17 +2238,6 @@ class LatentDiffusion(DDPM):
             if all_id_embs is not None:
                 id_embs = all_id_embs.mean(dim=0, keepdim=True)
                 id_embs = F.normalize(id_embs, p=2, dim=1)
-
-                # Add noise to all_id_embs during training with probability 0.5.
-                # Noise level is gradually reduced from [0.04, 0.06] to [0.02, 0.03] during training.
-                # Noise std is absolute, not relative (to the std of all_id_embs).
-                if self.training:
-                    id_embs = add_noise_to_embedding(id_embs, self.training_percent,
-                                                     begin_noise_std_range=[0.04, 0.06], 
-                                                     end_noise_std_range  =[0.02, 0.03],
-                                                     add_noise_prob=0.5, noise_std_is_relative=False,
-                                                     keep_norm=True)
-
             # id_embs is None only if face_encoder is None, i.e., disabled by the user.
         else:
             # Don't do average of all_id_embs.

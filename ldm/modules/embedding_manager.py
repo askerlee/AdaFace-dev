@@ -1013,6 +1013,7 @@ class EmbeddingManager(nn.Module):
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_apply_neg_subj_bases=False,
             zs_num_latent_queries=64,
+            zs_cls_delta_string=None,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1143,6 +1144,8 @@ class EmbeddingManager(nn.Module):
             self.zs_num_vecs_per_subj  = self.number_vectors_each_subj * self.num_zs_vecs_per_token
             # num_bg_queries:   4 * 26 = 104.
             self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
+            self.zs_cls_delta_string   = zs_cls_delta_string
+            self.zs_cls_delta_tokens   = get_tokens_for_string(zs_cls_delta_string)
 
         for placeholder_idx, placeholder_string in enumerate(self.placeholder_strings):
             placeholder_is_bg =  (placeholder_string in self.background_string_dict)
@@ -1481,6 +1484,16 @@ class EmbeddingManager(nn.Module):
                     zs_id_embs = zs_image_feat_dict['id']
                     uncond_id_embs = torch.zeros_like(zs_id_embs)
 
+                    # Add noise to all_id_embs during training with probability 0.5.
+                    # Noise level is gradually reduced from [0.04, 0.06] to [0.02, 0.03] during training.
+                    # Noise std is absolute, not relative (to the std of all_id_embs).
+                    if self.training:
+                        id_embs = add_noise_to_embedding(id_embs, self.training_percent,
+                                                         begin_noise_std_range=[0.04, 0.06], 
+                                                         end_noise_std_range  =[0.02, 0.03],
+                                                         add_noise_prob=0.5, noise_std_is_relative=False,
+                                                         keep_norm=True)
+
                     # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
                     # curr_subj_is_face. 
                     # During inference, we set curr_subj_is_face directly.
@@ -1490,16 +1503,26 @@ class EmbeddingManager(nn.Module):
                         self.curr_subj_is_face = self.subj_name_to_being_faces[self.curr_batch_subj_names[0]]
 
                     subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
-                    cls_delta_tokens = list(prompt_subj_name_to_cls_delta_tokens.values())[0].to(device)
-                    cls_delta_embeddings = self.get_embeddings_for_tokens(cls_delta_tokens)
-                    extra_token_embs = cls_delta_embeddings
+                    if self.do_zero_shot and self.zs_cls_delta_string is not None:
+                        cls_delta_tokens = self.zs_cls_delta_tokens
+                    else:
+                        cls_delta_tokens = list(prompt_subj_name_to_cls_delta_tokens.values())[0]
+
+                    if cls_delta_tokens is not None:
+                        cls_delta_tokens     = cls_delta_tokens.to(device)
+                        cls_delta_embeddings = self.get_embeddings_for_tokens(cls_delta_tokens)
+                    else:
+                        cls_delta_embeddings = None
+
                     # zs_clip_features: [BS, 257, 1280]
                     # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
                     zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs, 
-                                                         extra_token_embs, self.curr_subj_is_face)
+                                                         extra_token_embs=cls_delta_embeddings, 
+                                                         is_face=self.curr_subj_is_face)
                     if self.zs_apply_neg_subj_bases:
                         zs_vecs_2sets_neg = subj_basis_generator(-zs_clip_features, uncond_id_embs, 
-                                                                 None, self.curr_subj_is_face)
+                                                                 extra_token_embs=None, 
+                                                                 is_face=self.curr_subj_is_face)
                         zs_neg_subj_bases_weight = 0.2
                         zs_vecs_2sets = zs_vecs_2sets * (1 + zs_neg_subj_bases_weight) \
                                         - zs_vecs_2sets_neg * zs_neg_subj_bases_weight

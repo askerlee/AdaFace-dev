@@ -296,6 +296,8 @@ def parse_args():
                         help="Type of zero-shot learning clip model")
     parser.add_argument("--zs_apply_neg_subj_bases", type=str2bool, nargs="?", const=True, default=False,
                         help="Apply negative subject bases for zero-shot learning")
+    parser.add_argument("--zs_cls_delta_string", type=str, default=None,
+                        help="Class delta string for zero-shot learning")
     
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
@@ -407,6 +409,7 @@ def main(opt):
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.zs_clip_type = opt.zs_clip_type
             config.model.params.personalization_config.params.zs_apply_neg_subj_bases = opt.zs_apply_neg_subj_bases
+            config.model.params.personalization_config.params.zs_cls_delta_string = opt.zs_cls_delta_string
         else:
             ref_images = None
             ref_masks  = None
