@@ -1010,7 +1010,7 @@ def scan_cls_delta_strings(tokenized_text, placeholder_indices_1st,
 
     return cls_delta_string_indices
 
-def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices, subj_name_to_cls_delta_weights):
+def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices, subj_name_to_cls_delta_token_weights):
     if cls_delta_string_indices is None or len(cls_delta_string_indices) == 0:
         return prompt_embedding
 
@@ -1030,10 +1030,10 @@ def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices, subj_
         i_off = batch_i2offset.get(batch_i, 0)
         # cls_delta_embeddings: [M, 768].
         cls_delta_embeddings = prompt_embedding[batch_i, start_index_N:start_index_N+M]
-        # cls_delta_weights: [M] -> [M, 1].
-        cls_delta_weights    = subj_name_to_cls_delta_weights[subj_name].unsqueeze(1).to(device)
+        # cls_delta_token_weights: [M] -> [M, 1].
+        cls_delta_token_weights = subj_name_to_cls_delta_token_weights[subj_name].unsqueeze(1).to(device)
         # avg_cls_delta_embedding: [768].
-        avg_cls_delta_embedding = (cls_delta_embeddings * cls_delta_weights).sum(dim=0)
+        avg_cls_delta_embedding = (cls_delta_embeddings * cls_delta_token_weights).sum(dim=0)
         prompt_embedding2[batch_i, start_index_N-i_off] = avg_cls_delta_embedding
         # NOTE: Our purpose is to combine all the cls delta tokens to 1 token, so that
         # their positions align with the subject tokens in the first half of the batch.

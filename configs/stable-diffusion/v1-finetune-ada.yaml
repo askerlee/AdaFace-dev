@@ -94,7 +94,7 @@ model:
         background_strings:       ['y']
         initializer_strings:      ["person", "unknown"]
         list_initializer_word_weights: [ None, None ]
-        subj_name_to_cls_delta_strings: { 'z': "person" }
+        subj_name_to_cls_delta_string: { 'z': "person" }
         subj_name_to_cls_delta_word_weights: { 'z': [1.0] }
         num_vectors_per_subj_token: 9
         use_layerwise_embedding: True

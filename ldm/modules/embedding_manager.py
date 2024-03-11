@@ -15,9 +15,7 @@ from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_ea
 
 from functools import partial
 from collections import OrderedDict
-import random
-import copy
-import glob
+import random, os, copy
 
 # When debugging, make the printed tensors less messy.
 torch.set_printoptions(precision=4, sci_mode=False)
@@ -978,7 +976,7 @@ class EmbeddingManager(nn.Module):
             background_strings=None,
             initializer_strings=None,
             list_initializer_word_weights=None,
-            subj_name_to_cls_delta_strings=None,
+            subj_name_to_cls_delta_string=None,
             subj_name_to_cls_delta_word_weights=None,
             # token2num_vectors: how many vectors in each layer are allocated to model 
             # the subject (represented as the subject token) and the background. 
@@ -1014,6 +1012,7 @@ class EmbeddingManager(nn.Module):
             zs_apply_neg_subj_bases=False,
             zs_num_latent_queries=64,
             zs_cls_delta_string=None,
+            zs_cls_delta_token_weights=None,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1146,6 +1145,18 @@ class EmbeddingManager(nn.Module):
             self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
             self.zs_cls_delta_string   = zs_cls_delta_string
             self.zs_cls_delta_tokens   = get_tokens_for_string(zs_cls_delta_string)
+            if self.zs_cls_delta_string is not None:
+                if zs_cls_delta_token_weights is None:
+                    self.zs_cls_delta_token_weights = torch.ones(len(self.zs_cls_delta_tokens))
+                    self.zs_cls_delta_token_weights[-1] = 2
+                else:
+                    self.zs_cls_delta_token_weights = torch.tensor(zs_cls_delta_token_weights, dtype=float)
+                # The last word is the main word "man, woman, boy, girl" whose weight will be normalized to 1;
+                # if there are any words before this word, their weights will be normalized to 0.25.
+                self.zs_cls_delta_token_weights **= 2
+                self.zs_cls_delta_token_weights /= self.zs_cls_delta_token_weights.max()
+            else:
+                self.zs_cls_delta_token_weights = None
 
         for placeholder_idx, placeholder_string in enumerate(self.placeholder_strings):
             placeholder_is_bg =  (placeholder_string in self.background_string_dict)
@@ -1228,7 +1239,7 @@ class EmbeddingManager(nn.Module):
 
         # Initialize self.subj_name_to_cls_delta_tokens and self.subj_name_to_cls_delta_token_weights.
         self.init_cls_delta_tokens(get_tokens_for_string, get_embeddings_for_tokens, 
-                                   subj_name_to_cls_delta_strings, subj_name_to_cls_delta_word_weights)
+                                   subj_name_to_cls_delta_string, subj_name_to_cls_delta_word_weights)
         self.share_embedder_components(shared_placeholder_set, shared_embedder_components)
 
         self.layer_idx = -1
@@ -1281,20 +1292,21 @@ class EmbeddingManager(nn.Module):
         print(f"CLS_DELTA_STRING_MAX_SEARCH_SPAN={self.CLS_DELTA_STRING_MAX_SEARCH_SPAN}")
 
     def init_cls_delta_tokens(self, get_tokens_for_string, get_embeddings_for_tokens, 
-                              subj_name_to_cls_delta_strings, subj_name_to_cls_delta_word_weights):
+                              subj_name_to_cls_delta_string, subj_name_to_cls_delta_word_weights):
+        self.subj_name_to_cls_delta_string  = subj_name_to_cls_delta_string
         self.subj_name_to_cls_delta_tokens  = {}
         self.subj_name_to_cls_delta_token_weights = {}
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = 0
 
-        if subj_name_to_cls_delta_strings is None:
+        if subj_name_to_cls_delta_string is None:
             return
 
         # subj_name_to_cls_delta_word_weights is of type omegaconf. If without convertion to dict,
         # "subj_name_to_cls_delta_token_weights[subj_name] = cls_delta_token_weights" will throw an error.
         self.subj_name_to_cls_delta_token_weights = dict(subj_name_to_cls_delta_word_weights)
 
-        for subj_name in subj_name_to_cls_delta_strings:
-            cls_delta_string = subj_name_to_cls_delta_strings[subj_name]
+        for subj_name in subj_name_to_cls_delta_string:
+            cls_delta_string = subj_name_to_cls_delta_string[subj_name]
             cls_delta_token_weights = subj_name_to_cls_delta_word_weights[subj_name]
             cls_delta_tokens, cls_delta_token_weights, _, _ = \
                 calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
@@ -1403,9 +1415,14 @@ class EmbeddingManager(nn.Module):
         orig_tokenized_text = tokenized_text
         static_subj_embs_dict = {}
         self.cls_delta_string_indices = []
-        prompt_subj_name_to_cls_delta_tokens = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
-                                                 for subj_name in self.curr_batch_subj_names }
-
+        # During inference, as self.curr_batch_subj_names is not set, the three dicts are empty.
+        prompt_subj_name_to_cls_delta_tokens        = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
+                                                        for subj_name in self.curr_batch_subj_names }
+        prompt_subj_name_to_cls_delta_token_weights = { subj_name: self.subj_name_to_cls_delta_token_weights[subj_name] \
+                                                        for subj_name in self.curr_batch_subj_names }
+        prompt_subj_name_to_cls_delta_string        = { subj_name: self.subj_name_to_cls_delta_string[subj_name] \
+                                                        for subj_name in self.curr_batch_subj_names }
+        
         if self.use_layerwise_embedding:
             # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
             # "Tuck" the layer dimension into the batch dimension, 
@@ -1503,14 +1520,33 @@ class EmbeddingManager(nn.Module):
                         self.curr_subj_is_face = self.subj_name_to_being_faces[self.curr_batch_subj_names[0]]
 
                     subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
-                    if self.do_zero_shot and self.zs_cls_delta_string is not None:
+                    if self.zs_cls_delta_string is not None:
+                        cls_delta_string = self.zs_cls_delta_string
                         cls_delta_tokens = self.zs_cls_delta_tokens
-                    else:
+                        cls_delta_token_weights = self.zs_cls_delta_token_weights
+                    elif len(prompt_subj_name_to_cls_delta_string) > 0:
+                        cls_delta_string = list(prompt_subj_name_to_cls_delta_string.keys())[0]
                         cls_delta_tokens = list(prompt_subj_name_to_cls_delta_tokens.values())[0]
+                        cls_delta_token_weights = list(prompt_subj_name_to_cls_delta_token_weights.values())[0]
+                    else:
+                        cls_delta_string = None
+                        cls_delta_tokens = None
+                        cls_delta_token_weights = None
 
                     if cls_delta_tokens is not None:
                         cls_delta_tokens     = cls_delta_tokens.to(device)
+                        # cls_delta_embeddings: [K, 768]
                         cls_delta_embeddings = self.get_embeddings_for_tokens(cls_delta_tokens)
+                        cls_delta_embeddings = F.layer_norm(cls_delta_embeddings, (self.out_emb_dim,))
+
+                        if 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+                            print(f"cls_delta_string: {cls_delta_string}, weights: {cls_delta_token_weights.cpu().numpy()}")
+
+                        # cls_delta_token_weights: [K] -> [K, 1].
+                        cls_delta_token_weights = cls_delta_token_weights.unsqueeze(1).to(device)
+                        # Weight the cls_delta_embeddings by cls_delta_token_weights.
+                        cls_delta_embeddings = cls_delta_embeddings * cls_delta_token_weights
+                        
                     else:
                         cls_delta_embeddings = None
 

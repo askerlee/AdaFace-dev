@@ -362,7 +362,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         personalization_config_params.subject_strings                     = dataset.subject_strings
         personalization_config_params.initializer_strings                 = dataset.cls_delta_strings
         personalization_config_params.list_initializer_word_weights       = dataset.list_subj_initializer_word_weights
-        personalization_config_params.subj_name_to_cls_delta_strings      = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
+        personalization_config_params.subj_name_to_cls_delta_string      = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
         personalization_config_params.subj_name_to_cls_delta_word_weights = dict(zip(dataset.subject_names, dataset.list_subj_initializer_word_weights))
         personalization_config_params.token2num_vectors         = dict()
         for subject_string in dataset.subject_strings:
@@ -390,7 +390,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         personalization_config_params.subject_strings                       = dataset.subject_strings[:1]
         personalization_config_params.initializer_strings                   = ["person"]
         personalization_config_params.list_initializer_word_weights         = [None]
-        personalization_config_params.subj_name_to_cls_delta_strings        = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
+        personalization_config_params.subj_name_to_cls_delta_string        = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
         personalization_config_params.subj_name_to_cls_delta_word_weights   = dict(zip(dataset.subject_names, dataset.list_subj_initializer_word_weights))
         personalization_config_params.token2num_vectors         = dict()
         for subject_string in dataset.subject_strings[:1]:

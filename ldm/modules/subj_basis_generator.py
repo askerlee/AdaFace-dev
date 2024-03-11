@@ -394,6 +394,8 @@ class SubjBasisGenerator(nn.Module):
                 id_embs = self.prompt2token_emb_proj(id_embs)
                 if extra_token_embs is not None:
                     # extra_token_embs: [K, 768] -> [1, K, 768]
+                    # extra_token_embs should have been layer-normalized before being passed to the model.
+                    # Otherwise, the default magnitude of the extra_token_embs is much smaller than id_embs.
                     extra_token_embs = extra_token_embs.unsqueeze(0)
                     id_embs = torch.cat([id_embs, extra_token_embs], dim=1)
             else:
