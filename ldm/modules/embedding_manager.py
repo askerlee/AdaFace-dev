@@ -1526,7 +1526,7 @@ class EmbeddingManager(nn.Module):
                         cls_delta_tokens = self.zs_cls_delta_tokens
                         cls_delta_token_weights = self.zs_cls_delta_token_weights
                     elif len(prompt_subj_name_to_cls_delta_string) > 0:
-                        cls_delta_string = list(prompt_subj_name_to_cls_delta_string.keys())[0]
+                        cls_delta_string = list(prompt_subj_name_to_cls_delta_string.values())[0]
                         cls_delta_tokens = list(prompt_subj_name_to_cls_delta_tokens.values())[0]
                         cls_delta_token_weights = list(prompt_subj_name_to_cls_delta_token_weights.values())[0]
                     else:

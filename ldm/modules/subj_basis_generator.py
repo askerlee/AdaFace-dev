@@ -396,6 +396,8 @@ class SubjBasisGenerator(nn.Module):
                     # extra_token_embs: [K, 768] -> [1, K, 768]
                     # extra_token_embs should have been layer-normalized before being passed to the model.
                     # Otherwise, the default magnitude of the extra_token_embs is much smaller than id_embs.
+                    # If applicable, extra_token_embs should have been token-wise weighted before 
+                    # being passed to the model.
                     extra_token_embs = extra_token_embs.unsqueeze(0)
                     id_embs = torch.cat([id_embs, extra_token_embs], dim=1)
             else:
