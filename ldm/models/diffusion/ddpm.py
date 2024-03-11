@@ -1527,7 +1527,11 @@ class LatentDiffusion(DDPM):
             # then keep at 1.0.
             # That is, mix_prompt_distill loss is only enabled at the first 25% of the training 
             # as bootstrapping, then disabled (only keep comp_fg_bg_preserve_loss).
-            p_comp_init_fg_from_training_image = anneal_value(self.training_percent, 0.5, (0.7, 0.9))
+            if not self.do_zero_shot:
+                p_comp_init_fg_from_training_image = anneal_value(self.training_percent, 0.5, (0.7, 0.9))
+            else:
+                # If do_zero_shot, then comp_init_fg_from_training_image is always enabled.
+                p_comp_init_fg_from_training_image = 1
 
             # If reuse_init_conds, comp_init_fg_from_training_image may be set to True later
             # if the previous iteration has comp_init_fg_from_training_image = True.
