@@ -1144,8 +1144,8 @@ class EmbeddingManager(nn.Module):
             # num_bg_queries:   4 * 26 = 104.
             self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
             self.zs_cls_delta_string   = zs_cls_delta_string
-            self.zs_cls_delta_tokens   = get_tokens_for_string(zs_cls_delta_string)
             if self.zs_cls_delta_string is not None:
+                self.zs_cls_delta_tokens   = get_tokens_for_string(zs_cls_delta_string)
                 if zs_cls_delta_token_weights is None:
                     self.zs_cls_delta_token_weights = torch.ones(len(self.zs_cls_delta_tokens))
                     self.zs_cls_delta_token_weights[-1] = 2
@@ -1156,6 +1156,7 @@ class EmbeddingManager(nn.Module):
                 self.zs_cls_delta_token_weights **= 2
                 self.zs_cls_delta_token_weights /= self.zs_cls_delta_token_weights.max()
             else:
+                self.zs_cls_delta_tokens = None
                 self.zs_cls_delta_token_weights = None
 
         for placeholder_idx, placeholder_string in enumerate(self.placeholder_strings):
