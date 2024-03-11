@@ -1109,6 +1109,7 @@ class EmbeddingManager(nn.Module):
 
         # Save this function to be used in load() when doing placeholder substitution.
         self.get_tokens_for_string = get_tokens_for_string
+        self.get_embeddings_for_tokens = get_embeddings_for_tokens
         str2lora_rank = {}
         # "," -> 267, "z": 345, "y": 344.
         self.subj_idx_to_cls_delta_tokens   = {}
@@ -1451,6 +1452,7 @@ class EmbeddingManager(nn.Module):
             # occurs in the prompts without the placeholder token. If so, we need to merge 
             # their embeddings to one (the first) embedding, and delete the 2nd to the last embeddings,
             # using merge_cls_token_embeddings().
+            # prompt_subj_name_to_cls_delta_tokens only contains the cls_delta_tokens of the current batch.
             if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0 \
               and len(prompt_subj_name_to_cls_delta_tokens) > 0:
                 cls_delta_string_indices = scan_cls_delta_strings(tokenized_text,
@@ -1488,13 +1490,16 @@ class EmbeddingManager(nn.Module):
                         self.curr_subj_is_face = self.subj_name_to_being_faces[self.curr_batch_subj_names[0]]
 
                     subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
+                    cls_delta_tokens = list(prompt_subj_name_to_cls_delta_tokens.values())[0].to(device)
+                    cls_delta_embeddings = self.get_embeddings_for_tokens(cls_delta_tokens)
+                    extra_token_embs = cls_delta_embeddings
                     # zs_clip_features: [BS, 257, 1280]
                     # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
                     zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs, 
-                                                         self.curr_subj_is_face)
+                                                         extra_token_embs, self.curr_subj_is_face)
                     if self.zs_apply_neg_subj_bases:
                         zs_vecs_2sets_neg = subj_basis_generator(-zs_clip_features, uncond_id_embs, 
-                                                                 self.curr_subj_is_face)
+                                                                 None, self.curr_subj_is_face)
                         zs_neg_subj_bases_weight = 0.2
                         zs_vecs_2sets = zs_vecs_2sets * (1 + zs_neg_subj_bases_weight) \
                                         - zs_vecs_2sets_neg * zs_neg_subj_bases_weight

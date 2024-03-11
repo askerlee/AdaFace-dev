@@ -96,7 +96,10 @@ pipe = StableDiffusionPipeline.from_pretrained(
 # but only the first 80 will be effective.
 # If we take the average of the face embeddings (as above), then only 16 image tokens will be generated,
 # and all of them will be effective.
-ip_model = IPAdapterFaceID(pipe, ip_ckpt, device, num_tokens=16, n_cond=n_cond)
+ip_model = IPAdapterFaceID(pipe, ip_ckpt, device, num_tokens=16, 
+                           n_cond=n_cond, 
+                           ablation_no_attn_proc=False,
+                           ablation_no_image_proj=False)
 
 # generate image
 prompt = args.prompt 

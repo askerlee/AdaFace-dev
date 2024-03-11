@@ -126,14 +126,27 @@ def LoRA_ExpandEmbs(input_dim, lora_rank, output_dim, num_modes,
         nn.Dropout(0.1),
     )
 
-def ExpandEmbs(input_dim, output_dim, num_output_vecs, elementwise_affine=True):
+def ExpandEmbs(input_dim, output_dim, expansion_ratio, elementwise_affine=True):
     return nn.Sequential(
         # Project to [BS, num_output_vecs * output_dim].
-        nn.Linear(input_dim, num_output_vecs * output_dim, bias=False),
+        nn.Linear(input_dim, expansion_ratio * output_dim, bias=False),
         # Reshape to [BS, num_output_vecs, output_dim].
-        Rearrange('b (q d) -> b q d', q=num_output_vecs, d=output_dim),
+        Rearrange('b (e d) -> b e d', e=expansion_ratio, d=output_dim),
         nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
         nn.Dropout(0.1),
+    )
+
+def MultimodeProjection(input_dim, output_dim=-1, num_modes=4, elementwise_affine=True):
+    if output_dim == -1:
+        output_dim = input_dim
+
+    return nn.Sequential(
+            nn.Linear(input_dim, output_dim * num_modes, bias=False),
+            # Reshape to [BS, num_output_vecs, output_dim].
+            Rearrange('b n (m d) -> b n m d', m=num_modes, d=output_dim),
+            nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
+            LearnedSoftAggregate(num_feat=output_dim, group_dim=2, keepdim=False),
+            nn.Dropout(0.1),
     )
 
 # Low-rank to high-rank transformation.
@@ -145,9 +158,9 @@ def Lora2Hira(lora_rank, hira_rank, output_dim, num_modes, elementwise_affine=Tr
         nn.Linear(lora_rank, hira_rank * num_modes, bias=False),
         # Reshape and permute to [BS, num_modes, num_output_vecs, output_dim].
         Rearrange('b d (m q) -> b m q d', m=num_modes, q=hira_rank),
+        nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
         # Aggregate [BS, num_modes, hira_rank, output_dim] -> [BS, hira_rank, output_dim].
         LearnedSoftAggregate(num_feat=output_dim, group_dim=1, keepdim=False),        
-        nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
         nn.Dropout(0.1),    
     )
 
@@ -199,40 +212,23 @@ class PerceiverAttention(nn.Module):
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, input_dim, context_dim, num_heads, dropout=0.1, attn_polarity=1, elementwise_affine=True, 
-                 identity_to_q=False, identity_to_k=False, identity_to_v=False, identity_to_out=False):
+    def __init__(self, input_dim, num_heads=6, dropout=0.1, 
+                 identity_to_q=False, identity_to_k=False, identity_to_v=False, 
+                 identity_to_out=False, out_has_skip=False):
         super().__init__()
         dim_head  = input_dim // num_heads
         inner_dim = dim_head   * num_heads
 
-        self.num_heads = num_heads
-        self.attn_polarity = attn_polarity
-        # If context_dim != inner_dim, then we need to project context_dim to inner_dim.
-        identity_to_k = identity_to_k and (context_dim == inner_dim)
-        
-        # To increase stability,, we add layernorm to q,k,v projections.
-        self.to_q = nn.Sequential(
-                        nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_q else nn.Identity(),
-                        #nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine)
-                    )
-        
-        self.to_k = nn.Sequential(
-                        # If context_dim != input_dim, then we need to project context_dim to input_dim 
-                        # for similarity computation.
-                        nn.Linear(context_dim, inner_dim, bias=False) if not identity_to_k else nn.Identity(),
-                        #nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine)
-                    )
-        
-        self.to_v = nn.Sequential(
-                        nn.Linear(context_dim, context_dim, bias=False) if not identity_to_v else nn.Identity(),
-                        #nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine)
-                    )
+        self.num_heads = num_heads        
+        self.to_q = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_q else nn.Identity()
+        self.to_k = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_k else nn.Identity()
+        self.to_v = nn.Linear(input_dim, input_dim, bias=False) if not identity_to_v else nn.Identity()
 
         self.to_out = nn.Sequential(
-            nn.Linear(context_dim, context_dim, bias=False) if not identity_to_out else nn.Identity(),
-            # nn.LayerNorm(context_dim, elementwise_affine=elementwise_affine),
+            nn.Linear(input_dim, input_dim, bias=False) if not identity_to_out else nn.Identity(),
             nn.Dropout(dropout)
         )
+        self.out_has_skip = out_has_skip
         self.attn_drop = nn.Dropout(dropout)
 
     def forward(self, x, context=None):
@@ -264,7 +260,7 @@ class CrossAttention(nn.Module):
         '''        
         scale = q.size(-1) ** -0.25
 
-        sim = einsum('b i d, b j d -> b i j', q * scale, k * scale) * self.attn_polarity
+        sim = einsum('b i d, b j d -> b i j', q * scale, k * scale)
         # sim: [16, 378, 257]. 16: bs 1 * h 16.
         # attention, what we cannot get enough of
         # NOTE: the normalization is done across tokens, not across pixels.
@@ -278,7 +274,10 @@ class CrossAttention(nn.Module):
         # [16, 378, 48] -> [1, 378, 768].
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
 
-        out = self.to_out(out)
+        if self.out_has_skip:
+            out = self.to_out(out) + out
+        else:
+            out = self.to_out(out)
 
         return out
 
@@ -294,18 +293,18 @@ class SubjBasisGenerator(nn.Module):
         # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
         num_id_vecs=16,                     # number of identity vectors.
         num_out_queries=234,                # fg: 234 = 9 * 26. bg: 104 = 4 * 26.
-        image_embedding_dim=1280,           # CLIP image feature dimension, as per config.json above.
+        image_embedding_dim=768,            # CLIP image feature dimension, as per config.json above.
         # DINO vits16 has 6 attention heads:
         # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
         # Number of low-rank latent queries. If num_latent_queries = 1, 
         # then basically all output queries are the same.
         num_latent_queries=64,               
-        latent_query_dim=768,               # Latent query dimension. num_heads * 128.
+        num_prompt2token_emb_modes=4,       # number of modes for prompt2token_emb.
         num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
-        use_FFN: bool = True,               # Whether to use FeedForward layer after cross-attention.
+        use_FFN: bool = False,              # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         ip_model_ckpt_path: str = None,     # Path to the IP-Adapter model checkpoint.
     ):
@@ -320,7 +319,7 @@ class SubjBasisGenerator(nn.Module):
 
         self.placeholder_is_bg   = placeholder_is_bg
         self.num_latent_queries  = num_latent_queries
-        self.latent_query_dim    = latent_query_dim
+        self.latent_query_dim    = output_dim
 
         # If not self.placeholder_is_bg:
         # The dimension of IP-Adapter face features for humans is the same as output_dim = latent_query_dim.   
@@ -330,14 +329,16 @@ class SubjBasisGenerator(nn.Module):
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
-            self.obj_proj_in  = ExpandEmbs(dino_embedding_dim, latent_query_dim, num_output_vecs=num_id_vecs,
+            self.obj_proj_in  = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
                                            elementwise_affine=elementwise_affine)
+            self.prompt2token_emb_proj = MultimodeProjection(input_dim=output_dim, 
+                                                             num_modes=num_prompt2token_emb_modes,
+                                                             elementwise_affine=elementwise_affine)
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.face_proj_in = None
             self.obj_proj_in  = None
-
-        self.lq_ln    = nn.LayerNorm(latent_query_dim, elementwise_affine=elementwise_affine)
+            self.prompt2token_emb_proj = None
 
         self.num_out_queries        = num_out_queries
         self.num_lora2hira_modes    = num_lora2hira_modes
@@ -354,27 +355,14 @@ class SubjBasisGenerator(nn.Module):
         self.use_FFN            = use_FFN
 
         for dep in range(depth):
-            if dep == 0:
-                input_dim = latent_query_dim
-                # First layer uses k, q, v, and out projections.
-                identity_to_k = False
-                identity_to_v = False
-                identity_to_out = False
-            else:
-                # Subsequent layers don't use k, v, and out projections.
-                # q projection is always used.
-                input_dim = output_dim
-                identity_to_k = True
-                identity_to_v = True
-                identity_to_out = True
-
             self.layers.append(
                 nn.ModuleList(
                     [
                         # dim=768, num_heads=6.
-                        CrossAttention(input_dim=input_dim, context_dim=output_dim, num_heads=num_heads, dropout=0.1,
-                                       identity_to_q=False, identity_to_k=identity_to_k,
-                                       identity_to_v=identity_to_v, identity_to_out=identity_to_out),
+                        CrossAttention(input_dim=output_dim, num_heads=num_heads, dropout=0.1,
+                                       identity_to_q=True, identity_to_k=True,
+                                       identity_to_v=True, identity_to_out=False,
+                                       out_has_skip=True),
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
                         FeedForward(dim=output_dim, mult=1, elementwise_affine=elementwise_affine) \
@@ -389,7 +377,8 @@ class SubjBasisGenerator(nn.Module):
 
         print(repr(self))
 
-    def forward(self, clip_features, id_embs, is_face):     
+    def forward(self, clip_features, id_embs, extra_token_embs, is_face):    
+        BS = clip_features.shape[0] 
         # No need to use id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (id_embs is not None):
             if is_face:
@@ -401,27 +390,32 @@ class SubjBasisGenerator(nn.Module):
                 else:
                     # face_proj_in will be updated during training.
                     id_embs = self.face_proj_in(id_embs)
+                # id_embs is projected to the token embedding space.
+                id_embs = self.prompt2token_emb_proj(id_embs)
+                if extra_token_embs is not None:
+                    # extra_token_embs: [K, 768] -> [1, K, 768]
+                    extra_token_embs = extra_token_embs.unsqueeze(0)
+                    id_embs = torch.cat([id_embs, extra_token_embs], dim=1)
             else:
                 # id_embs: [1, 384] -> [1, 16, 768].
+                # obj_proj_in is expected to project the DINO object features to 
+                # the token embedding space. So no need to use prompt2token_emb_proj.
                 id_embs = self.obj_proj_in(id_embs)
+                if extra_token_embs is not None:
+                    # extra_token_embs: [K, 768] -> [1, K, 768]
+                    extra_token_embs = extra_token_embs.unsqueeze(0)
+                    id_embs = torch.cat([id_embs, extra_token_embs], dim=1)                
         else:
             # Otherwise, context is the ad-hoc CLIP image features.
             # id_embs: [1, 257, 768].
             id_embs = self.proj_in(clip_features)
 
+        # context is already in the token embedding space.
         context = id_embs
 
         for i, (attn, ff) in enumerate(self.layers):
-            latent_queries = self.latent_queries[i]
-            latent_queries = self.latent_query_lns[i](latent_queries)
-
-            if i == 0:
-                # No residual connection at the first layer, as the semantic space is different
-                # (prompt embedding vs. token embedding).
-                context = attn(latent_queries, context)
-            else:
-                # The semantic space is already in the token embedding space.
-                context = attn(latent_queries, context) + context
+            latent_queries = self.latent_query_lns[i](self.latent_queries[i])
+            context = attn(latent_queries, context)
 
             if self.use_FFN:
                 context = ff(context) + context
