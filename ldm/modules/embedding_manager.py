@@ -1506,11 +1506,11 @@ class EmbeddingManager(nn.Module):
                     # Noise level is gradually reduced from [0.04, 0.06] to [0.02, 0.03] during training.
                     # Noise std is absolute, not relative (to the std of all_id_embs).
                     if self.training:
-                        id_embs = add_noise_to_embedding(id_embs, self.training_percent,
-                                                         begin_noise_std_range=[0.04, 0.06], 
-                                                         end_noise_std_range  =[0.02, 0.03],
-                                                         add_noise_prob=0.5, noise_std_is_relative=False,
-                                                         keep_norm=True)
+                        zs_id_embs = add_noise_to_embedding(zs_id_embs, self.training_percent,
+                                                            begin_noise_std_range=[0.04, 0.06], 
+                                                            end_noise_std_range  =[0.02, 0.03],
+                                                            add_noise_prob=0.5, noise_std_is_relative=False,
+                                                            keep_norm=True)
 
                     # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
                     # curr_subj_is_face. 
