@@ -97,7 +97,6 @@ class DDPM(pl.LightningModule):
                  unfreeze_model=False,
                  model_lr=0.,
                  v_posterior=0.,  # weight for choosing posterior variance as sigma = (1-v) * beta_tilde + v * beta
-                 recon_loss_weight=1.,
                  conditioning_key=None,
                  parameterization="eps",  # all assuming fixed variance schedules
                  optimizer_type='Prodigy',
@@ -135,7 +134,7 @@ class DDPM(pl.LightningModule):
                  normalize_ca_q_and_outfeat=True,
                  do_zero_shot=False,
                  zs_clip_type='openai',
-                 each_batch_from_same_subject=True
+                 same_subject_in_each_batch=True
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -182,7 +181,7 @@ class DDPM(pl.LightningModule):
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
         self.do_zero_shot                           = do_zero_shot
 
-        self.each_batch_from_same_subject           = each_batch_from_same_subject
+        self.same_subject_in_each_batch             = same_subject_in_each_batch
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
@@ -222,7 +221,6 @@ class DDPM(pl.LightningModule):
         
         self.v_posterior = v_posterior
         self.original_elbo_weight = original_elbo_weight
-        self.recon_loss_weight = recon_loss_weight
         self.unfreeze_model = unfreeze_model
         self.model_lr = model_lr
 
@@ -459,7 +457,7 @@ class DDPM(pl.LightningModule):
         log_prefix = 'train' if self.training else 'val'
 
         loss_dict.update({f'{log_prefix}/loss_recon': loss.mean().detach()})
-        loss_recon = loss.mean() * self.recon_loss_weight
+        loss_recon = loss.mean()
 
         loss_vlb = (self.lvlb_weights[t] * loss).mean()
         loss_dict.update({f'{log_prefix}/loss_vlb': loss_vlb.mean().detach()})
@@ -1007,6 +1005,8 @@ class LatentDiffusion(DDPM):
                     # It also updates the EMA of ada embeddings.
                     # Since get_learned_conditioning() is always called before the loss computations,
                     # it won't cause computation graph errors.
+                    # This call is redundant, as the cache has already been cleared in p_losses() 
+                    # after finishing each iteration.
                     self.embedding_manager.clear_ada_prompt_embeddings_cache()
                     extra_info['ada_embedder'] = ada_embedder
 
@@ -1427,20 +1427,9 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['wds_comp_avail_ratio'] = batch['has_wds_comp'].sum() / batch['has_wds_comp'].shape[0]
 
-        if self.each_batch_from_same_subject and len(set(batch['subject_name'])) > 1:
-            print("Different subjects in the batch when each_batch_from_same_subject=True.")
-            breakpoint()
-
-        self.batch_subject_names = batch['subject_name']
         # If it's a compositional distillation iteration, only the first instance in the batch is used.
         # Therefore, self.batch_1st_subject_name is the only subject name in the batch.
-        self.batch_1st_subject_name  = self.batch_subject_names[0]
-        self.iter_flags['is_face'] = [ self.embedding_manager.subj_name_to_being_faces[subject_name] \
-                                        for subject_name in self.batch_subject_names ]
-
-        # Currently, only one subject name is allowed in the batch.
-        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names)
-        print(self.batch_subject_names)
+        self.batch_1st_subject_name  = batch['subject_name'][0]
 
         # If cached_inits is available (self.batch_1st_subject_name in self.cached_inits), 
         # cached_inits are only used if do_mix_prompt_distillation = True.
@@ -1671,6 +1660,32 @@ class LatentDiffusion(DDPM):
             assert self.iter_flags['fg_mask_avail_ratio'] == 0
             fg_mask = None
 
+        if self.same_subject_in_each_batch and len(set(batch['subject_name'])) > 1:
+            print("Different subjects in the batch when same_subject_in_each_batch=True.")
+            breakpoint()
+
+        if not self.same_subject_in_each_batch and self.iter_flags['do_mix_prompt_distillation']:
+            BS = len(batch['subject_name'])
+            batch['subject_name'] = batch['subject_name'][0:1] * BS
+            x_start  = x_start[0:1].repeat(BS, 1, 1, 1)
+            img_mask = img_mask[0:1].repeat(BS, 1, 1, 1) if img_mask is not None else None
+            fg_mask  = fg_mask[0:1].repeat(BS, 1, 1, 1)  if fg_mask  is not None else None
+            batch_have_fg_mask    = batch_have_fg_mask[0:1].repeat(BS)
+            batch["image_unnorm"] = batch["image_unnorm"][0:1].repeat(BS, 1, 1, 1)
+            batch["image_path"]   = batch["image_path"][0:1] * BS
+            # captions and delta_prompts don't change, as different subjects share the same placeholder "z".
+            self.iter_flags['same_subject_in_batch'] = True
+        else:
+            self.iter_flags['same_subject_in_batch'] = self.same_subject_in_each_batch
+
+        self.batch_subject_names = batch['subject_name']
+        # Currently, only one subject name is allowed in the batch.
+        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names)
+        print(self.batch_subject_names)
+
+        self.iter_flags['is_face'] = [ self.embedding_manager.subj_name_to_being_faces[subject_name] \
+                                        for subject_name in self.batch_subject_names ]
+
         # aug_mask is renamed as img_mask.
         self.iter_flags['img_mask']             = img_mask
         self.iter_flags['fg_mask']              = fg_mask
@@ -1680,18 +1695,16 @@ class LatentDiffusion(DDPM):
         if self.do_zero_shot:
             # images: 0~255 uint8 tensor [3, 512, 512, 3] -> [3, 3, 512, 512].
             images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
-            # batch["fg_mask"]: [3, 512, 512].
-            fg_mask = batch["fg_mask"]
             image_paths = batch["image_path"]
 
-            # If each_batch_from_same_subject:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
-            # Otherwise:                        zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
-            # If each_batch_from_same_subject, then we average the zs_clip_features and zs_id_embs to get 
+            # If self.iter_flags['same_subject_in_batch']:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
+            # Otherwise:                      zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
+            # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_features and zs_id_embs to get 
             # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
-            zs_clip_features, zs_id_embs = self.encode_zero_shot_image_features(images, fg_mask,
+            zs_clip_features, zs_id_embs = self.encode_zero_shot_image_features(images, fg_mask.squeeze(1),
                                                                                 # iter_flags['is_face'] is a list of 0/1 elements.
                                                                                 is_face=self.iter_flags['is_face'][0],
-                                                                                calc_avg=self.each_batch_from_same_subject,
+                                                                                calc_avg=self.iter_flags['same_subject_in_batch'],
                                                                                 image_paths=image_paths)
             
             '''
@@ -1727,8 +1740,6 @@ class LatentDiffusion(DDPM):
             self.iter_flags['use_background_token']     = cached_inits['use_background_token']
             self.iter_flags['use_wds_comp']             = cached_inits['use_wds_comp']
             self.iter_flags['comp_init_fg_from_training_image']   = cached_inits['comp_init_fg_from_training_image']
-
-        self.iter_flags['recon_loss_weight'] = self.recon_loss_weight 
 
         self.embedding_manager.iter_type = 'distill_iter' if self.iter_flags['is_compos_iter'] else 'recon_iter'
 
@@ -2935,11 +2946,11 @@ class LatentDiffusion(DDPM):
 
             loss += loss_emb_reg * emb_reg_loss_scale
 
-        # If do_zero_shot but not each_batch_from_same_subject, then in each batch,
+        # If do_zero_shot but not self.iter_flags['same_subject_in_batch'], then in each batch,
         # the subject instances are from different subjects, and their embeddings are different as well.
         # The fg_bg_token_embs_ortho_loss will be too complicated to compute (we need to separately consider
         # compositional and non-compositional iterations), so we disable it.
-        if not (self.do_zero_shot and not self.each_batch_from_same_subject) \
+        if not (self.do_zero_shot and not self.iter_flags['same_subject_in_batch']) \
           and self.fg_bg_token_emb_ortho_loss_weight >= 0:
             # If use_background_token, then loss_fg_bg_token_emb_ortho is nonzero.
             # Otherwise, loss_fg_bg_token_emb_ortho is zero.
@@ -3423,8 +3434,7 @@ class LatentDiffusion(DDPM):
                                              bg_pixel_weight=bg_pixel_weight)
 
         loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
-
-        loss += self.iter_flags['recon_loss_weight'] * loss_recon
+        loss += loss_recon
 
         return loss
 

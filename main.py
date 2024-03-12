@@ -256,7 +256,7 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning")
-    parser.add_argument("--each_batch_from_same_subject", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--same_subject_in_each_batch", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to sample each batch from the same subject")
     
     parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
@@ -452,7 +452,7 @@ def worker_init_fn(_):
 class DataModuleFromConfig(pl.LightningDataModule):
     # train, validation: the corresponding section in the config file,
     # used by instantiate_from_config(self.dataset_configs[k]).
-    def __init__(self, batch_size, max_steps, each_batch_from_same_subject=True, train=None, validation=None, test=None, predict=None,
+    def __init__(self, batch_size, max_steps, same_subject_in_each_batch=True, train=None, validation=None, test=None, predict=None,
                  wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
                  shuffle_val_dataloader=False):
         super().__init__()
@@ -474,7 +474,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
             self.dataset_configs["predict"] = predict
             self.predict_dataloader = self._predict_dataloader
         self.wrap = wrap
-        self.each_batch_from_same_subject = each_batch_from_same_subject
+        self.same_subject_in_each_batch = same_subject_in_each_batch
 
     def prepare_data(self):
         for data_cfg in self.dataset_configs.values():
@@ -503,7 +503,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
         if self.datasets['train'].num_subjects > 1:
             shuffle = False
             sampler = SubjectSampler(self.datasets['train'].num_subjects, self.datasets['train'].subject_names, self.num_batches, 
-                                     self.batch_size, each_batch_from_same_subject=self.each_batch_from_same_subject)
+                                     self.batch_size, same_subject_in_each_batch=self.same_subject_in_each_batch)
         else:
             sampler = None
 
@@ -922,6 +922,7 @@ if __name__ == "__main__":
 
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
+        config.model.params.same_subject_in_each_batch = opt.same_subject_in_each_batch
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
         config.data.params.train.params.do_zero_shot        = opt.zeroshot
         config.data.params.validation.params.do_zero_shot   = opt.zeroshot
@@ -946,7 +947,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_num_latent_queries     = opt.zs_num_latent_queries
 
             # When using zero-shot, we load different subjects in the same batch.
-            config.data.params.each_batch_from_same_subject = opt.each_batch_from_same_subject
+            config.data.params.same_subject_in_each_batch = opt.same_subject_in_each_batch
         
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
