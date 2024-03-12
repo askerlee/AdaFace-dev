@@ -1521,33 +1521,37 @@ class EmbeddingManager(nn.Module):
                         self.curr_subj_is_face = self.subj_name_to_being_faces[self.curr_batch_subj_names[0]]
 
                     subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
-                    if self.zs_cls_delta_string is not None:
-                        cls_delta_string = self.zs_cls_delta_string
-                        cls_delta_tokens = self.zs_cls_delta_tokens
-                        cls_delta_token_weights = self.zs_cls_delta_token_weights
-                    elif len(prompt_subj_name_to_cls_delta_string) > 0:
-                        cls_delta_string = list(prompt_subj_name_to_cls_delta_string.values())[0]
-                        cls_delta_tokens = list(prompt_subj_name_to_cls_delta_tokens.values())[0]
-                        cls_delta_token_weights = list(prompt_subj_name_to_cls_delta_token_weights.values())[0]
-                    else:
-                        cls_delta_string = None
-                        cls_delta_tokens = None
-                        cls_delta_token_weights = None
 
-                    if cls_delta_tokens is not None:
-                        cls_delta_tokens     = cls_delta_tokens.to(device)
-                        # cls_delta_embeddings: [K, 768]
-                        cls_delta_embeddings = self.get_embeddings_for_tokens(cls_delta_tokens)
-                        cls_delta_embeddings = F.layer_norm(cls_delta_embeddings, (self.out_emb_dim,))
+                    if not placeholder_is_bg:
+                        if self.zs_cls_delta_string is not None:
+                            cls_delta_string = self.zs_cls_delta_string
+                            cls_delta_tokens = self.zs_cls_delta_tokens
+                            cls_delta_token_weights = self.zs_cls_delta_token_weights
+                        elif len(prompt_subj_name_to_cls_delta_string) > 0:
+                            cls_delta_string = list(prompt_subj_name_to_cls_delta_string.values())[0]
+                            cls_delta_tokens = list(prompt_subj_name_to_cls_delta_tokens.values())[0]
+                            cls_delta_token_weights = list(prompt_subj_name_to_cls_delta_token_weights.values())[0]
+                        else:
+                            cls_delta_string = None
+                            cls_delta_tokens = None
+                            cls_delta_token_weights = None
 
-                        if 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
-                            print(f"cls_delta_string: {cls_delta_string}, weights: {cls_delta_token_weights.cpu().numpy()}")
+                        if cls_delta_tokens is not None:
+                            cls_delta_tokens     = cls_delta_tokens.to(device)
+                            # cls_delta_embeddings: [K, 768]
+                            cls_delta_embeddings = self.get_embeddings_for_tokens(cls_delta_tokens)
+                            cls_delta_embeddings = F.layer_norm(cls_delta_embeddings, (self.out_emb_dim,))
 
-                        # cls_delta_token_weights: [K] -> [K, 1].
-                        cls_delta_token_weights = cls_delta_token_weights.unsqueeze(1).to(device)
-                        # Weight the cls_delta_embeddings by cls_delta_token_weights.
-                        cls_delta_embeddings = cls_delta_embeddings * cls_delta_token_weights
-                        
+                            if 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+                                print(f"cls_delta_string: {cls_delta_string}, weights: {cls_delta_token_weights.cpu().numpy()}")
+
+                            # cls_delta_token_weights: [K] -> [K, 1].
+                            cls_delta_token_weights = cls_delta_token_weights.unsqueeze(1).to(device)
+                            # Weight the cls_delta_embeddings by cls_delta_token_weights.
+                            cls_delta_embeddings = cls_delta_embeddings * cls_delta_token_weights
+                            
+                        else:
+                            cls_delta_embeddings = None
                     else:
                         cls_delta_embeddings = None
 

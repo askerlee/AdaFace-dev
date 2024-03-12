@@ -902,9 +902,9 @@ class LatentDiffusion(DDPM):
         self.dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
         print(f'Face and DINO encoders loaded on {self.device}.')
 
-        ip_ckpt = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
-        for _, subj_basis_generator in self.embedding_manager.string_to_subj_basis_generator_dict.items():
-            subj_basis_generator.init_face_proj_in(768, ip_ckpt, self.device)
+        #ip_ckpt = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
+        #for _, subj_basis_generator in self.embedding_manager.string_to_subj_basis_generator_dict.items():
+        #    subj_basis_generator.init_face_proj_in(768, ip_ckpt, self.device)
         self.neg_image_features = None
         self.zs_image_encoder_instantiated = True
 
