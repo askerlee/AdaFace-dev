@@ -392,23 +392,20 @@ class SubjBasisGenerator(nn.Module):
                     id_embs = self.face_proj_in(id_embs)
                 # id_embs is projected to the token embedding space.
                 id_embs = self.prompt2token_emb_proj(id_embs)
-                if extra_token_embs is not None:
-                    # extra_token_embs: [K, 768] -> [1, K, 768]
-                    # extra_token_embs should have been layer-normalized before being passed to the model.
-                    # Otherwise, the default magnitude of the extra_token_embs is much smaller than id_embs.
-                    # If applicable, extra_token_embs should have been token-wise weighted before 
-                    # being passed to the model.
-                    extra_token_embs = extra_token_embs.unsqueeze(0)
-                    id_embs = torch.cat([id_embs, extra_token_embs], dim=1)
             else:
                 # id_embs: [1, 384] -> [1, 16, 768].
                 # obj_proj_in is expected to project the DINO object features to 
                 # the token embedding space. So no need to use prompt2token_emb_proj.
                 id_embs = self.obj_proj_in(id_embs)
-                if extra_token_embs is not None:
-                    # extra_token_embs: [K, 768] -> [1, K, 768]
-                    extra_token_embs = extra_token_embs.unsqueeze(0)
-                    id_embs = torch.cat([id_embs, extra_token_embs], dim=1)                
+
+            if extra_token_embs is not None:
+                # extra_token_embs: [K, 768] -> [1, K, 768]
+                # extra_token_embs should have been layer-normalized before being passed to the model.
+                # Otherwise, the default magnitude of the extra_token_embs is much smaller than id_embs.
+                # If applicable, extra_token_embs should have been token-wise weighted before 
+                # being passed to the model.
+                extra_token_embs = extra_token_embs.unsqueeze(0)
+                id_embs = torch.cat([id_embs, extra_token_embs], dim=1)
         else:
             # Otherwise, context is the ad-hoc CLIP image features.
             # id_embs: [1, 257, 768].
