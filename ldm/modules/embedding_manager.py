@@ -1557,6 +1557,10 @@ class EmbeddingManager(nn.Module):
                                 cls_delta_embeddings_list.append(cls_delta_embeddings)
                             
                             cls_delta_embeddings = torch.cat(cls_delta_embeddings_list, dim=0)
+                            if cls_delta_embeddings.shape[0] > zs_id_embs.shape[0]:
+                                # It has to be a single-subject iteration.
+                                assert zs_id_embs.shape[0] == 1
+                                cls_delta_embeddings = cls_delta_embeddings[:zs_id_embs.shape[0]]
                         else:
                             cls_delta_embeddings = None
                     else:
