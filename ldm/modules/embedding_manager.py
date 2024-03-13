@@ -648,7 +648,9 @@ class AdaEmbedding(nn.Module):
         else:
             self.basis_vecs = None
             # Scale down the gradient to basis_dyn_coeffs, i.e., update layer_coeff_maps more slowly.
-            self.basis_dyn_coeffs_scaler = gen_gradient_scaler(0.01)
+            # Update: change the gradient scale to 1 so that disabling the scaling, 
+            # as the gradient on basis_dyn_coeffs are only around 1e-7.
+            self.basis_dyn_coeffs_scaler = gen_gradient_scaler(1, debug=False) #True)
             
         self.ca_infeat_dims = list(ca_infeat_dims)
         # self.infeat_dims = [ 320 for i in range(25) ]

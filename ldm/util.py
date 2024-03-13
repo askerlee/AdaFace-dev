@@ -1093,38 +1093,44 @@ def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1,
 # Revised from RevGrad, by removing the grad negation.
 class ScaleGrad(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input_, alpha_):
-        ctx.save_for_backward(input_, alpha_)
+    def forward(ctx, input_, alpha_, debug=False):
+        ctx.save_for_backward(alpha_, debug)
         output = input_
+        if debug:
+            print(f"input: {input_.abs().mean().item()}")
         return output
 
     @staticmethod
     def backward(ctx, grad_output):  # pragma: no cover
-        grad_input = None
-        _, alpha_ = ctx.saved_tensors
+        # saved_tensors returns a tuple of tensors.
+        alpha_, debug = ctx.saved_tensors
         if ctx.needs_input_grad[0]:
-            grad_input = grad_output * alpha_
-        return grad_input, None
+            grad_output2 = grad_output * alpha_
+            if debug:
+                print(f"grad_output2: {grad_output2.abs().mean().item()}")
+        else:
+            grad_output2 = None
+        return grad_output2, None, None
 
 class GradientScaler(nn.Module):
-    def __init__(self, alpha=1., *args, **kwargs):
+    def __init__(self, alpha=1., debug=False, *args, **kwargs):
         """
-        A gradient reversal layer.
-        This layer has no parameters, and simply reverses the gradient
-        in the backward pass.
+        A gradient scaling layer.
+        This layer has no parameters, and simply scales the gradient in the backward pass.
         """
         super().__init__(*args, **kwargs)
 
         self._alpha = torch.tensor(alpha, requires_grad=False)
+        self._debug = torch.tensor(debug, requires_grad=False)
 
     def forward(self, input_):
-        return ScaleGrad.apply(input_, self._alpha.to(input_.device))
+        return ScaleGrad.apply(input_, self._alpha.to(input_.device), self._debug)
 
-def gen_gradient_scaler(alpha):
-    if alpha == 1:
-        return lambda x: x
+def gen_gradient_scaler(alpha, debug=False):
+    #if alpha == 1:
+    #    return lambda x: x
     if alpha > 0:
-        return GradientScaler(alpha)
+        return GradientScaler(alpha, debug=debug)
     else:
         assert alpha == 0
         return lambda x: x.detach()
