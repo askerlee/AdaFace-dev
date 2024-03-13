@@ -1554,7 +1554,7 @@ class EmbeddingManager(nn.Module):
                                 # cls_delta_token_weights: [K] -> [K, 1].
                                 cls_delta_token_weights = cls_delta_token_weights.unsqueeze(1).to(device)
                                 # Weight the cls_delta_embeddings by cls_delta_token_weights.
-                                cls_delta_embeddings = cls_delta_embeddings * cls_delta_token_weights
+                                cls_delta_embeddings = (cls_delta_embeddings * cls_delta_token_weights).sum(dim=0, keepdim=True)
                                 cls_delta_embeddings_list.append(cls_delta_embeddings)
                             
                             cls_delta_embeddings = torch.cat(cls_delta_embeddings_list, dim=0)
