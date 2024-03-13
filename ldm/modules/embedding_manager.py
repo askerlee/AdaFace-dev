@@ -1420,11 +1420,7 @@ class EmbeddingManager(nn.Module):
         # During inference, as self.curr_batch_subj_names is not set, the three dicts are empty.
         prompt_subj_name_to_cls_delta_tokens        = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
                                                         for subj_name in self.curr_batch_subj_names }
-        prompt_subj_name_to_cls_delta_token_weights = { subj_name: self.subj_name_to_cls_delta_token_weights[subj_name] \
-                                                        for subj_name in self.curr_batch_subj_names }
-        prompt_subj_name_to_cls_delta_string        = { subj_name: self.subj_name_to_cls_delta_string[subj_name] \
-                                                        for subj_name in self.curr_batch_subj_names }
-        
+
         if self.use_layerwise_embedding:
             # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
             # "Tuck" the layer dimension into the batch dimension, 
@@ -1525,13 +1521,16 @@ class EmbeddingManager(nn.Module):
 
                     if not placeholder_is_bg:
                         if self.zs_cls_delta_string is not None:
-                            cls_delta_strings = [self.zs_cls_delta_string]
-                            cls_delta_tokens_list = [self.zs_cls_delta_tokens]
-                            cls_delta_token_weights_list = [self.zs_cls_delta_token_weights]
-                        elif len(prompt_subj_name_to_cls_delta_string) > 0:
-                            cls_delta_strings            = list(prompt_subj_name_to_cls_delta_string.values())
-                            cls_delta_tokens_list        = list(prompt_subj_name_to_cls_delta_tokens.values())
-                            cls_delta_token_weights_list = list(prompt_subj_name_to_cls_delta_token_weights.values())
+                            cls_delta_strings               = [self.zs_cls_delta_string]
+                            cls_delta_tokens_list           = [self.zs_cls_delta_tokens]
+                            cls_delta_token_weights_list    = [self.zs_cls_delta_token_weights]
+                        elif len(prompt_subj_name_to_cls_delta_tokens) > 0:
+                            cls_delta_strings            = [ self.subj_name_to_cls_delta_string[subj_name] \
+                                                             for subj_name in self.curr_batch_subj_names ]
+                            cls_delta_tokens_list        = [ self.subj_name_to_cls_delta_tokens[subj_name] \
+                                                             for subj_name in self.curr_batch_subj_names ]
+                            cls_delta_token_weights_list = [ self.subj_name_to_cls_delta_token_weights[subj_name] \
+                                                             for subj_name in self.curr_batch_subj_names ]
                         else:
                             cls_delta_strings = None
                             cls_delta_tokens_list = None
