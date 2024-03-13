@@ -1124,6 +1124,10 @@ class GradientScaler(nn.Module):
         self._debug = torch.tensor(debug, requires_grad=False)
 
     def forward(self, input_):
+        if hasattr('_debug', self):
+            _debug = self._debug
+        else:
+            _debug = False
         return ScaleGrad.apply(input_, self._alpha.to(input_.device), self._debug)
 
 def gen_gradient_scaler(alpha, debug=False):
