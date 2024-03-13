@@ -256,8 +256,8 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning")
-    parser.add_argument("--same_subject_in_each_batch", type=str2bool, nargs="?", const=True, default=True,
-                        help="Whether to sample each batch from the same subject")
+    parser.add_argument("--same_subject_in_each_batch", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether each batch only contains one particular subject (default: multiple subjects)")
     
     parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
                         default='openai',
