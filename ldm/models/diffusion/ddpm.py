@@ -581,16 +581,16 @@ class DDPM(pl.LightningModule):
         loss = loss / self.manual_accumulate_grad_batches
         self.manual_backward(loss)
 
-        if (batch_idx + 1) % self.manual_accumulate_grad_batches == 0:
-            optimizers = self.optimizers()
-            if isinstance(optimizers, list):
-                main_optimizer   = optimizers[0]
-                extra_optimizers = optimizers[1:]
-            else:
-                # Single optimizer.
-                main_optimizer   = optimizers
-                extra_optimizers = None
+        optimizers = self.optimizers()
+        if isinstance(optimizers, list):
+            main_optimizer   = optimizers[0]
+            extra_optimizers = optimizers[1:]
+        else:
+            # Single optimizer.
+            main_optimizer   = optimizers
+            extra_optimizers = None
 
+        if (batch_idx + 1) % self.manual_accumulate_grad_batches == 0:
             self.clip_gradients(main_optimizer, gradient_clip_val=self.grad_clip, 
                                 gradient_clip_algorithm="norm")
             
