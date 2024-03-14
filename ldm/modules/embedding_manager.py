@@ -1572,7 +1572,8 @@ class EmbeddingManager(nn.Module):
                     # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
                     zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs, 
                                                          extra_token_embs=cls_delta_embeddings, 
-                                                         is_face=self.curr_subj_is_face)
+                                                         is_face=self.curr_subj_is_face,
+                                                         training_percent=self.training_percent)
                     if self.zs_apply_neg_subj_bases:
                         zs_vecs_2sets_neg = subj_basis_generator(-zs_clip_features, uncond_id_embs, 
                                                                  extra_token_embs=None, 

@@ -16,6 +16,7 @@ from torch import einsum
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from transformers.utils import ModelOutput
+from util import anneal_value
 
 def reshape_tensor(x, num_heads):
     bs, length, width = x.shape
@@ -355,7 +356,6 @@ class SubjBasisGenerator(nn.Module):
         self.latent_queries     = nn.ParameterList([])
         self.latent_query_lns   = nn.ModuleList([])
         self.use_FFN            = use_FFN
-        self.p_drop_path        = 0.3 if self.use_FFN else 1.0
 
         for dep in range(depth):
             self.layers.append(
@@ -381,8 +381,8 @@ class SubjBasisGenerator(nn.Module):
 
         print(repr(self))
 
-    def forward(self, clip_features, id_embs, extra_token_embs, is_face):    
-        BS = clip_features.shape[0] 
+    def forward(self, clip_features, id_embs, extra_token_embs, is_face, training_percent=0):    
+        BS = clip_features.shape[0]
         # No need to use id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (id_embs is not None):
             if is_face:
@@ -423,9 +423,11 @@ class SubjBasisGenerator(nn.Module):
             latent_queries = latent_queries.repeat(BS, 1, 1)
             context = attn(latent_queries, context)
 
+            # Gradually reduce the dropout rate from 0.5 to 0.1 (average: 0.3).
+            p_drop_path = anneal_value(training_percent, 1, (0.5, 0.2))
             # ff is either nn.Identity() or nn.Sequential. If it's nn.Sequential, it implies self.use_FFN is True.
             # (torch.rand(1) > self.p_drop_path) is evaluated to [True] or [False], which is equivalent to True or False.
-            if isinstance(ff, nn.Sequential) and (torch.rand(1) > self.p_drop_path):
+            if isinstance(ff, nn.Sequential) and (torch.rand(1) > p_drop_path):
                 context = ff(context) + context
         
         output_queries = self.lora2hira(context)
