@@ -150,7 +150,7 @@ class DDPM(pl.LightningModule):
         self.use_positional_encodings = use_positional_encodings
 
         self.use_layerwise_embedding = use_layerwise_embedding
-        self.N_LAYERS = 16 if self.use_layerwise_embedding else 1
+        self.N_CA_LAYERS = 16 if self.use_layerwise_embedding else 1
 
         self.use_ada_embedding = (use_layerwise_embedding and use_ada_embedding)
 
@@ -965,7 +965,7 @@ class LatentDiffusion(DDPM):
                         emb_extra_global_scale *= self.embedding_manager.background_extra_global_scale
 
                     static_prompt_embedding = fix_emb_scales(static_prompt_embedding, placeholder_indices,
-                                                             num_layers=self.N_LAYERS,
+                                                             num_layers=self.N_CA_LAYERS,
                                                              extra_scale=emb_extra_global_scale)
 
                 # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scales first().
@@ -1786,12 +1786,12 @@ class LatentDiffusion(DDPM):
                     #print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
                     ORIG_BS  = len(x_start)
-                    N_EMBEDS = ORIG_BS * self.N_LAYERS
+                    N_EMBEDS = ORIG_BS * self.N_CA_LAYERS
                     
                     # Recon iters don't do_ada_prompt_delta_reg.
                     if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_prompt_delta_reg']:                        
-                        # BLOCK_SIZE is at least 1. So if ORIG_BS == 1, then BLOCK_SIZE = 1.
-                        BLOCK_SIZE  = max(ORIG_BS // self.num_candidate_teachers, 1)
+                        # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
+                        BLOCK_SIZE  = 1
                         # Only keep the first half of batched prompts to save RAM.
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
@@ -1810,8 +1810,8 @@ class LatentDiffusion(DDPM):
                     #print(delta_prompts)
                     # breakpoint()
                     # c_static_emb: the static embeddings for static delta loss.
-                    # [4 * N_EMBEDS, 77, 768], 4 * N_EMBEDS = 4 * ORIG_BS * N_LAYERS,
-                    # whose layer dimension (N_LAYERS) is tucked into the batch dimension. 
+                    # [4 * N_EMBEDS, 77, 768], 4 * N_EMBEDS = 4 * ORIG_BS * N_CA_LAYERS,
+                    # whose layer dimension (N_CA_LAYERS) is tucked into the batch dimension. 
                     # delta_prompts: the concatenation of
                     # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
                     # extra_info: a dict that contains extra info.
@@ -1865,7 +1865,7 @@ class LatentDiffusion(DDPM):
                                               cls_single_emb, cls_comp_emb], dim=0)
                     
                     # [64, 77, 768] => [16, 4, 77, 768].
-                    extra_info['c_static_emb_4b'] = c_static_emb.reshape(4 * BLOCK_SIZE, self.N_LAYERS, 
+                    extra_info['c_static_emb_4b'] = c_static_emb.reshape(4 * BLOCK_SIZE, self.N_CA_LAYERS, 
                                                                          *c_static_emb.shape[1:])
                     # if do_ada_prompt_delta_reg, then do_mix_prompt_distillation 
                     # may be True or False, depending whether mix reg is enabled.
@@ -1929,7 +1929,7 @@ class LatentDiffusion(DDPM):
                             # print(captions)
                             extra_info['placeholder2indices'] = extra_info0['placeholder2indices']
 
-                        extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_LAYERS, 
+                        extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
                                                                              *c_static_emb.shape[1:])
                         ##### End of normal_recon with static delta loss iters. #####
 
@@ -1959,7 +1959,7 @@ class LatentDiffusion(DDPM):
                         self.get_learned_conditioning(captions, randomize_clip_weights=True)
                     
                     extra_info['placeholder2indices']   = extra_info0['placeholder2indices']
-                    extra_info['c_static_emb_1b']   = c_static_emb.reshape(ORIG_BS, self.N_LAYERS, 
+                    extra_info['c_static_emb_1b']   = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
                                                                            *c_static_emb.shape[1:])
                                         
                     extra_info['iter_type']         = 'normal_recon'
@@ -2427,8 +2427,8 @@ class LatentDiffusion(DDPM):
                 # x_start is like (s1, s2, c1, c2) (s1, s2 repeated those in the previous distillation iter).
                 # s1 is different from s2, but they are generated from the same initial noise in the 
                 # previous reconstruction. This is desired as a simulation of a multi-step inference process.
-                # If batch_size <= 7 (default 3), BLOCK_SIZE = 1.
-                BLOCK_SIZE  = max(x_start.shape[0] // 4, 1)
+                # For simplicity, always BLOCK_SIZE = 1, no matter the batch size.
+                BLOCK_SIZE  = 1
                 # Randomly choose t from the middle 400-700 timesteps, 
                 # so as to match the once-denoised x_start.
                 # generate the full batch size of t, but actually only use the first block of BLOCK_SIZE.
@@ -2447,12 +2447,8 @@ class LatentDiffusion(DDPM):
                 t_tail = torch.randint(int(self.num_timesteps * 0.8), int(self.num_timesteps * 1), 
                                        (x_start.shape[0],), device=x_start.device)
                 t = t_tail
-                # x_start is of ORIG_BS = 3. num_candidate_teachers = 3.
-                # So BLOCK_SIZE=1. We can't afford BLOCK_SIZE=2,
-                # which will bloat to batch size of 8 for the 4-type prompts.
-                # Why BS // num_candidate_teachers? We want the input x to be as diverse as possible for
-                # different candidate teachers.
-                BLOCK_SIZE = max(x_start.shape[0] // self.num_candidate_teachers, 1)
+                # For simplicity, always BLOCK_SIZE = 1, no matter the batch size. We can't afford BLOCK_SIZE=2.
+                BLOCK_SIZE = 1
 
                 if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
                     # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
@@ -2511,45 +2507,23 @@ class LatentDiffusion(DDPM):
                 # If batch size = 3 and N = 6, then we quadruple the batch size to 12
                 # (6 subj comp, 6 mix comp).
                 if self.iter_flags['do_teacher_filter']:
-                    ORIG_HALF_BS = x_start.shape[0]
                     NEW_HALF_BS  = self.num_candidate_teachers * BLOCK_SIZE
-                    # It's possible that num_candidate_teachers % ORIG_HALF_BS > 0.
-                    # In this case, for better diversity, we repeat x_start and t by X_REPL times, 
-                    # then truncate them to num_candidate_teachers instances.
-                    # Although x_start is repeated, noise is not. Therefore, the denoised images
-                    # are still different, making them meaningful candidates for teacher filtering.
-                    X_REPL = math.ceil(NEW_HALF_BS / ORIG_HALF_BS)
-                    if X_REPL > 1:
-                        # First repeat x_start and t by X_REPL times.
-                        x_start = x_start.repeat(X_REPL, 1, 1, 1)
-                        t       = t.repeat(X_REPL)
-                        # noise is NOT repeated by X_REPL times, to achieve diversity.
-                        noise   = torch.randn_like(x_start)
-
-                        img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
-                            repeat_selected_instances(slice(0, ORIG_HALF_BS), X_REPL, 
-                                                      img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
-                        
-                    if NEW_HALF_BS % ORIG_HALF_BS > 0:
-                        # Then truncate them to num_candidate_teachers instances.
-                        x_start = x_start[:NEW_HALF_BS]
-                        t       = t[:NEW_HALF_BS]
-                        noise   = noise[:NEW_HALF_BS]
-                        # No need to truncate masks, as later we will select the first NEW_HALF_BS
-                        # masks and then repeat by 2x, all done with repeat_selected_instances().
-
-                    # Then repeat twice to get a FULL BATCH consisting of two sets of instances.
-                    x_start = x_start.repeat(2, 1, 1, 1)
+                    assert NEW_HALF_BS <= x_start.shape[0], \
+                        f"NEW_HALF_BS {NEW_HALF_BS} should be no larger than the batch size {x_start.shape[0]}."
+                    # Repeat twice to get a FULL BATCH consisting of two sets of instances.
+                    x_start = x_start[:NEW_HALF_BS].repeat(2, 1, 1, 1)
                     # noise and t are repeated in the same way as x_start for two sets. 
                     # Set 1 is for two subj comp instances, set 2 is for two mix comp instances.
                     # Noise and t are different between the two instances within one set.
-                    noise   = noise.repeat(2, 1, 1, 1)
-                    t       = t.repeat(2)
+                    noise   = noise[:NEW_HALF_BS].repeat(2, 1, 1, 1)
+                    t       = t[:NEW_HALF_BS].repeat(2)
 
                     # Make two identical sets of c_static_emb2 and c_in2 (first half batch and second half batch).
                     # The two sets are applied on different initial x_start, noise and t (within each half batch).
                     subj_single_emb, subj_comp_emb, mix_single_emb, mix_comp_emb = \
                         c_static_emb.chunk(4)
+                    subj_comp_emb = subj_comp_emb[:BLOCK_SIZE * self.N_CA_LAYERS]
+                    mix_comp_emb  = mix_comp_emb[:BLOCK_SIZE * self.N_CA_LAYERS]
                     # Only keep *_comp_emb, but repeat them to form 2x or 3x comp sets.
                     # subj_comp_emb, mix_comp_emb: each contains BLOCK_SIZE instances (truncated in forward()). 
                     # So repeat them by num_candidate_teachers times to match the size of x_start.
@@ -2581,9 +2555,11 @@ class LatentDiffusion(DDPM):
                         placeholder2indices2[k], _ = extend_indices_B_by_n_times(extra_info['placeholder2indices_1b'][k],
                                                                                  self.num_candidate_teachers,
                                                                                  block_offset=BLOCK_SIZE)
-                        
+                    
                     subj_single_emb_mask, subj_comp_emb_mask, cls_single_emb_mask, cls_comp_emb_mask = \
                         chunk_list(prompt_emb_mask, 4)
+                    subj_comp_emb_mask = subj_comp_emb_mask[:BLOCK_SIZE]
+                    cls_comp_emb_mask  = cls_comp_emb_mask[:BLOCK_SIZE]
                     # prompt_emb_mask2: [4 or 6, 77, 1]
                     prompt_emb_mask2 = \
                         torch.cat( [subj_comp_emb_mask.repeat(self.num_candidate_teachers, 1, 1),
@@ -2657,7 +2633,7 @@ class LatentDiffusion(DDPM):
                                          self.training_percent,
                                          t_frac = t_frac, 
                                          use_layerwise_embedding = self.use_layerwise_embedding,
-                                         N_LAYERS = self.N_LAYERS,
+                                         N_CA_LAYERS = self.N_CA_LAYERS,
                                          K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range,
                                          V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range)
           
@@ -2797,7 +2773,7 @@ class LatentDiffusion(DDPM):
                                                  self.training_percent,
                                                  t_frac = t_frac, 
                                                  use_layerwise_embedding = self.use_layerwise_embedding,
-                                                 N_LAYERS = self.N_LAYERS,
+                                                 N_CA_LAYERS = self.N_CA_LAYERS,
                                                  K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range,
                                                  V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range)
 
@@ -4540,7 +4516,7 @@ class LatentDiffusion(DDPM):
         # then along instances. reshape(SSB_SIZE, K_fg) corresponds to this order.
         subj_subj_embs = cond_prompt_embeddings[subj_subj_indices_B, :, subj_subj_indices_N]
         # subj_subj_embs: [27, 16, 768] => [3, 9, 16, 768] => [3, 1, 16, 768]. "1" is for broadcasting.
-        subj_subj_embs = subj_subj_embs.reshape(SSB_SIZE, K_fg, self.N_LAYERS, -1).sum(dim=1, keepdim=True)
+        subj_subj_embs = subj_subj_embs.reshape(SSB_SIZE, K_fg, self.N_CA_LAYERS, -1).sum(dim=1, keepdim=True)
         subj_subj_embs_gs = subj_embs_contrast_paddings_grad_scaler(subj_subj_embs)
 
         loss_padding_subj_embs_align = 0
@@ -4575,7 +4551,7 @@ class LatentDiffusion(DDPM):
         if is_compos_iter:
             cls_subj_indices_B, cls_subj_indices_N = subj_subj_indices_B + SSB_SIZE, subj_subj_indices_N
             cls_subj_embs = cond_prompt_embeddings[cls_subj_indices_B, :, cls_subj_indices_N]
-            cls_subj_embs = cls_subj_embs.reshape(SSB_SIZE, K_fg, self.N_LAYERS, -1).sum(dim=1, keepdim=True)
+            cls_subj_embs = cls_subj_embs.reshape(SSB_SIZE, K_fg, self.N_CA_LAYERS, -1).sum(dim=1, keepdim=True)
             cls_padding_indices = padding_mask[SSB_SIZE:].nonzero(as_tuple=True)
             cls_padding_indices_by_instance = split_indices_by_instance(cls_padding_indices)
 
