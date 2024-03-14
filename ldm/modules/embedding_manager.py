@@ -1577,7 +1577,8 @@ class EmbeddingManager(nn.Module):
                     if self.zs_apply_neg_subj_bases:
                         zs_vecs_2sets_neg = subj_basis_generator(-zs_clip_features, uncond_id_embs, 
                                                                  extra_token_embs=None, 
-                                                                 is_face=self.curr_subj_is_face)
+                                                                 is_face=self.curr_subj_is_face,
+                                                                 training_percent=self.training_percent)
                         zs_neg_subj_bases_weight = 0.2
                         zs_vecs_2sets = zs_vecs_2sets * (1 + zs_neg_subj_bases_weight) \
                                         - zs_vecs_2sets_neg * zs_neg_subj_bases_weight
