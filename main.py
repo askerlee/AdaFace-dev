@@ -169,7 +169,8 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--optimizer", dest='optimizer_type',
                         type=str, default=argparse.SUPPRESS, choices=['AdamW', 'Prodigy'],
                         help="Type of optimizer")
-    
+    parser.add_argument("--manual_accumulate_grad_batches", type=int, default=argparse.SUPPRESS,
+                        help="Number of manually accumulate grad batches")
     parser.add_argument("--warmup_steps", type=int, default=argparse.SUPPRESS,
                         help="Number of warm up steps")
     
@@ -991,6 +992,8 @@ if __name__ == "__main__":
 
         if hasattr(opt, 'optimizer_type'):
             config.model.params.optimizer_type = opt.optimizer_type
+        if hasattr(opt, 'manual_accumulate_grad_batches'):
+            config.model.params.manual_accumulate_grad_batches = opt.manual_accumulate_grad_batches
 
         if hasattr(opt, 'warmup_steps'):
             if config.model.params.optimizer_type == 'Prodigy':

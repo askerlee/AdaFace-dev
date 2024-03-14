@@ -100,7 +100,8 @@ class DDPM(pl.LightningModule):
                  conditioning_key=None,
                  parameterization="eps",  # all assuming fixed variance schedules
                  optimizer_type='Prodigy',
-                 grad_clip=1.,
+                 grad_clip=0.5,
+                 manual_accumulate_grad_batches=1,
                  adam_config=None,
                  prodigy_config=None,
                  use_positional_encodings=False,
@@ -212,6 +213,7 @@ class DDPM(pl.LightningModule):
         self.optimizer_type = optimizer_type
         self.adam_config = adam_config
         self.grad_clip = grad_clip
+        self.manual_accumulate_grad_batches = manual_accumulate_grad_batches
         self.automatic_optimization = False
     
         if 'Prodigy' in self.optimizer_type:
@@ -576,42 +578,46 @@ class DDPM(pl.LightningModule):
         self.log("global_step", self.global_step,
                  prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
-        # Update LRs of optimizers first.
-        schedulers = self.lr_schedulers()
-        if isinstance(schedulers, list):
-            for scheduler in schedulers:
-                scheduler.step()
-        else:
-            scheduler = schedulers
-            # Single scheduler.
-            scheduler.step()
-
-        optimizers = self.optimizers()
-        if isinstance(optimizers, list):
-            main_optimizer   = optimizers[0]
-            extra_optimizers = optimizers[1:]
-        else:
-            # Single optimizer.
-            main_optimizer   = optimizers
-            extra_optimizers = None
-
-        main_optimizer.zero_grad()
+        loss = loss / self.manual_accumulate_grad_batches
         self.manual_backward(loss)
-        self.clip_gradients(main_optimizer, gradient_clip_val=self.grad_clip, 
-                            gradient_clip_algorithm="norm")
-        
-        main_optimizer.step()
-        # Execute all optimizers.
-        if extra_optimizers is not None:
-            for optimizer in extra_optimizers:
-                # Fix double counted global step counter which causes premature end of training.
-                # https://github.com/Lightning-AI/pytorch-lightning/issues/17958
-                # The default two functions do self.optim_step_progress.increment_ready()
-                # and self.optim_step_progress.increment_completed(), respectively.
-                # Removing them will prevent optimizer from updating the global step counter.
-                optimizer._on_before_step = lambda : self.trainer.profiler.start("optimizer_step")
-                optimizer._on_after_step  = lambda : self.trainer.profiler.stop("optimizer_step")                
-                optimizer.step()
+
+        if (batch_idx + 1) % self.manual_accumulate_grad_batches == 0:
+            optimizers = self.optimizers()
+            if isinstance(optimizers, list):
+                main_optimizer   = optimizers[0]
+                extra_optimizers = optimizers[1:]
+            else:
+                # Single optimizer.
+                main_optimizer   = optimizers
+                extra_optimizers = None
+
+            self.clip_gradients(main_optimizer, gradient_clip_val=self.grad_clip, 
+                                gradient_clip_algorithm="norm")
+            
+            main_optimizer.step()
+            # Execute all optimizers.
+            if extra_optimizers is not None:
+                for optimizer in extra_optimizers:
+                    # Fix double counted global step counter which causes premature end of training.
+                    # https://github.com/Lightning-AI/pytorch-lightning/issues/17958
+                    # The default two functions do self.optim_step_progress.increment_ready()
+                    # and self.optim_step_progress.increment_completed(), respectively.
+                    # Removing them will prevent optimizer from updating the global step counter.
+                    optimizer._on_before_step = lambda : self.trainer.profiler.start("optimizer_step")
+                    optimizer._on_after_step  = lambda : self.trainer.profiler.stop("optimizer_step")                
+                    optimizer.step()
+
+            main_optimizer.zero_grad()
+
+            # Update LRs of optimizers.
+            schedulers = self.lr_schedulers()
+            if isinstance(schedulers, list):
+                for scheduler in schedulers:
+                    scheduler.step()
+            else:
+                scheduler = schedulers
+                # Single scheduler.
+                scheduler.step()
 
         lr = main_optimizer.param_groups[0]['lr']
         self.log('lr_abs', lr, prog_bar=True, logger=True, on_step=True, on_epoch=False)
