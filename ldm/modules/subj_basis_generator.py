@@ -424,7 +424,7 @@ class SubjBasisGenerator(nn.Module):
             context = attn(latent_queries, context)
 
             # Gradually reduce the dropout rate from 0.5 to 0.1 (average: 0.3).
-            p_drop_path = anneal_value(training_percent, 1, (0.5, 0.2))
+            p_drop_path = anneal_value(training_percent, 1, (0.5, 0.2)) if self.training else 0
             # ff is either nn.Identity() or nn.Sequential. If it's nn.Sequential, it implies self.use_FFN is True.
             # (torch.rand(1) > self.p_drop_path) is evaluated to [True] or [False], which is equivalent to True or False.
             if isinstance(ff, nn.Sequential) and (torch.rand(1) > p_drop_path):
