@@ -422,7 +422,8 @@ class SubjBasisGenerator(nn.Module):
             latent_queries = latent_queries.repeat(BS, 1, 1)
             context = attn(latent_queries, context)
 
-            if self.use_FFN:
+            # ff is either nn.Identity() or nn.Sequential.
+            if self.use_FFN and isinstance(ff, nn.Sequential):
                 context = ff(context) + context
         
         output_queries = self.lora2hira(context)
