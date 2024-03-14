@@ -214,7 +214,7 @@ class PerceiverAttention(nn.Module):
 class CrossAttention(nn.Module):
     def __init__(self, input_dim, num_heads=6, dropout=0.1, 
                  identity_to_q=False, identity_to_k=False, identity_to_v=False, 
-                 identity_to_out=False, out_has_gelu=False, out_has_skip=False):
+                 identity_to_out=False, out_has_skip=False):
         super().__init__()
         dim_head  = input_dim // num_heads
         inner_dim = dim_head   * num_heads
@@ -228,7 +228,6 @@ class CrossAttention(nn.Module):
 
         self.to_out = nn.Sequential(
             nn.Linear(input_dim, input_dim, bias=False) if not identity_to_out else nn.Identity(),
-            nn.GELU() if out_has_gelu else nn.Identity(),
             nn.Dropout(dropout)
         )
         self.out_has_skip = out_has_skip
@@ -365,11 +364,12 @@ class SubjBasisGenerator(nn.Module):
                         CrossAttention(input_dim=output_dim, num_heads=num_heads, dropout=0.1,
                                        identity_to_q=True, identity_to_k=True,
                                        identity_to_v=True, identity_to_out=False,
-                                       out_has_gelu=True,  out_has_skip=True),
+                                       out_has_skip=True),
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
+                        # Only use FFN in the first layer.
                         FeedForward(dim=output_dim, mult=1, elementwise_affine=elementwise_affine) \
-                            if self.use_FFN else nn.Identity(),
+                            if (self.use_FFN and dep == 0) else nn.Identity(),
                     ]
                 )
             )
