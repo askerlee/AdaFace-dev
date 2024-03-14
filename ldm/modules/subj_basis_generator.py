@@ -60,12 +60,12 @@ class IP_MLPProjModel(nn.Module):
         self.cross_attention_dim = cross_attention_dim
         self.num_tokens = num_tokens
         
-        self.proj = torch.nn.Sequential(
-            torch.nn.Linear(id_embeddings_dim, id_embeddings_dim*2),
-            torch.nn.GELU(),
-            torch.nn.Linear(id_embeddings_dim*2, cross_attention_dim*num_tokens),
+        self.proj = nn.Sequential(
+            nn.Linear(id_embeddings_dim, id_embeddings_dim*2),
+            nn.GELU(),
+            nn.Linear(id_embeddings_dim*2, cross_attention_dim*num_tokens),
         )
-        self.norm = torch.nn.LayerNorm(cross_attention_dim)
+        self.norm = nn.LayerNorm(cross_attention_dim)
         
     def forward(self, id_embeds):
         x = self.proj(id_embeds)
@@ -214,7 +214,7 @@ class PerceiverAttention(nn.Module):
 class CrossAttention(nn.Module):
     def __init__(self, input_dim, num_heads=6, dropout=0.1, 
                  identity_to_q=False, identity_to_k=False, identity_to_v=False, 
-                 identity_to_out=False, out_has_skip=False):
+                 identity_to_out=False, out_has_gelu=False, out_has_skip=False):
         super().__init__()
         dim_head  = input_dim // num_heads
         inner_dim = dim_head   * num_heads
@@ -224,8 +224,11 @@ class CrossAttention(nn.Module):
         self.to_k = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_k else nn.Identity()
         self.to_v = nn.Linear(input_dim, input_dim, bias=False) if not identity_to_v else nn.Identity()
 
+        assert not (identity_to_out and out_has_skip), "identity_to_out and out_has_skip cannot be both True."
+
         self.to_out = nn.Sequential(
             nn.Linear(input_dim, input_dim, bias=False) if not identity_to_out else nn.Identity(),
+            nn.GELU() if out_has_gelu else nn.Identity(),
             nn.Dropout(dropout)
         )
         self.out_has_skip = out_has_skip
@@ -362,7 +365,7 @@ class SubjBasisGenerator(nn.Module):
                         CrossAttention(input_dim=output_dim, num_heads=num_heads, dropout=0.1,
                                        identity_to_q=True, identity_to_k=True,
                                        identity_to_v=True, identity_to_out=False,
-                                       out_has_skip=True),
+                                       out_has_gelu=True,  out_has_skip=True),
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
                         FeedForward(dim=output_dim, mult=1, elementwise_affine=elementwise_affine) \
