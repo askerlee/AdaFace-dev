@@ -16,7 +16,7 @@ from torch import einsum
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from transformers.utils import ModelOutput
-from util import anneal_value
+from ldm.util import anneal_value
 
 def reshape_tensor(x, num_heads):
     bs, length, width = x.shape
@@ -423,7 +423,9 @@ class SubjBasisGenerator(nn.Module):
             latent_queries = latent_queries.repeat(BS, 1, 1)
             context = attn(latent_queries, context)
 
-            # Gradually reduce the dropout rate from 0.5 to 0.1 (average: 0.3).
+            # Gradually reduce the drop path rate from 0.5 to 0.1 (average: 0.3).
+            # The ratio in dinov2's paper is 0.3 or 0.4. 
+            # https://github.com/huggingface/pytorch-image-models/issues/1836
             p_drop_path = anneal_value(training_percent, 1, (0.5, 0.2)) if self.training else 0
             # ff is either nn.Identity() or nn.Sequential. If it's nn.Sequential, it implies self.use_FFN is True.
             # (torch.rand(1) > self.p_drop_path) is evaluated to [True] or [False], which is equivalent to True or False.
