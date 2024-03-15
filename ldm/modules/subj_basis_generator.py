@@ -370,7 +370,7 @@ class SubjBasisGenerator(nn.Module):
                         # LayerNorm -> Linear -> GELU -> Linear.
                         # Only use FFN in the first layer.
                         FeedForward(dim=output_dim, mult=1, elementwise_affine=elementwise_affine) \
-                            if (self.use_FFN and dep == 0) else nn.Identity(),
+                            if self.use_FFN else nn.Identity(),
                     ]
                 )
             )
