@@ -463,7 +463,7 @@ class SubjBasisGenerator(nn.Module):
             self.mean_face_proj_emb = torch.load(mean_face_proj_emb_path)
             # Wrap mean_face_proj_emb with nn.Parameter, so that it's put on the GPU automatically.
             self.mean_face_proj_emb = nn.Parameter(self.mean_face_proj_emb, requires_grad=False)
-            print(f"mean_face_proj_emb is loaded from {mean_face_proj_emb_path}")
+            print(f"mean_face_proj_emb ({list(self.mean_face_proj_emb.shape)}) is loaded from {mean_face_proj_emb_path}")
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
