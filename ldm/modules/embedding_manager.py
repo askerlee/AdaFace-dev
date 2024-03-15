@@ -1227,6 +1227,8 @@ class EmbeddingManager(nn.Module):
                 # bg placeholder always has depth=1.
                 depth = zs_num_subj_generator_layers if not placeholder_is_bg else 1
                 ip_model_ckpt_path = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
+                mean_face_proj_emb_path = "models/ip-adapter/mean_face_proj_emb.pt"
+
                 subj_basis_generator = SubjBasisGenerator(depth=depth,
                                                           num_latent_queries = zs_num_latent_queries,
                                                           num_out_queries = num_out_queries,
@@ -1237,7 +1239,8 @@ class EmbeddingManager(nn.Module):
                                                           elementwise_affine = zs_elementwise_affine,
                                                           use_FFN = zs_use_FFN,
                                                           placeholder_is_bg = placeholder_is_bg,
-                                                          ip_model_ckpt_path = ip_model_ckpt_path)
+                                                          ip_model_ckpt_path = ip_model_ckpt_path,
+                                                          mean_face_proj_emb_path = mean_face_proj_emb_path)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 

@@ -310,6 +310,7 @@ class SubjBasisGenerator(nn.Module):
         use_FFN: bool = False,              # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         ip_model_ckpt_path: str = None,     # Path to the IP-Adapter model checkpoint.
+        mean_face_proj_emb_path: str = None, # Path to the mean face projection embedding.
     ):
         super().__init__()
         assert depth > 0, "depth must be > 0."
@@ -323,12 +324,13 @@ class SubjBasisGenerator(nn.Module):
         self.placeholder_is_bg   = placeholder_is_bg
         self.num_latent_queries  = num_latent_queries
         self.latent_query_dim    = output_dim
+        self.mean_face_proj_emb  = 0
 
         # If not self.placeholder_is_bg:
         # The dimension of IP-Adapter face features for humans is the same as output_dim = latent_query_dim.   
         # self.face_proj_in: [1, 512] -> [1, 16, 768].
         # If self.placeholder_is_bg: face_proj_in is set to None.
-        self.init_face_proj_in(output_dim, ip_model_ckpt_path, device='cpu')
+        self.init_face_proj_in(output_dim, ip_model_ckpt_path, mean_face_proj_emb_path, device='cpu')
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
@@ -390,10 +392,10 @@ class SubjBasisGenerator(nn.Module):
                 if self.freeze_face_proj_in:
                     # Loaded pretrained IP-Adapter model weight. No need to update face_proj_in.
                     with torch.no_grad():
-                        id_embs = self.face_proj_in(id_embs)
+                        id_embs = self.face_proj_in(id_embs) - self.mean_face_proj_emb
                 else:
                     # face_proj_in will be updated during training.
-                    id_embs = self.face_proj_in(id_embs)
+                    id_embs = self.face_proj_in(id_embs) - self.mean_face_proj_emb
                 # id_embs is projected to the token embedding space.
                 id_embs = self.prompt2token_emb_proj(id_embs)
             else:
@@ -435,7 +437,9 @@ class SubjBasisGenerator(nn.Module):
         output_queries = self.lora2hira(context)
         return output_queries * self.output_scale
 
-    def init_face_proj_in(self, output_dim=768, ip_model_ckpt_path=None, device='cpu'):
+    def init_face_proj_in(self, output_dim=768, ip_model_ckpt_path=None, 
+                          mean_face_proj_emb_path=None,
+                          device='cpu'):
         if self.placeholder_is_bg:
             self.face_proj_in = None
             self.freeze_face_proj_in = False
@@ -454,6 +458,12 @@ class SubjBasisGenerator(nn.Module):
         else:
             self.freeze_face_proj_in = False
             print("Subj face_proj_in is randomly initialized")
+
+        if mean_face_proj_emb_path is not None:
+            self.mean_face_proj_emb = torch.load(mean_face_proj_emb_path)
+            # Wrap mean_face_proj_emb with nn.Parameter, so that it's put on the GPU automatically.
+            self.mean_face_proj_emb = nn.Parameter(self.mean_face_proj_emb, requires_grad=False)
+            print(f"mean_face_proj_emb is loaded from {mean_face_proj_emb_path}")
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
