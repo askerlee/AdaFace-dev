@@ -172,7 +172,7 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size:  4
+    batch_size:  3
     num_workers: 4
     wrap: false
     same_subject_in_each_batch: true
