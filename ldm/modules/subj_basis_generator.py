@@ -178,7 +178,7 @@ class PerceiverAttention(nn.Module):
 
         self.to_q   = nn.Linear(dim, inner_dim, bias=False)
         self.to_kv  = nn.Linear(dim, inner_dim * 2, bias=False)
-        self.to_out = nn.Linear(inner_dim, dim, bias=False)
+        self.to_out = nn.Linear(inner_dim, dim, bias=True)
 
     def forward(self, x, latent_queries):
         """
@@ -228,7 +228,7 @@ class CrossAttention(nn.Module):
         assert not (identity_to_out and out_has_skip), "identity_to_out and out_has_skip cannot be both True."
 
         self.to_out = nn.Sequential(
-            nn.Linear(input_dim, input_dim, bias=False) if not identity_to_out else nn.Identity(),
+            nn.Linear(input_dim, input_dim, bias=True) if not identity_to_out else nn.Identity(),
             nn.Dropout(dropout)
         )
         self.out_has_skip = out_has_skip
