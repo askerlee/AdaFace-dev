@@ -2372,6 +2372,10 @@ class EmbeddingManager(nn.Module):
                     # Then replace it with the one in ckpt.
                     print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                     self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
+                    if not hasattr(ckpt_subj_basis_generator, 'mean_face_proj_emb'):
+                        ip_model_ckpt_path = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
+                        mean_face_proj_emb_path = "models/ip-adapter/mean_face_proj_emb.pt"
+                        ckpt_subj_basis_generator.init_face_proj_in(768, ip_model_ckpt_path, mean_face_proj_emb_path, device='cpu')
 
             for token_idx, km in enumerate(ckpt["placeholder_strings"]):
                 # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.

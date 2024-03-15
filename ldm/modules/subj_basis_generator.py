@@ -392,10 +392,12 @@ class SubjBasisGenerator(nn.Module):
                 if self.freeze_face_proj_in:
                     # Loaded pretrained IP-Adapter model weight. No need to update face_proj_in.
                     with torch.no_grad():
-                        id_embs = self.face_proj_in(id_embs) - self.mean_face_proj_emb
+                        id_embs0 = self.face_proj_in(id_embs)
                 else:
                     # face_proj_in will be updated during training.
-                    id_embs = self.face_proj_in(id_embs) - self.mean_face_proj_emb
+                    id_embs0 = self.face_proj_in(id_embs)
+
+                id_embs = F.normalize(id_embs0, p=2, dim=2) - self.mean_face_proj_emb
                 # id_embs is projected to the token embedding space.
                 id_embs = self.prompt2token_emb_proj(id_embs)
             else:
