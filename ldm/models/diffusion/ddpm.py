@@ -510,8 +510,9 @@ class DDPM(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         self.init_iteration_flags()
-        
-        self.training_percent = self.global_step / self.trainer.max_steps
+        # global_step is updated every self.manual_accumulate_grad_batches iterations.
+        # So training_percent is multiplied by self.manual_accumulate_grad_batches.
+        self.training_percent = (self.global_step * self.manual_accumulate_grad_batches) / self.trainer.max_steps
 
         # How many regularizations are done intermittently during the training iterations?
         cand_reg_types = []
@@ -2387,13 +2388,13 @@ class LatentDiffusion(DDPM):
             # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
             # posing too strong regularizations to the subject embeddings.
             if self.iter_flags['comp_init_fg_from_training_image']:
-                k_cls_scale_layerwise_range = [1.0, 1.0]
+                k_cls_scale_layerwise_range = [1.0, 0.8]
                 # Less (compared with the settings below) subject embeddings mixed into v.
-                v_cls_scale_layerwise_range = [1.0, 0.85]
-            else:
-                k_cls_scale_layerwise_range = [1.0, 1.0]
-                # More subject embeddings mixed into v.
                 v_cls_scale_layerwise_range = [1.0, 0.7]
+            else:
+                k_cls_scale_layerwise_range = [1.0, 0.8]
+                # More subject embeddings mixed into v.
+                v_cls_scale_layerwise_range = [1.0, 0.6]
         else:
             if self.iter_flags['comp_init_fg_from_training_image']:
                 k_cls_scale_layerwise_range = [1.0, 1.0]
@@ -2460,7 +2461,8 @@ class LatentDiffusion(DDPM):
                     # If use_wds_comp, then don't fill up the background with gaussian noise 
                     # by doing nothing to x_start.
                     if not self.iter_flags['use_wds_comp']:
-                        fg_noise_anneal_mean_range = (0.1, 0.4)
+                        # If do zero-shot, then don't add extra noise to the foreground.
+                        fg_noise_anneal_mean_range = (0.1, 0.4) if not self.do_zero_shot else (0, 0)
                         x_start, fg_mask, filtered_fg_mask = \
                             init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
                                                                self.training_percent,
