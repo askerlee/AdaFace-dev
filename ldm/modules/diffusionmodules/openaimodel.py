@@ -983,7 +983,8 @@ class UNetModel(nn.Module):
 
             else:
                 layer_context = layer_static_context
-
+                ada_subj_attn_dict = None
+                
             if apply_compel_cfg_prob > 0:
                 # layer_context could be a tensor or a tuple of tensors.
                 compel_batch_mask = torch.ones(B, dtype=torch.float, device=x.device)
