@@ -413,8 +413,11 @@ class SubjBasisGenerator(nn.Module):
                 # Otherwise, the default magnitude of the extra_token_embs is much smaller than id_embs.
                 # If applicable, extra_token_embs should have been token-wise weighted before 
                 # being passed to the model.
+                # Although id_embs have been L2-normalized, later it has passed through self.prompt2token_emb_proj
+                # which layer-normalizes the output. So it's not L2-normalized anymore.
+                # Therefore, we don't need to L2-normalize extra_token_embs.
                 extra_token_embs = extra_token_embs.unsqueeze(1)
-                extra_token_embs = F.normalize(extra_token_embs, p=2, dim=2)
+                #extra_token_embs = F.normalize(extra_token_embs, p=2, dim=2)
                 id_embs = torch.cat([id_embs, extra_token_embs], dim=1)
         else:
             # Otherwise, context is the ad-hoc CLIP image features.
