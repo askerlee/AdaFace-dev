@@ -1242,7 +1242,7 @@ class EmbeddingManager(nn.Module):
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           ip_model_ckpt_path = ip_model_ckpt_path,
                                                           mean_face_proj_emb_path = mean_face_proj_emb_path,
-                                                          zs_use_dynamic_to_v = zs_use_dynamic_to_v)
+                                                          use_dynamic_to_v = zs_use_dynamic_to_v)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 
