@@ -900,7 +900,7 @@ class UNetModel(nn.Module):
                 if layer_static_context_v.shape[1] < 77:
                     breakpoint()
             else:
-                layer_static_context_v = layer_static_context
+                layer_static_context_k = layer_static_context_v = layer_static_context
 
             if use_ada_context and not disable_ada_emb:
                 ada_embedder   = extra_info['ada_embedder']
@@ -922,7 +922,6 @@ class UNetModel(nn.Module):
                     if layer_ada_context.shape[1] != layer_static_context.shape[1] // 2:
                         breakpoint()
                     # iter_type == 'mix_hijk'. layer_static_context has been split into v and k above.
-                    # layer_static_context_v, layer_static_context_k = layer_static_context.chunk(2, dim=1)
                     # The second half of a mix_hijk batch is always the mix instances,
                     # even for twin comp sets.
                     subj_layer_ada_context, cls_layer_ada_context = layer_ada_context.chunk(2)
@@ -982,9 +981,9 @@ class UNetModel(nn.Module):
                     layer_context = layer_hyb_context
 
             else:
-                layer_context = layer_static_context
+                layer_context = (layer_static_context_v, layer_static_context_k)
                 ada_subj_attn_dict = None
-                
+
             if apply_compel_cfg_prob > 0:
                 # layer_context could be a tensor or a tuple of tensors.
                 compel_batch_mask = torch.ones(B, dtype=torch.float, device=x.device)

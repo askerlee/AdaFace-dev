@@ -156,6 +156,17 @@ def get_parser(**parser_kwargs):
         default=True,
         help="scale base-lr by ngpu * batch_size * n_accumulate",
     )
+    parser.add_argument(
+        "--bs", type=int, 
+        default=argparse.SUPPRESS,
+        help="Batch size"
+    )
+    parser.add_argument(
+        "--num_nodes",
+        type=int,
+        default=1,
+        help="number of nodes for distributed training",
+    )    
     # max_steps is inherent in Trainer class. No need to specify it here.
     '''
     parser.add_argument(
@@ -869,6 +880,8 @@ if __name__ == "__main__":
         lightning_config.trainer = trainer_config
 
         # Data config
+        if hasattr(opt, "bs"):
+            config.data.params.batch_size = opt.bs
         config.data.params.train.params.subject_string       = opt.subject_string
         config.data.params.validation.params.subject_string  = opt.subject_string
         if hasattr(opt, 'subj_info_filepaths'):
@@ -1007,9 +1020,10 @@ if __name__ == "__main__":
         if opt.lr > 0:
             config.model.base_learning_rate = opt.lr
 
+        trainer_opt.num_nodes = opt.num_nodes
         if opt.max_steps > 0:
             trainer_opt.max_steps = opt.max_steps
-
+        
         # Personalization config
         config.model.params.personalization_config.params.layerwise_lora_rank = opt.layerwise_lora_rank
 
