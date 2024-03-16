@@ -2407,6 +2407,10 @@ class LatentDiffusion(DDPM):
                 v_cls_scale_layerwise_range = [1.0, 0.7]
 
         if self.iter_flags['is_compos_iter']:
+            # For simplicity, always BLOCK_SIZE = 1, no matter the batch size.
+            # We can't afford BLOCK_SIZE=2.
+            BLOCK_SIZE = 1
+
             # Only reuse_init_conds if do_mix_prompt_distillation.
             if self.iter_flags['reuse_init_conds']:
                 # If self.iter_flags['reuse_init_conds'], we use the cached x_start and cond.
@@ -2429,8 +2433,6 @@ class LatentDiffusion(DDPM):
                 # x_start is like (s1, s2, c1, c2) (s1, s2 repeated those in the previous distillation iter).
                 # s1 is different from s2, but they are generated from the same initial noise in the 
                 # previous reconstruction. This is desired as a simulation of a multi-step inference process.
-                # For simplicity, always BLOCK_SIZE = 1, no matter the batch size.
-                BLOCK_SIZE  = 1
                 # Randomly choose t from the middle 400-700 timesteps, 
                 # so as to match the once-denoised x_start.
                 # generate the full batch size of t, but actually only use the first block of BLOCK_SIZE.
@@ -2449,8 +2451,6 @@ class LatentDiffusion(DDPM):
                 t_tail = torch.randint(int(self.num_timesteps * 0.8), int(self.num_timesteps * 1), 
                                        (x_start.shape[0],), device=x_start.device)
                 t = t_tail
-                # For simplicity, always BLOCK_SIZE = 1, no matter the batch size. We can't afford BLOCK_SIZE=2.
-                BLOCK_SIZE = 1
 
                 if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
                     # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
