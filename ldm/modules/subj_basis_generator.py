@@ -137,6 +137,7 @@ def ExpandEmbs(input_dim, output_dim, expansion_ratio, elementwise_affine=True):
         nn.Dropout(0.1),
     )
 
+# Input: [BS, N, D].
 def MultimodeProjection(input_dim, output_dim=-1, num_modes=4, elementwise_affine=True):
     if output_dim == -1:
         output_dim = input_dim
@@ -388,7 +389,7 @@ class SubjBasisGenerator(nn.Module):
         # No need to use id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (id_embs is not None):
             if is_face:
-                # id_embs: [1, 512] -> [1, 16, 768].
+                # id_embs: [BS, 512] -> [BS, 16, 768].
                 if self.freeze_face_proj_in:
                     # Loaded pretrained IP-Adapter model weight. No need to update face_proj_in.
                     with torch.no_grad():
@@ -401,13 +402,13 @@ class SubjBasisGenerator(nn.Module):
                 # id_embs is projected to the token embedding space.
                 id_embs = self.prompt2token_emb_proj(id_embs)
             else:
-                # id_embs: [1, 384] -> [1, 16, 768].
+                # id_embs: [BS, 384] -> [BS, 16, 768].
                 # obj_proj_in is expected to project the DINO object features to 
                 # the token embedding space. So no need to use prompt2token_emb_proj.
                 id_embs = self.obj_proj_in(id_embs)
 
             if extra_token_embs is not None:
-                # extra_token_embs: [K, 768] -> [1, K, 768]
+                # extra_token_embs: [BS, 768] -> [BS, 1, 768].
                 # extra_token_embs should have been layer-normalized before being passed to the model.
                 # Otherwise, the default magnitude of the extra_token_embs is much smaller than id_embs.
                 # If applicable, extra_token_embs should have been token-wise weighted before 
@@ -417,7 +418,7 @@ class SubjBasisGenerator(nn.Module):
                 id_embs = torch.cat([id_embs, extra_token_embs], dim=1)
         else:
             # Otherwise, context is the ad-hoc CLIP image features.
-            # id_embs: [1, 257, 768].
+            # id_embs: [BS, 257, 768].
             id_embs = self.proj_in(clip_features)
 
         # context is already in the token embedding space.
