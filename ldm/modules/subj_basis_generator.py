@@ -383,7 +383,8 @@ class SubjBasisGenerator(nn.Module):
 
         for dep in range(depth):
             dynamic_to_v = use_dynamic_to_v and not self.placeholder_is_bg
-            identity_to_out = not dynamic_to_v
+            identity_to_v   = not dynamic_to_v
+            identity_to_out = dynamic_to_v
             out_has_skip = not identity_to_out
 
             self.layers.append(
@@ -391,7 +392,7 @@ class SubjBasisGenerator(nn.Module):
                     [
                         # dim=768, num_heads=6.
                         CrossAttention(input_dim=output_dim, num_heads=num_heads, dropout=0.1,
-                                       identity_to_q=True, identity_to_k=True,
+                                       identity_to_q=True, identity_to_k=True, identity_to_v=identity_to_v,
                                        dynamic_to_v=dynamic_to_v, 
                                        identity_to_out=identity_to_out,
                                        out_has_skip=out_has_skip),
