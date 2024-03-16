@@ -215,16 +215,23 @@ class PerceiverAttention(nn.Module):
 
 class CrossAttention(nn.Module):
     def __init__(self, input_dim, num_heads=6, dropout=0.1, 
-                 identity_to_q=False, identity_to_k=False, identity_to_v=False, 
+                 identity_to_q=False, identity_to_k=False, identity_to_v=False, dynamic_to_v=True, 
                  identity_to_out=False, out_has_skip=False):
         super().__init__()
         dim_head  = input_dim // num_heads
         inner_dim = dim_head   * num_heads
 
-        self.num_heads = num_heads        
+        self.num_heads = num_heads
+        self.dynamic_to_v = dynamic_to_v
         self.to_q = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_q else nn.Identity()
         self.to_k = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_k else nn.Identity()
-        self.to_v = nn.Linear(input_dim, input_dim, bias=False) if not identity_to_v else nn.Identity()
+        # If dynamic_to_v is True, then self.to_v is applied on x to get the actual to_v, 
+        # which is then applied on context.
+        # Otherwise, self.to_v is applied on context.
+        if dynamic_to_v:
+            self.to_v = nn.Linear(input_dim, input_dim * input_dim, bias=False)
+        else:
+            self.to_v = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_v else nn.Identity()
 
         assert not (identity_to_out and out_has_skip), "identity_to_out and out_has_skip cannot be both True."
 
@@ -238,34 +245,42 @@ class CrossAttention(nn.Module):
     def forward(self, x, context=None):
         h = self.num_heads
 
+        # q: [BS, Q, D] -> [BS, Q, D].
         q = self.to_q(x)
         if context is None:
             context = x
 
-        k = self.to_k(context)            
-        v = self.to_v(context)
+        # k: [BS, L, D] -> [BS, L, D].
+        k = self.to_k(context)
 
-        # q: [12, 16, 8], k: [12, 117, 8], v: [12, 117, 64].
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
-        # * self.attn_polarity to increase the polarity of the attention scores. 
-        # Otherwise the variance is too small and the attention is too uniform.
-        '''
-        for N in (768, 7680, 76800, 768000):
-            ln = nn.LayerNorm(N)
-            a = torch.randn(100, N)
-            b = torch.randn(100, N)
-            x=(ln(a) * ln(b)).sum(dim=1) * 5 / (N**0.5)
-            print(x.std(dim=0))
-            
-        tensor(4.6600, grad_fn=<StdBackward0>)
-        tensor(5.3220, grad_fn=<StdBackward0>)
-        tensor(4.8963, grad_fn=<StdBackward0>)
-        tensor(5.0100, grad_fn=<StdBackward0>)        
-        '''        
+        # Compatible with old code.
+        if not hasattr(self, 'dynamic_to_v'):
+            self.dynamic_to_v = False
+
+        if self.dynamic_to_v:
+            # x: [BS, Q, D] -> [BS, Q, D, D]. There are effectively Q to_v projections.
+            # The BS dim is repeated from a batch size of 1.
+            to_v = self.to_v(x).reshape(-1, x.shape[1], x.shape[2], x.shape[2])
+            # context: [BS, L, D] -> [BS, 1, L, D].
+            # to_v: [BS, Q, D, D]
+            # v: [BS, Q, L, D].
+            v = torch.matmul(context.unsqueeze(1), to_v)
+        else:
+            # v: [BS, L, D].
+            v = self.to_v(context)
+
+        # q: [6, 32, 128], k: [6, 17, 128].
+        q, k = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k))
+        if self.dynamic_to_v:
+            # v: [6, 32, 17, 128].
+            v = rearrange(v, 'b q n (h d) -> (b h) q n d', h=h)
+        else:
+            v = rearrange(v, 'b n (h d) -> (b h) n d', h=h)
+
         scale = q.size(-1) ** -0.25
 
         sim = einsum('b i d, b j d -> b i j', q * scale, k * scale)
-        # sim: [16, 378, 257]. 16: bs 1 * h 16.
+        # sim: [6, 64, 17]. 6: bs 1 * h 6.
         # attention, what we cannot get enough of
         # NOTE: the normalization is done across tokens, not across pixels.
         # So for each pixel, the sum of attention scores across tokens is 1.
@@ -273,9 +288,14 @@ class CrossAttention(nn.Module):
         attn = self.attn_drop(attn)
         #print(attn.std())
 
-        # v: [16, 257, 48]. 48: dim of each head. out: [16, 378, 48].
-        out = einsum('b i j, b j d -> b i d', attn, v)
-        # [16, 378, 48] -> [1, 378, 768].
+        if self.dynamic_to_v:
+            # attn: [6, 32, 17]. v: [6, 32, 17, 128]. 128: dim of each head. out: [6, 32, 128].
+            out = einsum('b i j, b i j d -> b i d', attn, v)
+        else:
+            # v: [6, 17, 128]. out: [6, 32, 128].
+            out = einsum('b i j, b j d -> b i d', attn, v)
+
+        # [6, 32, 128] -> [1, 32, 768].
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
 
         if self.out_has_skip:
@@ -303,7 +323,7 @@ class SubjBasisGenerator(nn.Module):
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
         # Number of low-rank latent queries. If num_latent_queries = 1, 
         # then basically all output queries are the same.
-        num_latent_queries=64,               
+        num_latent_queries=32,               
         num_prompt2token_emb_modes=4,       # number of modes for prompt2token_emb.
         num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
@@ -312,6 +332,7 @@ class SubjBasisGenerator(nn.Module):
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         ip_model_ckpt_path: str = None,     # Path to the IP-Adapter model checkpoint.
         mean_face_proj_emb_path: str = None, # Path to the mean face projection embedding.
+        use_dynamic_to_v: bool = False,      # Whether to use dynamic to_v in CrossAttention.
     ):
         super().__init__()
         assert depth > 0, "depth must be > 0."
@@ -361,14 +382,19 @@ class SubjBasisGenerator(nn.Module):
         self.use_FFN            = use_FFN
 
         for dep in range(depth):
+            dynamic_to_v = use_dynamic_to_v and not self.placeholder_is_bg
+            identity_to_out = not dynamic_to_v
+            out_has_skip = not identity_to_out
+
             self.layers.append(
                 nn.ModuleList(
                     [
                         # dim=768, num_heads=6.
                         CrossAttention(input_dim=output_dim, num_heads=num_heads, dropout=0.1,
                                        identity_to_q=True, identity_to_k=True,
-                                       identity_to_v=True, identity_to_out=False,
-                                       out_has_skip=True),
+                                       dynamic_to_v=dynamic_to_v, 
+                                       identity_to_out=identity_to_out,
+                                       out_has_skip=out_has_skip),
                         # FeedForward: 2-layer MLP with GELU activation.
                         # LayerNorm -> Linear -> GELU -> Linear.
                         # Only use FFN in the first layer.
