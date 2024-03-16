@@ -161,12 +161,7 @@ def get_parser(**parser_kwargs):
         default=argparse.SUPPRESS,
         help="Batch size"
     )
-    parser.add_argument(
-        "--num_nodes",
-        type=int,
-        default=1,
-        help="number of nodes for distributed training",
-    )    
+    # num_nodes is inherent in Trainer class. No need to specify it here.
     # max_steps is inherent in Trainer class. No need to specify it here.
     '''
     parser.add_argument(
