@@ -413,6 +413,7 @@ class SubjBasisGenerator(nn.Module):
                 # If applicable, extra_token_embs should have been token-wise weighted before 
                 # being passed to the model.
                 extra_token_embs = extra_token_embs.unsqueeze(1)
+                extra_token_embs = F.normalize(extra_token_embs, p=2, dim=2)
                 id_embs = torch.cat([id_embs, extra_token_embs], dim=1)
         else:
             # Otherwise, context is the ad-hoc CLIP image features.
