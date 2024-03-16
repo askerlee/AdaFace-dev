@@ -215,7 +215,8 @@ class PerceiverAttention(nn.Module):
 
 class CrossAttention(nn.Module):
     def __init__(self, input_dim, num_heads=6, dropout=0.1, 
-                 identity_to_q=False, identity_to_k=False, identity_to_v=False, dynamic_to_v=True, 
+                 identity_to_q=False, identity_to_k=False, identity_to_v=False, 
+                 dynamic_to_v=True, dynamic_to_v_lora_rank=128,
                  identity_to_out=False, out_has_skip=False):
         super().__init__()
         dim_head  = input_dim // num_heads
@@ -229,7 +230,16 @@ class CrossAttention(nn.Module):
         # which is then applied on context.
         # Otherwise, self.to_v is applied on context.
         if dynamic_to_v:
-            self.to_v = nn.Linear(input_dim, input_dim * input_dim, bias=False)
+            self.to_v = nn.Sequential(
+                nn.Linear(input_dim, input_dim * dynamic_to_v_lora_rank, bias=False),
+                Rearrange('b n (m q) -> b n q m', q=dynamic_to_v_lora_rank),
+                nn.LayerNorm(input_dim, elementwise_affine=True),
+                Rearrange('b n q m -> b n m q'),
+                nn.Linear(dynamic_to_v_lora_rank, input_dim, bias=False),
+                nn.LayerNorm(input_dim, elementwise_affine=True),
+            )
+
+            nn.Linear(input_dim, input_dim * input_dim, bias=False)
         else:
             self.to_v = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_v else nn.Identity()
 
@@ -268,6 +278,8 @@ class CrossAttention(nn.Module):
         else:
             # v: [BS, L, D].
             v = self.to_v(context)
+
+        #print(v.shape)
 
         # q: [6, 32, 128], k: [6, 17, 128].
         q, k = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k))
