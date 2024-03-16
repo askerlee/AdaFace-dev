@@ -990,6 +990,7 @@ class LatentDiffusion(DDPM):
                 extra_info = { 
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
                                 'use_ada_context':               self.use_ada_embedding,
+                                'disable_ada_emb':               self.embedding_manager.get_ada_emb_weight(do_perturb=False) == 0,
                                 'use_conv_attn_kernel_size':     self.embedding_manager.use_conv_attn_kernel_size,
                                 'placeholder2indices':           copy.copy(self.embedding_manager.placeholder2indices),
                                 'prompt_emb_mask':               copy.copy(self.embedding_manager.prompt_emb_mask),

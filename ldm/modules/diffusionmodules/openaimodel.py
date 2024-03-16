@@ -849,6 +849,7 @@ class UNetModel(nn.Module):
 
         use_layerwise_context = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
         use_ada_context       = extra_info.get('use_ada_context', False)       if extra_info is not None else False
+        disable_ada_emb       = extra_info.get('disable_ada_emb', False)       if extra_info is not None else False
         iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
         is_training           = extra_info.get('is_training', True)            if extra_info is not None else True
         capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
@@ -901,7 +902,7 @@ class UNetModel(nn.Module):
             else:
                 layer_static_context_v = layer_static_context
 
-            if use_ada_context:
+            if use_ada_context and not disable_ada_emb:
                 ada_embedder   = extra_info['ada_embedder']
                 layer_attn_components['layer_static_prompt_embs'] = layer_static_context_v
                 # emb: time embedding. h: features from the previous layer.
@@ -983,7 +984,6 @@ class UNetModel(nn.Module):
             else:
                 layer_context = layer_static_context
 
-            # Only apply compel cfg in mix_hijk iterations.
             if apply_compel_cfg_prob > 0:
                 # layer_context could be a tensor or a tuple of tensors.
                 compel_batch_mask = torch.ones(B, dtype=torch.float, device=x.device)

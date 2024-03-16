@@ -82,7 +82,7 @@ class LearnedSoftAggregate(nn.Module):
         # num_feat = 1: element-wise score function & softmax.
         # num_feat > 1: the linear score function is applied to the last dim (features) of the input tensor. 
         self.num_feat   = num_feat
-        self.feat2score = nn.Linear(num_feat, 1)
+        self.feat2score = nn.Linear(num_feat, 1, bias=False)
         self.keepdim    = keepdim
 
     def forward(self, x, score_basis=None):
@@ -178,7 +178,7 @@ class PerceiverAttention(nn.Module):
 
         self.to_q   = nn.Linear(dim, inner_dim, bias=False)
         self.to_kv  = nn.Linear(dim, inner_dim * 2, bias=False)
-        self.to_out = nn.Linear(inner_dim, dim, bias=True)
+        self.to_out = nn.Linear(inner_dim, dim, bias=False)
 
     def forward(self, x, latent_queries):
         """
@@ -228,7 +228,7 @@ class CrossAttention(nn.Module):
         assert not (identity_to_out and out_has_skip), "identity_to_out and out_has_skip cannot be both True."
 
         self.to_out = nn.Sequential(
-            nn.Linear(input_dim, input_dim, bias=True) if not identity_to_out else nn.Identity(),
+            nn.Linear(input_dim, input_dim, bias=False) if not identity_to_out else nn.Identity(),
             nn.Dropout(dropout)
         )
         self.out_has_skip = out_has_skip
