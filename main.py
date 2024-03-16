@@ -868,6 +868,7 @@ if __name__ == "__main__":
             del trainer_config["accelerator"]
             cpu = True
         else:
+            trainer_config["accelerator"] = "gpu"
             gpuinfo = trainer_config["gpus"]
             print(f"Running on GPUs {gpuinfo}")
             cpu = False
@@ -877,6 +878,12 @@ if __name__ == "__main__":
         # Data config
         if hasattr(opt, "bs"):
             config.data.params.batch_size = opt.bs
+        trainer_opt.num_nodes = opt.num_nodes
+        if opt.max_steps > 0:
+            trainer_opt.max_steps = opt.max_steps
+            # max_steps: Used to initialize DataModuleFromConfig.
+            config.data.params.max_steps = opt.max_steps
+                    
         config.data.params.train.params.subject_string       = opt.subject_string
         config.data.params.validation.params.subject_string  = opt.subject_string
         if hasattr(opt, 'subj_info_filepaths'):
@@ -926,8 +933,6 @@ if __name__ == "__main__":
         #  'subject_string': 'z', 'data_roots': 'data/spikelee/'}}}}
         config.data.params.train.params.data_roots       = opt.data_roots
         config.data.params.validation.params.data_roots  = opt.data_roots
-        # max_steps: Used to initialize DataModuleFromConfig.
-        config.data.params.max_steps = opt.max_steps
 
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
@@ -1015,10 +1020,6 @@ if __name__ == "__main__":
         if opt.lr > 0:
             config.model.base_learning_rate = opt.lr
 
-        trainer_opt.num_nodes = opt.num_nodes
-        if opt.max_steps > 0:
-            trainer_opt.max_steps = opt.max_steps
-        
         # Personalization config
         config.model.params.personalization_config.params.layerwise_lora_rank = opt.layerwise_lora_rank
 
