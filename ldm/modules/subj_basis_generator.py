@@ -235,11 +235,9 @@ class CrossAttention(nn.Module):
                 Rearrange('b n (m q) -> b n q m', q=dynamic_to_v_lora_rank),
                 nn.LayerNorm(input_dim, elementwise_affine=True),
                 Rearrange('b n q m -> b n m q'),
-                nn.Linear(dynamic_to_v_lora_rank, input_dim, bias=False),
+                nn.Linear(dynamic_to_v_lora_rank, input_dim, bias=True),
                 # nn.LayerNorm(input_dim, elementwise_affine=True),
             )
-
-            nn.Linear(input_dim, input_dim * input_dim, bias=False)
         else:
             self.to_v = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_v else nn.Identity()
 
