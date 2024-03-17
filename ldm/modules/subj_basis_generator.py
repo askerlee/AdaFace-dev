@@ -283,6 +283,7 @@ class CrossAttention(nn.Module):
         q, k = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k))
         if self.dynamic_to_v:
             # v: [6, 32, 17, 128].
+            # v is query-specific, so there's an extra dim for the query.
             v = rearrange(v, 'b q n (h d) -> (b h) q n d', h=h)
         else:
             v = rearrange(v, 'b n (h d) -> (b h) n d', h=h)
@@ -300,6 +301,7 @@ class CrossAttention(nn.Module):
 
         if self.dynamic_to_v:
             # attn: [6, 32, 17]. v: [6, 32, 17, 128]. 128: dim of each head. out: [6, 32, 128].
+            # out is combined with different attn weights and v for different queries.
             out = einsum('b i j, b i j d -> b i d', attn, v)
         else:
             # v: [6, 17, 128]. out: [6, 32, 128].
@@ -505,6 +507,8 @@ class SubjBasisGenerator(nn.Module):
 
         if mean_face_proj_emb_path is not None:
             self.mean_face_proj_emb = torch.load(mean_face_proj_emb_path)
+            # self.mean_face_proj_emb: [16, 768]
+            self.mean_face_proj_emb = F.normalize(self.mean_face_proj_emb, p=2, dim=-1)
             # Wrap mean_face_proj_emb with nn.Parameter, so that it's put on the GPU automatically.
             self.mean_face_proj_emb = nn.Parameter(self.mean_face_proj_emb, requires_grad=False)
             print(f"mean_face_proj_emb ({list(self.mean_face_proj_emb.shape)}) is loaded from {mean_face_proj_emb_path}")
