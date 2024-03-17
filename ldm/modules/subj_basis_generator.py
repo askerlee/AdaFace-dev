@@ -232,7 +232,7 @@ class CrossAttention(nn.Module):
         if q_aware_to_v:
             self.to_v = nn.Sequential(
                 nn.Linear(input_dim, num_q * q_aware_to_v_lora_rank, bias=False),
-                Rearrange('b n (q r) -> b n q r', q=num_q, r=q_aware_to_v_lora_rank),
+                Rearrange('b n (q r) -> b q n r', q=num_q, r=q_aware_to_v_lora_rank),
                 nn.LayerNorm(q_aware_to_v_lora_rank, elementwise_affine=True),
                 nn.Linear(q_aware_to_v_lora_rank, input_dim, bias=True),
                 # nn.LayerNorm(input_dim, elementwise_affine=True),
