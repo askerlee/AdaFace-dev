@@ -1013,7 +1013,7 @@ class EmbeddingManager(nn.Module):
             zs_use_FFN=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_apply_neg_subj_bases=False,
-            zs_num_latent_queries=32,
+            zs_num_latent_queries=64,
             zs_cls_delta_string=None,
             zs_cls_delta_token_weights=None,
             zs_use_dynamic_to_v=False,

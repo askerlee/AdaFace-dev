@@ -216,7 +216,7 @@ class PerceiverAttention(nn.Module):
 class CrossAttention(nn.Module):
     def __init__(self, input_dim, num_heads=6, dropout=0.1, 
                  identity_to_q=False, identity_to_k=False, identity_to_v=False, 
-                 dynamic_to_v=True, dynamic_to_v_lora_rank=128,
+                 dynamic_to_v=True, dynamic_to_v_lora_rank=64,
                  identity_to_out=False, out_has_skip=False):
         super().__init__()
         dim_head  = input_dim // num_heads
@@ -236,7 +236,7 @@ class CrossAttention(nn.Module):
                 nn.LayerNorm(input_dim, elementwise_affine=True),
                 Rearrange('b n q m -> b n m q'),
                 nn.Linear(dynamic_to_v_lora_rank, input_dim, bias=False),
-                nn.LayerNorm(input_dim, elementwise_affine=True),
+                # nn.LayerNorm(input_dim, elementwise_affine=True),
             )
 
             nn.Linear(input_dim, input_dim * input_dim, bias=False)
@@ -335,7 +335,7 @@ class SubjBasisGenerator(nn.Module):
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
         # Number of low-rank latent queries. If num_latent_queries = 1, 
         # then basically all output queries are the same.
-        num_latent_queries=32,               
+        num_latent_queries=64,               
         num_prompt2token_emb_modes=4,       # number of modes for prompt2token_emb.
         num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
         output_dim=768,                     # CLIP text embedding input dimension.
