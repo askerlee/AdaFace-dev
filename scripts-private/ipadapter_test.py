@@ -1,6 +1,7 @@
 import cv2
 from insightface.app import FaceAnalysis
 import torch
+import torch.nn.functional as F
 from diffusers import StableDiffusionPipeline, DDIMScheduler, AutoencoderKL
 from PIL import Image
 import sys
@@ -64,6 +65,8 @@ faceid_embeds += torch.randn_like(faceid_embeds) * args.noise
 # faceid_embeds: [1, 1, 512]. If we don't keepdim, then it's [1, 512], 
 # and the resulted prompt embeddings are the same.
 faceid_embeds = faceid_embeds.mean(dim=1, keepdim=True)
+#print(faceid_embeds.norm(dim=-1))
+#faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
 n_cond = faceid_embeds.shape[1]
 
 base_model_path = "runwayml/stable-diffusion-v1-5" #"SG161222/Realistic_Vision_V4.0_noVAE"

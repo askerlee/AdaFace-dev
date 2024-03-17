@@ -2260,6 +2260,7 @@ class LatentDiffusion(DDPM):
 
             if all_id_embs is not None:
                 id_embs = all_id_embs.mean(dim=0, keepdim=True)
+                # Without normalization, id_embs.norm(dim=1) is ~0.9. So normalization doesn't have much effect.
                 id_embs = F.normalize(id_embs, p=2, dim=1)
             # id_embs is None only if face_encoder is None, i.e., disabled by the user.
         else:

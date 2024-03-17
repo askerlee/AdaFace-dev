@@ -503,6 +503,7 @@ class StaticLayerwiseEmbedding(nn.Module):
             # torch.matmul(lora_up, basis_vecs): 16 * 768.
 
             if self.do_zero_shot:
+                # (i0, e0), (i0, e1), ..., (i0, e15), (i1, e0), (i1, e1), ..., (i1, e15), ..., (iB, e15).
                 static_zs_embs = rearrange(static_zs_embs, 'b l k d -> (b l) k d')
                 # Copy to bias, so that static_zs_embs is regularized by layerwise_embedding_norm_loss().
                 self.bias = static_zs_embs
@@ -1504,7 +1505,6 @@ class EmbeddingManager(nn.Module):
 
                     # zs_id_embs: [1, 512].
                     zs_id_embs = zs_image_feat_dict['id']
-                    uncond_id_embs = torch.zeros_like(zs_id_embs)
 
                     # Add noise to all_id_embs during training with probability 0.5.
                     # Noise level is gradually reduced from [0.04, 0.06] to [0.02, 0.03] during training.
@@ -1580,7 +1580,8 @@ class EmbeddingManager(nn.Module):
                                                          is_face=self.curr_subj_is_face,
                                                          training_percent=self.training_percent)
                     if self.zs_apply_neg_subj_bases:
-                        zs_vecs_2sets_neg = subj_basis_generator(-zs_clip_features, uncond_id_embs, 
+                        zs_vecs_2sets_neg = subj_basis_generator(torch.zeros_like(zs_clip_features), 
+                                                                 torch.zeros_like(zs_id_embs),
                                                                  extra_token_embs=None, 
                                                                  is_face=self.curr_subj_is_face,
                                                                  training_percent=self.training_percent)
@@ -1588,8 +1589,8 @@ class EmbeddingManager(nn.Module):
                         zs_vecs_2sets = zs_vecs_2sets * (1 + zs_neg_subj_bases_weight) \
                                         - zs_vecs_2sets_neg * zs_neg_subj_bases_weight
                         
-                    # TODO: support multiple subjects in a batch, i.e., zs_vecs_2sets will be reshaped to 4D.
-                    # num_vectors_each_placeholder: 9. num_zs_vecs_per_token: 26. 
+                    # num_vectors_each_placeholder: 9. 
+                    # num_zs_vecs_per_token: 26 = layerwise_lora_rank + self.num_unet_ca_layers.
                     # zs_vecs_2sets: [BS, 234, 768] -> [BS, 9, 26, 768].
                     zs_vecs_2sets = zs_vecs_2sets.reshape(zs_vecs_2sets.shape[0], 
                                                           num_vectors_each_placeholder,
@@ -1603,6 +1604,7 @@ class EmbeddingManager(nn.Module):
                         zs_vecs_2sets[:, :, self.layerwise_lora_rank:]
                     self.subj2ada_zs_basis_vecs[placeholder_string] = ada_zs_basis_vecs
                     # subj_static_embedding: [BS, 9, 16, 768] => [BS, 16, 9, 768]
+                    # [BS, num_unet_ca_layers, num_vectors_each_placeholder, 768].
                     static_zs_embs = static_zs_embs.permute(0, 2, 1, 3)
                 else:
                     static_zs_embs = None
@@ -1615,10 +1617,8 @@ class EmbeddingManager(nn.Module):
             static_subj_embs_dict[placeholder_string] = subj_static_embedding
 
             for k in range(self.token2num_vectors[placeholder_string]):
-                # Assign the k-th token embedding (along the text dim).
-                placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k)
                 # embedded_text is repeated 16 times along the layer dimension, with size of dim 0 = 16 * BS.
-                # After repeat, the same instance is repeated 16 times, which are adjacent 
+                # The result of the repeat is: the same instance is repeated 16 times, which are adjacent 
                 # to each other across the batch dim:
                 # [b1_l1, ..., b1_l16, b2_l1, ..., b2_l16, ..., bB_l1, ..., bB_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
@@ -1637,15 +1637,22 @@ class EmbeddingManager(nn.Module):
                                                                      self.training_end_add_noise_std_range,
                                                                      self.training_add_noise_prob[self.iter_type])
 
+                # Training with delta loss. Each subject only appears once in subj_static_embedding, 
+                # but twice in the prompts (subject single and subject comp), so we need to repeat it twice.
                 if REAL_OCCURS_IN_BATCH == BS // 2 and subj_static_embedding_k.shape[0] == REAL_OCCURS_IN_BATCH // 2 * num_unet_ca_layers:
                     # subj_static_embedding_k: [48, 768] => [48*2, 768]
                     subj_static_embedding_k = subj_static_embedding_k.repeat(2, 1)
+                # Single-subject batch. Probably it's during inference.
+                # Each subject only appears once in subj_static_embedding, but BS == REAL_OCCURS_IN_BATCH
+                # times in the prompts. Therefore, it's repeated REAL_OCCURS_IN_BATCH times.
                 elif subj_static_embedding_k.shape[0] == num_unet_ca_layers:
                     # subj_static_embedding_k: [16, 768] => [16*REAL_OCCURS_IN_BATCH, 768]
                     subj_static_embedding_k = subj_static_embedding_k.repeat(REAL_OCCURS_IN_BATCH, 1)
                 else:
                     breakpoint()
 
+                # Assign the k-th token embedding (along the text dim).
+                placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k)
                 embedded_text[placeholder_indices_k] = subj_static_embedding_k
 
             # Cache the placeholder indices for mix prompt distillation.

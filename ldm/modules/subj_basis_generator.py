@@ -479,7 +479,6 @@ class SubjBasisGenerator(nn.Module):
 
         # lora2hira contains a LayerNorm, so no need to normalize output_queries.
         output_queries = self.lora2hira(context) * self.output_scale
-        # breakpoint()
         return output_queries
 
     def init_face_proj_in(self, output_dim=768, ip_model_ckpt_path=None, 
