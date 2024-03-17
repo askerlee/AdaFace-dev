@@ -233,10 +233,10 @@ class CrossAttention(nn.Module):
             all_q_mid = num_q * q_aware_to_v_lora_rank
             self.to_v = nn.Sequential(
                 # number of params: 768 * 4096 = 3,145,728.
-                # Output: [BS, 16, 4096]
+                # Input:  [BS, 16, 768]. Output: [BS, 16, 4096]
                 nn.Linear(input_dim, all_q_mid, bias=False),
                 nn.LayerNorm(all_q_mid, elementwise_affine=True),
-                # Change the dim of the tensor to [BS, 4096, 16].
+                # Change the dim of the tensor to [BS, 4096, 16], as Conv1d transforms dim 1.
                 Rearrange('b n q -> b q n', q=all_q_mid),
                 # Each q_aware_to_v projection has its own lora2hira linear layer.
                 # The total number of parameters will be 4096*768 = 3,145,728.
@@ -248,6 +248,7 @@ class CrossAttention(nn.Module):
                     groups=num_q,
                     bias=False,
                 ),
+                # Output: [BS, 64, 16, 768].
                 Rearrange('b (q d) n -> b q n d', q=num_q, d=input_dim),
                 # nn.LayerNorm(input_dim, elementwise_affine=True),
             )
