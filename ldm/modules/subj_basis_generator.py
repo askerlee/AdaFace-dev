@@ -368,11 +368,11 @@ class SubjBasisGenerator(nn.Module):
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
-            self.obj_proj_in  = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
-                                           elementwise_affine=elementwise_affine)
-            self.prompt2token_emb_proj = MultimodeProjection(input_dim=output_dim, 
-                                                             num_modes=num_prompt2token_emb_modes,
-                                                             elementwise_affine=elementwise_affine)
+            self.obj_proj_in            = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
+                                                     elementwise_affine=elementwise_affine)
+            self.prompt2token_emb_proj  = MultimodeProjection(input_dim=output_dim, 
+                                                              num_modes=num_prompt2token_emb_modes,
+                                                              elementwise_affine=elementwise_affine)
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.face_proj_in = None
@@ -506,9 +506,9 @@ class SubjBasisGenerator(nn.Module):
             print("Subj face_proj_in is randomly initialized")
 
         if mean_face_proj_emb_path is not None:
-            self.mean_face_proj_emb = torch.load(mean_face_proj_emb_path)
             # self.mean_face_proj_emb: [16, 768]
-            self.mean_face_proj_emb = F.normalize(self.mean_face_proj_emb, p=2, dim=-1)
+            # We don't need to L2-normalize mean_face_proj_emb, as it's mean of 1097 L2-normalized face embeddings.
+            self.mean_face_proj_emb = torch.load(mean_face_proj_emb_path)
             # Wrap mean_face_proj_emb with nn.Parameter, so that it's put on the GPU automatically.
             self.mean_face_proj_emb = nn.Parameter(self.mean_face_proj_emb, requires_grad=False)
             print(f"mean_face_proj_emb ({list(self.mean_face_proj_emb.shape)}) is loaded from {mean_face_proj_emb_path}")
