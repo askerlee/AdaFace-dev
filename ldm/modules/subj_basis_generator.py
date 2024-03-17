@@ -226,15 +226,29 @@ class CrossAttention(nn.Module):
         self.q_aware_to_v = q_aware_to_v
         self.to_q = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_q else nn.Identity()
         self.to_k = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_k else nn.Identity()
-        # If q_aware_to_v is True, then self.to_v is applied on x to get the actual to_v, 
-        # which is then applied on context.
-        # Otherwise, self.to_v is applied on context.
+        # If q_aware_to_v is True, then self.to_v consists of num_q projections of input_dim to inner_dim.
+        # Otherwise, self.to_v consists of a single projection of input_dim to inner_dim.
         if q_aware_to_v:
+            # all_q_mid: 64 * 64 = 4096.
+            all_q_mid = num_q * q_aware_to_v_lora_rank
             self.to_v = nn.Sequential(
-                nn.Linear(input_dim, num_q * q_aware_to_v_lora_rank, bias=False),
-                Rearrange('b n (q r) -> b q n r', q=num_q, r=q_aware_to_v_lora_rank),
-                nn.LayerNorm(q_aware_to_v_lora_rank, elementwise_affine=True),
-                nn.Linear(q_aware_to_v_lora_rank, input_dim, bias=True),
+                # number of params: 768 * 4096 = 3,145,728.
+                # Output: [BS, 16, 4096]
+                nn.Linear(input_dim, all_q_mid, bias=False),
+                nn.LayerNorm(all_q_mid, elementwise_affine=True),
+                # Change the dim of the tensor to [BS, 4096, 16].
+                Rearrange('b n q -> b q n', q=all_q_mid),
+                # Each q_aware_to_v projection has its own lora2hira linear layer.
+                # The total number of parameters will be 4096*768 = 3,145,728.
+                # Output: [BS, 64*768, 16].
+                torch.nn.Conv1d(
+                    in_channels=all_q_mid,
+                    out_channels=num_q * input_dim,
+                    kernel_size=1,
+                    groups=num_q,
+                    bias=False,
+                ),
+                Rearrange('b (q d) n -> b q n d', q=num_q, d=input_dim),
                 # nn.LayerNorm(input_dim, elementwise_affine=True),
             )
         else:
