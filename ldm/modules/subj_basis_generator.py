@@ -267,7 +267,7 @@ class CrossAttention(nn.Module):
         if self.q_aware_to_v:
             # context: [BS, L, D]. v: [BS, Q, L, D].
             # There are effectively Q to_v projections.
-            v = self.to_v(context).reshape(-1, x.shape[1], x.shape[2], x.shape[2])
+            v = self.to_v(context)
         else:
             # v: [BS, L, D].
             v = self.to_v(context)
