@@ -1586,9 +1586,11 @@ class EmbeddingManager(nn.Module):
                                                                  is_face=self.curr_subj_is_face,
                                                                  training_percent=self.training_percent)
                         zs_neg_subj_bases_weight = 0.2
-                        zs_vecs_2sets = zs_vecs_2sets * (1 + zs_neg_subj_bases_weight) \
+                        zs_vecs_2sets_pos = zs_vecs_2sets
+                        zs_vecs_2sets = zs_vecs_2sets_pos * (1 + zs_neg_subj_bases_weight) \
                                         - zs_vecs_2sets_neg * zs_neg_subj_bases_weight
-                        
+                        #breakpoint()
+
                     # num_vectors_each_placeholder: 9. 
                     # num_zs_vecs_per_token: 26 = layerwise_lora_rank + self.num_unet_ca_layers.
                     # zs_vecs_2sets: [BS, 234, 768] -> [BS, 9, 26, 768].
