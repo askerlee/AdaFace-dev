@@ -470,13 +470,17 @@ class SubjBasisGenerator(nn.Module):
             # The ratio in dinov2's paper is 0.3 or 0.4. 
             # https://github.com/huggingface/pytorch-image-models/issues/1836
             p_drop_path = anneal_value(training_percent, 1, (0.4, 0.2)) if self.training else 0
+            # Skip ff(context) with probability p_drop_path. 
+            # Divide by 2 to keep the magnitude of context roughly the same, no matter whether ff(context) is skipped.
             # ff is either nn.Identity() or nn.Sequential. If it's nn.Sequential, it implies self.use_FFN is True.
             # (torch.rand(1) > self.p_drop_path) is evaluated to [True] or [False], which is equivalent to True or False.
             if isinstance(ff, nn.Sequential) and (torch.rand(1) > p_drop_path):
-                context = ff(context) + context
-        
-        output_queries = self.lora2hira(context)
-        return output_queries * self.output_scale
+                context = (ff(context) + context) / 2
+
+        # lora2hira contains a LayerNorm, so no need to normalize output_queries.
+        output_queries = self.lora2hira(context) * self.output_scale
+        # breakpoint()
+        return output_queries
 
     def init_face_proj_in(self, output_dim=768, ip_model_ckpt_path=None, 
                           mean_face_proj_emb_path=None,
