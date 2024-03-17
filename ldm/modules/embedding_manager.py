@@ -1016,7 +1016,7 @@ class EmbeddingManager(nn.Module):
             zs_num_latent_queries=64,
             zs_cls_delta_string=None,
             zs_cls_delta_token_weights=None,
-            zs_use_dynamic_to_v=False,
+            zs_use_q_aware_to_v=False,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1242,7 +1242,7 @@ class EmbeddingManager(nn.Module):
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           ip_model_ckpt_path = ip_model_ckpt_path,
                                                           mean_face_proj_emb_path = mean_face_proj_emb_path,
-                                                          use_dynamic_to_v = zs_use_dynamic_to_v)
+                                                          use_q_aware_to_v = zs_use_q_aware_to_v)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 

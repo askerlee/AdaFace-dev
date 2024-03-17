@@ -282,7 +282,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to use FFN in zero-shot subject feature generator")
     parser.add_argument("--zs_apply_neg_subj_bases", type=str2bool, nargs="?", const=True, default=False,
                         help="Apply negative subject bases for zero-shot learning")
-    parser.add_argument("--zs_use_dynamic_to_v", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--zs_use_q_aware_to_v", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use dynamic to_v in zero-shot learning")
     
     parser.add_argument("--layerwise_lora_rank", 
@@ -961,7 +961,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_use_FFN                = opt.zs_use_FFN
             config.model.params.personalization_config.params.zs_apply_neg_subj_bases   = opt.zs_apply_neg_subj_bases
             config.model.params.personalization_config.params.zs_num_latent_queries     = opt.zs_num_latent_queries
-            config.model.params.personalization_config.params.zs_use_dynamic_to_v       = opt.zs_use_dynamic_to_v
+            config.model.params.personalization_config.params.zs_use_q_aware_to_v       = opt.zs_use_q_aware_to_v
 
             # When using zero-shot, we load different subjects in the same batch.
             config.data.params.same_subject_in_each_batch = opt.same_subject_in_each_batch
