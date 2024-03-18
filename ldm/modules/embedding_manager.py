@@ -2387,7 +2387,7 @@ class EmbeddingManager(nn.Module):
                     # Then replace it with the one in ckpt.
                     print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                     self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
-                    if not hasattr(ckpt_subj_basis_generator, 'mean_face_proj_emb'):
+                    if not hasattr(ckpt_subj_basis_generator, 'face_proj_in_grad_scaler'):
                         ip_model_ckpt_path = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
                         mean_face_proj_emb_path = "models/ip-adapter/mean_face_proj_emb.pt"
                         ckpt_subj_basis_generator.init_face_proj_in(768, ip_model_ckpt_path, mean_face_proj_emb_path, 
