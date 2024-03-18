@@ -1018,6 +1018,7 @@ class EmbeddingManager(nn.Module):
             zs_cls_delta_string=None,
             zs_cls_delta_token_weights=None,
             zs_use_q_aware_to_v=False,
+            zs_face_proj_in_grad_scale=0.1,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1149,6 +1150,8 @@ class EmbeddingManager(nn.Module):
             # num_bg_queries:   4 * 26 = 104.
             self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
             self.zs_cls_delta_string   = zs_cls_delta_string
+            self.zs_face_proj_in_grad_scale = zs_face_proj_in_grad_scale
+            
             if self.zs_cls_delta_string is not None:
                 self.zs_cls_delta_tokens   = get_tokens_for_string(zs_cls_delta_string)
                 if zs_cls_delta_token_weights is None:
@@ -1243,7 +1246,8 @@ class EmbeddingManager(nn.Module):
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           ip_model_ckpt_path = ip_model_ckpt_path,
                                                           mean_face_proj_emb_path = mean_face_proj_emb_path,
-                                                          use_q_aware_to_v = zs_use_q_aware_to_v)
+                                                          use_q_aware_to_v = zs_use_q_aware_to_v,
+                                                          face_proj_in_grad_scale = self.zs_face_proj_in_grad_scale)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 
@@ -2386,7 +2390,8 @@ class EmbeddingManager(nn.Module):
                     if not hasattr(ckpt_subj_basis_generator, 'mean_face_proj_emb'):
                         ip_model_ckpt_path = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
                         mean_face_proj_emb_path = "models/ip-adapter/mean_face_proj_emb.pt"
-                        ckpt_subj_basis_generator.init_face_proj_in(768, ip_model_ckpt_path, mean_face_proj_emb_path, device='cpu')
+                        ckpt_subj_basis_generator.init_face_proj_in(768, ip_model_ckpt_path, mean_face_proj_emb_path, 
+                                                                    self.zs_face_proj_in_grad_scale, device='cpu')
 
             for token_idx, km in enumerate(ckpt["placeholder_strings"]):
                 # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.

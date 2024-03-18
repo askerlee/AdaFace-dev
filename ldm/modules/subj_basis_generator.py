@@ -16,7 +16,7 @@ from torch import einsum
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from transformers.utils import ModelOutput
-from ldm.util import anneal_value
+from ldm.util import anneal_value, gen_gradient_scaler
 
 def reshape_tensor(x, num_heads):
     bs, length, width = x.shape
@@ -353,8 +353,9 @@ class SubjBasisGenerator(nn.Module):
         use_FFN: bool = False,              # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         ip_model_ckpt_path: str = None,     # Path to the IP-Adapter model checkpoint.
-        mean_face_proj_emb_path: str = None, # Path to the mean face projection embedding.
-        use_q_aware_to_v: bool = False,     # Whether to use q-aware (q-specific) to_v in CrossAttention.
+        mean_face_proj_emb_path: str = None,  # Path to the mean face projection embedding.
+        use_q_aware_to_v: bool = False,       # Whether to use q-aware (q-specific) to_v in CrossAttention.
+        face_proj_in_grad_scale: float = 0.1, # Gradient scale for face_proj_in.
     ):
         super().__init__()
         assert depth > 0, "depth must be > 0."
@@ -374,7 +375,8 @@ class SubjBasisGenerator(nn.Module):
         # The dimension of IP-Adapter face features for humans is the same as output_dim = latent_query_dim.   
         # self.face_proj_in: [1, 512] -> [1, 16, 768].
         # If self.placeholder_is_bg: face_proj_in is set to None.
-        self.init_face_proj_in(output_dim, ip_model_ckpt_path, mean_face_proj_emb_path, device='cpu')
+        self.init_face_proj_in(output_dim, ip_model_ckpt_path, mean_face_proj_emb_path, 
+                               face_proj_in_grad_scale, device='cpu')
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
@@ -439,14 +441,9 @@ class SubjBasisGenerator(nn.Module):
         if (not self.placeholder_is_bg) and (id_embs is not None):
             if is_face:
                 # id_embs: [BS, 512] -> [BS, 16, 768].
-                if self.freeze_face_proj_in:
-                    # Loaded pretrained IP-Adapter model weight. No need to update face_proj_in.
-                    with torch.no_grad():
-                        id_embs0 = self.face_proj_in(id_embs)
-                else:
-                    # face_proj_in will be updated during training.
-                    id_embs0 = self.face_proj_in(id_embs)
-
+                # Loaded pretrained IP-Adapter model weight. No need to update face_proj_in.
+                id_embs0 = self.face_proj_in(id_embs)
+                id_embs0 = self.face_proj_in_grad_scaler(id_embs0)
                 id_embs = F.normalize(id_embs0, p=2, dim=2) - self.mean_face_proj_emb
                 # id_embs is projected to the token embedding space.
                 id_embs = self.prompt2token_emb_proj(id_embs)
@@ -497,7 +494,7 @@ class SubjBasisGenerator(nn.Module):
         return output_queries
 
     def init_face_proj_in(self, output_dim=768, ip_model_ckpt_path=None, 
-                          mean_face_proj_emb_path=None,
+                          mean_face_proj_emb_path=None, face_proj_in_gs=0.1,
                           device='cpu'):
         if self.placeholder_is_bg:
             self.face_proj_in = None
@@ -512,11 +509,11 @@ class SubjBasisGenerator(nn.Module):
         if ip_model_ckpt_path is not None:
             ip_model_ckpt = torch.load(ip_model_ckpt_path, map_location=device)
             self.face_proj_in.load_state_dict(ip_model_ckpt['image_proj'])
-            self.freeze_face_proj_in = True
             print(f"Subj face_proj_in is loaded from {ip_model_ckpt_path}")
         else:
-            self.freeze_face_proj_in = False
             print("Subj face_proj_in is randomly initialized")
+
+        self.face_proj_in_grad_scaler = gen_gradient_scaler(face_proj_in_gs)
 
         if mean_face_proj_emb_path is not None:
             # self.mean_face_proj_emb: [16, 768]
