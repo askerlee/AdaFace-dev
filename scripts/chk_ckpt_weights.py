@@ -34,8 +34,7 @@ iterations = sorted(iter2path.keys())
 
 emb_path = os.path.join(emb_folder, iter2path[iterations[0]])
 emb_ckpt = torch.load(emb_path, map_location="cpu")
-tokens = emb_ckpt['string_to_emb_ema_dict'].keys()
-
+tokens = emb_ckpt['string_to_token'].keys()
 
 if 'string_to_subj_basis_generator_dict' in emb_ckpt:
     for token in tokens:
