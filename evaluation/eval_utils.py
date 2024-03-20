@@ -69,7 +69,14 @@ def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_s
     with torch.no_grad():
         sim_dino = dino_evator.image_pairwise_similarity(gt_np_images, sample_np_images)
 
-    print(os.path.basename(gt_dir), "vs", os.path.basename(samples_dir))
+    if gt_dir[-1] == "/":
+        gt_dir = gt_dir[:-1]
+    if samples_dir[-1] == "/":
+        samples_dir = samples_dir[:-1]
+    gt_dir_base = os.path.basename(gt_dir)
+    samples_dir_base = os.path.basename(samples_dir)
+
+    print(gt_dir_base, "vs", samples_dir_base)
     print(f"Image/text/dino sim: {sim_img:.3f} {sim_text:.3f} {sim_dino:.3f}")
     return sim_img, sim_text, sim_dino
 
