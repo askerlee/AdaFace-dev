@@ -877,8 +877,11 @@ def main(opt):
                         # subjname_method: gabrielleunion-ada
                         subjname_method = subjfolder_mat.group(3)
                         if opt.zeroshot and opt.compare_with:
+                            if opt.compare_with.endswith("/") or opt.compare_with.endswith("\\"):
+                                opt.compare_with = opt.compare_with[:-1]
+                            subj_gt_folder_name = os.path.basename(opt.compare_with)
                             # all-ada => all-ada-gabrielleunion
-                            subjname_method += "-" + os.path.basename(opt.compare_with)
+                            subjname_method += "-" + subj_gt_folder_name
 
                         iter_mat = re.search(r"(\d+).pt", opt.subj_model_path)
                         if iter_mat is not None:
