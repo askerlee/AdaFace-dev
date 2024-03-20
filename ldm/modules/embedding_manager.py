@@ -1150,6 +1150,7 @@ class EmbeddingManager(nn.Module):
             # num_bg_queries:   4 * 26 = 104.
             self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
             self.zs_cls_delta_string   = zs_cls_delta_string
+            self.zs_num_latent_queries = zs_num_latent_queries
             self.zs_face_proj_in_grad_scale = zs_face_proj_in_grad_scale
             
             if self.zs_cls_delta_string is not None:
@@ -2392,6 +2393,9 @@ class EmbeddingManager(nn.Module):
                         mean_face_proj_emb_path = "models/ip-adapter/mean_face_proj_emb.pt"
                         ckpt_subj_basis_generator.init_face_proj_in(768, ip_model_ckpt_path, mean_face_proj_emb_path, 
                                                                     self.zs_face_proj_in_grad_scale, device='cpu')
+                    if ckpt_subj_basis_generator.num_latent_queries < self.zs_num_latent_queries \
+                      and not ckpt_subj_basis_generator.placeholder_is_bg:
+                        ckpt_subj_basis_generator.extend_latent_queries(self.zs_num_latent_queries)
 
             for token_idx, km in enumerate(ckpt["placeholder_strings"]):
                 # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.

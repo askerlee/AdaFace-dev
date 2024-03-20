@@ -353,13 +353,12 @@ class SubjBasisGenerator(nn.Module):
         use_FFN: bool = False,              # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         ip_model_ckpt_path: str = None,     # Path to the IP-Adapter model checkpoint.
-        mean_face_proj_emb_path: str = None,  # Path to the mean face projection embedding.
-        use_q_aware_to_v: bool = False,       # Whether to use q-aware (q-specific) to_v in CrossAttention.
+        mean_face_proj_emb_path: str = None, # Path to the mean face projection embedding.
+        use_q_aware_to_v: bool = False,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
+        q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
         face_proj_in_grad_scale: float = 0.1, # Gradient scale for face_proj_in.
     ):
         super().__init__()
-        assert depth > 0, "depth must be > 0."
-        self.depth = depth
 
         self.proj_in = nn.Sequential(
             nn.Linear(image_embedding_dim, output_dim, bias=False),
@@ -404,6 +403,9 @@ class SubjBasisGenerator(nn.Module):
         self.latent_queries     = nn.ParameterList([])
         self.latent_query_lns   = nn.ModuleList([])
         self.use_FFN            = use_FFN
+        assert depth > 0, "depth must be > 0."
+        self.depth = depth
+        self.q_aware_to_v_lora_rank = q_aware_to_v_lora_rank
 
         for dep in range(depth):
             q_aware_to_v = use_q_aware_to_v and not self.placeholder_is_bg
@@ -418,6 +420,7 @@ class SubjBasisGenerator(nn.Module):
                         CrossAttention(input_dim=output_dim, num_heads=num_heads, dropout=0.1,
                                        identity_to_q=True, identity_to_k=True, identity_to_v=identity_to_v,
                                        q_aware_to_v=q_aware_to_v, num_q=self.num_latent_queries,
+                                       q_aware_to_v_lora_rank=q_aware_to_v_lora_rank,
                                        identity_to_out=identity_to_out,
                                        out_has_skip=out_has_skip),
                         # FeedForward: 2-layer MLP with GELU activation.
@@ -522,6 +525,71 @@ class SubjBasisGenerator(nn.Module):
             # Wrap mean_face_proj_emb with nn.Parameter, so that it's put on the GPU automatically.
             self.mean_face_proj_emb = nn.Parameter(mean_face_proj_emb, requires_grad=False)
             print(f"mean_face_proj_emb ({list(self.mean_face_proj_emb.shape)}) is loaded from {mean_face_proj_emb_path}")
+
+    # q_aware_to_v_lora_rank has to be the same as the old q_aware_to_v_lora_rank.
+    def extend_latent_queries(self, new_num_latent_queries, q_aware_to_v_lora_rank=64, output_dim=768):
+        assert new_num_latent_queries > self.num_latent_queries, "new_num_latent_queries must be > num_latent_queries."
+
+        for i in range(self.depth):
+            layer_latent_queries = self.latent_queries[i]
+            new_layer_latent_queries = nn.Parameter(torch.randn(1, new_num_latent_queries, self.latent_query_dim) / new_num_latent_queries**0.5)
+            new_layer_latent_queries.data[:, :self.num_latent_queries] = layer_latent_queries.data
+            new_layer_latent_queries = new_layer_latent_queries.to(layer_latent_queries.device)
+            self.latent_queries[i] = new_layer_latent_queries
+
+            cross_attn = self.layers[i][0]
+            # if q_aware_to_v is enabled, CrossAttention layer is initialized with a 
+            # predefined number of latent queries, therefore it also needs to be extended.
+            if cross_attn.q_aware_to_v:
+                input_dim = self.latent_query_dim
+                # all_q_mid: 64 * 64 = 4096.
+                all_q_mid = new_num_latent_queries * q_aware_to_v_lora_rank
+                old_all_q_mid = self.num_latent_queries * q_aware_to_v_lora_rank
+                new_to_v = nn.Sequential(
+                    # number of params: 768 * 4096 = 3,145,728.
+                    # Input:  [BS, 16, 768]. Output: [BS, 16, 4096]
+                    nn.Linear(input_dim, all_q_mid, bias=False),
+                    nn.LayerNorm(all_q_mid, elementwise_affine=True),
+                    # Change the dim of the tensor to [BS, 4096, 16], as Conv1d transforms dim 1.
+                    Rearrange('b n q -> b q n', q=all_q_mid),
+                    # Each q_aware_to_v projection has its own lora2hira linear layer.
+                    # The total number of parameters will be 4096*768 = 3,145,728.
+                    # Output: [BS, 64*768, 16].
+                    torch.nn.Conv1d(
+                        in_channels=all_q_mid,
+                        out_channels=new_num_latent_queries * input_dim,
+                        kernel_size=1,
+                        groups=new_num_latent_queries,
+                        bias=False,
+                    ),
+                    # Output: [BS, 64, 16, 768].
+                    Rearrange('b (q d) n -> b q n d', q=new_num_latent_queries, d=input_dim),
+                    # nn.LayerNorm(input_dim, elementwise_affine=True),
+                )
+                new_to_v[0].weight.data[:old_all_q_mid] = cross_attn.to_v[0].weight.data
+                # We couldn't reuse the old LayerNorm, as it has a different number of channels.
+                # new_to_v[1] = cross_attn.to_v[1]
+                # grouped Conv1d has a weight shape of [out_channels, in_channels], 
+                # same as non-grouped Conv1d.
+                old_out_channels = cross_attn.to_v[3].weight.shape[0]
+                new_to_v[3].weight.data[:old_out_channels:, :old_all_q_mid] = cross_attn.to_v[3].weight.data
+                new_to_v.to(cross_attn.to_v[0].weight.device)
+                cross_attn.to_v = new_to_v
+
+        # Linearly combine the latent queries to generate the output queries.
+        new_lora2hira = Lora2Hira(lora_rank=new_num_latent_queries, hira_rank=self.num_out_queries, 
+                                  output_dim=output_dim, num_modes=self.num_lora2hira_modes,
+                                  elementwise_affine=self.elementwise_affine)
+        # lora2hira[1]: nn.Linear(lora_rank, hira_rank * num_modes
+        new_lora2hira[1].weight.data[:, :self.num_latent_queries] = self.lora2hira[1].weight.data
+        new_lora2hira[3] = self.lora2hira[3]
+        new_lora2hira[4] = self.lora2hira[4]
+        new_lora2hira.to(self.lora2hira[1].weight.device)
+        self.lora2hira = new_lora2hira
+
+        type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
+        print(f"{type_sig} SubjBasisGenerator extended latent queries from {self.num_latent_queries} to {new_num_latent_queries}")
+        self.num_latent_queries = new_num_latent_queries
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
