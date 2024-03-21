@@ -7,18 +7,26 @@ import cv2
 import shutil
 import os
 import json
+import argparse
 
-gpu_id = 0
 T = 0.65
 
-base_folder  = '/data/shaohua/VGGface2_HQ_masks/'
-trash_folder = '/data/shaohua/VGGface2_HQ_masks_trash/'
+# argparse to receive base_folder and trash_folder
+parser = argparse.ArgumentParser(description='Filter faces')
+parser.add_argument('--base_folder', type=str, default='/data/shaohua/VGGface2_HQ_masks/', help='Base folder')
+parser.add_argument('--trash_folder', type=str, default='/data/shaohua/VGGface2_HQ_masks_trash/', help='Trash folder')
+parser.add_argument('--no_trash', action='store_true', help='Do not move trash images to the trash folder')
+parser.add_argument('--gpu_id', type=int, default=0, help='GPU id')
+args = parser.parse_args()
+
+base_folder  = args.base_folder
+trash_folder = args.trash_folder
 #face_encoder = insightface.model_zoo.get_model('models/insightface/model.onnx', 
 #                                               providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
 face_encoder = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
+face_encoder.prepare(ctx_id=args.gpu_id, det_size=(512, 512))
 
-face_encoder.prepare(ctx_id=gpu_id)
+face_encoder.prepare(ctx_id=args.gpu_id)
 trash_img_count = 0
 trash_mask_count = 0
 num_subjects = len(os.listdir(base_folder))
@@ -52,13 +60,18 @@ for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
 
         face_info = face_encoder.get(image_np)
         if len(face_info) == 0:
+            trash_img_count += 1
+
+            if args.no_trash:
+                print('No face detected:', image_fullpath)
+                continue
+
+            print('No face detected:', image_trash_path)
             if not os.path.exists(subj_trash_path):
                 os.makedirs(subj_trash_path)
             image_trash_path = os.path.join(subj_trash_path, os.path.basename(image_fullpath))
             # Move to trash folder
             shutil.move(image_fullpath, image_trash_path)
-            print('No face detected:', image_trash_path)
-            trash_img_count += 1
 
             mask_fullpath = image_fullpath.replace('.jpg', '_mask.png')
             if os.path.exists(mask_fullpath):
@@ -69,7 +82,7 @@ for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
         else:
             face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
             # id_emb: [512,]
-            id_emb = torch.from_numpy(face_info.normed_embedding).to(f"cuda:{gpu_id}")
+            id_emb = torch.from_numpy(face_info.normed_embedding).to(f"cuda:{args.gpu_id}")
             id_embs.append(id_emb)
             image_fullpaths.append(image_fullpath)
             gender  = face_info['gender']
@@ -119,13 +132,17 @@ for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
 
     for i, sim in enumerate(sims_to_mean):
         if sim < T:
+            trash_img_count += 1
+            if args.no_trash:
+                print(f'sim={sim:.4f}, moved to trash:', image_fullpaths[i])
+                continue
+
             if not os.path.exists(subj_trash_path):
                 os.makedirs(subj_trash_path)
             image_trash_path = os.path.join(subj_trash_path, os.path.basename(image_fullpaths[i]))
             # Move to trash folder
             shutil.move(image_fullpaths[i], image_trash_path)
             print(f'sim={sim:.4f}, moved to trash:', image_trash_path)
-            trash_img_count += 1
             mask_fullpath = image_fullpaths[i].replace('.jpg', '_mask.png')
             if os.path.exists(mask_fullpath):
                 mask_trash_path = image_trash_path.replace('.jpg', '_mask.png')
