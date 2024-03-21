@@ -567,8 +567,10 @@ class SubjBasisGenerator(nn.Module):
                     # nn.LayerNorm(input_dim, elementwise_affine=True),
                 )
                 new_to_v[0].weight.data[:old_all_q_mid] = cross_attn.to_v[0].weight.data
-                # We couldn't reuse the old LayerNorm, as it has a different number of channels.
-                # new_to_v[1] = cross_attn.to_v[1]
+                # We couldn't directly reuse the old LayerNorm, as it has a different number of channels.
+                # But we can still reuse part of the weights and biases that correspond to the old channels.
+                new_to_v[1].weight.data[:old_all_q_mid] = cross_attn.to_v[1].weight.data
+                new_to_v[1].bias.data[:old_all_q_mid]   = cross_attn.to_v[1].bias.data
                 # grouped Conv1d has a weight shape of [out_channels, in_channels], 
                 # same as non-grouped Conv1d.
                 old_out_channels = cross_attn.to_v[3].weight.shape[0]
