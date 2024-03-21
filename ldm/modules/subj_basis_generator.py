@@ -330,7 +330,7 @@ class CrossAttention(nn.Module):
 class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
-        depth=2,                            # number of (CrossAttention, FeedForward) layers.     
+        depth=1,                            # number of (CrossAttention, FeedForward) layers.     
         # number of cross-attention heads. Half of the number of heads 12 of OpenAI clip-vit-large-patch14:
         # https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
         num_heads=6,                       

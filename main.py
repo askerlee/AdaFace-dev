@@ -270,7 +270,7 @@ def get_parser(**parser_kwargs):
                         default='openai',
                         help="Type of zero-shot learning clip model")
 
-    parser.add_argument("--zs_num_subj_generator_layers", type=int, default=2,
+    parser.add_argument("--zs_num_subj_generator_layers", type=int, default=1,
                         help="Layers (depth) of zero-shot subject feature generator")
     parser.add_argument("--zs_num_latent_queries", type=int, default=64,
                         help="Number of latent queries for the zero-shot embedding to queries mapping")    
