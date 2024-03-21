@@ -2461,7 +2461,7 @@ class LatentDiffusion(DDPM):
                     # by doing nothing to x_start.
                     if not self.iter_flags['use_wds_comp']:
                         # If do zero-shot, then don't add extra noise to the foreground.
-                        fg_noise_anneal_mean_range = (0.1, 0.4) if not self.do_zero_shot else (0, 0)
+                        fg_noise_anneal_mean_range = (0.1, 0.4) if not self.do_zero_shot else (0.1, 0.4)
                         x_start, fg_mask, filtered_fg_mask = \
                             init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
                                                                self.training_percent,
