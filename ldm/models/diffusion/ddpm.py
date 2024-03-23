@@ -2143,7 +2143,6 @@ class LatentDiffusion(DDPM):
                 # Resize image to (512, 512). The scheme is Image.NEAREST, to be consistent with 
                 # PersonalizedBase dataset class.
                 image = np.array(Image.fromarray(image).resize(size, Image.NEAREST))
-                cv2.resize(image, size, interpolation=cv2.INTER_AREA)
 
                 '''
                 face_encoder:
