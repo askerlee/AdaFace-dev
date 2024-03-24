@@ -178,7 +178,7 @@ def parse_args():
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt",
+        default="models/stable-diffusion-v-1-5/v1-5-dste8-vae.ckpt",
         help="path to checkpoint of model",
     )    
     parser.add_argument(
@@ -291,9 +291,6 @@ def parse_args():
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning")                    
-    parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
-                        default='openai',
-                        help="Type of zero-shot learning clip model")
     parser.add_argument("--zs_apply_neg_subj_bases", type=str2bool, nargs="?", const=True, default=False,
                         help="Apply negative subject bases for zero-shot learning")
     parser.add_argument("--zs_cls_delta_string", type=str, default=None,
@@ -402,12 +399,12 @@ def main(opt):
             ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
             ref_masks  = [ np.array(Image.open(ref_mask), dtype=float) for ref_mask in opt.ref_masks ] \
                             if (opt.ref_masks is not None) and (not opt.ignore_ref_masks) else None
+            zs_clip_type = 'openai'
             # image_emb_dim is not the output dim but the second last layer dim. 
             # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
             zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
-            zs_image_emb_dim = zs_clip_type2image_emb_dim[opt.zs_clip_type]            
+            zs_image_emb_dim = zs_clip_type2image_emb_dim[zs_clip_type]            
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
-            config.model.params.zs_clip_type = opt.zs_clip_type
             config.model.params.personalization_config.params.zs_apply_neg_subj_bases = opt.zs_apply_neg_subj_bases
             config.model.params.personalization_config.params.zs_cls_delta_string = opt.zs_cls_delta_string
         else:

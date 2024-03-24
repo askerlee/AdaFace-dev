@@ -40,7 +40,8 @@ model:
         prompt_embedding_clamp_value:    -1
                 
     unet_config:
-      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      #target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      target: ldm.models.diffusion.ddpm.DiffuserUNetWrapper
       params:
         image_size: 32 # unused
         in_channels: 4

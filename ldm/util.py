@@ -21,6 +21,7 @@ import random, math
 from torch.optim.lr_scheduler import SequentialLR
 from bisect import bisect_right
 import cv2
+
 class SequentialLR2(SequentialLR):
     def step(self):
         self.last_epoch += 1
@@ -1089,6 +1090,79 @@ def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1,
     scaled_text_embedding = scaled_text_embedding.reshape(text_embedding_shape)
 
     return scaled_text_embedding
+
+@torch.no_grad()
+def arc2face_project_face_embs(tokenizer, text_encoder, face_embs):
+
+    '''
+    face_embs: (N, 512) normalized ArcFace embeddings
+    '''
+
+    arcface_token_id = tokenizer.encode("id", add_special_tokens=False)[0]
+
+    input_ids = tokenizer(
+            "photo of a id person",
+            truncation=True,
+            padding="max_length",
+            max_length=tokenizer.model_max_length,
+            return_tensors="pt",
+        ).input_ids.to(face_embs.device)
+
+    face_embs_padded = F.pad(face_embs, (0, text_encoder.config.hidden_size-512), "constant", 0)
+    token_embs = text_encoder(input_ids=input_ids.repeat(len(face_embs), 1), return_token_embs=True)
+    token_embs[input_ids==arcface_token_id] = face_embs_padded
+
+    prompt_embeds = text_encoder(
+        input_ids=input_ids,
+        input_token_embs=token_embs
+    )[0]
+
+    return prompt_embeds
+
+def get_id_prompt_embs_from_images(face_app, tokenizer, text_encoder, 
+                                   image_folder, image_paths, 
+                                   max_image_count=5, randface=False, noise_level=0.0):
+    if not randface:
+        image_count = 0
+        faceid_embeds = []
+        for image_path in image_paths:
+            image_np = cv2.imread(image_path)
+            #image_np = np.array(Image.open(image_path))
+            #image_np2 = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+            face_infos = face_app.get(image_np)
+            print(image_path, len(face_infos))
+            if len(face_infos) == 0:
+                continue
+            # only use the maximum face
+            face_info = sorted(face_infos, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1]
+            # Each faceid_embed: [1, 512]
+            faceid_embeds.append(torch.from_numpy(face_info.normed_embedding).unsqueeze(0))
+            image_count += 1
+            if image_count >= max_image_count:
+                break
+
+        print(f"Extracted ID embeddings from {image_count} images in {image_folder}")
+        if len(faceid_embeds) == 0:
+            print("No face detected")
+            breakpoint()
+
+        # faceid_embeds: [10, 512]
+        faceid_embeds = torch.cat(faceid_embeds, dim=0)
+        faceid_embeds += torch.randn_like(faceid_embeds) * noise_level
+        # faceid_embeds: [1, 512]. 
+        # and the resulted prompt embeddings are the same.
+        faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True).to(torch.float16).to('cuda')
+
+    else:
+        faceid_embeds = torch.randn(1, 512).to(torch.float16).to('cuda')
+
+    faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
+
+    # id_prompt_emb: [1, 77, 768]
+    id_prompt_emb = arc2face_project_face_embs(tokenizer, text_encoder, faceid_embeds)    # pass through the encoder
+    neg_id_prompt_emb = arc2face_project_face_embs(tokenizer, text_encoder, torch.zeros_like(faceid_embeds))    # pass through the encoder
+
+    return id_prompt_emb, neg_id_prompt_emb
 
 # Revised from RevGrad, by removing the grad negation.
 class ScaleGrad(torch.autograd.Function):

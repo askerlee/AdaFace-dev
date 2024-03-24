@@ -263,13 +263,6 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning")
-    parser.add_argument("--same_subject_in_each_batch", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether each batch only contains one particular subject (default: multiple subjects)")
-    
-    parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
-                        default='openai',
-                        help="Type of zero-shot learning clip model")
-
     parser.add_argument("--zs_num_subj_generator_layers", type=int, default=1,
                         help="Layers (depth) of zero-shot subject feature generator")
     parser.add_argument("--zs_num_latent_queries", type=int, default=64,
@@ -464,7 +457,7 @@ def worker_init_fn(_):
 class DataModuleFromConfig(pl.LightningDataModule):
     # train, validation: the corresponding section in the config file,
     # used by instantiate_from_config(self.dataset_configs[k]).
-    def __init__(self, batch_size, max_steps, same_subject_in_each_batch=True, train=None, validation=None, test=None, predict=None,
+    def __init__(self, batch_size, max_steps, same_subject_in_each_batch=False, train=None, validation=None, test=None, predict=None,
                  wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
                  shuffle_val_dataloader=False):
         super().__init__()
@@ -941,7 +934,7 @@ if __name__ == "__main__":
 
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
-        config.model.params.same_subject_in_each_batch = opt.same_subject_in_each_batch
+        config.model.params.same_subject_in_each_batch      = False
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
         config.data.params.train.params.do_zero_shot        = opt.zeroshot
         config.data.params.validation.params.do_zero_shot   = opt.zeroshot
@@ -950,12 +943,12 @@ if __name__ == "__main__":
         device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
 
         if opt.zeroshot:
+            zs_clip_type = 'openai'
             # image_emb_dim is not the output dim but the second last layer dim. 
             # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
             zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
-            zs_image_emb_dim = zs_clip_type2image_emb_dim[opt.zs_clip_type]
+            zs_image_emb_dim = zs_clip_type2image_emb_dim[zs_clip_type]
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
-            config.model.params.zs_clip_type = opt.zs_clip_type
 
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
             config.model.params.personalization_config.params.zs_num_subj_generator_layers   = opt.zs_num_subj_generator_layers
@@ -968,7 +961,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_face_proj_in_grad_scale = opt.zs_face_proj_in_grad_scale
             
             # When using zero-shot, we load different subjects in the same batch.
-            config.data.params.same_subject_in_each_batch = opt.same_subject_in_each_batch
+            config.data.params.same_subject_in_each_batch = False
         
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)

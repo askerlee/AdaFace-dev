@@ -42,9 +42,6 @@ def parse_args():
  
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning")
-    parser.add_argument("--zs_clip_type", type=str, choices=['openai', 'laion'],
-                        default='openai',
-                        help="Type of zero-shot learning clip model")
     parser.add_argument("--zs_apply_neg_subj_bases", type=str2bool, nargs="?", const=True, default=False,
                         help="Apply negative subject bases for zero-shot learning")    
     parser.add_argument("--zs_cls_delta_string", type=str, default=None,
@@ -482,7 +479,7 @@ if __name__ == "__main__":
             if isinstance(args.ref_masks, (list, tuple)):
                 args.ref_masks  = " ".join(args.ref_masks)
 
-            command_line += f" --zeroshot --zs_clip_type {args.zs_clip_type} --ref_images {args.ref_images}"
+            command_line += f" --zeroshot --ref_images {args.ref_images}"
             if args.ref_masks is not None:
                 command_line += f" --ref_masks {args.ref_masks}"
             if args.ignore_ref_masks:

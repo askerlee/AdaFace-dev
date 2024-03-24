@@ -134,8 +134,8 @@ class DDPM(pl.LightningModule):
                  prompt_embedding_clamp_value=-1,
                  normalize_ca_q_and_outfeat=True,
                  do_zero_shot=False,
-                 zs_clip_type='openai',
-                 same_subject_in_each_batch=True
+                 same_subject_in_each_batch=False,
+                 arc2face_iter_prob=0.5,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -181,7 +181,7 @@ class DDPM(pl.LightningModule):
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
         self.do_zero_shot                           = do_zero_shot
-
+        self.arc2face_iter_prob                     = arc2face_iter_prob if do_zero_shot else 0
         self.same_subject_in_each_batch             = same_subject_in_each_batch
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
@@ -189,7 +189,6 @@ class DDPM(pl.LightningModule):
         self.face_encoder                           = None
         self.dino_encoder                           = None
         self.zs_image_encoder_instantiated          = False
-        self.zs_clip_type                           = zs_clip_type
 
         self.cached_inits = {}
         self.init_iteration_flags()
@@ -488,6 +487,7 @@ class DDPM(pl.LightningModule):
     def init_iteration_flags(self):
         self.iter_flags = { 'calc_clip_loss':               False,
                             'do_normal_recon':              True,
+                            'do_arc2face_distill':          False,
                             'is_compos_iter':               False,
                             'do_mix_prompt_distillation':   False,
                             'do_ada_prompt_delta_reg':         False,
@@ -561,6 +561,10 @@ class DDPM(pl.LightningModule):
                 # This is to monitor how well the model performs on compositionality.
                 self.iter_flags['calc_clip_loss']   = True
                 self.iter_flags['do_normal_recon']  = False
+
+        if self.iter_flags['do_normal_recon'] and self.arc2face_iter_prob > 0:
+            if np.random.rand() < self.arc2face_iter_prob:
+                self.iter_flags['do_arc2face_distill'] = True
 
         if self.is_dreambooth:
             # DreamBooth uses ConcatDataset to make batch a tuple of train_batch and reg_batch.
@@ -876,7 +880,7 @@ class LatentDiffusion(DDPM):
         
         return model
 
-    def instantiate_zero_shot_image_encoders(self, clip_type):
+    def instantiate_zero_shot_image_encoders(self, clip_type='openai'):
         if clip_type == 'laion':
             clip_model_tag = 'laion/CLIP-ViT-H-14-laion2B-s32B-b79K'
         else:
@@ -2121,7 +2125,7 @@ class LatentDiffusion(DDPM):
     def encode_zero_shot_image_features(self, images, fg_masks, is_face, size=(512, 512), 
                                         calc_avg=False, image_paths=None):
         if not self.zs_image_encoder_instantiated:
-            self.instantiate_zero_shot_image_encoders(self.zs_clip_type)
+            self.instantiate_zero_shot_image_encoders()
 
         # Must call self.instantiate_zero_shot_image_encoders() before calling this function.
         image_pixel_values = []
@@ -2659,8 +2663,18 @@ class LatentDiffusion(DDPM):
                 t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0),
                                        keep_prob_range=(0.5, 0.3))
             else:
+                # Increase t slightly to increase noise amount and make the denoising more challenging.
+                # This branch includes the 'do_arc2face_distill' iterations.
                 t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
                                        keep_prob_range=(0.5, 0.3))
+
+                if self.iter_flags['do_arc2face_distill']:
+                    img_mask = None
+                    # In arc2face distillation, we don't need to consider the fg_mask.
+                    fg_mask = None
+                    batch_have_fg_mask[:] = False
+                    x_start = torch.randn_like(x_start)
+
             # No need to update masks.
 
         extra_info['capture_distill_attn'] = not self.iter_flags['do_teacher_filter']
@@ -5226,8 +5240,26 @@ class LatentDiffusion(DDPM):
             self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, "embeddings.pt"))
             self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
 
-
-class DiffusionWrapper(pl.LightningModule):
+class DiffuserUNetWrapper(nn.Module):
+    def __init__(self, **kwargs):
+        super().__init__()
+        from diffusers import UNet2DConditionModel
+        self.unet = UNet2DConditionModel.from_pretrained(
+                        #"runwayml/stable-diffusion-v1-5", subfolder="unet"
+                        '../Arc2Face/models', subfolder="arc2face", torch_dtype=torch.float16
+                    )
+    
+    def forward(self, x, timesteps=None, context=None, y=None, 
+                context_in=None, extra_info=None):
+        pos_context, neg_context = context.chunk(2, dim=0)
+        pos_context = pos_context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
+        neg_context = neg_context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
+        context = torch.cat([pos_context, neg_context], dim=0)
+        noise_pred = self.unet(sample=x, timestep=timesteps, encoder_hidden_states=context,
+                                return_dict=False)[0]
+        return noise_pred
+    
+class DiffusionWrapper(pl.LightningModule): 
     def __init__(self, diff_model_config, conditioning_key):
         super().__init__()
         # diffusion_model: UNetModel

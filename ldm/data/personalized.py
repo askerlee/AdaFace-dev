@@ -943,7 +943,7 @@ class PersonalizedBase(Dataset):
 # due to randomness in the DDPM model (?), soon the sampled subjects will be different on different GPUs.
 class SubjectSampler(Sampler):
     def __init__(self, num_subjects, subject_names, num_batches, batch_size, replay_buffer_size=20, p_replay=0.2,
-                 same_subject_in_each_batch=True, debug=False):
+                 same_subject_in_each_batch=False, debug=False):
         self.batch_size = batch_size
         # num_batches: +1 to make sure the last batch is also used.
         self.num_batches  = num_batches + 1
