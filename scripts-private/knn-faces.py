@@ -14,7 +14,7 @@ T = 0.65
 
 base_folder  = '/data/shaohua/VGGface2_HQ_masks/'
 ip_model_ckpt_path = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
-face_encoder = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+face_encoder = FaceAnalysis(name="antelopev2", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
 face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
 face_proj_in = IP_MLPProjModel(cross_attention_dim=768, 
                                id_embeddings_dim=512, num_tokens=16)

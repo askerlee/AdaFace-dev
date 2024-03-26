@@ -23,7 +23,7 @@ from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
-from transformers import CLIPImageProcessor, ViTFeatureExtractor, ViTModel
+from transformers import CLIPImageProcessor, CLIPTokenizer, ViTFeatureExtractor, ViTModel
 from insightface.app import FaceAnalysis
 
 from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
@@ -39,7 +39,8 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
                         gen_comp_extra_indices_by_block, extend_indices_B_by_n_times, \
                         split_indices_by_instance, repeat_selected_instances, \
-                        anneal_t_keep_prob, anneal_value, gen_cfg_scales_for_stu_tea
+                        anneal_t_keep_prob, anneal_value, gen_cfg_scales_for_stu_tea, \
+                        get_arc2face_id_prompt_embs
                                               
 
 from ldm.modules.ema import LitEma
@@ -203,6 +204,9 @@ class DDPM(pl.LightningModule):
         self.is_dreambooth                  = False
 
         self.model = DiffusionWrapper(unet_config, conditioning_key)
+        if self.arc2face_iter_prob > 0:
+            self.arc2face = Arc2FaceWrapper()
+
         count_params(self.model, verbose=True)
         self.use_ema = use_ema
         if self.use_ema:
@@ -902,7 +906,8 @@ class LatentDiffusion(DDPM):
          'genderage': <insightface.model_zoo.attribute.Attribute object at 0x7f8e3f0cc1f0>, 
          'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
         '''
-        self.face_encoder = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        # Use the same model as Arc2Face.
+        self.face_encoder = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
 
         self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
@@ -1547,6 +1552,9 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['use_wds_comp']:
                     # At 95% of the time, use background tokens in recon iters if use_wds_comp.
                     p_use_background_token  = 0.95
+                elif self.iter_flags['do_arc2face_distill']:
+                    # If do_arc2face_distill, then disable the background token.
+                    p_use_background_token  = 0
                 else:
                     # To avoid the backgound token taking too much of the foreground, 
                     # we only use the background token on 90% of the training images, to 
@@ -1687,7 +1695,10 @@ class LatentDiffusion(DDPM):
         else:
             self.iter_flags['same_subject_in_batch'] = self.same_subject_in_each_batch
 
-        self.batch_subject_names = batch['subject_name']
+        if not self.iter_flags['do_arc2face_distill']:
+            self.batch_subject_names = batch['subject_name']
+        else:
+            self.batch_subject_names = [ "arc2face" ] * len(batch['subject_name'])
         # Currently, only one subject name is allowed in the batch.
         self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names)
         print(self.batch_subject_names)
@@ -1706,16 +1717,35 @@ class LatentDiffusion(DDPM):
             images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
             image_paths = batch["image_path"]
 
-            # If self.iter_flags['same_subject_in_batch']:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
-            # Otherwise:                      zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
-            # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_features and zs_id_embs to get 
-            # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
-            zs_clip_features, zs_id_embs = self.encode_zero_shot_image_features(images, fg_mask.squeeze(1),
-                                                                                # iter_flags['is_face'] is a list of 0/1 elements.
-                                                                                is_face=self.iter_flags['is_face'][0],
-                                                                                calc_avg=self.iter_flags['same_subject_in_batch'],
-                                                                                image_paths=image_paths)
-            
+            if not self.iter_flags['do_arc2face_distill']:
+                # If self.iter_flags['same_subject_in_batch']:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
+                # Otherwise:                      zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
+                # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_features and zs_id_embs to get 
+                # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
+                zs_clip_features, zs_id_embs = self.encode_zero_shot_image_features(images, fg_mask.squeeze(1),
+                                                                                    # iter_flags['is_face'] is a list of 0/1 elements.
+                                                                                    is_face=self.iter_flags['is_face'][0],
+                                                                                    calc_avg=self.iter_flags['same_subject_in_batch'],
+                                                                                    image_paths=image_paths)
+
+            else:
+                zs_clip_features = torch.zeros(x_start.shape[0], 514, 1280).to(x_start.device)
+                # zs_id_embs: [4, 512]. arc2face_pos_prompt_emb: [4, 77, 768]
+                zs_id_embs, arc2face_pos_prompt_emb = self.arc2face.gen_rand_arc2face_id_prompt_embs(images.shape[0],
+                                                                                                     gen_neg_prompt=False)
+                # During training, zs_id_embs, arc2face_pos_prompt_emb are float16, but x_start is float32.
+                zs_id_embs = zs_id_embs.to(x_start.dtype)
+                arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.to(x_start.dtype)
+                # arc2face_pos_prompt_emb is used to condition self.arc2face to do teacher denoising.
+                self.iter_flags['arc2face_prompt_emb'] = arc2face_pos_prompt_emb
+                # In arc2face distillation, we don't need to consider img_mask and fg_mask.
+                self.iter_flags['img_mask'] = None
+                self.iter_flags['fg_mask']  = None
+                self.iter_flags['batch_have_fg_mask'][:] = False
+                # Simply denoise a totally random x_start with arc2face_pos_prompt_emb.
+                x_start = torch.randn_like(x_start)
+
+
             '''
             # Sanity check for zs_id_embs.
             mean_emb = batch["mean_emb"]
@@ -2663,17 +2693,10 @@ class LatentDiffusion(DDPM):
                 t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0),
                                        keep_prob_range=(0.5, 0.3))
             else:
-                # Increase t slightly to increase noise amount and make the denoising more challenging.
+                # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging.
                 # This branch includes the 'do_arc2face_distill' iterations.
                 t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
                                        keep_prob_range=(0.5, 0.3))
-
-                if self.iter_flags['do_arc2face_distill']:
-                    img_mask = None
-                    # In arc2face distillation, we don't need to consider the fg_mask.
-                    fg_mask = None
-                    batch_have_fg_mask[:] = False
-                    x_start = torch.randn_like(x_start)
 
             # No need to update masks.
 
@@ -2729,11 +2752,18 @@ class LatentDiffusion(DDPM):
         loss = 0
                                 
         if self.iter_flags['do_normal_recon']:
-            loss += self.calc_normal_recon_losses(x_start, model_output, target, extra_info,
-                                                  all_subj_indices, all_bg_indices,
-                                                  img_mask, fg_mask, batch_have_fg_mask,
-                                                  loss_dict, prefix)
-            
+            if not self.iter_flags['do_arc2face_distill']:
+                loss += self.calc_recon_and_complem_losses(model_output, target, extra_info,
+                                                           all_subj_indices, all_bg_indices,
+                                                           img_mask, fg_mask, batch_have_fg_mask,
+                                                           x_start.shape[0], loss_dict, prefix)
+            else:
+                # Use the predicted noise by arc2face as the target.
+                # target: [4, 4, 64, 64].
+                target = self.arc2face(x_start, t, self.iter_flags['arc2face_prompt_emb'],
+                                       batch_contains_neg_instances=False)
+                loss += self.get_loss(model_output, target.to(model_output.dtype), mean=True)
+
         ###### begin of preparation for is_compos_iter ######
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
         if self.iter_flags['is_compos_iter'] and self.iter_flags['calc_clip_loss']:
@@ -3281,35 +3311,12 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    # pixel-wise recon loss. 
-    # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
-    # img_mask, fg_mask: [2, 1, 64, 64].
-    # model_output, target: [2, 4, 64, 64]
-    def calc_recon_loss(self, model_output, target, img_mask, fg_mask, 
-                        fg_pixel_weight=1, bg_pixel_weight=1):
-        # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-        model_output = model_output * img_mask
-        target       = target       * img_mask
-        loss_recon_pixels = self.get_loss(model_output, target, mean=False)
-
-        # fg_mask,              weighted_fg_mask.sum(): 1747, 1747
-        # bg_mask=(1-fg_mask),  weighted_fg_mask.sum(): 6445, 887
-        weighted_fg_mask = fg_mask       * img_mask * fg_pixel_weight
-        weighted_bg_mask = (1 - fg_mask) * img_mask * bg_pixel_weight
-        weighted_fg_mask = weighted_fg_mask.expand_as(loss_recon_pixels)
-        weighted_bg_mask = weighted_bg_mask.expand_as(loss_recon_pixels)
-
-        loss_recon = (  (loss_recon_pixels * weighted_fg_mask).sum()     \
-                      + (loss_recon_pixels * weighted_bg_mask).sum() )   \
-                     / (weighted_fg_mask.sum() + weighted_bg_mask.sum())
-
-        return loss_recon, loss_recon_pixels
-    
-    # Major losses for normal_recon iterations. 
+    # Major losses for normal_recon iterations (loss_recon, loss_fg_bg_complementary, etc.).
     # (But there are still other losses used after calling this function.)
-    def calc_normal_recon_losses(self, x_start, model_output, target, extra_info,
-                                 all_subj_indices, all_bg_indices,
-                                 img_mask, fg_mask, batch_have_fg_mask, loss_dict, prefix):
+    def calc_recon_and_complem_losses(self, model_output, target, extra_info,
+                                      all_subj_indices, all_bg_indices,
+                                      img_mask, fg_mask, batch_have_fg_mask, 
+                                      BLOCK_SIZE, loss_dict, prefix):
         loss = 0
 
         if self.fg_bg_complementary_loss_weight > 0:
@@ -3324,7 +3331,7 @@ class LatentDiffusion(DDPM):
                         self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attnscore'],
                                                             all_subj_indices,
                                                             all_bg_indices,
-                                                            BLOCK_SIZE=x_start.shape[0],
+                                                            BLOCK_SIZE=BLOCK_SIZE,
                                                             fg_grad_scale=0.1,
                                                             fg_mask=fg_mask,
                                                             instance_mask=batch_have_fg_mask,
@@ -3379,7 +3386,7 @@ class LatentDiffusion(DDPM):
                         self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attnscore'],
                                                             subj_indices_ext,
                                                             wds_comp_extra_indices,
-                                                            BLOCK_SIZE=x_start.shape[0],
+                                                            BLOCK_SIZE=BLOCK_SIZE,
                                                             fg_grad_scale=0.1, 
                                                             fg_mask=fg_mask,
                                                             instance_mask=batch_have_fg_mask,
@@ -3434,6 +3441,36 @@ class LatentDiffusion(DDPM):
 
         return loss
 
+    # pixel-wise recon loss, weighted by fg_pixel_weight and bg_pixel_weight separately.
+    # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
+    # img_mask, fg_mask:    [BS, 1, 64, 64] or None.
+    # model_output, target: [BS, 4, 64, 64].
+    def calc_recon_loss(self, model_output, target, img_mask, fg_mask, 
+                        fg_pixel_weight=1, bg_pixel_weight=1):
+
+        if img_mask is None:
+            img_mask = torch.ones_like(model_output)
+        if fg_mask is None:
+            fg_mask = torch.ones_like(model_output)
+        
+        # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+        model_output = model_output * img_mask
+        target       = target       * img_mask
+        loss_recon_pixels = self.get_loss(model_output, target, mean=False)
+
+        # fg_mask,              weighted_fg_mask.sum(): 1747, 1747
+        # bg_mask=(1-fg_mask),  weighted_fg_mask.sum(): 6445, 887
+        weighted_fg_mask = fg_mask       * img_mask * fg_pixel_weight
+        weighted_bg_mask = (1 - fg_mask) * img_mask * bg_pixel_weight
+        weighted_fg_mask = weighted_fg_mask.expand_as(loss_recon_pixels)
+        weighted_bg_mask = weighted_bg_mask.expand_as(loss_recon_pixels)
+
+        loss_recon = (  (loss_recon_pixels * weighted_fg_mask).sum()     \
+                      + (loss_recon_pixels * weighted_bg_mask).sum() )   \
+                     / (weighted_fg_mask.sum() + weighted_bg_mask.sum())
+
+        return loss_recon, loss_recon_pixels
+    
     def calc_clip_losses(self, x_recon, extra_info, loss_dict, prefix):
         # Images generated both under subj_comp_prompts and cls_comp_prompts 
         # are subject to the CLIP text-image matching evaluation.
@@ -5240,22 +5277,53 @@ class LatentDiffusion(DDPM):
             self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, "embeddings.pt"))
             self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
 
-class DiffuserUNetWrapper(nn.Module):
+class Arc2FaceWrapper(pl.LightningModule):
     def __init__(self, **kwargs):
         super().__init__()
         from diffusers import UNet2DConditionModel
+        from arc2face.arc2face import CLIPTextModelWrapper
         self.unet = UNet2DConditionModel.from_pretrained(
                         #"runwayml/stable-diffusion-v1-5", subfolder="unet"
-                        '../Arc2Face/models', subfolder="arc2face", torch_dtype=torch.float16
+                        'arc2face/models', subfolder="arc2face", torch_dtype=torch.float16
                     )
+        self.text_encoder = CLIPTextModelWrapper.from_pretrained(
+                            'arc2face/models', subfolder="encoder", torch_dtype=torch.float16
+                            )
+        self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+
+    def gen_rand_arc2face_id_prompt_embs(self, batch_size, gen_neg_prompt=False):
+        # Returns faceid_embeds, arc2face_pos_prompt_emb.
+        return get_arc2face_id_prompt_embs(None, self.tokenizer, self.text_encoder,
+                                           image_folder=None, image_paths=None,
+                                           images_np=None, max_image_count=batch_size,
+                                           device=self.device,
+                                           rand_face=True, noise_level=0, 
+                                           gen_neg_prompt=gen_neg_prompt, verbose=False)
     
+    # Keep compatible with the original openaimodel.UNetModel:forward().
+    # Only used for inference/distillation, so no_grad() is used.
+    @torch.no_grad()
     def forward(self, x, timesteps=None, context=None, y=None, 
-                context_in=None, extra_info=None):
-        pos_context, neg_context = context.chunk(2, dim=0)
-        pos_context = pos_context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
-        neg_context = neg_context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
-        context = torch.cat([pos_context, neg_context], dim=0)
-        noise_pred = self.unet(sample=x, timestep=timesteps, encoder_hidden_states=context,
+                context_in=None, extra_info=None, batch_contains_neg_instances=False):
+        with torch.autocast(device_type='cuda', dtype=torch.float16):            
+            if batch_contains_neg_instances:
+                # Batch contains half positive, half negative instances.
+                pos_context, neg_context = context.chunk(2, dim=0)
+                # Either context.shape[0] == x.shape[0] * 16, or context.shape[0] == x.shape[0].
+                if context.shape[0] == x.shape[0] * 16:
+                    pos_context = pos_context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
+                    neg_context = neg_context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
+                elif context.shape[0] != x.shape[0]:
+                    breakpoint()
+
+                context = torch.cat([pos_context, neg_context], dim=0)
+            else:
+                # Batch only contains positive instances. No need to split.
+                # Either context.shape[0] == x.shape[0] * 16, or context.shape[0] == x.shape[0].
+                if context.shape[0] == x.shape[0] * 16:
+                    context = context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
+                
+            noise_pred = self.unet(sample=x, timestep=timesteps, encoder_hidden_states=context,
                                 return_dict=False)[0]
         return noise_pred
     

@@ -1294,6 +1294,8 @@ class EmbeddingManager(nn.Module):
         # subj_name_to_being_faces is used in ddpm.py and not here.
         self.subj_name_to_being_faces = subj_name_to_being_faces if subj_name_to_being_faces is not None \
                                             else {subj_name: True for subj_name in self.subject_strings}
+        self.subj_name_to_being_faces['arc2face'] = True
+
         # zs_image_feat_dict have three keys: 'subj', 'bg', 'id'.
         self.zs_image_feat_dict = {}
         self.zs_apply_neg_subj_bases = zs_apply_neg_subj_bases
@@ -1308,20 +1310,26 @@ class EmbeddingManager(nn.Module):
 
     def init_cls_delta_tokens(self, get_tokens_for_string, get_embeddings_for_tokens, 
                               subj_name_to_cls_delta_string, subj_name_to_cls_delta_word_weights):
+        if subj_name_to_cls_delta_string is None:
+            subj_name_to_cls_delta_string = {}
+        if subj_name_to_cls_delta_word_weights is None:
+            subj_name_to_cls_delta_word_weights = {}
+        
+        # We don't know the gender of a random arc2face subject.
+        subj_name_to_cls_delta_string['arc2face'] = 'person'
+        subj_name_to_cls_delta_word_weights['arc2face'] = [1]
+
         self.subj_name_to_cls_delta_string  = subj_name_to_cls_delta_string
         self.subj_name_to_cls_delta_tokens  = {}
         self.subj_name_to_cls_delta_token_weights = {}
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = 0
 
-        if subj_name_to_cls_delta_string is None:
-            return
-
         # subj_name_to_cls_delta_word_weights is of type omegaconf. If without convertion to dict,
         # "subj_name_to_cls_delta_token_weights[subj_name] = cls_delta_token_weights" will throw an error.
         self.subj_name_to_cls_delta_token_weights = dict(subj_name_to_cls_delta_word_weights)
 
-        for subj_name in subj_name_to_cls_delta_string:
-            cls_delta_string = subj_name_to_cls_delta_string[subj_name]
+        for subj_name in self.subj_name_to_cls_delta_string:
+            cls_delta_string = self.subj_name_to_cls_delta_string[subj_name]
             cls_delta_token_weights = subj_name_to_cls_delta_word_weights[subj_name]
             cls_delta_tokens, cls_delta_token_weights, _, _ = \
                 calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
@@ -1580,6 +1588,7 @@ class EmbeddingManager(nn.Module):
 
                     # zs_clip_features: [BS, 257, 1280]
                     # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
+                    #print(f"zs_clip_features: {zs_clip_features.shape}, zs_id_embs: {zs_id_embs.shape}")
                     zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs, 
                                                          extra_token_embs=cls_delta_embeddings, 
                                                          is_face=self.curr_subj_is_face,

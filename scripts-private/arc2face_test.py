@@ -5,8 +5,8 @@ from diffusers import (
     UNet2DConditionModel,
     DDIMScheduler,
 )
-from transformers import CLIPTextModel
-from arc2face import CLIPTextModelWrapper
+from transformers import CLIPTextModel, CLIPTokenizer
+from arc2face.arc2face import CLIPTextModelWrapper
 from insightface.app import FaceAnalysis
 
 import torch
@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from PIL import Image
 import numpy as np
 import os, argparse, sys, glob, cv2
-from ldm.util import get_id_prompt_embs_from_images
+from ldm.util import get_arc2face_id_prompt_embs
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -30,13 +30,14 @@ if __name__ == "__main__":
     base_model = 'runwayml/stable-diffusion-v1-5'
 
     text_encoder = CLIPTextModelWrapper.from_pretrained(
-        'models', subfolder="encoder", torch_dtype=torch.float16
+        'arc2face/models', subfolder="encoder", torch_dtype=torch.float16
     )
-
+    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+    
     orig_text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16).to("cuda") 
 
     unet = UNet2DConditionModel.from_pretrained(
-        'models', subfolder="arc2face", torch_dtype=torch.float16
+        'arc2face/models', subfolder="arc2face", torch_dtype=torch.float16
     )
 
     pipeline = StableDiffusionPipeline.from_pretrained(
@@ -77,14 +78,18 @@ if __name__ == "__main__":
         subject_name = "randface"
         image_paths = None
 
-    face_app = FaceAnalysis(name='antelopev2', root='./', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+    face_app = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
     face_app.prepare(ctx_id=0, det_size=(512, 512))
 
-    id_prompt_emb, neg_id_prompt_emb = get_id_prompt_embs_from_images(face_app, pipeline.tokenizer, text_encoder,
-                                                                      image_folder, image_paths, 
-                                                                      max_image_count=args.image_count, 
-                                                                      randface=args.randface, 
-                                                                      noise_level=args.noise)
+    faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
+        = get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
+                                      image_folder, image_paths, 
+                                      images_np=None,
+                                      max_image_count=args.image_count, 
+                                      device='cuda',
+                                      rand_face=args.randface, 
+                                      noise_level=args.noise,
+                                      verbose=True)
 
 
     pipeline.text_encoder = orig_text_encoder
@@ -110,8 +115,7 @@ if __name__ == "__main__":
                     guidance_scale=3.0, 
                     num_images_per_prompt=num_images).images
 
-
-    save_dir = "samples"
+    save_dir = "samples-ada"
     os.makedirs(save_dir, exist_ok=True)
     # Save 4 images as a grid image in save_dir
     grid_image = Image.new('RGB', (512 * 2, 512 * 2))

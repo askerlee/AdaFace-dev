@@ -46,3 +46,5 @@ wds-samples
 /*.png
 /ip_adapter/*
 /ip_adapter
+arc2face/*
+arc2face

@@ -1107,9 +1107,10 @@ def arc2face_project_face_embs(tokenizer, text_encoder, face_embs):
             max_length=tokenizer.model_max_length,
             return_tensors="pt",
         ).input_ids.to(face_embs.device)
+    input_ids = input_ids.repeat(len(face_embs), 1)
 
     face_embs_padded = F.pad(face_embs, (0, text_encoder.config.hidden_size-512), "constant", 0)
-    token_embs = text_encoder(input_ids=input_ids.repeat(len(face_embs), 1), return_token_embs=True)
+    token_embs = text_encoder(input_ids=input_ids, return_token_embs=True)
     token_embs[input_ids==arcface_token_id] = face_embs_padded
 
     prompt_embeds = text_encoder(
@@ -1119,18 +1120,26 @@ def arc2face_project_face_embs(tokenizer, text_encoder, face_embs):
 
     return prompt_embeds
 
-def get_id_prompt_embs_from_images(face_app, tokenizer, text_encoder, 
-                                   image_folder, image_paths, 
-                                   max_image_count=5, randface=False, noise_level=0.0):
-    if not randface:
+def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder, 
+                                image_folder, image_paths, images_np,
+                                max_image_count, device, rand_face=False, noise_level=0.0,
+                                gen_neg_prompt=True, verbose=False):
+    if not rand_face:
         image_count = 0
         faceid_embeds = []
-        for image_path in image_paths:
-            image_np = cv2.imread(image_path)
-            #image_np = np.array(Image.open(image_path))
-            #image_np2 = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+        if image_paths is not None:
+            images_np = []
+            for image_path in image_paths:
+                image_np = np.array(Image.open(image_path))
+                images_np.append(image_np)
+
+        for i, image_np in enumerate(images_np):
+            image_obj = Image.fromarray(image_np).resize((512, 512), Image.NEAREST)
+            image_np = cv2.cvtColor(np.array(image_obj), cv2.COLOR_RGB2BGR)
+
             face_infos = face_app.get(image_np)
-            print(image_path, len(face_infos))
+            if verbose and image_paths is not None:
+                print(image_paths[i], len(face_infos))
             if len(face_infos) == 0:
                 continue
             # only use the maximum face
@@ -1141,7 +1150,9 @@ def get_id_prompt_embs_from_images(face_app, tokenizer, text_encoder,
             if image_count >= max_image_count:
                 break
 
-        print(f"Extracted ID embeddings from {image_count} images in {image_folder}")
+        if verbose and image_folder is not None:
+            print(f"Extracted ID embeddings from {image_count} images in {image_folder}")
+
         if len(faceid_embeds) == 0:
             print("No face detected")
             breakpoint()
@@ -1151,19 +1162,21 @@ def get_id_prompt_embs_from_images(face_app, tokenizer, text_encoder,
         faceid_embeds += torch.randn_like(faceid_embeds) * noise_level
         # faceid_embeds: [1, 512]. 
         # and the resulted prompt embeddings are the same.
-        faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True).to(torch.float16).to('cuda')
+        faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True).to(torch.float16).to(device)
 
     else:
-        faceid_embeds = torch.randn(1, 512).to(torch.float16).to('cuda')
+        faceid_embeds = torch.randn(max_image_count, 512).to(torch.float16).to(device)
 
     faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
 
-    # id_prompt_emb: [1, 77, 768]
-    id_prompt_emb = arc2face_project_face_embs(tokenizer, text_encoder, faceid_embeds)    # pass through the encoder
-    neg_id_prompt_emb = arc2face_project_face_embs(tokenizer, text_encoder, torch.zeros_like(faceid_embeds))    # pass through the encoder
-
-    return id_prompt_emb, neg_id_prompt_emb
-
+    # arc2face_pos_prompt_emb, arc2face_neg_prompt_emb: [1, 77, 768]
+    arc2face_pos_prompt_emb   = arc2face_project_face_embs(tokenizer, text_encoder, faceid_embeds)
+    if gen_neg_prompt:
+        arc2face_neg_prompt_emb   = arc2face_project_face_embs(tokenizer, text_encoder, torch.zeros_like(faceid_embeds))
+        return faceid_embeds, arc2face_pos_prompt_emb, arc2face_neg_prompt_emb
+    else:
+        return faceid_embeds, arc2face_pos_prompt_emb
+    
 # Revised from RevGrad, by removing the grad negation.
 class ScaleGrad(torch.autograd.Function):
     @staticmethod

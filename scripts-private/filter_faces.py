@@ -23,7 +23,7 @@ base_folder  = args.base_folder
 trash_folder = args.trash_folder
 #face_encoder = insightface.model_zoo.get_model('models/insightface/model.onnx', 
 #                                               providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-face_encoder = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+face_encoder = FaceAnalysis(name="antelopev2", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
 face_encoder.prepare(ctx_id=args.gpu_id, det_size=(512, 512))
 
 face_encoder.prepare(ctx_id=args.gpu_id)
