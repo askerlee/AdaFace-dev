@@ -27,7 +27,6 @@ print(f"Subj face_proj_in is loaded from {ip_model_ckpt_path}")
 trash_img_count = 0
 trash_mask_count = 0
 num_subjects = len(os.listdir(base_folder))
-print(f'num_subjects={num_subjects}')
 resumed_subj_folder = None 
 resumed = True
 
@@ -60,12 +59,10 @@ for noise_std in [0.00, 0.01, 0.02, 0.03, 0.04, 0.05]:
     face_proj_embs = torch.cat(face_proj_embs, dim=0)
     mean_face_proj_emb = face_proj_embs.mean(dim=0, keepdim=True)
 
-    '''
     if noise_std == 0:
         # Saved mean_face_proj_emb: [16, 768].
         torch.save(mean_face_proj_emb.squeeze(0), "models/ip-adapter/mean_face_proj_emb.pt")
         print("mean_face_proj_emb is saved to models/ip-adapter/mean_face_proj_emb.pt")
-    '''
     
     face_proj_emb_mean_ratio = (face_proj_embs.abs() / (mean_face_proj_emb.abs() + 1e-6)).mean()
     print("face_proj_embs mean/ratio:")
