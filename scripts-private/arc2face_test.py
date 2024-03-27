@@ -19,7 +19,8 @@ from ldm.util import get_arc2face_id_prompt_embs
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--subject", type=str, default="/home/shaohua/adaprompt/subjects-private/xiuchao")
-    parser.add_argument("--image_count", type=int, default=5, help="Number of images to use")
+    parser.add_argument("--example_image_count", type=int, default=5, help="Number of example images to use")
+    parser.add_argument("--out_image_count",     type=int, default=4, help="Number of images to generate")
     # "a man in superman costume"
     parser.add_argument("--prompt", type=str, default="")
     parser.add_argument("--noise", type=float, default=0)
@@ -85,7 +86,8 @@ if __name__ == "__main__":
         = get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
                                       image_folder, image_paths, 
                                       images_np=None,
-                                      max_image_count=args.image_count, 
+                                      example_image_count=args.example_image_count, 
+                                      out_image_count=args.out_image_count,
                                       device='cuda',
                                       rand_face=args.randface, 
                                       noise_level=args.noise,
@@ -93,7 +95,7 @@ if __name__ == "__main__":
 
 
     pipeline.text_encoder = orig_text_encoder
-    num_images = 4
+    num_images = args.out_image_count
 
     comp_prompt = args.prompt 
 
@@ -101,19 +103,19 @@ if __name__ == "__main__":
         negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
         # prompt_embeds_, negative_prompt_embeds_: [4, 77, 768]
         prompt_embeds_, negative_prompt_embeds_ = pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt = num_images,
-                                                                        do_classifier_free_guidance=True, negative_prompt=negative_prompt)
+                                                                         do_classifier_free_guidance=True, negative_prompt=negative_prompt)
         pipeline.text_encoder = text_encoder
-        prompt_emb = torch.cat([id_prompt_emb.repeat(num_images, 1, 1), prompt_embeds_], dim=1)
-        neg_prompt_emb = torch.cat([neg_id_prompt_emb.repeat(num_images, 1, 1), negative_prompt_embeds_], dim=1)
+        pos_prompt_emb  = torch.cat([id_prompt_emb,     prompt_embeds_], dim=1)
+        neg_prompt_emb  = torch.cat([neg_id_prompt_emb, negative_prompt_embeds_], dim=1)
     else:
-        prompt_emb = id_prompt_emb
+        pos_prompt_emb = id_prompt_emb
         neg_prompt_emb = neg_id_prompt_emb
         
-    images = pipeline(prompt_embeds=prompt_emb, 
-                    negative_prompt_embeds=neg_prompt_emb,
-                    num_inference_steps=40, 
-                    guidance_scale=3.0, 
-                    num_images_per_prompt=num_images).images
+    images = pipeline(prompt_embeds=pos_prompt_emb, 
+                      negative_prompt_embeds=neg_prompt_emb,
+                      num_inference_steps=40, 
+                      guidance_scale=3.0, 
+                      num_images_per_prompt=num_images).images
 
     save_dir = "samples-ada"
     os.makedirs(save_dir, exist_ok=True)

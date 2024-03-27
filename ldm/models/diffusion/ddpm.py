@@ -5295,7 +5295,8 @@ class Arc2FaceWrapper(pl.LightningModule):
         # Returns faceid_embeds, arc2face_pos_prompt_emb.
         return get_arc2face_id_prompt_embs(None, self.tokenizer, self.text_encoder,
                                            image_folder=None, image_paths=None,
-                                           images_np=None, max_image_count=batch_size,
+                                           images_np=None, example_image_count=0,
+                                           out_image_count=batch_size,
                                            device=self.device,
                                            rand_face=True, noise_level=0, 
                                            gen_neg_prompt=gen_neg_prompt, verbose=False)
