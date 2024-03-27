@@ -356,7 +356,7 @@ class SubjBasisGenerator(nn.Module):
         mean_face_proj_emb_path: str = None, # Path to the mean face projection embedding.
         use_q_aware_to_v: bool = False,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
-        face_proj_in_grad_scale: float = 0.1, # Gradient scale for face_proj_in.
+        face_proj_in_grad_scale: float = 1,  # Gradient scale for face_proj_in.
     ):
         super().__init__()
 
