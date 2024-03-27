@@ -1018,7 +1018,8 @@ class EmbeddingManager(nn.Module):
             zs_cls_delta_string=None,
             zs_cls_delta_token_weights=None,
             zs_use_q_aware_to_v=False,
-            zs_face_proj_in_grad_scale=0.1,
+            zs_face_proj_in_grad_scale=1,
+            zs_face_proj_in_initialized_from_IP=False,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1232,9 +1233,13 @@ class EmbeddingManager(nn.Module):
                 num_out_queries = self.zs_num_vecs_per_subj if not placeholder_is_bg else self.zs_num_vecs_per_bg
                 # bg placeholder always has depth=1.
                 depth = zs_num_subj_generator_layers if not placeholder_is_bg else 1
-                ip_model_ckpt_path = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
-                mean_face_proj_emb_path = "models/ip-adapter/mean_face_proj_emb.pt"
-
+                if zs_face_proj_in_initialized_from_IP:
+                    ip_model_ckpt_path = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
+                    mean_face_proj_emb_path = "models/ip-adapter/mean_face_proj_emb.pt"
+                else:
+                    ip_model_ckpt_path = None
+                    mean_face_proj_emb_path = None
+                    
                 subj_basis_generator = SubjBasisGenerator(depth=depth,
                                                           num_latent_queries = zs_num_latent_queries,
                                                           num_out_queries = num_out_queries,
@@ -2398,8 +2403,8 @@ class EmbeddingManager(nn.Module):
                     print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                     self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
                     if not hasattr(ckpt_subj_basis_generator, 'face_proj_in_grad_scaler'):
-                        ip_model_ckpt_path = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
-                        mean_face_proj_emb_path = "models/ip-adapter/mean_face_proj_emb.pt"
+                        ip_model_ckpt_path = None #"models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
+                        mean_face_proj_emb_path = None #"models/ip-adapter/mean_face_proj_emb.pt"
                         ckpt_subj_basis_generator.init_face_proj_in(768, ip_model_ckpt_path, mean_face_proj_emb_path, 
                                                                     self.zs_face_proj_in_grad_scale, device='cpu')
                     if ckpt_subj_basis_generator.num_latent_queries < self.zs_num_latent_queries \

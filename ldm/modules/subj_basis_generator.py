@@ -526,6 +526,9 @@ class SubjBasisGenerator(nn.Module):
             # requires_grad=True, allowing being updated gradually.
             self.mean_face_proj_emb = nn.Parameter(mean_face_proj_emb, requires_grad=True)
             print(f"mean_face_proj_emb ({list(self.mean_face_proj_emb.shape)}) is loaded from {mean_face_proj_emb_path}")
+        else:
+            self.mean_face_proj_emb = nn.Parameter(torch.zeros(16, 768), requires_grad=True)
+            print("mean_face_proj_emb is initialized as 0")
 
     # q_aware_to_v_lora_rank has to be the same as the old q_aware_to_v_lora_rank.
     def extend_latent_queries(self, new_num_latent_queries, q_aware_to_v_lora_rank=64, output_dim=768):
