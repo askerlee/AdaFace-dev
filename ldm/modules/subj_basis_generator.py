@@ -523,7 +523,8 @@ class SubjBasisGenerator(nn.Module):
             # We don't need to L2-normalize mean_face_proj_emb, as it's mean of 1097 L2-normalized face embeddings.
             mean_face_proj_emb = torch.load(mean_face_proj_emb_path)
             # Wrap mean_face_proj_emb with nn.Parameter, so that it's put on the GPU automatically.
-            self.mean_face_proj_emb = nn.Parameter(mean_face_proj_emb, requires_grad=False)
+            # requires_grad=True, allowing being updated gradually.
+            self.mean_face_proj_emb = nn.Parameter(mean_face_proj_emb, requires_grad=True)
             print(f"mean_face_proj_emb ({list(self.mean_face_proj_emb.shape)}) is loaded from {mean_face_proj_emb_path}")
 
     # q_aware_to_v_lora_rank has to be the same as the old q_aware_to_v_lora_rank.

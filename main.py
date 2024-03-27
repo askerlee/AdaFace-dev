@@ -277,8 +277,7 @@ def get_parser(**parser_kwargs):
                         help="Apply negative subject bases for zero-shot learning")
     parser.add_argument("--zs_use_q_aware_to_v", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use dynamic to_v in zero-shot learning")
-    # --zs_face_proj_in_grad_scale
-    parser.add_argument("--zs_face_proj_in_grad_scale", type=float, default=0.1,
+    parser.add_argument("--zs_face_proj_in_grad_scale", type=float, default=1,
                         help="Gradient scale of the face projection in layer")
     
     parser.add_argument("--layerwise_lora_rank", 
