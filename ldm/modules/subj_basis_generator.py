@@ -497,7 +497,7 @@ class SubjBasisGenerator(nn.Module):
         return output_queries
 
     def init_face_proj_in(self, output_dim=768, ip_model_ckpt_path=None, 
-                          mean_face_proj_emb_path=None, face_proj_in_gs=0.1,
+                          mean_face_proj_emb_path=None, face_proj_in_gs=1,
                           device='cpu'):
         if self.placeholder_is_bg:
             self.face_proj_in = None
