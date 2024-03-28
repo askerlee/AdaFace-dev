@@ -424,9 +424,9 @@ class SubjBasisGenerator(nn.Module):
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
-            self.obj_proj_in            = ExpandEmbs(dino_embedding_dim, init_proj_dim, expansion_ratio=num_id_vecs,
+            self.obj_proj_in            = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
                                                      elementwise_affine=elementwise_affine)
-            self.prompt2token_emb_proj  = MultimodeProjection(input_dim=init_proj_dim, 
+            self.prompt2token_emb_proj  = MultimodeProjection(input_dim=output_dim, 
                                                               output_dim=output_dim,
                                                               num_modes=num_prompt2token_emb_modes,
                                                               elementwise_affine=elementwise_affine)
@@ -514,6 +514,7 @@ class SubjBasisGenerator(nn.Module):
                 # which layer-normalizes the output. So it's not L2-normalized anymore.
                 # Therefore, we don't need to L2-normalize extra_token_embs.
                 extra_token_embs = extra_token_embs.unsqueeze(1)
+                breakpoint()
                 #extra_token_embs = F.normalize(extra_token_embs, p=2, dim=2)
                 id_embs = torch.cat([id_embs, extra_token_embs], dim=1)
         else:
