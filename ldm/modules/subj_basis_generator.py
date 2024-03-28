@@ -426,7 +426,7 @@ class SubjBasisGenerator(nn.Module):
             # [1, 384] -> [1, 16, 768].
             self.obj_proj_in            = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
                                                      elementwise_affine=elementwise_affine)
-            self.prompt2token_emb_proj  = MultimodeProjection(input_dim=output_dim, 
+            self.prompt2token_emb_proj  = MultimodeProjection(input_dim=init_proj_dim, 
                                                               output_dim=output_dim,
                                                               num_modes=num_prompt2token_emb_modes,
                                                               elementwise_affine=elementwise_affine)
