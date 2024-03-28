@@ -415,13 +415,6 @@ class SubjBasisGenerator(nn.Module):
         self.latent_query_dim    = output_dim
         self.mean_face_proj_emb  = 0
 
-        # If not self.placeholder_is_bg:
-        # The dimension of IP-Adapter face features for humans is the same as output_dim = latent_query_dim.   
-        # self.face_proj_in: [1, 512] -> [1, 16, 768].
-        # If self.placeholder_is_bg: face_proj_in is set to None.
-        self.init_face_proj_in(iid_model_ckpt_path, mean_face_proj_emb_path, 
-                               face_proj_in_grad_scale, device='cpu')
-
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
             self.obj_proj_in            = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
@@ -430,11 +423,19 @@ class SubjBasisGenerator(nn.Module):
                                                               output_dim=output_dim,
                                                               num_modes=num_prompt2token_emb_modes,
                                                               elementwise_affine=elementwise_affine)
+
+            # The dimension of InstantID face features for humans is NOT the same as output_dim = latent_query_dim.   
+            # self.face_proj_in: [1, 512] -> [1, 16, 2048].
+            # If self.placeholder_is_bg: face_proj_in is set to None.
+            self.init_face_proj_in(init_proj_dim, iid_model_ckpt_path, mean_face_proj_emb_path, 
+                                   face_proj_in_grad_scale, device='cpu')
+            
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.face_proj_in = None
             self.obj_proj_in  = None
             self.prompt2token_emb_proj = None
+            print("Bg face_proj_in is set to None.")
 
         self.num_out_queries        = num_out_queries
         self.num_lora2hira_modes    = num_lora2hira_modes
@@ -544,15 +545,9 @@ class SubjBasisGenerator(nn.Module):
         output_queries = self.lora2hira(context) * self.output_scale
         return output_queries
 
-    def init_face_proj_in(self, iid_model_ckpt_path=None, 
+    def init_face_proj_in(self, init_proj_dim=2048, iid_model_ckpt_path=None, 
                           mean_face_proj_emb_path=None, face_proj_in_gs=0.1,
                           device='cpu'):
-        if self.placeholder_is_bg:
-            self.face_proj_in = None
-            self.freeze_face_proj_in = False
-            print("Bg face_proj_in is set to None")
-            return
-        
         self.face_proj_in = IID_Resampler()
         self.face_proj_in.to(device)
 
@@ -578,6 +573,13 @@ class SubjBasisGenerator(nn.Module):
                 mean_face_proj_emb = self.face_proj_in(torch.zeros(1, 1, 512))
             self.mean_face_proj_emb = nn.Parameter(mean_face_proj_emb, requires_grad=True)
             print(f"mean_face_proj_emb is initialized as face_proj_in(0): {mean_face_proj_emb.shape}")
+
+        if (not self.placeholder_is_bg) and (init_proj_dim != self.prompt2token_emb_proj[0].weight.shape[1]):
+            old_linear_shape = self.prompt2token_emb_proj[0].weight.shape
+            # init_proj_dim has changed (to be different from subj_basis_generator loaded from an old ckpt). 
+            # So we need to re-initialize the first Linear of prompt2token_emb_proj. Other layers are not affected.
+            self.prompt2token_emb_proj[0]  = nn.Linear(init_proj_dim, old_linear_shape[0], bias=False)
+            print(f"Re-initialize prompt2token_emb_proj nn.Linear from {old_linear_shape} to {self.prompt2token_emb_proj[0].shape}.")
 
     # q_aware_to_v_lora_rank has to be the same as the old q_aware_to_v_lora_rank.
     def extend_latent_queries(self, new_num_latent_queries, q_aware_to_v_lora_rank=64, output_dim=768):

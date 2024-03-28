@@ -2409,7 +2409,7 @@ class EmbeddingManager(nn.Module):
                     if self.zs_face_proj_in_initialized_from_IID:
                         iid_model_ckpt_path = "models/instantid/ip-adapter.bin"
                         mean_face_proj_emb_path = None # "models/ip-adapter/mean_face_proj_emb.pt"
-                        ckpt_subj_basis_generator.init_face_proj_in(iid_model_ckpt_path, mean_face_proj_emb_path, 
+                        ckpt_subj_basis_generator.init_face_proj_in(2048, iid_model_ckpt_path, mean_face_proj_emb_path, 
                                                                     self.zs_face_proj_in_grad_scale, device='cpu')
                     if ckpt_subj_basis_generator.num_latent_queries < self.zs_num_latent_queries \
                       and not ckpt_subj_basis_generator.placeholder_is_bg:
