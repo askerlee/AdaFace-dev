@@ -579,7 +579,7 @@ class SubjBasisGenerator(nn.Module):
             # init_proj_dim has changed (to be different from subj_basis_generator loaded from an old ckpt). 
             # So we need to re-initialize the first Linear of prompt2token_emb_proj. Other layers are not affected.
             self.prompt2token_emb_proj[0]  = nn.Linear(init_proj_dim, old_linear_shape[0], bias=False)
-            print(f"Re-initialize prompt2token_emb_proj nn.Linear from {old_linear_shape} to {self.prompt2token_emb_proj[0].shape}.")
+            print(f"Re-initialize prompt2token_emb_proj nn.Linear from {old_linear_shape} to {self.prompt2token_emb_proj[0].weight.shape}.")
 
     # q_aware_to_v_lora_rank has to be the same as the old q_aware_to_v_lora_rank.
     def extend_latent_queries(self, new_num_latent_queries, q_aware_to_v_lora_rank=64, output_dim=768):
