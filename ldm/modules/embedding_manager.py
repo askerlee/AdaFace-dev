@@ -1020,6 +1020,7 @@ class EmbeddingManager(nn.Module):
             zs_use_q_aware_to_v=False,
             zs_face_proj_in_grad_scale=0.1,
             zs_face_proj_in_initialized_from_IID=False,
+            zs_load_subj_basis_generators_from_ckpt=True,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1154,7 +1155,8 @@ class EmbeddingManager(nn.Module):
             self.zs_num_latent_queries = zs_num_latent_queries
             self.zs_face_proj_in_grad_scale = zs_face_proj_in_grad_scale
             self.zs_face_proj_in_initialized_from_IID = zs_face_proj_in_initialized_from_IID
-
+            self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
+            
             if self.zs_cls_delta_string is not None:
                 self.zs_cls_delta_tokens   = get_tokens_for_string(zs_cls_delta_string)
                 if zs_cls_delta_token_weights is None:
@@ -2394,7 +2396,7 @@ class EmbeddingManager(nn.Module):
             # Only load subj_basis_generator from ckpt if the ckpt is set with the same do_zero_shot.
             # If zs_face_proj_in_initialized_from_IID, then keep the randomly initialized subj_basis_generator,
             # and don't load the subj_basis_generator from ckpt.
-            if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"]:
+            if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"] and self.zs_load_subj_basis_generators_from_ckpt:
                 for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
                     # repr(ckpt_subj_basis_generator) will assign missing variables to ckpt_subj_basis_generator.
                     print(f"Loading {repr(ckpt_subj_basis_generator)}")
