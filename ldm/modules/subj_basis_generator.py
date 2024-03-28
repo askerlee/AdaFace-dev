@@ -398,7 +398,6 @@ class SubjBasisGenerator(nn.Module):
         use_FFN: bool = False,              # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         iid_model_ckpt_path: str = None,     # Path to the InstantID model checkpoint.
-        mean_face_proj_emb_path: str = None, # Path to the mean face projection embedding.
         use_q_aware_to_v: bool = False,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
         face_proj_in_grad_scale: float = 0.1,  # Gradient scale for face_proj_in.
@@ -413,7 +412,6 @@ class SubjBasisGenerator(nn.Module):
         self.placeholder_is_bg   = placeholder_is_bg
         self.num_latent_queries  = num_latent_queries
         self.latent_query_dim    = output_dim
-        self.mean_face_proj_emb  = 0
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
@@ -427,7 +425,7 @@ class SubjBasisGenerator(nn.Module):
             # The dimension of InstantID face features for humans is NOT the same as output_dim = latent_query_dim.   
             # self.face_proj_in: [1, 512] -> [1, 16, 2048].
             # If self.placeholder_is_bg: face_proj_in is set to None.
-            self.init_face_proj_in(init_proj_dim, iid_model_ckpt_path, mean_face_proj_emb_path, 
+            self.init_face_proj_in(init_proj_dim, iid_model_ckpt_path, 
                                    face_proj_in_grad_scale, device='cpu')
             
         else:
@@ -494,9 +492,11 @@ class SubjBasisGenerator(nn.Module):
                     id_embs = id_embs.unsqueeze(1)
                 # id_embs: [BS, 1, 512] -> [BS, 16, 2048].
                 # Loaded pretrained IP-Adapter model weight. No need to update face_proj_in.
-                id_embs0 = self.face_proj_in(id_embs)
+                id_embs_pos = self.face_proj_in(id_embs)
+                id_embs_neg = self.face_proj_in(torch.zeros_like(id_embs[[0]]))
+                id_embs0 = id_embs_pos - id_embs_neg
                 id_embs0 = self.face_proj_in_grad_scaler(id_embs0)
-                id_embs = F.normalize(id_embs0, p=2, dim=2) - self.mean_face_proj_emb
+                id_embs = F.normalize(id_embs0, p=2, dim=2)
                 # id_embs is projected to the token embedding space.
                 id_embs = self.prompt2token_emb_proj(id_embs)
             else:
@@ -546,8 +546,7 @@ class SubjBasisGenerator(nn.Module):
         return output_queries
 
     def init_face_proj_in(self, init_proj_dim=2048, iid_model_ckpt_path=None, 
-                          mean_face_proj_emb_path=None, face_proj_in_gs=0.1,
-                          device='cpu'):
+                          face_proj_in_gs=0.1, device='cpu'):
         self.face_proj_in = IID_Resampler()
         self.face_proj_in.to(device)
 
@@ -559,20 +558,6 @@ class SubjBasisGenerator(nn.Module):
             print("Subj face_proj_in is randomly initialized")
 
         self.face_proj_in_grad_scaler = gen_gradient_scaler(face_proj_in_gs)
-
-        if mean_face_proj_emb_path is not None:
-            # self.mean_face_proj_emb: [16, 768]
-            # We don't need to L2-normalize mean_face_proj_emb, as it's mean of 1097 L2-normalized face embeddings.
-            mean_face_proj_emb = torch.load(mean_face_proj_emb_path)
-            # Wrap mean_face_proj_emb with nn.Parameter, so that it's put on the GPU automatically.
-            # requires_grad=True, allowing being updated gradually.
-            self.mean_face_proj_emb = nn.Parameter(mean_face_proj_emb, requires_grad=True)
-            print(f"mean_face_proj_emb ({list(self.mean_face_proj_emb.shape)}) is loaded from {mean_face_proj_emb_path}")
-        else:
-            with torch.no_grad():
-                mean_face_proj_emb = self.face_proj_in(torch.zeros(1, 1, 512))
-            self.mean_face_proj_emb = nn.Parameter(mean_face_proj_emb, requires_grad=True)
-            print(f"mean_face_proj_emb is initialized as face_proj_in(0): {mean_face_proj_emb.shape}")
 
         if (not self.placeholder_is_bg) and (init_proj_dim != self.prompt2token_emb_proj[0].weight.shape[1]):
             old_linear_shape = self.prompt2token_emb_proj[0].weight.shape

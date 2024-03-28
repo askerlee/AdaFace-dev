@@ -1236,10 +1236,8 @@ class EmbeddingManager(nn.Module):
                 depth = zs_num_subj_generator_layers if not placeholder_is_bg else 1
                 if zs_face_proj_in_initialized_from_IID:
                     iid_model_ckpt_path = "models/instantid/ip-adapter.bin"
-                    mean_face_proj_emb_path = None #"models/ip-adapter/mean_face_proj_emb.pt"
                 else:
                     iid_model_ckpt_path = None
-                    mean_face_proj_emb_path = None
                     
                 subj_basis_generator = SubjBasisGenerator(depth=depth,
                                                           num_latent_queries = zs_num_latent_queries,
@@ -1252,7 +1250,6 @@ class EmbeddingManager(nn.Module):
                                                           use_FFN = zs_use_FFN,
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           iid_model_ckpt_path = iid_model_ckpt_path,
-                                                          mean_face_proj_emb_path = mean_face_proj_emb_path,
                                                           use_q_aware_to_v = zs_use_q_aware_to_v,
                                                           face_proj_in_grad_scale = self.zs_face_proj_in_grad_scale)
 
@@ -2408,8 +2405,7 @@ class EmbeddingManager(nn.Module):
                     # Re-initialize face_proj_in from InstantID ckpt.
                     if self.zs_face_proj_in_initialized_from_IID:
                         iid_model_ckpt_path = "models/instantid/ip-adapter.bin"
-                        mean_face_proj_emb_path = None # "models/ip-adapter/mean_face_proj_emb.pt"
-                        ckpt_subj_basis_generator.init_face_proj_in(2048, iid_model_ckpt_path, mean_face_proj_emb_path, 
+                        ckpt_subj_basis_generator.init_face_proj_in(2048, iid_model_ckpt_path, 
                                                                     self.zs_face_proj_in_grad_scale, device='cpu')
                     if ckpt_subj_basis_generator.num_latent_queries < self.zs_num_latent_queries \
                       and not ckpt_subj_basis_generator.placeholder_is_bg:
