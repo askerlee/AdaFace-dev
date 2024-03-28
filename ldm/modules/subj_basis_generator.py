@@ -40,19 +40,17 @@ def masked_mean(t, *, dim, mask=None):
     return masked_t.sum(dim=dim) / denom.clamp(min=1e-5)
 
 
-# FFN
-def FeedForward(dim, mult=4, elementwise_affine=True):
+# FFN. Added a dropout layer at the end, so that it can still load the old ckpt.
+def FeedForward(dim, mult=4):
     inner_dim = int(dim * mult)
     return nn.Sequential(
+        nn.LayerNorm(dim),
         nn.Linear(dim, inner_dim, bias=False),
-        nn.LayerNorm(inner_dim, elementwise_affine=elementwise_affine),
-        nn.Dropout(0.1),
         nn.GELU(),
         nn.Linear(inner_dim, dim, bias=False),
-        nn.LayerNorm(dim, elementwise_affine=elementwise_affine),
         nn.Dropout(0.1),
     )
-
+    
 # From: https://github.com/tencent-ailab/IP-Adapter/blob/main/ip_adapter/ip_adapter_faceid_separate.py
 class IP_MLPProjModel(nn.Module):
     def __init__(self, cross_attention_dim=768, id_embeddings_dim=512, num_tokens=4):
@@ -74,6 +72,52 @@ class IP_MLPProjModel(nn.Module):
         x = self.norm(x)
         return x
 
+# https://github.com/InstantID/InstantID/blob/main/ip_adapter/resampler.py
+class IID_Resampler(nn.Module):
+    def __init__(
+        self,
+        dim=1280,
+        depth=4,
+        dim_head=64,
+        num_heads=20,
+        num_queries=16,
+        embedding_dim=512,
+        output_dim=2048,
+        ff_mult=4,
+    ):
+        super().__init__()
+        
+        self.latents = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
+        
+        self.proj_in = nn.Linear(embedding_dim, dim)
+
+        self.proj_out = nn.Linear(dim, output_dim)
+        self.norm_out = nn.LayerNorm(output_dim)
+        
+        self.layers = nn.ModuleList([])
+        for _ in range(depth):
+            self.layers.append(
+                nn.ModuleList(
+                    [
+                        PerceiverAttention(dim=dim, dim_head=dim_head, num_heads=num_heads),
+                        FeedForward(dim=dim, mult=ff_mult),
+                    ]
+                )
+            )
+
+    def forward(self, x):
+        
+        latents = self.latents.repeat(x.size(0), 1, 1)
+        
+        x = self.proj_in(x)
+        
+        for attn, ff in self.layers:
+            latents = attn(x, latents) + latents
+            latents = ff(latents) + latents
+            
+        latents = self.proj_out(latents)
+        return self.norm_out(latents)
+    
 # group_dim: the tensor dimension that corresponds to the multiple groups.
 class LearnedSoftAggregate(nn.Module):
     def __init__(self, num_feat, group_dim, keepdim=False):
@@ -348,15 +392,16 @@ class SubjBasisGenerator(nn.Module):
         num_latent_queries=64,               
         num_prompt2token_emb_modes=4,       # number of modes for prompt2token_emb.
         num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
+        init_proj_dim=2048,                 # InstantID face projection dimension.
         output_dim=768,                     # CLIP text embedding input dimension.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
         use_FFN: bool = False,              # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
-        ip_model_ckpt_path: str = None,     # Path to the IP-Adapter model checkpoint.
+        iid_model_ckpt_path: str = None,     # Path to the InstantID model checkpoint.
         mean_face_proj_emb_path: str = None, # Path to the mean face projection embedding.
         use_q_aware_to_v: bool = False,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
-        face_proj_in_grad_scale: float = 1,  # Gradient scale for face_proj_in.
+        face_proj_in_grad_scale: float = 0.1,  # Gradient scale for face_proj_in.
     ):
         super().__init__()
 
@@ -374,14 +419,15 @@ class SubjBasisGenerator(nn.Module):
         # The dimension of IP-Adapter face features for humans is the same as output_dim = latent_query_dim.   
         # self.face_proj_in: [1, 512] -> [1, 16, 768].
         # If self.placeholder_is_bg: face_proj_in is set to None.
-        self.init_face_proj_in(output_dim, ip_model_ckpt_path, mean_face_proj_emb_path, 
+        self.init_face_proj_in(init_proj_dim, iid_model_ckpt_path, mean_face_proj_emb_path, 
                                face_proj_in_grad_scale, device='cpu')
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
-            self.obj_proj_in            = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
+            self.obj_proj_in            = ExpandEmbs(dino_embedding_dim, init_proj_dim, expansion_ratio=num_id_vecs,
                                                      elementwise_affine=elementwise_affine)
-            self.prompt2token_emb_proj  = MultimodeProjection(input_dim=output_dim, 
+            self.prompt2token_emb_proj  = MultimodeProjection(input_dim=init_proj_dim, 
+                                                              output_dim=output_dim,
                                                               num_modes=num_prompt2token_emb_modes,
                                                               elementwise_affine=elementwise_affine)
         else:
@@ -443,7 +489,9 @@ class SubjBasisGenerator(nn.Module):
         # No need to use id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (id_embs is not None):
             if is_face:
-                # id_embs: [BS, 512] -> [BS, 16, 768].
+                if id_embs.ndim == 2:
+                    id_embs = id_embs.unsqueeze(1)
+                # id_embs: [BS, 1, 512] -> [BS, 16, 2048].
                 # Loaded pretrained IP-Adapter model weight. No need to update face_proj_in.
                 id_embs0 = self.face_proj_in(id_embs)
                 id_embs0 = self.face_proj_in_grad_scaler(id_embs0)
@@ -496,8 +544,8 @@ class SubjBasisGenerator(nn.Module):
         output_queries = self.lora2hira(context) * self.output_scale
         return output_queries
 
-    def init_face_proj_in(self, output_dim=768, ip_model_ckpt_path=None, 
-                          mean_face_proj_emb_path=None, face_proj_in_gs=1,
+    def init_face_proj_in(self, init_proj_dim=2048, iid_model_ckpt_path=None, 
+                          mean_face_proj_emb_path=None, face_proj_in_gs=0.1,
                           device='cpu'):
         if self.placeholder_is_bg:
             self.face_proj_in = None
@@ -505,14 +553,13 @@ class SubjBasisGenerator(nn.Module):
             print("Bg face_proj_in is set to None")
             return
         
-        self.face_proj_in = IP_MLPProjModel(cross_attention_dim=output_dim, 
-                                            id_embeddings_dim=512, num_tokens=16)
+        self.face_proj_in = IID_Resampler()
         self.face_proj_in.to(device)
 
-        if ip_model_ckpt_path is not None:
-            ip_model_ckpt = torch.load(ip_model_ckpt_path, map_location=device)
-            self.face_proj_in.load_state_dict(ip_model_ckpt['image_proj'])
-            print(f"Subj face_proj_in is loaded from {ip_model_ckpt_path}")
+        if iid_model_ckpt_path is not None:
+            iid_model_ckpt = torch.load(iid_model_ckpt_path, map_location=device)
+            self.face_proj_in.load_state_dict(iid_model_ckpt['image_proj'])
+            print(f"Subj face_proj_in is loaded from {iid_model_ckpt_path}")
         else:
             print("Subj face_proj_in is randomly initialized")
 
@@ -527,8 +574,10 @@ class SubjBasisGenerator(nn.Module):
             self.mean_face_proj_emb = nn.Parameter(mean_face_proj_emb, requires_grad=True)
             print(f"mean_face_proj_emb ({list(self.mean_face_proj_emb.shape)}) is loaded from {mean_face_proj_emb_path}")
         else:
-            self.mean_face_proj_emb = nn.Parameter(torch.zeros(16, 768), requires_grad=True)
-            print("mean_face_proj_emb is initialized as 0")
+            with torch.no_grad():
+                mean_face_proj_emb = self.face_proj_in(torch.zeros(1, 1, 512))
+            self.mean_face_proj_emb = nn.Parameter(mean_face_proj_emb, requires_grad=True)
+            print(f"mean_face_proj_emb is initialized as face_proj_in(0): {mean_face_proj_emb.shape}")
 
     # q_aware_to_v_lora_rank has to be the same as the old q_aware_to_v_lora_rank.
     def extend_latent_queries(self, new_num_latent_queries, q_aware_to_v_lora_rank=64, output_dim=768):

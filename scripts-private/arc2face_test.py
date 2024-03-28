@@ -78,6 +78,7 @@ if __name__ == "__main__":
     else:
         subject_name = "randface"
         image_paths = None
+        image_folder = None
 
     face_app = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
     face_app.prepare(ctx_id=0, det_size=(512, 512))
