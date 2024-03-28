@@ -514,7 +514,6 @@ class SubjBasisGenerator(nn.Module):
                 # which layer-normalizes the output. So it's not L2-normalized anymore.
                 # Therefore, we don't need to L2-normalize extra_token_embs.
                 extra_token_embs = extra_token_embs.unsqueeze(1)
-                breakpoint()
                 #extra_token_embs = F.normalize(extra_token_embs, p=2, dim=2)
                 id_embs = torch.cat([id_embs, extra_token_embs], dim=1)
         else:
