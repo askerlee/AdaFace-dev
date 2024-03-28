@@ -419,7 +419,7 @@ class SubjBasisGenerator(nn.Module):
         # The dimension of IP-Adapter face features for humans is the same as output_dim = latent_query_dim.   
         # self.face_proj_in: [1, 512] -> [1, 16, 768].
         # If self.placeholder_is_bg: face_proj_in is set to None.
-        self.init_face_proj_in(init_proj_dim, iid_model_ckpt_path, mean_face_proj_emb_path, 
+        self.init_face_proj_in(iid_model_ckpt_path, mean_face_proj_emb_path, 
                                face_proj_in_grad_scale, device='cpu')
 
         if not self.placeholder_is_bg:
@@ -544,7 +544,7 @@ class SubjBasisGenerator(nn.Module):
         output_queries = self.lora2hira(context) * self.output_scale
         return output_queries
 
-    def init_face_proj_in(self, init_proj_dim=2048, iid_model_ckpt_path=None, 
+    def init_face_proj_in(self, iid_model_ckpt_path=None, 
                           mean_face_proj_emb_path=None, face_proj_in_gs=0.1,
                           device='cpu'):
         if self.placeholder_is_bg:

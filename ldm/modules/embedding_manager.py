@@ -2397,7 +2397,7 @@ class EmbeddingManager(nn.Module):
             # Only load subj_basis_generator from ckpt if the ckpt is set with the same do_zero_shot.
             # If zs_face_proj_in_initialized_from_IID, then keep the randomly initialized subj_basis_generator,
             # and don't load the subj_basis_generator from ckpt.
-            if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"] and not self.zs_face_proj_in_initialized_from_IID:
+            if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"]:
                 for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
                     # repr(ckpt_subj_basis_generator) will assign missing variables to ckpt_subj_basis_generator.
                     print(f"Loading {repr(ckpt_subj_basis_generator)}")
@@ -2405,17 +2405,18 @@ class EmbeddingManager(nn.Module):
                     # Then replace it with the one in ckpt.
                     print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                     self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
-                    if not hasattr(ckpt_subj_basis_generator, 'face_proj_in_grad_scaler'):
-                        iid_model_ckpt_path = None # "models/instantid/ip-adapter.bin"
+                    # Re-initialize face_proj_in from InstantID ckpt.
+                    if self.zs_face_proj_in_initialized_from_IID:
+                        iid_model_ckpt_path = "models/instantid/ip-adapter.bin"
                         mean_face_proj_emb_path = None # "models/ip-adapter/mean_face_proj_emb.pt"
-                        ckpt_subj_basis_generator.init_face_proj_in(768, iid_model_ckpt_path, mean_face_proj_emb_path, 
+                        ckpt_subj_basis_generator.init_face_proj_in(iid_model_ckpt_path, mean_face_proj_emb_path, 
                                                                     self.zs_face_proj_in_grad_scale, device='cpu')
                     if ckpt_subj_basis_generator.num_latent_queries < self.zs_num_latent_queries \
                       and not ckpt_subj_basis_generator.placeholder_is_bg:
                         ckpt_subj_basis_generator.extend_latent_queries(self.zs_num_latent_queries)
             else:
                 print(f"Skipping loading subj_basis_generator from {ckpt_path}")
-                
+
             for token_idx, km in enumerate(ckpt["placeholder_strings"]):
                 # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.
                 if (placeholder_mapper is not None) and (km in placeholder_mapper):
