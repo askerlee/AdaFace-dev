@@ -485,6 +485,9 @@ class SubjBasisGenerator(nn.Module):
 
     def forward(self, clip_features, id_embs, extra_token_embs, is_face, training_percent=0):    
         BS = clip_features.shape[0]
+        if not hasattr(self, 'face_proj_in_grad_scale'):
+            self.face_proj_in_grad_scale = 0.01
+            
         # No need to use id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (id_embs is not None):
             if is_face:
