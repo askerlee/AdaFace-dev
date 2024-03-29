@@ -191,7 +191,9 @@ def MultimodeProjection(input_dim, output_dim=-1, num_modes=4, elementwise_affin
             # Reshape to [BS, num_output_vecs, output_dim].
             Rearrange('b n (m d) -> b n m d', m=num_modes, d=output_dim),
             nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
-            LearnedSoftAggregate(num_feat=output_dim, group_dim=2, keepdim=False) if num_modes > 1 else nn.Identity(),
+            # If num_modes == 1, then simply remove the mode dim. Otherwise, aggregate the modes.
+            LearnedSoftAggregate(num_feat=output_dim, group_dim=2, keepdim=False) if num_modes > 1 \
+                else Rearrange('b n m d -> b n d'),
             nn.Dropout(0.1),
     )
 
@@ -400,7 +402,7 @@ class SubjBasisGenerator(nn.Module):
         iid_model_ckpt_path: str = None,     # Path to the InstantID model checkpoint.
         use_q_aware_to_v: bool = False,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
-        face_proj_in_grad_scale: float = 0.001,  # Gradient scale for face_proj_in.
+        face_proj_in_grad_scale: float = 0.004,  # Gradient scale for face_proj_in.
     ):
         super().__init__()
 
@@ -486,7 +488,7 @@ class SubjBasisGenerator(nn.Module):
     def forward(self, clip_features, id_embs, extra_token_embs, is_face, training_percent=0):    
         BS = clip_features.shape[0]
         if not hasattr(self, 'face_proj_in_grad_scale'):
-            self.face_proj_in_grad_scale = 0.001
+            self.face_proj_in_grad_scale = 0.004
             
         # No need to use id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (id_embs is not None):
@@ -560,7 +562,7 @@ class SubjBasisGenerator(nn.Module):
         return output_queries
 
     def init_face_proj_in(self, init_proj_dim=2048, iid_model_ckpt_path=None, 
-                          face_proj_in_grad_scale=0.001, device='cpu'):
+                          face_proj_in_grad_scale=0.004, device='cpu'):
         self.face_proj_in = IID_Resampler()
         self.face_proj_in.to(device)
 
