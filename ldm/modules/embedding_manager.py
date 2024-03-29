@@ -1018,7 +1018,7 @@ class EmbeddingManager(nn.Module):
             zs_cls_delta_string=None,
             zs_cls_delta_token_weights=None,
             zs_use_q_aware_to_v=False,
-            zs_face_proj_in_grad_scale=0.1,
+            zs_face_proj_in_grad_scale=0.01,
             zs_face_proj_in_initialized_from_IID=False,
             zs_load_subj_basis_generators_from_ckpt=True,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 

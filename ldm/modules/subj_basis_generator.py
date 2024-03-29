@@ -400,7 +400,7 @@ class SubjBasisGenerator(nn.Module):
         iid_model_ckpt_path: str = None,     # Path to the InstantID model checkpoint.
         use_q_aware_to_v: bool = False,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
-        face_proj_in_grad_scale: float = 0.1,  # Gradient scale for face_proj_in.
+        face_proj_in_grad_scale: float = 0.01,  # Gradient scale for face_proj_in.
     ):
         super().__init__()
 
@@ -496,15 +496,17 @@ class SubjBasisGenerator(nn.Module):
                 if self.face_proj_in_grad_scale == 0:
                     with torch.no_grad():
                         id_embs_pos = self.face_proj_in(id_embs)
+                        # Use a batch size 1 to reduce computation.
                         id_embs_neg = self.face_proj_in(torch.zeros_like(id_embs[[0]]))
                 else:
                     id_embs_pos = self.face_proj_in(id_embs)
+                    # Use a batch size 1 to reduce computation.
                     id_embs_neg = self.face_proj_in(torch.zeros_like(id_embs[[0]]))
 
                 id_embs0 = id_embs_pos - id_embs_neg
                 id_embs0 = self.face_proj_in_grad_scaler(id_embs0)
-                id_embs = F.normalize(id_embs0, p=2, dim=2)
-                # id_embs is projected to the token embedding space.
+                id_embs = F.normalize(id_embs0, p=2, dim=-1)
+                # id_embs is projected to the token embedding space. [BS, 16, 2048] -> [BS, 16, 768].
                 id_embs = self.prompt2token_emb_proj(id_embs)
             else:
                 # id_embs: [BS, 384] -> [BS, 16, 768].
@@ -523,6 +525,8 @@ class SubjBasisGenerator(nn.Module):
                 # Therefore, we don't need to L2-normalize extra_token_embs.
                 extra_token_embs = extra_token_embs.unsqueeze(1)
                 #extra_token_embs = F.normalize(extra_token_embs, p=2, dim=2)
+                # id_embs have been mapped to the token embedding space. So they can be concatenated.
+                # id_embs: [BS, 16, 768] -> [BS, 17, 768].
                 id_embs = torch.cat([id_embs, extra_token_embs], dim=1)
         else:
             # Otherwise, context is the ad-hoc CLIP image features.
@@ -553,7 +557,7 @@ class SubjBasisGenerator(nn.Module):
         return output_queries
 
     def init_face_proj_in(self, init_proj_dim=2048, iid_model_ckpt_path=None, 
-                          face_proj_in_grad_scale=0.1, device='cpu'):
+                          face_proj_in_grad_scale=0.01, device='cpu'):
         self.face_proj_in = IID_Resampler()
         self.face_proj_in.to(device)
 
