@@ -193,7 +193,7 @@ def MultimodeProjection(input_dim, output_dim=-1, num_modes=4, elementwise_affin
             nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
             # If num_modes == 1, then simply remove the mode dim. Otherwise, aggregate the modes.
             LearnedSoftAggregate(num_feat=output_dim, group_dim=2, keepdim=False) if num_modes > 1 \
-                else Rearrange('b n m d -> b n d'),
+                else Rearrange('b n () d -> b n d'),
             nn.Dropout(0.1),
     )
 
