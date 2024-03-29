@@ -492,8 +492,15 @@ class SubjBasisGenerator(nn.Module):
                     id_embs = id_embs.unsqueeze(1)
                 # id_embs: [BS, 1, 512] -> [BS, 16, 2048].
                 # Loaded pretrained IP-Adapter model weight. No need to update face_proj_in.
-                id_embs_pos = self.face_proj_in(id_embs)
-                id_embs_neg = self.face_proj_in(torch.zeros_like(id_embs[[0]]))
+                # face_proj_in_grad_scale == 0: freeze the face_proj_in.
+                if self.face_proj_in_grad_scale == 0:
+                    with torch.no_grad():
+                        id_embs_pos = self.face_proj_in(id_embs)
+                        id_embs_neg = self.face_proj_in(torch.zeros_like(id_embs[[0]]))
+                else:
+                    id_embs_pos = self.face_proj_in(id_embs)
+                    id_embs_neg = self.face_proj_in(torch.zeros_like(id_embs[[0]]))
+
                 id_embs0 = id_embs_pos - id_embs_neg
                 id_embs0 = self.face_proj_in_grad_scaler(id_embs0)
                 id_embs = F.normalize(id_embs0, p=2, dim=2)
@@ -546,7 +553,7 @@ class SubjBasisGenerator(nn.Module):
         return output_queries
 
     def init_face_proj_in(self, init_proj_dim=2048, iid_model_ckpt_path=None, 
-                          face_proj_in_gs=0.1, device='cpu'):
+                          face_proj_in_grad_scale=0.1, device='cpu'):
         self.face_proj_in = IID_Resampler()
         self.face_proj_in.to(device)
 
@@ -557,7 +564,8 @@ class SubjBasisGenerator(nn.Module):
         else:
             print("Subj face_proj_in is randomly initialized")
 
-        self.face_proj_in_grad_scaler = gen_gradient_scaler(face_proj_in_gs)
+        self.face_proj_in_grad_scale  = face_proj_in_grad_scale
+        self.face_proj_in_grad_scaler = gen_gradient_scaler(face_proj_in_grad_scale)
 
         if (not self.placeholder_is_bg) and (init_proj_dim != self.prompt2token_emb_proj[0].weight.shape[1]):
             old_linear_shape = self.prompt2token_emb_proj[0].weight.shape
