@@ -1228,7 +1228,8 @@ def gen_gradient_scaler(alpha, debug=False):
         return GradientScaler(alpha, debug=debug)
     else:
         assert alpha == 0
-        return lambda x: x.detach()
+        # Don't use lambda function here, otherwise the object can't be pickled.
+        return torch.detach
 
 # new_token_embeddings: [new_num_tokens, 768].
 def extend_nn_embedding(old_nn_embedding, new_token_embeddings):
