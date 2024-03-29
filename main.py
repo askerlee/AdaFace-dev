@@ -267,6 +267,8 @@ def get_parser(**parser_kwargs):
                         help="Layers (depth) of zero-shot subject feature generator")
     parser.add_argument("--zs_num_latent_queries", type=int, default=64,
                         help="Number of latent queries for the zero-shot embedding to queries mapping")    
+    parser.add_argument("--zs_num_prompt2token_emb_modes", type=int, default=4,
+                        help="Number of modes for the zero-shot prompt embedding to token embedding mapping")
     parser.add_argument("--zs_num_lora2hira_modes", type=int, default=4,
                         help="Number of modes for the zero-shot embedding to queries mapping")
     parser.add_argument("--zs_elementwise_affine", type=str2bool, nargs="?", const=True, default=True,
@@ -955,6 +957,7 @@ if __name__ == "__main__":
 
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
             config.model.params.personalization_config.params.zs_num_subj_generator_layers   = opt.zs_num_subj_generator_layers
+            config.model.params.personalization_config.params.zs_num_prompt2token_emb_modes  = opt.zs_num_prompt2token_emb_modes
             config.model.params.personalization_config.params.zs_num_lora2hira_modes  = opt.zs_num_lora2hira_modes
             config.model.params.personalization_config.params.zs_elementwise_affine     = opt.zs_elementwise_affine
             config.model.params.personalization_config.params.zs_use_FFN                = opt.zs_use_FFN

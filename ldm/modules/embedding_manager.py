@@ -1009,6 +1009,7 @@ class EmbeddingManager(nn.Module):
             do_zero_shot=False,
             zs_image_emb_dim=1280,
             zs_num_subj_generator_layers=1,
+            zs_num_prompt2token_emb_modes=4,
             zs_num_lora2hira_modes=4,
             zs_elementwise_affine=True,
             zs_use_FFN=False,
@@ -1244,6 +1245,7 @@ class EmbeddingManager(nn.Module):
                 subj_basis_generator = SubjBasisGenerator(depth=depth,
                                                           num_latent_queries = zs_num_latent_queries,
                                                           num_out_queries = num_out_queries,
+                                                          num_prompt2token_emb_modes = zs_num_prompt2token_emb_modes,
                                                           num_lora2hira_modes = zs_num_lora2hira_modes,
                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
                                                           image_embedding_dim = zs_image_emb_dim, 

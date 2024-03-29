@@ -41,14 +41,14 @@ def masked_mean(t, *, dim, mask=None):
 
 
 # FFN. Added a dropout layer at the end, so that it can still load the old ckpt.
-def FeedForward(dim, mult=4):
+def FeedForward(dim, mult=4, p_dropout=0.1):
     inner_dim = int(dim * mult)
     return nn.Sequential(
         nn.LayerNorm(dim),
         nn.Linear(dim, inner_dim, bias=False),
         nn.GELU(),
         nn.Linear(inner_dim, dim, bias=False),
-        nn.Dropout(0.1),
+        nn.Dropout(p_dropout),
     )
     
 # From: https://github.com/tencent-ailab/IP-Adapter/blob/main/ip_adapter/ip_adapter_faceid_separate.py
@@ -100,7 +100,7 @@ class IID_Resampler(nn.Module):
                 nn.ModuleList(
                     [
                         PerceiverAttention(dim=dim, dim_head=dim_head, num_heads=num_heads),
-                        FeedForward(dim=dim, mult=ff_mult),
+                        FeedForward(dim=dim, mult=ff_mult, p_dropout=0),
                     ]
                 )
             )
@@ -191,7 +191,7 @@ def MultimodeProjection(input_dim, output_dim=-1, num_modes=4, elementwise_affin
             # Reshape to [BS, num_output_vecs, output_dim].
             Rearrange('b n (m d) -> b n m d', m=num_modes, d=output_dim),
             nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
-            LearnedSoftAggregate(num_feat=output_dim, group_dim=2, keepdim=False),
+            LearnedSoftAggregate(num_feat=output_dim, group_dim=2, keepdim=False) if num_modes > 1 else nn.Identity(),
             nn.Dropout(0.1),
     )
 
