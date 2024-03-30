@@ -5325,6 +5325,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                 # Repeat x to match negative context.
                 elif context.shape[0] == x.shape[0] * 2:
                     x = x.repeat(2, 1, 1, 1)
+                    timesteps = timesteps.repeat(2)
                 else:
                     breakpoint()
 
