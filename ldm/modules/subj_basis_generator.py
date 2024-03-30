@@ -40,7 +40,7 @@ def masked_mean(t, *, dim, mask=None):
     return masked_t.sum(dim=dim) / denom.clamp(min=1e-5)
 
 
-# FFN. Added a dropout layer at the end, so that it can still load the old ckpt.
+# FFN. Added a Dropout layer at the end, so that it can still load the old ckpt.
 def FeedForward(dim, mult=4, p_dropout=0.1):
     inner_dim = int(dim * mult)
     return nn.Sequential(
@@ -150,7 +150,7 @@ class LearnedSoftAggregate(nn.Module):
         return x_aggr
     
 def LoRA_ExpandEmbs(input_dim, lora_rank, output_dim, num_modes, 
-                     num_output_vecs, elementwise_affine=True):
+                    num_output_vecs, elementwise_affine=True, p_dropout=0.1):
     return nn.Sequential(
         # Project to [BS, lora_rank * output_dim * num_modes].
         # It takes a huge param size. 512 * 32 * 768 * 4 = 6,291,456.
@@ -159,8 +159,9 @@ def LoRA_ExpandEmbs(input_dim, lora_rank, output_dim, num_modes,
         Rearrange('b (m q d) -> b m q d', q=lora_rank, m=num_modes, d=output_dim),
         nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
         # Aggregate [BS, num_modes, loar_rank, output_dim] -> [BS, lora_rank, output_dim].
-        LearnedSoftAggregate(num_feat=output_dim, group_dim=1, keepdim=False),
-        nn.Dropout(0.1),
+        LearnedSoftAggregate(num_feat=output_dim, group_dim=1, keepdim=False) if num_modes > 1 \
+            else Rearrange('b () q d -> b q d'),
+        nn.Dropout(p_dropout),
         # Permute to [BS, output_dim, lora_rank].
         Rearrange('b q d -> b d q'),
         # Project to [BS, output_dim, num_output_vecs].
@@ -168,21 +169,21 @@ def LoRA_ExpandEmbs(input_dim, lora_rank, output_dim, num_modes,
         # Permute to [BS, num_output_vecs, output_dim].
         Rearrange('b d q -> b q d'),
         nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
-        nn.Dropout(0.1),
+        nn.Dropout(p_dropout),
     )
 
-def ExpandEmbs(input_dim, output_dim, expansion_ratio, elementwise_affine=True):
+def ExpandEmbs(input_dim, output_dim, expansion_ratio, elementwise_affine=True, p_dropout=0.1):
     return nn.Sequential(
         # Project to [BS, num_output_vecs * output_dim].
         nn.Linear(input_dim, expansion_ratio * output_dim, bias=False),
         # Reshape to [BS, num_output_vecs, output_dim].
         Rearrange('b (e d) -> b e d', e=expansion_ratio, d=output_dim),
         nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
-        nn.Dropout(0.1),
+        nn.Dropout(p_dropout),
     )
 
 # Input: [BS, N, D].
-def MultimodeProjection(input_dim, output_dim=-1, num_modes=4, elementwise_affine=True):
+def MultimodeProjection(input_dim, output_dim=-1, num_modes=4, elementwise_affine=True, p_dropout=0.1):
     if output_dim == -1:
         output_dim = input_dim
 
@@ -194,11 +195,11 @@ def MultimodeProjection(input_dim, output_dim=-1, num_modes=4, elementwise_affin
             # If num_modes == 1, then simply remove the mode dim. Otherwise, aggregate the modes.
             LearnedSoftAggregate(num_feat=output_dim, group_dim=2, keepdim=False) if num_modes > 1 \
                 else Rearrange('b n () d -> b n d'),
-            nn.Dropout(0.1),
+            nn.Dropout(p_dropout),
     )
 
 # Low-rank to high-rank transformation.
-def Lora2Hira(lora_rank, hira_rank, output_dim, num_modes, elementwise_affine=True):
+def Lora2Hira(lora_rank, hira_rank, output_dim, num_modes, elementwise_affine=True, p_dropout=0.1):
     return nn.Sequential(        
         # Permute to [BS, output_dim, lora_rank].
         Rearrange('b q d -> b d q'),
@@ -208,8 +209,9 @@ def Lora2Hira(lora_rank, hira_rank, output_dim, num_modes, elementwise_affine=Tr
         Rearrange('b d (m q) -> b m q d', m=num_modes, q=hira_rank),
         nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
         # Aggregate [BS, num_modes, hira_rank, output_dim] -> [BS, hira_rank, output_dim].
-        LearnedSoftAggregate(num_feat=output_dim, group_dim=1, keepdim=False),        
-        nn.Dropout(0.1),    
+        LearnedSoftAggregate(num_feat=output_dim, group_dim=1, keepdim=False) if num_modes > 1 \
+            else Rearrange('b () q d -> b q d'),       
+        nn.Dropout(p_dropout),    
     )
 
 class PerceiverAttention(nn.Module):
@@ -260,7 +262,7 @@ class PerceiverAttention(nn.Module):
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, input_dim, num_heads=6, dropout=0.1, 
+    def __init__(self, input_dim, num_heads=6, p_dropout=0.1, 
                  identity_to_q=False, identity_to_k=False, identity_to_v=False, 
                  q_aware_to_v=True, num_q=64, q_aware_to_v_lora_rank=64,
                  identity_to_out=False, out_has_skip=False):
@@ -305,10 +307,10 @@ class CrossAttention(nn.Module):
 
         self.to_out = nn.Sequential(
             nn.Linear(input_dim, input_dim, bias=False) if not identity_to_out else nn.Identity(),
-            nn.Dropout(dropout)
+            nn.Dropout(p_dropout)
         )
         self.out_has_skip = out_has_skip
-        self.attn_drop = nn.Dropout(dropout)
+        self.attn_drop = nn.Dropout(p_dropout)
 
     def forward(self, x, context=None):
         h = self.num_heads
@@ -464,7 +466,7 @@ class SubjBasisGenerator(nn.Module):
                 nn.ModuleList(
                     [
                         # dim=768, num_heads=6.
-                        CrossAttention(input_dim=output_dim, num_heads=num_heads, dropout=0.1,
+                        CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.1,
                                        identity_to_q=True, identity_to_k=True, identity_to_v=identity_to_v,
                                        q_aware_to_v=q_aware_to_v, num_q=self.num_latent_queries,
                                        q_aware_to_v_lora_rank=q_aware_to_v_lora_rank,
