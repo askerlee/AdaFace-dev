@@ -92,6 +92,7 @@ if __name__ == "__main__":
                                       device='cuda',
                                       rand_face=args.randface, 
                                       noise_level=args.noise,
+                                      gen_neg_prompt=True, 
                                       verbose=True)
 
 
@@ -111,12 +112,17 @@ if __name__ == "__main__":
     else:
         pos_prompt_emb = id_prompt_emb
         neg_prompt_emb = neg_id_prompt_emb
-        
+
+    if args.randface:
+        num_images_per_prompt = 1
+    else:
+        num_images_per_prompt = num_images
+
     images = pipeline(prompt_embeds=pos_prompt_emb, 
                       negative_prompt_embeds=neg_prompt_emb,
                       num_inference_steps=40, 
                       guidance_scale=3.0, 
-                      num_images_per_prompt=num_images).images
+                      num_images_per_prompt=num_images_per_prompt).images
 
     save_dir = "samples-ada"
     os.makedirs(save_dir, exist_ok=True)
