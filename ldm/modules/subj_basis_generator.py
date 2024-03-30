@@ -394,8 +394,8 @@ class SubjBasisGenerator(nn.Module):
         # Number of low-rank latent queries. If num_latent_queries = 1, 
         # then basically all output queries are the same.
         num_latent_queries=64,               
-        num_prompt2token_emb_modes=4,       # number of modes for prompt2token_emb.
-        num_lora2hira_modes=4,              # number of modes for Lora2Hira.  
+        num_prompt2token_emb_modes=1,       # number of modes for prompt2token_emb.
+        num_lora2hira_modes=1,              # number of modes for Lora2Hira.  
         init_proj_dim=2048,                 # InstantID face projection dimension.
         output_dim=768,                     # CLIP text embedding input dimension.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
