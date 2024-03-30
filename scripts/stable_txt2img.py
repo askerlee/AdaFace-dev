@@ -393,7 +393,9 @@ def main(opt):
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
-        
+        config.model.params.personalization_config.params.token2num_vectors = { opt.subject_string:    opt.num_vectors_per_subj_token,
+                                                                                opt.background_string: opt.num_vectors_per_bg_token }
+
         if opt.zeroshot:
             assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
             ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
