@@ -5322,7 +5322,10 @@ class Arc2FaceWrapper(pl.LightningModule):
                 if context.shape[0] == x.shape[0] * 16:
                     pos_context = pos_context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
                     neg_context = neg_context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
-                elif context.shape[0] != x.shape[0]:
+                # Repeat x to match negative context.
+                elif context.shape[0] == x.shape[0] * 2:
+                    x = x.repeat(2, 1, 1, 1)
+                else:
                     breakpoint()
 
                 context = torch.cat([pos_context, neg_context], dim=0)
