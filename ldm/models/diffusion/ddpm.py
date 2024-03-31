@@ -5315,7 +5315,7 @@ class Arc2FaceWrapper(pl.LightningModule):
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):            
             if batch_contains_neg_instances:
-                if context.shape[0] == x.shape[0] * 16:
+                if context.shape[0] == x.shape[0] * 16 or context.shape[0] == x.shape[0] * 32:
                     # Batch contains half positive, half negative instances.
                     pos_context, neg_context = context.chunk(2, dim=0)
                     # If we intercept layerwise prompts here, then context.shape[0] == x.shape[0] * 16.
@@ -5324,7 +5324,8 @@ class Arc2FaceWrapper(pl.LightningModule):
                     neg_context = neg_context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
                     context = torch.cat([pos_context, neg_context], dim=0)
                 # Repeat x to match negative context.
-                elif context.shape[0] == x.shape[0] * 2:
+                # If context.shape[0] == x.shape[0] * 32 above, then now context.shape[0] == x.shape[0] * 2.
+                if context.shape[0] == x.shape[0] * 2:
                     x = x.repeat(2, 1, 1, 1)
                     timesteps = timesteps.repeat(2)
                 else:
