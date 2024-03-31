@@ -1178,8 +1178,8 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
 
     if gen_neg_prompt:
         arc2face_neg_prompt_emb = arc2face_project_face_embs(tokenizer, text_encoder, torch.zeros_like(faceid_embeds))
-        if not rand_face:
-            arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.repeat(out_image_count, 1, 1)
+        #if not rand_face:
+        #    arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.repeat(out_image_count, 1, 1)
         return faceid_embeds, arc2face_pos_prompt_emb, arc2face_neg_prompt_emb
     else:
         return faceid_embeds, arc2face_pos_prompt_emb

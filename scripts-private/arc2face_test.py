@@ -16,6 +16,28 @@ import numpy as np
 import os, argparse, sys, glob, cv2
 from ldm.util import get_arc2face_id_prompt_embs
 
+    
+def save_images(images, save_dir = "samples-ada"):
+    
+    os.makedirs(save_dir, exist_ok=True)
+    # Save 4 images as a grid image in save_dir
+    grid_image = Image.new('RGB', (512 * 2, 512 * 2))
+    for i, image in enumerate(images):
+        image = image.resize((512, 512))
+        grid_image.paste(image, (512 * (i % 2), 512 * (i // 2)))
+
+    prompt_sig = comp_prompt.replace(" ", "_").replace(",", "_")
+    grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{args.noise}.png")
+    if os.path.exists(grid_filepath):
+        grid_count = 2
+        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{args.noise}-{grid_count}.jpg')
+        while os.path.exists(grid_filepath):
+            grid_count += 1
+            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{args.noise}-{grid_count}.jpg')
+
+    grid_image.save(grid_filepath)
+    print(f"Saved to {grid_filepath}")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--subject", type=str, default="/home/shaohua/adaprompt/subjects-private/xiuchao")
@@ -101,45 +123,32 @@ if __name__ == "__main__":
 
     comp_prompt = args.prompt 
 
+    negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
+    # prompt_embeds_, negative_prompt_embeds_: [4, 77, 768]
+    prompt_embeds_, negative_prompt_embeds_ = pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt = num_images,
+                                                                     do_classifier_free_guidance=True, negative_prompt=negative_prompt)
+    pipeline.text_encoder = text_encoder
+
     if len(comp_prompt) > 0:
-        negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
-        # prompt_embeds_, negative_prompt_embeds_: [4, 77, 768]
-        prompt_embeds_, negative_prompt_embeds_ = pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt = num_images,
-                                                                         do_classifier_free_guidance=True, negative_prompt=negative_prompt)
-        pipeline.text_encoder = text_encoder
         pos_prompt_emb  = torch.cat([id_prompt_emb,     prompt_embeds_], dim=1)
         neg_prompt_emb  = torch.cat([neg_id_prompt_emb, negative_prompt_embeds_], dim=1)
     else:
         pos_prompt_emb = id_prompt_emb
         neg_prompt_emb = neg_id_prompt_emb
 
-    if args.randface:
-        num_images_per_prompt = 1
-    else:
-        num_images_per_prompt = num_images
+    noise = torch.randn(1, 4, 64, 64).cuda()
+    images = pipeline(image=noise,
+                      prompt_embeds=pos_prompt_emb, 
+                      negative_prompt_embeds=negative_prompt_embeds_, 
+                      num_inference_steps=40, 
+                      guidance_scale=1, 
+                      num_images_per_prompt=1).images
+    save_images(images)
 
-    images = pipeline(prompt_embeds=pos_prompt_emb, 
+    images2 = pipeline(image=noise,
+                      prompt_embeds=pos_prompt_emb, 
                       negative_prompt_embeds=neg_prompt_emb,
                       num_inference_steps=40, 
-                      guidance_scale=3.0, 
-                      num_images_per_prompt=num_images_per_prompt).images
-
-    save_dir = "samples-ada"
-    os.makedirs(save_dir, exist_ok=True)
-    # Save 4 images as a grid image in save_dir
-    grid_image = Image.new('RGB', (512 * 2, 512 * 2))
-    for i, image in enumerate(images):
-        image = image.resize((512, 512))
-        grid_image.paste(image, (512 * (i % 2), 512 * (i // 2)))
-
-    prompt_sig = comp_prompt.replace(" ", "_").replace(",", "_")
-    grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{args.noise}.png")
-    if os.path.exists(grid_filepath):
-        grid_count = 2
-        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{args.noise}-{grid_count}.jpg')
-        while os.path.exists(grid_filepath):
-            grid_count += 1
-            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{args.noise}-{grid_count}.jpg')
-
-    grid_image.save(grid_filepath)
-    print(f"Saved to {grid_filepath}")
+                      guidance_scale=1, 
+                      num_images_per_prompt=1).images
+    save_images(images2)
