@@ -1012,16 +1012,16 @@ class EmbeddingManager(nn.Module):
             zs_num_prompt2token_emb_modes=1,
             zs_num_lora2hira_modes=1,
             zs_elementwise_affine=True,
-            zs_use_FFN=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_apply_neg_subj_bases=False,
             zs_num_latent_queries=64,
             zs_cls_delta_string=None,
             zs_cls_delta_token_weights=None,
-            zs_use_q_aware_to_v=False,
+            zs_use_FFN=False,
+            zs_use_q_aware_to_v=True,
             zs_face_proj_in_grad_scale=0.004,
-            zs_face_proj_in_initialized_from_IID=False,
-            zs_load_subj_basis_generators_from_ckpt=True,
+            zs_face_proj_in_initialized_from_IID=True,
+            zs_load_subj_basis_generators_from_ckpt=False,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
