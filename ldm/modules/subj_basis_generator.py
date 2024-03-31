@@ -467,7 +467,7 @@ class SubjBasisGenerator(nn.Module):
                     [
                         # dim=768, num_heads=6.
                         CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.1,
-                                       identity_to_q=True, identity_to_k=True, identity_to_v=identity_to_v,
+                                       identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
                                        q_aware_to_v=q_aware_to_v, num_q=self.num_latent_queries,
                                        q_aware_to_v_lora_rank=q_aware_to_v_lora_rank,
                                        identity_to_out=identity_to_out,

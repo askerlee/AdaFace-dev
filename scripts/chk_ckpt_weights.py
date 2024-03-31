@@ -61,8 +61,9 @@ if 'string_to_subj_basis_generator_dict' in emb_ckpt:
                     param_delta = torch.norm(param - prev_param).item()
                     param_total_norm  += param_norm
                     param_total_delta += param_delta
+                    param_shape = list(param.shape)
 
-                    print(f"{param_name}-{iteration} norm/diff: {param_norm:.4f}/{param_delta:.4f}")
+                    print(f"{param_name}-{iteration} {param_shape} norm/diff: {param_norm:.4f}/{param_delta:.4f}")
 
                 print(f"Total norm/diff: {param_total_norm:.4f}/{param_total_delta:.4f}")
 
