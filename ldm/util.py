@@ -1160,10 +1160,10 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
 
         # faceid_embeds: [10, 512]
         faceid_embeds = torch.cat(faceid_embeds, dim=0)
-        faceid_embeds += torch.randn_like(faceid_embeds) * noise_level
         # faceid_embeds: [10, 512] -> [1, 512] -> [BS, 512].
         # and the resulted prompt embeddings are the same.
         faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True).to(torch.float16).to(device)
+        faceid_embeds += torch.randn_like(faceid_embeds) * noise_level        
     else:
         # Random face embeddings. faceid_embeds: [BS, 512].
         faceid_embeds = torch.randn(out_image_count, 512).to(torch.float16).to(device)

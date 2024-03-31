@@ -1531,8 +1531,8 @@ class EmbeddingManager(nn.Module):
                     # Noise std is absolute, not relative (to the std of all_id_embs).
                     if self.training:
                         zs_id_embs = add_noise_to_embedding(zs_id_embs, self.training_percent,
-                                                            begin_noise_std_range=[0.04, 0.06], 
-                                                            end_noise_std_range  =[0.02, 0.03],
+                                                            begin_noise_std_range=[0.02, 0.01], 
+                                                            end_noise_std_range  =[0.01, 0.015],
                                                             add_noise_prob=0.5, noise_std_is_relative=False,
                                                             keep_norm=True)
 

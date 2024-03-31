@@ -2294,7 +2294,7 @@ class LatentDiffusion(DDPM):
             if all_id_embs is not None:
                 id_embs = all_id_embs.mean(dim=0, keepdim=True)
                 # Without normalization, id_embs.norm(dim=1) is ~0.9. So normalization doesn't have much effect.
-                id_embs = F.normalize(id_embs, p=2, dim=1)
+                id_embs = F.normalize(id_embs, p=2, dim=-1)
             # id_embs is None only if face_encoder is None, i.e., disabled by the user.
         else:
             # Don't do average of all_id_embs.
@@ -5309,39 +5309,40 @@ class Arc2FaceWrapper(pl.LightningModule):
     @torch.no_grad()
     def forward(self, x, timesteps=None, context=None, y=None, 
                 context_in=None, extra_info=None, batch_contains_neg_instances=False, 
-                do_cfg=False, cfg_scale=3.0):
+                do_cfg=False, cfg_scale=2.0):
         if do_cfg and not batch_contains_neg_instances:
             breakpoint()
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):            
             if batch_contains_neg_instances:
-                # Batch contains half positive, half negative instances.
-                pos_context, neg_context = context.chunk(2, dim=0)
-                # If we intercept layerwise prompts here, then context.shape[0] == x.shape[0] * 16.
-                # Otherwise, it's ordinary prompts, and context.shape[0] == x.shape[0].
                 if context.shape[0] == x.shape[0] * 16:
+                    # Batch contains half positive, half negative instances.
+                    pos_context, neg_context = context.chunk(2, dim=0)
+                    # If we intercept layerwise prompts here, then context.shape[0] == x.shape[0] * 16.
+                    # Otherwise, it's ordinary prompts, and context.shape[0] == x.shape[0].
                     pos_context = pos_context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
                     neg_context = neg_context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
+                    context = torch.cat([pos_context, neg_context], dim=0)
                 # Repeat x to match negative context.
                 elif context.shape[0] == x.shape[0] * 2:
                     x = x.repeat(2, 1, 1, 1)
                     timesteps = timesteps.repeat(2)
                 else:
                     breakpoint()
-
-                context = torch.cat([pos_context, neg_context], dim=0)
             else:
                 # Batch only contains positive instances. No need to split.
                 # Either context.shape[0] == x.shape[0] * 16, or context.shape[0] == x.shape[0].
                 if context.shape[0] == x.shape[0] * 16:
                     context = context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)
-                
+                # Otherwise, we don't need to do anything.
+                    
             noise_pred = self.unet(sample=x, timestep=timesteps, encoder_hidden_states=context,
                                    return_dict=False)[0]
             if do_cfg:
                 pos_noise_pred, neg_noise_pred = noise_pred.chunk(2, dim=0)
-                # Classifier-free guidance.
-                noise_pred = pos_noise_pred * cfg_scale + neg_noise_pred * (1 - cfg_scale)
+                # Classifier-free guidance, but the predicted noise is scaled down by cfg_scale,
+                # to match the magnitude of the original UNet predicted noise.
+                noise_pred = pos_noise_pred + neg_noise_pred * (1 - cfg_scale) / cfg_scale
 
         return noise_pred
     
