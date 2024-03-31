@@ -283,7 +283,7 @@ def get_parser(**parser_kwargs):
                         help="Gradient scale of the face projection in layer")
     parser.add_argument("--zs_face_proj_in_initialized_from_IID", type=str2bool, nargs="?", const=True, default=False,
                         help="Initialize the face projection in layer from pretrained IP model")
-    parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=False,
                         help="Load the subject basis generators from the checkpoint")
     
     parser.add_argument("--layerwise_lora_rank", 
