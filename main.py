@@ -265,7 +265,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to use zero-shot learning")
     parser.add_argument("--zs_num_subj_generator_layers", type=int, default=1,
                         help="Layers (depth) of zero-shot subject feature generator")
-    parser.add_argument("--zs_num_latent_queries", type=int, default=64,
+    parser.add_argument("--zs_num_latent_queries", type=int, default=512,
                         help="Number of latent queries for the zero-shot embedding to queries mapping")    
     parser.add_argument("--zs_num_prompt2token_emb_modes", type=int, default=1,
                         help="Number of modes for the zero-shot prompt embedding to token embedding mapping")

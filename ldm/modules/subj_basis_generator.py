@@ -264,7 +264,7 @@ class PerceiverAttention(nn.Module):
 class CrossAttention(nn.Module):
     def __init__(self, input_dim, num_heads=6, p_dropout=0.1, 
                  identity_to_q=False, identity_to_k=False, identity_to_v=False, 
-                 q_aware_to_v=True, num_q=64, q_aware_to_v_lora_rank=64,
+                 q_aware_to_v=True, num_q=512, num_q_group=64, q_aware_to_v_lora_rank=64,
                  identity_to_out=False, out_has_skip=False):
         super().__init__()
         dim_head  = input_dim // num_heads
@@ -278,7 +278,7 @@ class CrossAttention(nn.Module):
         # Otherwise, self.to_v consists of a single projection of input_dim to inner_dim.
         if q_aware_to_v:
             # all_q_mid: 64 * 64 = 4096.
-            all_q_mid = num_q * q_aware_to_v_lora_rank
+            all_q_mid = num_q_group * q_aware_to_v_lora_rank
             self.to_v = nn.Sequential(
                 # number of params: 768 * 4096 = 3,145,728.
                 # Input:  [BS, 16, 768]. Output: [BS, 16, 4096]
@@ -291,15 +291,16 @@ class CrossAttention(nn.Module):
                 # Output: [BS, 64*768, 16].
                 torch.nn.Conv1d(
                     in_channels=all_q_mid,
-                    out_channels=num_q * input_dim,
+                    out_channels=num_q_group * input_dim,
                     kernel_size=1,
-                    groups=num_q,
+                    groups=num_q_group,
                     bias=False,
                 ),
                 # Output: [BS, 64, 16, 768].
-                Rearrange('b (q d) n -> b q n d', q=num_q, d=input_dim),
+                Rearrange('b (q d) n -> b q n d', q=num_q_group, d=input_dim),
                 # nn.LayerNorm(input_dim, elementwise_affine=True),
             )
+            self.v_repeat = num_q // num_q_group
         else:
             self.to_v = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_v else nn.Identity()
 
@@ -337,12 +338,16 @@ class CrossAttention(nn.Module):
 
         #print(v.shape)
 
-        # q: [6, 32, 128], k: [6, 17, 128].
+        # q: [6, 512, 128], k: [6, 17, 128].
         q, k = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k))
         if self.q_aware_to_v:
-            # v: [6, 32, 17, 128].
+            # v: [6, 64, 17, 128].
             # v is query-specific, so there's an extra dim for the query.
             v = rearrange(v, 'b q n (h d) -> (b h) q n d', h=h)
+            # Each v is for a query group with 512/64 = 8 queries.
+            # So each v is repeated 8 times to match the number of queries.
+            # v: [6, 64, 17, 128] -> [6, 512, 17, 128].
+            v = v.repeat(1, self.v_repeat, 1, 1)
         else:
             v = rearrange(v, 'b n (h d) -> (b h) n d', h=h)
 
@@ -391,9 +396,8 @@ class SubjBasisGenerator(nn.Module):
         # DINO vits16 has 6 attention heads:
         # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
-        # Number of low-rank latent queries. If num_latent_queries = 1, 
-        # then basically all output queries are the same.
-        num_latent_queries=64,               
+        num_latent_queries=512,             # Number of latent queries.
+        num_latent_query_groups=64,         # number of latent query groups. Each group has its own v projection.
         num_prompt2token_emb_modes=1,       # number of modes for prompt2token_emb.
         num_lora2hira_modes=1,              # number of modes for Lora2Hira.  
         init_proj_dim=2048,                 # InstantID face projection dimension.
@@ -402,7 +406,7 @@ class SubjBasisGenerator(nn.Module):
         use_FFN: bool = False,              # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         iid_model_ckpt_path: str = None,     # Path to the InstantID model checkpoint.
-        use_q_aware_to_v: bool = False,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
+        use_q_aware_to_v: bool = True,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
         face_proj_in_grad_scale: float = 0.004,  # Gradient scale for face_proj_in.
     ):
@@ -415,6 +419,7 @@ class SubjBasisGenerator(nn.Module):
 
         self.placeholder_is_bg   = placeholder_is_bg
         self.num_latent_queries  = num_latent_queries
+        self.num_latent_query_groups = num_latent_query_groups
         self.latent_query_dim    = output_dim
 
         if not self.placeholder_is_bg:
@@ -469,6 +474,7 @@ class SubjBasisGenerator(nn.Module):
                         CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.1,
                                        identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
                                        q_aware_to_v=q_aware_to_v, num_q=self.num_latent_queries,
+                                       num_q_group=self.num_latent_query_groups,
                                        q_aware_to_v_lora_rank=q_aware_to_v_lora_rank,
                                        identity_to_out=identity_to_out,
                                        out_has_skip=out_has_skip),
