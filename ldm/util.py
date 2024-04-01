@@ -1105,12 +1105,14 @@ def arc2face_project_face_embs(tokenizer, text_encoder, face_embs, return_core_e
             "photo of a id person",
             truncation=True,
             padding="max_length",
-            max_length=tokenizer.model_max_length,
+            max_length=30, #tokenizer.model_max_length,
             return_tensors="pt",
         ).input_ids.to(face_embs.device)
+    # input_ids: [1, 77] or [3, 77].
     input_ids = input_ids.repeat(len(face_embs), 1)
     face_embs_dtype = face_embs.dtype
     face_embs = face_embs.to(text_encoder.dtype)
+    # face_embs_padded: [1, 512] -> [1, 768].
     face_embs_padded = F.pad(face_embs, (0, text_encoder.config.hidden_size-512), "constant", 0)
     token_embs = text_encoder(input_ids=input_ids, return_token_embs=True)
     token_embs[input_ids==arcface_token_id] = face_embs_padded
