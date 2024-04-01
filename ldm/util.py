@@ -1105,7 +1105,7 @@ def arc2face_project_face_embs(tokenizer, text_encoder, face_embs, return_core_e
             "photo of a id person",
             truncation=True,
             padding="max_length",
-            max_length=24, #tokenizer.model_max_length,
+            max_length=tokenizer.model_max_length,
             return_tensors="pt",
         ).input_ids.to(face_embs.device)
     # input_ids: [1, 77] or [3, 77].
