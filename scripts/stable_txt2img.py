@@ -409,6 +409,7 @@ def main(opt):
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.zs_apply_neg_subj_bases = opt.zs_apply_neg_subj_bases
             config.model.params.personalization_config.params.zs_cls_delta_string = opt.zs_cls_delta_string
+            config.model.params.personalization_config.params.zs_load_subj_basis_generators_from_ckpt = True
         else:
             ref_images = None
             ref_masks  = None

@@ -123,7 +123,9 @@ if __name__ == "__main__":
 
     filler_prompt = "photo of a id person"
     comp_prompt = args.prompt 
-    # comp_prompt = filler_prompt
+    test_core_embs = False
+    if test_core_embs:
+        comp_prompt = filler_prompt
 
     negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
     # prompt_embeds_, negative_prompt_embeds_: [4, 77, 768]
@@ -131,12 +133,14 @@ if __name__ == "__main__":
                                                                      do_classifier_free_guidance=True, negative_prompt=negative_prompt)
     pipeline.text_encoder = text_encoder
 
-    # By replacing comp_prompt with filler_prompt, and replacing prompt_embeds_ 4:20 with id_prompt_emb 4:20,
-    # the resulting images are quite similar to those generated with id_prompt_emb. 
-    # This shows id_prompt_emb 4:20 contains the ID of the person.
-    # prompt_embeds_[:, 4:20] = id_prompt_emb[:, 4:20]
-    # id_prompt_emb = prompt_embeds_
-
+    if test_core_embs:
+        # By replacing comp_prompt with filler_prompt, and replacing prompt_embeds_ 4:20 with id_prompt_emb 4:20,
+        # the resulting images are quite similar to those generated with id_prompt_emb. 
+        # This shows id_prompt_emb 4:20 contains the ID of the person.
+        prompt_embeds_[:, 4:20] = id_prompt_emb[:, 4:20]
+        id_prompt_emb = prompt_embeds_
+        negative_prompt_embeds_[:, :neg_id_prompt_emb.shape[1]] = neg_id_prompt_emb
+        
     if len(comp_prompt) > 0:
         pos_prompt_emb  = torch.cat([id_prompt_emb,     prompt_embeds_], dim=1)
         neg_prompt_emb  = torch.cat([neg_id_prompt_emb, negative_prompt_embeds_], dim=1)
