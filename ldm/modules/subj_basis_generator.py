@@ -530,8 +530,7 @@ class SubjBasisGenerator(nn.Module):
 
     def init_face_proj_in(self, face_proj_in_grad_scale=0.004, device='cpu'):
         self.face_proj_in =  CLIPTextModelWrapper.from_pretrained(
-                                'arc2face/models', subfolder="encoder", torch_dtype=torch.float16
-                             )        
+                                'arc2face/models', subfolder="encoder")
         self.face_proj_in.to(device)
 
         print(f"Subj face_proj_in is loaded from './arc2face/models/encoder'")
