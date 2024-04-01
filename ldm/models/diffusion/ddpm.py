@@ -3555,7 +3555,7 @@ class LatentDiffusion(DDPM):
             # Sometimes the max among loss_diffs_subj_mix is not teachable (> clip_loss_thres),
             # so we set the loss_diffs_subj_mix of non-teachable instances to be a very large 
             # negative number, so that non-teachable instances will never be selected as the best candidate.
-            loss_diffs_subj_mix[~are_insts_teachable] = -1e5
+            loss_diffs_subj_mix[~are_insts_teachable] = -1e4
             best_cand_idx = torch.argmax(loss_diffs_subj_mix).item()
 
             self.num_total_teacher_filter_iters += 1

@@ -1091,7 +1091,7 @@ def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1,
 
     return scaled_text_embedding
 
-@torch.autocast(device_type="cuda")
+#@torch.autocast(device_type="cuda")
 def arc2face_project_face_embs(tokenizer, text_encoder, face_embs, return_core_embs_only=False):
 
     '''
