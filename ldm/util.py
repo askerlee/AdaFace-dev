@@ -1091,7 +1091,6 @@ def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1,
 
     return scaled_text_embedding
 
-@torch.no_grad()
 def arc2face_project_face_embs(tokenizer, text_encoder, face_embs, return_core_embs_only=False):
 
     '''
@@ -1100,6 +1099,7 @@ def arc2face_project_face_embs(tokenizer, text_encoder, face_embs, return_core_e
 
     arcface_token_id = tokenizer.encode("id", add_special_tokens=False)[0]
 
+    # This step should be quite fast, and there's no need to cache the input_ids.
     input_ids = tokenizer(
             "photo of a id person",
             truncation=True,
@@ -1123,6 +1123,8 @@ def arc2face_project_face_embs(tokenizer, text_encoder, face_embs, return_core_e
     prompt_embeds = prompt_embeds.to(face_embs_dtype)
 
     if return_core_embs_only:
+        # token 4: 'id' in "photo of a id person". 
+        # 4:20 are the most important 16 embeddings that contain the subject's identity.
         # [N, 77, 768] -> [N, 16, 768]
         return prompt_embeds[:, 4:20]
     else:
@@ -1180,13 +1182,15 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
     faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
 
     # arc2face_pos_prompt_emb, arc2face_neg_prompt_emb: [BS, 77, 768]
-    arc2face_pos_prompt_emb     = arc2face_project_face_embs(tokenizer, text_encoder, faceid_embeds)
+    with torch.no_grad():
+        arc2face_pos_prompt_emb     = arc2face_project_face_embs(tokenizer, text_encoder, faceid_embeds)
     if not rand_face:
         faceid_embeds = faceid_embeds.repeat(out_image_count, 1)
         arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.repeat(out_image_count, 1, 1)
 
     if gen_neg_prompt:
-        arc2face_neg_prompt_emb = arc2face_project_face_embs(tokenizer, text_encoder, torch.zeros_like(faceid_embeds))
+        with torch.no_grad():
+            arc2face_neg_prompt_emb = arc2face_project_face_embs(tokenizer, text_encoder, torch.zeros_like(faceid_embeds))
         #if not rand_face:
         #    arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.repeat(out_image_count, 1, 1)
         return faceid_embeds, arc2face_pos_prompt_emb, arc2face_neg_prompt_emb
