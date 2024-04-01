@@ -1020,7 +1020,6 @@ class EmbeddingManager(nn.Module):
             zs_use_FFN=False,
             zs_use_q_aware_to_v=True,
             zs_face_proj_in_grad_scale=0.004,
-            zs_face_proj_in_initialized_from_IID=True,
             zs_load_subj_basis_generators_from_ckpt=False,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
@@ -1155,7 +1154,6 @@ class EmbeddingManager(nn.Module):
             self.zs_cls_delta_string   = zs_cls_delta_string
             self.zs_num_latent_queries = zs_num_latent_queries
             self.zs_face_proj_in_grad_scale = zs_face_proj_in_grad_scale
-            self.zs_face_proj_in_initialized_from_IID = zs_face_proj_in_initialized_from_IID
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
             
             if self.zs_cls_delta_string is not None:
@@ -1237,11 +1235,7 @@ class EmbeddingManager(nn.Module):
                 num_out_queries = self.zs_num_vecs_per_subj if not placeholder_is_bg else self.zs_num_vecs_per_bg
                 # bg placeholder always has depth=1.
                 depth = zs_num_subj_generator_layers if not placeholder_is_bg else 1
-                if zs_face_proj_in_initialized_from_IID:
-                    iid_model_ckpt_path = "models/instantid/ip-adapter.bin"
-                else:
-                    iid_model_ckpt_path = None
-                    
+
                 subj_basis_generator = SubjBasisGenerator(depth=depth,
                                                           num_latent_queries = zs_num_latent_queries,
                                                           num_out_queries = num_out_queries,
@@ -1253,7 +1247,6 @@ class EmbeddingManager(nn.Module):
                                                           elementwise_affine = zs_elementwise_affine,
                                                           use_FFN = zs_use_FFN,
                                                           placeholder_is_bg = placeholder_is_bg,
-                                                          iid_model_ckpt_path = iid_model_ckpt_path,
                                                           use_q_aware_to_v = zs_use_q_aware_to_v,
                                                           face_proj_in_grad_scale = self.zs_face_proj_in_grad_scale)
 
@@ -2396,8 +2389,6 @@ class EmbeddingManager(nn.Module):
                 self.ca_outfeat_lns = ckpt["ca_outfeat_lns"]
 
             # Only load subj_basis_generator from ckpt if the ckpt is set with the same do_zero_shot.
-            # If zs_face_proj_in_initialized_from_IID, then keep the randomly initialized subj_basis_generator,
-            # and don't load the subj_basis_generator from ckpt.
             if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"] and self.zs_load_subj_basis_generators_from_ckpt:
                 for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
                     # repr(ckpt_subj_basis_generator) will assign missing variables to ckpt_subj_basis_generator.
@@ -2406,14 +2397,10 @@ class EmbeddingManager(nn.Module):
                     # Then replace it with the one in ckpt.
                     print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                     self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
-                    # Re-initialize face_proj_in from InstantID ckpt.
-                    if self.zs_face_proj_in_initialized_from_IID:
-                        iid_model_ckpt_path = "models/instantid/ip-adapter.bin"
-                        ckpt_subj_basis_generator.init_face_proj_in(2048, iid_model_ckpt_path, 
-                                                                    self.zs_face_proj_in_grad_scale, device='cpu')
+                    # Dynamically expand the latent queries of the subj_basis_generator.
                     if ckpt_subj_basis_generator.num_latent_queries < self.zs_num_latent_queries \
                       and not ckpt_subj_basis_generator.placeholder_is_bg:
-                        ckpt_subj_basis_generator.extend_latent_queries(self.zs_num_latent_queries)
+                        ckpt_subj_basis_generator.expand_latent_queries(self.zs_num_latent_queries)
             else:
                 print(f"Skipping loading subj_basis_generator from {ckpt_path}")
 

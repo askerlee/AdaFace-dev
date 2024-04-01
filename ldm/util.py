@@ -1092,7 +1092,7 @@ def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1,
     return scaled_text_embedding
 
 @torch.no_grad()
-def arc2face_project_face_embs(tokenizer, text_encoder, face_embs):
+def arc2face_project_face_embs(tokenizer, text_encoder, face_embs, return_core_embs_only=False):
 
     '''
     face_embs: (N, 512) normalized ArcFace embeddings
@@ -1108,7 +1108,8 @@ def arc2face_project_face_embs(tokenizer, text_encoder, face_embs):
             return_tensors="pt",
         ).input_ids.to(face_embs.device)
     input_ids = input_ids.repeat(len(face_embs), 1)
-
+    face_embs_dtype = face_embs.dtype
+    face_embs = face_embs.to(text_encoder.dtype)
     face_embs_padded = F.pad(face_embs, (0, text_encoder.config.hidden_size-512), "constant", 0)
     token_embs = text_encoder(input_ids=input_ids, return_token_embs=True)
     token_embs[input_ids==arcface_token_id] = face_embs_padded
@@ -1118,7 +1119,15 @@ def arc2face_project_face_embs(tokenizer, text_encoder, face_embs):
         input_token_embs=token_embs
     )[0]
 
-    return prompt_embeds
+    # Restore the original dtype of prompt_embeds: float16 -> float32.
+    prompt_embeds = prompt_embeds.to(face_embs_dtype)
+
+    if return_core_embs_only:
+        # [N, 77, 768] -> [N, 16, 768]
+        return prompt_embeds[:, 4:20]
+    else:
+        # [N, 77, 768]
+        return prompt_embeds
 
 def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder, 
                                 image_folder, image_paths, images_np,

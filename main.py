@@ -281,8 +281,6 @@ def get_parser(**parser_kwargs):
                         help="Whether to use dynamic to_v in zero-shot learning")
     parser.add_argument("--zs_face_proj_in_grad_scale", type=float, default=0.004,
                         help="Gradient scale of the face projection in layer")
-    parser.add_argument("--zs_face_proj_in_initialized_from_IID", type=str2bool, nargs="?", const=True, default=True,
-                        help="Initialize the face projection in layer from pretrained IP model")
     parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=False,
                         help="Load the subject basis generators from the checkpoint")
     
@@ -965,7 +963,6 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_num_latent_queries     = opt.zs_num_latent_queries
             config.model.params.personalization_config.params.zs_use_q_aware_to_v       = opt.zs_use_q_aware_to_v
             config.model.params.personalization_config.params.zs_face_proj_in_grad_scale = opt.zs_face_proj_in_grad_scale
-            config.model.params.personalization_config.params.zs_face_proj_in_initialized_from_IID = opt.zs_face_proj_in_initialized_from_IID
             config.model.params.personalization_config.params.zs_load_subj_basis_generators_from_ckpt = opt.zs_load_subj_basis_generators_from_ckpt
             
             # When using zero-shot, we load different subjects in the same batch.

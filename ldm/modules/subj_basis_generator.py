@@ -10,13 +10,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from transformers import CLIPVisionModel
+from transformers import CLIPVisionModel, CLIPTokenizer
 import numpy as np
 from torch import einsum
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from transformers.utils import ModelOutput
-from ldm.util import anneal_value, gen_gradient_scaler
+from ldm.util import anneal_value, gen_gradient_scaler, arc2face_project_face_embs
+from arc2face.arc2face import CLIPTextModelWrapper
+
+tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 
 def reshape_tensor(x, num_heads):
     bs, length, width = x.shape
@@ -72,52 +75,6 @@ class IP_MLPProjModel(nn.Module):
         x = self.norm(x)
         return x
 
-# https://github.com/InstantID/InstantID/blob/main/ip_adapter/resampler.py
-class IID_Resampler(nn.Module):
-    def __init__(
-        self,
-        dim=1280,
-        depth=4,
-        dim_head=64,
-        num_heads=20,
-        num_queries=16,
-        embedding_dim=512,
-        output_dim=2048,
-        ff_mult=4,
-    ):
-        super().__init__()
-        
-        self.latents = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
-        
-        self.proj_in = nn.Linear(embedding_dim, dim)
-
-        self.proj_out = nn.Linear(dim, output_dim)
-        self.norm_out = nn.LayerNorm(output_dim)
-        
-        self.layers = nn.ModuleList([])
-        for _ in range(depth):
-            self.layers.append(
-                nn.ModuleList(
-                    [
-                        PerceiverAttention(dim=dim, dim_head=dim_head, num_heads=num_heads),
-                        FeedForward(dim=dim, mult=ff_mult, p_dropout=0),
-                    ]
-                )
-            )
-
-    def forward(self, x):
-        
-        latents = self.latents.repeat(x.size(0), 1, 1)
-        
-        x = self.proj_in(x)
-        
-        for attn, ff in self.layers:
-            latents = attn(x, latents) + latents
-            latents = ff(latents) + latents
-            
-        latents = self.proj_out(latents)
-        return self.norm_out(latents)
-    
 # group_dim: the tensor dimension that corresponds to the multiple groups.
 class LearnedSoftAggregate(nn.Module):
     def __init__(self, num_feat, group_dim, keepdim=False):
@@ -400,12 +357,11 @@ class SubjBasisGenerator(nn.Module):
         num_latent_query_groups=64,         # number of latent query groups. Each group has its own v projection.
         num_prompt2token_emb_modes=1,       # number of modes for prompt2token_emb.
         num_lora2hira_modes=1,              # number of modes for Lora2Hira.  
-        init_proj_dim=2048,                 # InstantID face projection dimension.
+        init_proj_dim=768,                 # InstantID face projection dimension.
         output_dim=768,                     # CLIP text embedding input dimension.
         elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
         use_FFN: bool = False,              # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
-        iid_model_ckpt_path: str = None,     # Path to the InstantID model checkpoint.
         use_q_aware_to_v: bool = True,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
         face_proj_in_grad_scale: float = 0.004,  # Gradient scale for face_proj_in.
@@ -432,10 +388,9 @@ class SubjBasisGenerator(nn.Module):
                                                               elementwise_affine=elementwise_affine)
 
             # The dimension of InstantID face features for humans is NOT the same as output_dim = latent_query_dim.   
-            # self.face_proj_in: [1, 512] -> [1, 16, 2048].
+            # self.face_proj_in: [1, 512] -> [1, 16, 768].
             # If self.placeholder_is_bg: face_proj_in is set to None.
-            self.init_face_proj_in(init_proj_dim, iid_model_ckpt_path, 
-                                   face_proj_in_grad_scale, device='cpu')
+            self.init_face_proj_in(face_proj_in_grad_scale, device='cpu')
             
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
@@ -495,32 +450,35 @@ class SubjBasisGenerator(nn.Module):
 
     def forward(self, clip_features, id_embs, extra_token_embs, is_face, training_percent=0):    
         BS = clip_features.shape[0]
-        if not hasattr(self, 'face_proj_in_grad_scale'):
-            self.face_proj_in_grad_scale = 0.004
             
         # No need to use id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (id_embs is not None):
             if is_face:
-                if id_embs.ndim == 2:
-                    id_embs = id_embs.unsqueeze(1)
-                # id_embs: [BS, 1, 512] -> [BS, 16, 2048].
+                # id_embs: [BS, 512] -> [BS, 16, 768].
                 # Loaded pretrained IP-Adapter model weight. No need to update face_proj_in.
                 # face_proj_in_grad_scale == 0: freeze the face_proj_in.
                 if self.face_proj_in_grad_scale == 0:
                     with torch.no_grad():
-                        id_embs_pos = self.face_proj_in(id_embs)
+                        # id_embs: [BS, 16, 768].
+                        id_embs_pos = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
+                                                                 id_embs, return_core_embs_only=True)
                         # Use a batch size 1 to reduce computation.
-                        id_embs_neg = self.face_proj_in(torch.zeros_like(id_embs[[0]]))
+                        id_embs_neg = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
+                                                                 torch.zeros_like(id_embs[[0]]), 
+                                                                 return_core_embs_only=True)
                 else:
-                    id_embs_pos = self.face_proj_in(id_embs)
+                    # id_embs: [BS, 16, 768].
+                    id_embs_pos = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
+                                                             id_embs, return_core_embs_only=True)
                     # Use a batch size 1 to reduce computation.
-                    id_embs_neg = self.face_proj_in(torch.zeros_like(id_embs[[0]]))
+                    id_embs_neg = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
+                                                             torch.zeros_like(id_embs[[0]]), 
+                                                             return_core_embs_only=True)
 
                 id_embs0 = id_embs_pos - id_embs_neg
                 id_embs0 = self.face_proj_in_grad_scaler(id_embs0)
-                id_embs = F.normalize(id_embs0, p=2, dim=-1)
-                # id_embs is projected to the token embedding space. [BS, 16, 2048] -> [BS, 16, 768].
-                id_embs = self.prompt2token_emb_proj(id_embs)
+                # id_embs is projected to the token embedding space. [BS, 16, 768] -> [BS, 16, 768].
+                id_embs = self.prompt2token_emb_proj(id_embs0)
                 id_embs = self.face_proj_in_grad_scaler(id_embs)
             else:
                 # id_embs: [BS, 384] -> [BS, 16, 768].
@@ -570,30 +528,19 @@ class SubjBasisGenerator(nn.Module):
         output_queries = self.lora2hira(context) * self.output_scale
         return output_queries
 
-    def init_face_proj_in(self, init_proj_dim=2048, iid_model_ckpt_path=None, 
-                          face_proj_in_grad_scale=0.004, device='cpu'):
-        self.face_proj_in = IID_Resampler()
+    def init_face_proj_in(self, face_proj_in_grad_scale=0.004, device='cpu'):
+        self.face_proj_in =  CLIPTextModelWrapper.from_pretrained(
+                                'arc2face/models', subfolder="encoder", torch_dtype=torch.float16
+                             )        
         self.face_proj_in.to(device)
 
-        if iid_model_ckpt_path is not None:
-            iid_model_ckpt = torch.load(iid_model_ckpt_path, map_location=device)
-            self.face_proj_in.load_state_dict(iid_model_ckpt['image_proj'])
-            print(f"Subj face_proj_in is loaded from {iid_model_ckpt_path}")
-        else:
-            print("Subj face_proj_in is randomly initialized")
+        print(f"Subj face_proj_in is loaded from './arc2face/models/encoder'")
 
         self.face_proj_in_grad_scale  = face_proj_in_grad_scale
         self.face_proj_in_grad_scaler = gen_gradient_scaler(face_proj_in_grad_scale)
 
-        if (not self.placeholder_is_bg) and (init_proj_dim != self.prompt2token_emb_proj[0].weight.shape[1]):
-            old_linear_shape = self.prompt2token_emb_proj[0].weight.shape
-            # init_proj_dim has changed (to be different from subj_basis_generator loaded from an old ckpt). 
-            # So we need to re-initialize the first Linear of prompt2token_emb_proj. Other layers are not affected.
-            self.prompt2token_emb_proj[0]  = nn.Linear(init_proj_dim, old_linear_shape[0], bias=False)
-            print(f"Re-initialize prompt2token_emb_proj nn.Linear from {old_linear_shape} to {self.prompt2token_emb_proj[0].weight.shape}.")
-
     # q_aware_to_v_lora_rank has to be the same as the old q_aware_to_v_lora_rank.
-    def extend_latent_queries(self, new_num_latent_queries, q_aware_to_v_lora_rank=64, output_dim=768):
+    def expand_latent_queries(self, new_num_latent_queries, q_aware_to_v_lora_rank=64, output_dim=768):
         assert new_num_latent_queries > self.num_latent_queries, "new_num_latent_queries must be > num_latent_queries."
 
         for i in range(self.depth):

@@ -121,13 +121,21 @@ if __name__ == "__main__":
     pipeline.text_encoder = orig_text_encoder
     num_images = args.out_image_count
 
+    filler_prompt = "photo of a id person"
     comp_prompt = args.prompt 
+    # comp_prompt = filler_prompt
 
     negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
     # prompt_embeds_, negative_prompt_embeds_: [4, 77, 768]
     prompt_embeds_, negative_prompt_embeds_ = pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt = num_images,
                                                                      do_classifier_free_guidance=True, negative_prompt=negative_prompt)
     pipeline.text_encoder = text_encoder
+
+    # By replacing comp_prompt with filler_prompt, and replacing prompt_embeds_ 4:20 with id_prompt_emb 4:20,
+    # the resulting images are quite similar to those generated with id_prompt_emb. 
+    # This shows id_prompt_emb 4:20 contains the ID of the person.
+    # prompt_embeds_[:, 4:20] = id_prompt_emb[:, 4:20]
+    # id_prompt_emb = prompt_embeds_
 
     if len(comp_prompt) > 0:
         pos_prompt_emb  = torch.cat([id_prompt_emb,     prompt_embeds_], dim=1)
