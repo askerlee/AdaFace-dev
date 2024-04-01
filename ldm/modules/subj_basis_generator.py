@@ -470,10 +470,12 @@ class SubjBasisGenerator(nn.Module):
                     # id_embs: [BS, 16, 768].
                     id_embs_pos = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
                                                              id_embs, return_core_embs_only=True)
-                    # Use a batch size 1 to reduce computation.
-                    id_embs_neg = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
-                                                             torch.zeros_like(id_embs[[0]]), 
-                                                             return_core_embs_only=True)
+                    # Save RAM. No grad is needed for the negative face embeddings.
+                    with torch.no_grad():
+                        # Use a batch size 1 to reduce computation.
+                        id_embs_neg = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
+                                                                torch.zeros_like(id_embs[[0]]), 
+                                                                return_core_embs_only=True)
 
                 id_embs0 = id_embs_pos - id_embs_neg
                 id_embs0 = self.face_proj_in_grad_scaler(id_embs0)
