@@ -532,6 +532,11 @@ class SubjBasisGenerator(nn.Module):
         self.face_proj_in.to(device)
 
         print(f"Subj face_proj_in is loaded from './arc2face/models/encoder'")
+        # Freeze the face_proj_in if face_proj_in_grad_scale == 0.
+        # Setting requires_grad to False will save the RAM taken by the optimizer.
+        if face_proj_in_grad_scale == 0:
+            for param in self.face_proj_in.parameters():
+                param.requires_grad = False
 
         self.face_proj_in_grad_scale  = face_proj_in_grad_scale
         self.face_proj_in_grad_scaler = gen_gradient_scaler(face_proj_in_grad_scale)
