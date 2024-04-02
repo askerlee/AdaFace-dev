@@ -942,8 +942,13 @@ class PersonalizedBase(Dataset):
 # In the first few iterations, they will sample the same subjects, but 
 # due to randomness in the DDPM model (?), soon the sampled subjects will be different on different GPUs.
 class SubjectSampler(Sampler):
-    def __init__(self, num_subjects, subject_names, num_batches, batch_size, replay_buffer_size=20, p_replay=0.2,
-                 same_subject_in_each_batch=False, debug=False):
+    def __init__(self, num_subjects, subject_names, subjects_are_faces, num_batches, batch_size, replay_buffer_size=20, p_replay=0.2,
+                 same_subject_in_each_batch=False, skip_non_faces=True, debug=False):
+
+        # If do_zero_shot, then skip non-faces in the dataset. Otherwise, non-face subjects (dogs, cats)
+        # will disrupt the model update.
+        self.skip_non_faces = skip_non_faces        
+        self.subjects_are_faces = subjects_are_faces
         self.batch_size = batch_size
         # num_batches: +1 to make sure the last batch is also used.
         self.num_batches  = num_batches + 1
@@ -975,7 +980,11 @@ class SubjectSampler(Sampler):
             new_subj_idx = self.replay_buffer.get()
             print(f"Replay subject {new_subj_idx}:{self.subject_names[new_subj_idx]}, qsize: {self.replay_buffer.qsize()}")
         else:
-            new_subj_idx = random.randint(0, self.num_subjects - 1)
+            while True:
+                new_subj_idx = random.randint(0, self.num_subjects - 1)
+                if not self.skip_non_faces or self.subjects_are_faces[new_subj_idx]:
+                    break
+                
             self.replay_buffer.put(new_subj_idx)
             # Pop out the oldest subject index if the replay buffer is full, so that
             # the replay buffer always contains <= replay_buffer_size subjects.
