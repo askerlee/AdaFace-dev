@@ -1747,7 +1747,7 @@ class LatentDiffusion(DDPM):
                 self.iter_flags['batch_have_fg_mask'][:] = False
                 # Simply denoise a totally random x_start with arc2face_pos_prompt_emb.
                 x_start = torch.randn_like(x_start)
-
+                self.iter_flags['is_face'] = [True] * x_start.shape[0]
 
             '''
             # Sanity check for zs_id_embs.
@@ -3891,7 +3891,7 @@ class LatentDiffusion(DDPM):
             avg_subj_score_at_mf = masked_mean(subj_score_at_mf, fg_mask3, dim=(1,2), keepdim=True)
             avg_subj_score_at_mb = masked_mean(subj_score_at_mb, bg_mask3, dim=(1,2), keepdim=True)
 
-            if 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+            if False and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
                 print(f'layer {unet_layer_idx}')
                 print(f'avg_subj_score_at_mf: {avg_subj_score_at_mf.mean():.4f}, avg_subj_score_at_mb: {avg_subj_score_at_mb.mean():.4f}')
             
@@ -4070,7 +4070,7 @@ class LatentDiffusion(DDPM):
                 avg_bg_score_at_mf   = masked_mean(bg_score_at_mf,   fg_mask3, dim=(1,2), keepdim=True)
                 avg_bg_score_at_mb   = masked_mean(bg_score_at_mb,   bg_mask3, dim=(1,2), keepdim=True)
 
-                if 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+                if False and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
                     print(f'layer {unet_layer_idx}')
                     print(f'avg_subj_score_at_mf: {avg_subj_score_at_mf.mean():.4f}, avg_subj_score_at_mb: {avg_subj_score_at_mb.mean():.4f}')
                     print(f'avg_bg_score_at_mf:   {avg_bg_score_at_mf.mean():.4f},   avg_bg_score_at_mb:   {avg_bg_score_at_mb.mean():.4f}')

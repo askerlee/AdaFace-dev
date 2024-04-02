@@ -1,5 +1,3 @@
-import diffusers
-
 from diffusers import (
     StableDiffusionPipeline,
     UNet2DConditionModel,
