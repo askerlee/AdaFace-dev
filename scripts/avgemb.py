@@ -12,6 +12,7 @@ weight averaging), but post-training.
 Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
 """
 import torch
+import torch.nn as nn
 import argparse
 import os
 import glob
@@ -25,9 +26,9 @@ parser.add_argument('--input', default='', type=str, metavar='PATH',
                     help='path to base input folder containing checkpoints')
 parser.add_argument('--filter', default='*0.pt', type=str, metavar='WILDCARD',
                     help='checkpoint filter (path wildcard)')
-parser.add_argument('--output', default='averaged.pt', type=str, metavar='PATH',
-                    help='output filename')
-parser.add_argument('--min', type=int, help='Minimal iteration of checkpoints to average')
+parser.add_argument('--min', type=int, default=500, help='Minimal iteration of checkpoints to average')
+parser.add_argument('--max', type=int, default=-1,  help='Maximum iteration of checkpoints to average')
+
 
 
 def main():
@@ -38,9 +39,11 @@ def main():
     pattern += args.filter
     checkpoint_filenames = glob.glob(pattern, recursive=True)
     checkpoint_filenames = filter(lambda x: int(re.search(r"(\d+).pt", x).group(1)) >= args.min, checkpoint_filenames)
+    if args.max > 0:
+        checkpoint_filenames = filter(lambda x: int(re.search(r"(\d+).pt", x).group(1)) <= args.max, checkpoint_filenames)
+    checkpoint_filenames = filter(lambda x: 'avg_' not in x, checkpoint_filenames)
     checkpoint_filenames = sorted(checkpoint_filenames, key=lambda x: int(re.search(r"(\d+).pt", x).group(1)))
-    avg_checkpoint_filenames = checkpoint_filenames
-    if len(avg_checkpoint_filenames) == 0:
+    if len(checkpoint_filenames) == 0:
         print("Error: No checkpoints matching '{}' and iteration >= {} in '{}'".format(
                 args.filter, args.min, args.input))
         return
@@ -48,41 +51,42 @@ def main():
     print("Selected checkpoints:")
     [print(c) for c in checkpoint_filenames]
 
-    avg_state_dict = {}
-    avg_counts = {}
-    for c in avg_checkpoint_filenames:
+    avg_ckpt = {}
+    avg_counts = 0
+    for c in checkpoint_filenames:
         checkpoint = torch.load(c, map_location='cpu')
-        new_state_dict = checkpoint['string_to_param']
-        if not new_state_dict:
-            print("Error: Checkpoint ({}) doesn't exist".format(args.checkpoint))
-            continue
+        for k in checkpoint:
+            if k not in avg_ckpt:
+                avg_ckpt[k] = checkpoint[k]
+            elif isinstance(checkpoint[k], nn.Module):
+                #print(f"nn.Module: {k}")
+                avg_state_dict = avg_ckpt[k].state_dict()
+                param_state_dict = checkpoint[k]
+                for m_k, m_v in param_state_dict.items():
+                    if m_k not in avg_state_dict:
+                        avg_state_dict[m_k] = copy.copy(m_v)
+                    else:
+                        avg_state_dict[m_k].data += m_v
+            elif isinstance(checkpoint[k], nn.Parameter):
+                #print(f"nn.Parameter: {k}")
+                avg_ckpt[k].data += checkpoint[k].data
 
-        for k, v in new_state_dict.items():
-            if k not in avg_state_dict:
-                avg_state_dict[k] = copy.copy(v)
-                avg_counts[k] = 1
-            else:
-                avg_state_dict[k].data = v
-                avg_counts[k] += 1
+        avg_counts += 1
+    
+    for k in avg_ckpt:
+        if isinstance(avg_ckpt[k], nn.Parameter):
+            print(f"nn.Parameter: {k}")
+            avg_ckpt[k].data /= avg_counts
+        elif isinstance(avg_ckpt[k], nn.Module):
+            print(f"nn.Module: {k}")
+            avg_state_dict = avg_ckpt[k].state_dict()
+            for m_k, m_v in avg_state_dict.items():
+                m_v.data = (m_v.data / avg_counts).to(m_v.data.dtype)
+        else:
+            print(f"{type(avg_ckpt[k])}: {k}")
 
-    for k, v in avg_state_dict.items():
-        v.data.div_(avg_counts[k])
-
-    # float32 overflow seems unlikely based on weights seen to date, but who knows
-    float32_info = torch.finfo(torch.float32)
-    final_state_dict = {}
-    for k, v in avg_state_dict.items():
-        v = v.clamp(float32_info.min, float32_info.max)
-        final_state_dict[k] = v.to(dtype=torch.float32)
-
-    complete_state_dict = { 'string_to_token': checkpoint['string_to_token'],
-                            'string_to_param': torch.nn.ParameterDict(final_state_dict) }
-
-    output_filename = os.path.join(args.input, f"avg_{args.min}.pt")
-    try:
-        torch.save(complete_state_dict, output_filename, _use_new_zipfile_serialization=False)
-    except:
-        torch.save(complete_state_dict, output_filename)
+    output_filename = os.path.join(args.input, f"embeddings_gs-avg_{args.min}.pt")
+    torch.save(avg_ckpt, output_filename)
 
     print("=> Saved state_dict to '{}'".format(output_filename))
 

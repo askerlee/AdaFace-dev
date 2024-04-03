@@ -116,7 +116,7 @@ def parse_args():
                         help="number of DDIM steps to generate samples")
     parser.add_argument("--ckpt_dir", type=str, default="logs",
                         help="parent directory containing checkpoints of all subjects")
-    parser.add_argument("--ckpt_iter", type=int, default=-1,
+    parser.add_argument("--ckpt_iter", type=str, default=None,
                         help="checkpoint iteration to use")
     parser.add_argument("--ckpt_sig", dest='ckpt_extra_sig', type=str, default="",
                         help="Extra signature that is part of the checkpoint directory name."
@@ -350,7 +350,7 @@ if __name__ == "__main__":
             else:
                 bb_type = args.bb_type
 
-            if args.ckpt_iter == -1:
+            if args.ckpt_iter is None:
                 ckpt_iter = ckpt_iters[broad_class]
             else:
                 ckpt_iter = args.ckpt_iter
