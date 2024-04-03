@@ -482,11 +482,14 @@ class SubjBasisGenerator(nn.Module):
 
                 id_embs0 = id_embs_pos - id_embs_neg
                 id_embs0 = self.face_proj_in_grad_scaler(id_embs0)
+                id_embs  = id_embs0
                 # id_embs is projected to the token embedding space. [BS, 16, 768] -> [BS, 16, 768].
+                '''
                 id_embs = self.prompt2token_emb_proj(id_embs0)
                 # Reduce the update rate of prompt2token_emb_proj.
                 if hasattr(self, 'prompt2token_emb_proj_grad_scaler'):
                     id_embs = self.prompt2token_emb_proj_grad_scaler(id_embs)
+                '''
             else:
                 # id_embs: [BS, 384] -> [BS, 16, 768].
                 # obj_proj_in is expected to project the DINO object features to 
