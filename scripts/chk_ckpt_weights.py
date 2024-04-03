@@ -56,14 +56,16 @@ if 'string_to_subj_basis_generator_dict' in emb_ckpt:
                 param_total_norm  = 0
                 param_total_delta = 0
                 for param_name, param in subj_basis_generator.named_parameters():
-                    prev_param = prev_subj_basis_generator.state_dict()[param_name]
-                    param_norm = torch.norm(param).item()
-                    param_delta = torch.norm(param - prev_param).item()
-                    param_total_norm  += param_norm
-                    param_total_delta += param_delta
-                    param_shape = list(param.shape)
+                    # Skip non-learnable parameters.
+                    if param.requires_grad:
+                        prev_param = prev_subj_basis_generator.state_dict()[param_name]
+                        param_norm = torch.norm(param).item()
+                        param_delta = torch.norm(param - prev_param).item()
+                        param_total_norm  += param_norm
+                        param_total_delta += param_delta
+                        param_shape = list(param.shape)
 
-                    print(f"{param_name}-{iteration} {param_shape} norm/diff: {param_norm:.4f}/{param_delta:.4f}")
+                        print(f"{param_name}-{iteration} {param_shape} norm/diff: {param_norm:.4f}/{param_delta:.4f}")
 
                 print(f"Total norm/diff: {param_total_norm:.4f}/{param_total_delta:.4f}")
 
