@@ -489,8 +489,6 @@ class SubjBasisGenerator(nn.Module):
                 # the token embedding space. So no need to use prompt2token_emb_proj.
                 id_embs = self.obj_proj_in(id_embs)
 
-            breakpoint()
-
             if extra_token_embs is not None:
                 # extra_token_embs: [BS, 768] -> [BS, 1, 768].
                 # extra_token_embs should have been layer-normalized before being passed to the model.
