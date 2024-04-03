@@ -229,8 +229,14 @@ class CrossAttention(nn.Module):
 
         self.num_heads = num_heads
         self.q_aware_to_v = q_aware_to_v
-        self.to_q = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_q else nn.Identity()
-        self.to_k = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_k else nn.Identity()
+        self.to_q = nn.Sequential(
+                        nn.Linear(input_dim, inner_dim, bias=False),
+                        nn.LayerNorm(inner_dim, elementwise_affine=True) 
+                    ) if not identity_to_q else nn.Identity()
+        self.to_k = nn.Sequential(
+                        nn.Linear(input_dim, inner_dim, bias=False),
+                        nn.LayerNorm(inner_dim, elementwise_affine=True) 
+                    ) if not identity_to_k else nn.Identity()
         # If q_aware_to_v is True, then self.to_v consists of num_q projections of input_dim to inner_dim.
         # Otherwise, self.to_v consists of a single projection of input_dim to inner_dim.
         if q_aware_to_v:
@@ -255,7 +261,7 @@ class CrossAttention(nn.Module):
                 ),
                 # Output: [BS, 64, 16, 768].
                 Rearrange('b (q d) n -> b q n d', q=num_q_group, d=input_dim),
-                # nn.LayerNorm(input_dim, elementwise_affine=True),
+                nn.LayerNorm(input_dim, elementwise_affine=True),
             )
             self.v_repeat = num_q // num_q_group
         else:
@@ -482,6 +488,8 @@ class SubjBasisGenerator(nn.Module):
                 # obj_proj_in is expected to project the DINO object features to 
                 # the token embedding space. So no need to use prompt2token_emb_proj.
                 id_embs = self.obj_proj_in(id_embs)
+
+            breakpoint()
 
             if extra_token_embs is not None:
                 # extra_token_embs: [BS, 768] -> [BS, 1, 768].
