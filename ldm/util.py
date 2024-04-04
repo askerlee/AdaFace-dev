@@ -1139,7 +1139,7 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
                                       input_max_length=21):
 
     '''
-    face_prompt_embs: (B, 21, 768).
+    face_prompt_embs: (B, 16, 768). Only the core embeddings, no paddings.
     input_max_length: BOS + "photo of a" + 16 face_prompt_embs + EOS.
     '''
 
@@ -1156,9 +1156,12 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
     face_prompt_embs_dtype = face_prompt_embs.dtype
     face_prompt_embs = face_prompt_embs.to(text_encoder.dtype)
 
+    token_embs = text_encoder(input_ids=input_ids, return_token_embs=True)
+    token_embs[:, 4:20] = face_prompt_embs
+
     prompt_embeds = text_encoder(
         input_ids=input_ids,
-        input_token_embs=face_prompt_embs
+        input_token_embs=token_embs
     )[0]
 
     # Restore the original dtype of prompt_embeds: float16 -> float32.

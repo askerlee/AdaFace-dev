@@ -525,13 +525,12 @@ class DDPM(pl.LightningModule):
         # do_mix_prompt_distillation implies do_ada_prompt_delta_reg.
         # So if do_mix_prompt_distillation is enabled (mix_prompt_distill_weight > 0),
         # then no need to put do_ada_prompt_delta_reg in cand_reg_types.
-        # Otherwise, we need to put do_ada_prompt_delta_reg in cand_reg_types.
-        # There's only one reg type: 'do_mix_prompt_distillation' in cand_reg_types.
-        # This structure is kept for possible future extensions.
+        # Otherwise, if prompt_emb_delta_reg_weight > 0, we need to put 
+        # do_ada_prompt_delta_reg in cand_reg_types.
         if self.mix_prompt_distill_weight > 0:
             cand_reg_types.append('do_mix_prompt_distillation')
             cand_reg_probs.append(1.)
-        else:
+        elif self.prompt_emb_delta_reg_weight > 0:
             cand_reg_types.append('do_ada_prompt_delta_reg')
             cand_reg_probs.append(1.)
 
@@ -1730,7 +1729,7 @@ class LatentDiffusion(DDPM):
 
             else:
                 zs_clip_features = torch.zeros(x_start.shape[0], 514, 1280).to(x_start.device)
-                # zs_id_embs: [4, 512]. arc2face_pos_prompt_emb: [4, 77, 768]
+                # zs_id_embs: [4, 512]. arc2face_pos_prompt_emb: [4, 21, 768]
                 zs_id_embs, arc2face_pos_prompt_emb, arc2face_neg_prompt_emb \
                     = self.arc2face.gen_rand_arc2face_id_prompt_embs(images.shape[0],
                                                                      gen_neg_prompt=True)
@@ -5301,6 +5300,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                                            images_np=None, example_image_count=0,
                                            out_image_count=batch_size,
                                            device=self.device,
+                                           input_max_length=21, # Remove all paddings.
                                            rand_face=True, noise_level=0, 
                                            gen_neg_prompt=gen_neg_prompt, verbose=False)
     

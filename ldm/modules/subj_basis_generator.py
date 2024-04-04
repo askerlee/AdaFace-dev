@@ -10,13 +10,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from transformers import CLIPVisionModel, CLIPTokenizer
+from transformers import CLIPVisionModel, CLIPTokenizer, CLIPTextModel
 import numpy as np
 from torch import einsum
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from transformers.utils import ModelOutput
-from ldm.util import anneal_value, gen_gradient_scaler, arc2face_project_face_embs
+from ldm.util import anneal_value, gen_gradient_scaler, \
+                     arc2face_project_face_embs, arc2face_inverse_face_prompt_embs
 from arc2face.arc2face import CLIPTextModelWrapper
 
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
@@ -371,7 +372,7 @@ class SubjBasisGenerator(nn.Module):
         use_q_aware_to_v: bool = True,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
         face_proj_in_grad_scale: float = 0.004,  # Gradient scale for face_proj_in.
-        prompt2token_emb_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_emb_proj.
+        prompt2token_emb_proj_grad_scale: float = 0.3,  # Gradient scale for prompt2token_emb_proj.
     ):
         super().__init__()
 
@@ -389,10 +390,14 @@ class SubjBasisGenerator(nn.Module):
             # [1, 384] -> [1, 16, 768].
             self.obj_proj_in            = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
                                                      elementwise_affine=elementwise_affine)
+            self.prompt2token_emb_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
+                                                                       
+            '''
             self.prompt2token_emb_proj  = MultimodeProjection(input_dim=init_proj_dim, 
-                                                              output_dim=output_dim,
-                                                              num_modes=num_prompt2token_emb_modes,
-                                                              elementwise_affine=elementwise_affine)
+                                                                output_dim=output_dim,
+                                                                num_modes=num_prompt2token_emb_modes,
+                                                                elementwise_affine=elementwise_affine)
+            '''
 
             # The dimension of InstantID face features for humans is NOT the same as output_dim = latent_query_dim.   
             # self.face_proj_in: [1, 512] -> [1, 16, 768].
@@ -482,14 +487,13 @@ class SubjBasisGenerator(nn.Module):
 
                 id_embs0 = id_embs_pos - id_embs_neg
                 id_embs0 = self.face_proj_in_grad_scaler(id_embs0)
-                id_embs  = id_embs0
-                # id_embs is projected to the token embedding space. [BS, 16, 768] -> [BS, 16, 768].
-                '''
-                id_embs = self.prompt2token_emb_proj(id_embs0)
+                # id_embs is projected to the token embedding space. [BS, 16, 768] -> [BS, 21, 768].
+                # id_embs0 is only the core embeddings. But id_embs are padded with BOS/EOS, 
+                # and a few other filler words.
+                id_embs = arc2face_inverse_face_prompt_embs(tokenizer, self.prompt2token_emb_proj, 
+                                                            id_embs0, input_max_length=21)
                 # Reduce the update rate of prompt2token_emb_proj.
-                if hasattr(self, 'prompt2token_emb_proj_grad_scaler'):
-                    id_embs = self.prompt2token_emb_proj_grad_scaler(id_embs)
-                '''
+                id_embs = self.prompt2token_emb_proj_grad_scaler(id_embs)
             else:
                 # id_embs: [BS, 384] -> [BS, 16, 768].
                 # obj_proj_in is expected to project the DINO object features to 
@@ -538,7 +542,7 @@ class SubjBasisGenerator(nn.Module):
         output_queries = self.lora2hira(context) * self.output_scale
         return output_queries
 
-    def init_face_proj_in(self, face_proj_in_grad_scale=0.004, prompt2token_emb_proj_grad_scale=0.4, device='cpu'):
+    def init_face_proj_in(self, face_proj_in_grad_scale=0.004, prompt2token_emb_proj_grad_scale=0.3, device='cpu'):
         self.face_proj_in =  CLIPTextModelWrapper.from_pretrained(
                                 'arc2face/models', subfolder="encoder") #, torch_dtype=torch.float16)
         self.face_proj_in.to(device)
