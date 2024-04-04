@@ -1737,10 +1737,10 @@ class LatentDiffusion(DDPM):
                 # During training, zs_id_embs, arc2face_pos_prompt_emb are float16, but x_start is float32.
                 zs_id_embs = zs_id_embs.to(x_start.dtype)
                 arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.to(x_start.dtype)
-                arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.to(x_start.dtype)
+                # arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.to(x_start.dtype)
                 # arc2face_pos_prompt_emb and arc2face_neg_prompt_emb are used to do CFG-style conditioning on
                 # self.arc2face to generate the predicted teacher noise.
-                self.iter_flags['arc2face_prompt_emb'] = torch.cat([arc2face_pos_prompt_emb, arc2face_neg_prompt_emb], dim=0)
+                self.iter_flags['arc2face_prompt_emb'] = arc2face_pos_prompt_emb
                 # In arc2face distillation, we don't need to consider img_mask and fg_mask.
                 self.iter_flags['img_mask'] = None
                 self.iter_flags['fg_mask']  = None
@@ -2764,7 +2764,7 @@ class LatentDiffusion(DDPM):
                 # Use the predicted noise by arc2face as the target.
                 # target: [4, 4, 64, 64].
                 target = self.arc2face(x_start, t, self.iter_flags['arc2face_prompt_emb'],
-                                       batch_contains_neg_instances=True, do_cfg=True, cfg_scale=3.0)
+                                       batch_contains_neg_instances=False, do_cfg=False)
                 loss += self.get_loss(model_output, target.to(model_output.dtype), mean=True)
 
         ###### begin of preparation for is_compos_iter ######
@@ -5309,7 +5309,7 @@ class Arc2FaceWrapper(pl.LightningModule):
     @torch.no_grad()
     def forward(self, x, timesteps=None, context=None, y=None, 
                 context_in=None, extra_info=None, batch_contains_neg_instances=False, 
-                do_cfg=False, cfg_scale=2.0):
+                do_cfg=False, cfg_scale=3.0):
         if do_cfg and not batch_contains_neg_instances:
             breakpoint()
 

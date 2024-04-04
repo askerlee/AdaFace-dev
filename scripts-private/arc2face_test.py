@@ -15,7 +15,7 @@ import os, argparse, sys, glob, cv2
 from ldm.util import get_arc2face_id_prompt_embs
 
     
-def save_images(images, save_dir = "samples-ada"):
+def save_images(images, prompt, save_dir = "samples-ada"):
     
     os.makedirs(save_dir, exist_ok=True)
     # Save 4 images as a grid image in save_dir
@@ -24,7 +24,7 @@ def save_images(images, save_dir = "samples-ada"):
         image = image.resize((512, 512))
         grid_image.paste(image, (512 * (i % 2), 512 * (i // 2)))
 
-    prompt_sig = comp_prompt.replace(" ", "_").replace(",", "_")
+    prompt_sig = prompt.replace(" ", "_").replace(",", "_")
     grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{args.noise}.png")
     if os.path.exists(grid_filepath):
         grid_count = 2
@@ -108,13 +108,16 @@ if __name__ == "__main__":
                                       image_folder, image_paths, 
                                       images_np=None,
                                       example_image_count=args.example_image_count, 
-                                      out_image_count=args.out_image_count,
+                                      out_image_count=1,
                                       device='cuda',
                                       rand_face=args.randface, 
                                       noise_level=args.noise,
                                       gen_neg_prompt=True, 
                                       verbose=True)
 
+    if args.randface:
+        id_prompt_emb = id_prompt_emb.repeat(args.out_image_count, 1, 1)
+        neg_id_prompt_emb = neg_id_prompt_emb.repeat(args.out_image_count, 1, 1)
 
     pipeline.text_encoder = orig_text_encoder
     num_images = args.out_image_count
@@ -146,19 +149,22 @@ if __name__ == "__main__":
         pos_prompt_emb = id_prompt_emb
         neg_prompt_emb = neg_id_prompt_emb
 
-    noise = torch.randn(1, 4, 64, 64).cuda()
-    images = pipeline(image=noise,
-                      prompt_embeds=pos_prompt_emb, 
-                      negative_prompt_embeds=negative_prompt_embeds_, 
-                      num_inference_steps=40, 
-                      guidance_scale=1, 
-                      num_images_per_prompt=1).images
-    save_images(images)
+    randsig = torch.seed()
+    noise = torch.randn(num_images, 4, 64, 64).cuda()
 
-    images2 = pipeline(image=noise,
-                      prompt_embeds=pos_prompt_emb, 
-                      negative_prompt_embeds=neg_prompt_emb,
-                      num_inference_steps=40, 
-                      guidance_scale=1, 
-                      num_images_per_prompt=1).images
-    save_images(images2)
+    for guidance_scale in [1, 3, 5, 7]:
+        images = pipeline(image=noise,
+                          prompt_embeds=pos_prompt_emb, 
+                          negative_prompt_embeds=negative_prompt_embeds_, 
+                          num_inference_steps=40, 
+                          guidance_scale=guidance_scale, 
+                          num_images_per_prompt=1).images
+        save_images(images, f"{randsig}-guide{guidance_scale}-origneg")
+
+        images2 = pipeline(image=noise,
+                           prompt_embeds=pos_prompt_emb, 
+                           negative_prompt_embeds=neg_prompt_emb,
+                           num_inference_steps=40, 
+                           guidance_scale=guidance_scale, 
+                           num_images_per_prompt=1).images
+        save_images(images2, f"{randsig}-guide{guidance_scale}-arcneg")
