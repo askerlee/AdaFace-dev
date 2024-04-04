@@ -15,7 +15,7 @@ import os, argparse, sys, glob, cv2
 from ldm.util import get_arc2face_id_prompt_embs
 
     
-def save_images(images, prompt, save_dir = "samples-ada"):
+def save_images(images, subject_name, prompt, save_dir = "samples-ada"):
     
     os.makedirs(save_dir, exist_ok=True)
     # Save 4 images as a grid image in save_dir
@@ -96,75 +96,81 @@ if __name__ == "__main__":
             subject_name = os.path.basename(image_folder)
             image_paths = glob.glob(os.path.join(image_folder, "*.jpg"))
     else:
-        subject_name = "randface"
+        subject_name = None
         image_paths = None
         image_folder = None
 
     face_app = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
     face_app.prepare(ctx_id=0, det_size=(512, 512))
+    
+    subject_name = "randface-" + str(torch.seed()) if args.randface else subject_name
+    rand_face_embs=torch.randn(1, 512)
 
-    faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
-        = get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
-                                      image_folder, image_paths, 
-                                      images_np=None,
-                                      example_image_count=args.example_image_count, 
-                                      out_image_count=1,
-                                      device='cuda',
-                                      rand_face=args.randface, 
-                                      noise_level=args.noise,
-                                      gen_neg_prompt=True, 
-                                      verbose=True)
+    for input_max_length in (21, 77):
+        faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
+            = get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
+                                        image_folder, image_paths, 
+                                        images_np=None,
+                                        example_image_count=args.example_image_count, 
+                                        out_image_count=1,
+                                        device='cuda',
+                                        input_max_length=input_max_length,
+                                        rand_face=args.randface, 
+                                        rand_face_embs=rand_face_embs,
+                                        noise_level=args.noise,
+                                        gen_neg_prompt=True, 
+                                        verbose=True)
 
-    if args.randface:
-        id_prompt_emb = id_prompt_emb.repeat(args.out_image_count, 1, 1)
-        neg_id_prompt_emb = neg_id_prompt_emb.repeat(args.out_image_count, 1, 1)
+        if args.randface:
+            id_prompt_emb = id_prompt_emb.repeat(args.out_image_count, 1, 1)
+            neg_id_prompt_emb = neg_id_prompt_emb.repeat(args.out_image_count, 1, 1)
 
-    pipeline.text_encoder = orig_text_encoder
-    num_images = args.out_image_count
+        pipeline.text_encoder = orig_text_encoder
+        num_images = args.out_image_count
 
-    filler_prompt = "photo of a id person"
-    comp_prompt = args.prompt 
-    test_core_embs = False
-    if test_core_embs:
-        comp_prompt = filler_prompt
+        filler_prompt = "photo of a id person"
+        comp_prompt = args.prompt 
+        test_core_embs = False
+        if test_core_embs:
+            comp_prompt = filler_prompt
 
-    negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
-    # prompt_embeds_, negative_prompt_embeds_: [4, 77, 768]
-    prompt_embeds_, negative_prompt_embeds_ = pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt = num_images,
-                                                                     do_classifier_free_guidance=True, negative_prompt=negative_prompt)
-    pipeline.text_encoder = text_encoder
+        negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
+        # prompt_embeds_, negative_prompt_embeds_: [4, 77, 768]
+        prompt_embeds_, negative_prompt_embeds_ = pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt = num_images,
+                                                                        do_classifier_free_guidance=True, negative_prompt=negative_prompt)
+        pipeline.text_encoder = text_encoder
 
-    if test_core_embs:
-        # By replacing comp_prompt with filler_prompt, and replacing prompt_embeds_ 4:20 with id_prompt_emb 4:20,
-        # the resulting images are quite similar to those generated with id_prompt_emb. 
-        # This shows id_prompt_emb 4:20 contains the ID of the person.
-        prompt_embeds_[:, 4:20] = id_prompt_emb[:, 4:20]
-        id_prompt_emb = prompt_embeds_
-        negative_prompt_embeds_[:, :neg_id_prompt_emb.shape[1]] = neg_id_prompt_emb
-        
-    if len(comp_prompt) > 0:
-        pos_prompt_emb  = torch.cat([id_prompt_emb,     prompt_embeds_], dim=1)
-        neg_prompt_emb  = torch.cat([neg_id_prompt_emb, negative_prompt_embeds_], dim=1)
-    else:
-        pos_prompt_emb = id_prompt_emb
-        neg_prompt_emb = neg_id_prompt_emb
+        if test_core_embs:
+            # By replacing comp_prompt with filler_prompt, and replacing prompt_embeds_ 4:20 with id_prompt_emb 4:20,
+            # the resulting images are quite similar to those generated with id_prompt_emb. 
+            # This shows id_prompt_emb 4:20 contains the ID of the person.
+            prompt_embeds_[:, 4:20] = id_prompt_emb[:, 4:20]
+            id_prompt_emb = prompt_embeds_
+            negative_prompt_embeds_[:, :neg_id_prompt_emb.shape[1]] = neg_id_prompt_emb
+            
+        if len(comp_prompt) > 0:
+            pos_prompt_emb  = torch.cat([id_prompt_emb,     prompt_embeds_], dim=1)
+            neg_prompt_emb  = torch.cat([neg_id_prompt_emb, negative_prompt_embeds_], dim=1)
+        else:
+            pos_prompt_emb = id_prompt_emb
+            neg_prompt_emb = neg_id_prompt_emb
 
-    randsig = torch.seed()
-    noise = torch.randn(num_images, 4, 64, 64).cuda()
+        noise = torch.randn(num_images, 4, 64, 64).cuda()
+        negative_prompt_embeds_ = negative_prompt_embeds_[:, :neg_id_prompt_emb.shape[1]]
 
-    for guidance_scale in [1, 3, 5, 7]:
-        images = pipeline(image=noise,
-                          prompt_embeds=pos_prompt_emb, 
-                          negative_prompt_embeds=negative_prompt_embeds_, 
-                          num_inference_steps=40, 
-                          guidance_scale=guidance_scale, 
-                          num_images_per_prompt=1).images
-        save_images(images, f"{randsig}-guide{guidance_scale}-origneg")
+        for guidance_scale in [2, 4]:
+            images = pipeline(image=noise,
+                            prompt_embeds=pos_prompt_emb, 
+                            negative_prompt_embeds=negative_prompt_embeds_, 
+                            num_inference_steps=40, 
+                            guidance_scale=guidance_scale, 
+                            num_images_per_prompt=1).images
+            save_images(images, subject_name, f"guide{guidance_scale}-len{input_max_length}-origneg")
 
-        images2 = pipeline(image=noise,
-                           prompt_embeds=pos_prompt_emb, 
-                           negative_prompt_embeds=neg_prompt_emb,
-                           num_inference_steps=40, 
-                           guidance_scale=guidance_scale, 
-                           num_images_per_prompt=1).images
-        save_images(images2, f"{randsig}-guide{guidance_scale}-arcneg")
+            images2 = pipeline(image=noise,
+                            prompt_embeds=pos_prompt_emb, 
+                            negative_prompt_embeds=neg_prompt_emb,
+                            num_inference_steps=40, 
+                            guidance_scale=guidance_scale, 
+                            num_images_per_prompt=1).images
+            save_images(images2, subject_name, f"guide{guidance_scale}-len{input_max_length}-arcneg")
