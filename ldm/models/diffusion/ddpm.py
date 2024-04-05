@@ -1806,6 +1806,7 @@ class LatentDiffusion(DDPM):
     #LINK #shared_step
     def forward(self, x_start, captions, *args, **kwargs):
         t = torch.randint(0, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
+        ORIG_BS  = len(x_start)
 
         # Use >=, i.e., assign decay in all iterations after the first 100.
         # This is in case there are skips of iterations of global_step 
@@ -1819,6 +1820,7 @@ class LatentDiffusion(DDPM):
                 # or traditional TI.
                 # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
                 # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
+                
                 if self.iter_flags['do_static_prompt_delta_reg'] or self.iter_flags['do_mix_prompt_distillation']:
                     # reuse_init_conds, discard the prompts offered in shared_step().
                     if self.iter_flags['reuse_init_conds']:
@@ -1833,9 +1835,6 @@ class LatentDiffusion(DDPM):
                     subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
                     #if self.iter_flags['use_background_token']:
                     #print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-
-                    ORIG_BS  = len(x_start)
-                    N_EMBEDS = ORIG_BS * self.N_CA_LAYERS
                     
                     # Recon iters don't do_ada_prompt_delta_reg.
                     if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_prompt_delta_reg']:                        
@@ -2004,10 +2003,15 @@ class LatentDiffusion(DDPM):
                     # Either prompt_emb_delta_reg_weight == 0 (ablation only) or 
                     # it's called by self.validation_step().
                     assert self.iter_flags['do_normal_recon']
-                    c_static_emb, c_in, extra_info0 = \
-                        self.get_learned_conditioning(captions, randomize_clip_weights=True)
                     
-                    extra_info['placeholder2indices']   = extra_info0['placeholder2indices']
+                    c_static_emb, c_in, extra_info0 = \
+                        self.get_learned_conditioning(captions, 
+                                                      self.iter_flags['zs_clip_features'],
+                                                      self.iter_flags['zs_id_embs'],                                                      
+                                                      randomize_clip_weights=True)
+                    
+                    extra_info = extra_info0
+                    extra_info['placeholder2indices_1b'] = extra_info['placeholder2indices']
                     extra_info['c_static_emb_1b']   = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
                                                                            *c_static_emb.shape[1:])
                                         

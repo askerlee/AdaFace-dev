@@ -1552,10 +1552,10 @@ class EmbeddingManager(nn.Module):
                         # In a distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
                         if cls_delta_strings is not None and self.iter_type == 'distill_iter':
                             cls_delta_strings = cls_delta_strings[:1]
-
+                            
                         if cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
                             print(f"cls_delta_strings: {cls_delta_strings}")
-
+                            
                     # zs_clip_features: [BS, 257, 1280]
                     # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
                     #print(f"zs_clip_features: {zs_clip_features.shape}, zs_id_embs: {zs_id_embs.shape}")
@@ -1640,7 +1640,7 @@ class EmbeddingManager(nn.Module):
                 elif subj_static_embedding_k.shape[0] == num_unet_ca_layers:
                     # subj_static_embedding_k: [16, 768] => [16*REAL_OCCURS_IN_BATCH, 768]
                     subj_static_embedding_k = subj_static_embedding_k.repeat(REAL_OCCURS_IN_BATCH, 1)
-                else:
+                elif subj_static_embedding_k.shape[0] != num_unet_ca_layers * REAL_OCCURS_IN_BATCH:
                     breakpoint()
 
                 # Assign the k-th token embedding (along the text dim).
