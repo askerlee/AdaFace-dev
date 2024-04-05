@@ -1571,7 +1571,7 @@ class EmbeddingManager(nn.Module):
                         arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
 
                     if self.zs_apply_neg_subj_bases:
-                        zs_vecs_2sets_neg = subj_basis_generator(torch.zeros_like(zs_clip_features), 
+                        zs_vecs_2sets_neg, _ = subj_basis_generator(torch.zeros_like(zs_clip_features), 
                                                                  torch.zeros_like(zs_id_embs),
                                                                  list_extra_words=None, 
                                                                  is_face=self.curr_subj_is_face,
