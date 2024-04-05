@@ -1542,7 +1542,8 @@ class EmbeddingManager(nn.Module):
 
                     if not placeholder_is_bg:
                         if self.zs_cls_delta_string is not None:
-                            cls_delta_strings               = [self.zs_cls_delta_string         for _ in self.curr_batch_subj_names ]
+                            # During inference, zs_id_embs is [1, 512], so cls_delta_strings only contains one element.
+                            cls_delta_strings               = [self.zs_cls_delta_string]
                         elif len(prompt_subj_name_to_cls_delta_tokens) > 0:
                             cls_delta_strings            = [ self.subj_name_to_cls_delta_string[subj_name] \
                                                              for subj_name in self.curr_batch_subj_names ]
