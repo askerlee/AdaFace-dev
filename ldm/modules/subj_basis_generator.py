@@ -372,7 +372,7 @@ class SubjBasisGenerator(nn.Module):
         use_q_aware_to_v: bool = True,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
         face_proj_in_grad_scale: float = 0.004,  # Gradient scale for face_proj_in.
-        prompt2token_emb_proj_grad_scale: float = 0.3,  # Gradient scale for prompt2token_emb_proj.
+        prompt2token_emb_proj_grad_scale: float = 0.1,  # Gradient scale for prompt2token_emb_proj.
     ):
         super().__init__()
 
@@ -533,7 +533,7 @@ class SubjBasisGenerator(nn.Module):
         output_queries = self.lora2hira(context) * self.output_scale
         return output_queries, arc2face_inverse_prompt_embs
 
-    def init_face_proj_in(self, face_proj_in_grad_scale=0.004, prompt2token_emb_proj_grad_scale=0.3, device='cpu'):
+    def init_face_proj_in(self, face_proj_in_grad_scale=0.004, prompt2token_emb_proj_grad_scale=0.1, device='cpu'):
         self.face_proj_in =  CLIPTextModelWrapper.from_pretrained(
                                 'arc2face/models', subfolder="encoder") #, torch_dtype=torch.float16)
         self.face_proj_in.to(device)
