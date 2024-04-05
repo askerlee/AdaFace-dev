@@ -192,14 +192,15 @@ class DDPM(pl.LightningModule):
         self.zs_image_encoder_instantiated          = False
 
         self.cached_inits = {}
-        self.init_iteration_flags()
 
-        # Training flags. 
         # No matter wheter the scheme is layerwise or not,
         # as long as prompt_emb_delta_reg_weight >= 0, do static comp delta reg.
         # If self.prompt_emb_delta_reg_weight == 0, we still do_static_prompt_delta_reg to monitor this loss, 
         # but this loss won't be involved in the optimization.
         self.do_static_prompt_delta_reg = (self.prompt_emb_delta_reg_weight >= 0)
+        
+        self.init_iteration_flags()
+        
         # Is this for DreamBooth training? Will be overwritten in LatentDiffusion ctor.
         self.is_dreambooth                  = False
 
@@ -494,7 +495,8 @@ class DDPM(pl.LightningModule):
                             'do_arc2face_distill':          False,
                             'is_compos_iter':               False,
                             'do_mix_prompt_distillation':   False,
-                            'do_ada_prompt_delta_reg':         False,
+                            'do_static_prompt_delta_reg':   self.do_static_prompt_delta_reg,
+                            'do_ada_prompt_delta_reg':      False,
                             # 'do_teacher_filter':        False,
                             # 'is_teachable':             False,
                             'use_background_token':         False,
@@ -568,6 +570,8 @@ class DDPM(pl.LightningModule):
         if self.iter_flags['do_normal_recon'] and self.arc2face_iter_prob > 0:
             if np.random.rand() < self.arc2face_iter_prob:
                 self.iter_flags['do_arc2face_distill'] = True
+                # Disable do_static_prompt_delta_reg during arc2face distillation.
+                self.iter_flags['do_static_prompt_delta_reg'] = False
 
         if self.is_dreambooth:
             # DreamBooth uses ConcatDataset to make batch a tuple of train_batch and reg_batch.
@@ -963,25 +967,30 @@ class LatentDiffusion(DDPM):
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
                     static_prompt_embedding = static_prompt_embedding.mode()
 
-                emb_global_scales_dict  = self.embedding_manager.get_emb_global_scales_dict(regen=True)
-                # Fix the scales of the static subject embeddings.
-                for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
-                    emb_extra_global_scale = emb_global_scales_dict[placeholder]
-                    if placeholder in self.embedding_manager.background_string_dict:
-                        emb_extra_global_scale *= self.embedding_manager.background_extra_global_scale
+                if not self.iter_flags['do_arc2face_distill']:
+                    emb_global_scales_dict  = self.embedding_manager.get_emb_global_scales_dict(regen=True)
+                    # Fix the scales of the static subject embeddings.
+                    for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
+                        emb_extra_global_scale = emb_global_scales_dict[placeholder]
+                        if placeholder in self.embedding_manager.background_string_dict:
+                            emb_extra_global_scale *= self.embedding_manager.background_extra_global_scale
 
-                    static_prompt_embedding = fix_emb_scales(static_prompt_embedding, placeholder_indices,
-                                                             num_layers=self.N_CA_LAYERS,
-                                                             extra_scale=emb_extra_global_scale)
+                        static_prompt_embedding = fix_emb_scales(static_prompt_embedding, placeholder_indices,
+                                                                num_layers=self.N_CA_LAYERS,
+                                                                extra_scale=emb_extra_global_scale)
 
-                # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scales first().
-                # If cls_delta_string_indices is not empty, then it must be a compositional 
-                # distillation iteration, and placeholder_indices only contains the indices of the subject 
-                # instances. Whereas cls_delta_string_indices only contains the indices of the
-                # class (mix) instances. Switching their order doesn't affect the results.
-                static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
-                                                                     self.embedding_manager.cls_delta_string_indices,
-                                                                     self.embedding_manager.subj_name_to_cls_delta_token_weights)
+                    # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scales first().
+                    # If cls_delta_string_indices is not empty, then it must be a compositional 
+                    # distillation iteration, and placeholder_indices only contains the indices of the subject 
+                    # instances. Whereas cls_delta_string_indices only contains the indices of the
+                    # class (mix) instances. Switching their order doesn't affect the results.
+                    static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
+                                                                        self.embedding_manager.cls_delta_string_indices,
+                                                                        self.embedding_manager.subj_name_to_cls_delta_token_weights)
+
+                else:
+                    # Repeat the static prompt embeddings 16 times to match the layerwise prompts.
+                    static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(1, 16, 1, 1).reshape(-1, 77, 768)
 
                 '''
                 'subj_indices':                  filter_dict_by_key(self.embedding_manager.placeholder2indices,
@@ -1782,7 +1791,12 @@ class LatentDiffusion(DDPM):
             self.iter_flags['use_wds_comp']             = cached_inits['use_wds_comp']
             self.iter_flags['comp_init_fg_from_training_image']   = cached_inits['comp_init_fg_from_training_image']
 
-        self.embedding_manager.iter_type = 'distill_iter' if self.iter_flags['is_compos_iter'] else 'recon_iter'
+        if self.iter_flags['is_compos_iter']:
+            self.embedding_manager.iter_type = 'distill_iter'
+        elif self.iter_flags['do_arc2face_distill']:
+            self.embedding_manager.iter_type = 'arc2face_distill_iter'
+        else:
+            self.embedding_manager.iter_type = 'recon_iter'
 
         loss = self(x_start, captions, **kwargs)
 
@@ -1805,7 +1819,7 @@ class LatentDiffusion(DDPM):
                 # or traditional TI.
                 # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
                 # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
-                if self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation']:
+                if self.iter_flags['do_static_prompt_delta_reg'] or self.iter_flags['do_mix_prompt_distillation']:
                     # reuse_init_conds, discard the prompts offered in shared_step().
                     if self.iter_flags['reuse_init_conds']:
                         # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
@@ -1983,7 +1997,7 @@ class LatentDiffusion(DDPM):
                     # c_static_emb: [64, 77, 768]                    
                     cond = (c_static_emb, c_in2, extra_info)
                 else:
-                    # Not (self.do_static_prompt_delta_reg or 'do_mix_prompt_distillation').
+                    # Not (self.iter_flags['do_static_prompt_delta_reg'] or 'do_mix_prompt_distillation').
                     # That is, non-compositional iter, or recon iter without static delta loss. 
                     # Keep the tuple cond unchanged. prompts: subject single.
                     # This branch is only reached when do_static_prompt_delta_reg = False.
@@ -2760,7 +2774,7 @@ class LatentDiffusion(DDPM):
                                                            img_mask, fg_mask, batch_have_fg_mask,
                                                            x_start.shape[0], loss_dict, prefix)
             else:
-                # Use the predicted noise by arc2face as the target.
+                # Use the predicted noise by the arc2face UNet as the target.
                 # target: [4, 4, 64, 64].
                 target = self.arc2face(x_start, t, self.iter_flags['arc2face_prompt_emb'],
                                        batch_contains_neg_instances=False, do_cfg=False)
@@ -2992,7 +3006,7 @@ class LatentDiffusion(DDPM):
 
             loss += loss_fg_bg_token_emb_ortho * fg_bg_token_emb_ortho_loss_scale * self.fg_bg_token_emb_ortho_loss_weight
 
-        if self.do_static_prompt_delta_reg:
+        if self.iter_flags['do_static_prompt_delta_reg']:
             # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
             loss_static_prompt_delta,  loss_ada_prompt_delta \
                 = calc_prompt_emb_delta_loss( 

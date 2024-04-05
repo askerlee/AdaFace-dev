@@ -1135,28 +1135,45 @@ def arc2face_project_face_embs(tokenizer, text_encoder, face_embs,
         # [N, 77, 768]
         return prompt_embeds
 
-def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs, 
-                                      input_max_length=21):
+def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs, list_extra_words,
+                                      input_max_length=77, return_full_and_core_embs=False):
 
     '''
-    face_prompt_embs: (B, 16, 768). Only the core embeddings, no paddings.
+    face_prompt_embs: (BS, 16, 768). Only the core embeddings, no paddings.
+    list_extra_words: [s_1, ..., s_BS], each s_i is the extra words to be added to the prompt.
     input_max_length: BOS + "photo of a" + 16 face_prompt_embs + EOS.
+    return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings.
     '''
+
+    if list_extra_words is not None:
+        if len(list_extra_words) != len(face_prompt_embs):
+            print("list_extra_words should have the same length as face_prompt_embs.")
+            breakpoint()
+
+        for extra_words in list_extra_words:
+            assert len(extra_words.split()) <= 2, "Each extra_words should be at most 2 words."
+        # 16 ", " are placeholders for face_prompt_embs.
+        prompts = [ "photo of a " + ", " * 16 + list_extra_words[i] for i in range(len(list_extra_words)) ]
+    else:
+        # 16 ", " are placeholders for face_prompt_embs.
+        # No extra words are added to the prompt.
+        prompts = [ "photo of a " + ", " * 16 for _ in range(len(face_prompt_embs)) ]
 
     # This step should be quite fast, and there's no need to cache the input_ids.
+    # input_ids: [BS, 77].
     input_ids = tokenizer(
-            "photo of a id person",
+            prompts,
             truncation=True,
             padding="max_length",
             max_length=input_max_length,
             return_tensors="pt",
         ).input_ids.to(face_prompt_embs.device)
-    # input_ids: [1, 21] or [3, 21].
-    input_ids = input_ids.repeat(len(face_prompt_embs), 1)
+
     face_prompt_embs_dtype = face_prompt_embs.dtype
     face_prompt_embs = face_prompt_embs.to(text_encoder.dtype)
 
     token_embs = text_encoder(input_ids=input_ids, return_token_embs=True)
+    # Replace embeddings of 16 placeholder ", " with face_prompt_embs.
     token_embs[:, 4:20] = face_prompt_embs
 
     prompt_embeds = text_encoder(
@@ -1167,8 +1184,14 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
     # Restore the original dtype of prompt_embeds: float16 -> float32.
     prompt_embeds = prompt_embeds.to(face_prompt_embs_dtype)
 
-    # prompt_embeds: [N, 21, 768]
-    return prompt_embeds
+    if return_full_and_core_embs:
+        # token 4: 'id' in "photo of a id person". 
+        # 4:20 are the most important 16 embeddings that contain the subject's identity.
+        # [N, 77, 768] -> [N, 18, 768]
+        return prompt_embeds, prompt_embeds[:, 4:22]
+    else:
+        # [N, 77, 768]
+        return prompt_embeds
 
 def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder, 
                                 image_folder, image_paths, images_np,

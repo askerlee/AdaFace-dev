@@ -1441,6 +1441,7 @@ class EmbeddingManager(nn.Module):
         # During inference, as self.curr_batch_subj_names is not set, the three dicts are empty.
         prompt_subj_name_to_cls_delta_tokens        = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
                                                         for subj_name in self.curr_batch_subj_names }
+        arc2face_inverse_prompt_embs = None
 
         if self.use_layerwise_embedding:
             # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
@@ -1520,12 +1521,12 @@ class EmbeddingManager(nn.Module):
                     zs_id_embs = zs_image_feat_dict['id']
 
                     # Add noise to all_id_embs during training with probability 0.5.
-                    # Noise level is gradually reduced from [0.04, 0.06] to [0.02, 0.03] during training.
+                    # Noise level is gradually reduced from [0.01, 0.02] to [0.005, 0.01] during training.
                     # Noise std is absolute, not relative (to the std of all_id_embs).
                     if self.training:
                         zs_id_embs = add_noise_to_embedding(zs_id_embs, self.training_percent,
-                                                            begin_noise_std_range=[0.02, 0.01], 
-                                                            end_noise_std_range  =[0.01, 0.015],
+                                                            begin_noise_std_range=[0.01,  0.02], 
+                                                            end_noise_std_range  =[0.005, 0.01],
                                                             add_noise_prob=0.5, noise_std_is_relative=False,
                                                             keep_norm=True)
 
@@ -1541,62 +1542,37 @@ class EmbeddingManager(nn.Module):
 
                     if not placeholder_is_bg:
                         if self.zs_cls_delta_string is not None:
-                            cls_delta_strings               = [self.zs_cls_delta_string]
-                            cls_delta_tokens_list           = [self.zs_cls_delta_tokens]
-                            cls_delta_token_weights_list    = [self.zs_cls_delta_token_weights]
+                            cls_delta_strings               = [self.zs_cls_delta_string         for _ in self.curr_batch_subj_names ]
                         elif len(prompt_subj_name_to_cls_delta_tokens) > 0:
                             cls_delta_strings            = [ self.subj_name_to_cls_delta_string[subj_name] \
                                                              for subj_name in self.curr_batch_subj_names ]
-                            cls_delta_tokens_list        = [ self.subj_name_to_cls_delta_tokens[subj_name] \
-                                                             for subj_name in self.curr_batch_subj_names ]
-                            cls_delta_token_weights_list = [ self.subj_name_to_cls_delta_token_weights[subj_name] \
-                                                             for subj_name in self.curr_batch_subj_names ]
                         else:
                             cls_delta_strings = None
-                            cls_delta_tokens_list = None
-                            cls_delta_token_weights_list = None
 
-                        if cls_delta_tokens_list is not None:
-                            cls_delta_embeddings_list = []
-                            for i, cls_delta_string in enumerate(cls_delta_strings):
-                                cls_delta_tokens        = cls_delta_tokens_list[i]
-                                cls_delta_token_weights = cls_delta_token_weights_list[i]
+                        # In a distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
+                        if cls_delta_strings is not None and self.iter_type == 'distill_iter':
+                            cls_delta_strings = cls_delta_strings[:1]
 
-                                cls_delta_tokens = cls_delta_tokens.to(device)
-                                # cls_delta_embeddings: [K, 768]
-                                cls_delta_embeddings = self.get_embeddings_for_tokens(cls_delta_tokens)
-                                cls_delta_embeddings = F.layer_norm(cls_delta_embeddings, (self.out_emb_dim,))
-
-                                if 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
-                                    print(f"cls_delta_string: {cls_delta_string}, weights: {cls_delta_token_weights.cpu().numpy()}")
-
-                                # cls_delta_token_weights: [K] -> [K, 1].
-                                cls_delta_token_weights = cls_delta_token_weights.unsqueeze(1).to(device)
-                                # Weight the cls_delta_embeddings by cls_delta_token_weights.
-                                cls_delta_embeddings = (cls_delta_embeddings * cls_delta_token_weights).sum(dim=0, keepdim=True)
-                                cls_delta_embeddings_list.append(cls_delta_embeddings)
-                            
-                            cls_delta_embeddings = torch.cat(cls_delta_embeddings_list, dim=0)
-                            if cls_delta_embeddings.shape[0] > zs_id_embs.shape[0]:
-                                # It has to be a single-subject iteration.
-                                assert zs_id_embs.shape[0] == 1
-                                cls_delta_embeddings = cls_delta_embeddings[:zs_id_embs.shape[0]]
-                        else:
-                            cls_delta_embeddings = None
-                    else:
-                        cls_delta_embeddings = None
+                        if cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+                            print(f"cls_delta_strings: {cls_delta_strings}")
 
                     # zs_clip_features: [BS, 257, 1280]
                     # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
                     #print(f"zs_clip_features: {zs_clip_features.shape}, zs_id_embs: {zs_id_embs.shape}")
-                    zs_vecs_2sets = subj_basis_generator(zs_clip_features, zs_id_embs, 
-                                                         extra_token_embs=cls_delta_embeddings, 
-                                                         is_face=self.curr_subj_is_face,
-                                                         training_percent=self.training_percent)
+                    zs_vecs_2sets, placeholder_arc2face_inverse_prompt_embs = \
+                            subj_basis_generator(zs_clip_features, zs_id_embs, 
+                                                 list_extra_words=cls_delta_strings, 
+                                                 is_face=self.curr_subj_is_face,
+                                                 training_percent=self.training_percent)
+                    
+                    if self.iter_type == 'arc2face_distill_iter' and not placeholder_is_bg:
+                        assert placeholder_arc2face_inverse_prompt_embs is not None
+                        arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
+
                     if self.zs_apply_neg_subj_bases:
                         zs_vecs_2sets_neg = subj_basis_generator(torch.zeros_like(zs_clip_features), 
                                                                  torch.zeros_like(zs_id_embs),
-                                                                 extra_token_embs=None, 
+                                                                 list_extra_words=None, 
                                                                  is_face=self.curr_subj_is_face,
                                                                  training_percent=self.training_percent)
                         zs_neg_subj_bases_weight = 0.2
@@ -1684,6 +1660,11 @@ class EmbeddingManager(nn.Module):
                                             placeholder_is_bg=placeholder_is_bg)
         
         #print(self.cls_delta_string_indices)
+        if self.iter_type == 'arc2face_distill_iter':
+            # In an arc2face_distill_iter, inversed arc2face prompt embeddings is used as the prompt embeddings.
+            # The updated embedded_text above is ignored. But subj_static_embeddings is 
+            # still involved in delta-loss computation.
+            embedded_text = arc2face_inverse_prompt_embs
 
         return embedded_text, tokenized_text, static_subj_embs_dict
 

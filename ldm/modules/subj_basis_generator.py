@@ -460,60 +460,51 @@ class SubjBasisGenerator(nn.Module):
 
         print(repr(self))
 
-    def forward(self, clip_features, id_embs, extra_token_embs, is_face, training_percent=0):    
+    # list_extra_words: a list of length BS. Each element is a string of extra words.
+    # raw_id_embs: ArcFace embeddings for faces, or DINO embeddings for objects.
+    def forward(self, clip_features, raw_id_embs, list_extra_words, is_face, training_percent=0):    
         BS = clip_features.shape[0]
-            
-        # No need to use id_embs if placeholder_is_bg.
-        if (not self.placeholder_is_bg) and (id_embs is not None):
+        arc2face_inverse_prompt_embs = None
+
+        # No need to use raw_id_embs if placeholder_is_bg.
+        if (not self.placeholder_is_bg) and (raw_id_embs is not None):
             if is_face:
-                # id_embs: [BS, 512] -> [BS, 16, 768].
+                # id_embs_pos: [BS, 512] -> [BS, 16, 768].
                 # Loaded pretrained IP-Adapter model weight. No need to update face_proj_in.
                 # face_proj_in_grad_scale == 0: freeze the face_proj_in.
                 if self.face_proj_in_grad_scale == 0:
                     with torch.no_grad():
                         # id_embs: [BS, 16, 768].
                         id_embs_pos = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
-                                                                 id_embs, return_core_embs_only=True)
+                                                                 raw_id_embs, return_core_embs_only=True)
                 else:
-                    # id_embs: [BS, 16, 768].
+                    # id_embs_pos: [BS, 16, 768].
                     id_embs_pos = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
-                                                             id_embs, return_core_embs_only=True)
+                                                             raw_id_embs, return_core_embs_only=True)
                 # Always no grad on the negative face embeddings to save RAM.
                 with torch.no_grad():
                     # Use a batch size 1 to reduce computation.
                     id_embs_neg = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
-                                                             torch.zeros_like(id_embs[[0]]), 
+                                                             torch.zeros_like(raw_id_embs[[0]]), 
                                                              return_core_embs_only=True)
 
                 id_embs0 = id_embs_pos - id_embs_neg
                 id_embs0 = self.face_proj_in_grad_scaler(id_embs0)
-                # id_embs is projected to the token embedding space. [BS, 16, 768] -> [BS, 21, 768].
-                # id_embs0 is only the core embeddings. But id_embs are padded with BOS/EOS, 
-                # and a few other filler words.
-                id_embs = arc2face_inverse_face_prompt_embs(tokenizer, self.prompt2token_emb_proj, 
-                                                            id_embs0, input_max_length=21)
+                # full_prompt_embs is projected to the token embedding space. [BS, 16, 768] -> [BS, 77, 768].
+                # core_id_embs: [BS, 18, 768], the identity and (at most) two extra words 
+                # in full_prompt_embs, without BOS and EOS.
+                arc2face_inverse_prompt_embs, core_id_embs = \
+                    arc2face_inverse_face_prompt_embs(tokenizer, self.prompt2token_emb_proj, 
+                                                      id_embs0, list_extra_words, input_max_length=77,
+                                                      return_full_and_core_embs=True)
+                
                 # Reduce the update rate of prompt2token_emb_proj.
-                id_embs = self.prompt2token_emb_proj_grad_scaler(id_embs)
+                id_embs = self.prompt2token_emb_proj_grad_scaler(core_id_embs)
             else:
                 # id_embs: [BS, 384] -> [BS, 16, 768].
                 # obj_proj_in is expected to project the DINO object features to 
                 # the token embedding space. So no need to use prompt2token_emb_proj.
-                id_embs = self.obj_proj_in(id_embs)
-
-            if extra_token_embs is not None:
-                # extra_token_embs: [BS, 768] -> [BS, 1, 768].
-                # extra_token_embs should have been layer-normalized before being passed to the model.
-                # Otherwise, the default magnitude of the extra_token_embs is much smaller than id_embs.
-                # If applicable, extra_token_embs should have been token-wise weighted before 
-                # being passed to the model.
-                # Although id_embs have been L2-normalized, later it has passed through self.prompt2token_emb_proj
-                # which layer-normalizes the output. So it's not L2-normalized anymore.
-                # Therefore, we don't need to L2-normalize extra_token_embs.
-                extra_token_embs = extra_token_embs.unsqueeze(1)
-                #extra_token_embs = F.normalize(extra_token_embs, p=2, dim=2)
-                # id_embs have been mapped to the token embedding space. So they can be concatenated.
-                # id_embs: [BS, 16, 768] -> [BS, 17, 768].
-                id_embs = torch.cat([id_embs, extra_token_embs], dim=1)
+                id_embs = self.obj_proj_in(raw_id_embs)
         else:
             # Otherwise, context is the ad-hoc CLIP image features.
             # id_embs: [BS, 257, 768].
@@ -540,7 +531,7 @@ class SubjBasisGenerator(nn.Module):
 
         # lora2hira contains a LayerNorm, so no need to normalize output_queries.
         output_queries = self.lora2hira(context) * self.output_scale
-        return output_queries
+        return output_queries, arc2face_inverse_prompt_embs
 
     def init_face_proj_in(self, face_proj_in_grad_scale=0.004, prompt2token_emb_proj_grad_scale=0.3, device='cpu'):
         self.face_proj_in =  CLIPTextModelWrapper.from_pretrained(
