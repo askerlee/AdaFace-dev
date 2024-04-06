@@ -957,8 +957,12 @@ class LatentDiffusion(DDPM):
 
                 # If do_zero_shot, but the prompt is empty (uncond prompt), then zs_clip_features is None.
                 # We don't update the zs_clip_features in this case.
-                if self.do_zero_shot and zs_clip_features is not None:
+                if self.do_zero_shot and (zs_clip_features is not None or zs_id_embs is not None):
                     self.embedding_manager.set_zs_image_features(zs_clip_features, zs_id_embs)
+                    # When do_zero_shot, never apply compel_cfg (applied in UNet), as compel cfg has been applied in embedding manager.
+                    apply_compel_cfg_prob = 0
+                else:
+                    apply_compel_cfg_prob = self.apply_compel_cfg_prob
 
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
@@ -987,7 +991,6 @@ class LatentDiffusion(DDPM):
                     static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
                                                                          self.embedding_manager.cls_delta_string_indices,
                                                                          self.embedding_manager.subj_name_to_cls_delta_token_weights)
- 
                 else:
                     # Repeat the static prompt embeddings 16 times to match the layerwise prompts.
                     static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(1, 16, 1, 1).reshape(-1, 77, 768)
@@ -1013,7 +1016,7 @@ class LatentDiffusion(DDPM):
                                 'subj2conv_attn_layer_scale':    self.embedding_manager.get_subj2conv_attn_layer_scale(),
                                 'is_training':                   self.embedding_manager.training,
                                 'compel_cfg_weight_level_range': self.compel_cfg_weight_level_range,
-                                'apply_compel_cfg_prob':         self.apply_compel_cfg_prob,
+                                'apply_compel_cfg_prob':         apply_compel_cfg_prob,
                                 'empty_context':                 self.empty_context,
                                 # Will set to True in p_losses() if in compositional iterations.
                                 'capture_distill_attn':          False,
