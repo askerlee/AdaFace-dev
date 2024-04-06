@@ -280,10 +280,12 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--zs_use_q_aware_to_v", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use dynamic to_v in zero-shot learning")
     parser.add_argument("--zs_face_proj_in_grad_scale", type=float, default=0.0,
-                        help="Gradient scale of the face projection in layer")
+                        help="Gradient scale of the face projection input layer")
+    parser.add_argument("--zs_prompt2token_proj_grad_scale", type=float, default=0.4,
+                        help="Gradient scale of the prompt2token projection layer")    
     parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=False,
                         help="Load the subject basis generators from the checkpoint")
-    
+
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=10,
         help="Layerwise lora rank")
@@ -326,7 +328,9 @@ def get_parser(**parser_kwargs):
                         type=int, default=argparse.SUPPRESS,
                         help="Gaps between iterations for composition regularization. "
                              "Set to -1 to disable for ablation.")
-    
+    parser.add_argument("--arc2face_distill_iter_prob", type=float, default=argparse.SUPPRESS,
+                        help="Probability of doing arc2face distillation in each iteration")
+        
     # num_compositions_per_image: a value > 1 leads to better performance on prompt compositions
     parser.add_argument("--num_compositions_per_image",
                         type=int, default=1,
@@ -965,6 +969,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_num_latent_queries     = opt.zs_num_latent_queries
             config.model.params.personalization_config.params.zs_use_q_aware_to_v       = opt.zs_use_q_aware_to_v
             config.model.params.personalization_config.params.zs_face_proj_in_grad_scale = opt.zs_face_proj_in_grad_scale
+            config.model.params.personalization_config.params.zs_prompt2token_proj_grad_scale = opt.zs_prompt2token_proj_grad_scale
             config.model.params.personalization_config.params.zs_load_subj_basis_generators_from_ckpt = opt.zs_load_subj_basis_generators_from_ckpt
             
             # When using zero-shot, we load different subjects in the same batch.
@@ -1009,6 +1014,9 @@ if __name__ == "__main__":
             # If do_zero_shot, composition_regs_iter_gap changes from 3 to 6, i.e., 
             # the frequency of composition_regs is halved.
             config.model.params.composition_regs_iter_gap *= 2
+
+        if hasattr(opt, 'arc2face_distill_iter_prob'):
+            config.model.params.arc2face_distill_iter_prob = opt.arc2face_distill_iter_prob
 
         if hasattr(opt, 'optimizer_type'):
             config.model.params.optimizer_type = opt.optimizer_type

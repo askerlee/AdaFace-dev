@@ -1020,6 +1020,7 @@ class EmbeddingManager(nn.Module):
             zs_use_FFN=False,
             zs_use_q_aware_to_v=True,
             zs_face_proj_in_grad_scale=0.0,
+            zs_prompt2token_proj_grad_scale=0.4,
             zs_load_subj_basis_generators_from_ckpt=False,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
@@ -1154,6 +1155,7 @@ class EmbeddingManager(nn.Module):
             self.zs_cls_delta_string   = zs_cls_delta_string
             self.zs_num_latent_queries = zs_num_latent_queries
             self.zs_face_proj_in_grad_scale = zs_face_proj_in_grad_scale
+            self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
             
             if self.zs_cls_delta_string is not None:
@@ -1248,7 +1250,8 @@ class EmbeddingManager(nn.Module):
                                                           use_FFN = zs_use_FFN,
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           use_q_aware_to_v = zs_use_q_aware_to_v,
-                                                          face_proj_in_grad_scale = self.zs_face_proj_in_grad_scale)
+                                                          face_proj_in_grad_scale = self.zs_face_proj_in_grad_scale,
+                                                          prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 

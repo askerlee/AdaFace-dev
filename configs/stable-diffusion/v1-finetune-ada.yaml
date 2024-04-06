@@ -38,7 +38,7 @@ model:
     composition_regs_iter_gap:          3
     do_zero_shot:                       false
     same_subject_in_each_batch:         false
-    arc2face_iter_prob:                 0.5
+    arc2face_distill_iter_prob:         0.5
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     static_embedding_reg_weight:        2e-5
     # typical loss_ada_em_reg is ~5e-2, * weight -> 5e-5.

@@ -136,7 +136,7 @@ class DDPM(pl.LightningModule):
                  normalize_ca_q_and_outfeat=True,
                  do_zero_shot=False,
                  same_subject_in_each_batch=False,
-                 arc2face_iter_prob=0.5,
+                 arc2face_distill_iter_prob=0.5,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -182,7 +182,7 @@ class DDPM(pl.LightningModule):
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
         self.do_zero_shot                           = do_zero_shot
-        self.arc2face_iter_prob                     = arc2face_iter_prob if do_zero_shot else 0
+        self.arc2face_distill_iter_prob                     = arc2face_distill_iter_prob if do_zero_shot else 0
         self.same_subject_in_each_batch             = same_subject_in_each_batch
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
@@ -205,7 +205,7 @@ class DDPM(pl.LightningModule):
         self.is_dreambooth                  = False
 
         self.model = DiffusionWrapper(unet_config, conditioning_key)
-        if self.arc2face_iter_prob > 0:
+        if self.arc2face_distill_iter_prob > 0:
             self.arc2face = Arc2FaceWrapper()
 
         count_params(self.model, verbose=True)
@@ -567,8 +567,8 @@ class DDPM(pl.LightningModule):
                 self.iter_flags['calc_clip_loss']   = True
                 self.iter_flags['do_normal_recon']  = False
 
-        if self.iter_flags['do_normal_recon'] and self.arc2face_iter_prob > 0:
-            if np.random.rand() < self.arc2face_iter_prob:
+        if self.iter_flags['do_normal_recon'] and self.arc2face_distill_iter_prob > 0:
+            if np.random.rand() < self.arc2face_distill_iter_prob:
                 self.iter_flags['do_arc2face_distill'] = True
                 # Disable do_static_prompt_delta_reg during arc2face distillation.
                 self.iter_flags['do_static_prompt_delta_reg'] = False
