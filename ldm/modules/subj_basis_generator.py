@@ -463,6 +463,7 @@ class SubjBasisGenerator(nn.Module):
     # raw_id_embs: ArcFace embeddings for faces, or DINO embeddings for objects.
     def forward(self, clip_features, raw_id_embs, list_extra_words, is_face, training_percent=0):    
         BS = clip_features.shape[0]
+        arc2face_embs = None
         arc2face_inverse_prompt_embs = None
 
         # No need to use raw_id_embs if placeholder_is_bg.
