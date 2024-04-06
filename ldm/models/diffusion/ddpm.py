@@ -964,6 +964,13 @@ class LatentDiffusion(DDPM):
                 else:
                     apply_compel_cfg_prob = self.apply_compel_cfg_prob
 
+                if self.iter_flags['is_compos_iter']:
+                    self.embedding_manager.iter_type = 'distill_iter'
+                elif do_arc2face_distill:
+                    self.embedding_manager.iter_type = 'arc2face_distill_iter'
+                else:
+                    self.embedding_manager.iter_type = 'recon_iter'
+
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
                 if debug_arc2face_embs:
@@ -1796,13 +1803,6 @@ class LatentDiffusion(DDPM):
             self.iter_flags['use_background_token']     = cached_inits['use_background_token']
             self.iter_flags['use_wds_comp']             = cached_inits['use_wds_comp']
             self.iter_flags['comp_init_fg_from_training_image']   = cached_inits['comp_init_fg_from_training_image']
-
-        if self.iter_flags['is_compos_iter']:
-            self.embedding_manager.iter_type = 'distill_iter'
-        elif self.iter_flags['do_arc2face_distill']:
-            self.embedding_manager.iter_type = 'arc2face_distill_iter'
-        else:
-            self.embedding_manager.iter_type = 'recon_iter'
 
         loss = self(x_start, captions, **kwargs)
 

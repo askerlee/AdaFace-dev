@@ -1276,7 +1276,7 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_placeholder2indices_cache = {}
         self.emb_global_scales_dict = None
-        self.iter_type = None       # 'recon_iter' or 'distill_iter'
+        self.iter_type = None       # 'recon_iter', 'distill_iter', 'arc2face_distill_iter'.
         self.prompt_embedding_clamp_value  = prompt_embedding_clamp_value
         self.background_extra_global_scale = background_extra_global_scale
         self.emb_reg_loss_scale = emb_reg_loss_scale
