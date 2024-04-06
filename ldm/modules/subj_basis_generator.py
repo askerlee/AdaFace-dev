@@ -498,6 +498,7 @@ class SubjBasisGenerator(nn.Module):
                                                       id_embs0, list_extra_words, input_max_length=77,
                                                       return_full_and_core_embs=True)
                 
+                arc2face_inverse_prompt_embs = self.prompt2token_emb_proj_grad_scaler(arc2face_inverse_prompt_embs)
                 # Reduce the update rate of prompt2token_emb_proj.
                 id_embs = self.prompt2token_emb_proj_grad_scaler(core_id_embs)
             else:
