@@ -1770,21 +1770,6 @@ class LatentDiffusion(DDPM):
                 x_start = torch.randn_like(x_start)
                 self.iter_flags['is_face'] = [True] * x_start.shape[0]
 
-            '''
-            # Sanity check for zs_id_embs.
-            mean_emb = batch["mean_emb"]
-            # The whole batch of mean_emb should be repetitions of the same mean_emb.
-            assert ((mean_emb - mean_emb[[0]]) == 0).all()
-
-            mean_emb = mean_emb[0].to(x_start.device)
-            zs_id_embs2 = F.normalize(zs_id_embs, p=2, dim=1)
-            # Compute pairwise similarities of the embeddings.
-            mean_emb2 = F.normalize(mean_emb, p=2, dim=1)
-            # [1, 512] * [512, BS] => [1, BS]
-            sims_to_mean = torch.matmul(mean_emb2, zs_id_embs2.t())[0]
-            print(f"Avg sim: {sims_to_mean.mean().item():.3f}")
-            '''
-
             self.iter_flags['zs_clip_features'] = zs_clip_features
             self.iter_flags['zs_id_embs']       = zs_id_embs
         else:
@@ -2722,9 +2707,9 @@ class LatentDiffusion(DDPM):
                 # kind of "Out-of-Domain" at the background, and are intrinsically difficult to denoise.
                 t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0),
                                        keep_prob_range=(0.5, 0.3))
-            else:
+            elif not self.iter_flags['do_arc2face_distill']:
                 # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging.
-                # This branch includes the 'do_arc2face_distill' iterations.
+                # This branch doesn't include the 'do_arc2face_distill' iterations.
                 t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
                                        keep_prob_range=(0.5, 0.3))
 
@@ -2792,7 +2777,9 @@ class LatentDiffusion(DDPM):
                 # target: [4, 4, 64, 64].
                 target = self.arc2face(x_start, t, self.iter_flags['arc2face_prompt_emb'],
                                        batch_contains_neg_instances=False, do_cfg=False)
-                loss += self.get_loss(model_output, target.to(model_output.dtype), mean=True)
+                loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
+                loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
+                loss += loss_recon
 
         ###### begin of preparation for is_compos_iter ######
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
