@@ -466,7 +466,7 @@ class SubjBasisGenerator(nn.Module):
         arc2face_embs = None
         arc2face_inverse_prompt_embs = None
         # Compatible with old ckpt.
-        if not hasattr(self, 'self.prompt2token_proj'):
+        if not hasattr(self, 'prompt2token_proj'):
             self.prompt2token_proj = self.prompt2token_emb_proj
             self.prompt2token_proj_grad_scaler = self.prompt2token_emb_proj_grad_scaler
 
