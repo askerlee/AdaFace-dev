@@ -1560,7 +1560,7 @@ class EmbeddingManager(nn.Module):
                     # zs_clip_features: [BS, 257, 1280]
                     # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
                     #print(f"zs_clip_features: {zs_clip_features.shape}, zs_id_embs: {zs_id_embs.shape}")
-                    zs_vecs_2sets, placeholder_arc2face_inverse_prompt_embs = \
+                    zs_vecs_2sets, placeholder_arc2face_embs, placeholder_arc2face_inverse_prompt_embs = \
                             subj_basis_generator(zs_clip_features, zs_id_embs, 
                                                  list_extra_words=cls_delta_strings, 
                                                  is_face=self.curr_subj_is_face,
@@ -1569,13 +1569,14 @@ class EmbeddingManager(nn.Module):
                     if self.do_zero_shot and self.iter_type == 'arc2face_distill_iter' and not placeholder_is_bg:
                         assert placeholder_arc2face_inverse_prompt_embs is not None
                         arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
+                        self.arc2face_embs = placeholder_arc2face_embs
 
                     if self.zs_apply_neg_subj_bases:
-                        zs_vecs_2sets_neg, _ = subj_basis_generator(torch.zeros_like(zs_clip_features), 
-                                                                    torch.zeros_like(zs_id_embs),
-                                                                    list_extra_words=None, 
-                                                                    is_face=self.curr_subj_is_face,
-                                                                    training_percent=self.training_percent)
+                        zs_vecs_2sets_neg, _, _ = subj_basis_generator(torch.zeros_like(zs_clip_features), 
+                                                                       torch.zeros_like(zs_id_embs),
+                                                                       list_extra_words=None, 
+                                                                       is_face=self.curr_subj_is_face,
+                                                                       training_percent=self.training_percent)
                         zs_neg_subj_bases_weight = 0.2
                         zs_vecs_2sets_pos = zs_vecs_2sets
                         # Similar to compel_cfg. So we use a similar weight 0.2.

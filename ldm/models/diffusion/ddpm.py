@@ -945,7 +945,7 @@ class LatentDiffusion(DDPM):
 
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
     def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_id_embs=None, 
-                                 randomize_clip_weights=False):
+                                 randomize_clip_weights=False, debug_arc2face_embs=False):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
@@ -966,7 +966,10 @@ class LatentDiffusion(DDPM):
 
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
-                    
+                if debug_arc2face_embs:
+                    # static_prompt_embedding: [1, 77, 768]. Need to repeat 16 times for 16 layers, and then BS times for BS instances.
+                    static_prompt_embedding = self.embedding_manager.arc2face_embs
+
                 # static_prompt_embedding is tensor. So the following statement is False.
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
                     static_prompt_embedding = static_prompt_embedding.mode()

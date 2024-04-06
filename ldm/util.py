@@ -1093,7 +1093,7 @@ def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1,
 
 #@torch.autocast(device_type="cuda")
 def arc2face_project_face_embs(tokenizer, text_encoder, face_embs, 
-                               input_max_length=77, return_core_embs_only=False):
+                               input_max_length=77, return_full_and_core_embs=True):
 
     '''
     face_embs: (N, 512) normalized ArcFace embeddings
@@ -1126,14 +1126,14 @@ def arc2face_project_face_embs(tokenizer, text_encoder, face_embs,
     # Restore the original dtype of prompt_embeds: float16 -> float32.
     prompt_embeds = prompt_embeds.to(face_embs_dtype)
 
-    if return_core_embs_only:
+    if return_full_and_core_embs:
         # token 4: 'id' in "photo of a id person". 
         # 4:20 are the most important 16 embeddings that contain the subject's identity.
         # [N, 77, 768] -> [N, 16, 768]
-        return prompt_embeds[:, 4:20]
+        return prompt_embeds, prompt_embeds[:, 4:20]
     else:
         # [N, 77, 768]
-        return prompt_embeds
+        return prompt_embeds[:, 4:20]
 
 def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs, list_extra_words,
                                       input_max_length=77, return_full_and_core_embs=False):
@@ -1249,17 +1249,19 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
 
     # arc2face_pos_prompt_emb, arc2face_neg_prompt_emb: [BS, 77, 768]
     with torch.no_grad():
-        arc2face_pos_prompt_emb     = arc2face_project_face_embs(tokenizer, text_encoder, 
-                                                                 faceid_embeds, input_max_length=input_max_length)
+        arc2face_pos_prompt_emb, _  = arc2face_project_face_embs(tokenizer, text_encoder, 
+                                                                 faceid_embeds, input_max_length=input_max_length,
+                                                                 return_full_and_core_embs=True)
     if not rand_face:
         faceid_embeds = faceid_embeds.repeat(out_image_count, 1)
         arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.repeat(out_image_count, 1, 1)
 
     if gen_neg_prompt:
         with torch.no_grad():
-            arc2face_neg_prompt_emb = arc2face_project_face_embs(tokenizer, text_encoder, 
-                                                                 torch.zeros_like(faceid_embeds),
-                                                                 input_max_length=input_max_length)
+            arc2face_neg_prompt_emb, _ = arc2face_project_face_embs(tokenizer, text_encoder, 
+                                                                    torch.zeros_like(faceid_embeds),
+                                                                    input_max_length=input_max_length,
+                                                                    return_full_and_core_embs=True)
         #if not rand_face:
         #    arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.repeat(out_image_count, 1, 1)
         return faceid_embeds, arc2face_pos_prompt_emb, arc2face_neg_prompt_emb

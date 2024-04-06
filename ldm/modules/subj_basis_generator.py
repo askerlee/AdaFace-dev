@@ -474,20 +474,20 @@ class SubjBasisGenerator(nn.Module):
                 # face_proj_in_grad_scale == 0: freeze the face_proj_in.
                 if self.face_proj_in_grad_scale == 0:
                     with torch.no_grad():
-                        # id_embs: [BS, 16, 768].
-                        id_embs_pos = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
-                                                                 raw_id_embs, return_core_embs_only=True)
+                        # arc2face_embs: [BS, 77, 768]. id_embs: [BS, 16, 768].
+                        arc2face_embs, id_embs_pos = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
+                                                                                raw_id_embs, return_full_and_core_embs=True)
                 else:
-                    # id_embs_pos: [BS, 16, 768].
-                    id_embs_pos = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
-                                                             raw_id_embs, return_core_embs_only=True)
+                    # arc2face_embs: [BS, 77, 768]. id_embs_pos: [BS, 16, 768].
+                    arc2face_embs, id_embs_pos = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
+                                                                            raw_id_embs, return_full_and_core_embs=True)
                 # Always no grad on the negative face embeddings to save RAM.
                 with torch.no_grad():
                     # Use a batch size 1 to reduce computation.
                     id_embs_neg = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
                                                              torch.zeros_like(raw_id_embs[[0]]), 
-                                                             return_core_embs_only=True)
-
+                                                             return_full_and_core_embs=False)
+                    
                 id_embs0 = id_embs_pos - id_embs_neg
                 id_embs0 = self.face_proj_in_grad_scaler(id_embs0)
                 # full_prompt_embs is projected to the token embedding space. [BS, 16, 768] -> [BS, 77, 768].
@@ -532,7 +532,7 @@ class SubjBasisGenerator(nn.Module):
 
         # lora2hira contains a LayerNorm, so no need to normalize output_queries.
         output_queries = self.lora2hira(context) * self.output_scale
-        return output_queries, arc2face_inverse_prompt_embs
+        return output_queries, arc2face_embs, arc2face_inverse_prompt_embs
 
     def init_face_proj_in(self, face_proj_in_grad_scale=0.004, prompt2token_emb_proj_grad_scale=0.1, device='cpu'):
         self.face_proj_in =  CLIPTextModelWrapper.from_pretrained(

@@ -657,17 +657,17 @@ def main(opt):
                             prompts = list(prompts)
 
                         if not opt.eval_blip:
-                            simu_arc2face_distill = True
-                            if simu_arc2face_distill:
+                            debug_arc2face_distill = True
+                            if debug_arc2face_distill:
                                 model.iter_flags['do_arc2face_distill'] = True
                                 model.embedding_manager.iter_type = 'arc2face_distill_iter'
 
                             # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                             # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                             c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
-                                                               zs_id_embs=zs_id_embs)
+                                                               zs_id_embs=zs_id_embs, debug_arc2face_embs=False)
                             
-                            if simu_arc2face_distill:
+                            if debug_arc2face_distill:
                                 static_prompt_embedding = c[0].repeat(len(prompts), 1, 1)
                                 c = (static_prompt_embedding, c[1], c[2])
 
