@@ -485,15 +485,17 @@ class SubjBasisGenerator(nn.Module):
                     # arc2face_embs: [BS, 77, 768]. id_embs_pos: [BS, 16, 768].
                     arc2face_embs, id_embs_pos = arc2face_forward_face_embs(tokenizer, self.face_proj_in, 
                                                                             raw_id_embs, return_full_and_core_embs=True)
+                '''
                 # Always no grad on the negative face embeddings to save RAM.
                 with torch.no_grad():
                     # Use a batch size 1 to reduce computation.
                     id_embs_neg = arc2face_forward_face_embs(tokenizer, self.face_proj_in, 
                                                              torch.zeros_like(raw_id_embs[[0]]), 
                                                              return_full_and_core_embs=False)
-                    
                 id_embs0 = id_embs_pos - id_embs_neg
-                id_embs0 = self.face_proj_in_grad_scaler(id_embs0)
+                '''
+
+                id_embs0 = self.face_proj_in_grad_scaler(id_embs_pos)
                 # full_prompt_embs is projected to the token embedding space. [BS, 16, 768] -> [BS, 77, 768].
                 # core_id_embs: [BS, 18, 768], the identity and (at most) two extra words 
                 # in full_prompt_embs, without BOS and EOS.

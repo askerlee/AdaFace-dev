@@ -1752,9 +1752,9 @@ class LatentDiffusion(DDPM):
             else:
                 zs_clip_features = torch.zeros(x_start.shape[0], 514, 1280).to(x_start.device)
                 # zs_id_embs: [4, 512]. arc2face_pos_prompt_emb: [4, 21, 768]
-                zs_id_embs, arc2face_pos_prompt_emb, arc2face_neg_prompt_emb \
+                zs_id_embs, arc2face_pos_prompt_emb \
                     = self.arc2face.gen_rand_arc2face_id_prompt_embs(images.shape[0],
-                                                                     gen_neg_prompt=True)
+                                                                     gen_neg_prompt=False)
                 # During training, zs_id_embs, arc2face_pos_prompt_emb are float16, but x_start is float32.
                 zs_id_embs = zs_id_embs.to(x_start.dtype)
                 arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.to(x_start.dtype)
