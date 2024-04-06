@@ -980,6 +980,7 @@ class UNetModel(nn.Module):
                     # Both the key and the value are layer_hyb_context. Only provide one.
                     layer_context = layer_hyb_context
 
+            # Not use_ada_context.
             else:
                 layer_context = (layer_static_context_v, layer_static_context_k)
                 ada_subj_attn_dict = None
@@ -991,9 +992,12 @@ class UNetModel(nn.Module):
                 # not to the subject instances. At 50% chance, apply compel cfg to all instances.
                 # If not is_training, the second half of the batch is always the empty prompt instances.
                 # So only apply compel cfg to the first half of the batch.
-                if is_training and random.random() < 0.5:
-                    compel_batch_mask[:B // 2] = 0
+                if is_training:
+                    if random.random() < 0.5:
+                        compel_batch_mask[:B // 2] = 0
+                    # Otherwise, compel_batch_mask is all 1s, i.e., compel cfg is applied to all instances.
                 else:
+                    # Inference. Only apply compel cfg to the first half of the batch.
                     compel_batch_mask[B // 2:] = 0
 
                 layer_context = prob_apply_compel_cfg(layer_context, empty_context, 

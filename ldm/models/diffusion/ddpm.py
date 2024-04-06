@@ -976,8 +976,8 @@ class LatentDiffusion(DDPM):
                             emb_extra_global_scale *= self.embedding_manager.background_extra_global_scale
 
                         static_prompt_embedding = fix_emb_scales(static_prompt_embedding, placeholder_indices,
-                                                                num_layers=self.N_CA_LAYERS,
-                                                                extra_scale=emb_extra_global_scale)
+                                                                 num_layers=self.N_CA_LAYERS,
+                                                                 extra_scale=emb_extra_global_scale)
 
                     # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scales first().
                     # If cls_delta_string_indices is not empty, then it must be a compositional 
@@ -985,9 +985,9 @@ class LatentDiffusion(DDPM):
                     # instances. Whereas cls_delta_string_indices only contains the indices of the
                     # class (mix) instances. Switching their order doesn't affect the results.
                     static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
-                                                                        self.embedding_manager.cls_delta_string_indices,
-                                                                        self.embedding_manager.subj_name_to_cls_delta_token_weights)
-
+                                                                         self.embedding_manager.cls_delta_string_indices,
+                                                                         self.embedding_manager.subj_name_to_cls_delta_token_weights)
+ 
                 else:
                     # Repeat the static prompt embeddings 16 times to match the layerwise prompts.
                     static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(1, 16, 1, 1).reshape(-1, 77, 768)

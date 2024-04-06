@@ -1661,12 +1661,12 @@ class EmbeddingManager(nn.Module):
                                             placeholder_is_bg=placeholder_is_bg)
         
         #print(self.cls_delta_string_indices)
-        if self.iter_type == 'arc2face_distill_iter':
+        if self.do_zero_shot and self.iter_type == 'arc2face_distill_iter':
             # In an arc2face_distill_iter, inversed arc2face prompt embeddings is used as the prompt embeddings.
             # The updated embedded_text above is ignored. But subj_static_embeddings is 
             # still involved in delta-loss computation.
             embedded_text = arc2face_inverse_prompt_embs
-
+            
         return embedded_text, tokenized_text, static_subj_embs_dict
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.

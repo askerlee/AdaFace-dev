@@ -17,14 +17,13 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import instantiate_from_config, mix_embeddings, save_grid, extend_nn_embedding
+from ldm.util import instantiate_from_config, save_grid, extend_nn_embedding
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
                                   init_evaluators, set_tf_gpu
 from ldm.data.personalized import PersonalizedBase
 from safetensors.torch import load_file as safetensors_load_file
-
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -252,16 +251,7 @@ def parse_args():
     parser.add_argument("--class_prompt", type=str, default=None,
                         help="the original prompt used for text/image matching evaluation "
                              "(requires --compare_with to be specified)")
-    parser.add_argument("--ref_prompt", type=str, default=None,
-                        help="a class-level reference prompt to be mixed with the subject prompt "
-                             "(if None, then don't mix with reference prompt)")
-    parser.add_argument("--prompt_mix_scheme", type=str, default=argparse.SUPPRESS, 
-                        choices=['mix_hijk', 'mix_concat_cls'],
-                        help="How to mix the subject prompt with the reference prompt")
-    
-    parser.add_argument("--prompt_mix_weight", type=float, default=0,
-                        help="Weight of the reference prompt to be mixed with the subject prompt (0 to disable)")
-        
+
     parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5, 0.5],
                         help="Weight of the skip connections of the last few layers of CLIP text embedder. " 
                              "NOTE: the last element is the weight of the last layer.")
@@ -527,7 +517,6 @@ def main(opt):
             assert opt.class_prompt is not None, "Must specify --class_prompt when calculating CLIP similarities."
 
         batched_class_long_prompts = [ opt.class_prompt ] * len(batched_prompts)
-        batched_ref_prompts        = [ opt.ref_prompt ]   * len(batched_prompts)
 
     else:
         print(f"Reading prompts from {opt.from_file}")
@@ -543,7 +532,6 @@ def main(opt):
             batched_prompts = []
             batched_subdirs = []
             batched_class_long_prompts = []
-            batched_ref_prompts = []
 
             # Repeat each prompt n_repeats times.
             for i, prompt in enumerate(all_prompts):
@@ -569,7 +557,6 @@ def main(opt):
 
                 batched_subdirs.extend([indiv_subdir] * n_batches)
                 batched_class_long_prompts.extend([class_long_prompt] * n_batches)
-                batched_ref_prompts.extend([class_short_prompt] * n_batches)
 
             # Append None to the end of batched_subdirs, for indiv_subdir change detection.
             batched_subdirs.append(None)
@@ -637,18 +624,6 @@ def main(opt):
         start_code  = avg_x_T * opt.init_img_weight + torch.randn_like(avg_x_T) * (1 - opt.init_img_weight)
 
     if not opt.eval_blip:
-        # Normal evaluation.
-        use_layerwise_embedding = config.model.params.use_layerwise_embedding
-        if hasattr(opt, 'prompt_mix_scheme'):
-            if opt.prompt_mix_scheme == 'mix_hijk':
-                prompt_mix_weight = 1.0
-            elif opt.prompt_mix_scheme == 'mix_concat_cls':
-                prompt_mix_weight = opt.prompt_mix_weight
-            else:
-                raise NotImplementedError
-        else:
-            prompt_mix_weight = 0
-
         if opt.scale != 1.0:
             try:
                 uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt])
@@ -658,8 +633,6 @@ def main(opt):
             uc = None
     else:
         # eval_blip
-        use_layerwise_embedding = False
-        prompt_mix_weight = 0
         uc = None
 
     if opt.neg_prompt != "":
@@ -680,59 +653,23 @@ def main(opt):
                     for p_i, prompts in enumerate(tqdm(batched_prompts, desc="prompts")):
                         print(f"\n{p_i+1}/{prompt_block_count}", prompts[0])
 
-                        if prompt_mix_weight != 0:
-                            # If ref_prompt is None (default), then ref_c is None, i.e., no mixing.
-                            ref_prompt = batched_ref_prompts[p_i]
-                            if ref_prompt is not None:
-                                print("Mix with", ref_prompt)
-                                ref_c = model.get_learned_conditioning(batch_size * [ref_prompt])
-                            else:
-                                ref_c = None
-                        else:
-                            ref_c = None
-
-                        if opt.scale != 1.0:
-                            # ref_prompt_mix doubles the number of channels of conditioning embeddings.
-                            # So we need to repeat uc by 2.
-                            if ref_c is not None:
-                                uc_0 = uc[0].repeat(1, 2, 1)
-                                uc = (uc_0, uc[1], uc[2])
-
                         if isinstance(prompts, tuple):
                             prompts = list(prompts)
 
                         if not opt.eval_blip:
+                            simu_arc2face_distill = True
+                            if simu_arc2face_distill:
+                                model.iter_flags['do_arc2face_distill'] = True
+                                model.embedding_manager.iter_type = 'arc2face_distill_iter'
+
                             # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                             # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                             c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
                                                                zs_id_embs=zs_id_embs)
-                            # ref_c is not None, implies (prompt_mix_weight != 0 and ref_prompt is not None).
-                            if ref_c is not None:
-                                # c / ref_c are tuples of (cond, prompts, extra_info).
-                                c0_mix_all_layers = mix_embeddings(c[0], ref_c[0], prompt_mix_weight, 
-                                                                mix_scheme='adeltaconcat')
-
-                                if use_layerwise_embedding:
-                                    # 4, 5, 6, 7, 8 correspond to original layer indices 7, 8, 12, 16, 17
-                                    # (same as used in computing mixing loss)
-                                    sync_layer_indices = [4, 5, 6, 7, 8]
-                                    # [64, 154, 768] => [4, 16, 154, 768] => assign 1s => [64, 154, 768]
-                                    layer_mask = torch.zeros_like(c0_mix_all_layers).reshape(-1, 16, *c0_mix_all_layers.shape[1:])
-                                    layer_mask[:, sync_layer_indices] = 1
-                                    layer_mask = layer_mask.reshape(c0_mix_all_layers.shape)
-                                    # Use most of the layers of embeddings in subj_comps_emb, but 
-                                    # replace sync_layer_indices layers with those from subj_comps_emb_mix_all_layers.
-                                    # Do not assign with sync_layers as indices, which destroys the computation graph.
-                                    c0_mix  = c[0].repeat(1, 2, 1) * (1 - layer_mask) \
-                                            + c0_mix_all_layers * layer_mask
-
-                                else:
-                                    # There is only one layer of embeddings.
-                                    c0_mix = c0_mix_all_layers
-
-                                c[2]['iter_type'] = 'mix_hijk'
-                                # c / ref_c are tuples of (cond, prompts, extra_info).
-                                c = (c0_mix, c[1], c[2])
+                            
+                            if simu_arc2face_distill:
+                                static_prompt_embedding = c[0].repeat(len(prompts), 1, 1)
+                                c = (static_prompt_embedding, c[1], c[2])
 
                             if opt.compel_cfg_weight_level != 0:
                                 c[2]['compel_cfg_weight_level_range'] = (opt.compel_cfg_weight_level, opt.compel_cfg_weight_level)
@@ -748,7 +685,7 @@ def main(opt):
                                 c = (static_prompt_embs_weighted, c[1], c[2])
                                 '''
 
-                            if opt.debug and ref_c is None:
+                            if opt.debug:
                                 c[2]['debug_attn'] = True
 
                             shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
