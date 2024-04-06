@@ -493,6 +493,7 @@ class DDPM(pl.LightningModule):
         self.iter_flags = { 'calc_clip_loss':               False,
                             'do_normal_recon':              True,
                             'do_arc2face_distill':          False,
+                            'gen_arc2face_rand_face':       False,
                             'is_compos_iter':               False,
                             'do_mix_prompt_distillation':   False,
                             'do_static_prompt_delta_reg':   self.do_static_prompt_delta_reg,
@@ -1716,7 +1717,11 @@ class LatentDiffusion(DDPM):
         else:
             self.iter_flags['same_subject_in_batch'] = self.same_subject_in_each_batch
 
-        if not self.iter_flags['do_arc2face_distill']:
+        p_arc2face_rand_face = 0.2
+        if self.iter_flags['do_arc2face_distill'] and random.random() < p_arc2face_rand_face:
+            self.iter_flags['gen_arc2face_rand_face'] = True
+
+        if not self.iter_flags['gen_arc2face_rand_face']:
             self.batch_subject_names = batch['subject_name']
         else:
             self.batch_subject_names = [ "arc2face" ] * len(batch['subject_name'])
@@ -1738,7 +1743,7 @@ class LatentDiffusion(DDPM):
             images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
             image_paths = batch["image_path"]
 
-            if not self.iter_flags['do_arc2face_distill']:
+            if not self.iter_flags['gen_arc2face_rand_face']:
                 # If self.iter_flags['same_subject_in_batch']:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
                 # Otherwise:                      zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
                 # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_features and zs_id_embs to get 
@@ -1748,27 +1753,36 @@ class LatentDiffusion(DDPM):
                                                                                     is_face=self.iter_flags['is_face'][0],
                                                                                     calc_avg=self.iter_flags['same_subject_in_batch'],
                                                                                     image_paths=image_paths)
+                if self.iter_flags['do_arc2face_distill']:
+                    # The returned zs_id_embs should be the same as the passed zs_id_embs.
+                    zs_id_embs, arc2face_pos_prompt_emb \
+                        = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], 
+                                                                 pre_face_embs=zs_id_embs,
+                                                                 gen_neg_prompt=False)
+
 
             else:
                 zs_clip_features = torch.zeros(x_start.shape[0], 514, 1280).to(x_start.device)
                 # zs_id_embs: [4, 512]. arc2face_pos_prompt_emb: [4, 21, 768]
                 zs_id_embs, arc2face_pos_prompt_emb \
-                    = self.arc2face.gen_rand_arc2face_id_prompt_embs(images.shape[0],
-                                                                     gen_neg_prompt=False)
-                # During training, zs_id_embs, arc2face_pos_prompt_emb are float16, but x_start is float32.
-                zs_id_embs = zs_id_embs.to(x_start.dtype)
-                arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.to(x_start.dtype)
-                # arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.to(x_start.dtype)
-                # arc2face_pos_prompt_emb and arc2face_neg_prompt_emb are used to do CFG-style conditioning on
-                # self.arc2face to generate the predicted teacher noise.
-                self.iter_flags['arc2face_prompt_emb'] = arc2face_pos_prompt_emb
-                # In arc2face distillation, we don't need to consider img_mask and fg_mask.
+                    = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], pre_face_embs=None,
+                                                             gen_neg_prompt=False)
+                # On random faces, we don't need to consider img_mask and fg_mask.
                 self.iter_flags['img_mask'] = None
                 self.iter_flags['fg_mask']  = None
                 self.iter_flags['batch_have_fg_mask'][:] = False
                 # Simply denoise a totally random x_start with arc2face_pos_prompt_emb.
                 x_start = torch.randn_like(x_start)
                 self.iter_flags['is_face'] = [True] * x_start.shape[0]
+                    
+            # During training, zs_id_embs, arc2face_pos_prompt_emb are float16, but x_start is float32.
+            zs_id_embs = zs_id_embs.to(x_start.dtype)
+            if self.iter_flags['do_arc2face_distill']:
+                arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.to(x_start.dtype)
+                # arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.to(x_start.dtype)
+                # arc2face_pos_prompt_emb and arc2face_neg_prompt_emb are used to do CFG-style conditioning on
+                # self.arc2face to generate the predicted teacher noise.
+                self.iter_flags['arc2face_prompt_emb'] = arc2face_pos_prompt_emb
 
             self.iter_flags['zs_clip_features'] = zs_clip_features
             self.iter_flags['zs_id_embs']       = zs_id_embs
@@ -2707,16 +2721,15 @@ class LatentDiffusion(DDPM):
                 # kind of "Out-of-Domain" at the background, and are intrinsically difficult to denoise.
                 t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0),
                                        keep_prob_range=(0.5, 0.3))
-            elif self.iter_flags['do_arc2face_distill']:
+            elif self.iter_flags['gen_arc2face_rand_face']:
                 # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
                 # with smaller prob to keep the original t.
-                # This branch includes the 'do_arc2face_distill' iterations.
                 t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
                                        keep_prob_range=(0.3, 0.1))
             else:
                 # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
                 # with larger prob to keep the original t.
-                # This branch includes the 'do_arc2face_distill' iterations.
+                # This branch includes the 'do_arc2face_distill' but not 'gen_arc2face_rand_face' iterations.
                 t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
                                        keep_prob_range=(0.5, 0.3))
 
@@ -2780,12 +2793,22 @@ class LatentDiffusion(DDPM):
                                                            img_mask, fg_mask, batch_have_fg_mask,
                                                            x_start.shape[0], loss_dict, prefix)
             else:
-                # Use the predicted noise by the arc2face UNet as the target.
+                # Replace target with the predicted noise by the arc2face UNet.
                 # target: [4, 4, 64, 64].
                 x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
                 target = self.arc2face(x_noisy, t, self.iter_flags['arc2face_prompt_emb'],
-                                       batch_contains_neg_instances=False, do_cfg=False)
-                loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
+                                        batch_contains_neg_instances=False, do_cfg=False)
+                                
+                if not self.iter_flags['gen_arc2face_rand_face']:
+                    # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+                    loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
+                                                         img_mask, fg_mask, 
+                                                         fg_pixel_weight=1,
+                                                         bg_pixel_weight=0)
+                else:
+                    # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
+                    loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
+
                 loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
                 loss += loss_recon
 
@@ -5316,7 +5339,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                             )
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 
-    def gen_rand_arc2face_id_prompt_embs(self, batch_size, gen_neg_prompt=False):
+    def gen_arc2face_prompt_embs(self, batch_size, pre_face_embs=None, gen_neg_prompt=False):
         # Returns faceid_embeds, arc2face_pos_prompt_emb.
         return get_arc2face_id_prompt_embs(None, self.tokenizer, self.text_encoder,
                                            image_folder=None, image_paths=None,
@@ -5324,8 +5347,10 @@ class Arc2FaceWrapper(pl.LightningModule):
                                            out_image_count=batch_size,
                                            device=self.device,
                                            input_max_length=21, # Remove all paddings.
-                                           rand_face=True, noise_level=0, 
-                                           gen_neg_prompt=gen_neg_prompt, verbose=False)
+                                           extract_faceid_embeds=False, 
+                                           pre_face_embs=pre_face_embs,
+                                           gen_neg_prompt=gen_neg_prompt, 
+                                           noise_level=0, verbose=False)
     
     # Keep compatible with the original openaimodel.UNetModel:forward().
     # Only used for inference/distillation, so no_grad() is used.

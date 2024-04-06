@@ -1205,10 +1205,10 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
                                 image_folder, image_paths, images_np,
                                 example_image_count, out_image_count,
                                 device, input_max_length=77, 
-                                rand_face=False, rand_face_embs=None, 
+                                extract_faceid_embeds=True, pre_face_embs=None, 
                                 noise_level=0.0,
                                 gen_neg_prompt=True, verbose=False):
-    if not rand_face:
+    if extract_faceid_embeds:
         image_count = 0
         faceid_embeds = []
         if image_paths is not None:
@@ -1249,9 +1249,11 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
         faceid_embeds += torch.randn_like(faceid_embeds) * noise_level        
     else:
         # Random face embeddings. faceid_embeds: [BS, 512].
-        if rand_face_embs is None:
-            rand_face_embs=torch.randn(out_image_count, 512)
-        faceid_embeds = rand_face_embs.to(torch.float16).to(device)
+        if pre_face_embs is None:
+            faceid_embeds = torch.randn(out_image_count, 512)
+        else:
+            faceid_embeds = pre_face_embs
+        faceid_embeds = faceid_embeds.to(torch.float16).to(device)
 
     faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
 
@@ -1260,7 +1262,7 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
         arc2face_pos_prompt_emb, _  = arc2face_forward_face_embs(tokenizer, text_encoder, 
                                                                  faceid_embeds, input_max_length=input_max_length,
                                                                  return_full_and_core_embs=True)
-    if not rand_face:
+    if extract_faceid_embeds:
         faceid_embeds = faceid_embeds.repeat(out_image_count, 1)
         arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.repeat(out_image_count, 1, 1)
 
@@ -1270,7 +1272,7 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
                                                                     torch.zeros_like(faceid_embeds),
                                                                     input_max_length=input_max_length,
                                                                     return_full_and_core_embs=True)
-        #if not rand_face:
+        #if extract_faceid_embeds:
         #    arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.repeat(out_image_count, 1, 1)
         return faceid_embeds, arc2face_pos_prompt_emb, arc2face_neg_prompt_emb
     else:
