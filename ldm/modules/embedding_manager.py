@@ -1566,18 +1566,19 @@ class EmbeddingManager(nn.Module):
                                                  is_face=self.curr_subj_is_face,
                                                  training_percent=self.training_percent)
                     
-                    if self.iter_type == 'arc2face_distill_iter' and not placeholder_is_bg:
+                    if self.do_zero_shot and self.iter_type == 'arc2face_distill_iter' and not placeholder_is_bg:
                         assert placeholder_arc2face_inverse_prompt_embs is not None
                         arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
 
                     if self.zs_apply_neg_subj_bases:
                         zs_vecs_2sets_neg, _ = subj_basis_generator(torch.zeros_like(zs_clip_features), 
-                                                                 torch.zeros_like(zs_id_embs),
-                                                                 list_extra_words=None, 
-                                                                 is_face=self.curr_subj_is_face,
-                                                                 training_percent=self.training_percent)
+                                                                    torch.zeros_like(zs_id_embs),
+                                                                    list_extra_words=None, 
+                                                                    is_face=self.curr_subj_is_face,
+                                                                    training_percent=self.training_percent)
                         zs_neg_subj_bases_weight = 0.2
                         zs_vecs_2sets_pos = zs_vecs_2sets
+                        # Similar to compel_cfg. So we use a similar weight 0.2.
                         zs_vecs_2sets = zs_vecs_2sets_pos * (1 + zs_neg_subj_bases_weight) \
                                         - zs_vecs_2sets_neg * zs_neg_subj_bases_weight
                         #breakpoint()
@@ -1643,6 +1644,8 @@ class EmbeddingManager(nn.Module):
                     subj_static_embedding_k = subj_static_embedding_k.repeat(REAL_OCCURS_IN_BATCH, 1)
                 elif subj_static_embedding_k.shape[0] != num_unet_ca_layers * REAL_OCCURS_IN_BATCH:
                     breakpoint()
+                # Otherwise, subj_static_embedding_k.shape[0] == num_unet_ca_layers * REAL_OCCURS_IN_BATCH,
+                # i.e., the left and right sides will have the same number of identity embeddings, and we don't need to do anything.
 
                 # Assign the k-th token embedding (along the text dim).
                 placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k)
