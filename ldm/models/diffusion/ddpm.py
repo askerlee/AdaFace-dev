@@ -182,7 +182,7 @@ class DDPM(pl.LightningModule):
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
         self.do_zero_shot                           = do_zero_shot
-        self.arc2face_distill_iter_prob                     = arc2face_distill_iter_prob if do_zero_shot else 0
+        self.arc2face_distill_iter_prob             = arc2face_distill_iter_prob if do_zero_shot else 0
         self.same_subject_in_each_batch             = same_subject_in_each_batch
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
@@ -945,7 +945,7 @@ class LatentDiffusion(DDPM):
 
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
     def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_id_embs=None, 
-                                 randomize_clip_weights=False, debug_arc2face_embs=False):
+                                 randomize_clip_weights=False, do_arc2face_distill=False, debug_arc2face_embs=False):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
@@ -974,7 +974,7 @@ class LatentDiffusion(DDPM):
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
                     static_prompt_embedding = static_prompt_embedding.mode()
 
-                if not self.iter_flags['do_arc2face_distill']:
+                if not do_arc2face_distill:
                     emb_global_scales_dict  = self.embedding_manager.get_emb_global_scales_dict(regen=True)
                     # Fix the scales of the static subject embeddings.
                     for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
@@ -1873,7 +1873,9 @@ class LatentDiffusion(DDPM):
                         self.get_learned_conditioning(delta_prompts, 
                                                       self.iter_flags['zs_clip_features'],
                                                       self.iter_flags['zs_id_embs'],
-                                                      randomize_clip_weights=True)
+                                                      randomize_clip_weights=True,
+                                                      do_arc2face_distill=self.iter_flags['do_arc2face_distill'])
+                    
                     # Release zs_clip_features and zs_id_embs.
                     del self.iter_flags['zs_clip_features'], self.iter_flags['zs_id_embs']
 
@@ -1975,11 +1977,12 @@ class LatentDiffusion(DDPM):
                             # placeholder2indices in captions should be the same as in subj_single_prompts.
                             # "captions" consist of subject single prompts only (no comp prompts).
                             # Embeddings don't need patching as there are no class prompts.
-                            c_static_emb, _, extra_info0 = self.get_learned_conditioning(captions, 
-                                                                                         # No need to pass image_features, as
-                                                                                         # image_features have been assigned to emb manager.
-                                                                                         None, None,
-                                                                                         randomize_clip_weights=True)
+                            c_static_emb, _, extra_info0 = \
+                                self.get_learned_conditioning(captions, 
+                                                              self.iter_flags['zs_clip_features'],
+                                                              self.iter_flags['zs_id_embs'],
+                                                              randomize_clip_weights=True,
+                                                              do_arc2face_distill=self.iter_flags['do_arc2face_distill'])
                             # print(captions)
                             extra_info['placeholder2indices'] = extra_info0['placeholder2indices']
 
@@ -2014,7 +2017,8 @@ class LatentDiffusion(DDPM):
                         self.get_learned_conditioning(captions, 
                                                       self.iter_flags['zs_clip_features'],
                                                       self.iter_flags['zs_id_embs'],                                                      
-                                                      randomize_clip_weights=True)
+                                                      randomize_clip_weights=True,
+                                                      do_arc2face_distill=self.iter_flags['do_arc2face_distill'])
                     
                     extra_info = extra_info0
                     extra_info['placeholder2indices_1b'] = extra_info['placeholder2indices']
