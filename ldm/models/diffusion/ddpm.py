@@ -2775,7 +2775,8 @@ class LatentDiffusion(DDPM):
             else:
                 # Use the predicted noise by the arc2face UNet as the target.
                 # target: [4, 4, 64, 64].
-                target = self.arc2face(x_start, t, self.iter_flags['arc2face_prompt_emb'],
+                x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+                target = self.arc2face(x_noisy, t, self.iter_flags['arc2face_prompt_emb'],
                                        batch_contains_neg_instances=False, do_cfg=False)
                 loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
                 loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
@@ -5347,6 +5348,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                     breakpoint()
             else:
                 # Batch only contains positive instances. No need to split.
+                # If do_arc2face_distill, then context is [BS=6, 21, 768]. The condition below is False.
                 # Either context.shape[0] == x.shape[0] * 16, or context.shape[0] == x.shape[0].
                 if context.shape[0] == x.shape[0] * 16:
                     context = context.reshape(-1, 16, *context.shape[1:]).mean(dim=1)

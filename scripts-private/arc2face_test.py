@@ -160,17 +160,17 @@ if __name__ == "__main__":
 
         for guidance_scale in [2, 4]:
             images = pipeline(image=noise,
-                            prompt_embeds=pos_prompt_emb, 
-                            negative_prompt_embeds=negative_prompt_embeds_, 
-                            num_inference_steps=40, 
-                            guidance_scale=guidance_scale, 
-                            num_images_per_prompt=1).images
+                              prompt_embeds=pos_prompt_emb, 
+                              negative_prompt_embeds=negative_prompt_embeds_, 
+                              num_inference_steps=40, 
+                              guidance_scale=guidance_scale, 
+                              num_images_per_prompt=1).images
             save_images(images, subject_name, f"guide{guidance_scale}-len{input_max_length}-origneg")
 
             images2 = pipeline(image=noise,
-                            prompt_embeds=pos_prompt_emb, 
-                            negative_prompt_embeds=neg_prompt_emb,
-                            num_inference_steps=40, 
-                            guidance_scale=guidance_scale, 
-                            num_images_per_prompt=1).images
+                               prompt_embeds=pos_prompt_emb, 
+                               negative_prompt_embeds=neg_prompt_emb,
+                               num_inference_steps=40, 
+                               guidance_scale=guidance_scale, 
+                               num_images_per_prompt=1).images
             save_images(images2, subject_name, f"guide{guidance_scale}-len{input_max_length}-arcneg")
