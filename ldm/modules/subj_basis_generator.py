@@ -465,6 +465,10 @@ class SubjBasisGenerator(nn.Module):
         BS = clip_features.shape[0]
         arc2face_embs = None
         arc2face_inverse_prompt_embs = None
+        # Compatible with old ckpt.
+        if not hasattr(self, 'self.prompt2token_proj'):
+            self.prompt2token_proj = self.prompt2token_emb_proj
+            self.prompt2token_proj_grad_scaler = self.prompt2token_emb_proj_grad_scaler
 
         # No need to use raw_id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (raw_id_embs is not None):
