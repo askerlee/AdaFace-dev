@@ -657,7 +657,7 @@ def main(opt):
                             prompts = list(prompts)
 
                         if not opt.eval_blip:
-                            debug_arc2face_distill = True
+                            debug_arc2face_distill = False
                             if debug_arc2face_distill:
                                 model.iter_flags['do_arc2face_distill'] = True
                                 model.embedding_manager.iter_type = 'arc2face_distill_iter'

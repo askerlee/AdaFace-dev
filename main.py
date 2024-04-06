@@ -279,7 +279,7 @@ def get_parser(**parser_kwargs):
                         help="Apply negative subject bases for zero-shot learning")
     parser.add_argument("--zs_use_q_aware_to_v", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use dynamic to_v in zero-shot learning")
-    parser.add_argument("--zs_face_proj_in_grad_scale", type=float, default=0.004,
+    parser.add_argument("--zs_face_proj_in_grad_scale", type=float, default=0.0,
                         help="Gradient scale of the face projection in layer")
     parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=False,
                         help="Load the subject basis generators from the checkpoint")

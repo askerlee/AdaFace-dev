@@ -1092,11 +1092,15 @@ def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1,
     return scaled_text_embedding
 
 #@torch.autocast(device_type="cuda")
-def arc2face_project_face_embs(tokenizer, text_encoder, face_embs, 
+def arc2face_forward_face_embs(tokenizer, text_encoder, face_embs, 
                                input_max_length=77, return_full_and_core_embs=True):
 
     '''
-    face_embs: (N, 512) normalized ArcFace embeddings
+    text_encoder: arc2face CLIPTextModelWrapper instance.
+    face_embs: (N, 512) normalized ArcFace embeddings.
+    return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings. 
+                               If False, return only the core embeddings.
+
     '''
 
     arcface_token_id = tokenizer.encode("id", add_special_tokens=False)[0]
@@ -1136,13 +1140,14 @@ def arc2face_project_face_embs(tokenizer, text_encoder, face_embs,
         return prompt_embeds[:, 4:20]
 
 def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs, list_extra_words,
-                                      input_max_length=77, return_full_and_core_embs=False):
+                                      input_max_length=77, return_full_and_core_embs=True):
 
     '''
+    text_encoder: arc2face CLIPTextModelWrapper instance.
     face_prompt_embs: (BS, 16, 768). Only the core embeddings, no paddings.
-    list_extra_words: [s_1, ..., s_BS], each s_i is the extra words to be added to the prompt.
-    input_max_length: BOS + "photo of a" + 16 face_prompt_embs + EOS.
-    return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings.
+    list_extra_words: [s_1, ..., s_BS], each s_i is a list of extra words to be added to the prompt.
+    return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings. 
+                               If False, return only the core embeddings.
     '''
 
     if list_extra_words is not None:
@@ -1151,7 +1156,7 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
             breakpoint()
 
         for extra_words in list_extra_words:
-            assert len(extra_words.split()) <= 2, "Each extra_words should be at most 2 words."
+            assert len(extra_words.split()) <= 2, "Each extra_words string should consist of at most 2 words."
         # 16 ", " are placeholders for face_prompt_embs.
         prompts = [ "photo of a " + ", " * 16 + list_extra_words[i] for i in range(len(list_extra_words)) ]
     else:
@@ -1172,7 +1177,9 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
     face_prompt_embs_dtype = face_prompt_embs.dtype
     face_prompt_embs = face_prompt_embs.to(text_encoder.dtype)
 
+    # token_embs: [1, 77, 768].
     token_embs = text_encoder(input_ids=input_ids, return_token_embs=True)
+    # token 4: first ", " in the template prompt.
     # Replace embeddings of 16 placeholder ", " with face_prompt_embs.
     token_embs[:, 4:20] = face_prompt_embs
 
@@ -1185,8 +1192,9 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
     prompt_embeds = prompt_embeds.to(face_prompt_embs_dtype)
 
     if return_full_and_core_embs:
-        # token 4: 'id' in "photo of a id person". 
+        # token 4: first ", " in the template prompt.
         # 4:20 are the most important 16 embeddings that contain the subject's identity.
+        # 20:22 are embeddings of the (at most) two extra words.
         # [N, 77, 768] -> [N, 18, 768]
         return prompt_embeds, prompt_embeds[:, 4:22]
     else:
@@ -1249,7 +1257,7 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
 
     # arc2face_pos_prompt_emb, arc2face_neg_prompt_emb: [BS, 77, 768]
     with torch.no_grad():
-        arc2face_pos_prompt_emb, _  = arc2face_project_face_embs(tokenizer, text_encoder, 
+        arc2face_pos_prompt_emb, _  = arc2face_forward_face_embs(tokenizer, text_encoder, 
                                                                  faceid_embeds, input_max_length=input_max_length,
                                                                  return_full_and_core_embs=True)
     if not rand_face:
@@ -1258,7 +1266,7 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
 
     if gen_neg_prompt:
         with torch.no_grad():
-            arc2face_neg_prompt_emb, _ = arc2face_project_face_embs(tokenizer, text_encoder, 
+            arc2face_neg_prompt_emb, _ = arc2face_forward_face_embs(tokenizer, text_encoder, 
                                                                     torch.zeros_like(faceid_embeds),
                                                                     input_max_length=input_max_length,
                                                                     return_full_and_core_embs=True)

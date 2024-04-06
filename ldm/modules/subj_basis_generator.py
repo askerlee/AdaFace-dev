@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 from transformers.utils import ModelOutput
 from ldm.util import anneal_value, gen_gradient_scaler, \
-                     arc2face_project_face_embs, arc2face_inverse_face_prompt_embs
+                     arc2face_forward_face_embs, arc2face_inverse_face_prompt_embs
 from arc2face.arc2face import CLIPTextModelWrapper
 
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
@@ -371,8 +371,8 @@ class SubjBasisGenerator(nn.Module):
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         use_q_aware_to_v: bool = True,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
-        face_proj_in_grad_scale: float = 0.004,  # Gradient scale for face_proj_in.
-        prompt2token_emb_proj_grad_scale: float = 0.1,  # Gradient scale for prompt2token_emb_proj.
+        face_proj_in_grad_scale: float = 0.0,           # Gradient scale for face_proj_in.
+        prompt2token_emb_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_emb_proj.
     ):
         super().__init__()
 
@@ -390,7 +390,6 @@ class SubjBasisGenerator(nn.Module):
             # [1, 384] -> [1, 16, 768].
             self.obj_proj_in            = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
                                                      elementwise_affine=elementwise_affine)
-            self.prompt2token_emb_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
                                                                        
             '''
             self.prompt2token_emb_proj  = MultimodeProjection(input_dim=init_proj_dim, 
@@ -475,16 +474,16 @@ class SubjBasisGenerator(nn.Module):
                 if self.face_proj_in_grad_scale == 0:
                     with torch.no_grad():
                         # arc2face_embs: [BS, 77, 768]. id_embs: [BS, 16, 768].
-                        arc2face_embs, id_embs_pos = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
+                        arc2face_embs, id_embs_pos = arc2face_forward_face_embs(tokenizer, self.face_proj_in, 
                                                                                 raw_id_embs, return_full_and_core_embs=True)
                 else:
                     # arc2face_embs: [BS, 77, 768]. id_embs_pos: [BS, 16, 768].
-                    arc2face_embs, id_embs_pos = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
+                    arc2face_embs, id_embs_pos = arc2face_forward_face_embs(tokenizer, self.face_proj_in, 
                                                                             raw_id_embs, return_full_and_core_embs=True)
                 # Always no grad on the negative face embeddings to save RAM.
                 with torch.no_grad():
                     # Use a batch size 1 to reduce computation.
-                    id_embs_neg = arc2face_project_face_embs(tokenizer, self.face_proj_in, 
+                    id_embs_neg = arc2face_forward_face_embs(tokenizer, self.face_proj_in, 
                                                              torch.zeros_like(raw_id_embs[[0]]), 
                                                              return_full_and_core_embs=False)
                     
@@ -534,7 +533,7 @@ class SubjBasisGenerator(nn.Module):
         output_queries = self.lora2hira(context) * self.output_scale
         return output_queries, arc2face_embs, arc2face_inverse_prompt_embs
 
-    def init_face_proj_in(self, face_proj_in_grad_scale=0.004, prompt2token_emb_proj_grad_scale=0.1, device='cpu'):
+    def init_face_proj_in(self, face_proj_in_grad_scale=0.0, prompt2token_emb_proj_grad_scale=0.4, device='cpu'):
         self.face_proj_in =  CLIPTextModelWrapper.from_pretrained(
                                 'arc2face/models', subfolder="encoder") #, torch_dtype=torch.float16)
         self.face_proj_in.to(device)
@@ -548,6 +547,8 @@ class SubjBasisGenerator(nn.Module):
 
         self.face_proj_in_grad_scale  = face_proj_in_grad_scale
         self.face_proj_in_grad_scaler = gen_gradient_scaler(face_proj_in_grad_scale)
+
+        self.prompt2token_emb_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
         self.prompt2token_emb_proj_grad_scale = prompt2token_emb_proj_grad_scale
         self.prompt2token_emb_proj_grad_scaler = gen_gradient_scaler(prompt2token_emb_proj_grad_scale)
 
