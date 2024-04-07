@@ -2218,8 +2218,8 @@ class LatentDiffusion(DDPM):
                 '''                    
                 face_info = self.face_encoder.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
                 if len(face_info) == 0:
-                    # If no face is detected (e.g. animals or objects), then use a zero tensor as the face embedding.
-                    id_emb = torch.zeros(512, device=self.device)
+                    # If no face is detected (e.g. animals or bad images), then use a random tensor as the face embedding.
+                    id_emb = torch.randn(512, device=self.device)
                 else:
                     face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
                     # id_emb: [512,]
@@ -2806,6 +2806,8 @@ class LatentDiffusion(DDPM):
                                                          img_mask, fg_mask, 
                                                          fg_pixel_weight=1,
                                                          bg_pixel_weight=0)
+                    if torch.isnan(loss_recon):
+                        breakpoint()
                 else:
                     # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
                     loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
