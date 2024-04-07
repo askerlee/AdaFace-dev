@@ -105,6 +105,7 @@ if __name__ == "__main__":
     
     subject_name = "randface-" + str(torch.seed()) if args.randface else subject_name
     rand_face_embs=torch.randn(1, 512)
+    num_images = args.out_image_count
 
     for input_max_length in (21, 77):
         faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
@@ -114,7 +115,7 @@ if __name__ == "__main__":
                                           image_folder=image_folder, image_paths=image_paths,
                                           images_np=None,
                                           example_image_count=args.example_image_count, 
-                                          out_image_count=1,
+                                          out_image_count=num_images,
                                           device='cuda',
                                           input_max_length=input_max_length,
                                           noise_level=args.noise,
@@ -126,7 +127,6 @@ if __name__ == "__main__":
             neg_id_prompt_emb = neg_id_prompt_emb.repeat(args.out_image_count, 1, 1)
 
         pipeline.text_encoder = orig_text_encoder
-        num_images = args.out_image_count
 
         filler_prompt = "photo of a id person"
         comp_prompt = args.prompt 
