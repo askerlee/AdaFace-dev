@@ -1718,7 +1718,7 @@ class LatentDiffusion(DDPM):
         else:
             self.iter_flags['same_subject_in_batch'] = self.same_subject_in_each_batch
 
-        p_arc2face_rand_face = 0.5
+        p_arc2face_rand_face = 0.3
         if self.iter_flags['do_arc2face_distill'] and random.random() < p_arc2face_rand_face:
             self.iter_flags['gen_arc2face_rand_face'] = True
 
