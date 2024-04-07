@@ -495,6 +495,7 @@ class DDPM(pl.LightningModule):
                             'do_arc2face_distill':          False,
                             'gen_arc2face_rand_face':       False,
                             'arc2face_prompt_emb':          None,
+                            'faceless_img_count':           0,
                             'is_compos_iter':               False,
                             'do_mix_prompt_distillation':   False,
                             'do_static_prompt_delta_reg':   self.do_static_prompt_delta_reg,
@@ -1751,13 +1752,16 @@ class LatentDiffusion(DDPM):
                 # Otherwise:                      zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
                 # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_features and zs_id_embs to get 
                 # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
-                zs_clip_features, zs_id_embs = self.encode_zero_shot_image_features(images, fg_mask.squeeze(1),
-                                                                                    # iter_flags['is_face'] is a list of 0/1 elements.
-                                                                                    is_face=self.iter_flags['is_face'][0],
-                                                                                    calc_avg=self.iter_flags['same_subject_in_batch'],
-                                                                                    image_paths=image_paths)
+                zs_clip_features, zs_id_embs, faceless_img_count = \
+                    self.encode_zero_shot_image_features(images, fg_mask.squeeze(1),
+                                                         # iter_flags['is_face'] is a list of 0/1 elements.
+                                                         is_face=self.iter_flags['is_face'][0],
+                                                         calc_avg=self.iter_flags['same_subject_in_batch'],
+                                                         image_paths=image_paths)
+                self.iter_flags['faceless_img_count'] = faceless_img_count
+
                 if self.iter_flags['do_arc2face_distill']:
-                    # The returned zs_id_embs should be the same as the passed zs_id_embs.
+                    # The returned zs_id_embs2 should be (almost) the same as the passed-in zs_id_embs.
                     zs_id_embs2, arc2face_pos_prompt_emb \
                         = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], 
                                                                  pre_face_embs=zs_id_embs,
@@ -2192,6 +2196,8 @@ class LatentDiffusion(DDPM):
         # Must call self.instantiate_zero_shot_image_encoders() before calling this function.
         image_pixel_values = []
         all_id_embs = []
+        faceless_img_count = 0
+
         # images could be a batch of images that have been collated into a tensor or np array.
         # images can also be a list of images.
         # The code below that processes them one by one can be applied in both cases.
@@ -2223,6 +2229,7 @@ class LatentDiffusion(DDPM):
                     print(f'No face detected in {image_paths[idx]}. Use random face embedding.')
                     # If no face is detected (e.g. animals or bad images), then use a random tensor as the face embedding.
                     id_emb = torch.randn(512, device=self.device)
+                    faceless_img_count += 1
                 else:
                     face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
                     # id_emb: [512,]
@@ -2330,7 +2337,7 @@ class LatentDiffusion(DDPM):
             # Don't do average of all_id_embs.
             id_embs = all_id_embs
                     
-        return clip_features, id_embs
+        return clip_features, id_embs, faceless_img_count
 
     # emb_man_prompt_adhoc_info: volatile data structures changing along with the prompts or the input images.
     # Sometimes the prompts changed after generating the static embeddings, 
@@ -2735,7 +2742,7 @@ class LatentDiffusion(DDPM):
                 # with larger prob to keep the original t.
                 # This branch includes the 'do_arc2face_distill' but not 'gen_arc2face_rand_face' iterations.
                 t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
-                                       keep_prob_range=(0.5, 0.3))
+                                       keep_prob_range=(0.4, 0.2))
 
             # No need to update masks.
 
@@ -2797,20 +2804,34 @@ class LatentDiffusion(DDPM):
                                                            img_mask, fg_mask, batch_have_fg_mask,
                                                            x_start.shape[0], loss_dict, prefix)
             else:
-                # Replace target with the predicted noise by the arc2face UNet.
-                # target: [4, 4, 64, 64].
-                x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-                target = self.arc2face(x_noisy, t, self.iter_flags['arc2face_prompt_emb'],
-                                       batch_contains_neg_instances=False, do_cfg=False)
-                                
+                # If there are faceless input images in the batch, we have to use arc2face target.
+                # Otherwise, use arc2face target with a probability of 0.6, and use the original image (noise) 
+                # as target with a probability of 0.4.
+                if self.iter_flags['gen_arc2face_rand_face'] or self.iter_flags['faceless_img_count'] > 0:
+                    p_use_arc2face_target = 1
+                else:
+                    p_use_arc2face_target = 0.6
+                
+                use_arc2face_target = random.random() < p_use_arc2face_target
+                if use_arc2face_target:
+                    # Replace target with the predicted noise by the arc2face UNet.
+                    # target: [4, 4, 64, 64].
+                    x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+                    target = self.arc2face(x_noisy, t, self.iter_flags['arc2face_prompt_emb'],
+                                           batch_contains_neg_instances=False, do_cfg=False)
+                # Otherwise, use the original image as guidance. We don't need to change target.
+                                                
                 if not self.iter_flags['gen_arc2face_rand_face']:
+                    # If use_arc2face_target, we don't want to distill on the background pixels, 
+                    # as those pixels are suppressed by the arc2face UNet. So bg_pixel_weight = 0.
+                    # Otherwise, we still wish the inverse arc2face embeddings to be close to the original background,
+                    # i.e., not suppressing the background pixels. Therefore, bg_pixel_weight = 0.2.
+                    bg_pixel_weight = 0 if use_arc2face_target else 0.2
                     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
                     loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
                                                          img_mask, fg_mask, 
                                                          fg_pixel_weight=1,
-                                                         bg_pixel_weight=0)
-                    if torch.isnan(loss_recon):
-                        breakpoint()
+                                                         bg_pixel_weight=bg_pixel_weight)
                 else:
                     # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
                     loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
