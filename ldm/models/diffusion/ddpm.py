@@ -2814,18 +2814,21 @@ class LatentDiffusion(DDPM):
                 
                 use_arc2face_target = random.random() < p_use_arc2face_target
                 if use_arc2face_target:
+                    x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
                     # Replace target with the predicted noise by the arc2face UNet.
                     # target: [4, 4, 64, 64].
-                    x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
                     target = self.arc2face(x_noisy, t, self.iter_flags['arc2face_prompt_emb'],
                                            batch_contains_neg_instances=False, do_cfg=False)
-                # Otherwise, use the original image as guidance. We don't need to change target.
+                # Otherwise, use the original image as target. We don't need to change target.
                                                 
                 if not self.iter_flags['gen_arc2face_rand_face']:
                     # If use_arc2face_target, we don't want to distill on the background pixels, 
                     # as those pixels are suppressed by the arc2face UNet. So bg_pixel_weight = 0.
-                    # Otherwise, we still wish the inverse arc2face embeddings to be close to the original background,
-                    # i.e., not suppressing the background pixels. Therefore, bg_pixel_weight = 0.2.
+                    # Otherwise, we still wish images reconstructed with arc2face_prompt_emb 
+                    # to be close to the original background, i.e., not suppressing the background pixels. 
+                    # Therefore, bg_pixel_weight = 0.2.
+                    # NOTE: we still use the input img_mask and fg_mask, but the foreground reconstructed with 
+                    # arc2face UNet might be slightly off. Anyway, hopefully the error is small.
                     bg_pixel_weight = 0 if use_arc2face_target else 0.2
                     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
                     loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
