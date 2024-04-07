@@ -463,13 +463,13 @@ class PersonalizedBase(Dataset):
                 image_path      = image_paths[image_idx]
                 # Sometimes we remove some images during the training process, 
                 # so we need to check if the image exists.
-                if not os.path.exists(image_path):
+                if os.path.exists(image_path):
+                    break
+                else:
                     print(f"WARNING: {image_path} doesn't exist!")
-                    continue
 
             if not os.path.exists(image_path):
                 print(f"ERROR: {image_path} still doesn't exist after 10 trials!")
-                breakpoint()
                 return None                
             
             fg_mask_path    = self.fg_mask_paths_by_subj[index][image_idx]
