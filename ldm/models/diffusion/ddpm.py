@@ -1718,8 +1718,10 @@ class LatentDiffusion(DDPM):
         else:
             self.iter_flags['same_subject_in_batch'] = self.same_subject_in_each_batch
 
-        p_arc2face_rand_face = 0.3
-        if self.iter_flags['do_arc2face_distill'] and random.random() < p_arc2face_rand_face:
+        # Gradually increase the probability of generating random faces from 0.3 to 0.6 
+        # over the first 50% of the training, to address overfitting on the training faces.
+        p_gen_arc2face_rand_face = anneal_value(self.training_percent, 0.5, (0.3, 0.6))
+        if self.iter_flags['do_arc2face_distill'] and random.random() < p_gen_arc2face_rand_face:
             self.iter_flags['gen_arc2face_rand_face'] = True
 
         if not self.iter_flags['gen_arc2face_rand_face']:
@@ -2194,7 +2196,7 @@ class LatentDiffusion(DDPM):
         # images can also be a list of images.
         # The code below that processes them one by one can be applied in both cases.
         # If images are a collated batch, processing them one by one will not add much overhead.
-        for image in images:
+        for idx, image in enumerate(images):
             # input to clip_preprocessor: an image or a batch of images, each being PIL.Image.Image, numpy.ndarray, 
             # torch.Tensor, tf.Tensor or jax.ndarray.
             # Different sizes of images are standardized to the same size 224*224.
@@ -2218,6 +2220,7 @@ class LatentDiffusion(DDPM):
                 '''                    
                 face_info = self.face_encoder.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
                 if len(face_info) == 0:
+                    print(f'No face detected in {image_paths[idx]}. Use random face embedding.')
                     # If no face is detected (e.g. animals or bad images), then use a random tensor as the face embedding.
                     id_emb = torch.randn(512, device=self.device)
                 else:

@@ -1223,6 +1223,7 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
             face_infos = face_app.get(image_np)
             if verbose and image_paths is not None:
                 print(image_paths[i], len(face_infos))
+            # Assume all images belong to the same subject. Therefore, we can skip the images with no face detected.
             if len(face_infos) == 0:
                 continue
             # only use the maximum face

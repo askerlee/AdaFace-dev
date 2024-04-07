@@ -31,10 +31,10 @@ trash_img_count = 0
 trash_mask_count = 0
 num_subjects = len(os.listdir(base_folder))
 print(f'num_subjects={num_subjects}')
-resumed_subj_folder = None #'n007809'
+resumed_subj_folder = None #'n002393'
 resumed = True
 
-for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
+for subj_i, subj_folder in enumerate(sorted(os.listdir(base_folder))):
     image_fullpaths = []
     id_embs = []
     print(f"{subj_i+1}/{num_subjects}: {subj_folder}")
@@ -48,7 +48,7 @@ for subj_i, subj_folder in enumerate(os.listdir(base_folder)):
     genders = []
     ages = []
 
-    for image_i, image_path in enumerate(os.listdir(subj_path)):
+    for image_i, image_path in enumerate(sorted(os.listdir(subj_path))):
         if "_mask.png" in image_path or ".pt" in image_path or ".json" in image_path:
             continue
 
