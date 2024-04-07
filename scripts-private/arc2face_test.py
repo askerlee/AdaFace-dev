@@ -109,17 +109,17 @@ if __name__ == "__main__":
     for input_max_length in (21, 77):
         faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
             = get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
-                                        image_folder, image_paths, 
-                                        images_np=None,
-                                        example_image_count=args.example_image_count, 
-                                        out_image_count=1,
-                                        device='cuda',
-                                        input_max_length=input_max_length,
-                                        rand_face=args.randface, 
-                                        rand_face_embs=rand_face_embs,
-                                        noise_level=args.noise,
-                                        gen_neg_prompt=True, 
-                                        verbose=True)
+                                          extract_faceid_embeds=not args.randface,
+                                          pre_face_embs=rand_face_embs,
+                                          image_folder=image_folder, image_paths=image_paths,
+                                          images_np=None,
+                                          example_image_count=args.example_image_count, 
+                                          out_image_count=1,
+                                          device='cuda',
+                                          input_max_length=input_max_length,
+                                          noise_level=args.noise,
+                                          gen_neg_prompt=True, 
+                                          verbose=True)
 
         if args.randface:
             id_prompt_emb = id_prompt_emb.repeat(args.out_image_count, 1, 1)

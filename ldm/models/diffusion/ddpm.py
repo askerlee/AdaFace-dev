@@ -494,6 +494,7 @@ class DDPM(pl.LightningModule):
                             'do_normal_recon':              True,
                             'do_arc2face_distill':          False,
                             'gen_arc2face_rand_face':       False,
+                            'arc2face_prompt_emb':          None,
                             'is_compos_iter':               False,
                             'do_mix_prompt_distillation':   False,
                             'do_static_prompt_delta_reg':   self.do_static_prompt_delta_reg,
@@ -1755,11 +1756,10 @@ class LatentDiffusion(DDPM):
                                                                                     image_paths=image_paths)
                 if self.iter_flags['do_arc2face_distill']:
                     # The returned zs_id_embs should be the same as the passed zs_id_embs.
-                    zs_id_embs, arc2face_pos_prompt_emb \
+                    zs_id_embs2, arc2face_pos_prompt_emb \
                         = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], 
                                                                  pre_face_embs=zs_id_embs,
                                                                  gen_neg_prompt=False)
-
 
             else:
                 zs_clip_features = torch.zeros(x_start.shape[0], 514, 1280).to(x_start.device)
@@ -1771,7 +1771,8 @@ class LatentDiffusion(DDPM):
                 self.iter_flags['img_mask'] = None
                 self.iter_flags['fg_mask']  = None
                 self.iter_flags['batch_have_fg_mask'][:] = False
-                # Simply denoise a totally random x_start with arc2face_pos_prompt_emb.
+                # In a gen_arc2face_rand_face iteration, simply denoise a totally random x_start 
+                # with arc2face_pos_prompt_emb.
                 x_start = torch.randn_like(x_start)
                 self.iter_flags['is_face'] = [True] * x_start.shape[0]
                     
@@ -2797,7 +2798,7 @@ class LatentDiffusion(DDPM):
                 # target: [4, 4, 64, 64].
                 x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
                 target = self.arc2face(x_noisy, t, self.iter_flags['arc2face_prompt_emb'],
-                                        batch_contains_neg_instances=False, do_cfg=False)
+                                       batch_contains_neg_instances=False, do_cfg=False)
                                 
                 if not self.iter_flags['gen_arc2face_rand_face']:
                     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
@@ -3352,7 +3353,7 @@ class LatentDiffusion(DDPM):
 
         if torch.isnan(loss):
             print('NaN loss detected.')
-            losd = 0
+            loss = 0
             #breakpoint()
 
         self.release_plosses_intermediates(locals())
@@ -5343,13 +5344,13 @@ class Arc2FaceWrapper(pl.LightningModule):
     def gen_arc2face_prompt_embs(self, batch_size, pre_face_embs=None, gen_neg_prompt=False):
         # Returns faceid_embeds, arc2face_pos_prompt_emb.
         return get_arc2face_id_prompt_embs(None, self.tokenizer, self.text_encoder,
+                                           extract_faceid_embeds=False, 
+                                           pre_face_embs=pre_face_embs,
                                            image_folder=None, image_paths=None,
                                            images_np=None, example_image_count=0,
                                            out_image_count=batch_size,
                                            device=self.device,
                                            input_max_length=21, # Remove all paddings.
-                                           extract_faceid_embeds=False, 
-                                           pre_face_embs=pre_face_embs,
                                            gen_neg_prompt=gen_neg_prompt, 
                                            noise_level=0, verbose=False)
     

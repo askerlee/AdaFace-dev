@@ -1202,11 +1202,10 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
         return prompt_embeds
 
 def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder, 
+                                extract_faceid_embeds, pre_face_embs, 
                                 image_folder, image_paths, images_np,
                                 example_image_count, out_image_count,
-                                device, input_max_length=77, 
-                                extract_faceid_embeds=True, pre_face_embs=None, 
-                                noise_level=0.0,
+                                device, input_max_length=77, noise_level=0.0, 
                                 gen_neg_prompt=True, verbose=False):
     if extract_faceid_embeds:
         image_count = 0
@@ -1262,6 +1261,8 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
         arc2face_pos_prompt_emb, _  = arc2face_forward_face_embs(tokenizer, text_encoder, 
                                                                  faceid_embeds, input_max_length=input_max_length,
                                                                  return_full_and_core_embs=True)
+    # If extract_faceid_embeds, we assume all images are from the same subject, and the batch dim of faceid_embeds is 1. 
+    # So we need to repeat faceid_embeds.
     if extract_faceid_embeds:
         faceid_embeds = faceid_embeds.repeat(out_image_count, 1)
         arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.repeat(out_image_count, 1, 1)
