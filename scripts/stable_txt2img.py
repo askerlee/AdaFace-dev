@@ -454,7 +454,7 @@ def main(opt):
         if opt.zeroshot:
             # zs_clip_features: [1, 514, 1280]. 
             # zs_id_embs: [1, 512] if is_face, or [2, 16, 512] if uses IP-adapter warm start; or [1, 384] if is object.
-            zs_clip_features, zs_id_embs = model.encode_zero_shot_image_features(ref_images, ref_masks,
+            zs_clip_features, zs_id_embs, _ = model.encode_zero_shot_image_features(ref_images, ref_masks,
                                                                                  is_face=opt.calc_face_sim,
                                                                                  calc_avg=True)
 
