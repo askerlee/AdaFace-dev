@@ -1021,7 +1021,7 @@ class EmbeddingManager(nn.Module):
             zs_use_q_aware_to_v=True,
             zs_face_proj_in_grad_scale=0.0,
             zs_prompt2token_proj_grad_scale=0.4,
-            zs_load_subj_basis_generators_from_ckpt=False,
+            zs_load_subj_basis_generators_from_ckpt=True,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs

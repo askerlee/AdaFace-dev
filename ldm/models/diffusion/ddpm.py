@@ -2846,7 +2846,6 @@ class LatentDiffusion(DDPM):
                                                          fg_pixel_weight=1,
                                                          bg_pixel_weight=bg_pixel_weight)
                 else:
-                    
                     # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
                     # If self.iter_flags['use_std_as_arc2face_recon_weighting'], we get the pixel-wise losses,
                     # then multiply them with the loss variances across instances to get the final loss.

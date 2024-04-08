@@ -283,7 +283,7 @@ def get_parser(**parser_kwargs):
                         help="Gradient scale of the face projection input layer")
     parser.add_argument("--zs_prompt2token_proj_grad_scale", type=float, default=0.4,
                         help="Gradient scale of the prompt2token projection layer")    
-    parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Load the subject basis generators from the checkpoint")
 
     parser.add_argument("--layerwise_lora_rank", 
