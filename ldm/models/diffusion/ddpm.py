@@ -496,6 +496,9 @@ class DDPM(pl.LightningModule):
                             'gen_arc2face_rand_face':       False,
                             'arc2face_prompt_emb':          None,
                             'faceless_img_count':           0,
+                            'use_arc2face_as_target':       False,
+                            # use_std_as_arc2face_recon_weighting is only applicable if gen_arc2face_rand_face.
+                            'use_std_as_arc2face_recon_weighting': False,
                             'is_compos_iter':               False,
                             'do_mix_prompt_distillation':   False,
                             'do_static_prompt_delta_reg':   self.do_static_prompt_delta_reg,
@@ -1781,7 +1784,14 @@ class LatentDiffusion(DDPM):
                 # with arc2face_pos_prompt_emb.
                 x_start = torch.randn_like(x_start)
                 self.iter_flags['is_face'] = [True] * x_start.shape[0]
-                    
+
+                p_use_std_as_arc2face_recon_weighting = 0.5
+                self.iter_flags['use_std_as_arc2face_recon_weighting'] = random.random() < p_use_std_as_arc2face_recon_weighting
+                if self.iter_flags['use_std_as_arc2face_recon_weighting']:
+                    # Use the same noise for different ID embeddings in the batch,
+                    # so that we can compute the variance at each pixel.
+                    x_start = x_start[[0]].repeat(x_start.shape[0], 1, 1, 1)
+
             # During training, zs_id_embs, arc2face_pos_prompt_emb are float16, but x_start is float32.
             zs_id_embs = zs_id_embs.to(x_start.dtype)
             if self.iter_flags['do_arc2face_distill']:
@@ -1793,6 +1803,15 @@ class LatentDiffusion(DDPM):
 
             self.iter_flags['zs_clip_features'] = zs_clip_features
             self.iter_flags['zs_id_embs']       = zs_id_embs
+
+            # If there are faceless input images in the batch, we have to use arc2face target.
+            # Otherwise, use arc2face target with a probability of 0.6, and use the original image (noise) 
+            # as target with a probability of 0.4.
+            if self.iter_flags['gen_arc2face_rand_face'] or self.iter_flags['faceless_img_count'] > 0:
+                p_use_arc2face_as_target = 1
+            else:
+                p_use_arc2face_as_target = 0.6
+            self.iter_flags['use_arc2face_as_target'] = random.random() < p_use_arc2face_as_target
         else:
             self.iter_flags['zs_clip_features'] = None
             self.iter_flags['zs_id_embs']       = None
@@ -2804,16 +2823,7 @@ class LatentDiffusion(DDPM):
                                                            img_mask, fg_mask, batch_have_fg_mask,
                                                            x_start.shape[0], loss_dict, prefix)
             else:
-                # If there are faceless input images in the batch, we have to use arc2face target.
-                # Otherwise, use arc2face target with a probability of 0.6, and use the original image (noise) 
-                # as target with a probability of 0.4.
-                if self.iter_flags['gen_arc2face_rand_face'] or self.iter_flags['faceless_img_count'] > 0:
-                    p_use_arc2face_target = 1
-                else:
-                    p_use_arc2face_target = 0.6
-                
-                use_arc2face_target = random.random() < p_use_arc2face_target
-                if use_arc2face_target:
+                if self.iter_flags['use_arc2face_as_target']:
                     x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
                     # Replace target with the predicted noise by the arc2face UNet.
                     # target: [4, 4, 64, 64].
@@ -2822,22 +2832,32 @@ class LatentDiffusion(DDPM):
                 # Otherwise, use the original image as target. We don't need to change target.
                                                 
                 if not self.iter_flags['gen_arc2face_rand_face']:
-                    # If use_arc2face_target, we don't want to distill on the background pixels, 
+                    # If use_arc2face_as_target, we don't want to distill using the background pixels, 
                     # as those pixels are suppressed by the arc2face UNet. So bg_pixel_weight = 0.
-                    # Otherwise, we still wish images reconstructed with arc2face_prompt_emb 
-                    # to be close to the original background, i.e., not suppressing the background pixels. 
+                    # Otherwise, we use the original image (noise) as target, and still wish to keep the original background
+                    # after being reconstructed with arc2face_prompt_emb, so as not to suppress the background pixels. 
                     # Therefore, bg_pixel_weight = 0.2.
                     # NOTE: we still use the input img_mask and fg_mask, but the foreground reconstructed with 
                     # arc2face UNet might be slightly off. Anyway, hopefully the error is small.
-                    bg_pixel_weight = 0 if use_arc2face_target else 0.2
+                    bg_pixel_weight = 0 if self.iter_flags['use_arc2face_as_target'] else 0.2
                     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
                     loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
                                                          img_mask, fg_mask, 
                                                          fg_pixel_weight=1,
                                                          bg_pixel_weight=bg_pixel_weight)
                 else:
+                    
                     # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
-                    loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
+                    # If self.iter_flags['use_std_as_arc2face_recon_weighting'], we get the pixel-wise losses,
+                    # then multiply them with the loss variances across instances to get the final loss.
+                    loss_recon = self.get_loss(model_output, target.to(model_output.dtype), 
+                                               mean=not self.iter_flags['use_std_as_arc2face_recon_weighting'])
+                    if self.iter_flags['use_std_as_arc2face_recon_weighting']:
+                        loss_inst_std = loss_recon.std(dim=0, keepdim=True).detach()
+                        # Don't take mean across dim 1 (4 channels), as the latent pixels may have different 
+                        # scales acorss the 4 channels.
+                        spatial_weight = loss_inst_std / (loss_inst_std.mean(dim=(2,3), keepdim=True) + 1e-8)
+                        loss_recon = (loss_recon * spatial_weight).mean()
 
                 loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
                 loss += loss_recon
