@@ -183,7 +183,8 @@ class DDPM(pl.LightningModule):
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
         self.do_zero_shot                           = do_zero_shot
-        self.arc2face_distill_iter_prob             = arc2face_distill_iter_prob if do_zero_shot else 0
+        self.arc2face_distill_iter_prob             = arc2face_distill_iter_prob if (do_zero_shot and self.training) \
+                                                        else 0
         self.p_gen_arc2face_rand_face_range         = p_gen_arc2face_rand_face_range
         self.same_subject_in_each_batch             = same_subject_in_each_batch
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
