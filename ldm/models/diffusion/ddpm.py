@@ -2856,8 +2856,9 @@ class LatentDiffusion(DDPM):
                         # Don't take mean across dim 1 (4 channels), as the latent pixels may have different 
                         # scales acorss the 4 channels.
                         spatial_weight = loss_inst_std / (loss_inst_std.mean(dim=(2,3), keepdim=True) + 1e-8)
-                        # Smooth the spatial_weight by average pooling.
-                        spatial_weight = F.avg_pool2d(spatial_weight, 4, 4)
+                        # Smooth the spatial_weight by average pooling. spatial_weight: [1, 1, 64, 64] -> [1, 1, 31, 31].
+                        spatial_weight = F.avg_pool2d(spatial_weight, 4, 2)
+                        # Resize spatial_weight to the original size. spatial_weight: [1, 1, 31, 31] -> [1, 1, 64, 64].
                         spatial_weight = F.interpolate(spatial_weight, size=(64, 64), mode='bilinear', align_corners=False)
                         loss_recon = (loss_recon * spatial_weight).mean()
 
