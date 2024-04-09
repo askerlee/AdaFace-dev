@@ -1587,11 +1587,23 @@ class EmbeddingManager(nn.Module):
                         self.arc2face_embs = placeholder_arc2face_embs
 
                     if self.zs_apply_neg_subj_bases:
-                        zs_vecs_2sets_neg, _, _ = subj_basis_generator(torch.zeros_like(zs_clip_features), 
-                                                                       torch.zeros_like(zs_id_embs),
-                                                                       list_extra_words=None, 
-                                                                       is_face=self.curr_subj_is_face,
-                                                                       training_percent=self.training_percent)
+                        if self.do_zero_shot and not placeholder_is_bg and self.curr_subj_is_face:
+                            with torch.no_grad():
+                                # neg_arc2face_id_embs: [BS, 16, 768].
+                                _, neg_arc2face_id_embs = \
+                                        arc2face_forward_face_embs(self.tokenizer, self.arc2face_text_encoder, 
+                                                                   torch.zeros_like(zs_id_embs), return_full_and_core_embs=True)
+                        else:
+                            neg_arc2face_id_embs = None
+
+                        zs_vecs_2sets_neg, _ = \
+                            subj_basis_generator(torch.zeros_like(zs_clip_features), 
+                                                 torch.zeros_like(zs_id_embs), 
+                                                 neg_arc2face_id_embs,
+                                                 list_extra_words=None, 
+                                                 is_face=self.curr_subj_is_face,
+                                                 training_percent=self.training_percent)
+                        
                         zs_neg_subj_bases_weight = 0.2
                         zs_vecs_2sets_pos = zs_vecs_2sets
                         # Similar to compel_cfg. So we use a similar weight 0.2.
