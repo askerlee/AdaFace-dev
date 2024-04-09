@@ -2862,7 +2862,7 @@ class LatentDiffusion(DDPM):
                     loss_recon = self.get_loss(model_output, target.to(model_output.dtype), 
                                                mean=not self.iter_flags['use_std_as_arc2face_recon_weighting'])
                     if self.iter_flags['use_std_as_arc2face_recon_weighting']:
-                        loss_inst_std = loss_recon.std(dim=(0,1), keepdim=True).detach()
+                        loss_inst_std = loss_recon.mean(dim=1, keepdim=True).std(dim=(0,1), keepdim=True).detach()
                         # Don't take mean across dim 1 (4 channels), as the latent pixels may have different 
                         # scales acorss the 4 channels.
                         spatial_weight = loss_inst_std / (loss_inst_std.mean(dim=(2,3), keepdim=True) + 1e-8)
