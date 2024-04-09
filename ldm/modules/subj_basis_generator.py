@@ -386,6 +386,7 @@ class SubjBasisGenerator(nn.Module):
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
+            # TODO: use CLIPTextModelWrapper as obj_proj_in.
             self.obj_proj_in            = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
                                                      elementwise_affine=elementwise_affine)
 
@@ -394,13 +395,12 @@ class SubjBasisGenerator(nn.Module):
             self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
             self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
             self.prompt2token_proj_grad_scaler = gen_gradient_scaler(prompt2token_proj_grad_scale)
-            print(f"prompt2token_proj initialized with grad scale of {prompt2token_proj_grad_scale}.")            
+            print(f"Subj prompt2token_proj initialized with grad scale of {prompt2token_proj_grad_scale}.")            
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
-            self.face_proj_in = None
             self.obj_proj_in  = None
             self.prompt2token_proj = None
-            print("Bg face_proj_in is set to None.")
+            print("Bg prompt2token_proj is set to None.")
 
         self.num_out_queries        = num_out_queries
         self.num_lora2hira_modes    = num_lora2hira_modes
