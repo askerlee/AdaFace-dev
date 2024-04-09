@@ -137,6 +137,7 @@ class DDPM(pl.LightningModule):
                  do_zero_shot=False,
                  same_subject_in_each_batch=False,
                  arc2face_distill_iter_prob=0.5,
+                 p_gen_arc2face_rand_face_range=[0.3, 0.6],
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -183,6 +184,7 @@ class DDPM(pl.LightningModule):
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
         self.do_zero_shot                           = do_zero_shot
         self.arc2face_distill_iter_prob             = arc2face_distill_iter_prob if do_zero_shot else 0
+        self.p_gen_arc2face_rand_face_range         = p_gen_arc2face_rand_face_range
         self.same_subject_in_each_batch             = same_subject_in_each_batch
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
@@ -1722,9 +1724,10 @@ class LatentDiffusion(DDPM):
         else:
             self.iter_flags['same_subject_in_batch'] = self.same_subject_in_each_batch
 
-        # Gradually increase the probability of generating random faces from 0.3 to 0.6 
+        # Gradually increase the probability of generating random faces 
+        # from p_gen_arc2face_rand_face_range[0] to p_gen_arc2face_rand_face_range[1] (default: 0.3 to 0.6)
         # over the first 50% of the training, to address overfitting on the training faces.
-        p_gen_arc2face_rand_face = anneal_value(self.training_percent, 0.5, (0.3, 0.6))
+        p_gen_arc2face_rand_face = anneal_value(self.training_percent, 0.5, self.p_gen_arc2face_rand_face_range)
         if self.iter_flags['do_arc2face_distill'] and random.random() < p_gen_arc2face_rand_face:
             self.iter_flags['gen_arc2face_rand_face'] = True
 

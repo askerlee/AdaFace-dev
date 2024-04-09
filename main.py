@@ -285,7 +285,9 @@ def get_parser(**parser_kwargs):
                         help="Gradient scale of the prompt2token projection layer")    
     parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Load the subject basis generators from the checkpoint")
-
+    parser.add_argument("--p_gen_arc2face_rand_face_range", type=float, nargs=2, default=[0.3, 0.6],
+                        help="Range of generating random faces during arc2face distillation")
+    
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=10,
         help="Layerwise lora rank")
@@ -944,6 +946,7 @@ if __name__ == "__main__":
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.same_subject_in_each_batch      = False
+        config.model.params.p_gen_arc2face_rand_face_range  = opt.p_gen_arc2face_rand_face_range
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
         config.data.params.train.params.do_zero_shot        = opt.zeroshot
         config.data.params.validation.params.do_zero_shot   = opt.zeroshot
@@ -971,7 +974,6 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_face_proj_in_grad_scale = opt.zs_face_proj_in_grad_scale
             config.model.params.personalization_config.params.zs_prompt2token_proj_grad_scale = opt.zs_prompt2token_proj_grad_scale
             config.model.params.personalization_config.params.zs_load_subj_basis_generators_from_ckpt = opt.zs_load_subj_basis_generators_from_ckpt
-            
             # When using zero-shot, we load different subjects in the same batch.
             config.data.params.same_subject_in_each_batch = False
         

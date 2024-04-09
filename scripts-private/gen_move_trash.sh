@@ -26,7 +26,11 @@ while read -l file_path
     set new_dir_path (string replace "VGGface2_HQ_masks" "VGGface2_HQ_masks_trash" $dir_path)
 
     # Create the new directory (if it doesn't exist)
-    echo mkdir $new_dir_path
+    echo mkdir -p $new_dir_path
     # Move the file to the new directory
     echo mv $file_path $new_dir_path/(basename $file_path)
+    set mask_path (string replace ".jpg" "_mask.png" $file_path)
+    if test -e $mask_path
+        echo mv $mask_path $new_dir_path/(basename $mask_path)
+    end
 end
