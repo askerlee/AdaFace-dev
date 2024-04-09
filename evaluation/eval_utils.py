@@ -12,6 +12,9 @@ from deepface import DeepFace
 from deepface.commons import functions as deepface_functions
 
 def set_tf_gpu(gpu_id):
+    # Suppress tensorflow info and warning messages.
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
     import tensorflow as tf
     if gpu_id >= 0:
         gpus = tf.config.experimental.list_physical_devices('GPU')
