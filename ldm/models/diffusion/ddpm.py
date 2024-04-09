@@ -1785,7 +1785,7 @@ class LatentDiffusion(DDPM):
                 x_start = torch.randn_like(x_start)
                 self.iter_flags['is_face'] = [True] * x_start.shape[0]
 
-                p_use_std_as_arc2face_recon_weighting = 0.5
+                p_use_std_as_arc2face_recon_weighting = 1 # 0.5
                 self.iter_flags['use_std_as_arc2face_recon_weighting'] = random.random() < p_use_std_as_arc2face_recon_weighting
                 if self.iter_flags['use_std_as_arc2face_recon_weighting']:
                     # Use the same noise for different ID embeddings in the batch,
@@ -2856,6 +2856,9 @@ class LatentDiffusion(DDPM):
                         # Don't take mean across dim 1 (4 channels), as the latent pixels may have different 
                         # scales acorss the 4 channels.
                         spatial_weight = loss_inst_std / (loss_inst_std.mean(dim=(2,3), keepdim=True) + 1e-8)
+                        # Smooth the spatial_weight by average pooling.
+                        spatial_weight = F.avg_pool2d(spatial_weight, 4, 4)
+                        spatial_weight = F.interpolate(spatial_weight, size=(64, 64), mode='bilinear', align_corners=False)
                         loss_recon = (loss_recon * spatial_weight).mean()
 
                 loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
