@@ -10,14 +10,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from transformers import CLIPVisionModel, CLIPTokenizer, CLIPTextModel
+from transformers import CLIPVisionModel, CLIPTokenizer
 import numpy as np
 from torch import einsum
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from transformers.utils import ModelOutput
-from ldm.util import anneal_value, gen_gradient_scaler, \
-                     arc2face_forward_face_embs, arc2face_inverse_face_prompt_embs
+from ldm.util import anneal_value, gen_gradient_scaler, arc2face_inverse_face_prompt_embs
 from arc2face.arc2face import CLIPTextModelWrapper
 
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
@@ -371,7 +370,6 @@ class SubjBasisGenerator(nn.Module):
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         use_q_aware_to_v: bool = True,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
-        face_proj_in_grad_scale: float = 0.0,       # Gradient scale for face_proj_in.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
     ):
         super().__init__()
@@ -401,7 +399,7 @@ class SubjBasisGenerator(nn.Module):
             # The dimension of InstantID face features for humans is NOT the same as output_dim = latent_query_dim.   
             # self.face_proj_in: [1, 512] -> [1, 16, 768].
             # If self.placeholder_is_bg: face_proj_in is set to None.
-            self.init_face_proj_in(face_proj_in_grad_scale, prompt2token_proj_grad_scale, device='cpu')
+            self.init_face_proj_in(prompt2token_proj_grad_scale, device='cpu')
             
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
@@ -461,9 +459,9 @@ class SubjBasisGenerator(nn.Module):
 
     # list_extra_words: a list of length BS. Each element is a string of extra words.
     # raw_id_embs: ArcFace embeddings for faces, or DINO embeddings for objects.
-    def forward(self, clip_features, raw_id_embs, list_extra_words, is_face, training_percent=0):    
+    def forward(self, clip_features, raw_id_embs, arc2face_id_embs, 
+                list_extra_words, is_face, training_percent=0):    
         BS = clip_features.shape[0]
-        arc2face_embs = None
         arc2face_inverse_prompt_embs = None
         # Compatible with old ckpt.
         if not hasattr(self, 'prompt2token_proj'):
@@ -473,35 +471,16 @@ class SubjBasisGenerator(nn.Module):
         # No need to use raw_id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (raw_id_embs is not None):
             if is_face:
-                # id_embs_pos: [BS, 512] -> [BS, 16, 768].
-                # Loaded pretrained IP-Adapter model weight. No need to update face_proj_in.
-                # face_proj_in_grad_scale == 0: freeze the face_proj_in.
-                if self.face_proj_in_grad_scale == 0:
-                    with torch.no_grad():
-                        # arc2face_embs: [BS, 77, 768]. id_embs: [BS, 16, 768].
-                        arc2face_embs, id_embs_pos = arc2face_forward_face_embs(tokenizer, self.face_proj_in, 
-                                                                                raw_id_embs, return_full_and_core_embs=True)
-                else:
-                    # arc2face_embs: [BS, 77, 768]. id_embs_pos: [BS, 16, 768].
-                    arc2face_embs, id_embs_pos = arc2face_forward_face_embs(tokenizer, self.face_proj_in, 
-                                                                            raw_id_embs, return_full_and_core_embs=True)
-                '''
-                # Always no grad on the negative face embeddings to save RAM.
-                with torch.no_grad():
-                    # Use a batch size 1 to reduce computation.
-                    id_embs_neg = arc2face_forward_face_embs(tokenizer, self.face_proj_in, 
-                                                             torch.zeros_like(raw_id_embs[[0]]), 
-                                                             return_full_and_core_embs=False)
-                id_embs0 = id_embs_pos - id_embs_neg
-                '''
-
-                id_embs0 = self.face_proj_in_grad_scaler(id_embs_pos)
-                # full_prompt_embs is projected to the token embedding space. [BS, 16, 768] -> [BS, 77, 768].
+                assert arc2face_id_embs is not None
+                # arc2face_embs is projected to the prompt embedding space by arc2face_forward_face_embs
+                # in embedding_manager: [BS, 16, 768] -> [BS, 77, 768].
+                # arc2face_id_embs is part of arc2face_embs: [BS, 77, 768] -> [BS, 16, 768].
+                # arc2face_inverse_prompt_embs is projected to the token embedding spaces.
                 # core_id_embs: [BS, 18, 768], the identity and (at most) two extra words 
                 # in full_prompt_embs, without BOS and EOS.
                 arc2face_inverse_prompt_embs, core_id_embs = \
                     arc2face_inverse_face_prompt_embs(tokenizer, self.prompt2token_proj, 
-                                                      id_embs0, list_extra_words, input_max_length=77,
+                                                      arc2face_id_embs, list_extra_words, input_max_length=77,
                                                       return_full_and_core_embs=True)
                 
                 arc2face_inverse_prompt_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
@@ -538,23 +517,9 @@ class SubjBasisGenerator(nn.Module):
 
         # lora2hira contains a LayerNorm, so no need to normalize output_queries.
         output_queries = self.lora2hira(context) * self.output_scale
-        return output_queries, arc2face_embs, arc2face_inverse_prompt_embs
+        return output_queries, arc2face_inverse_prompt_embs
 
-    def init_face_proj_in(self, face_proj_in_grad_scale=0.0, prompt2token_proj_grad_scale=0.4, device='cpu'):
-        self.face_proj_in =  CLIPTextModelWrapper.from_pretrained(
-                                'arc2face/models', subfolder="encoder") #, torch_dtype=torch.float16)
-        self.face_proj_in.to(device)
-
-        print(f"Subj face_proj_in is loaded from './arc2face/models/encoder'")
-        # Freeze the face_proj_in if face_proj_in_grad_scale == 0.
-        # Setting requires_grad to False will save the RAM taken by the optimizer.
-        if face_proj_in_grad_scale == 0:
-            for param in self.face_proj_in.parameters():
-                param.requires_grad = False
-
-        self.face_proj_in_grad_scale  = face_proj_in_grad_scale
-        self.face_proj_in_grad_scaler = gen_gradient_scaler(face_proj_in_grad_scale)
-
+    def init_face_proj_in(self, prompt2token_proj_grad_scale=0.4, device='cpu'):
         self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
         self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
         self.prompt2token_proj_grad_scaler = gen_gradient_scaler(prompt2token_proj_grad_scale)

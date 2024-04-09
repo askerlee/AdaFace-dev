@@ -11,7 +11,8 @@ from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_ea
                      add_noise_to_embedding, calc_ref_cosine_loss, \
                      get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
                      scan_cls_delta_strings, torch_uniform, extend_indices_N_by_n_times, \
-                     extend_clip_text_embedder, calc_init_word_embeddings, calc_stats
+                     extend_clip_text_embedder, calc_init_word_embeddings, calc_stats, \
+                     arc2face_forward_face_embs
 
 from functools import partial
 from collections import OrderedDict
@@ -1009,7 +1010,6 @@ class EmbeddingManager(nn.Module):
             do_zero_shot=False,
             zs_image_emb_dim=1280,
             zs_num_subj_generator_layers=1,
-            zs_num_prompt2token_emb_modes=1,
             zs_num_lora2hira_modes=1,
             zs_elementwise_affine=True,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
@@ -1019,7 +1019,6 @@ class EmbeddingManager(nn.Module):
             zs_cls_delta_token_weights=None,
             zs_use_FFN=False,
             zs_use_q_aware_to_v=True,
-            zs_face_proj_in_grad_scale=0.0,
             zs_prompt2token_proj_grad_scale=0.4,
             zs_load_subj_basis_generators_from_ckpt=True,
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
@@ -1154,10 +1153,12 @@ class EmbeddingManager(nn.Module):
             self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
             self.zs_cls_delta_string   = zs_cls_delta_string
             self.zs_num_latent_queries = zs_num_latent_queries
-            self.zs_face_proj_in_grad_scale = zs_face_proj_in_grad_scale
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
-            
+            # arc2face_text_encoder will be passed from ddpm.py after the Arc2FaceWrapper instance 
+            # is initialized, so as to save some RAM.
+            self.arc2face_text_encoder = None
+
             if self.zs_cls_delta_string is not None:
                 self.zs_cls_delta_tokens   = get_tokens_for_string(zs_cls_delta_string)
                 if zs_cls_delta_token_weights is None:
@@ -1241,7 +1242,6 @@ class EmbeddingManager(nn.Module):
                 subj_basis_generator = SubjBasisGenerator(depth=depth,
                                                           num_latent_queries = zs_num_latent_queries,
                                                           num_out_queries = num_out_queries,
-                                                          # num_prompt2token_emb_modes = zs_num_prompt2token_emb_modes,
                                                           num_lora2hira_modes = zs_num_lora2hira_modes,
                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
                                                           image_embedding_dim = zs_image_emb_dim, 
@@ -1250,7 +1250,6 @@ class EmbeddingManager(nn.Module):
                                                           use_FFN = zs_use_FFN,
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           use_q_aware_to_v = zs_use_q_aware_to_v,
-                                                          face_proj_in_grad_scale = self.zs_face_proj_in_grad_scale,
                                                           prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
@@ -1273,6 +1272,7 @@ class EmbeddingManager(nn.Module):
         self.training_percent = 0
         # Store the text_embedder to compute the delta loss.
         self.text_embedder  = text_embedder
+        self.tokenizer      = text_embedder.tokenizer
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_placeholder2indices_cache = {}
         self.emb_global_scales_dict = None
@@ -1559,12 +1559,24 @@ class EmbeddingManager(nn.Module):
                             
                         if cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
                             print(f"cls_delta_strings: {cls_delta_strings}")
-                            
+
+                    # Loaded pretrained IP-Adapter model weight. No need to update arc2face_text_encoder.
+                    # So arc2face_text_encoder is frozen.
+                    if self.do_zero_shot and not placeholder_is_bg and self.curr_subj_is_face:
+                        with torch.no_grad():
+                            # arc2face_embs: [BS, 77, 768]. id_embs: [BS, 16, 768].
+                            placeholder_arc2face_embs, arc2face_id_embs = \
+                                    arc2face_forward_face_embs(self.tokenizer, self.arc2face_text_encoder, 
+                                                               zs_id_embs, return_full_and_core_embs=True)
+                    else:
+                        placeholder_arc2face_embs = None
+                        arc2face_id_embs = None
+
                     # zs_clip_features: [BS, 257, 1280]
                     # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
                     #print(f"zs_clip_features: {zs_clip_features.shape}, zs_id_embs: {zs_id_embs.shape}")
-                    zs_vecs_2sets, placeholder_arc2face_embs, placeholder_arc2face_inverse_prompt_embs = \
-                            subj_basis_generator(zs_clip_features, zs_id_embs, 
+                    zs_vecs_2sets, placeholder_arc2face_inverse_prompt_embs = \
+                            subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
                                                  list_extra_words=cls_delta_strings, 
                                                  is_face=self.curr_subj_is_face,
                                                  training_percent=self.training_percent)

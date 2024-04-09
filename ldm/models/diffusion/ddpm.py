@@ -209,6 +209,8 @@ class DDPM(pl.LightningModule):
         self.model = DiffusionWrapper(unet_config, conditioning_key)
         if self.arc2face_distill_iter_prob > 0:
             self.arc2face = Arc2FaceWrapper()
+        else:
+            self.arc2face = None
 
         count_params(self.model, verbose=True)
         self.use_ema = use_ema
@@ -789,6 +791,10 @@ class LatentDiffusion(DDPM):
             # self.embedding_manager.training = True after creation. 
             # *** Where this status is set? ***
             self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
+            if self.arc2face is not None:
+                # Let embedding_manager share the text_encoder with arc2face, to save some RAM.
+                self.embedding_manager.arc2face_text_encoder = self.arc2face.text_encoder
+
             # embedding_manager.optimized_parameters(): string_to_static_embedder_dict, 
             # which maps custom tokens to embeddings
             #for param in self.embedding_manager.optimized_parameters():
