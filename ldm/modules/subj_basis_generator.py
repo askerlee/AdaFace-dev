@@ -388,19 +388,13 @@ class SubjBasisGenerator(nn.Module):
             # [1, 384] -> [1, 16, 768].
             self.obj_proj_in            = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
                                                      elementwise_affine=elementwise_affine)
-                                                                       
-            '''
-            self.prompt2token_proj  = MultimodeProjection(input_dim=init_proj_dim, 
-                                                                output_dim=output_dim,
-                                                                num_modes=num_prompt2token_emb_modes,
-                                                                elementwise_affine=elementwise_affine)
-            '''
 
-            # The dimension of InstantID face features for humans is NOT the same as output_dim = latent_query_dim.   
-            # self.face_proj_in: [1, 512] -> [1, 16, 768].
-            # If self.placeholder_is_bg: face_proj_in is set to None.
-            self.init_face_proj_in(prompt2token_proj_grad_scale, device='cpu')
-            
+            # self.prompt2token_proj: [1, 16, 768] -> [1, 77, 768] (with paddings).
+            # If self.placeholder_is_bg: prompt2token_proj is set to None.
+            self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
+            self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
+            self.prompt2token_proj_grad_scaler = gen_gradient_scaler(prompt2token_proj_grad_scale)
+            print(f"prompt2token_proj initialized with grad scale of {prompt2token_proj_grad_scale}.")            
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.face_proj_in = None
@@ -463,10 +457,6 @@ class SubjBasisGenerator(nn.Module):
                 list_extra_words, is_face, training_percent=0):    
         BS = clip_features.shape[0]
         arc2face_inverse_prompt_embs = None
-        # Compatible with old ckpt.
-        if not hasattr(self, 'prompt2token_proj'):
-            self.prompt2token_proj = self.prompt2token_emb_proj
-            self.prompt2token_proj_grad_scaler = self.prompt2token_emb_proj_grad_scaler
 
         # No need to use raw_id_embs if placeholder_is_bg.
         if (not self.placeholder_is_bg) and (raw_id_embs is not None):
@@ -518,11 +508,6 @@ class SubjBasisGenerator(nn.Module):
         # lora2hira contains a LayerNorm, so no need to normalize output_queries.
         output_queries = self.lora2hira(context) * self.output_scale
         return output_queries, arc2face_inverse_prompt_embs
-
-    def init_face_proj_in(self, prompt2token_proj_grad_scale=0.4, device='cpu'):
-        self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
-        self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
-        self.prompt2token_proj_grad_scaler = gen_gradient_scaler(prompt2token_proj_grad_scale)
 
     # q_aware_to_v_lora_rank has to be the same as the old q_aware_to_v_lora_rank.
     def expand_latent_queries(self, new_num_latent_queries, q_aware_to_v_lora_rank=64, output_dim=768):
