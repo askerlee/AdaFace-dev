@@ -133,8 +133,8 @@ class PersonalizedBase(Dataset):
                  data_roots,
                  size=512,
                  repeats=100,
-                 max_num_subjects_per_base_folder=1000,  # Set to -1 to load all subjects in each base folder.
-                 max_num_images_per_subject=100,         # Set to -1 to load all images in each subject folder.
+                 max_num_subjects_per_base_folder=2000,  # Set to -1 to load all subjects in each base folder.
+                 max_num_images_per_subject=50,          # Set to -1 to load all images in each subject folder.
                  flip_p=0.5,
                  # rand_scale_range: None (disabled) or a tuple of floats
                  # that specifies the (minimum, maximum) scaling factors.
