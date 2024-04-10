@@ -1251,6 +1251,8 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
         # Random face embeddings. faceid_embeds: [BS, 512].
         if pre_face_embs is None:
             faceid_embeds = torch.randn(out_image_count, 512)
+            if noise_level > 0:
+                faceid_embeds += torch.randn_like(faceid_embeds) * noise_level
         else:
             faceid_embeds = pre_face_embs
         faceid_embeds = faceid_embeds.to(torch.float16).to(device)

@@ -15,7 +15,7 @@ import os, argparse, sys, glob, cv2
 from ldm.util import get_arc2face_id_prompt_embs
 
     
-def save_images(images, subject_name, prompt, save_dir = "samples-ada"):
+def save_images(images, subject_name, prompt, noise_level, save_dir = "samples-ada"):
     
     os.makedirs(save_dir, exist_ok=True)
     # Save 4 images as a grid image in save_dir
@@ -25,13 +25,13 @@ def save_images(images, subject_name, prompt, save_dir = "samples-ada"):
         grid_image.paste(image, (512 * (i % 2), 512 * (i // 2)))
 
     prompt_sig = prompt.replace(" ", "_").replace(",", "_")
-    grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{args.noise}.png")
+    grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{noise_level}.png")
     if os.path.exists(grid_filepath):
         grid_count = 2
-        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{args.noise}-{grid_count}.jpg')
+        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level}-{grid_count}.jpg')
         while os.path.exists(grid_filepath):
             grid_count += 1
-            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{args.noise}-{grid_count}.jpg')
+            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level}-{grid_count}.jpg')
 
     grid_image.save(grid_filepath)
     print(f"Saved to {grid_filepath}")
@@ -107,20 +107,24 @@ if __name__ == "__main__":
     rand_face_embs=torch.randn(1, 512)
     num_images = args.out_image_count
 
-    for input_max_length in (21, 77):
+    input_max_length = 22
+
+    for noise_level in (0, 0.05, 0.1, 0.15):
+        pre_face_embs = rand_face_embs if args.randface else None
+
         faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
             = get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
-                                          extract_faceid_embeds=not args.randface,
-                                          pre_face_embs=rand_face_embs,
-                                          image_folder=image_folder, image_paths=image_paths,
-                                          images_np=None,
-                                          example_image_count=args.example_image_count, 
-                                          out_image_count=num_images,
-                                          device='cuda',
-                                          input_max_length=input_max_length,
-                                          noise_level=args.noise,
-                                          gen_neg_prompt=True, 
-                                          verbose=True)
+                                            extract_faceid_embeds=not args.randface,
+                                            pre_face_embs=pre_face_embs,
+                                            image_folder=image_folder, image_paths=image_paths,
+                                            images_np=None,
+                                            example_image_count=args.example_image_count, 
+                                            out_image_count=num_images,
+                                            device='cuda',
+                                            input_max_length=input_max_length,
+                                            noise_level=noise_level,
+                                            gen_neg_prompt=True, 
+                                            verbose=True)
 
         if args.randface:
             id_prompt_emb = id_prompt_emb.repeat(args.out_image_count, 1, 1)
@@ -160,17 +164,18 @@ if __name__ == "__main__":
 
         for guidance_scale in [2, 4]:
             images = pipeline(image=noise,
-                              prompt_embeds=pos_prompt_emb, 
-                              negative_prompt_embeds=negative_prompt_embeds_, 
-                              num_inference_steps=40, 
-                              guidance_scale=guidance_scale, 
-                              num_images_per_prompt=1).images
-            save_images(images, subject_name, f"guide{guidance_scale}-len{input_max_length}-origneg")
+                            prompt_embeds=pos_prompt_emb, 
+                            negative_prompt_embeds=negative_prompt_embeds_, 
+                            num_inference_steps=40, 
+                            guidance_scale=guidance_scale, 
+                            num_images_per_prompt=1).images
+
+            save_images(images, subject_name, f"guide{guidance_scale}-origneg", noise_level)
 
             images2 = pipeline(image=noise,
-                               prompt_embeds=pos_prompt_emb, 
-                               negative_prompt_embeds=neg_prompt_emb,
-                               num_inference_steps=40, 
-                               guidance_scale=guidance_scale, 
-                               num_images_per_prompt=1).images
-            save_images(images2, subject_name, f"guide{guidance_scale}-len{input_max_length}-arcneg")
+                                prompt_embeds=pos_prompt_emb, 
+                                negative_prompt_embeds=neg_prompt_emb,
+                                num_inference_steps=40, 
+                                guidance_scale=guidance_scale, 
+                                num_images_per_prompt=1).images
+            save_images(images2, subject_name, f"guide{guidance_scale}-arcneg", noise_level)
