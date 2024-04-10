@@ -195,7 +195,7 @@ class PersonalizedBase(Dataset):
         # Sort subj_roots, so that the order of subjects is consistent.
         self.subj_roots = sorted(subj_roots)
         # subject_names: sorted ascendingly for subjects within the same folder.
-        self.subject_names = [ os.path.basename(subj_root) for subj_root in self.subj_roots ]
+        self.subject_names = [] #[ os.path.basename(subj_root) for subj_root in self.subj_roots ]
 
         assert len(self.subj_roots) > 0, f"No data found in data_roots={data_roots}!"
 
@@ -228,6 +228,7 @@ class PersonalizedBase(Dataset):
             caption_paths       = list(map(lambda x: x if x in all_file_paths else None, caption_paths))
             num_valid_captions  = sum([ 1 if x is not None else 0 for x in caption_paths ])
 
+            self.subject_names.append(subject_name)
             self.image_paths_by_subj.append(image_paths)
             self.fg_mask_paths_by_subj.append(fg_mask_paths)
             self.caption_paths_by_subj.append(caption_paths)

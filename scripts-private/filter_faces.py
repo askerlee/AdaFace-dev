@@ -115,6 +115,8 @@ for subj_i, subj_folder in enumerate(sorted(os.listdir(base_folder))):
     avg_gender  = sum(genders) / len(genders)
     # Neutral face? 
     if avg_gender == 0.5:
+        # Continue execution. It means we will use the person_type of the previous subject.
+        # Since it's a neutral face, either person type is fine.
         print('WARNING: Neutral face', subj_folder)
         #breakpoint()
 
