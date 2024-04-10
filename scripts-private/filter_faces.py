@@ -66,12 +66,12 @@ for subj_i, subj_folder in enumerate(sorted(os.listdir(base_folder))):
                 print('No face detected:', image_fullpath)
                 continue
 
-            print('No face detected:', image_trash_path)
             if not os.path.exists(subj_trash_path):
                 os.makedirs(subj_trash_path)
             image_trash_path = os.path.join(subj_trash_path, os.path.basename(image_fullpath))
             # Move to trash folder
             shutil.move(image_fullpath, image_trash_path)
+            print('No face detected:', image_trash_path)
 
             mask_fullpath = image_fullpath.replace('.jpg', '_mask.png')
             if os.path.exists(mask_fullpath):
