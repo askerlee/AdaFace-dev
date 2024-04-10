@@ -1246,13 +1246,19 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
         # faceid_embeds: [10, 512] -> [1, 512] -> [BS, 512].
         # and the resulted prompt embeddings are the same.
         faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True).to(torch.float16).to(device)
+        faceid_embeds = add_noise_to_embedding(faceid_embeds, 0, begin_noise_std_range=(noise_level, noise_level), 
+                                               end_noise_std_range=None, add_noise_prob=1,
+                                               noise_std_is_relative=True, keep_norm=True)
+        
         faceid_embeds += torch.randn_like(faceid_embeds) * noise_level        
     else:
         # Random face embeddings. faceid_embeds: [BS, 512].
         if pre_face_embs is None:
             faceid_embeds = torch.randn(out_image_count, 512)
             if noise_level > 0:
-                faceid_embeds += torch.randn_like(faceid_embeds) * noise_level
+                faceid_embeds = add_noise_to_embedding(faceid_embeds, 0, begin_noise_std_range=(noise_level, noise_level), 
+                                                       end_noise_std_range=None, add_noise_prob=1,
+                                                       noise_std_is_relative=True, keep_norm=True)
         else:
             faceid_embeds = pre_face_embs
         faceid_embeds = faceid_embeds.to(torch.float16).to(device)
@@ -2349,8 +2355,12 @@ def add_noise_to_embedding(embeddings, training_percent,
     if random.random() > add_noise_prob:
         return embeddings
     
-    noise_std_lb = anneal_value(training_percent, 1, (begin_noise_std_range[0], end_noise_std_range[0]))
-    noise_std_ub = anneal_value(training_percent, 1, (begin_noise_std_range[1], end_noise_std_range[1]))
+    if end_noise_std_range is not None:
+        noise_std_lb = anneal_value(training_percent, 1, (begin_noise_std_range[0], end_noise_std_range[0]))
+        noise_std_ub = anneal_value(training_percent, 1, (begin_noise_std_range[1], end_noise_std_range[1]))
+    else:
+        noise_std_lb, noise_std_ub = begin_noise_std_range
+        
     noise_std = np.random.uniform(noise_std_lb, noise_std_ub)
 
     if noise_std_is_relative:

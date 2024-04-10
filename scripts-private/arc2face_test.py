@@ -109,7 +109,8 @@ if __name__ == "__main__":
 
     input_max_length = 22
 
-    for noise_level in (0, 0.05, 0.1, 0.15):
+    # Noise level is the *relative* std of the noise added to the face embeddings.
+    for noise_level in (0, 0.04, 0.08):
         pre_face_embs = rand_face_embs if args.randface else None
 
         faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
