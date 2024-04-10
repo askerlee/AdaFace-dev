@@ -137,7 +137,7 @@ class DDPM(pl.LightningModule):
                  do_zero_shot=False,
                  same_subject_in_each_batch=False,
                  arc2face_distill_iter_prob=0.5,
-                 p_gen_arc2face_rand_face_range=[0.4, 0.4],
+                 p_gen_arc2face_rand_face_range=[0.3, 0.3],
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -1775,8 +1775,8 @@ class LatentDiffusion(DDPM):
                 self.iter_flags['add_noise_to_real_id_embs'] = random.random() < p_add_noise_to_real_id_embs
                 if self.iter_flags['add_noise_to_real_id_embs']:
                     # Add noise to the zero-shot ID embeddings.
-                    zs_id_embs = add_noise_to_embedding(zs_id_embs, 1, begin_noise_std_range=[0.03, 0.06], 
-                                                        end_noise_std_range=[0.06, 0.12], 
+                    zs_id_embs = add_noise_to_embedding(zs_id_embs, 0, begin_noise_std_range=[0.02, 0.06], 
+                                                        end_noise_std_range=None, 
                                                         add_noise_prob=1, noise_std_is_relative=True, keep_norm=True)
                     
                 self.iter_flags['faceless_img_count'] = faceless_img_count
