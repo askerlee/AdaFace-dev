@@ -15,6 +15,8 @@ T = 0.65
 parser = argparse.ArgumentParser(description='Filter faces')
 parser.add_argument('--base_folder', type=str, default='/data/shaohua/VGGface2_HQ_masks/', help='Base folder')
 parser.add_argument('--trash_folder', type=str, default='/data/shaohua/VGGface2_HQ_masks_trash/', help='Trash folder')
+parser.add_argument('--resumed_subj_folder', type=str, default=None, 
+                    help='Resume filtering from this subject folder and skipp all subjects before')
 parser.add_argument('--no_trash', action='store_true', help='Do not move trash images to the trash folder')
 parser.add_argument('--gpu_id', type=int, default=0, help='GPU id')
 args = parser.parse_args()
@@ -31,8 +33,11 @@ trash_img_count = 0
 trash_mask_count = 0
 num_subjects = len(os.listdir(base_folder))
 print(f'num_subjects={num_subjects}')
-resumed_subj_folder = None #'n002393'
-resumed = True
+resumed_subj_folder = args.resumed_subj_folder
+if args.resumed_subj_folder is None:
+    resumed = True
+else:
+    resumed = False
 
 for subj_i, subj_folder in enumerate(sorted(os.listdir(base_folder))):
     image_fullpaths = []
@@ -110,7 +115,8 @@ for subj_i, subj_folder in enumerate(sorted(os.listdir(base_folder))):
     avg_gender  = sum(genders) / len(genders)
     # Neutral face? 
     if avg_gender == 0.5:
-        breakpoint()
+        print('WARNING: Neutral face', subj_folder)
+        #breakpoint()
 
     # Map gender and avg_age to one in ["man", "woman", "young man", "young woman", "boy", "girl"]:
     if avg_age <= 18 and avg_gender < 0.5:
