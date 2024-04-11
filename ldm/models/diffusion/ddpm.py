@@ -137,7 +137,7 @@ class DDPM(pl.LightningModule):
                  do_zero_shot=False,
                  same_subject_in_each_batch=False,
                  arc2face_distill_iter_prob=0.5,
-                 p_gen_arc2face_rand_face_range=[0.3, 0.3],
+                 p_gen_arc2face_rand_face_range=[0.2, 0.2],
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
