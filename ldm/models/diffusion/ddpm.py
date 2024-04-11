@@ -2769,10 +2769,10 @@ class LatentDiffusion(DDPM):
                 # kind of "Out-of-Domain" at the background, and are intrinsically difficult to denoise.
                 t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0),
                                        keep_prob_range=(0.5, 0.3))
-            elif self.iter_flags['gen_arc2face_rand_face']:
-                # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
+            elif self.iter_flags['gen_arc2face_rand_face'] or self.iter_flags['add_noise_to_real_id_embs']:
+                # Increase t slightly by (1, 1.5) to increase noise amount and make the denoising more challenging,
                 # with smaller prob to keep the original t.
-                t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
+                t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.5), 
                                        keep_prob_range=(0.3, 0.1))
             else:
                 # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
