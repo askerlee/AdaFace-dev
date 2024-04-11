@@ -25,13 +25,13 @@ def save_images(images, subject_name, prompt, noise_level, save_dir = "samples-a
         grid_image.paste(image, (512 * (i % 2), 512 * (i // 2)))
 
     prompt_sig = prompt.replace(" ", "_").replace(",", "_")
-    grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{noise_level}.png")
+    grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{noise_level:.02f}.png")
     if os.path.exists(grid_filepath):
         grid_count = 2
-        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level}-{grid_count}.jpg')
+        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level:.02f}-{grid_count}.jpg')
         while os.path.exists(grid_filepath):
             grid_count += 1
-            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level}-{grid_count}.jpg')
+            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level:.02f}-{grid_count}.jpg')
 
     grid_image.save(grid_filepath)
     print(f"Saved to {grid_filepath}")
@@ -110,7 +110,8 @@ if __name__ == "__main__":
     input_max_length = 22
 
     # Noise level is the *relative* std of the noise added to the face embeddings.
-    for noise_level in (0, 0.04, 0.08):
+    # A noise level of 0.08 could change gender, but 0.06 is usually safe.
+    for noise_level in (0, 0.03, 0.06):
         pre_face_embs = rand_face_embs if args.randface else None
 
         faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
