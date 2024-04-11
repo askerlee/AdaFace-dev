@@ -137,7 +137,7 @@ class DDPM(pl.LightningModule):
                  do_zero_shot=False,
                  same_subject_in_each_batch=False,
                  arc2face_distill_iter_prob=0.5,
-                 p_gen_arc2face_rand_face=0.1,
+                 p_gen_arc2face_rand_face=0.4,
                  p_add_noise_to_real_id_embs=0.6,
                  ):
         super().__init__()

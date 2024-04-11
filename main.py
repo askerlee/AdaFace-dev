@@ -281,7 +281,7 @@ def get_parser(**parser_kwargs):
                         help="Gradient scale of the prompt2token projection layer")    
     parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Load the subject basis generators from the checkpoint")
-    parser.add_argument("--p_gen_arc2face_rand_face", type=float, default=0.1,
+    parser.add_argument("--p_gen_arc2face_rand_face", type=float, default=0.4,
                         help="Probability of generating random faces during arc2face distillation")
     parser.add_argument("--p_add_noise_to_real_id_embs", type=float, default=0.6,
                         help="Probability of adding noise to real identity embeddings")
