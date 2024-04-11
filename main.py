@@ -281,9 +281,11 @@ def get_parser(**parser_kwargs):
                         help="Gradient scale of the prompt2token projection layer")    
     parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Load the subject basis generators from the checkpoint")
-    parser.add_argument("--p_gen_arc2face_rand_face_range", type=float, nargs=2, default=[0.2, 0.2],
-                        help="Range of generating random faces during arc2face distillation")
-    
+    parser.add_argument("--p_gen_arc2face_rand_face", type=float, default=0.1,
+                        help="Probability of generating random faces during arc2face distillation")
+    parser.add_argument("--p_add_noise_to_real_id_embs", type=float, default=0.6,
+                        help="Probability of adding noise to real identity embeddings")
+        
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=10,
         help="Layerwise lora rank")
@@ -942,7 +944,7 @@ if __name__ == "__main__":
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.same_subject_in_each_batch      = False
-        config.model.params.p_gen_arc2face_rand_face_range  = opt.p_gen_arc2face_rand_face_range
+        config.model.params.p_gen_arc2face_rand_face  = opt.p_gen_arc2face_rand_face
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
         config.data.params.train.params.do_zero_shot        = opt.zeroshot
         config.data.params.validation.params.do_zero_shot   = opt.zeroshot
