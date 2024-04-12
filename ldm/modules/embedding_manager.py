@@ -2422,6 +2422,9 @@ class EmbeddingManager(nn.Module):
                     # Then replace it with the one in ckpt.
                     # print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                     ckpt_subj_basis_generator.face_proj_in = None
+                    # Temporarily fix a different-shape of lora2hira bug.
+                    # TODO: correct the fix
+                    ckpt_subj_basis_generator.lora2hira =None
                     ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
                     if len(ret.missing_keys) > 0:
                         print(f"Missing keys: {ret.missing_keys}")
