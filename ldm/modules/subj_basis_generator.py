@@ -371,7 +371,7 @@ class SubjBasisGenerator(nn.Module):
         use_q_aware_to_v: bool = True,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
-        use_learnable_hidden_state_weights: bool = True,  # Whether to use learnable hidden state weights.
+        learnable_hidden_state_weights_scheme: str = 'per-channel',  # none, per-layer, per-channel.
     ):
         super().__init__()
 
@@ -397,7 +397,7 @@ class SubjBasisGenerator(nn.Module):
             self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
             self.prompt2token_proj_grad_scaler = gen_gradient_scaler(prompt2token_proj_grad_scale)
             print(f"Subj prompt2token_proj initialized with grad scale of {prompt2token_proj_grad_scale}.")            
-            self.initialize_hidden_state_layer_weights(use_learnable_hidden_state_weights, 'cpu')
+            self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.obj_proj_in  = None
@@ -513,16 +513,23 @@ class SubjBasisGenerator(nn.Module):
         output_queries = self.lora2hira(context) * self.output_scale
         return output_queries, arc2face_inverse_prompt_embs
 
-    def initialize_hidden_state_layer_weights(self, use_learnable_hidden_state_weights, device):
-        if not use_learnable_hidden_state_weights:
+    def initialize_hidden_state_layer_weights(self, learnable_hidden_state_weights_scheme, device):
+        if learnable_hidden_state_weights_scheme == 'none':
             self.hidden_state_layer_weights = None
             print("hidden_state_layer_weights is set to None.")
-        else:        
+        elif learnable_hidden_state_weights_scheme == 'per-layer':
             # Learnable weights of the last 3 layers, initialized to focus more on the last layer.
-            self.hidden_state_layer_weights = nn.Parameter(torch.tensor([1.0, 1.0, 2.0], device=device),
+            # 'per-layer': Different weights for different layers, but the same for different channels.
+            # hidden_state_layer_weights: [3, 1].
+            self.hidden_state_layer_weights = nn.Parameter(torch.tensor([[1.0], [1.0], [2.0]], device=device),
                                                             requires_grad=True)
-            print("hidden_state_layer_weights initialized as [1, 1, 2].")
-
+            print("hidden_state_layer_weights initialized as per-layer [1, 1, 2].")
+        elif learnable_hidden_state_weights_scheme == 'per-channel':
+            # 'per-channel': Different weights for different channel in different layers.
+            # hidden_state_layer_weights: [3, 768].
+            self.hidden_state_layer_weights = nn.Parameter(torch.tensor([[1.0], [1.0], [2.0]], device=device).repeat(1, 768),
+                                                           requires_grad=True)
+            
     # q_aware_to_v_lora_rank has to be the same as the old q_aware_to_v_lora_rank.
     def expand_latent_queries(self, new_num_latent_queries, q_aware_to_v_lora_rank=64, output_dim=768):
         assert new_num_latent_queries > self.num_latent_queries, "new_num_latent_queries must be > num_latent_queries."

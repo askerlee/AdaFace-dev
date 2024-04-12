@@ -71,12 +71,13 @@ class CLIPTextModelWrapper(CLIPTextModel):
             num_hidden_state_layers = len(hidden_state_layer_weights)
             last_hidden_states = encoder_outputs[1][-num_hidden_state_layers:]
             hidden_state_layer_weights = hidden_state_layer_weights.to(last_hidden_states[0].dtype)
-            # Normalize the weights to sum to 1.
-            hidden_state_layer_weights = hidden_state_layer_weights / hidden_state_layer_weights.sum()
-            # [3] -> [3, 1, 1, 1]
-            hidden_state_layer_weights = hidden_state_layer_weights.view(-1, 1, 1, 1)
+            # Normalize the weights of to sum to 1 across layers.
+            # hidden_state_layer_weights: [3, 1] or [3, 768].
+            hidden_state_layer_weights = hidden_state_layer_weights / hidden_state_layer_weights.sum(dim=0, keepdim=True)
+            # [3, 1/768] -> [3, 1, 1, 1/768]
+            hidden_state_layer_weights = hidden_state_layer_weights.unsqueeze(1).unsqueeze(1)
             # A weighted sum of last_hidden_states.
-            # [3, 1, 22, 768] * [3, 1, 1, 1] -> [3, 1, 22, 768] -> [1, 22, 768]
+            # [3, 1, 22, 768] * [3, 1, 1, 1/768] -> [3, 1, 22, 768] -> [1, 22, 768]
             last_hidden_state = (torch.stack(last_hidden_states, dim=0) * hidden_state_layer_weights).sum(dim=0)
             
         last_hidden_state = self.text_model.final_layer_norm(last_hidden_state)
