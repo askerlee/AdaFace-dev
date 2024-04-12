@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 from transformers.utils import ModelOutput
 from ldm.util import anneal_value, gen_gradient_scaler, arc2face_inverse_face_prompt_embs
-from arc2face.arc2face import CLIPTextModelWrapper
+from ldm.modules.arc2face_models import CLIPTextModelWrapper
 
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 
@@ -371,6 +371,7 @@ class SubjBasisGenerator(nn.Module):
         use_q_aware_to_v: bool = True,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
+        use_learnable_hidden_state_weights: bool = True,  # Whether to use learnable hidden state weights.
     ):
         super().__init__()
 
@@ -396,6 +397,7 @@ class SubjBasisGenerator(nn.Module):
             self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
             self.prompt2token_proj_grad_scaler = gen_gradient_scaler(prompt2token_proj_grad_scale)
             print(f"Subj prompt2token_proj initialized with grad scale of {prompt2token_proj_grad_scale}.")            
+            self.initialize_hidden_state_layer_weights(use_learnable_hidden_state_weights, 'cpu')
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.obj_proj_in  = None
@@ -470,7 +472,9 @@ class SubjBasisGenerator(nn.Module):
                 # in full_prompt_embs, without BOS and EOS.
                 arc2face_inverse_prompt_embs, core_id_embs = \
                     arc2face_inverse_face_prompt_embs(tokenizer, self.prompt2token_proj, 
-                                                      arc2face_id_embs, list_extra_words, input_max_length=77,
+                                                      arc2face_id_embs, list_extra_words, 
+                                                      hidden_state_layer_weights=self.hidden_state_layer_weights,
+                                                      input_max_length=77,
                                                       return_full_and_core_embs=True)
                 
                 arc2face_inverse_prompt_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
@@ -508,6 +512,16 @@ class SubjBasisGenerator(nn.Module):
         # lora2hira contains a LayerNorm, so no need to normalize output_queries.
         output_queries = self.lora2hira(context) * self.output_scale
         return output_queries, arc2face_inverse_prompt_embs
+
+    def initialize_hidden_state_layer_weights(self, use_learnable_hidden_state_weights, device):
+        if not use_learnable_hidden_state_weights:
+            self.hidden_state_layer_weights = None
+            print("hidden_state_layer_weights is set to None.")
+        else:        
+            # Learnable weights of the last 3 layers, initialized to focus more on the last layer.
+            self.hidden_state_layer_weights = nn.Parameter(torch.tensor([1.0, 1.0, 2.0], device=device),
+                                                            requires_grad=True)
+            print("hidden_state_layer_weights initialized as [1, 1, 2].")
 
     # q_aware_to_v_lora_rank has to be the same as the old q_aware_to_v_lora_rank.
     def expand_latent_queries(self, new_num_latent_queries, q_aware_to_v_lora_rank=64, output_dim=768):

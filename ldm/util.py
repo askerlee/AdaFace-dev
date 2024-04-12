@@ -1096,7 +1096,7 @@ def arc2face_forward_face_embs(tokenizer, text_encoder, face_embs,
                                input_max_length=77, return_full_and_core_embs=True):
 
     '''
-    text_encoder: arc2face CLIPTextModelWrapper instance.
+    text_encoder: arc2face_models.py CLIPTextModelWrapper instance.
     face_embs: (N, 512) normalized ArcFace embeddings.
     return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings. 
                                If False, return only the core embeddings.
@@ -1124,7 +1124,8 @@ def arc2face_forward_face_embs(tokenizer, text_encoder, face_embs,
 
     prompt_embeds = text_encoder(
         input_ids=input_ids,
-        input_token_embs=token_embs
+        input_token_embs=token_embs,
+        return_token_embs=False
     )[0]
 
     # Restore the original dtype of prompt_embeds: float16 -> float32.
@@ -1140,10 +1141,11 @@ def arc2face_forward_face_embs(tokenizer, text_encoder, face_embs,
         return prompt_embeds[:, 4:20]
 
 def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs, list_extra_words,
+                                      hidden_state_layer_weights=None, 
                                       input_max_length=77, return_full_and_core_embs=True):
 
     '''
-    text_encoder: arc2face CLIPTextModelWrapper instance.
+    text_encoder: arc2face_models.py CLIPTextModelWrapper instance.
     face_prompt_embs: (BS, 16, 768). Only the core embeddings, no paddings.
     list_extra_words: [s_1, ..., s_BS], each s_i is a list of extra words to be added to the prompt.
     return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings. 
@@ -1185,7 +1187,9 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
 
     prompt_embeds = text_encoder(
         input_ids=input_ids,
-        input_token_embs=token_embs
+        input_token_embs=token_embs,
+        hidden_state_layer_weights=hidden_state_layer_weights,
+        return_token_embs=False
     )[0]
 
     # Restore the original dtype of prompt_embeds: float16 -> float32.

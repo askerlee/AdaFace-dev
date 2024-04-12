@@ -5400,7 +5400,7 @@ class Arc2FaceWrapper(pl.LightningModule):
     def __init__(self, **kwargs):
         super().__init__()
         from diffusers import UNet2DConditionModel
-        from arc2face.arc2face import CLIPTextModelWrapper
+        from ldm.modules.arc2face_models import CLIPTextModelWrapper
         self.unet = UNet2DConditionModel.from_pretrained(
                         #"runwayml/stable-diffusion-v1-5", subfolder="unet"
                         'arc2face/models', subfolder="arc2face", torch_dtype=torch.float16

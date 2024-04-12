@@ -2204,7 +2204,7 @@ class EmbeddingManager(nn.Module):
 
     def check_arc2face_text_encoder(self):
         if self.arc2face_text_encoder is None:
-            from arc2face.arc2face import CLIPTextModelWrapper
+            from ldm.modules.arc2face_models import CLIPTextModelWrapper
             print("arc2face_text_encoder is still None. Initialize it as a private copy.")
             self.arc2face_text_encoder = CLIPTextModelWrapper.from_pretrained(
                                             'arc2face/models', subfolder="encoder", torch_dtype=torch.float16
@@ -2420,12 +2420,20 @@ class EmbeddingManager(nn.Module):
                     print(f"Loading {repr(ckpt_subj_basis_generator)}")
                     # self.string_to_subj_basis_generator_dict[km] is either not initialized, or initialized with a smaller depth.
                     # Then replace it with the one in ckpt.
-                    print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
-                    self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
+                    # print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
+                    ckpt_subj_basis_generator.face_proj_in = None
+                    ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
+                    if len(ret.missing_keys) > 0:
+                        print(f"Missing keys: {ret.missing_keys}")
+                    if len(ret.unexpected_keys) > 0:
+                        print(f"Unexpected keys: {ret.unexpected_keys}")
+
+                    '''
                     # Dynamically expand the latent queries of the subj_basis_generator.
                     if ckpt_subj_basis_generator.num_latent_queries < self.zs_num_latent_queries \
                       and not ckpt_subj_basis_generator.placeholder_is_bg:
                         ckpt_subj_basis_generator.expand_latent_queries(self.zs_num_latent_queries)
+                    '''
             else:
                 print(f"Skipping loading subj_basis_generator from {ckpt_path}")
 

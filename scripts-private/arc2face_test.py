@@ -4,7 +4,7 @@ from diffusers import (
     DDIMScheduler,
 )
 from transformers import CLIPTextModel, CLIPTokenizer
-from arc2face.arc2face import CLIPTextModelWrapper
+from ldm.modules.arc2face_models import CLIPTextModelWrapper
 from insightface.app import FaceAnalysis
 
 import torch
