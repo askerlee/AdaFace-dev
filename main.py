@@ -356,6 +356,9 @@ def get_parser(**parser_kwargs):
                         help="Whether to randomize the skip weights of CLIP text embedder. "
                              "If True, the weights are sampled from a Dirichlet distribution with clip_last_layers_skip_weights as the alpha.")
     
+    parser.add_argument("--matmul_prec", type=str, default=argparse.SUPPRESS,
+                        help="Precision of the matmul operation in PyTorch")
+    
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
                         help="Disable wandb logging")    
     return parser
@@ -858,7 +861,10 @@ if __name__ == "__main__":
     #torch.backends.cudnn.benchmark = False
 
     torch.backends.cuda.matmul.allow_tf32 = True
-    
+    if hasattr(opt, 'matmul_prec'):
+        torch.set_float32_matmul_precision(opt.matmul_prec)
+        print(f"Set PyTorch matmul precision to {opt.matmul_prec}")
+
     try:
         # init and save configs
         configs = [OmegaConf.load(cfg) for cfg in opt.base]

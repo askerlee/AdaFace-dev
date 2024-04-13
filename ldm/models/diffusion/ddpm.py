@@ -1772,7 +1772,8 @@ class LatentDiffusion(DDPM):
                 self.iter_flags['add_noise_to_real_id_embs'] = random.random() < self.p_add_noise_to_real_id_embs
                 if self.iter_flags['add_noise_to_real_id_embs']:
                     # Add noise to the zero-shot ID embeddings.
-                    # A noise level of 0.08 could change gender, but 0.06 is usually safe.
+                    # noise_std_is_relative=True: The noise_std is relative to the std of the last dim (512) of zs_id_embs.
+                    # A noise_std_range of 0.08 could change gender, but 0.06 is usually safe to gender (but could change look drastically).
                     zs_id_embs = add_noise_to_embedding(zs_id_embs, 0, begin_noise_std_range=[0.02, 0.06], 
                                                         end_noise_std_range=None, 
                                                         add_noise_prob=1, noise_std_is_relative=True, keep_norm=True)
