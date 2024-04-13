@@ -2426,7 +2426,8 @@ class EmbeddingManager(nn.Module):
                     # TODO: correct the fix
                     ckpt_subj_basis_generator.lora2hira = None
                     # Compatible with older ckpts which only have per-layer hidden_state_layer_weights.
-                    if ckpt_subj_basis_generator.hidden_state_layer_weights.shape[-1] != self.string_to_subj_basis_generator_dict[km].hidden_state_layer_weights.shape[-1]:
+                    if (not ckpt_subj_basis_generator.placeholder_is_bg) \
+                      and ckpt_subj_basis_generator.hidden_state_layer_weights.shape[-1] != self.string_to_subj_basis_generator_dict[km].hidden_state_layer_weights.shape[-1]:
                         if self.string_to_subj_basis_generator_dict[km].hidden_state_layer_weights.shape[-1] == 1:
                             # hidden_state_layer_weights: [3, 768] -> [3, 1]
                             ckpt_subj_basis_generator.hidden_state_layer_weights = nn.Parameter(ckpt_subj_basis_generator.hidden_state_layer_weights.mean(dim=1, keepdim=True))
