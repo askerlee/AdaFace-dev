@@ -371,7 +371,7 @@ class SubjBasisGenerator(nn.Module):
         use_q_aware_to_v: bool = True,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
-        learnable_hidden_state_weights_scheme: str = 'per-layer',  # none, per-layer, per-channel.
+        learnable_hidden_state_weights_scheme: str = 'per-channel',  # none, per-layer, per-channel.
     ):
         super().__init__()
 
@@ -470,10 +470,11 @@ class SubjBasisGenerator(nn.Module):
                 # arc2face_inverse_prompt_embs is projected to the token embedding spaces.
                 # core_id_embs: [BS, 18, 768], the identity and (at most) two extra words 
                 # in full_prompt_embs, without BOS and EOS.
+                hidden_state_layer_weights = self.hidden_state_layer_weights_grad_scaler(self.hidden_state_layer_weights)
                 arc2face_inverse_prompt_embs, core_id_embs = \
                     arc2face_inverse_face_prompt_embs(tokenizer, self.prompt2token_proj, 
                                                       arc2face_id_embs, list_extra_words, 
-                                                      hidden_state_layer_weights=self.hidden_state_layer_weights,
+                                                      hidden_state_layer_weights=hidden_state_layer_weights,
                                                       input_max_length=77,
                                                       return_full_and_core_embs=True)
                 
@@ -516,19 +517,25 @@ class SubjBasisGenerator(nn.Module):
     def initialize_hidden_state_layer_weights(self, learnable_hidden_state_weights_scheme, device):
         if learnable_hidden_state_weights_scheme == 'none':
             self.hidden_state_layer_weights = None
+            # A grad scaler with alpha =1 is nn.Identity(), which outputs None given None as input.
+            self.hidden_state_layer_weights_grad_scaler = gen_gradient_scaler(1)
             print("hidden_state_layer_weights is set to None.")
+
         elif learnable_hidden_state_weights_scheme == 'per-layer':
-            # Learnable weights of the last 3 layers, initialized to focus more on the last layer.
+            # Learnable weights of the last 3 layers, initialized to putting more focus on the last layer.
             # 'per-layer': Different weights for different layers, but the same for different channels.
             # hidden_state_layer_weights: [3, 1].
-            self.hidden_state_layer_weights = nn.Parameter(torch.tensor([[1.0], [1.0], [2.0]], device=device),
+            self.hidden_state_layer_weights = nn.Parameter(torch.tensor([[1.0], [2.0], [4.0]], device=device),
                                                             requires_grad=True)
-            print("hidden_state_layer_weights initialized as per-layer [1, 1, 2].")
+            self.hidden_state_layer_weights_grad_scaler = gen_gradient_scaler(2)
+            print("hidden_state_layer_weights initialized as per-layer   [1, 2, 4], with grad scaler 2.")
         elif learnable_hidden_state_weights_scheme == 'per-channel':
             # 'per-channel': Different weights for different channel in different layers.
             # hidden_state_layer_weights: [3, 768].
-            self.hidden_state_layer_weights = nn.Parameter(torch.tensor([[1.0], [1.0], [2.0]], device=device).repeat(1, 768),
+            self.hidden_state_layer_weights = nn.Parameter(torch.tensor([[1.0], [2.0], [4.0]], device=device).repeat(1, 768),
                                                            requires_grad=True)
+            self.hidden_state_layer_weights_grad_scaler = gen_gradient_scaler(6)
+            print("hidden_state_layer_weights initialized as per-channel [1, 2, 4], with grad scaler 4.")
             
     # q_aware_to_v_lora_rank has to be the same as the old q_aware_to_v_lora_rank.
     def expand_latent_queries(self, new_num_latent_queries, q_aware_to_v_lora_rank=64, output_dim=768):

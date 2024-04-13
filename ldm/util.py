@@ -1330,8 +1330,8 @@ class GradientScaler(nn.Module):
         return ScaleGrad.apply(input_, self._alpha.to(input_.device), _debug)
 
 def gen_gradient_scaler(alpha, debug=False):
-    #if alpha == 1:
-    #    return lambda x: x
+    if alpha == 1:
+        return nn.Identity()
     if alpha > 0:
         return GradientScaler(alpha, debug=debug)
     else:
