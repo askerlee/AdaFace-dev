@@ -371,7 +371,7 @@ class SubjBasisGenerator(nn.Module):
         use_q_aware_to_v: bool = True,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
-        learnable_hidden_state_weights_scheme: str = 'per-channel',  # none, per-layer, per-channel.
+        learnable_hidden_state_weights_scheme: str = 'per-layer',  # none, per-layer, per-channel.
     ):
         super().__init__()
 

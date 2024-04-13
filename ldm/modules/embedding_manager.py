@@ -2426,10 +2426,15 @@ class EmbeddingManager(nn.Module):
                     # TODO: correct the fix
                     ckpt_subj_basis_generator.lora2hira = None
                     # Compatible with older ckpts which only have per-layer hidden_state_layer_weights.
-                    if hasattr(ckpt_subj_basis_generator, 'hidden_state_layer_weights') and ckpt_subj_basis_generator.hidden_state_layer_weights.ndim == 1:
-                        # hidden_state_layer_weights: [3] -> [3, 768]
-                        ckpt_subj_basis_generator.hidden_state_layer_weights = nn.Parameter(ckpt_subj_basis_generator.hidden_state_layer_weights.unsqueeze(1).repeat(1, 768))
-                        print(f"Expand hidden_state_layer_weights: {ckpt_subj_basis_generator.hidden_state_layer_weights.shape}")
+                    if ckpt_subj_basis_generator.hidden_state_layer_weights.shape[-1] != self.string_to_subj_basis_generator_dict[km].hidden_state_layer_weights.shape[-1]:
+                        if self.string_to_subj_basis_generator_dict[km].hidden_state_layer_weights.shape[-1] == 1:
+                            # hidden_state_layer_weights: [3, 768] -> [3, 1]
+                            ckpt_subj_basis_generator.hidden_state_layer_weights = nn.Parameter(ckpt_subj_basis_generator.hidden_state_layer_weights.mean(dim=1, keepdim=True))
+                            print(f"Average along features: hidden_state_layer_weights -> {ckpt_subj_basis_generator.hidden_state_layer_weights.shape}")
+                        else:
+                            # hidden_state_layer_weights: [3, 1] -> [3, 768]
+                            ckpt_subj_basis_generator.hidden_state_layer_weights = nn.Parameter(ckpt_subj_basis_generator.hidden_state_layer_weights.repeat(1, 768))
+                            print(f"Expand along features:  hidden_state_layer_weights -> {ckpt_subj_basis_generator.hidden_state_layer_weights.shape}")
 
                     ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
 
