@@ -2191,7 +2191,7 @@ class EmbeddingManager(nn.Module):
     def set_embs_attn_tricks(self, use_conv_attn_kernel_size=None):
         if use_conv_attn_kernel_size is not None:
             self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
-            extra_msg = ", DISABLED" if use_conv_attn_kernel_size is -1 else ""
+            extra_msg = ", DISABLED" if use_conv_attn_kernel_size == -1 else ""
             print(f"Setting use_conv_attn_kernel_size = {use_conv_attn_kernel_size}{extra_msg}")
 
     def set_emb_ema_as_pooling_probe_weight(self, emb_ema_as_pooling_probe_weight):
