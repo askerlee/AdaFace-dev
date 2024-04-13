@@ -856,7 +856,10 @@ if __name__ == "__main__":
 
     ckptdir = os.path.join(logdir, "checkpoints")
     cfgdir = os.path.join(logdir, "configs")
-    seed_everything(opt.seed, workers=True)
+    # If do zeroshot and setting seed, then the whole training sequence is deterministic, limiting the random space
+    # it can explore. Therefore we don't set seed when doing zero-shot learning.
+    if not opt.zeroshot:
+        seed_everything(opt.seed, workers=True)
     #torch.backends.cudnn.deterministic = True
     #torch.backends.cudnn.benchmark = False
 
