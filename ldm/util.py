@@ -2062,7 +2062,12 @@ def repeat_selected_instances(sel_indices, REPEAT, *args):
     rep_args = []
     for arg in args:
         if arg is not None:
-            arg2 = arg[sel_indices].repeat([REPEAT] + [1] * (arg.ndim - 1))
+            if isinstance(arg, torch.Tensor):
+                arg2 = arg[sel_indices].repeat([REPEAT] + [1] * (arg.ndim - 1))
+            elif isinstance(arg, (list, tuple)):
+                arg2 = arg[sel_indices] * REPEAT
+            else:
+                breakpoint()
         else:
             arg2 = None
         rep_args.append(arg2)

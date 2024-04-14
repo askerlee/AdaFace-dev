@@ -1719,16 +1719,13 @@ class LatentDiffusion(DDPM):
             print("Different subjects in the batch when same_subject_in_each_batch=True.")
             breakpoint()
 
+        BS = len(batch['subject_name'])
         if not self.same_subject_in_each_batch and self.iter_flags['do_mix_prompt_distillation']:
-            BS = len(batch['subject_name'])
-            batch['subject_name'] = batch['subject_name'][0:1] * BS
-            x_start  = x_start[0:1].repeat(BS, 1, 1, 1)
-            img_mask = img_mask[0:1].repeat(BS, 1, 1, 1) if img_mask is not None else None
-            fg_mask  = fg_mask[0:1].repeat(BS, 1, 1, 1)  if fg_mask  is not None else None
-            batch_have_fg_mask    = batch_have_fg_mask[0:1].repeat(BS)
-            batch["image_unnorm"] = batch["image_unnorm"][0:1].repeat(BS, 1, 1, 1)
-            batch["image_path"]   = batch["image_path"][0:1] * BS
-            # captions and delta_prompts don't change, as different subjects share the same placeholder "z".
+            # Change the batch to have the (1 subject image) * BS strcture.
+            # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
+            batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask, batch_have_fg_mask = \
+                repeat_selected_instances(slice(0, 1), BS, batch['subject_name'], batch["image_path"], batch["image_unnorm"], 
+                                          x_start, img_mask, fg_mask, batch_have_fg_mask)
             self.iter_flags['same_subject_in_batch'] = True
         else:
             self.iter_flags['same_subject_in_batch'] = self.same_subject_in_each_batch
@@ -1740,9 +1737,6 @@ class LatentDiffusion(DDPM):
             self.batch_subject_names = batch['subject_name']
         else:
             self.batch_subject_names = [ "arc2face" ] * len(batch['subject_name'])
-        # Currently, only one subject name is allowed in the batch.
-        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names)
-        print(self.batch_subject_names)
 
         self.iter_flags['is_face'] = [ self.embedding_manager.subj_name_to_being_faces[subject_name] \
                                         for subject_name in self.batch_subject_names ]
@@ -1769,11 +1763,32 @@ class LatentDiffusion(DDPM):
                                                          is_face=self.iter_flags['is_face'][0],
                                                          calc_avg=self.iter_flags['same_subject_in_batch'],
                                                          image_paths=image_paths)
+                
+                # prob of add_noise_to_real_id_embs: (1 - 0.4) * 0.6 = 0.36.
                 self.iter_flags['add_noise_to_real_id_embs'] = random.random() < self.p_add_noise_to_real_id_embs
                 if self.iter_flags['add_noise_to_real_id_embs']:
+                    if not self.iter_flags['same_subject_in_batch']:
+                        # Change the batch to have the (1 subject image) * BS strcture.
+                        # NOTE: Use the same noise for different ID embeddings in the batch,
+                        # so that we can compute the variance at each pixel.
+                        # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
+                        batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask, batch_have_fg_mask = \
+                            repeat_selected_instances(slice(0, 1), BS, batch['subject_name'], batch["image_path"], batch["image_unnorm"], 
+                                                      x_start, img_mask, fg_mask, batch_have_fg_mask)
+                        # In this case, no need to use std to weight the arc2face reconstruction loss (use_std_as_arc2face_recon_weighting),
+                        # as the fg_mask is still effective, so that we will ignore the background pixel errors.
+                        # Moreover, the recon loss is L2, which implicitly gives more penalties to larger errors.
+                        self.iter_flags['same_subject_in_batch'] = True
+                        # Change the ID features of multiple subjects in the batch to the ID features of the first subject,
+                        # before adding noise to the ID features.
+                        zs_clip_features, zs_id_embs, self.batch_subject_names, self.iter_flags['is_face'] = \
+                            repeat_selected_instances(slice(0, 1), BS, zs_clip_features, zs_id_embs, 
+                                                      self.batch_subject_names, self.iter_flags['is_face'])
+                        
                     # Add noise to the zero-shot ID embeddings.
                     # noise_std_is_relative=True: The noise_std is relative to the std of the last dim (512) of zs_id_embs.
                     # A noise_std_range of 0.08 could change gender, but 0.06 is usually safe to gender (but could change look drastically).
+                    # If the subject is not face, then zs_id_embs is DINO embeddings. We can still add noise to them.
                     zs_id_embs = add_noise_to_embedding(zs_id_embs, 0, begin_noise_std_range=[0.02, 0.06], 
                                                         end_noise_std_range=None, 
                                                         add_noise_prob=1, noise_std_is_relative=True, keep_norm=True)
@@ -1805,7 +1820,7 @@ class LatentDiffusion(DDPM):
                 p_use_std_as_arc2face_recon_weighting = 1 # 0.5
                 self.iter_flags['use_std_as_arc2face_recon_weighting'] = random.random() < p_use_std_as_arc2face_recon_weighting
                 if self.iter_flags['use_std_as_arc2face_recon_weighting']:
-                    # Use the same noise for different ID embeddings in the batch,
+                    # NOTE: Use the same noise for different ID embeddings in the batch,
                     # so that we can compute the variance at each pixel.
                     x_start = x_start[[0]].repeat(x_start.shape[0], 1, 1, 1)
 
@@ -1821,19 +1836,27 @@ class LatentDiffusion(DDPM):
             self.iter_flags['zs_clip_features'] = zs_clip_features
             self.iter_flags['zs_id_embs']       = zs_id_embs
 
-            # If there are faceless input images in the batch, we have to use arc2face target.
-            # Otherwise, use arc2face target with a probability of 0.6, and use the original image (noise) 
-            # as target with a probability of 0.4.
-            if self.iter_flags['gen_arc2face_rand_face'] or self.iter_flags['faceless_img_count'] > 0 \
-              or self.iter_flags['add_noise_to_real_id_embs']:
-                p_use_arc2face_as_target = 1
+            # If we generate random ID embeddings, or if we add noise to the real ID embeddings,
+            # or if there are faceless input images in the batch, we have to use the arc2face recon as target.
+            # Otherwise, use the arc2face recon as target with a probability of 0.5, and use the original image (noise) 
+            # as target with a probability of 0.5.
+            # Prob of this branch is 1 - (1 - 0.4) * 0.4 = 0.76.
+            if self.iter_flags['gen_arc2face_rand_face'] or self.iter_flags['add_noise_to_real_id_embs'] \
+              or self.iter_flags['faceless_img_count'] > 0:
+                self.iter_flags['use_arc2face_as_target'] = True
             else:
-                # Use original image as target with a probability of 0.5.
+                # Prob of this branch is (1 - 0.4) * 0.4 = 0.24 (ignoring the cases when faceless_img_count > 0, which are rare).
+                # Still with a probability of 0.5, we use the original image as target.
+                # Therefore, overall, the probability of using the original image as target is 0.5 * 0.24 = 0.12.
+                # The probability of using the arc2face recon as target is 0.88.
                 p_use_arc2face_as_target = 0.5
-            self.iter_flags['use_arc2face_as_target'] = random.random() < p_use_arc2face_as_target
+                self.iter_flags['use_arc2face_as_target'] = random.random() < p_use_arc2face_as_target
         else:
             self.iter_flags['zs_clip_features'] = None
             self.iter_flags['zs_id_embs']       = None
+
+        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names)
+        print(self.batch_subject_names)
 
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
@@ -2849,22 +2872,8 @@ class LatentDiffusion(DDPM):
                     target = self.arc2face(x_noisy, t, self.iter_flags['arc2face_prompt_emb'],
                                            batch_contains_neg_instances=False, do_cfg=False)
                 # Otherwise, use the original image as target. We don't need to change target.
-                                                
-                if not self.iter_flags['gen_arc2face_rand_face']:
-                    # If use_arc2face_as_target, we don't want to distill using the background pixels, 
-                    # as those pixels are suppressed by the arc2face UNet. So bg_pixel_weight = 0.
-                    # Otherwise, we use the original image (noise) as target, and still wish to keep the original background
-                    # after being reconstructed with arc2face_prompt_emb, so as not to suppress the background pixels. 
-                    # Therefore, bg_pixel_weight = 0.2.
-                    # NOTE: we still use the input img_mask and fg_mask, but the foreground reconstructed with 
-                    # arc2face UNet might be slightly off. Anyway, hopefully the error is small.
-                    bg_pixel_weight = 0 if self.iter_flags['use_arc2face_as_target'] else 0.2
-                    # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-                    loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
-                                                         img_mask, fg_mask, 
-                                                         fg_pixel_weight=1,
-                                                         bg_pixel_weight=bg_pixel_weight)
-                else:
+
+                if self.iter_flags['gen_arc2face_rand_face']:
                     # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
                     # If self.iter_flags['use_std_as_arc2face_recon_weighting'], we get the pixel-wise losses,
                     # then multiply them with the loss variances across instances to get the final loss.
@@ -2879,7 +2888,23 @@ class LatentDiffusion(DDPM):
                         spatial_weight = F.avg_pool2d(spatial_weight, 4, 2)
                         # Resize spatial_weight to the original size. spatial_weight: [1, 1, 31, 31] -> [1, 1, 64, 64].
                         spatial_weight = F.interpolate(spatial_weight, size=(64, 64), mode='bilinear', align_corners=False)
-                        loss_recon = (loss_recon * spatial_weight).mean()
+                        loss_recon = (loss_recon * spatial_weight).mean()      
+
+                else:
+                    # If use_arc2face_as_target, we don't want to distill using the background pixels, 
+                    # as those pixels are suppressed by the arc2face UNet. So bg_pixel_weight = 0.
+                    # Otherwise, we use the original image (noise) as target, and still wish to keep the original background
+                    # after being reconstructed with arc2face_prompt_emb, so as not to suppress the background pixels. 
+                    # Therefore, bg_pixel_weight = 0.2.
+                    # NOTE: we still use the input img_mask and fg_mask, but the foreground reconstructed with 
+                    # arc2face UNet might be slightly off. Anyway, hopefully the error is small.
+                    bg_pixel_weight = 0 if self.iter_flags['use_arc2face_as_target'] else 0.2
+                    # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+                    loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
+                                                         img_mask, fg_mask, 
+                                                         fg_pixel_weight=1,
+                                                         bg_pixel_weight=bg_pixel_weight)
+
 
                 loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
                 loss += loss_recon
