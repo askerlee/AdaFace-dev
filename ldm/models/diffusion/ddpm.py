@@ -1775,11 +1775,12 @@ class LatentDiffusion(DDPM):
                         batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask, batch_have_fg_mask = \
                             repeat_selected_instances(slice(0, 1), BS, batch['subject_name'], batch["image_path"], batch["image_unnorm"], 
                                                       x_start, img_mask, fg_mask, batch_have_fg_mask)
-                        # In this case, we use std to weight the arc2face reconstruction loss (use_std_as_arc2face_recon_weighting),
-                        # so that pixels with larger errors, where the pixels are more sensitive to ID embedding perturbations,
+                        # If we use std to weight the arc2face reconstruction loss (use_std_as_arc2face_recon_weighting),
+                        # "so that pixels with larger errors, where the pixels are more sensitive to ID embedding perturbations,
                         # are paid more attentions/penalties, and the less senstive areas are paid less attentions/penalties.
-                        # Moreover, the recon loss is L2, which implicitly gives more penalties to larger errors.
-                        self.iter_flags['use_std_as_arc2face_recon_weighting'] = True
+                        # Moreover, the recon loss is L2, which implicitly gives more penalties to larger errors."
+                        # The results are worse. So we disable use_std_as_arc2face_recon_weighting.
+                        self.iter_flags['use_std_as_arc2face_recon_weighting'] = False
                         self.iter_flags['same_subject_in_batch'] = True
                         # Change the ID features of multiple subjects in the batch to the ID features of the first subject,
                         # before adding noise to the ID features.
