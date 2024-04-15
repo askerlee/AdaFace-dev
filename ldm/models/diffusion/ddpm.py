@@ -2880,12 +2880,13 @@ class LatentDiffusion(DDPM):
                     loss_recon = self.get_loss(model_output, target.to(model_output.dtype), 
                                                mean=not self.iter_flags['use_std_as_arc2face_recon_weighting'])
                     if self.iter_flags['use_std_as_arc2face_recon_weighting']:
-                        loss_inst_std = loss_recon.mean(dim=1, keepdim=True).std(dim=(0,1), keepdim=True).detach()
+                        #loss_inst_std = loss_recon.mean(dim=1, keepdim=True).std(dim=(0,1), keepdim=True).detach()
                         # Don't take mean across dim 1 (4 channels), as the latent pixels may have different 
                         # scales acorss the 4 channels.
+                        loss_inst_std = loss_recon.std(dim=(0,1), keepdim=True).detach()
+                        # Smooth the loss_inst_std by average pooling. loss_inst_std: [1, 1, 64, 64] -> [1, 1, 31, 31].
+                        loss_inst_std = F.avg_pool2d(loss_inst_std, 4, 2)
                         spatial_weight = loss_inst_std / (loss_inst_std.mean(dim=(2,3), keepdim=True) + 1e-8)
-                        # Smooth the spatial_weight by average pooling. spatial_weight: [1, 1, 64, 64] -> [1, 1, 31, 31].
-                        spatial_weight = F.avg_pool2d(spatial_weight, 4, 2)
                         # Resize spatial_weight to the original size. spatial_weight: [1, 1, 31, 31] -> [1, 1, 64, 64].
                         spatial_weight = F.interpolate(spatial_weight, size=(64, 64), mode='bilinear', align_corners=False)
                         loss_recon = (loss_recon * spatial_weight).mean()      
