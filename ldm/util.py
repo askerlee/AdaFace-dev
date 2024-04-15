@@ -655,6 +655,18 @@ def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=Tr
     # flat_attn has been detached before passing to this function. So no need to detach spatial_weight.
     return spatial_weight, spatial_attn
 
+def gen_spatial_weight_using_loss_std(pixelwise_loss, out_spatial_shape=(64, 64)):
+    #loss_inst_std = loss_recon.mean(dim=1, keepdim=True).std(dim=(0,1), keepdim=True).detach()
+    # Don't take mean across dim 1 (4 channels), as the latent pixels may have different 
+    # scales acorss the 4 channels.
+    loss_inst_std = pixelwise_loss.std(dim=(0,1), keepdim=True).detach()
+    # Smooth the loss_inst_std by average pooling. loss_inst_std: [1, 1, 64, 64] -> [1, 1, 31, 31].
+    loss_inst_std = F.avg_pool2d(loss_inst_std, 4, 2)
+    spatial_weight = loss_inst_std / (loss_inst_std.mean(dim=(2,3), keepdim=True) + 1e-8)
+    # Resize spatial_weight to the original size. spatial_weight: [1, 1, 31, 31] -> [1, 1, 64, 64].
+    spatial_weight = F.interpolate(spatial_weight, size=out_spatial_shape, mode='bilinear', align_corners=False)
+    return spatial_weight
+
 # infeat_size: (h, w) of the input feature map (before flattening).
 # H: number of heads.
 # Return a new attn_mat with the same shape as attn_mat, but with the attention scores at subj_indices

@@ -40,7 +40,7 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         gen_comp_extra_indices_by_block, extend_indices_B_by_n_times, \
                         split_indices_by_instance, repeat_selected_instances, \
                         anneal_t_keep_prob, anneal_value, gen_cfg_scales_for_stu_tea, \
-                        get_arc2face_id_prompt_embs, add_noise_to_embedding
+                        get_arc2face_id_prompt_embs, add_noise_to_embedding, gen_spatial_weight_using_loss_std
                                               
 
 from ldm.modules.ema import LitEma
@@ -1775,9 +1775,11 @@ class LatentDiffusion(DDPM):
                         batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask, batch_have_fg_mask = \
                             repeat_selected_instances(slice(0, 1), BS, batch['subject_name'], batch["image_path"], batch["image_unnorm"], 
                                                       x_start, img_mask, fg_mask, batch_have_fg_mask)
-                        # In this case, no need to use std to weight the arc2face reconstruction loss (use_std_as_arc2face_recon_weighting),
-                        # as the fg_mask is still effective, so that we will ignore the background pixel errors.
+                        # In this case, we use std to weight the arc2face reconstruction loss (use_std_as_arc2face_recon_weighting),
+                        # so that pixels with larger errors, where the pixels are more sensitive to ID embedding perturbations,
+                        # are paid more attentions/penalties, and the less senstive areas are paid less attentions/penalties.
                         # Moreover, the recon loss is L2, which implicitly gives more penalties to larger errors.
+                        self.iter_flags['use_std_as_arc2face_recon_weighting'] = True
                         self.iter_flags['same_subject_in_batch'] = True
                         # Change the ID features of multiple subjects in the batch to the ID features of the first subject,
                         # before adding noise to the ID features.
@@ -2874,24 +2876,17 @@ class LatentDiffusion(DDPM):
                 # Otherwise, use the original image as target. We don't need to change target.
 
                 if self.iter_flags['gen_arc2face_rand_face']:
+                    # if gen_arc2face_rand_face, then always use_arc2face_as_target == True.                    
                     # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
                     # If self.iter_flags['use_std_as_arc2face_recon_weighting'], we get the pixel-wise losses,
                     # then multiply them with the loss variances across instances to get the final loss.
                     loss_recon = self.get_loss(model_output, target.to(model_output.dtype), 
                                                mean=not self.iter_flags['use_std_as_arc2face_recon_weighting'])
                     if self.iter_flags['use_std_as_arc2face_recon_weighting']:
-                        #loss_inst_std = loss_recon.mean(dim=1, keepdim=True).std(dim=(0,1), keepdim=True).detach()
-                        # Don't take mean across dim 1 (4 channels), as the latent pixels may have different 
-                        # scales acorss the 4 channels.
-                        loss_inst_std = loss_recon.std(dim=(0,1), keepdim=True).detach()
-                        # Smooth the loss_inst_std by average pooling. loss_inst_std: [1, 1, 64, 64] -> [1, 1, 31, 31].
-                        loss_inst_std = F.avg_pool2d(loss_inst_std, 4, 2)
-                        spatial_weight = loss_inst_std / (loss_inst_std.mean(dim=(2,3), keepdim=True) + 1e-8)
-                        # Resize spatial_weight to the original size. spatial_weight: [1, 1, 31, 31] -> [1, 1, 64, 64].
-                        spatial_weight = F.interpolate(spatial_weight, size=(64, 64), mode='bilinear', align_corners=False)
-                        loss_recon = (loss_recon * spatial_weight).mean()      
-
+                        spatial_weight = gen_spatial_weight_using_loss_std(loss_recon, out_spatial_shape=(64, 64))
+                        loss_recon = (loss_recon * spatial_weight).mean()
                 else:
+                    # use_arc2face_as_target could be True or False.
                     # If use_arc2face_as_target, we don't want to distill using the background pixels, 
                     # as those pixels are suppressed by the arc2face UNet. So bg_pixel_weight = 0.
                     # Otherwise, we use the original image (noise) as target, and still wish to keep the original background
@@ -2900,12 +2895,19 @@ class LatentDiffusion(DDPM):
                     # NOTE: we still use the input img_mask and fg_mask, but the foreground reconstructed with 
                     # arc2face UNet might be slightly off. Anyway, hopefully the error is small.
                     bg_pixel_weight = 0 if self.iter_flags['use_arc2face_as_target'] else 0.2
+                    if self.iter_flags['use_std_as_arc2face_recon_weighting']:
+                        loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=False)
+                        spatial_weight = gen_spatial_weight_using_loss_std(loss_recon, out_spatial_shape=(64, 64))
+                    else:
+                        # spatial_weight is used as fg_pixel_weight in calc_recon_loss(). 
+                        # So when it's 1, it's effectively disabled.
+                        spatial_weight = 1
+                    
                     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
                     loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
                                                          img_mask, fg_mask, 
-                                                         fg_pixel_weight=1,
+                                                         fg_pixel_weight=spatial_weight,
                                                          bg_pixel_weight=bg_pixel_weight)
-
 
                 loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
                 loss += loss_recon
