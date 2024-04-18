@@ -176,6 +176,7 @@ class DDIMSampler(object):
             
             if mask is not None:
                 assert x0 is not None
+                # q_sample adds noise to x0, according to ts.
                 img_orig = self.model.q_sample(x0, ts)  # TODO: deterministic forward pass?
                 # img: random noise. img_orig: masked image after adding noise.
                 img = img_orig * mask + (1. - mask) * img
@@ -253,6 +254,7 @@ class DDIMSampler(object):
         alphas = self.model.alphas_cumprod if use_original_steps else self.ddim_alphas
         alphas_prev = self.model.alphas_cumprod_prev if use_original_steps else self.ddim_alphas_prev
         sqrt_one_minus_alphas = self.model.sqrt_one_minus_alphas_cumprod if use_original_steps else self.ddim_sqrt_one_minus_alphas
+        # self.ddim_sigmas are all 0s.
         sigmas = self.model.ddim_sigmas_for_original_num_steps if use_original_steps else self.ddim_sigmas
         # select parameters corresponding to the currently considered timestep
         a_t = torch.full((b, 1, 1, 1), alphas[index], device=device)
@@ -266,9 +268,14 @@ class DDIMSampler(object):
             pred_x0, _, *_ = self.model.first_stage_model.quantize(pred_x0)
         # direction pointing to x_t
         dir_xt = (1. - a_prev - sigma_t**2).sqrt() * e_t
-        noise = sigma_t * noise_like(x.shape, device, repeat_noise) * temperature
+
+        # sigma_t are all 0. so always noise = 0, no matter what unscaled_noise is.
+        unscaled_noise = noise_like(x.shape, device, repeat_noise)
+        noise = sigma_t * unscaled_noise * temperature
+        # Otherwise, use the provided noise (for debugging purposes).
         if noise_dropout > 0.:
             noise = torch.nn.functional.dropout(noise, p=noise_dropout)
+
         x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
         return x_prev, pred_x0
 

@@ -260,7 +260,7 @@ def parse_args():
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
     parser.add_argument("--background_string", 
-                        type=str, default=None,
+                        type=str, default="y",
                         help="Background placeholder string used in prompts to denote the background in training images.")
                     
     parser.add_argument("--num_vectors_per_subj_token",
@@ -456,6 +456,8 @@ def main(opt):
             zs_clip_features, zs_id_embs, _ = model.encode_zero_shot_image_features(ref_images, ref_masks,
                                                                                  is_face=opt.calc_face_sim,
                                                                                  calc_avg=True)
+        else:
+            zs_clip_features, zs_id_embs = None, None
 
         if opt.plms:
             sampler = PLMSSampler(model)
@@ -656,14 +658,14 @@ def main(opt):
                             prompts = list(prompts)
 
                         if not opt.eval_blip:
-                            debug_arc2face_distill = True
+                            debug_arc2face_distill = opt.zeroshot
                             # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                             # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                             c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
                                                                zs_id_embs=zs_id_embs, 
                                                                do_arc2face_distill=debug_arc2face_distill,
                                                                debug_arc2face_embs=False)
-                            
+
                             if debug_arc2face_distill:
                                 static_prompt_embedding = c[0].repeat(len(prompts), 1, 1)
                                 c = (static_prompt_embedding, c[1], c[2])
