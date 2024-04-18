@@ -5522,11 +5522,11 @@ class Arc2FaceWrapper(pl.LightningModule):
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             t = timesteps
-            img = x
+            x_noisy = x
 
             for i in range(num_steps):
                 # If do_arc2face_distill, then context is [BS=6, 21, 768].
-                noise_pred = self.unet(sample=img, timestep=t, encoder_hidden_states=context,
+                noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=context,
                                        return_dict=False)[0]
                 
                 ddim_indices = self.t_to_ddim_index[t]
@@ -5538,7 +5538,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                 sqrt_one_minus_at = sqrt_one_minus_alphas[ddim_indices].reshape(BS, 1, 1, 1)
 
                 # current prediction for x_0
-                pred_x0 = (x - sqrt_one_minus_at * noise_pred) / a_t.sqrt()
+                pred_x0 = (x_noisy - sqrt_one_minus_at * noise_pred) / a_t.sqrt()
                 # direction pointing to x_t
                 dir_xt = (1. - a_prev - sigma_t**2).sqrt() * noise_pred
 
@@ -5546,7 +5546,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                 # Since noise is always 0, x_prev is a linear combination of pred_x0 and dir_xt,
                 # i.e., a linear combination of x and e_t.
                 x_prev = a_prev.sqrt() * pred_x0 + dir_xt
-                img = x_prev
+                x_noisy = x_prev
 
                 # NOTE: rand_like() samples from U(0, 1), not like randn_like().
                 relative_ts = torch.rand_like(timesteps.float())
@@ -5556,7 +5556,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                 shorter_timestep = shorter_timestep.long()
                 t = shorter_timestep
 
-        return img
+        return x_noisy
     
 class DiffusionWrapper(pl.LightningModule): 
     def __init__(self, diff_model_config, conditioning_key):
