@@ -2872,10 +2872,12 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['use_arc2face_as_target']:
                     x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
                     # num_steps: 1 or 2 with 50% chance each.
+                    # TODO: support num_steps >= 3..
                     num_steps = np.random.randint(1, 3)
                     # target: replaced as the reconstructed x0 by the arc2face UNet.
                     # target: [4, 4, 64, 64].
-                    target = self.arc2face(self, x_noisy, t, self.iter_flags['arc2face_prompt_emb'], num_steps=num_steps)
+                    target = self.arc2face(self, x_noisy, noise, t, self.iter_flags['arc2face_prompt_emb'], 
+                                           num_steps=num_steps)
 
                     # Replace model_output with the reconstructed image by the original UNet,
                     # so that model_output is aligned with target.
@@ -5463,7 +5465,7 @@ class Arc2FaceWrapper(pl.LightningModule):
     
     # Only used for inference/distillation, so no_grad() is used.
     @torch.no_grad()
-    def forward(self, ddpm_model, x, timesteps, context, num_steps=1):
+    def forward(self, ddpm_model, x, noise, timesteps, context, num_steps=1):
         BS = x.shape[0]
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
@@ -5491,7 +5493,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                 if i < num_steps - 1:
                     # ts[0] is mid_timesteps, ts[1] is timesteps.
                     # ts[0] > ts[1].
-                    x_noisy = ddpm_model.q_sample(pred_x0, ts[i+1])
+                    x_noisy = ddpm_model.q_sample(pred_x0, ts[i+1], noise)
 
         return pred_x0
     
