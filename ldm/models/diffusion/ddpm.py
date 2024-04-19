@@ -5556,7 +5556,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                 shorter_timestep = shorter_timestep.long()
                 t = shorter_timestep
 
-        return x_noisy
+        return pred_x0
     
 class DiffusionWrapper(pl.LightningModule): 
     def __init__(self, diff_model_config, conditioning_key):
