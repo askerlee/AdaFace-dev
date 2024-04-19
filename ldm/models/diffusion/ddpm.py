@@ -5480,6 +5480,8 @@ class Arc2FaceWrapper(pl.LightningModule):
                 mid_timesteps = mid_timesteps.long()
                 # mid_timesteps > timesteps.
                 ts = [ mid_timesteps, timesteps ]
+            else:
+                ts = [ timesteps ]
                 
             for i in range(num_steps):
                 t = ts[i]
