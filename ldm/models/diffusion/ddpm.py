@@ -242,7 +242,7 @@ class DDPM(pl.LightningModule):
                                linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
 
         if self.arc2face_distill_iter_prob > 0:
-            self.arc2face = Arc2FaceWrapper(self)
+            self.arc2face = Arc2FaceWrapper()
         else:
             self.arc2face = None
 
@@ -2875,7 +2875,7 @@ class LatentDiffusion(DDPM):
                     num_steps = np.random.randint(1, 3)
                     # target: replaced as the reconstructed x0 by the arc2face UNet.
                     # target: [4, 4, 64, 64].
-                    target = self.arc2face(x_noisy, t, self.iter_flags['arc2face_prompt_emb'], num_steps=num_steps)
+                    target = self.arc2face(self, x_noisy, t, self.iter_flags['arc2face_prompt_emb'], num_steps=num_steps)
 
                     # Replace model_output with the reconstructed image by the original UNet,
                     # so that model_output is aligned with target.
@@ -5434,12 +5434,11 @@ class LatentDiffusion(DDPM):
             self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
 
 class Arc2FaceWrapper(pl.LightningModule):
-    def __init__(self, ddpm_model, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__()
         from diffusers import UNet2DConditionModel
         from ldm.modules.arc2face_models import CLIPTextModelWrapper
 
-        self.ddpm_model  = ddpm_model
         self.unet = UNet2DConditionModel.from_pretrained(
                         #"runwayml/stable-diffusion-v1-5", subfolder="unet"
                         'arc2face/models', subfolder="arc2face", torch_dtype=torch.float16
@@ -5464,7 +5463,7 @@ class Arc2FaceWrapper(pl.LightningModule):
     
     # Only used for inference/distillation, so no_grad() is used.
     @torch.no_grad()
-    def forward(self, x, timesteps, context, num_steps=1):
+    def forward(self, ddpm_model, x, timesteps, context, num_steps=1):
         BS = x.shape[0]
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
@@ -5474,7 +5473,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                 # NOTE: rand_like() samples from U(0, 1), not like randn_like().
                 relative_ts = torch.rand_like(timesteps.float())
                 t_lb = timesteps
-                t_ub = self.ddpm_model.num_timesteps
+                t_ub = ddpm_model.num_timesteps
                 mid_timesteps = (t_ub - t_lb) * relative_ts + t_lb
                 mid_timesteps = mid_timesteps.long()
                 # mid_timesteps > timesteps.
@@ -5488,11 +5487,11 @@ class Arc2FaceWrapper(pl.LightningModule):
                 noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=context,
                                        return_dict=False)[0]
                 
-                pred_x0 = self.ddpm_model.predict_start_from_noise(x_noisy, t, noise_pred)
+                pred_x0 = ddpm_model.predict_start_from_noise(x_noisy, t, noise_pred)
                 if i < num_steps - 1:
                     # ts[0] is mid_timesteps, ts[1] is timesteps.
                     # ts[0] > ts[1].
-                    x_noisy = self.ddpm_model.q_sample(pred_x0, ts[i+1])
+                    x_noisy = ddpm_model.q_sample(pred_x0, ts[i+1])
 
         return pred_x0
     
