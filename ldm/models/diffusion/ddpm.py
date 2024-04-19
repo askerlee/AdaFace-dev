@@ -5471,7 +5471,6 @@ class Arc2FaceWrapper(pl.LightningModule):
             t = timesteps
             x_noisy = x
             if num_steps == 2:
-                ts = []
                 # NOTE: rand_like() samples from U(0, 1), not like randn_like().
                 relative_ts = torch.rand_like(timesteps.float())
                 t_lb = timesteps
@@ -5482,7 +5481,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                 ts = [ mid_timesteps, timesteps ]
             else:
                 ts = [ timesteps ]
-                
+
             for i in range(num_steps):
                 t = ts[i]
                 # If do_arc2face_distill, then context is [BS=6, 21, 768].
