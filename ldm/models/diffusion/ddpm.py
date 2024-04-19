@@ -242,9 +242,7 @@ class DDPM(pl.LightningModule):
                                linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
 
         if self.arc2face_distill_iter_prob > 0:
-            self.arc2face = Arc2FaceWrapper(self.alphas_cumprod, self.alphas_cumprod_prev, 
-                                            self.sqrt_one_minus_alphas_cumprod, 
-                                            self.betas, timesteps)
+            self.arc2face = Arc2FaceWrapper(self)
         else:
             self.arc2face = None
 
@@ -5436,17 +5434,12 @@ class LatentDiffusion(DDPM):
             self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
 
 class Arc2FaceWrapper(pl.LightningModule):
-    def __init__(self, alphas_cumprod, alphas_cumprod_prev, sqrt_one_minus_alphas_cumprod, betas, ddpm_num_timesteps=1000, **kwargs):
+    def __init__(self, ddpm_model, **kwargs):
         super().__init__()
         from diffusers import UNet2DConditionModel
         from ldm.modules.arc2face_models import CLIPTextModelWrapper
 
-        self.ddpm_num_timesteps  = ddpm_num_timesteps
-        self.register_buffer('betas', betas)                               
-        self.register_buffer('alphas_cumprod', alphas_cumprod)             
-        self.register_buffer('alphas_cumprod_prev', alphas_cumprod_prev)   
-        self.register_buffer('sqrt_one_minus_alphas_cumprod', sqrt_one_minus_alphas_cumprod)
-
+        self.ddpm_model  = ddpm_model
         self.unet = UNet2DConditionModel.from_pretrained(
                         #"runwayml/stable-diffusion-v1-5", subfolder="unet"
                         'arc2face/models', subfolder="arc2face", torch_dtype=torch.float16
@@ -5473,48 +5466,32 @@ class Arc2FaceWrapper(pl.LightningModule):
     @torch.no_grad()
     def forward(self, x, timesteps, context, num_steps=1):
         BS = x.shape[0]
-        alphas                  = self.alphas_cumprod
-        alphas_prev             = self.alphas_cumprod_prev
-        sqrt_one_minus_alphas   = self.sqrt_one_minus_alphas_cumprod
-        # sigmas are all 0s. Not initialized here.
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             t = timesteps
             x_noisy = x
-
+            if num_steps == 2:
+                ts = []
+                # NOTE: rand_like() samples from U(0, 1), not like randn_like().
+                relative_ts = torch.rand_like(timesteps.float())
+                t_lb = timesteps
+                t_ub = self.ddpm_model.num_timesteps
+                mid_timesteps = (t_ub - t_lb) * relative_ts + t_lb
+                mid_timesteps = mid_timesteps.long()
+                # mid_timesteps > timesteps.
+                ts = [ mid_timesteps, timesteps ]
+                
             for i in range(num_steps):
+                t = ts[i]
                 # If do_arc2face_distill, then context is [BS=6, 21, 768].
                 noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=context,
                                        return_dict=False)[0]
                 
-                # select parameters corresponding to the currently considered timestep
-                a_t                 = alphas[t].reshape(BS, 1, 1, 1)
-                a_prev              = alphas_prev[t].reshape(BS, 1, 1, 1)
-                sqrt_one_minus_at   = sqrt_one_minus_alphas[t].reshape(BS, 1, 1, 1)
-                sigma_t             = torch.zeros(BS, 1, 1, 1, device=self.device, dtype=torch.float32)
-
-                # current prediction for x_0
-                pred_x0 = (x_noisy - sqrt_one_minus_at * noise_pred) / a_t.sqrt()
-                # direction pointing to x_t
-                dir_xt = (1. - a_prev - sigma_t**2).sqrt() * noise_pred
-
-                # dir_xt is a scaled noise_pred.
-                # Since noise is always 0, x_prev is a linear combination of pred_x0 and dir_xt,
-                # i.e., a linear combination of x and noise_pred.
-                x_prev = a_prev.sqrt() * pred_x0 + dir_xt
-                x_noisy = x_prev
-
-                # NOTE: rand_like() samples from U(0, 1), not like randn_like().
-                relative_ts = torch.rand_like(timesteps.float())
-                t_lb = timesteps * 0.6
-                t_ub = timesteps * 0.8
-                shorter_timestep = (t_ub - t_lb) * relative_ts + t_lb
-                shorter_timestep = shorter_timestep.long()
-                t = shorter_timestep
-
-                if num_steps > 1 and i == 0:
-                    print(timesteps, shorter_timestep)
-                    #breakpoint()
+                pred_x0 = self.ddpm_model.predict_start_from_noise(x_noisy, t, noise_pred)
+                if i < num_steps - 1:
+                    # ts[0] is mid_timesteps, ts[1] is timesteps.
+                    # ts[0] > ts[1].
+                    x_noisy = self.ddpm_model.q_sample(pred_x0, ts[i+1])
 
         return pred_x0
     
