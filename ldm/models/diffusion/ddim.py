@@ -180,6 +180,8 @@ class DDIMSampler(object):
         guide_scale = max_guide_scale
 
         for i, step in enumerate(iterator):
+            # step: 981, ..., 1.
+            # index: 49, ..., 0.
             # index points to the correct elements in alphas, sigmas, sqrt_one_minus_alphas, etc.
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)

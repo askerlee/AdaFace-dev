@@ -46,8 +46,7 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
-from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like, \
-                                              make_ddim_sampling_parameters, make_ddim_timesteps
+from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 from evaluation.clip_eval import CLIPEvaluator
 from ldm.prodigy import Prodigy
@@ -244,6 +243,7 @@ class DDPM(pl.LightningModule):
 
         if self.arc2face_distill_iter_prob > 0:
             self.arc2face = Arc2FaceWrapper(self.alphas_cumprod, self.alphas_cumprod_prev, 
+                                            self.sqrt_one_minus_alphas_cumprod, 
                                             self.betas, timesteps)
         else:
             self.arc2face = None
@@ -5436,17 +5436,16 @@ class LatentDiffusion(DDPM):
             self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
 
 class Arc2FaceWrapper(pl.LightningModule):
-    def __init__(self, alphas_cumprod, alphas_cumprod_prev, betas, ddpm_num_timesteps=1000, **kwargs):
+    def __init__(self, alphas_cumprod, alphas_cumprod_prev, sqrt_one_minus_alphas_cumprod, betas, ddpm_num_timesteps=1000, **kwargs):
         super().__init__()
         from diffusers import UNet2DConditionModel
         from ldm.modules.arc2face_models import CLIPTextModelWrapper
-        to_torch = lambda x: x.clone().detach().to(torch.float32)
 
         self.ddpm_num_timesteps  = ddpm_num_timesteps
         self.register_buffer('betas', betas)                               
         self.register_buffer('alphas_cumprod', alphas_cumprod)             
         self.register_buffer('alphas_cumprod_prev', alphas_cumprod_prev)   
-        self.create_ddim_schedule()
+        self.register_buffer('sqrt_one_minus_alphas_cumprod', sqrt_one_minus_alphas_cumprod)
 
         self.unet = UNet2DConditionModel.from_pretrained(
                         #"runwayml/stable-diffusion-v1-5", subfolder="unet"
@@ -5457,46 +5456,6 @@ class Arc2FaceWrapper(pl.LightningModule):
                             )
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         
-    # Copied from ddim.py:DDIMSampler.make_schedule().
-    def create_ddim_schedule(self, ddim_num_steps=50, ddim_discretize="uniform", ddim_eta=0., verbose=False):
-        '''
-        If ddim_num_steps = 50,
-        ddim_timesteps = 
-        [  1,  21,  41,  61,  81, 101, 121, 141, 161, 181, 201, 221, 241,
-         261, 281, 301, 321, 341, 361, 381, 401, 421, 441, 461, 481, 501,
-         521, 541, 561, 581, 601, 621, 641, 661, 681, 701, 721, 741, 761,
-         781, 801, 821, 841, 861, 881, 901, 921, 941, 961, 981]
-        '''
-        
-        # ddim_timesteps is np array.
-        self.ddim_timesteps = make_ddim_timesteps(ddim_discr_method=ddim_discretize, num_ddim_timesteps=ddim_num_steps,
-                                                  num_ddpm_timesteps=self.ddpm_num_timesteps,verbose=verbose)
-        # t_to_ddim_index: map t to the index of the largest timestep in ddim_timesteps that is smaller than t,
-        # so that we round t down to the nearest timestep in ddim_timesteps.
-        t_to_ddim_index = torch.zeros(self.ddpm_num_timesteps, dtype=torch.long)
-        nearest_index = ddim_num_steps - 1
-        for t in range(self.ddpm_num_timesteps - 1, -1, -1):
-            while nearest_index > 0 and self.ddim_timesteps[0] < t < self.ddim_timesteps[nearest_index]: 
-                nearest_index -= 1
-            t_to_ddim_index[t] = nearest_index
-        self.register_buffer('t_to_ddim_index', t_to_ddim_index)
-
-        alphas_cumprod = self.alphas_cumprod
-        # ddim sampling parameters. ddim_sigmas, ddim_alphas are tensor, ddim_alphas_prev is np arrays.
-        # ddim_eta = 0, so ddim_sigmas are all 0s.
-        ddim_sigmas, ddim_alphas, ddim_alphas_prev = make_ddim_sampling_parameters(alphacums=alphas_cumprod.cpu(),
-                                                                                   ddim_timesteps=self.ddim_timesteps,
-                                                                                   eta=ddim_eta,verbose=verbose)
-        self.register_buffer('ddim_sigmas',                 ddim_sigmas.to(torch.float32))
-        self.register_buffer('ddim_alphas',                 ddim_alphas.to(torch.float32))
-        self.register_buffer('ddim_alphas_prev',            torch.from_numpy(ddim_alphas_prev).to(torch.float32))
-        self.register_buffer('ddim_sqrt_one_minus_alphas',  torch.sqrt(1. - ddim_alphas).to(torch.float32))
-        # ddim_sigmas_for_original_num_steps: all 0s, useless.
-        sigmas_for_original_sampling_steps = ddim_eta * torch.sqrt(
-            (1 - self.alphas_cumprod_prev) / (1 - self.alphas_cumprod) * (
-                        1 - self.alphas_cumprod / self.alphas_cumprod_prev))
-        self.register_buffer('ddim_sigmas_for_original_num_steps', sigmas_for_original_sampling_steps)
-
     def gen_arc2face_prompt_embs(self, batch_size, pre_face_embs=None, gen_neg_prompt=False):
         # Returns faceid_embeds, arc2face_pos_prompt_emb.
         return get_arc2face_id_prompt_embs(None, self.tokenizer, self.text_encoder,
@@ -5514,11 +5473,10 @@ class Arc2FaceWrapper(pl.LightningModule):
     @torch.no_grad()
     def forward(self, x, timesteps, context, num_steps=1):
         BS = x.shape[0]
-        alphas = self.ddim_alphas
-        alphas_prev = self.ddim_alphas_prev
-        sqrt_one_minus_alphas = self.ddim_sqrt_one_minus_alphas
-        # sigmas = self.ddim_sigmas are all 0s.
-        sigmas = self.ddim_sigmas
+        alphas                  = self.alphas_cumprod
+        alphas_prev             = self.alphas_cumprod_prev
+        sqrt_one_minus_alphas   = self.sqrt_one_minus_alphas_cumprod
+        # sigmas are all 0s. Not initialized here.
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             t = timesteps
@@ -5529,13 +5487,11 @@ class Arc2FaceWrapper(pl.LightningModule):
                 noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=context,
                                        return_dict=False)[0]
                 
-                ddim_indices = self.t_to_ddim_index[t]
-
                 # select parameters corresponding to the currently considered timestep
-                a_t = alphas[ddim_indices].reshape(BS, 1, 1, 1)
-                a_prev = alphas_prev[ddim_indices].reshape(BS, 1, 1, 1)
-                sigma_t = sigmas[ddim_indices].reshape(BS, 1, 1, 1)
-                sqrt_one_minus_at = sqrt_one_minus_alphas[ddim_indices].reshape(BS, 1, 1, 1)
+                a_t                 = alphas[t].reshape(BS, 1, 1, 1)
+                a_prev              = alphas_prev[t].reshape(BS, 1, 1, 1)
+                sqrt_one_minus_at   = sqrt_one_minus_alphas[t].reshape(BS, 1, 1, 1)
+                sigma_t             = torch.zeros(BS, 1, 1, 1, device=self.device, dtype=torch.float32)
 
                 # current prediction for x_0
                 pred_x0 = (x_noisy - sqrt_one_minus_at * noise_pred) / a_t.sqrt()
@@ -5544,7 +5500,7 @@ class Arc2FaceWrapper(pl.LightningModule):
 
                 # dir_xt is a scaled noise_pred.
                 # Since noise is always 0, x_prev is a linear combination of pred_x0 and dir_xt,
-                # i.e., a linear combination of x and e_t.
+                # i.e., a linear combination of x and noise_pred.
                 x_prev = a_prev.sqrt() * pred_x0 + dir_xt
                 x_noisy = x_prev
 
@@ -5555,6 +5511,10 @@ class Arc2FaceWrapper(pl.LightningModule):
                 shorter_timestep = (t_ub - t_lb) * relative_ts + t_lb
                 shorter_timestep = shorter_timestep.long()
                 t = shorter_timestep
+
+                if num_steps > 1 and i == 0:
+                    print(timesteps, shorter_timestep)
+                    #breakpoint()
 
         return pred_x0
     
