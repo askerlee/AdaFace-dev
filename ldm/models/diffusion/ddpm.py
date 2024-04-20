@@ -5521,8 +5521,8 @@ class Arc2FaceWrapper(pl.LightningModule):
         if num_denoising_steps == 2:
             # NOTE: rand_like() samples from U(0, 1), not like randn_like().
             relative_ts = torch.rand_like(timesteps.float())
-            t_lb = timesteps * 0.6
-            t_ub = timesteps * 0.8
+            t_lb = timesteps * 0.45
+            t_ub = timesteps * 0.75
             earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
             earlier_timesteps = earlier_timesteps.long()
 
