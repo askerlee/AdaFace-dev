@@ -2920,16 +2920,22 @@ class LatentDiffusion(DDPM):
                     target = torch.cat(arc2face_noise_preds, dim=0)
 
                     if num_denoising_steps > 1:
+                        cut_off_denoising_grad = False
                         # Predict the noise of the half-batch with t2 (a set of earlier t).
-                        # arc2face_pred_x0 is the first half-batch of the arc2face predicted images, used to seed the second denoising step.
-                        arc2face_pred_x0    = arc2face_pred_x0s[0].to(model_output.dtype)
+                        if cut_off_denoising_grad:
+                            # arc2face_pred_x0 is the first half-batch of the arc2face predicted images, 
+                            # used to seed the second denoising step. But using it will cut off the gradient flow.
+                            pred_x0 = arc2face_pred_x0s[0].to(model_output.dtype)
+                        else:
+                            pred_x0 = self.predict_start_from_noise(x_noisy, t, model_output)
+
                         # arc2face_noise is the second half-batch of noise used to by arc2face.
                         arc2face_noise      = arc2face_noises[1].to(model_output.dtype)
                         t2                  = ts[1]
 
                         # Here x_noisy is used as x_start.
                         model_output2, x_recon2, ada_embeddings2 = \
-                            self.guided_denoise(arc2face_pred_x0, arc2face_noise, t2, cond, 
+                            self.guided_denoise(pred_x0, arc2face_noise, t2, cond, 
                                                 emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
                                                 unet_has_grad=True, do_pixel_recon=False, cfg_info=cfg_info)
                         
