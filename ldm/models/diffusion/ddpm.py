@@ -2839,7 +2839,7 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['num_denoising_steps'] > 1:
                     # Push t to the end of the timesteps, to make the denoising more challenging, 
                     # since anyway we will have a second denoising step which is easier.
-                    t = t // 2 + 500
+                    t = (t + self.num_timesteps) // 2
             else:
                 # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
                 # with larger prob to keep the original t.
