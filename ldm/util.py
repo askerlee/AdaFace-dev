@@ -1722,7 +1722,7 @@ def draw_annealed_bool(training_percent, final_percent, true_prob_range):
 # ratio_range: range of fluctuation ratios (could > 1 or < 1).
 # keep_prob_range: range of annealed prob of keeping the original t. If (0, 0.5),
 # then gradually increase the prob of keeping the original t from 0 to 0.5.
-def anneal_t_keep_prob(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0, 0.5)):
+def probably_anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0, 0.5)):
     t_annealed = t.clone()
     # Gradually increase the chance of keeping the original t from 0 to 0.5.
     do_keep = draw_annealed_bool(training_percent, final_percent=1., true_prob_range=keep_prob_range)

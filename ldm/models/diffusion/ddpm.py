@@ -39,7 +39,7 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
                         gen_comp_extra_indices_by_block, extend_indices_B_by_n_times, \
                         split_indices_by_instance, repeat_selected_instances, \
-                        anneal_t_keep_prob, anneal_value, gen_cfg_scales_for_stu_tea, \
+                        probably_anneal_t, anneal_value, gen_cfg_scales_for_stu_tea, \
                         get_arc2face_id_prompt_embs, add_noise_to_embedding, gen_spatial_weight_using_loss_std
                                               
 
@@ -1849,6 +1849,8 @@ class LatentDiffusion(DDPM):
                     # num_denoising_steps: 1 or 2 with 50% chance each.
                     # TODO: support num_denoising_steps >= 3.
                     num_denoising_steps = np.random.randint(1, 3)
+                    self.iter_flags['num_denoising_steps'] = num_denoising_steps
+
                     if num_denoising_steps > 1:
                         ND = num_denoising_steps
                         # Only use the first half of the batch to avoid OOM.
@@ -1870,7 +1872,6 @@ class LatentDiffusion(DDPM):
                         
                         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
-                    self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
             # Do zero-shot training but not arc2face distillation.
             else:
@@ -2828,19 +2829,23 @@ class LatentDiffusion(DDPM):
                 # Decrease t slightly to decrease noise amount and preserve more semantics.
                 # Do not add extra noise for use_wds_comp instances, since such instances are 
                 # kind of "Out-of-Domain" at the background, and are intrinsically difficult to denoise.
-                t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0),
-                                       keep_prob_range=(0.5, 0.3))
-            elif self.iter_flags['gen_arc2face_rand_face'] or self.iter_flags['add_noise_to_real_id_embs']:
+                t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0),
+                                      keep_prob_range=(0.5, 0.3))
+            elif self.iter_flags['use_arc2face_as_target']:
                 # Increase t slightly by (1, 1.5) to increase noise amount and make the denoising more challenging,
                 # with smaller prob to keep the original t.
-                t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.5), 
-                                       keep_prob_range=(0.3, 0.1))
+                t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.5), 
+                                      keep_prob_range=(0.3, 0.1))
+                if self.iter_flags['num_denoising_steps'] > 1:
+                    # Push t to the end of the timesteps, to make the denoising more challenging, 
+                    # since anyway we will have a second denoising step which is easier.
+                    t = t // 2 + 500
             else:
                 # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
                 # with larger prob to keep the original t.
                 # This branch includes the 'do_arc2face_distill' but not 'gen_arc2face_rand_face' iterations.
-                t = anneal_t_keep_prob(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
-                                       keep_prob_range=(0.4, 0.2))
+                t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
+                                      keep_prob_range=(0.4, 0.2))
 
             # No need to update masks.
 
