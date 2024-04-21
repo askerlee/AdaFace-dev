@@ -1811,7 +1811,7 @@ class LatentDiffusion(DDPM):
                 x_start = torch.randn_like(x_start)
                 self.iter_flags['is_face'] = [True] * x_start.shape[0]
 
-                p_use_std_as_arc2face_recon_weighting = 1 # 0.5
+                p_use_std_as_arc2face_recon_weighting = 0 #1 
                 self.iter_flags['use_std_as_arc2face_recon_weighting'] = random.random() < p_use_std_as_arc2face_recon_weighting
                 if self.iter_flags['use_std_as_arc2face_recon_weighting']:
                     # NOTE: Use the same noise for different ID embeddings in the batch,
@@ -2930,7 +2930,9 @@ class LatentDiffusion(DDPM):
                             noise2  = arc2face_noises[s].to(model_output.dtype)
                             t2      = ts[s]
 
-                            # Here x_noisy is used as x_start.
+                            # Here pred_x0 is used as x_start.
+                            # emb_man_prompt_adhoc_info['img_mask'] needs no update, as the current batch is still a half-batch,
+                            # and the 'image_mask' is also for a half-batch.
                             model_output2, x_recon2, ada_embeddings2 = \
                                 self.guided_denoise(pred_x0, noise2, t2, cond, 
                                                     emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
@@ -5530,7 +5532,6 @@ class Arc2FaceWrapper(pl.LightningModule):
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             x_noisy = x
-            t       = timesteps
             
             for i in range(num_denoising_steps):
                 t = ts[i]
