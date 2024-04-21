@@ -1058,8 +1058,9 @@ if __name__ == "__main__":
             K = opt.use_conv_attn_kernel_size
             assert opt.num_vectors_per_subj_token >= K * K, \
                     f"--num_vectors_per_subj_token {opt.num_vectors_per_subj_token} should be at least {K*K}"
-            config.model.params.personalization_config.params.use_conv_attn_kernel_size \
-                = opt.use_conv_attn_kernel_size
+            
+        config.model.params.personalization_config.params.use_conv_attn_kernel_size \
+            = opt.use_conv_attn_kernel_size
 
         config.model.params.personalization_config.params.embedding_manager_ckpt        = opt.embedding_manager_ckpt
         config.model.params.personalization_config.params.src_placeholders              = opt.src_placeholders
