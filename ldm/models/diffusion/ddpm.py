@@ -1846,14 +1846,14 @@ class LatentDiffusion(DDPM):
                     self.iter_flags['use_arc2face_as_target'] = random.random() < p_use_arc2face_as_target
 
                 if self.iter_flags['use_arc2face_as_target']:
-                    # num_denoising_steps: 1 or 2 with 50% chance each.
-                    # TODO: support num_denoising_steps >= 3.
-                    num_denoising_steps = np.random.randint(1, 3)
+                    # num_denoising_steps: 1, 2 or 3 with 33% chance each.
+                    num_denoising_steps = np.random.randint(1, 4)
                     self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
                     if num_denoising_steps > 1:
                         ND = num_denoising_steps
                         # Only use the first half of the batch to avoid OOM.
+                        # If num_denoising_steps == 3, BS == 4, then HALF_BS == 2. Watch for possible OOM.
                         x_start = x_start.chunk(ND)[0]
                         HALF_BS = torch.arange(BS).chunk(num_denoising_steps)[0].shape[0]
 
@@ -2837,9 +2837,9 @@ class LatentDiffusion(DDPM):
                 t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.5), 
                                       keep_prob_range=(0.3, 0.1))
                 if self.iter_flags['num_denoising_steps'] > 1:
-                    # Push t to the end of the timesteps, to make the denoising more challenging, 
-                    # since anyway we will have a second denoising step which is easier.
-                    t = (t + self.num_timesteps) // 2
+                    # Push t to the end of the timesteps by taking a weighted average of t and 1000,
+                    # to make the denoising more challenging, since anyway we will have a second/third denoising step which is easier.
+                    t = (t * 2 + self.num_timesteps * (self.iter_flags['num_denoising_steps'] - 1)) // (1 + self.iter_flags['num_denoising_steps'])
             else:
                 # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
                 # with larger prob to keep the original t.
@@ -2920,27 +2920,25 @@ class LatentDiffusion(DDPM):
                     target = torch.cat(arc2face_noise_preds, dim=0)
 
                     if num_denoising_steps > 1:
-                        cut_off_denoising_grad = False
-                        # Predict the noise of the half-batch with t2 (a set of earlier t).
-                        if cut_off_denoising_grad:
+                        model_outputs = [model_output]
+                        for s in range(1, num_denoising_steps):
+                            # Predict the noise of the half-batch with t2 (a set of earlier t).
                             # arc2face_pred_x0 is the first half-batch of the arc2face predicted images, 
                             # used to seed the second denoising step. But using it will cut off the gradient flow.
-                            pred_x0 = arc2face_pred_x0s[0].to(model_output.dtype)
-                        else:
-                            pred_x0 = self.predict_start_from_noise(x_noisy, t, model_output)
+                            pred_x0 = arc2face_pred_x0s[s-1].to(model_output.dtype)
+                            # noise2, t2 are the s-th half-batch of noise/t used to by arc2face.
+                            noise2  = arc2face_noises[s].to(model_output.dtype)
+                            t2      = ts[s]
 
-                        # arc2face_noise is the second half-batch of noise used to by arc2face.
-                        arc2face_noise      = arc2face_noises[1].to(model_output.dtype)
-                        t2                  = ts[1]
+                            # Here x_noisy is used as x_start.
+                            model_output2, x_recon2, ada_embeddings2 = \
+                                self.guided_denoise(pred_x0, noise2, t2, cond, 
+                                                    emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
+                                                    unet_has_grad=True, do_pixel_recon=False, cfg_info=cfg_info)
+                            model_outputs.append(model_output2)
 
-                        # Here x_noisy is used as x_start.
-                        model_output2, x_recon2, ada_embeddings2 = \
-                            self.guided_denoise(pred_x0, arc2face_noise, t2, cond, 
-                                                emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
-                                                unet_has_grad=True, do_pixel_recon=False, cfg_info=cfg_info)
-                        
-                        # Combine the two half-batch outputs (of different ts) into a batch for loss computation.
-                        model_output = torch.cat([model_output, model_output2], dim=0)
+                        # Combine the ND half-batch outputs (of different ts) into a batch for loss computation.
+                        model_output = torch.cat(model_outputs, dim=0)
                         # img_mask and fg_mask are repeated for the recombined batch.
                         img_mask = img_mask.repeat(num_denoising_steps, 1, 1, 1) if img_mask is not None else None
                         fg_mask  = fg_mask.repeat(num_denoising_steps,  1, 1, 1) if fg_mask  is not None else None
@@ -5522,28 +5520,17 @@ class Arc2FaceWrapper(pl.LightningModule):
     # Only used for inference/distillation, so no_grad() is used.
     @torch.no_grad()
     def forward(self, ddpm_model, x, noise, timesteps, context, num_denoising_steps=1):
-        # Limited by RAM, we can only process 1 or 2 steps.
-        assert num_denoising_steps in [1, 2]
-        if num_denoising_steps == 2:
-            # NOTE: rand_like() samples from U(0, 1), not like randn_like().
-            relative_ts = torch.rand_like(timesteps.float())
-            t_lb = timesteps * 0.45
-            t_ub = timesteps * 0.75
-            earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
-            earlier_timesteps = earlier_timesteps.long()
+        # Limited by RAM, we can only process 1, 2, 3 steps.
+        assert num_denoising_steps in [1, 2, 3]
 
-            # earlier_timesteps < timesteps.
-            ts = [ timesteps, earlier_timesteps ]
-        else:
-            ts = [ timesteps ]
-
-        pred_x0s = []
-        noises   = [noise]
+        pred_x0s    = []
         noise_preds = []
+        noises      = [ noise ]
+        ts          = [ timesteps ]
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             x_noisy = x
-            t = timesteps
+            t       = timesteps
             
             for i in range(num_denoising_steps):
                 t = ts[i]
@@ -5562,6 +5549,16 @@ class Arc2FaceWrapper(pl.LightningModule):
                     # ts[0] > ts[1].
                     x_noisy = ddpm_model.q_sample(pred_x0, ts[i+1], noise)
                     noises.append(noise)
+
+                    # NOTE: rand_like() samples from U(0, 1), not like randn_like().
+                    relative_ts = torch.rand_like(timesteps.float())
+                    t_lb = timesteps * 0.6
+                    t_ub = timesteps * 0.8
+                    earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
+                    earlier_timesteps = earlier_timesteps.long()
+
+                    # earlier_timesteps < timesteps.
+                    ts.append(earlier_timesteps)
 
         return noise_preds, pred_x0s, noises, ts
     
