@@ -2914,14 +2914,13 @@ class LatentDiffusion(DDPM):
                 num_denoising_steps = self.iter_flags['num_denoising_steps']
 
                 if self.iter_flags['use_arc2face_as_target']:
-                    x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-
                     arc2face_noise_preds, arc2face_pred_x0s, arc2face_noises, ts = \
-                        self.arc2face(self, x_noisy, noise, t, self.iter_flags['arc2face_prompt_emb'], num_denoising_steps=num_denoising_steps)
+                        self.arc2face(self, x_start, noise, t, self.iter_flags['arc2face_prompt_emb'], num_denoising_steps=num_denoising_steps)
                     # targets: replaced as the reconstructed x0 by the arc2face UNet.
                     # If NS = num_denoising_steps > 1, then arc2face_noise_preds contain NS*half_batch arc2face predicted noises (of different ts).
                     # targets: [2, 4, 64, 64] * 2 or 3.
                     targets         = arc2face_noise_preds
+                    # model_outputs will be appended with the outputs of the second/third denoising steps.
                     model_outputs   = [model_output]
 
                     if num_denoising_steps > 1:
@@ -5534,20 +5533,23 @@ class Arc2FaceWrapper(pl.LightningModule):
     
     # Only used for inference/distillation, so no_grad() is used.
     @torch.no_grad()
-    def forward(self, ddpm_model, x, noise, timesteps, context, num_denoising_steps=1):
+    def forward(self, ddpm_model, x_start, noise, t, context, num_denoising_steps=1):
         # Limited by RAM, we can only process 1, 2, 3 steps.
         assert num_denoising_steps in [1, 2, 3]
 
-        pred_x0s    = []
-        noise_preds = []
+        x_starts    = [ x_start ]
         noises      = [ noise ]
-        ts          = [ timesteps ]
+        ts          = [ t ]
+        noise_preds = []
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
-            x_noisy = x
-            
             for i in range(num_denoising_steps):
-                t = ts[i]
+                x_start = x_starts[i]
+                t       = ts[i]
+                noises  = noises[i]
+                # sqrt_alphas_cumprod[t] * x_start + sqrt_one_minus_alphas_cumprod[t] * noise
+                x_noisy = ddpm_model.q_sample(x_start, t, noise)
+                                
                 # If do_arc2face_distill, then context is [BS=6, 21, 768].
                 noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=context,
                                        return_dict=False)[0]
@@ -5555,11 +5557,11 @@ class Arc2FaceWrapper(pl.LightningModule):
                 
                 # sqrt_recip_alphas_cumprod[t] * x_t - sqrt_recipm1_alphas_cumprod[t] * noise
                 pred_x0 = ddpm_model.predict_start_from_noise(x_noisy, t, noise_pred)
-                pred_x0s.append(pred_x0)
+                x_starts.append(pred_x0)
 
                 if i < num_denoising_steps - 1:
                     # NOTE: rand_like() samples from U(0, 1), not like randn_like().
-                    relative_ts = torch.rand_like(timesteps.float())
+                    relative_ts = torch.rand_like(t.float())
                     # Make sure at the earliest (i = num_denoising_steps - 1), the timestep 
                     # is between 60% and 80% of the current timestep. So if num_denoising_steps = 3,
                     # we take timesteps within [sqrt(0.6), sqrt(0.8)] of the current timestep.
@@ -5568,15 +5570,14 @@ class Arc2FaceWrapper(pl.LightningModule):
                     earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
                     earlier_timesteps = earlier_timesteps.long()
 
-                    # ts[i+1] < ts[i].
+                    # earlier_timesteps = ts[i+1] < ts[i].
                     ts.append(earlier_timesteps)
 
                     noise = torch.randn_like(pred_x0)
-                    # ts[0] is timesteps, ts[1] is earlier_timesteps.
-                    # ts[0] > ts[1].
-                    x_noisy = ddpm_model.q_sample(pred_x0, earlier_timesteps, noise)
                     noises.append(noise)
 
+        # Remove the original x_start from pred_x0s.
+        pred_x0s = x_starts[1:]
         return noise_preds, pred_x0s, noises, ts
     
 class DiffusionWrapper(pl.LightningModule): 
