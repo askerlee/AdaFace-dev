@@ -1001,6 +1001,7 @@ class EmbeddingManager(nn.Module):
             training_end_add_noise_std_range=None,
             training_add_noise_prob=None,
             use_conv_attn_kernel_size=-1,
+            disable_conv_attn=False,
             conv_attn_layerwise_scale_learnable=False,
             prompt_embedding_clamp_value=-1,
             background_extra_global_scale=1.,
@@ -1085,7 +1086,9 @@ class EmbeddingManager(nn.Module):
         self.set_training_add_noise_specs(training_begin_add_noise_std_range, 
                                           training_end_add_noise_std_range,
                                           training_add_noise_prob)
-        self.set_embs_attn_tricks(use_conv_attn_kernel_size)
+        
+        self.disable_conv_attn = disable_conv_attn
+        self.set_conv_attn_kernel_size(use_conv_attn_kernel_size)
         self.set_attn_pooler_feat_reduction_ratio(attn_pooler_feat_reduction_ratio)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
@@ -2188,11 +2191,14 @@ class EmbeddingManager(nn.Module):
 
         self.ada_emb_weight = ada_emb_weight
 
-    def set_embs_attn_tricks(self, use_conv_attn_kernel_size=None):
+    def set_conv_attn_kernel_size(self, use_conv_attn_kernel_size=None):
         if use_conv_attn_kernel_size is not None:
-            self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
-            extra_msg = ", DISABLED" if use_conv_attn_kernel_size == -1 else ""
-            print(f"Setting use_conv_attn_kernel_size = {use_conv_attn_kernel_size}{extra_msg}")
+            if self.disable_conv_attn or use_conv_attn_kernel_size == -1:
+                print("DISABLED: Setting use_conv_attn_kernel_size = -1")
+                self.use_conv_attn_kernel_size = -1
+            else:
+                self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
+                print(f"Setting use_conv_attn_kernel_size = {use_conv_attn_kernel_size}")
 
     def set_emb_ema_as_pooling_probe_weight(self, emb_ema_as_pooling_probe_weight):
         self.emb_ema_as_pooling_probe_weight = emb_ema_as_pooling_probe_weight
@@ -2399,8 +2405,9 @@ class EmbeddingManager(nn.Module):
             else:
                 ckpt_background_strings = []
 
-            use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
-            self.set_embs_attn_tricks(use_conv_attn_kernel_size)
+            if not self.disable_conv_attn:
+                use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
+                self.set_conv_attn_kernel_size(use_conv_attn_kernel_size)
 
             if "attn_pooler_feat_reduction_ratio" in ckpt:
                 # Setting attn_pooler_feat_reduction_ratio doesn't have much impact actually,
