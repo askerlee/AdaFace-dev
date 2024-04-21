@@ -274,9 +274,7 @@ def parse_args():
                         type=int, default=None,
                         help="Use convolutional attention of subject tokens with this kernel size."
                              "Default: None, not specified.")
-    parser.add_argument("--disable_conv_attn", action="store_true",
-                        help="Disable convolutional attention for subject tokens")
-    
+
     parser.add_argument("--emb_ema_as_pooling_probe",
                         action="store_true", default=argparse.SUPPRESS,
                         help="Use EMA embedding as the pooling probe")
@@ -387,7 +385,13 @@ def main(opt):
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.token2num_vectors = { opt.subject_string:    opt.num_vectors_per_subj_token,
                                                                                 opt.background_string: opt.num_vectors_per_bg_token }
-        config.model.params.personalization_config.params.disable_conv_attn = opt.disable_conv_attn
+
+        if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
+            K = opt.use_conv_attn_kernel_size
+            assert opt.num_vectors_per_subj_token >= K * K, \
+                    f"--num_vectors_per_subj_token {opt.num_vectors_per_subj_token} should be at least {K*K}"
+        # This will override the conv_attn_kernel_size setting to be loaded from the checkpoint.
+        config.model.params.personalization_config.params.use_conv_attn_kernel_size = opt.use_conv_attn_kernel_size
 
         if opt.zeroshot:
             assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
@@ -428,13 +432,6 @@ def main(opt):
 
         if hasattr(opt, 'emb_ema_as_pooling_probe'):
             model.embedding_manager.set_emb_ema_as_pooling_probe(opt.emb_ema_as_pooling_probe)
-
-        if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
-            K = opt.use_conv_attn_kernel_size
-            assert opt.num_vectors_per_subj_token >= K * K, \
-                    f"--num_vectors_per_subj_token {opt.num_vectors_per_subj_token} should be at least {K*K}"
-        
-        model.embedding_manager.set_conv_attn_kernel_size(opt.use_conv_attn_kernel_size)
 
         if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
             model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
