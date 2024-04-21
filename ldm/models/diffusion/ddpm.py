@@ -5546,7 +5546,7 @@ class Arc2FaceWrapper(pl.LightningModule):
             for i in range(num_denoising_steps):
                 x_start = x_starts[i]
                 t       = ts[i]
-                noises  = noises[i]
+                noise   = noises[i]
                 # sqrt_alphas_cumprod[t] * x_start + sqrt_one_minus_alphas_cumprod[t] * noise
                 x_noisy = ddpm_model.q_sample(x_start, t, noise)
                                 
