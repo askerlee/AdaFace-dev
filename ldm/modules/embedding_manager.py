@@ -987,6 +987,7 @@ class EmbeddingManager(nn.Module):
             # the subject (represented as the subject token) and the background. 
             # token2num_vectors is a dict.
             token2num_vectors={},
+            skip_loading_token2num_vectors=False,
             use_layerwise_embedding=True,
             out_emb_dim=768,
             num_unet_ca_layers=16,
@@ -1106,6 +1107,7 @@ class EmbeddingManager(nn.Module):
         # the concept through multiple learned pseudo-words. 
         # This setting was proposed in the TI paper,
         # and AdaPrompt also supports it for more expressive modeling.
+        self.skip_loading_token2num_vectors = skip_loading_token2num_vectors
         self.set_num_vectors_per_subj_token(token2num_vectors)
         self.out_emb_dim = out_emb_dim
 
@@ -2529,7 +2531,7 @@ class EmbeddingManager(nn.Module):
 
                 print(f"{km2}: {ada_embedder.fg_emb_count}/{ada_embedder.bg_emb_count}/{ada_embedder.K} fg/bg/total embeddings")
 
-            if "token2num_vectors" in ckpt:
+            if "token2num_vectors" in ckpt and not self.skip_loading_token2num_vectors:
                 self.set_num_vectors_per_subj_token(token2num_vectors)
 
             # In theory, if some ckpt has shared_placeholder_set = True, and some has False,

@@ -269,6 +269,8 @@ def parse_args():
     parser.add_argument("--num_vectors_per_bg_token",
                         type=int, default=4,
                         help="Number of vectors per background token. If > 1, use multiple embeddings to represent a background.")
+    parser.add_argument("--skip_loading_token2num_vectors", action="store_true",
+                        help="Skip loading token2num_vectors from the checkpoint.")
     
     parser.add_argument("--use_conv_attn_kernel_size",
                         type=int, default=None,
@@ -385,7 +387,8 @@ def main(opt):
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.token2num_vectors = { opt.subject_string:    opt.num_vectors_per_subj_token,
                                                                                 opt.background_string: opt.num_vectors_per_bg_token }
-
+        config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
+        
         if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
             K = opt.use_conv_attn_kernel_size
             assert opt.num_vectors_per_subj_token >= K * K, \

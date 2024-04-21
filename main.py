@@ -255,7 +255,9 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--num_vectors_per_bg_token",
         type=int, default=4,
         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
-    
+    parser.add_argument("--skip_loading_token2num_vectors", action="store_true",
+                        help="Skip loading token2num_vectors from the checkpoint.")
+        
     parser.add_argument("--use_conv_attn_kernel_size",
                         type=int, default=None,
                         help="Use convolutional attention of subject tokens with this kernel size."
@@ -1066,6 +1068,7 @@ if __name__ == "__main__":
         config.model.params.personalization_config.params.frozen_embedder_components    = opt.frozen_embedder_components
         config.model.params.personalization_config.params.ckpt_params_perturb_ratio     = opt.ckpt_params_perturb_ratio
         config.model.params.personalization_config.params.emb_reg_loss_scale = opt.emb_reg_loss_scale
+        config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
 
         set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])
 
